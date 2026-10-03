@@ -10,9 +10,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  PLAYCANVAS_INSTANCE_GLSL,
-  PLAYCANVAS_INSTANCE_MODIFIER,
   PLAYCANVAS_INSTANCE_WGSL,
+  playcanvasModifier,
+  playcanvasModifierGlsl,
 } from "@/cesium/scanView/playcanvasBackend";
 import { SCAN_INSTANCE_RULE_GLSL, SCAN_INSTANCE_RULE_WGSL } from "@/cesium/scanView/scanInstances";
 import { INSTANCE_TEXTURE_WIDTH } from "@/cesium/splatInstances";
@@ -83,10 +83,18 @@ describe("the objects' colour rule on WebGPU", () => {
     expect(PLAYCANVAS_INSTANCE_WGSL).not.toMatch(/\b(?:void|texelFetch|highp|sampler2D)\b/);
   });
 
-  it("hands PlayCanvas both languages, for it to take its device's", () => {
-    expect(PLAYCANVAS_INSTANCE_MODIFIER).toEqual({
-      glsl: PLAYCANVAS_INSTANCE_GLSL,
+  it("hands PlayCanvas both languages for hide and highlight, for it to take its device's", () => {
+    expect(playcanvasModifier(true, false)).toEqual({
+      glsl: playcanvasModifierGlsl(true, false),
       wgsl: PLAYCANVAS_INSTANCE_WGSL,
     });
+  });
+
+  it("has no WGSL for a skin: the motion is GLSL only, and not applied on WebGPU", () => {
+    expect(playcanvasModifier(true, true).wgsl).toBeUndefined();
+    expect(playcanvasModifier(false, true).wgsl).toBeUndefined();
+    expect(playcanvasModifier(false, true).glsl).toContain("loadSplatWeights()");
+    // One object per kind: a tile's modifier is compared by identity.
+    expect(playcanvasModifier(true, true)).toBe(playcanvasModifier(true, true));
   });
 });

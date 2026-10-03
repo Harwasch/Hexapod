@@ -1,0 +1,88 @@
+/**
+ * CesiumJS's own splats as a pick source (pickSources.ts): the tiles of the primitive's
+ * committed snapshot (`snapshotTiles`, as the instance hooks read them), each un-baked to the
+ * scan's frame (`unbakePositions`, so its checksum is the one `instances.json` lists), with
+ * its splats' largest axis (`content.scales`) and opacity (the snapshot's colours). Built once
+ * per tile content and bake; empty while the tileset is hidden (another renderer draws it).
+ */
+
+import { checksumPositions } from "@twin/world";
+import type { Cesium3DTileset, Matrix4 } from "cesium";
+
+import type { PickTile } from "@/lib/splatPick";
+
+import { invertAffine, unbakePositions } from "../splatFrames";
+import { splatTilesetOf } from "../splatInternals";
+import { sameMatrix, snapshotTiles } from "../splatTiles";
+import type { PickSource } from "./pickSources";
+
+/** A splat with no scale read: a couple of centimetres. */
+const DEFAULT_RADIUS_M = 0.02;
+
+/** Each splat's largest axis, from xyz scales (linear). */
+export function largestAxes(scales: ArrayLike<number> | undefined, count: number): Float32Array {
+  const out = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    if (!scales || scales.length < (i + 1) * 3) {
+      out[i] = DEFAULT_RADIUS_M;
+      continue;
+    }
+    out[i] = Math.max(
+      Math.abs(scales[i * 3] ?? 0),
+      Math.abs(scales[i * 3 + 1] ?? 0),
+      Math.abs(scales[i * 3 + 2] ?? 0),
+    );
+  }
+  return out;
+}
+
+export function cesiumPickSource(tileset: Cesium3DTileset): PickSource {
+  const cache = new WeakMap<object, { bake: number[]; tile: PickTile }>();
+  let last: readonly PickTile[] = [];
+  return {
+    renderer: "cesium",
+    toWorld: () =>
+      tileset.isDestroyed()
+        ? undefined
+        : (tileset.root as { computedTransform?: Matrix4 } | undefined)?.computedTransform,
+    tiles: () => {
+      if (tileset.isDestroyed() || !tileset.show) return [];
+      const like = splatTilesetOf(tileset);
+      const primitive = like.gaussianSplatPrimitive;
+      const positions = primitive?._positions;
+      const numSplats = primitive?._numSplats ?? 0;
+      if (!primitive || !positions || numSplats <= 0) return [];
+      const listed = snapshotTiles(like, primitive, positions, numSplats);
+      if (listed.kind === "wait") return last;
+      const colors = primitive._colors;
+      const out: PickTile[] = [];
+      for (const tile of listed.tiles) {
+        const cached = cache.get(tile.content);
+        if (cached && sameMatrix(cached.bake, tile.bake)) {
+          out.push(cached.tile);
+          continue;
+        }
+        const inverse = invertAffine(tile.bake);
+        if (!inverse) continue;
+        const baked = positions.subarray(tile.start * 3, (tile.start + tile.count) * 3);
+        const local = unbakePositions(baked, inverse);
+        const scales = (tile.content as { scales?: Float32Array }).scales;
+        const opacity = new Float32Array(tile.count);
+        for (let i = 0; i < tile.count; i++) {
+          opacity[i] = colors ? (colors[(tile.start + i) * 4 + 3] ?? 255) / 255 : 1;
+        }
+        const pick: PickTile = {
+          checksum: checksumPositions(local),
+          count: tile.count,
+          positions: local,
+          radii: largestAxes(scales, tile.count),
+          opacity,
+        };
+        cache.set(tile.content, { bake: Array.from(tile.bake), tile: pick });
+        out.push(pick);
+      }
+      last = out;
+      return out;
+    },
+  };
+}

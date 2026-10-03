@@ -3,26 +3,27 @@
 Everything below runs on the CPU today with stand-ins (Telea inpainting for fill, damped
 oscillators for motion). This page covers swapping in the real models on Modal.
 
-| Teacher         | Stand-in (CPU, tested)         | GPU model            | Modal class   | Client                              |
-| --------------- | ------------------------------ | -------------------- | ------------- | ----------------------------------- |
-| B: fill         | `InpaintFiller` (Telea)        | NVIDIA Fixer         | `Fixer.fix`   | `world_model_client:FixerFiller`    |
-| B: refine       | `distill_fill.torch_rasterize` | gsplat 1.5.3         | `Distill.run` | `teacher_fill.py fill --distill N`  |
-| A: motion       | `OscillatorClips`              | Wan 2.2 TI2V-5B      | `Wan.clip`    | `teacher_motion.py --source wan`    |
-| A: motion (alt) | (same)                         | Cosmos-Predict2.5-2B | `Cosmos.clip` | `teacher_motion.py --source cosmos` |
-| C2: materials   | `teacher_materials.py synth`   | Wan / Cosmos         | `Wan.clip`    | `teacher_materials.py world`        |
+| Teacher         | Stand-in (CPU, tested)         | GPU model                                               | Modal class                                  | Client                                |
+| --------------- | ------------------------------ | ------------------------------------------------------- | -------------------------------------------- | ------------------------------------- |
+| B: fill         | `InpaintFiller` (Telea)        | NVIDIA Fixer                                            | `Fixer.fix`                                  | `world_model_client:FixerFiller`      |
+| B: fill (holes) | `InpaintFiller` (Telea)        | Qwen-Image inpainting ControlNet; LaMa; SDXL inpainting | `InpaintQwen.inpaint`, `InpaintSDXL.inpaint` | `world_model_client:GenerativeFiller` |
+| B: refine       | `distill_fill.torch_rasterize` | gsplat 1.5.3                                            | `Distill.run`                                | `teacher_fill.py fill --distill N`    |
+| A: motion       | `OscillatorClips`              | Wan 2.2 TI2V-5B                                         | `Wan.clip`                                   | `teacher_motion.py --source wan`      |
+| A: motion (alt) | (same)                         | Cosmos-Predict2-2B                                      | `Cosmos.clip`                                | `teacher_motion.py --source cosmos`   |
+| C2: materials   | `teacher_materials.py synth`   | Wan / Cosmos                                            | `Wan.clip`                                   | `teacher_materials.py world`          |
 
 Code: `infra/modal/world_models.py` (server), `tools/captures/world_model_client.py`
 (client), `teacher_fill.py`, `teacher_motion.py`, `distill_fill.py`.
 
 ## 1. Credentials
 
-| Need                  | Where it goes                                        | Why                                                                                                                      |
-| --------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Modal token           | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell | deploy and call                                                                                                          |
-| Hugging Face token    | Modal secret `huggingface` (`HF_TOKEN`)              | Wan, Cosmos weights (Fixer's `nvidia/Fixer` is not gated and needs none); the workspace had no such secret on 2026-10-02 |
-| HF licence acceptance | huggingface.co, on the token's account               | Cosmos only: Cosmos-Predict2.5-2B, Cosmos-Reason1-7B, Cosmos-Guardrail1 (all gated; `harwasch` had none on 2026-10-01)   |
-| ~~NGC API key~~       | not needed                                           | Fixer's NGC container is replaced by the same environment built from cosmos-predict2's `uv.lock` (section 5)             |
-| R2 credentials        | already used by `infra/modal/app.py`                 | only to publish an inferred layer                                                                                        |
+| Need                  | Where it goes                                        | Why                                                                                                                              |
+| --------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Modal token           | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell | deploy and call                                                                                                                  |
+| Hugging Face token    | Modal secret `huggingface-secret` (found by prefix)  | Wan, Cosmos weights (Fixer's `nvidia/Fixer` is not gated and needs none); token of account `harwasch` (section 8)                |
+| HF licence acceptance | huggingface.co, on the token's account               | Cosmos only: nvidia/Cosmos-Predict2-2B-Video2World and nvidia/Cosmos-1.0-Guardrail (both still 403 for `harwasch` on 2026-10-03) |
+| ~~NGC API key~~       | not needed                                           | Fixer's NGC container is replaced by the same environment built from cosmos-predict2's `uv.lock` (section 5)                     |
+| R2 credentials        | already used by `infra/modal/app.py`                 | only to publish an inferred layer                                                                                                |
 
 ```sh
 modal secret create huggingface HF_TOKEN=hf_...   # for Wan / Cosmos only
@@ -153,6 +154,9 @@ runs the job on an L4 (`run_job_gsplat`). Runs 36992095315 (gsplat), 36994749804
   the hole. Held-out psnrFill/psnrHole (gsplat): yard Telea 16.71/15.56, Fixer t250
   16.53, t100 16.53, t50 16.53; spool Telea 8.05/7.37, Fixer t250 7.52, t100 7.48, t50 7.47.
   Telea is ahead on both; on the spool Fixer's fill views are near the hole's own score.
+- **Published.** Fixer t50 + Distill 1500 from run 36997466266 (job `fill-camp-fixer-t50`)
+  is on the live camp tileset as `inferred/fixer-t50/` (`publish-fill.yml`, which re-links
+  it onto the current published tileset.json rather than the run's measured-tileset.json).
 
 ## 7. Split objects: the pumpkin's hole (2026-10-02, branch `wm-c4`)
 
@@ -177,3 +181,114 @@ runs the job on an L4 (`run_job_gsplat`). Runs 36992095315 (gsplat), 36994749804
   first three views; 8-22 s.
 - **GPU time**: each job 44-98 s on the L4 (Fixer 36-53 s and Distill 8-22 s of it on
   L40S calls); about 10 min of L4 wall over the four runs (one a duplicate push).
+
+## 8. Generative inpainting for holes (2026-10-02, branch `wm-inpaint`)
+
+`world_model_client.GenerativeFiller` is a `Filler` that paints the mask with an inpainting
+model (`tools/captures/inpaint_models.py`, run by `InpaintSDXL` / `InpaintQwen` /
+`InpaintFlux` in `infra/modal/fill.py` and `world_models.py`). `fill.py` checks the
+workspace's Hugging Face token against every model first (`inpaint-access.json`), drops jobs
+whose model it cannot read, and fetches the weights into the volume once. Runs 37051163053,
+37053677004, 37057636855 (pumpkin), 37059869195 (camp). Fillers: `lama`, `sdxl`, `qwen`,
+`sdxl-lama` (LaMa then SDXL at strength 0.6), each with `-chain`.
+
+| Model                                                      | Weights                                                        | Licence                                                                           | GPU, per 1024x576 view                                             |
+| ---------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Qwen-Image + inpainting ControlNet                         | `Qwen/Qwen-Image`, `InstantX/Qwen-Image-ControlNet-Inpainting` | Apache-2.0 (both)                                                                 | H100, 7-9 s (58 GB; cold load from the volume 12 min, warm ~1 min) |
+| LaMa (big-lama, IOPaint's TorchScript export, md5 checked) | GitHub release `Sanster/models`                                | Apache-2.0                                                                        | L40S, 0.3-2 s                                                      |
+| SDXL inpainting 0.1                                        | `diffusers/stable-diffusion-xl-1.0-inpainting-0.1`             | CreativeML OpenRAIL++-M (use restrictions travel with the weights)                | L40S, 1.5-3 s                                                      |
+| FLUX.1 Fill [dev] (not run)                                | `black-forest-labs/FLUX.1-Fill-dev`                            | FLUX.1 [dev] Non-Commercial: the model may not be used commercially (outputs may) | gated: `GatedRepoError 403` for the workspace's token              |
+
+- **Secrets.** The workspace's Hugging Face secret is not named `huggingface` (it starts
+  with `huggingface-secr`): `fill.yml` finds it by prefix (`HEXAPOD_HF_SECRET`), and
+  `inpaint_models.find_token` reads whichever key holds an `hf_` value.
+- **What made it work on the pumpkin.** (1) Shown the whole frame, both diffusion models
+  painted an _object_ into the object-shaped hole (Qwen a blue bowl, then a mushroom; SDXL
+  an orange disc). (2) A crop 2.5x the hole, a texture prompt ("<labels>: a top-down close-up
+  photograph of the ground, a seamless natural texture ...") and the object's own labels
+  only as negative (its parts carry the ground's labels: dirt, leaves, rock) removed the
+  objects, but every model then copied the rough pre-fill's flat polygons beyond the scan's
+  edge. (3) The void (`Conditioning.void`: nothing measured, nothing asked) is now repainted
+  with the hole and discarded (`reads_void`), so the model reads only measured pixels.
+  The prompt is `teacher_fill.describe_surroundings` over instances.json around the
+  footprint (tags weighted by score x gaussians x footprint share): "Dirt, ground, forest
+  floor and moss"; the bale is straw, which no tag says.
+- **Multi-view consistency.** Same seed in every view; `chain=1` fills the views in turn,
+  each shown the earlier views' fill lifted onto the plane and re-rendered, only the rest
+  masked (`teacher_fill._chained_fill`). The masked L1 between the lifted layer and each
+  view's fill before distill measures how much the views disagree.
+- **Pumpkin split** (ids 3 --absorb, gsplat L4, 6 views, Distill 1500; held-out
+  coverage of the 91,480 see-through px 0.4% before):
+
+  | filler          | held-out covered | masked L1 before -> after distill (mean) | outside L1     | look                                     |
+  | --------------- | ---------------- | ---------------------------------------- | -------------- | ---------------------------------------- |
+  | telea           | 99.2%            | 0.035 -> 0.009                           | 0.020 -> 0.005 | flat Telea polygons, a red blob          |
+  | fixer-t50       | 99.0%            | 0.034 -> 0.009                           | 0.020 -> 0.005 | the same, cleaned at its edge            |
+  | lama            | 99.6%            | 0.043 -> 0.015                           | 0.016 -> 0.004 | dark, blurred straw texture              |
+  | lama-chain      | 99.4%            | 0.017 -> 0.008                           | 0.016 -> 0.004 | the same, smoother across views          |
+  | sdxl            | 99.1%            | 0.069 -> 0.016                           | 0.024 -> 0.005 | an orange pumpkin-like streak            |
+  | sdxl-chain      | 99.3%            | 0.011 -> 0.005                           | 0.026 -> 0.005 | orange streak, consistent                |
+  | sdxl-lama-chain | 99.5%            | 0.015 -> 0.007                           | 0.018 -> 0.004 | dark smooth patch                        |
+  | qwen-chain      | 99.6%            | 0.030 -> 0.015                           | 0.019 -> 0.004 | straw-and-soil texture, no object (best) |
+
+  Every view of every filler passes the gate (only the mask is kept, so the measured
+  pixels are untouched; the models' own re-encoding of the rest scores 22-31 dB, discarded).
+  Coverage does not separate fillers; the strips do. The fill is darker than the bale:
+  the scan's ground around the pumpkin is in its shadow.
+
+- **Camp from outside** (gsplat, max-scale 0.5, 8 views, Distill 1500): `qwen-chain`
+  paints sharp, plausible forest in each view, but independent views disagree (masked L1
+  0.19 -> 0.11 after distill, against Fixer t50's 0.05 -> 0.015) and distill cannot fit the
+  measured pixels better (outside L1 0.019 -> 0.017; Fixer 0.015 -> 0.003): the layer is a
+  blotchy mix. `lama-chain`: 0.16 -> 0.07, outside 0.017 -> 0.016, a smeared green.
+  For the camp from outside Fixer t50 + distill stays the better layer: it cleans one
+  consistent render rather than inventing eight.
+- **GPU time** (caller-side wall, overlapping): L4 jobs 86 min over 23 jobs; H100 (Qwen)
+  40 min, of which ~25 min cold loads of 58 GB from the volume in the first runs; L40S
+  SDXL/LaMa 9 min; L40S Distill 17 min; weight prefetch (CPU) 7 min.
+- **Next.** A hole wants the generative fill inside it and the scan's own lighting: Qwen
+  chained is the one to keep for split objects. The prompt would gain from a caption of the
+  surroundings (the tags miss "straw"); the camp wants Fixer, or a multi-view model.
+
+## 9. Dream clips and C2 on generated footage (2026-10-03, branch `wm-dream`)
+
+Runner: `infra/modal/dream.py` + `.github/workflows/dream.yml` (deploys `world_models.py`,
+then runs). Run 37079912011 is the complete one. Video models are diffusers 0.40 /
+transformers 5 / torch 2.8 on H100s (`world_models.video_image`); `world_models.access()`
+reports what the token can read.
+
+- **Wan 2.2 TI2V-5B runs**: 1280x704, 121 frames at 24 fps (5.04 s), 50 steps,
+  **~178 s of H100 per clip** warm (176-181 s over 24 clips), plus ~~25 s of model load per
+  new container (117 s on the very first, downloading into the weights volume). At Modal's
+  H100 rate (~~$3.95/h) that is about **$0.20 per clip**.
+- **Cosmos-Predict2-2B Video2World does not run yet**: the token's account (`harwasch`)
+  gets 403 on `nvidia/Cosmos-Predict2-2B-Video2World` and `nvidia/Cosmos-1.0-Guardrail`
+  (the guardrail the diffusers pipeline builds; its prompt model Qwen3Guard is open).
+  Accept both licences on huggingface.co. A model whose start fails is retried by Modal
+  without end (run 37054515134 waited 4 h), so `dream.py` now skips a model `access()`
+  reports unreadable, and waits on every call with a timeout.
+- **Starts**: gsplat renders over a pale sky from eye-level candidates scored by coverage
+  and depth (`starts/*-candidates.png`). The camp's two from its clearing look like
+  photographs; the pumpkin's (1.4 m over the patch) is a close, low view.
+- **Clips** (`gentle`, `gusty`, `rain` x 3 starts): the camera stays put (the sign, trunks
+  and benches do not move); `gusty` moves canopy and ferns visibly more than `gentle`;
+  `rain` adds faint streaks and little else. On the pumpkin the model reinvents the
+  foreground: the pumpkin turns into a leaf blowing through. A view where plants, not an
+  object, fill the frame is what the motion teachers want.
+- **C2** (`teacher_materials.py world`, strength 0.1 assumed, `--auto-bearing`, gsplat
+  still, three Wan calls chained = 361 frames, 15.0 s): 4 of 5 camp plants `fitted`
+  (`fitted-generated`), the 9.7 m tree 231 `weak` (445 of 14,387 px unoccluded from its
+  best bearing). Fitted c / zeta / D against the prior (3.6-3.9 / 0.10 / 0.025):
+  225 bush 0.9 m 5.0 / 0.62 / 0.008; 244 bush 1.0 m 24.0 / 0.49 / 0.010; 113 bush 4 m
+  30.7 / 0.95 / 0.034; 414 conifer 3.8 m 20.7 / 0.69 / 0.148.
+- **Read them as "no resonance seen"**, not as materials. The tracked spectra are a
+  smooth decay from 0.5 to 8 Hz (`materials/instance-*/spectrum.png`) with no peak, two
+  orders below what the prior predicts at 0.5 Hz; the fit reaches for very stiff,
+  overdamped (resonance above the band, flat response), two of four past the grid's
+  6x-prior edge and a third at it. Wan's breeze is small, broadband jitter of foliage, not the sway of an
+  anchored modal structure.
+- **Clip length**: 5 s gives Welch segments of ~1.25 s (lowest band ~1.6 Hz); three
+  chained calls (15 s) reach ~0.5 Hz. A shrub's 2-8 Hz would be inside that, a tree's
+  0.17-0.3 Hz is not. Chaining holds the pose at the joins but drifts colour (the 15 s
+  clip desaturates) and restarts the motion's phase each 5 s; longer chains need the
+  tracker to re-anchor per link. More length will not by itself make the fit physical.

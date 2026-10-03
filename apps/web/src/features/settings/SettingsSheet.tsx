@@ -9,6 +9,7 @@ import {
 } from "@twin/ui";
 
 import { env } from "@/app/env";
+import { MotionRendererNote } from "@/features/sites/MotionRendererNote";
 import {
   CPU_REASON_TEXT,
   DEFAULT_WIND_STRENGTH,
@@ -161,6 +162,7 @@ function WindSection() {
         }
       />
       <MotionReadout sites={status.sites} />
+      {on && <MotionRendererNote />}
       {on && !reducedMotion && (
         <>
           <Row
@@ -485,7 +487,7 @@ function AdvancedSection() {
         <Row
           id="splat-renderer-label"
           label="Splat renderer"
-          hint="Who draws Gaussian splats, for comparison; the globe, navigation and tools stay CesiumJS. WebGPU is PlayCanvas on WebGPU, in beta: WebGL2 where a device has none"
+          hint="Who draws Gaussian splats, for comparison; the globe, navigation and tools stay CesiumJS. WebGPU is PlayCanvas on WebGPU, in beta: WebGL2 where a device has none, and WebGL2 for scans with objects or motion"
           control={
             <GlassSegmentedControl
               aria-label="Splat renderer"

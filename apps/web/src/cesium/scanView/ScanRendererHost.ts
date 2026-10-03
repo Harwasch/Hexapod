@@ -21,6 +21,19 @@
  * globe's (quality.ts), and the main-thread part of each tile is spent within a frame budget
  * that shrinks while the camera moves (tileWork.ts). A flight can have its destination's
  * tiles fetched ahead (`prefetchScanDestination`).
+ *
+ * The scan's objects are the renderer's to draw too: hidden and highlighted (scanInstances.ts),
+ * moving as the shared drivers move them (scanMotion.ts: the wind's skins, telemetry's rigid
+ * motions) and split objects at their poses (scanObjects.ts), and selectable in the scene from
+ * the tiles it draws (`registerPickSource`, cesium/sceneSelect). Motion is one more input a
+ * frame is drawn from: the drivers ask the globe for a frame as they move something, and a
+ * frame is drawn when the motion handed to the renderer changed (`ScanMotionLink.update`) or a
+ * split object moved -- so at rest, with nothing moving, still nothing is drawn.
+ *
+ * Under the WebGPU trial a scan with objects or motion is drawn with WebGL2 (PlayCanvas's
+ * default renderer): the modifiers that hide, highlight and move them are GLSL only for now
+ * (playcanvasBackend.ts, `WorkBufferModifier`), and the readouts say so
+ * (`WEBGL2_FOR_OBJECTS_NOTICE`).
  */
 
 import {
@@ -36,18 +49,23 @@ import {
 } from "cesium";
 
 import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
+import { instancesRefOf } from "@/lib/instances";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import { createLogger, describeError } from "@/lib/log";
+import { useSceneObjects } from "@/state/sceneObjects";
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
+import { DEDICATED_PRIORITY, registerPickSource } from "../sceneSelect/pickSources";
 import { FrameMeter, type FrameReading } from "./frameMeter";
 import { Handover } from "./handover";
 import { OverlayFrames, OverlayInputs, type FrameOutcome } from "./overlayFrames";
 import { scanPose } from "./pose";
 import { globePixelRatio, maxShDegree, overlayPixelRatio, type GlobeResolution } from "./quality";
 import { linkScanInstances } from "./scanInstances";
+import { declaresMotion, declaresObjects, ScanMotionLink } from "./scanMotion";
+import { ScanObjects } from "./scanObjects";
 import { countOverlayDraw } from "./stats";
 import { TileWork } from "./tileWork";
 import type { BackendHooks, GraphicsApi, ScanBackend, SplatRendererKind } from "./types";
@@ -162,6 +180,58 @@ export async function findNativeLod(
   return null;
 }
 
+/**
+ * THE switch for a scan with objects (`extras.instances`) that also has a native streamed
+ * package: false streams its 3D Tiles, whose splats carry object ids by checksum, so the
+ * objects can be hidden, highlighted and moved; true streams the native package (SOG), whose
+ * splats carry none -- every object drawn whatever the panel says, and the panels report the
+ * gap. False for now; flipped to measure what the native package would gain such a scan.
+ */
+export const NATIVE_SOG_FOR_SCANS_WITH_OBJECTS = false;
+
+/** What the readouts say when the WebGPU trial draws a scan with WebGL2 for its objects. */
+export const WEBGL2_FOR_OBJECTS_NOTICE = "WebGL2 for scans with objects or motion";
+
+/** The scan tileset's root extras (what it declares: instances, skin, objects, ...). */
+function rootExtrasOf(tileset: Cesium3DTileset): unknown {
+  return (tileset.root as { extras?: unknown } | undefined)?.extras;
+}
+
+/** The scan tileset's root transform as it is declared, column-major (the splats' frame). */
+function rootTransformArray(tileset: Cesium3DTileset): number[] {
+  const transform = (tileset.root as { transform?: Matrix4 } | undefined)?.transform;
+  return Matrix4.toArray(transform ?? Matrix4.IDENTITY);
+}
+
+/**
+ * Whether a scan declares anything only a GLSL modifier draws: objects (`instances.json`,
+ * split objects) or motion (a skin, telemetry). The WebGPU trial draws such a scan with WebGL2.
+ */
+export function declaresObjectsOrMotion(extras: unknown): boolean {
+  return instancesRefOf(extras) !== null || declaresMotion(extras) || declaresObjects(extras);
+}
+
+/**
+ * Calls `changed` when a split object of `assetId`'s scan is given a pose (by hand or by a
+ * driver: `useSceneObjects.setPose`), which no camera move shows. Returns the remover.
+ */
+function watchPoses(assetId: string | undefined, changed: () => void): () => void {
+  if (assetId === undefined) return () => undefined;
+  return useSceneObjects.subscribe((state, previous) => {
+    if (state.poses[assetId] !== previous.poses[assetId]) changed();
+  });
+}
+
+/** What a session reports of its moving objects. */
+function motionStatus(
+  link: ScanMotionLink | null,
+  backend: ScanBackend<unknown>,
+): ScanRendererStatus["motion"] {
+  if (!link || !backend.setMotion) return null;
+  const tiles = backend.motionTiles?.() ?? { skinned: 0, redrawn: 0 };
+  return { updates: link.updates, ...tiles };
+}
+
 /** What the page's tests, the debug panel and the developer readouts read. */
 export interface ScanRendererStatus {
   kind: SplatRendererKind;
@@ -170,9 +240,13 @@ export interface ScanRendererStatus {
   api: GraphicsApi | null;
   /**
    * Why it does not draw with what was chosen, in one line, or null: the WebGPU trial on
-   * WebGL2 because the browser has no WebGPU, or because the WebGPU device was lost.
+   * WebGL2 because the browser has no WebGPU, because the WebGPU device was lost, or because
+   * the scan has objects or motion (`WEBGL2_FOR_OBJECTS_NOTICE`).
    */
   notice: string | null;
+  /** The WebGPU trial draws this scan with WebGL2 for its objects or motion, not for want of
+   *  WebGPU (`declaresObjectsOrMotion`). */
+  webgl2ForObjects: boolean;
   /** How fast it drew during the latest camera motion (frameMeter.ts), or null. */
   meter: FrameReading | null;
   tiles: number;
@@ -187,6 +261,15 @@ export interface ScanRendererStatus {
   cached: number;
   /** Tiles that can carry object ids, and those the scan's instances.json lists, or null. */
   instances: { tiles: number; matched: number } | null;
+  /**
+   * The scan's moving objects (scanMotion.ts): motions handed to the renderer, tiles carrying
+   * skin weights, and tile redraws for motion; null while the renderer moves nothing.
+   */
+  motion: { updates: number; skinned: number; redrawn: number } | null;
+  /** Split objects drawn beside the scan (scanObjects.ts). */
+  objects: number;
+  /** Whether the renderer shows what it was last asked for (`ScanBackend.settled`). */
+  settled: boolean;
 }
 
 interface Session {
@@ -196,16 +279,40 @@ interface Session {
   token: object;
   api: GraphicsApi;
   notice: string | null;
+  webgl2ForObjects: boolean;
   stop(): void;
-  status(): Omit<ScanRendererStatus, "kind" | "active" | "instances" | "api" | "notice" | "meter">;
+  status(): Omit<
+    ScanRendererStatus,
+    | "kind"
+    | "active"
+    | "instances"
+    | "api"
+    | "notice"
+    | "webgl2ForObjects"
+    | "meter"
+    | "motion"
+    | "objects"
+    | "settled"
+  >;
   meter(now: number): FrameReading | null;
   instances(): { tiles: number; matched: number } | null;
+  motion(): ScanRendererStatus["motion"];
+  objects(): number;
+  settled(): boolean;
   /** Fetches what a camera at `pose` will draw (a flight's destination); null forgets it. */
   prefetch(pose: CameraPose | null): void;
 }
 
 /** A session as drawing makes it; `start` adds which start, API and notice it is. */
-type SessionCore = Omit<Session, "token" | "api" | "notice">;
+type SessionCore = Omit<Session, "token" | "api" | "notice" | "webgl2ForObjects">;
+
+/** How the host makes its renderers. */
+export interface ScanRendererOptions {
+  /** The renderers' modules (tests hand the host their own); fetched on demand otherwise. */
+  backends?: (kind: Exclude<SplatRendererKind, "cesium">) => Promise<BackendModule>;
+  /** Keeps each drawn frame readable after it is shown (harnesses read pixels back). */
+  preserveDrawingBuffer?: boolean;
+}
 
 /** A renderer's module: what `loadBackend` fetches (tests hand the host their own). */
 export interface BackendModule {
@@ -354,12 +461,15 @@ export class ScanRendererHost {
    */
   onFailure: ((message: string) => void) | null = null;
 
+  private readonly backends: (kind: Exclude<SplatRendererKind, "cesium">) => Promise<BackendModule>;
+  private readonly preserveDrawingBuffer: boolean;
+
   constructor(
     private readonly viewer: HostViewer,
-    private readonly backends: (
-      kind: Exclude<SplatRendererKind, "cesium">,
-    ) => Promise<BackendModule> = loadBackend,
+    options: ScanRendererOptions = {},
   ) {
+    this.backends = options.backends ?? loadBackend;
+    this.preserveDrawingBuffer = options.preserveDrawingBuffer === true;
     hosts.add(this);
   }
 
@@ -421,9 +531,13 @@ export class ScanRendererHost {
       active: session !== null,
       api: session?.api ?? null,
       notice: session?.notice ?? null,
+      webgl2ForObjects: session?.webgl2ForObjects ?? false,
       meter: session?.meter(performance.now()) ?? null,
       ...inner,
       instances: session?.instances() ?? null,
+      motion: session?.motion() ?? null,
+      objects: session?.objects() ?? 0,
+      settled: session?.settled() ?? true,
       error: inner.error ?? this.lastError,
     };
   }
@@ -580,6 +694,7 @@ export class ScanRendererHost {
       work,
       maxShDegree: maxShDegree(isHandheld()),
       deviceLost: (reason) => this.deviceLost(token, reason),
+      preserveDrawingBuffer: this.preserveDrawingBuffer,
     };
     const create = async (
       module: Exclude<SplatRendererKind, "cesium">,
@@ -607,7 +722,13 @@ export class ScanRendererHost {
     let made: { canvas: HTMLCanvasElement; backend: ScanBackend<unknown> } | null = null;
     /** Why this one session draws with WebGL2 when WebGPU itself was never tried. */
     let loadNotice: string | null = null;
-    if (kind === "playcanvas-webgpu" && this.webgpuFailed === null) {
+    // A scan with objects or motion is drawn with WebGL2 from the start: what hides, lights and
+    // moves them is GLSL only for now (playcanvasBackend.ts). WebGPU is not held against.
+    const webgl2ForObjects =
+      kind === "playcanvas-webgpu" &&
+      target.assetId !== undefined &&
+      declaresObjectsOrMotion(rootExtrasOf(target.tileset));
+    if (kind === "playcanvas-webgpu" && this.webgpuFailed === null && !webgl2ForObjects) {
       try {
         made = await create(kind);
       } catch (error) {
@@ -632,12 +753,16 @@ export class ScanRendererHost {
     const api = backend.api ?? "webgl2";
     canvas.dataset.api = api;
     const notice =
-      kind === "playcanvas-webgpu" ? (backend.apiNote ?? this.webgpuFailed ?? loadNotice) : null;
+      kind !== "playcanvas-webgpu"
+        ? null
+        : webgl2ForObjects
+          ? WEBGL2_FOR_OBJECTS_NOTICE
+          : (backend.apiNote ?? this.webgpuFailed ?? loadNotice);
     // A frame that throws retires this session, never the globe (overlayFrames.ts).
     const failed = (error: unknown): void => this.drawFailed(token, kind, target.key, error);
     try {
       const session = await this.run(kind, target, canvas, backend, budget, wake, work, failed);
-      return Object.assign(session, { token, api, notice });
+      return Object.assign(session, { token, api, notice, webgl2ForObjects });
     } catch (error) {
       // Whatever failed before the first frame leaves nothing behind.
       work.stop();
@@ -706,6 +831,23 @@ export class ScanRendererHost {
     streamer.onArrival = () => {
       arrived = true;
       wake.frame("tiles");
+    };
+    // The scan's objects move as the shared drivers move them (scanMotion.ts), and its split
+    // objects are drawn where their poses put them (scanObjects.ts).
+    const extras = rootExtrasOf(target.tileset);
+    const motionLink = target.assetId
+      ? new ScanMotionLink(target.assetId, backend, { native: false, extras })
+      : null;
+    const objects = new ScanObjects<unknown>(backend, target.assetId, () => wake.frame("objects"));
+    /**
+     * Hands the renderer the drivers' latest motion and places the split objects at their
+     * poses; true when either changed what a frame shows. Both run every time: a frame drawn
+     * for one shows the other as it is now.
+     */
+    const pollMotion = (): boolean => {
+      const handed = motionLink?.update() ?? false;
+      const moved = objects.tick();
+      return handed || moved;
     };
 
     const toLocal = new Matrix4();
@@ -814,6 +956,8 @@ export class ScanRendererHost {
           replanAt = lastPlan + REPLAN_MS;
         }
       }
+      // The drivers' motion as it is now (`changed` may have handed it already).
+      pollMotion();
       const drawStart = performance.now();
       backend.render(pose);
       if (motion) meter.record(drawStart, performance.now() - drawStart);
@@ -825,6 +969,9 @@ export class ScanRendererHost {
         moving ? lastMotionAt + MOTION_SETTLE_MS : null,
         replanAt,
         step.nextAt,
+        // Work the renderer held back (a moving object's throttled re-sort): its last pose is
+        // sorted by then even when nothing moves any more.
+        backend.frameDueBy?.() ?? null,
       ].filter((t): t is number => t !== null);
       return {
         again: step.changed || step.animating || budgetMoved,
@@ -838,17 +985,25 @@ export class ScanRendererHost {
       root = await backend.load(url, tree.root);
     } catch (reason) {
       streamer.stop();
+      motionLink?.dispose();
       throw reason;
     }
     handover.show(root, performance.now());
     streamer.adopt(tree.root, root);
+    void objects.load(url, extras, rootTransformArray(target.tileset));
     const driver = new OverlayFrames(
       (listener) => viewer.scene.postRender.addEventListener(listener),
       {
+        // What the frame is drawn from moved -- or the objects did: the drivers ask the globe
+        // for a frame as they move something (LivingSurveyManager, telemetry.ts), and this is
+        // where the overlay hears of it.
         changed: () => {
           const tileset = target.tileset;
           if (tileset.isDestroyed()) return false;
-          return inputs.changed(viewer.camera, inputSize(), tileset.root.computedTransform);
+          return (
+            inputs.changed(viewer.camera, inputSize(), tileset.root.computedTransform) ||
+            pollMotion()
+          );
         },
         draw: frame,
         failed,
@@ -856,16 +1011,36 @@ export class ScanRendererHost {
     );
     wake.frame = (reason) => driver.wake(reason);
     driver.wake("start");
+    // A pose set by hand or by a driver (`useSceneObjects.setPose`).
+    const unwatchPoses = watchPoses(target.assetId, () => driver.wake("objects"));
     const unlinkInstances = target.assetId
       ? linkScanInstances(target.assetId, backend, false, undefined, () => driver.wake("instances"))
       : () => undefined;
+    // Scene selection picks from the tiles this renderer draws (cesium/sceneSelect).
+    const unlinkPick =
+      target.assetId && backend.pickTiles
+        ? registerPickSource(
+            target.assetId,
+            {
+              renderer: backend.name,
+              tiles: () => backend.pickTiles?.() ?? [],
+              toWorld: () =>
+                target.tileset.isDestroyed() ? undefined : target.tileset.root.computedTransform,
+            },
+            DEDICATED_PRIORITY,
+          )
+        : () => undefined;
     log.info("splat renderer started", { kind, tiles: tree.root.uri });
 
     return {
       kind,
       key: target.key,
       stop: () => {
+        unlinkPick();
         unlinkInstances();
+        motionLink?.dispose();
+        objects.stop();
+        unwatchPoses();
         driver.stop();
         work.stop();
         // The canvas goes whatever the renderer does on the way out (a retired one may throw).
@@ -897,6 +1072,9 @@ export class ScanRendererHost {
         );
       },
       instances: () => backend.instanceTiles?.() ?? null,
+      motion: () => motionStatus(motionLink, backend),
+      objects: () => objects.count,
+      settled: () => backend.settled?.() ?? true,
       meter: (now) => meter.reading(now),
       status: () => ({
         tiles: streamer.drawn.length,
@@ -914,7 +1092,11 @@ export class ScanRendererHost {
   /**
    * The scan in the renderer's own streamed format, when its package has one: the renderer
    * streams and chooses by itself and this only keeps its camera on Cesium's. Null when the
-   * package has none (older scans), and the tileset is streamed here instead.
+   * package has none (older scans), and the tileset is streamed here instead. Also null for
+   * a scan with objects (`extras.instances`) while `NATIVE_SOG_FOR_SCANS_WITH_OBJECTS` is off:
+   * the native package's splats carry no object ids, so the objects could not be hidden or
+   * highlighted there (the published camp, which has both, drew every object whatever the
+   * panel said); its 3D Tiles carry them by checksum.
    */
   private async runNative(
     kind: Exclude<SplatRendererKind, "cesium">,
@@ -927,7 +1109,10 @@ export class ScanRendererHost {
     failed: (error: unknown) => void,
   ): Promise<SessionCore | null> {
     if (!backend.streamNative) return null;
-    const extras = (target.tileset.root as { extras?: unknown } | undefined)?.extras;
+    const extras = rootExtrasOf(target.tileset);
+    if (!NATIVE_SOG_FOR_SCANS_WITH_OBJECTS && target.assetId && instancesRefOf(extras) !== null) {
+      return null;
+    }
     const lodUrl = await findNativeLod(tilesetUrl, extras);
     if (lodUrl === null) return null;
     const stream = await backend.streamNative(lodUrl);
@@ -975,20 +1160,34 @@ export class ScanRendererHost {
       frames += 1;
       return { again: false, by: moving ? lastMotionAt + MOTION_SETTLE_MS : null };
     };
+    // The native package carries no tile checksums: no object ids, no skins (the panels say
+    // so); split objects are tiles of their own, drawn as in any session.
+    const motionLink = target.assetId
+      ? new ScanMotionLink(target.assetId, backend, { native: true, extras })
+      : null;
+    const objects = new ScanObjects<unknown>(backend, target.assetId, () => wake.frame("objects"));
+    void objects.load(tilesetUrl, extras, rootTransformArray(target.tileset));
     const driver = new OverlayFrames(
       (listener) => viewer.scene.postRender.addEventListener(listener),
       {
         changed: () => {
           const tileset = target.tileset;
           if (tileset.isDestroyed()) return false;
-          return inputs.changed(viewer.camera, inputSize(), tileset.root.computedTransform);
+          return (
+            inputs.changed(viewer.camera, inputSize(), tileset.root.computedTransform) ||
+            objects.tick()
+          );
         },
-        draw: frame,
+        draw: () => {
+          objects.tick();
+          return frame();
+        },
         failed,
       },
     );
     wake.frame = (reason) => driver.wake(reason);
     driver.wake("start");
+    const unwatchPoses = watchPoses(target.assetId, () => driver.wake("objects"));
     // The native package's splats carry no object ids: the objects panel says so.
     const unlinkInstances = target.assetId
       ? linkScanInstances(target.assetId, backend, true)
@@ -998,11 +1197,17 @@ export class ScanRendererHost {
       kind,
       key: target.key,
       instances: () => null,
+      motion: () => null,
+      objects: () => objects.count,
+      settled: () => backend.settled?.() ?? true,
       meter: (now) => meter.reading(now),
       // The renderer chooses its own level of detail from its own camera.
       prefetch: () => undefined,
       stop: () => {
         unlinkInstances();
+        motionLink?.dispose();
+        objects.stop();
+        unwatchPoses();
         driver.stop();
         work.stop();
         try {

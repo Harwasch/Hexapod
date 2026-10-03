@@ -21,6 +21,12 @@ export interface SceneEvents extends Record<string, unknown> {
   layer: { id: string; patch: Partial<LayerRuntime> };
   asset: { id: string; patch: Partial<AssetRuntime> };
   "site-near": string | null;
+  /**
+   * The loaded site the camera still frames (SiteManager): near, or a few kilometres away in a
+   * straight line -- a pitched view from far up looks at it from well outside its footprint.
+   * Its controls (representation, renderer, objects, inferred fill) stay up while it is.
+   */
+  "site-in-view": string | null;
   "site-active": string | null;
   /** One site's load (record, model, first tiles), whole; null once the site is unloaded. */
   "site-load": { siteId: string; load: SiteLoad | null };

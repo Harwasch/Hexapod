@@ -1,8 +1,9 @@
 /**
  * The splat renderer as the developer readouts say it: which engine draws the scan and with
  * which graphics API ("PlayCanvas · WebGPU", or "PlayCanvas · WebGL2 (WebGPU unavailable)"
- * when the WebGPU trial could not have it), how fast it drew during the latest camera motion,
- * and the one line on why the trial fell back. What the owner compares renderers by in person
+ * when the WebGPU trial could not have it, "PlayCanvas · WebGL2 (objects or motion)" when the
+ * scan has objects or motion, whose modifiers are GLSL only for now), how fast it drew during
+ * the latest camera motion, and the one line on why the trial fell back. What the owner compares renderers by in person
  * (docs/WEBGPU_TRIAL.md); shown in the bottom bar and, for phones, where the bar is hidden,
  * under the renderer switch in Settings › Advanced.
  */
@@ -43,13 +44,17 @@ export interface RendererReadout {
 /** The readout for the renderer `chosen` and the overlay's status (null while none runs). */
 export function rendererReadout(
   chosen: SplatRenderer,
-  status: Pick<ScanRendererStatus, "kind" | "active" | "api" | "notice" | "meter"> | null,
+  status: Pick<
+    ScanRendererStatus,
+    "kind" | "active" | "api" | "notice" | "meter" | "webgl2ForObjects"
+  > | null,
 ): RendererReadout {
   if (chosen === "cesium" || !status?.active || status.kind !== chosen || status.api === null) {
     return { label: RENDERER_NAMES[chosen], meter: null, notice: null };
   }
   const fellBack = chosen === "playcanvas-webgpu" && status.api !== "webgpu";
-  const label = `${ENGINE[chosen]} · ${API_NAMES[status.api]}${fellBack ? " (WebGPU unavailable)" : ""}`;
+  const why = status.webgl2ForObjects ? " (objects or motion)" : " (WebGPU unavailable)";
+  const label = `${ENGINE[chosen]} · ${API_NAMES[status.api]}${fellBack ? why : ""}`;
   const reading = status.meter;
   const meter = reading
     ? `${reading.live ? "" : "last move "}${String(Math.round(reading.fps))} fps · p95 ${String(Math.round(reading.p95Ms))} ms · draw ${reading.cpuMs.toFixed(1)} ms`

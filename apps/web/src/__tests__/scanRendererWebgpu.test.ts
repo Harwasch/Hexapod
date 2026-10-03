@@ -123,13 +123,15 @@ function rig(webgpu: "fails" | "webgpu" | "webgl2" | "unfetched"): Rig {
   };
   // "unfetched": the WebGPU module's chunk does not arrive the first time it is asked for.
   let unfetched = webgpu === "unfetched" ? 1 : 0;
-  const host = new ScanRendererHost(viewer as never, (kind) => {
-    if (kind === "playcanvas-webgpu" && unfetched > 0) {
-      unfetched -= 1;
-      return Promise.reject(new TypeError("Failed to fetch dynamically imported module"));
-    }
-    const chosen = modules[kind];
-    return chosen ? Promise.resolve(chosen) : Promise.reject(new Error(kind));
+  const host = new ScanRendererHost(viewer as never, {
+    backends: (kind) => {
+      if (kind === "playcanvas-webgpu" && unfetched > 0) {
+        unfetched -= 1;
+        return Promise.reject(new TypeError("Failed to fetch dynamically imported module"));
+      }
+      const chosen = modules[kind];
+      return chosen ? Promise.resolve(chosen) : Promise.reject(new Error(kind));
+    },
   });
   const globe = (): void => {
     postRender.raiseEvent();

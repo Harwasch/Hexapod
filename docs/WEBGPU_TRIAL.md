@@ -86,7 +86,8 @@ side. Use `?renderer=webgl` and `?renderer=webgpu` and reload between runs.
    shows the warm cost.
 6. **Phone thermals.** Five minutes of continuous orbit on each renderer: is `fps` sustained or
    does it sag as the phone warms; how warm does it get; battery used.
-7. **Correctness.** Objects panel: hide, highlight, hide all (the WGSL port must look the same);
+7. **Correctness.** A scan with objects or motion is drawn with WebGL2 under the trial (see
+   below), and the readouts must say "WebGL2 for scans with objects or motion"; on one without,
    new detail fading in without black flashes; rotating the phone, resizing the window;
    switching tabs or apps and coming back (where a device loss is most likely; the trial must
    come back on WebGL2 with the notice, never blank); switching renderers back and forth.
@@ -123,6 +124,12 @@ The trial never leaves a scan undrawn (`ScanRendererHost.start`, `createWebgpuBa
   new release replacing the files). That says nothing about WebGPU, so it is not held against
   it: this scan is drawn by PlayCanvas on WebGL2 with the notice _The playcanvas-webgpu
   renderer's code did not load: …_, and the next scan asks for WebGPU again.
+- **A scan with objects or motion** (its root declares `instances`, split objects, a skin or
+  telemetry: `declaresObjectsOrMotion`). The work-buffer modifiers that move the objects
+  (docs/SCENE_OBJECTS.md §4) are GLSL only for now, so such a scan is drawn by PlayCanvas on
+  WebGL2 from the start, WebGPU never tried for it and not held against; the readouts say
+  _WebGL2 for scans with objects or motion_ and the renderer line reads _PlayCanvas · WebGL2
+  (objects or motion)_. The WGSL port of the motion is to come.
 
 The overlay canvas is tagged with the renderer actually drawing on it
 (`data-scan-renderer="playcanvas"` for a fallback on a fresh canvas) and the API it draws with
@@ -133,10 +140,11 @@ The overlay canvas is tagged with the renderer actually drawing on it
 - `createWebgpuBackend` (`cesium/scanView/playcanvasBackend.ts`): the device is made first,
   asynchronously, and the app is an `AppBase` with a camera, gsplats and the gsplat and texture
   asset handlers (`Application` always makes a WebGL2 device of its own).
-- The objects' work-buffer modifier and colour rule have WGSL ports
-  (`PLAYCANVAS_INSTANCE_WGSL`, `SCAN_INSTANCE_RULE_WGSL`); PlayCanvas takes the language its
-  device speaks. `instanceShaders.test.ts` holds the WGSL rule to the GLSL one statement for
-  statement.
+- A work-buffer modifier is `{ glsl, wgsl? }` (`WorkBufferModifier`); PlayCanvas takes the
+  language its device speaks, and one without WGSL is not applied there. Hide and highlight have
+  WGSL ports (`PLAYCANVAS_INSTANCE_WGSL`, `SCAN_INSTANCE_RULE_WGSL`; `instanceShaders.test.ts`
+  holds the WGSL rule to the GLSL one statement for statement); the motion has none yet, so a
+  renderer on WebGPU offers no `setMotion` and the host draws such scans with WebGL2.
 - PlayCanvas sorts on the GPU in the frame that draws, so no sort result comes back to ask
   for the frame that confirms a new tile is drawn (handover.ts waits for that before taking
   its parent away). The renderer asks for that one frame itself, once per batch of tiles, and
@@ -165,8 +173,8 @@ skips them and says so.
 - `e2e/scanOverlayIdle.spec.ts`: nothing drawn at rest and PlayCanvas's loop paused, on
   WebGPU too: 0 draws and 0 loop ticks in five seconds at rest, before and after a turn, for
   tiles and package; and every variant's turn is read by the frame meter.
-- `e2e/instances.spec.ts`: hide, highlight and hide all on WebGPU, with the WGSL modifier,
-  measured as on WebGL2.
+- `e2e/instances.spec.ts`: the yard has objects, so the trial draws it with WebGL2 and says
+  so; hide, highlight and hide all measured there as under PlayCanvas.
 
 Software rasterisers say nothing about speed, presentation timing, memory or heat: that is
 what the in-person comparison above is for. The fallbacks are unit-tested

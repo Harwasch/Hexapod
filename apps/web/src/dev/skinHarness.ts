@@ -17,6 +17,12 @@
  * (`cesium/telemetry.ts`) on a harness clock in milliseconds that moves only when told to
  * (`telemetryAt`): the driver for e2e/telemetry.spec.ts.
  *
+ * With `renderer` set to `playcanvas` or `spark`, CesiumJS's splats are hidden and the scan is
+ * drawn by that dedicated renderer over the globe (`cesium/scanView`), as the app does: the
+ * same drivers move the same objects through `scanView/scanMotion.ts`, split objects declared
+ * on the root are drawn at their poses (`objectPose`), and a frame is the globe and the
+ * renderer's canvas composited: the driver for e2e/motionRenderers.spec.ts.
+ *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -35,6 +41,8 @@ import {
 } from "cesium";
 
 import { claimsOf } from "@/cesium/motionClaims";
+import { ScanRendererHost, type ScanRendererStatus } from "@/cesium/scanView/ScanRendererHost";
+import type { SplatRendererKind } from "@/cesium/scanView/types";
 import { describeFromStore, SkinWindDriver } from "@/cesium/skinWind";
 import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
@@ -46,7 +54,9 @@ import { withDescendants } from "@/lib/instances";
 import { HANDLE_FLOATS, rigidHandle } from "@/lib/skin";
 import { SyntheticSource } from "@/lib/telemetrySources";
 import { SkinWindField, WIND_CALM, type WindSettings } from "@twin/world";
-import { useInstances } from "@/state/instances";
+import type { ObjectPose } from "@/lib/sceneObjects";
+import { useInstances, type RendererGap } from "@/state/instances";
+import { useSceneObjects } from "@/state/sceneObjects";
 
 const BACKGROUND = "#10141a";
 const ASSET = "skin-harness";
@@ -88,6 +98,8 @@ export interface SkinHarness {
   frame(): number;
   /** Share of pixels (in `rect`) that differ between frames `a` and `b` by more than `tol`. */
   difference(a: number, b: number, rect?: Rect, tol?: number): number;
+  /** The largest channel difference (0-255) between frames `a` and `b` in `rect`. */
+  maxDifference(a: number, b: number, rect?: Rect): number;
   /** Share of `rect` (or the canvas) that is not background in frame `a`. */
   coverage(a: number, rect?: Rect): number;
   /** Where instance `id` is on screen, or null. */
@@ -126,6 +138,12 @@ export interface SkinHarness {
   rigidInfo(ids: number[]): { driven: number[]; active: boolean; slots: number[] };
   /** The handles a skinned instance's skin holds now, or null at rest. */
   skinHandles(instance: number): number[] | null;
+  /** The dedicated renderer's state (null under CesiumJS). */
+  rendererStatus(): ScanRendererStatus | null;
+  /** Poses split object `instance` (null: its declared pose), then waits for the frame. */
+  objectPose(instance: number, pose: ObjectPose | null): Promise<void>;
+  /** What the store says the renderer cannot move, for the panels. */
+  motionGap(): RendererGap | null;
 }
 
 export interface TelemetryStatus {
@@ -156,6 +174,8 @@ export async function startSkinHarness(options: {
   maximumScreenSpaceError?: number;
   /** The app's distance sorter (`installSplatSorter`), which orders moving groups as drawn. */
   sorter?: boolean;
+  /** Who draws the splats: CesiumJS (the default) or a dedicated renderer over the globe. */
+  renderer?: SplatRendererKind;
 }): Promise<SkinHarness> {
   if (options.sorter === true) installSplatSorter();
   const widget = new CesiumWidget(options.container, {
@@ -184,9 +204,38 @@ export async function startSkinHarness(options: {
   attachSkin(tileset, scene, ASSET);
   let telemetryClock = 0;
   attachTelemetry(tileset, scene, ASSET, { clock: () => telemetryClock });
+  // A dedicated renderer draws the scan instead; CesiumJS keeps the tileset, hidden, for its
+  // frame, as SiteManager does.
+  const kind = options.renderer ?? "cesium";
+  let host: ScanRendererHost | undefined;
+  if (kind !== "cesium") {
+    tileset.show = false;
+    tileset.preloadWhenHidden = false;
+    host = new ScanRendererHost(widget, { preserveDrawingBuffer: true });
+    host.setRenderer(kind);
+    host.setTarget({ key: "harness", tileset, assetId: ASSET });
+  }
 
   const settle = async (frames: number): Promise<void> => {
     for (let frame = 0; frame < frames; frame += 1) await nextFrame(scene);
+    if (host) await converge();
+  };
+  /**
+   * A dedicated renderer catches up over the frames after a change: drawn until it says it
+   * shows what it was asked for (`settled`: Spark draws a new generation only once its
+   * asynchronous sort lands, and frames repeat while it waits) and two frames running are the
+   * same, so a frame read is the state, not the way to it.
+   */
+  const converge = async (): Promise<void> => {
+    let last = pixels().data;
+    for (let frame = 0; frame < 600; frame += 1) {
+      await nextFrame(scene);
+      const now = pixels().data;
+      const same = now.length === last.length && now.every((v, i) => v === last[i]);
+      if (same && (host?.status().settled ?? true)) return;
+      last = now;
+    }
+    throw new Error("the splat renderer never settled");
   };
   const part = (): SplatSkinning => {
     const found = skinningOf(ASSET);
@@ -217,6 +266,8 @@ export async function startSkinHarness(options: {
     const context = copy.getContext("2d");
     if (!context) throw new Error("no 2d context");
     context.drawImage(canvas, 0, 0);
+    const overlay = document.querySelector<HTMLCanvasElement>("canvas[data-scan-renderer]");
+    if (host && overlay) context.drawImage(overlay, 0, 0, copy.width, copy.height);
     return {
       data: context.getImageData(0, 0, copy.width, copy.height).data,
       width: copy.width,
@@ -254,15 +305,33 @@ export async function startSkinHarness(options: {
           rangeM,
         ),
       );
-      for (let frame = 0; frame < 600; frame += 1) {
-        if (
-          tileset.tilesLoaded &&
-          splatTilesetOf(tileset).gaussianSplatPrimitive &&
-          useInstances.getState().assets[ASSET] &&
-          skinningOf(ASSET)
-        )
-          break;
-        await nextFrame(scene);
+      if (host) {
+        // The renderer's tiles in and still, and nothing in flight, for 30 frames running.
+        let still = 0;
+        let last = -1;
+        for (let frame = 0; frame < 1500 && still < 30; frame += 1) {
+          await nextFrame(scene);
+          const status = host.status();
+          const ready =
+            status.active &&
+            (status.native || status.tiles > 0) &&
+            status.loading === 0 &&
+            useInstances.getState().assets[ASSET] !== undefined &&
+            skinningOf(ASSET) !== undefined;
+          still = ready && status.tiles === last ? still + 1 : 0;
+          last = status.tiles;
+        }
+      } else {
+        for (let frame = 0; frame < 600; frame += 1) {
+          if (
+            tileset.tilesLoaded &&
+            splatTilesetOf(tileset).gaussianSplatPrimitive &&
+            useInstances.getState().assets[ASSET] &&
+            skinningOf(ASSET)
+          )
+            break;
+          await nextFrame(scene);
+        }
       }
       part();
       await settle(30);
@@ -356,6 +425,21 @@ export async function startSkinHarness(options: {
         }
       }
       return total > 0 ? changed / total : 0;
+    },
+    maxDifference(a, b, rect) {
+      const fa = frames[a];
+      const fb = frames[b];
+      if (!fa || !fb) throw new Error("no such frame");
+      const width = scene.canvas.width;
+      const { x0, y0, x1, y1 } = bounds(rect, width, scene.canvas.height);
+      let worst = 0;
+      for (let y = y0; y < y1; y += 1)
+        for (let x = x0; x < x1; x += 1)
+          for (let k = 0; k < 3; k += 1) {
+            const i = (y * width + x) * 4 + k;
+            worst = Math.max(worst, Math.abs((fa[i] ?? 0) - (fb[i] ?? 0)));
+          }
+      return worst;
     },
     coverage(a, rect) {
       const fa = frames[a];
@@ -542,6 +626,16 @@ export async function startSkinHarness(options: {
         active: rigid?.active ?? false,
         slots: ids.map((id) => rigid?.slotOf(id) ?? 0),
       };
+    },
+    rendererStatus() {
+      return host?.status() ?? null;
+    },
+    async objectPose(instance, pose) {
+      useSceneObjects.getState().setPose(ASSET, instance, pose);
+      await settle(10);
+    },
+    motionGap() {
+      return useInstances.getState().motionGaps[ASSET] ?? null;
     },
     skinHandles(instance) {
       const handles = skinningOf(ASSET)?.instanceHandles(instance);

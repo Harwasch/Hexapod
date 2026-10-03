@@ -17,15 +17,17 @@ import { siteDisplayName } from "./siteNames";
 const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
 
 /**
- * [Splat] [Mesh] [Points] — appears when the camera is at a site that has a model, beside the
- * site's one display name (`siteNames.ts`), never the record of the tileset it came from.
- * Switching keeps the camera. Which engine draws a splat is a comparison for developers, so that choice
- * lives in Settings › Advanced, not here.
+ * [Splat] [Mesh] [Points] — appears while the camera is near a site that has a model or still
+ * frames it (SiteManager `framesSite`), beside the site's one display name (`siteNames.ts`),
+ * never the record of the tileset it came from. Switching keeps the camera. Which engine
+ * draws a splat is a comparison for developers, so that choice lives in Settings › Advanced,
+ * not here.
  */
 export function RepresentationSwitcher() {
   const scene = useScene();
   const activeSiteId = useSites((s) => s.activeSiteId);
   const nearSiteId = useSites((s) => s.nearSiteId);
+  const inViewSiteId = useSites((s) => s.inViewSiteId);
   const representation = useSites((s) =>
     activeSiteId ? s.representation[activeSiteId] : undefined,
   );
@@ -37,7 +39,13 @@ export function RepresentationSwitcher() {
   const shownAsset = site?.assets.find((a) => a.representation === representation);
   const evidence = shownAsset ? (inferred[shownAsset.id] ?? []) : [];
   const available = ORDER.filter((rep) => site?.assets.some((a) => a.representation === rep));
-  const visible = Boolean(site && nearSiteId === activeSiteId && available.length > 0);
+  // Up while the active site is near or still framed (a pitched view kilometres out).
+  const visible = Boolean(
+    site &&
+    activeSiteId &&
+    (nearSiteId === activeSiteId || inViewSiteId === activeSiteId) &&
+    available.length > 0,
+  );
   const options = ORDER.map((rep) => {
     const asset = site?.assets.find((a) => a.representation === rep);
     const loading = asset ? assets[asset.id]?.loadState === "loading" : false;

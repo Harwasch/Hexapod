@@ -536,13 +536,18 @@ class GsplatRenderer:
         *,
         opacity_scale: np.ndarray | None = None,
         background: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        rows: np.ndarray | None = None,
+        near: float = 0.05,
     ) -> Frame:
+        """`rows`: draw only these gaussians of `splats` (indices; the scene stays uploaded
+        whole, so the views of one scan that each see a part of it upload it once). `near`:
+        nothing nearer than this along the view axis is drawn."""
         import torch
 
         from distill_fill import camera_tensors, gsplat_frame
 
         shape = (camera.height, camera.width)
-        if len(splats) == 0:
+        if len(splats) == 0 or (rows is not None and len(rows) == 0):
             return Frame(
                 np.zeros(shape + (3,)) + np.asarray(background),
                 np.full(shape, np.inf),
@@ -555,19 +560,26 @@ class GsplatRenderer:
         if opacity_scale is not None:
             scale = torch.as_tensor(np.asarray(opacity_scale), dtype=torch.float32)
             opacities = opacities * scale.to(self.device)
+        chosen = None
+        if rows is not None:
+            chosen = torch.as_tensor(np.asarray(rows, np.int64), device=self.device)
+
+        def pick(x):
+            return x if chosen is None else x[chosen]
+
         viewmat, K, w, h = camera_tensors(camera.to_json(), torch, self.device)
         with torch.no_grad():
             rgb, alpha, depth = gsplat_frame(
-                scene["means"],
-                scene["quats"],
-                scene["scales"],
-                opacities.clamp(0.0, 1.0),
-                scene["colours"],
+                pick(scene["means"]),
+                pick(scene["quats"]),
+                pick(scene["scales"]),
+                pick(opacities).clamp(0.0, 1.0),
+                pick(scene["colours"]),
                 viewmat,
                 K,
                 w,
                 h,
-                near=0.05,
+                near=near,
                 far=camera.far if math.isfinite(camera.far) else 1e10,
             )
         a = alpha.double().clamp(0.0, 1.0).cpu().numpy()

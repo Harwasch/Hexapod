@@ -16,8 +16,9 @@
  * The same holds under the app's default splat renderer, PlayCanvas over the globe
  * (cesium/scanView): there the ids come from each tile's checksum as PlayCanvas decodes it, and
  * a hidden splat loses its opacity in PlayCanvas's own work buffer (scanInstances.ts). The
- * `@webgpu` variant runs the same checks on PlayCanvas on WebGPU, where the work-buffer
- * modifier is the WGSL port: hide and highlight must measure as they do on WebGL2.
+ * `@webgpu` variant chooses the PlayCanvas WebGPU trial: the yard has objects, whose hide,
+ * highlight and motion modifiers are GLSL only for now, so the trial draws it with WebGL2 --
+ * and says so -- and hide and highlight must measure as they do there.
  *
  * Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -26,8 +27,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
-
-import { webgpuAdapter } from "./webgpu";
 
 interface Measure {
   coverage: number;
@@ -58,6 +57,8 @@ interface InstancesHarness {
     kind: string;
     active: boolean;
     api: string | null;
+    notice: string | null;
+    webgl2ForObjects: boolean;
     tiles: number;
     native: boolean;
     instances: { tiles: number; matched: number } | null;
@@ -72,6 +73,12 @@ interface Options {
   incremental: boolean;
   maximumScreenSpaceError: number;
   renderer?: "cesium" | "playcanvas" | "spark" | "playcanvas-webgpu";
+  /**
+   * Mount the app's objects panel, and tag the yard's two largest objects (the yard is
+   * segmented against its own truth, so it has no tags): the largest "conifer", the next
+   * "bush", so the panel lists Trees and Shrubs & bushes over Other.
+   */
+  panel?: boolean;
 }
 
 function harnessHtml(options: Options): string {
@@ -83,10 +90,12 @@ function harnessHtml(options: Options): string {
     <style>
       html, body { margin: 0; height: 100%; background: #10141a; }
       #viewer, #viewer .cesium-widget, #viewer canvas { width: 100vw; height: 100vh; display: block; }
+      #panel { position: fixed; top: 12px; right: 12px; z-index: 10; width: 21rem; padding: 0.6rem; }
     </style>
   </head>
   <body>
     <div id="viewer"></div>
+    ${options.panel ? '<div id="panel" class="glass glass--strong"></div>' : ""}
     <script type="module">
       const harness = await import("/src/dev/instancesHarness.ts");
       window.__instances = await harness.startInstancesHarness({
@@ -95,6 +104,7 @@ function harnessHtml(options: Options): string {
         incremental: ${String(options.incremental)},
         maximumScreenSpaceError: ${String(options.maximumScreenSpaceError)},
         renderer: "${options.renderer ?? "cesium"}",
+        ${options.panel ? 'panel: document.getElementById("panel"),' : ""}
       });
     </script>
   </body>
@@ -108,7 +118,16 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
   page.on("pageerror", (error) => errors.push(error.message));
   const instances = JSON.parse(
     readFileSync(resolve(TILES, "synthetic-yard/instances/instances.json"), "utf-8"),
-  ) as { instances: unknown[] };
+  ) as {
+    instances: { id: number; parent: number | null; splats: number; tags?: unknown[] }[];
+  };
+  if (options.panel) {
+    const roots = instances.instances
+      .filter((i) => i.parent === null)
+      .sort((a, b) => b.splats - a.splats);
+    if (roots[0]) roots[0].tags = [{ label: "conifer", score: 0.6 }];
+    if (roots[1]) roots[1].tags = [{ label: "bush", score: 0.5 }];
+  }
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
@@ -123,6 +142,9 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
         nativeLod: false,
       };
       return route.fulfill({ status: 200, json: tileset });
+    }
+    if (relative === "synthetic-yard/instances/instances.json") {
+      return route.fulfill({ status: 200, json: instances });
     }
     const file = resolve(TILES, relative);
     if (!existsSync(file)) return route.fulfill({ status: 404, body: "" });
@@ -141,7 +163,13 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
     route.fulfill({ status: 200, contentType: "text/html", body: harnessHtml(options) }),
   );
   await page.goto("/instances-harness.html");
-  await page.waitForFunction(() => "__instances" in window, undefined, { timeout: 120_000 });
+  try {
+    await page.waitForFunction(() => "__instances" in window, undefined, { timeout: 180_000 });
+  } catch (error) {
+    throw new Error(`the harness never started; page errors: ${errors.join(" | ")}`, {
+      cause: error,
+    });
+  }
 }
 
 /** Calls a harness method in the page. */
@@ -280,7 +308,7 @@ test("the ids follow the splats in aggregated mode, at the app's screen-space er
 const RENDERER_TITLES = {
   playcanvas: "PlayCanvas, the app's default renderer",
   spark: "Spark",
-  "playcanvas-webgpu": "PlayCanvas on WebGPU (its WGSL modifier)",
+  "playcanvas-webgpu": "the PlayCanvas WebGPU trial (WebGL2 for a scan with objects)",
 } as const;
 
 for (const renderer of ["playcanvas", "spark", "playcanvas-webgpu"] as const) {
@@ -296,7 +324,6 @@ for (const renderer of ["playcanvas", "spark", "playcanvas-webgpu"] as const) {
       const requests: string[] = [];
       page.on("request", (request) => requests.push(request.url()));
       await open(page, { incremental: true, maximumScreenSpaceError: 16, renderer }, errors);
-      if (webgpu) test.skip((await webgpuAdapter(page)) === null, "no WebGPU adapter");
       const call = caller(page);
       await call("view", 30, -50, 45);
       const baseline = await call("view", 30, -50, 45);
@@ -347,8 +374,13 @@ for (const renderer of ["playcanvas", "spark", "playcanvas-webgpu"] as const) {
       // The tileset declares no native package: it is not probed for one.
       expect(requests.filter((url) => url.includes("lod-meta.json"))).toEqual([]);
       expect(scan?.kind).toBe(renderer);
-      // The trial is measured on WebGPU, with the WGSL modifier, not on its WebGL2 fallback.
-      if (webgpu) expect(scan?.api).toBe("webgpu");
+      // A scan with objects is drawn with WebGL2 under the trial, whatever the adapter, and
+      // the readouts say why (not "WebGPU unavailable").
+      if (webgpu) {
+        expect(scan?.api).toBe("webgl2");
+        expect(scan?.webgl2ForObjects).toBe(true);
+        expect(scan?.notice).toBe("WebGL2 for scans with objects or motion");
+      }
       expect(scan?.native).toBe(false);
       expect(hooks.table).toBe(true);
       // Every tile PlayCanvas loaded is found in instances.json by its checksum.
@@ -369,3 +401,54 @@ for (const renderer of ["playcanvas", "spark", "playcanvas-webgpu"] as const) {
     },
   );
 }
+
+test("the objects panel hides a category, highlights it on a click, and resets, under PlayCanvas", async ({
+  page,
+}) => {
+  test.setTimeout(600_000);
+  const errors: string[] = [];
+  await open(
+    page,
+    { incremental: true, maximumScreenSpaceError: 16, renderer: "playcanvas", panel: true },
+    errors,
+  );
+  const call = caller(page);
+  await call("view", 30, -50, 45);
+  const baseline = await call("view", 30, -50, 45);
+  const panel = page.getByTestId("instance-panel");
+  const rows = panel.locator("ul[aria-label='Object categories'] > li");
+  await expect(rows).toHaveCount(3);
+  expect(
+    await rows.evaluateAll((li) => li.map((e) => (e as HTMLElement).dataset.category)),
+  ).toEqual(["trees", "shrubs", "other"]);
+  await expect(panel).not.toContainText(/Object \d/);
+  await page.locator("#panel").screenshot({ path: test.info().outputPath("panel.png") });
+
+  await panel.getByRole("button", { name: "Hide Trees", exact: true }).click();
+  await page.waitForTimeout(500);
+  const hidden = await call("measure");
+  await page.screenshot({ path: test.info().outputPath("panel-hidden-trees.png") });
+  await expect(panel.getByRole("status")).toHaveText("Trees hidden");
+  await panel.getByRole("button", { name: "Reset" }).click();
+  await page.waitForTimeout(500);
+  const reset = await call("measure");
+
+  await panel.locator("li[data-category='trees'] > div > [data-row]").click();
+  await page.waitForTimeout(500);
+  const lit = await call("measure");
+  await page.screenshot({ path: test.info().outputPath("panel-highlight-trees.png") });
+  await panel.locator("li[data-category='trees'] > div > [data-row]").click();
+  await page.waitForTimeout(500);
+  const cleared = await call("measure");
+
+  test.info().annotations.push({
+    type: "measures",
+    description: JSON.stringify({ baseline, hidden, reset, lit, cleared }),
+  });
+  expect(shaderErrors(errors)).toEqual([]);
+  expect(hidden.coverage).toBeLessThan(baseline.coverage * 0.9);
+  expect(reset.coverage).toBeGreaterThan(baseline.coverage * 0.95);
+  expect(lit.warmth).toBeGreaterThan(baseline.warmth + 5);
+  expect(lit.luma).toBeLessThan(baseline.luma);
+  expect(cleared.coverage).toBeGreaterThan(baseline.coverage * 0.95);
+});

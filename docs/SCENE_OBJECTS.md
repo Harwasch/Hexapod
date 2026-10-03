@@ -65,7 +65,13 @@ All of these are general models; none knows our scenes.
    the Modal call's reservation holds (8 CPUs and 32 GiB on an L4: the camp in 1,416 s for
    $0.56; a scan past 1,000 tiles -- twice the camp's 514 -- gets 16 and 64 GiB;
    `infra/modal/segment.py`), not a fixed count, since the masks rather than the renders
-   set the pace.
+   set the pace. On a GPU the image the mask model sees is rasterized by gsplat
+   (`--renderer gsplat`, as a viewer draws it; the per-pixel splat ids still come from the
+   CPU's samples of the same camera), without the floaters larger than `--max-scale-m`
+   (0.5 m). Then **coverage rounds**
+   (`coverage_views`, two by default): after a lift, views are aimed at what is still
+   without an instance -- unassigned splats binned in 3D, each target seen by two obliques
+   and once from eye height (into a canopy) -- and everything is lifted again.
 2. **Masks.** Class-free automatic masks at several scales per view (SAM 2 family). A mask
    over (nearly) the whole view is no evidence of what belongs together and is left out.
 3. **Lift.** Each mask votes for the splats it covers. Splats that co-occur in masks across
@@ -76,6 +82,11 @@ All of these are general models; none knows our scenes.
    specks and slivers between masks take their neighbours' instance.
 4. **Meaning.** For each instance, crop its best views and embed them with an
    image-text model (SigLIP/CLIP family). Text search is cosine similarity at query time.
+   The crops (`DESCRIBE_KINDS`) are square, from the CPU's point samples: uncut (box
+   padded), and alone (the rest black, and grey); each kind is embedded on its own and the
+   kinds averaged. Measured on the pumpkin and the camp (`describe_variants`, 2026-10-03):
+   gsplat's images, dimmed context, wide crops and portraits of an instance's own splats all
+   read worse to SigLIP (a conifer's parts as "bush", crops on grey as "plume" or "map").
    An instance too small in every view for a useful crop (`DESCRIBE_MIN_PX`) keeps no
    embedding and no tags (its row in `instances.emb` is zero) and its nearest described
    ancestor's properties.
@@ -86,6 +97,50 @@ All of these are general models; none knows our scenes.
    vision-language model can fill the same record with free-text descriptions.
 6. **Behaviour.** `static` | `in-place` | `movable`, derived from the property scores by
    rule. It decides storage (§1) and which driver applies.
+7. **Categories.** The 1,300 labels are too fine to act on (the camp lists 650 "forest floor"
+   pieces and 238 "bush"es), so each label also belongs to one of 27 broad scene categories
+   (Trees, Shrubs & bushes, Grass & ground cover, Ground & soil, Water, Buildings, Walls &
+   fences, Paths & roads, Vehicles, People, Animals, Furniture, ..., Other). The mapping is
+   data, `tools/captures/data/categories.json`, made by the same SigLIP 2 text encoder: each
+   label's tag prompt goes to the nearest category (a few phrasings each, averaged) by cosine,
+   and the outliers inspection found are corrected in `scene_categories.OVERRIDES`
+   (`python scene_categories.py --review` lists every label with its nearest three). It is
+   general, not per scan; the viewer bundles the same file.
+
+   An instance's category is the one its tags vote for (each tag's score added to its label's
+   category); an instance without tags takes what most of its tagged siblings are (by splats:
+   a coarse parent is often a mixed region -- on the pumpkin scan a 6 m "pumpkin" instance holds
+   the hay around the pumpkins, and its untagged parts are hay like their tagged siblings, not
+   pumpkin), else its nearest tagged ancestor's (a part is what it is part of), else the
+   category most of the splats below it are in, else (a fragment no crop showed, with no
+   tagged relative) the category of the smallest categorised instance whose box holds its
+   centre, else Other. An **object** is an instance whose parent is in another category (or that has none), with
+   every descendant reached through its own category: a category is the union of its objects,
+   so hiding Ground & soil hides the ground and its untagged bits, not the trees a ground
+   region contains. An object is named by its best tag of its own category, else by its
+   category ("Trees 3"), never by an id.
+
+   What categories cannot fix is an instance that mixes two things. Measured on the published
+   pumpkin (leaf splats coloured orange, by the instance they carry): 78% are in "Fruit,
+   vegetables & crops", 21% in instances SigLIP described as dirt or bush -- parts of a
+   pumpkin's crop that are half pumpkin, half hay (instance 279: 43% orange, tags dirt 0.06,
+   bush 0.06, pumpkin 0.03) -- and the red pumpkin is instance 4, whose crop SigLIP read as
+   dirt / nest / moss (0.10, 0.08, 0.05), plus 3,900 splats the segmentation left without an
+   instance. Classifying each instance's embedding against the category prompts directly
+   (instead of through its top five labels) is no better there (instance 4: ground 0.20,
+   produce 0.19). Hiding "pumpkins" exactly needs finer segmentation, not another rule here.
+
+   **v2 (published 2026-10-03, segment.yml run 37100026825).** The category of a described
+   instance is now `segment_scene`'s own: per crop kind, its 10 best labels' probabilities
+   summed per category; averaged over kinds; then mixed 1:1 with its parent's (a part is
+   seen with what it is part of). The zero-shot head over the category prompts was measured
+   and is weighed 0 (it pulled crowns to Shrubs and hay to Sky). Before -> after:
+   splats without an instance 8.3% -> 1.7% on the camp (rim 54% -> 12%), 2.4% -> 0.2% on
+   the pumpkin, 3.1% -> 0.3% on the spool; the red pumpkin 57% -> 98% in Fruit, vegetables
+   & crops, orange splats 75% -> 89%, hay 65% -> 22% in it; the camp's canopy (over 3 m)
+   21% -> 28% Trees, 13% -> 12% Shrubs. Worse: the camp now has 6% Household and 4% Sky
+   (labels such as "map" and "plume" on crowns), and only 4.3k of 28.4k instances are
+   described.
 
 ## 4. Data contract (v1)
 
@@ -111,17 +166,30 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
       "properties": { "movable": 0.82, "rigid": 0.77, "elastic": 0.05, "static": 0.10,
                       "vegetation": 0.02, "water": 0.0, "vehicle": 0.91, "creature": 0.01 },
       "behaviour": "movable",        // "static" | "in-place" | "movable"
-      "views": 14                    // how many views it was seen in
+      "views": 14,                   // how many views it was seen in
+      "category": "vehicles"         // optional (§3 step 7); the viewer derives it if absent
     }
   ],
   "tiles": { "<tile checksum>": [id, count, id, count, ...] },  // per tile, RLE, tile order
-  "tilesEncoding": "rle; a merged parent splat takes an id only if all its children share it"
+  "tilesEncoding": "rle; a leaf splat carries its instance; a merged splat the instance most of the 8 leaf splats nearest to it carry"
 }
 ```
 
 - `tiles` uses the same checksum keys and run-length encoding as `plants.json`
   (`scene_plants.plant_binding`), so the viewer's existing per-tile binding code applies.
 - Ids are leaf-level (the finest instance). The hierarchy is walked through `parent`.
+- A coarse tile's merged splat takes the id most of the leaf splats nearest to it carry
+  (`rebind_instances.py`). The first rule gave it an id only when all the leaf splats merged
+  into it shared one; leaf instances are an object's parts, so few merged splats qualified --
+  on the published camp 46% of the non-leaf splats of the fourth level of detail and 22% of
+  the fifth carried 0, now 32% and 11% (8.7% to 0.9% at the sixth); the pumpkin's unassigned
+  share halves (2.4% to 1.2%). Scans published under the old rule are fixed by
+  `python rebind_instances.py TILES_DIR`, which rewrites only their instances.json from the
+  published tiles.
+- What the segmentation never saw keeps 0 and can be neither hidden nor highlighted: on the
+  camp that is the sparse rim of the capture (its shallow leaf tiles, 2.7 M splats, are 36-94%
+  unassigned), which a view from above the whole camp is mostly made of. (Before v2's
+  coverage rounds; now 12% of the rim and 1.7% of the camp.)
 - `instances.emb`: `float16`, `count × dim`, row `k` is instance id `k + 1`, L2-normalised; an
   instance that was not described (no `tags`) has a zero row.
 
@@ -137,11 +205,41 @@ PlayCanvas digests each tile's positions in its decode worker, keeps the ids bes
 splats as one more resource stream (in PlayCanvas's Morton order), and applies the rule in a
 work-buffer modifier; Spark digests the tile's SPZ centres and applies it in an object
 modifier (a dyno). The rule is CesiumJS's: a hidden splat has no opacity, a highlighted one
-is pulled toward the tint, and while anything is highlighted the rest are dimmed. A scan that
-PlayCanvas streams from its own package (`sog/lod-meta.json`) has no tile checksums, so its
-objects cannot be hidden there; the objects panel says so and offers the CesiumJS renderer.
-The panel's "Hide all N matches" and "Show only matches" act on every match of the query, not
-only the fifty it lists.
+is pulled toward the tint, and while anything is highlighted the rest are dimmed. The store
+(`state/instances.ts`) holds exact id sets -- a category's or an object's members -- and every
+renderer applies them id for id, so hiding one category never takes another's instances with
+it.
+
+A scan whose package also has PlayCanvas's own streamed format (`sog/lod-meta.json`) is drawn
+from its 3D Tiles instead when it has objects (`extras.instances`): the native package carries
+no tile checksums, so its splats have no object ids: before this, the published camp (which
+has both) streamed natively under the default renderer, and hide and highlight did nothing
+there but a note offering CesiumJS. A scan with a native package and no objects still
+streams natively. The rule is one switch, `NATIVE_SOG_FOR_SCANS_WITH_OBJECTS`
+(`cesium/scanView/ScanRendererHost.ts`, off), to be flipped to measure what the native package
+would gain such a scan.
+
+**The objects panel** (`features/sites/InstanceSearch.tsx`), from the "Objects" button beside
+the representation switcher:
+
+- a search box ("Search objects");
+- the scan's categories, largest share of the scan first, each with its colour, name, number
+  of objects and an eye that hides or shows the whole category; clicking a row highlights the
+  category (the rest dims), clicking it again clears it;
+- a chevron (or the right arrow key) opens a category onto its objects, fifty at a time, each
+  with its own eye; clicking an object highlights it and flies to it;
+- while searching, the matching objects are listed the same way, grouped by category, with
+  "Hide all" and "Show only" for every match. Words match tags and category names ("trees",
+  "water"); a typed property filter (`vegetation > 0.5`, `behaviour:movable`) still works but
+  has no buttons;
+- one "Reset" whenever anything is hidden or highlighted, with what is hidden in words.
+- selecting in the scene (a click, the cycle keys or the brush; `SceneSelectChip.tsx`) opens
+  that object's category and marks it; clicking an object in the panel selects it in the scene,
+  so the chip offers its actions. The chip names a selection as the panel does (its top tag,
+  else its category, never an id) and shows its actions as icon buttons with tooltips.
+
+The property scores and behaviours are not shown: they drive physics, not browsing (SigLIP's
+"vegetation" scored the pumpkins 0.88 -- true of a gourd, and confusing in a list).
 
 ### `skin.json` + `skin.bin` (step B2)
 
@@ -234,7 +332,7 @@ row per 16 skins. A skin at rest costs one fetch; nothing moving costs none. **C
 follow `J = I + Σ_j w_j A_j` through the engine patch's optional `splatVertexJacobian`
 (`J·Σ·Jᵀ`); dropped is the weights' gradient term `Σ_j Z_j[x;1]∇w_jᵀ` -- exact for the
 constant handle, 0.14 at most (against 1 on the diagonal) for the tree's 2% random handles.
-The sorter still orders by rest positions. **Drivers** (C1 wind, C3 telemetry) call
+The sorter still orders by rest positions. PlayCanvas and Spark apply the same skins (C3 "Renderers"). **Drivers** (C1 wind, C3 telemetry) call
 `skinningOf(assetId).setInstanceHandles(instanceId, Z)` with `12·m` numbers (rest frame) per
 frame, or `null` for rest; `skin.json`'s `eigenvalues` and `support` are what a modal wind
 model needs (a handle's stiffness, and where it acts).
@@ -468,14 +566,39 @@ that eye give the moved splats' order exactly, with no positions re-sent. A slot
 far as the camera would have to move calls for a new sort. A skinned object moved by its constant
 handle still sorts at rest (small objects; the same groups could come from the skin ids).
 
-**Renderers.** CesiumJS (its own splat primitive) only, as the skin is. The dedicated renderers
-would need the same rule over the instance ids they already stream for hide and highlight
-(`cesium/scanView/scanInstances.ts`): in PlayCanvas, a per-instance 3×4 motion (a small uniform
-array or texture indexed by a slot per id) applied to centres, and rotations applied to the
-covariances, in the work-buffer modifier that already reads the ids; in Spark, the same in the
-object modifier (dyno), with a motion uniform per driven object. Neither has the skin path yet,
-so a skinned instance would take the rigid path there. Nothing else changes: the driver hands
-each renderer motions, not pixels.
+**Renderers.** All three. The drivers are shared: wind and telemetry write the skin part
+(`setInstanceHandles`) and the rigid part (`setInstanceMotion`) whatever renderer draws the
+scan (CesiumJS keeps the tileset loaded, hidden, under every renderer), and those parts keep
+what was set (`drivenSkins`, `instanceMotions`, each with a `motionVersion`). Under PlayCanvas
+and Spark a `ScanMotionLink` (`cesium/scanView/scanMotion.ts`) reads them once a frame and hands
+the back-end one `ScanMotion` when anything changed: the skin handles folded into the scan's
+frame (`[A | t − A·o]`, 64 texels a skin, the layout CesiumJS uploads), a slot per instance
+id and `[R − I | t]` per slot, and which skins and instances changed. Per splat, the skin id
+and `skin.bin` row are bound by tile checksum exactly as the instance ids are (PlayCanvas: the
+`splatSkin` R32U and `splatWeights` RGBA32U resource streams, in its Morton order, only on
+tiles with skinned splats; Spark: per-tile R32UI / RGBA32UI textures). One shader
+(`SCAN_MOTION_GLSL`) serves both: PlayCanvas's work-buffer modifier, Spark's world modifier
+(a dyno). Neither takes a covariance, only a rotation and scales, so `J·Σ·Jᵀ` with `J = I + Σ
+w_j A_j` (+ the rigid part's) is decomposed again (Jacobi, exact up to float precision; a
+rotation `J` just turns the splat), the same Jacobian CesiumJS draws through. Only the tiles
+holding a changed skin or instance are recopied (PlayCanvas) or regenerated (Spark). Sorting:
+Spark sorts its generated, moved splats; PlayCanvas sorts on the CPU from each resource's
+`centers`, so a tile holding a rigidly moved object has its centres moved the same way and
+`centersVersion` bumped (at most every 100 ms while it moves, at once at rest); a skin's
+sway sorts at rest, as under CesiumJS. Skins and telemetry bind to objects, and a scan with
+objects is always streamed from its 3D Tiles (C4 above), so PlayCanvas's own package never
+has motion to lose. A back-end that cannot move objects (no `setMotion`, or a scan streamed
+without checksums) still reports it: one line in the objects panel and under the wind
+control, "Wind and telemetry need the Cesium renderer", with the reason as its tooltip and a
+"Use Cesium" button (`motionGaps` in `state/instances.ts`, `MotionRendererNote`). Under the
+PlayCanvas WebGPU trial a scan with objects or motion is drawn with WebGL2: these modifiers are
+GLSL only for now (docs/WEBGPU_TRIAL.md). The overlay draws only when something changes
+(`overlayFrames.ts`): a new motion handed over, or a split object moved, is such a change, and
+the drivers ask the globe for a frame as they move something, so a still scene costs no
+frames. Scene selection picks a split object where its pose puts it (`pickTiles` returns the
+placed positions, made when a pick asks); a rigidly or skin-moved object is picked at rest.
+PlayCanvas's tiles arrive in Morton order (its tile worker), and `pickTiles` puts each tile
+back in its own order, the order `instances.json` lists ids by.
 
 ### Split objects (step C4)
 
@@ -551,6 +674,12 @@ origin)`, `rotation` a unit quaternion `x, y, z, w`. The rest pose is the identi
   distilled; a held-out view scores how much of what sees through the scan covers before and
   after. Packaged as an inferred layer (`extras.evidence.hole` = the instance id) and
   declared in `inferredLayers`, so the viewer labels it inferred like any other.
+  A generative filler (`world_model_client:GenerativeFiller`, e.g. `?model=qwen&chain=1`)
+  is told what is around the hole (`hole_context`: instances.json tags around the footprint
+  as the prompt, the object's own labels as the negative), repaints the void with the hole
+  so only measured pixels are its context, and with `chain` fills the views in turn, each
+  shown the earlier views' fill (WORLD_MODEL_RUNBOOK.md §8). The held-out strip's last
+  panel shows the object moved aside, the fill showing.
 - **`--absorb`**: segmentation leaves pieces of an object under other ids (the pumpkin: 40
   small instances, most of them top-level). With it, every other id with 80% of its leaf
   gaussians inside the object's box (its 3rd-97th percentiles, padded 5%) and at most a fifth
@@ -567,8 +696,12 @@ telemetry driver will call. Hide and highlight: `attachInstances(..., { follower
 installs the same hooks on the object's primitive from the scan's `instances.json` and the
 scan's store entry, so an object hides, highlights and dims with the ids it carries; search
 and the table stay the scan's; flying to a moved instance follows its pose
-(`setInstanceOffset`). Not yet: the dedicated renderers (PlayCanvas, Spark) draw the scan
-without its split objects, and collision still has the object at rest.
+(`setInstanceOffset`). Under PlayCanvas and Spark (`cesium/scanView/scanObjects.ts`) each
+object's tile is loaded by the back-end like a scan tile (so its ids bind by checksum and hide,
+highlight and rigid motion act on it), drawn beside the scan's tiles under `L · S⁻¹ · O` (its
+pose about `origin`, times its root transform `O` in the scan's frame), placed again whenever
+the store's pose changes. Not yet: collision
+still has the object at rest.
 
 **Validation** (`tests/test_split_objects.py`, the yard with the lawn under one shrub taken
 away, packed in 6000-gaussian tiles, instances from its labels; CPU, Telea): every leaf
@@ -610,6 +743,16 @@ unbound objects stay still, a silent source holds, fades and returns the measure
 pixel for pixel, the frozen shrub holds, and with the wind on the bound shrub keeps its elastic
 handles at rest while the tree sways; the same clock gives the same frame.
 
+`apps/web/e2e/motionRenderers.spec.ts` runs the same checks under PlayCanvas and Spark
+(`skinHarness.ts` with `renderer`, the scan drawn by the dedicated renderer over a hidden
+CesiumJS tileset, frames composited): skins move their objects and nothing else, hidden stays
+hidden, the constant handle lifts a shrub, a scaled shrub stays filled only with the covariance
+following, the wind sways the tree but not its base, replays exactly and calms to the measured
+frame, telemetry moves the building along its path and fades it back to the measured frame
+exactly, and a split object (made at request time from a leaf tile) is drawn at its pose and
+back; with PlayCanvas's own package beside the tiles, a scan with objects is still streamed
+from its tiles and moves (no motion gap).
+
 `data/tiles/synthetic-yard/instances/` is the committed yard segmented against its own labels
 (`segment_scene.py ... --truth labels.json --tile-gaussians 6000`). It sits beside `splat/`,
 not in it, so the yard tiles stay byte-identical to what the packer writes; the e2e links it
@@ -618,6 +761,66 @@ real CesiumJS (`src/dev/instancesHarness.ts`): hide, hide everything, highlight 
 without dimming, both primitive modes, and composition with the view cones.
 `e2e/instancesScan.spec.ts` runs the same steps on any segmented scan
 (`INSTANCES_SCAN_DIR=...`) and saves screenshots.
+
+### Selecting in the scene
+
+The viewer selects objects where they are drawn, not only from the panel. It works the same way
+under every splat renderer (PlayCanvas, Spark, CesiumJS) because picking runs on the CPU over
+the tiles the renderer draws now:
+
+- **Pick sources** (`cesium/sceneSelect/pickSources.ts`). Per asset, the renderer drawing the
+  scan provides its drawn tiles as `PickTile`s. A `PickTile` holds each tile's own positions in
+  the scan's frame (the order and frame its checksum, and so its ids, are keyed by), each
+  splat's largest axis and its opacity.
+  - PlayCanvas keeps these from the worker's decode, before its Morton reorder.
+  - Spark reads them from the SPZ (`spzPickData`).
+  - CesiumJS un-bakes the committed snapshot's tiles (`cesiumPickSource.ts`).
+  - A dedicated renderer registers above CesiumJS, so whichever draws the scan is the one
+    picked from.
+- **Click** (`lib/splatPick.ts`). A ray through the cursor tests the splats as soft spheres. It
+  uses a per-tile index: Morton-ordered blocks of 64 splats, one box each. The hits are
+  composited front to back (`T · α`), so splats behind a solid surface count for almost
+  nothing. Hidden objects' splats let the ray through. The hit splats' leaf ids give the
+  candidates (`lib/sceneSelect.ts`):
+  - the strongest leaf's chain, from the leaf up to the top level;
+  - then the other instances hit near the front.
+
+  The first choice is the smallest instance in the chain that is at least 48 px across on
+  screen.
+
+- **Cycling**. `[` / `]`, Tab / Shift+Tab (from the scene), Alt+wheel or the wheel over the
+  chip move between candidates. Esc clears the selection.
+- **The chip** (`features/sites/SceneSelectChip.tsx`). It sits by the cursor and shows
+  "Tree · 2 of 4": the top tag, else the category, else "Object N". It offers **Hide**, **Show
+  only**, **Fly to**, the brush and **Clear**. The selection is the objects store's highlight:
+  the controller writes it through `useInstances.highlight`, expanded to descendants.
+- **Brush** (`B`, or the chip's brush; `lib/splatPaint.ts`). The camera holds still while you
+  paint. Every drawn splat is projected once, and 3 px cells keep the nearest depth of their
+  fairly solid splats (an approximation of the rendered depth). A splat counts as painted when
+  it is near its cell's front and the cell is under a stroke. Shift adds to the painted area,
+  Alt takes away, and a plain stroke starts again. The match is the instance, at any level,
+  with the best intersection over union. The IoU is weighted by opacity and counts only
+  visible splats, so an object's hidden back does not count against it.
+- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the chip offers
+  **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  - It is stored per scan in this browser (`localStorage`,
+    `hexapod.customObjects.<asset>`) as `{ key, name, tiles: { checksum: [start, length, …] },
+splats, bounds }`.
+  - It is drawn through the same pipeline: `withCustomSets` gives each set an id past the
+    file's (`maxId + 1`, …), relabels its splats in the tile runs, and appends it as a
+    top-level instance. Every renderer reads ids by checksum from that document
+    (`paintedDocOf`, `SplatInstances.setDoc`), so it hides and highlights like any instance.
+  - While the set exists, its splats no longer carry their segmented id.
+
+The controller is `cesium/sceneSelect/SceneSelectController.ts`, and its state is in
+`state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts`, and
+`e2e/sceneSelect.spec.ts` runs on the yard (`src/dev/sceneSelectHarness.ts`) under PlayCanvas,
+Spark and CesiumJS. The e2e checks that:
+
+- clicking the tree's crown selects the tree or a part of it;
+- `]` goes to the parent and `[` comes back;
+- painting over shrub 10 selects that shrub;
+- **Hide** in the chip removes it from the frame.
 
 ## 5. Storage by behaviour
 

@@ -29,15 +29,20 @@ import {
   SceneTransforms,
   Cartesian2,
   Cartesian3,
+  type BoundingSphere,
   type Scene,
 } from "cesium";
 
+import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { ScanRendererHost, type ScanRendererStatus } from "@/cesium/scanView/ScanRendererHost";
+import { paintedDocOf } from "@/cesium/scanView/scanInstances";
 import type { SplatRendererKind } from "@/cesium/scanView/types";
+import { pickSourceOf } from "@/cesium/sceneSelect/pickSources";
 import { attachInstances, instanceSphere, type InstancePrimitive } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { cesiumViewConeGpu, SplatViewCones } from "@/cesium/splatViewCones";
 import { visibilityChainOf } from "@/cesium/splatVisibility";
+import { tileInstanceIds } from "@/lib/instances";
 import { cellCount, loadViewCones, viewConesMetaOf } from "@/lib/viewCones";
 import { useInstances } from "@/state/instances";
 
@@ -82,12 +87,32 @@ export interface InstancesHarness {
   /** Where instance `id` is on screen, or null when it is not in front of the camera. */
   rectOf(id: number): Rect | null;
   measure(rect?: Rect): Measure;
+  /** Waits `frames` frames (for what the renderer applies over several). */
+  wait(frames: number): Promise<void>;
   /** The hooks on the primitive. */
   hooks(): { visibility: string[]; color: boolean; table: boolean };
   /** The tiles drawn now, and their splats. */
   tiles(): { uri: string; splats: number }[];
   /** The dedicated renderer's status, when one draws the scan. */
   scan(): ScanRendererStatus | null;
+  /** Keeps the frame drawn now, for `changed`. */
+  remember(): void;
+  /** Share of the canvas whose colour moved (by more than 48 in r + g + b) since `remember`. */
+  changed(): number;
+  /** The scan's categories as the objects panel lists them, largest first. */
+  categories(): { id: string; name: string; objects: number; splats: number }[];
+  /**
+   * The splats drawn now (the renderer's tiles, as scene selection reads them): how many,
+   * in how many tiles, how many tiles carry ids, how many splats carry none (id 0), and how
+   * many are in `category`'s objects.
+   */
+  drawn(category: string): {
+    tiles: number;
+    tilesWithIds: number;
+    splats: number;
+    unlabelled: number;
+    inCategory: number;
+  };
 }
 
 function nextFrame(scene: Scene): Promise<void> {
@@ -108,6 +133,44 @@ function isAmber(r: number, g: number, b: number): boolean {
   return r > 110 && g > 0.5 * r && g < 0.92 * r && b < 0.62 * g;
 }
 
+/**
+ * The app's objects panel over the harness, in the app's styles; "go to" flies the harness's
+ * camera (the app's camera controller is not here).
+ */
+async function mountPanel(element: HTMLElement, scene: Scene): Promise<void> {
+  // The page is not Vite's index.html, so React Fast Refresh's preamble was never injected;
+  // the components' dev transform expects its globals. No-ops will do: nothing is refreshed.
+  const refresh = window as unknown as Record<string, unknown>;
+  refresh.$RefreshReg$ ??= () => undefined;
+  refresh.$RefreshSig$ ??= () => (type: unknown) => type;
+  refresh.__vite_plugin_react_preamble_installed__ = true;
+  const [{ createElement }, { createRoot }, { InstancePanel }, { SceneContext, SceneRegistry }] =
+    await Promise.all([
+      import("react"),
+      import("react-dom/client"),
+      import("@/features/sites/InstanceSearch"),
+      import("@/cesium/SceneContext"),
+      import("@/styles/app.css"),
+    ]);
+  const registry = new SceneRegistry();
+  registry.set({
+    camera: {
+      flyToBoundingSphere: (sphere: BoundingSphere) =>
+        scene.camera.flyToBoundingSphere(sphere, {
+          offset: new HeadingPitchRange(0, CesiumMath.toRadians(-35), sphere.radius * 3.2),
+          duration: 0,
+        }),
+    },
+  } as unknown as CesiumSceneManager);
+  createRoot(element).render(
+    createElement(
+      SceneContext.Provider,
+      { value: registry },
+      createElement(InstancePanel, { assetId: ASSET }),
+    ),
+  );
+}
+
 export async function startInstancesHarness(options: {
   container: HTMLElement;
   url: string;
@@ -117,6 +180,8 @@ export async function startInstancesHarness(options: {
   maximumScreenSpaceError?: number;
   /** Who draws the splats: CesiumJS (default) or PlayCanvas over it, as the app's default. */
   renderer?: SplatRendererKind;
+  /** Where to mount the app's objects panel (`InstancePanel`), driving this scan. */
+  panel?: HTMLElement;
 }): Promise<InstancesHarness> {
   const dedicated = options.renderer !== undefined && options.renderer !== "cesium";
   if (dedicated) {
@@ -185,6 +250,7 @@ export async function startInstancesHarness(options: {
   }
   scene.primitives.add(tileset);
   attachInstances(tileset, scene, ASSET);
+  if (options.panel) await mountPanel(options.panel, scene);
   let host: ScanRendererHost | undefined;
   if (dedicated && options.renderer) {
     // As SiteManager.setSplatRenderer: CesiumJS's scan hidden, and not streamed.
@@ -217,18 +283,27 @@ export async function startInstancesHarness(options: {
     below = new SplatViewCones(meta, texels, coneGpu);
   }
 
-  function measure(rect?: Rect): Measure {
+  /** The globe's canvas with the dedicated renderer's drawn over it. */
+  function composite(): CanvasRenderingContext2D | null {
     const canvas = scene.canvas;
     const copy = document.createElement("canvas");
     copy.width = canvas.width;
     copy.height = canvas.height;
-    const context = copy.getContext("2d");
-    if (!context) return { coverage: 0, amber: 0, luma: 0, warmth: 0 };
+    const context = copy.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
     context.drawImage(canvas, 0, 0);
     const overlay = document.querySelector<HTMLCanvasElement>("canvas[data-scan-renderer]");
     // On WebGPU, the last frame drawn as the mirror kept it (see above).
     const drawn = overlay?.dataset.api === "webgpu" ? webgpuMirror : overlay;
     if (host && drawn) context.drawImage(drawn, 0, 0, copy.width, copy.height);
+    return context;
+  }
+  let remembered: Uint8ClampedArray | null = null;
+
+  function measure(rect?: Rect): Measure {
+    const context = composite();
+    if (!context) return { coverage: 0, amber: 0, luma: 0, warmth: 0 };
+    const copy = context.canvas;
     const x0 = Math.max(0, Math.floor(rect?.x ?? 0));
     const y0 = Math.max(0, Math.floor(rect?.y ?? 0));
     const x1 = Math.min(copy.width, Math.ceil(rect ? rect.x + rect.width : copy.width));
@@ -317,6 +392,54 @@ export async function startInstancesHarness(options: {
       return measure(rect);
     },
     scan: () => host?.status() ?? null,
+    remember() {
+      const context = composite();
+      remembered = context
+        ? context.getImageData(0, 0, context.canvas.width, context.canvas.height).data
+        : null;
+    },
+    changed() {
+      const context = composite();
+      if (!context || !remembered) return 0;
+      const now = context.getImageData(0, 0, context.canvas.width, context.canvas.height).data;
+      if (now.length !== remembered.length) return 1;
+      let moved = 0;
+      for (let i = 0; i < now.length; i += 4) {
+        const d =
+          Math.abs((now[i] ?? 0) - (remembered[i] ?? 0)) +
+          Math.abs((now[i + 1] ?? 0) - (remembered[i + 1] ?? 0)) +
+          Math.abs((now[i + 2] ?? 0) - (remembered[i + 2] ?? 0));
+        if (d > 48) moved += 1;
+      }
+      return moved / (now.length / 4);
+    },
+    categories: () =>
+      (useInstances.getState().assets[ASSET]?.index.groups ?? []).map((g) => ({
+        id: g.category.id,
+        name: g.category.name,
+        objects: g.objects.length,
+        splats: g.splats,
+      })),
+    drawn(category) {
+      const tiles = pickSourceOf(ASSET)?.tiles() ?? [];
+      const doc = paintedDocOf(ASSET);
+      const categoryOf = useInstances.getState().assets[ASSET]?.index.categoryOf;
+      const out = { tiles: tiles.length, tilesWithIds: 0, splats: 0, unlabelled: 0, inCategory: 0 };
+      for (const tile of tiles) {
+        const ids = doc ? tileInstanceIds(doc, tile.checksum) : undefined;
+        out.splats += tile.count;
+        if (ids?.length !== tile.count) {
+          out.unlabelled += tile.count;
+          continue;
+        }
+        out.tilesWithIds += 1;
+        for (const id of ids) {
+          if (id === 0) out.unlabelled += 1;
+          else if (categoryOf?.get(id) === category) out.inCategory += 1;
+        }
+      }
+      return out;
+    },
     async cones(mode) {
       const target = primitive();
       if (!file || !below || !target) throw new Error("no view-cone grid on this tileset");
@@ -357,6 +480,7 @@ export async function startInstancesHarness(options: {
       };
     },
     measure,
+    wait: (frames) => settle(frames),
     tiles() {
       const selected = (
         tileset as unknown as {

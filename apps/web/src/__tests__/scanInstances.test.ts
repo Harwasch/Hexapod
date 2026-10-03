@@ -80,12 +80,12 @@ function fakeBackend(
 }
 
 describe("the style a dedicated renderer draws objects with", () => {
-  it("expands to leaves and sets the same numbers as CesiumJS's hooks", () => {
+  it("applies the store's exact sets and the same numbers as CesiumJS's hooks", () => {
     const d = doc();
-    const style = instanceStyle(d, new Set([1]), new Set([3]), true);
+    const style = instanceStyle(d, new Set([1, 2]), new Set([3]), true);
     expect(style.rows).toBe(1);
     expect(style.state).toHaveLength(INSTANCE_TEXTURE_WIDTH * 4);
-    // Hiding 1 hides 2, inside it; 3 is lit.
+    // 1 and 2 (inside it, as the store expands it) hidden; 3 lit.
     expect([style.state[4], style.state[8], style.state[12 + 1]]).toEqual([255, 255, 255]);
     expect(style.state[12]).toBe(0);
     expect(style.params).toEqual([1, 3, 1, 0]);

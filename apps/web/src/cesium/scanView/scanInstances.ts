@@ -17,8 +17,9 @@
  * reported to the store as a gap, which the objects panel shows with a switch to CesiumJS.
  */
 
-import { withDescendants, type InstancesDoc } from "@/lib/instances";
+import type { InstancesDoc } from "@/lib/instances";
 import { useInstances } from "@/state/instances";
+import { effectiveDoc, onCustomSetsChange } from "@/state/sceneSelect";
 
 import {
   HIGHLIGHT_STYLE,
@@ -47,7 +48,10 @@ export interface InstanceStyle {
   readonly dim: readonly [number, number, number, number];
 }
 
-/** The style for `doc` with `hidden` and `highlighted` (store ids, expanded to leaves here). */
+/**
+ * The style for `doc` with `hidden` and `highlighted`: the store's exact sets (a category's or
+ * an object's members, `state/instances.ts`), applied id for id.
+ */
 export function instanceStyle(
   doc: InstancesDoc,
   hidden: ReadonlySet<number>,
@@ -57,11 +61,9 @@ export function instanceStyle(
 ): InstanceStyle {
   const rows = stateTextureRows(doc.maxId);
   const state = new Uint8Array(INSTANCE_TEXTURE_WIDTH * rows * 4);
-  const hiddenLeaves = withDescendants(doc, hidden);
-  const litLeaves = withDescendants(doc, highlighted);
-  writeStateTexels(state, doc.maxId, hiddenLeaves, litLeaves);
-  const anyHidden = hiddenLeaves.size > 0;
-  const anyLit = litLeaves.size > 0;
+  writeStateTexels(state, doc.maxId, hidden, highlighted);
+  const anyHidden = hidden.size > 0;
+  const anyLit = highlighted.size > 0;
   return {
     doc,
     state,
@@ -154,6 +156,15 @@ export function idsInResourceOrder(
   return out;
 }
 
+/**
+ * The scan's `instances.json` with the objects painted in this browser drawn as ids of their
+ * own (lib/customSets.ts): what the back-ends draw from.
+ */
+export function paintedDocOf(assetId: string): InstancesDoc | undefined {
+  const base = instancesDocOf(assetId);
+  return base ? effectiveDoc(assetId, base) : undefined;
+}
+
 /** Why a back-end cannot apply the style, or null when it can. */
 export function instanceGap(
   backend: Pick<ScanBackend<unknown>, "setInstances" | "name">,
@@ -179,7 +190,7 @@ export function linkScanInstances(
   assetId: string,
   backend: ScanBackend<unknown>,
   native: boolean,
-  docOf: (assetId: string) => InstancesDoc | undefined = instancesDocOf,
+  docOf: (assetId: string) => InstancesDoc | undefined = paintedDocOf,
   restyled: () => void = () => undefined,
 ): () => void {
   const gap = instanceGap(backend, native);
@@ -215,9 +226,11 @@ export function linkScanInstances(
     restyled();
   };
   const off = store.subscribe(push);
+  const offCustom = onCustomSetsChange(assetId, push);
   push();
   return () => {
     off();
+    offCustom();
     backend.setInstances?.(null);
   };
 }

@@ -1,6 +1,8 @@
+import type { PickTile } from "@/lib/splatPick";
 import type { TileNode } from "@/view/tiles";
 
 import type { InstanceStyle } from "./scanInstances";
+import type { ScanMotion } from "./scanMotion";
 import type { TileWork } from "./tileWork";
 
 /**
@@ -45,6 +47,11 @@ export interface BackendHooks {
    * WebGL2 renderer and draws again. `reason` is one line for the developer readouts.
    */
   deviceLost?(reason: string): void;
+  /**
+   * Keeps each drawn frame readable after it is shown (`preserveDrawingBuffer`): harnesses
+   * read the overlay's pixels back. Off in the app, where it costs a copy per frame.
+   */
+  preserveDrawingBuffer?: boolean;
 }
 
 /** A scan the renderer streams by itself (ScanBackend.streamNative). */
@@ -97,8 +104,38 @@ export interface ScanBackend<M> {
    * renderer cannot, and the objects panel then offers CesiumJS's renderer.
    */
   setInstances?(style: InstanceStyle | null): void;
+  /**
+   * The tiles drawn now, in each tile's own splat order and the scan's frame, for selecting
+   * objects in the scene (cesium/sceneSelect). Absent when the renderer cannot say.
+   */
+  pickTiles?(): readonly PickTile[];
+  /**
+   * Whether the screen shows what was last asked for: false while the renderer is still
+   * catching up on its own (Spark draws a new generation only once its asynchronous sort of
+   * it lands, and keeps drawing the previous one until then). Absent: always.
+   */
+  settled?(): boolean;
   /** Tiles loaded now, and how many of them carry object ids: for tests and diagnostics. */
   instanceTiles?(): { tiles: number; matched: number };
+  /**
+   * Moves the scan's objects as `motion` says (scanMotion.ts: skins and rigid motions the
+   * shared drivers set), on every tile loaded now or later; null draws every splat at rest.
+   * Absent when the renderer cannot, and the panels then offer CesiumJS's renderer.
+   */
+  setMotion?(motion: ScanMotion | null): void;
+  /** Tiles loaded now that carry skin weights, and those redrawn for motion so far. */
+  motionTiles?(): { skinned: number; redrawn: number };
+  /**
+   * Draws `mesh` -- a split object's tile -- under `matrix` (column-major 4x4, the scan's
+   * frame; a rigid motion), or where it was decoded with null.
+   */
+  place?(mesh: M, matrix: readonly number[] | null): void;
+  /**
+   * A time (`performance.now()` ms) by which the renderer wants another frame for work it held
+   * back -- a moving object's re-sort, throttled while it moves -- or null. The host draws one
+   * by then even when nothing else changes, so the last pose of a motion is sorted at rest.
+   */
+  frameDueBy?(): number | null;
   /**
    * Lets go of everything, the GPU context included: a lost context (`WEBGL_lose_context`)
    * is what frees its memory at once rather than whenever the browser collects the canvas,

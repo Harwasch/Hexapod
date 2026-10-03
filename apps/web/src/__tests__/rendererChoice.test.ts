@@ -70,6 +70,7 @@ describe("the renderer readout", () => {
     active: true,
     api: "webgpu" as const,
     notice: null,
+    webgl2ForObjects: false,
     meter: null,
   };
 

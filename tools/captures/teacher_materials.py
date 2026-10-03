@@ -51,6 +51,13 @@ with known materials from the same model, recovered from a deliberately wrong pr
         --camera /tmp/clip/camera.json --strength 0.5 --bearing 60 --materials OUT.json
     python teacher_materials.py validate TILES SKIN --instance 1 --instance 9 --out /tmp/c2
     python teacher_materials.py world TILES SKIN --instance 1 --model Wan ...  # Modal, GPU
+    python teacher_materials.py world TILES SKIN --instance 225 --renderer gsplat \\
+        --auto-bearing --chain 3 --save /tmp/c2 ...  # what infra/modal/dream.py runs
+
+`world` draws the still the model starts from over a pale sky (`SKY`), from the bearing the
+object is seen best from (`--auto-bearing`: `best_bearing`, the most pixels where it is the
+nearest thing drawn), and `--chain N` makes each clip N model calls long, each starting
+from the last frame of the one before (a model's own clip is ~5 s).
 """
 
 from __future__ import annotations
@@ -220,6 +227,58 @@ def camera_for(
     across = np.array([math.cos(b), -math.sin(b), 0.0])
     eye = target + across * distance
     return Camera.look_at(eye, target, fov_deg=fov_deg, width=width, height=height)
+
+
+#: A sky for stills shown to a video model: where the scan has nothing, a world model reads
+#: black as night or a void; a pale overcast sky is what it expects above trees.
+SKY = (0.78, 0.82, 0.86)
+
+
+def to_u8(rgb: np.ndarray) -> np.ndarray:
+    return np.clip(np.round(np.asarray(rgb) * 255), 0, 255).astype(np.uint8)
+
+
+def draw(scene: Scene, camera: Camera, renderer: object | None = None, **kwargs: object):
+    """The scan from `camera`: `splat_render.render` on the CPU, or a `GsplatRenderer`."""
+    if renderer is None:
+        return render(scene.splats, camera, index=scene.index, **kwargs)  # type: ignore[arg-type]
+    return renderer(scene.splats, camera, **kwargs)  # type: ignore[operator]
+
+
+def visible_pixels(
+    scene: Scene, instance: int, camera: Camera, renderer: object | None = None
+) -> tuple[int, int]:
+    """(pixels where `instance` is the nearest thing drawn, pixels it covers on its own):
+    how much of it the camera sees past whatever stands in front of it."""
+    only = scene.splats.take(scene.members(instance))
+    if renderer is None:
+        alone = render(only, camera)
+    else:
+        alone = renderer(only, camera)  # type: ignore[operator]
+    full = draw(scene, camera, renderer)
+    covered = (alone.alpha > 0.5) & np.isfinite(alone.depth)
+    front = covered & (alone.depth <= full.depth * 1.03 + 0.05)
+    return int(front.sum()), int(covered.sum())
+
+
+def best_bearing(
+    scene: Scene,
+    instance: int,
+    renderer: object | None = None,
+    *,
+    bearings: Sequence[float] = tuple(range(0, 360, 30)),
+    width: int = 256,
+    height: int = 144,
+) -> tuple[float, list[dict]]:
+    """The bearing (`camera_for`'s: the camera looks across a wind blowing toward it) from
+    which most of `instance` is seen unoccluded, and every bearing's count."""
+    tried = []
+    for bearing in bearings:
+        camera = camera_for(scene, instance, float(bearing), width=width, height=height)
+        seen, covered = visible_pixels(scene, instance, camera, renderer)
+        tried.append({"bearing": float(bearing), "visible": seen, "covered": covered})
+    best = max(tried, key=lambda t: (t["visible"], t["visible"] / max(t["covered"], 1)))
+    return best["bearing"], tried
 
 
 # ----------------------------------------------------------------------- synthetic clips
@@ -1061,6 +1120,20 @@ def main(argv: list[str] | None = None) -> int:
     world.add_argument("--height", type=int, default=704)
     world.add_argument("--materials", type=Path, required=True)
     world.add_argument("--report", type=Path)
+    world.add_argument("--prompt", help="what the clip shows (default: a gentle breeze)")
+    world.add_argument(
+        "--chain", type=int, default=1, help="model calls per clip, each from the last frame"
+    )
+    world.add_argument("--steps", type=int, help="the model's denoising steps")
+    world.add_argument(
+        "--renderer", choices=("cpu", "gsplat"), default="cpu", help="how the still is drawn"
+    )
+    world.add_argument(
+        "--auto-bearing",
+        action="store_true",
+        help="per instance, the bearing it is seen best from (over --bearing)",
+    )
+    world.add_argument("--save", type=Path, help="stills, clips, spectra and tracks here")
 
     args = parser.parse_args(argv)
     scene = load_scene(args.tiles, args.skin)
@@ -1142,21 +1215,66 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "world":
         from world_model_client import VideoClips
 
-        source = VideoClips(model=args.model)
-        fits = []
+        options: dict = {"model": args.model, "chain": args.chain, "steps": args.steps}
+        if args.prompt:
+            options["prompt"] = args.prompt
+        source = VideoClips(**options)
+        renderer = None
+        if args.renderer == "gsplat":
+            from splat_render import GsplatRenderer
+
+            renderer = GsplatRenderer()
+        fits, reports = [], []
         for instance in args.instance:
-            camera = camera_for(
-                scene, instance, wind.bearing_deg, width=args.width, height=args.height
-            )
-            still = render(scene.splats, camera, index=scene.index).rgb
+            if instance not in scene.skins:
+                print(f"instance {instance}: no skin with dynamics, skipped", flush=True)
+                continue
+            report: dict = {"instance": instance}
+            bearing = wind.bearing_deg
+            if args.auto_bearing:
+                bearing, report["bearings"] = best_bearing(scene, instance, renderer)
+            here = sw.SkinWind(wind.speed_mps, bearing)
+            camera = camera_for(scene, instance, bearing, width=args.width, height=args.height)
+            report["bearing"] = bearing
+            report["visible"], report["covered"] = visible_pixels(scene, instance, camera, renderer)
+            still = draw(scene, camera, renderer, background=SKY).rgb
+            first = len(source.received)
+            started = time.perf_counter()
             clips = source.clips([still], [camera], tuple(range(1, args.seeds + 1)))
+            report["clipSeconds"] = round(time.perf_counter() - started, 1)
+            report["calls"] = source.received[first:]
             frames = [f for clip in clips for f in clip]  # seeds back to back
             observation = observe(scene, instance, frames, source.fps, camera)
             prior = prior_of(inst_doc, mat_doc, instance)
-            fits.append(fit_material(scene, observation, wind, prior, log=True))
+            fit = fit_material(scene, observation, here, prior, log=True)
+            fits.append(fit)
+            report |= fit.to_json() | {"backgroundPoints": observation.background_points}
+            report["clipFrames"] = len(frames)
+            report["clipSecondsOfVideo"] = round(len(frames) / source.fps, 2)
+            print(json.dumps({k: v for k, v in report.items() if k != "calls"}), flush=True)
+            reports.append(report)
+            if args.save:
+                from world_model_client import encode_png
+
+                folder = args.save / f"instance-{instance}"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "still.png").write_bytes(encode_png(to_u8(still)))
+                (folder / "camera.json").write_text(json.dumps(camera.to_json(), indent=1))
+                for k, clip in enumerate(clips):
+                    write_clip(folder / f"clip-{k}.avi", clip, source.fps)
+                observation.save(folder / "observation.npz")
+                try:
+                    plot_fit(
+                        folder / "spectrum.png",
+                        fit,
+                        f"instance {instance}: {source.name}, {len(frames)} frames "
+                        f"at {source.fps:g} fps",
+                    )
+                except ImportError:
+                    pass
         write_materials(args.materials, fits, EVIDENCE["generated"], source.name)
         if args.report:
-            args.report.write_text(json.dumps([f.to_json() for f in fits], indent=1))
+            args.report.write_text(json.dumps(reports, indent=1))
         return 0
     return 1
 

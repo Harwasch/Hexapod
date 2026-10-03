@@ -128,7 +128,7 @@ async function rig(
     resolutionScale: 1,
     useBrowserRecommendedResolution: true,
   };
-  const host = new ScanRendererHost(viewer as never, () => Promise.resolve(module));
+  const host = new ScanRendererHost(viewer as never, { backends: () => Promise.resolve(module) });
   const tileset = {
     resource: { url: "https://scan.test/tileset.json" },
     root: { computedTransform: Matrix4.IDENTITY.clone(), extras: { nativeLod: false } },

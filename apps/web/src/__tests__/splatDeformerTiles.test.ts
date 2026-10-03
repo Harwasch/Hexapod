@@ -183,35 +183,87 @@ describe("attaching to a multi-tile snapshot", () => {
 });
 
 describe("a gaussian moves by where it stands, not by its tile", () => {
-  it("matches the single-gaussian reference in every selection, whatever its index", () => {
-    const tiles = tileSet();
-    const [transforms, field] = frameAt(6.5);
-    // Far (merged root), middle (merged octants and a packed leaf), near (every leaf), and
-    // the near view in a different order: the same gaussians at different indices.
-    const selections = [[ROOT], MIDDLE, [...lodLeaves], [...lodLeaves].reverse()];
-    const bound = maxDisplacement(lodRig, GALE) + maxFlutterAmplitude(lodRig, GALE);
-    for (const selection of selections) {
-      const primitive = new FakeTiledPrimitive();
-      commit(primitive, pick(tiles, selection));
-      const deformer = new SplatDeformer({ tileset: new FakeTiledTileset(primitive), rig: lodRig });
-      deformer.apply(transforms, field);
-      let start = 0;
-      for (const uri of selection) {
-        const local = lodTiles.get(uri)?.local ?? new Float32Array(0);
-        for (let j = 0; j < local.length / 3; j += 1) {
-          const got = uploaded(primitive, start + j);
-          const want = reference(local, j, transforms, field);
-          // Bit for bit: the aggregate is only concatenation, so nothing may differ.
-          expect(got).toEqual(want);
-          const rest = primitive._positions.subarray((start + j) * 3, (start + j) * 3 + 3);
-          const moved = Math.hypot(...got.map((v, k) => v - (rest[k] ?? 0)));
-          // A splat sits away from its node, so it can swing a little past the node bound.
-          expect(moved).toBeLessThan(bound * 2 + 0.1);
+  // A generous timeout on top: thousands of one-gaussian references are slow on a loaded runner.
+  it(
+    "matches the single-gaussian reference in every selection, whatever its index",
+    { timeout: 60_000 },
+    () => {
+      const tiles = tileSet();
+      const [transforms, field] = frameAt(6.5);
+      // Far (merged root), middle (merged octants and a packed leaf), near (every leaf), and
+      // the near view in a different order: the same gaussians at different indices.
+      const selections = [[ROOT], MIDDLE, [...lodLeaves], [...lodLeaves].reverse()];
+      const bound = maxDisplacement(lodRig, GALE) + maxFlutterAmplitude(lodRig, GALE);
+      // The reference depends on a gaussian's canonical position alone, so each is computed once
+      // and held against every selection that draws it (the near views draw the same leaves).
+      const references = new Map<string, [number, number, number][]>();
+      const referenceOf = (
+        uri: string,
+        local: Float32Array,
+        j: number,
+      ): [number, number, number] => {
+        let list = references.get(uri);
+        if (!list) {
+          list = [];
+          references.set(uri, list);
         }
-        start += local.length / 3;
+        const want = list[j] ?? reference(local, j, transforms, field);
+        list[j] = want;
+        return want;
+      };
+      // Every gaussian is checked; failures are collected and asserted once. One `expect` per
+      // gaussian made this the suite's slowest test, which timed out in loaded full runs.
+      const mismatches: {
+        selection: number;
+        uri: string;
+        j: number;
+        got: number[];
+        want: number[];
+      }[] = [];
+      const tooFar: { selection: number; uri: string; j: number; moved: number }[] = [];
+      let checked = 0;
+      for (const [s, selection] of selections.entries()) {
+        const primitive = new FakeTiledPrimitive();
+        commit(primitive, pick(tiles, selection));
+        const deformer = new SplatDeformer({
+          tileset: new FakeTiledTileset(primitive),
+          rig: lodRig,
+        });
+        deformer.apply(transforms, field);
+        let start = 0;
+        for (const uri of selection) {
+          const local = lodTiles.get(uri)?.local ?? new Float32Array(0);
+          for (let j = 0; j < local.length / 3; j += 1) {
+            const got = uploaded(primitive, start + j);
+            const want = referenceOf(uri, local, j);
+            checked += 1;
+            // Bit for bit (Object.is, as toEqual compares numbers): the aggregate is only
+            // concatenation, so nothing may differ.
+            if (!got.every((v, k) => Object.is(v, want[k]))) {
+              mismatches.push({ selection: s, uri, j, got, want });
+            }
+            const rest = primitive._positions.subarray((start + j) * 3, (start + j) * 3 + 3);
+            const moved = Math.hypot(...got.map((v, k) => v - (rest[k] ?? 0)));
+            // A splat sits away from its node, so it can swing a little past the node bound.
+            if (!(moved < bound * 2 + 0.1)) tooFar.push({ selection: s, uri, j, moved });
+          }
+          start += local.length / 3;
+        }
       }
-    }
-  });
+      expect(mismatches.slice(0, 5)).toEqual([]);
+      expect(mismatches.length).toBe(0);
+      expect(tooFar.slice(0, 5)).toEqual([]);
+      // Every gaussian of every selection was held to the reference.
+      expect(checked).toBe(
+        selections.reduce(
+          (n, selection) =>
+            n + selection.reduce((m, uri) => m + (lodTiles.get(uri)?.local.length ?? 0) / 3, 0),
+          0,
+        ),
+      );
+      expect(checked).toBeGreaterThan(0);
+    },
+  );
 
   it("gives a parent gaussian and a leaf gaussian at one position the same motion", () => {
     // The merge puts parents at cell centroids, so no committed parent coincides with a leaf;
@@ -324,55 +376,60 @@ describe("tiles load, unload and replace", () => {
     expect(primitive.gaussianSplatTexture.uploads.length).toBe(uploads);
   });
 
-  it("never writes a tile's canonical positions, across hundreds of frames and selections", () => {
-    const primitive = new FakeTiledPrimitive();
-    const tiles = tileSet();
-    const snapshot = (): Map<string, Uint8Array> =>
-      new Map(
-        [...tiles].map(([uri, tile]) => [
-          uri,
-          Uint8Array.from(new Uint8Array(tile.content.positions.buffer.slice(0))),
-        ]),
+  // Two hundred and forty CPU frames: a generous timeout, so a loaded runner cannot fail it.
+  it(
+    "never writes a tile's canonical positions, across hundreds of frames and selections",
+    { timeout: 60_000 },
+    () => {
+      const primitive = new FakeTiledPrimitive();
+      const tiles = tileSet();
+      const snapshot = (): Map<string, Uint8Array> =>
+        new Map(
+          [...tiles].map(([uri, tile]) => [
+            uri,
+            Uint8Array.from(new Uint8Array(tile.content.positions.buffer.slice(0))),
+          ]),
+        );
+      const before = snapshot();
+      const localBefore = new Map(
+        [...lodTiles].map(([uri, tile]) => [uri, Float32Array.from(tile.local)]),
       );
-    const before = snapshot();
-    const localBefore = new Map(
-      [...lodTiles].map(([uri, tile]) => [uri, Float32Array.from(tile.local)]),
-    );
-    const deformer = new SplatDeformer({ tileset: new FakeTiledTileset(primitive), rig: lodRig });
-    const selections = [[ROOT], MIDDLE, [...lodLeaves]];
-    const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
-      a.length === b.length && a.every((value, i) => value === b[i]);
-    let last: readonly string[] = [];
-    for (let frame = 0; frame < 240; frame += 1) {
-      if (frame % 40 === 0) {
-        last = selections[(frame / 40) % 3] ?? [];
-        commit(primitive, pick(tiles, last));
+      const deformer = new SplatDeformer({ tileset: new FakeTiledTileset(primitive), rig: lodRig });
+      const selections = [[ROOT], MIDDLE, [...lodLeaves]];
+      const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
+        a.length === b.length && a.every((value, i) => value === b[i]);
+      let last: readonly string[] = [];
+      for (let frame = 0; frame < 240; frame += 1) {
+        if (frame % 40 === 0) {
+          last = selections[(frame / 40) % 3] ?? [];
+          commit(primitive, pick(tiles, last));
+        }
+        const engine = Uint8Array.from(new Uint8Array(primitive._positions.buffer.slice(0)));
+        const t = frame / 60;
+        const wind = { strength: 0.3 + 0.7 * Math.abs(Math.sin(t)), bearingDeg: 30 + t * 20 };
+        deformer.apply(deform(lodRig, t, wind), flutterField(lodRig, t, wind));
+        expect(sameBytes(new Uint8Array(primitive._positions.buffer), engine)).toBe(true);
       }
-      const engine = Uint8Array.from(new Uint8Array(primitive._positions.buffer.slice(0)));
-      const t = frame / 60;
-      const wind = { strength: 0.3 + 0.7 * Math.abs(Math.sin(t)), bearingDeg: 30 + t * 20 };
-      deformer.apply(deform(lodRig, t, wind), flutterField(lodRig, t, wind));
-      expect(sameBytes(new Uint8Array(primitive._positions.buffer), engine)).toBe(true);
-    }
-    const after = snapshot();
-    for (const [uri, bytes] of before)
-      expect(sameBytes(after.get(uri) ?? new Uint8Array(), bytes)).toBe(true);
-    for (const [uri, tile] of lodTiles) {
-      expect(checksumPositions(tile.local)).toBe(
-        checksumPositions(localBefore.get(uri) ?? tile.local),
-      );
-    }
-    // And the deformer's own canonical copy is the un-baked tiles, not something drifting.
-    const canonical = deformer.canonicalPositions ?? new Float32Array(0);
-    let offset = 0;
-    for (const uri of last) {
-      const local = lodTiles.get(uri)?.local ?? new Float32Array(0);
-      expect(checksumPositions(canonical.subarray(offset, offset + local.length))).toBe(
-        checksumPositions(local),
-      );
-      offset += local.length;
-    }
-  });
+      const after = snapshot();
+      for (const [uri, bytes] of before)
+        expect(sameBytes(after.get(uri) ?? new Uint8Array(), bytes)).toBe(true);
+      for (const [uri, tile] of lodTiles) {
+        expect(checksumPositions(tile.local)).toBe(
+          checksumPositions(localBefore.get(uri) ?? tile.local),
+        );
+      }
+      // And the deformer's own canonical copy is the un-baked tiles, not something drifting.
+      const canonical = deformer.canonicalPositions ?? new Float32Array(0);
+      let offset = 0;
+      for (const uri of last) {
+        const local = lodTiles.get(uri)?.local ?? new Float32Array(0);
+        expect(checksumPositions(canonical.subarray(offset, offset + local.length))).toBe(
+          checksumPositions(local),
+        );
+        offset += local.length;
+      }
+    },
+  );
 });
 
 describe("refusing rather than misleading, per tile", () => {
