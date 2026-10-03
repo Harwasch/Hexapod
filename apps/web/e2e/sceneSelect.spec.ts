@@ -2,8 +2,11 @@
  * Selecting the synthetic yard's objects in the scene (cesium/sceneSelect, docs/SCENE_OBJECTS.md
  * "Selecting in the scene"), with the real mouse and keyboard, under PlayCanvas (the app's
  * default renderer) and Spark and CesiumJS: a click on a tree's crown selects the tree (or a
- * part of it), `]` cycles to its parent or child, the brush painted over a shrub selects that
- * shrub, and Hide in the chip hides it (its pixels change to the lawn behind it).
+ * part of it) and gives the map the keyboard, `]` and Tab cycle to its parent or child (Tab
+ * only from the map or the card: from the page's body it moves focus), the brush painted over
+ * a shrub selects that shrub, and Hide in the selection card hides it (its pixels change to the
+ * lawn behind it). The card is the HUD's (features/sites/ObjectCard.tsx), mounted by the
+ * harness where the app's right dock puts it.
  *
  * `data/tiles/synthetic-yard/instances/` is the yard segmented against its own ground truth;
  * the route links it from the root's extras, as e2e/instances.spec.ts does. Screenshots go to
@@ -169,14 +172,17 @@ for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
     const crown = await call("screenOf", CROWN);
     expect(crown, "the crown is on screen").not.toBeNull();
     await page.mouse.click(crown?.x ?? 0, crown?.y ?? 0);
-    const chip = page.getByTestId("scene-select-chip");
-    await expect(chip).toBeVisible();
+    const card = page.getByTestId("selection-card");
+    await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute("data-kind", "object");
     const picked = await call("state");
     await page.screenshot({ path: shot(`${renderer}-1-click-tree.png`) });
     expect(topOf(picked.selected)).toBe(TREE);
     expect(picked.highlighted).toContain(picked.selected);
-    const label = page.getByTestId("scene-select-label");
-    await expect(label).toHaveText(/ of /);
+    await expect(card.getByTestId("object-label")).not.toBeEmpty();
+    await expect(card.getByTestId("object-candidates")).toHaveText(/ of /);
+    // The hit gave the map the keyboard.
+    expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("CANVAS");
 
     // ---- Cycle: to the parent (or round to a child) ---------------------------------------
     await page.keyboard.press("]");
@@ -188,9 +194,19 @@ for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
     if (picked.index < picked.chain - 1) expect(after).toBe(parentOf.get(before));
     await page.keyboard.press("[");
     expect((await call("state")).selected).toBe(before);
+    // Tab cycles from the map, as `]` does, and Shift+Tab comes back.
+    await page.keyboard.press("Tab");
+    expect((await call("state")).selected).toBe(after);
+    await page.keyboard.press("Shift+Tab");
+    expect((await call("state")).selected).toBe(before);
+    // From the page's body Tab moves focus, and leaves the selection alone.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("Tab");
+    expect((await call("state")).selected).toBe(before);
+    expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
     await page.keyboard.press("Escape");
     expect((await call("state")).selected).toBeNull();
-    await expect(chip).toBeHidden();
+    await expect(card).toBeHidden();
 
     // ---- Paint over a shrub --------------------------------------------------------------
     await call("view", SHRUB, 20, -40, 7);
@@ -219,8 +235,8 @@ for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
     expect(topOf(painted.selected)).toBe(SHRUB);
     expect(painted.paint?.iou ?? 0).toBeGreaterThan(0.3);
 
-    // ---- Hide it from the chip ------------------------------------------------------------
-    await chip.getByRole("button", { name: "Hide" }).click();
+    // ---- Hide it from the card ------------------------------------------------------------
+    await card.getByRole("button", { name: "Hide" }).click();
     await call("frames", 30);
     const hidden = await call("state");
     const change = await call("changed", rect);

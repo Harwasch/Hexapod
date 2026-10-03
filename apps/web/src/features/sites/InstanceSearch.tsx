@@ -184,8 +184,8 @@ function CategoryRow({
   }, [selectedAt, open]);
 
   /**
-   * Highlights the object, selects it in the scene (the chip offers its actions), and flies to
-   * it as the chip's Fly to does (`CameraController.flyToObject`).
+   * Highlights the object, selects it in the scene (the selection card offers its actions),
+   * and flies to it as the card's Fly to does (`CameraController.flyToObject`).
    */
   const selectObject = (object: SceneObject): void => {
     const focus: Focus = { kind: "object", id: object.id };
@@ -479,7 +479,11 @@ export function InstancePanel({ assetId }: { assetId: string }) {
   );
 }
 
-/** A compact button beside the representation switcher that opens the objects panel. */
+/**
+ * A compact button beside the representation switcher that opens the objects panel: a
+ * popover over the HUD's regions (`data-hud-popover`, as the site switcher and the command
+ * box's results), closed with Escape or a click away.
+ */
 export function InstanceSearch({ assetId }: { assetId: string }) {
   const count = useInstances((s) => s.assets[assetId]?.instances.length ?? 0);
   const [open, setOpen] = useState(false);
@@ -491,6 +495,8 @@ export function InstanceSearch({ assetId }: { assetId: string }) {
       side="top"
       aria-label="Objects in this scan"
       className="instance-popover"
+      data-hud-popover=""
+      data-testid="instance-popover"
       trigger={
         <GlassButton
           size="sm"

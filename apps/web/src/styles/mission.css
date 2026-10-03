@@ -673,6 +673,93 @@ a.mc-link {
   color: rgba(242, 246, 239, 0.78);
 }
 
+/* An object of a scan in the same card (features/sites/ObjectCard): the candidates a click
+   offered, the brush, and what can be done with the object. It takes focus from a click on
+   it (never from Tab), and Tab then cycles the candidates. */
+.mc-card--object:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.mc-card--object .mc-card__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-cycle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.mc-cycle__count {
+  min-width: 4.5rem;
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.mc-cycle__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: auto;
+  font: 400 11px var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.mc-card__brush {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.mc-card__brush-size {
+  min-width: 3.2rem;
+  font-size: 12px;
+  text-align: center;
+}
+
+.mc-card--object .mc-actions {
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.mc-card--object .mc-actions--tools {
+  margin-top: 0.5rem;
+}
+
+.mc-card--object .mc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.55rem 0.5rem;
+  white-space: nowrap;
+}
+
+.mc-card--object .mc-btn .glass-kbd {
+  margin-left: 0.15rem;
+}
+
+/* A finger needs more than a mouse: the small square buttons grow on a touch screen. */
+@media (hover: none) and (pointer: coarse) {
+  .mc-card--object .mc-close {
+    width: 36px;
+    height: 36px;
+  }
+
+  .mc-card--object .mc-btn {
+    padding: 0.7rem 0.5rem;
+  }
+}
+
 .mc-close {
   width: 24px;
   height: 24px;

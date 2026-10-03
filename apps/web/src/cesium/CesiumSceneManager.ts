@@ -242,12 +242,13 @@ export class CesiumSceneManager {
       this.sites,
     );
     this.selection.setCollider(this.collider);
-    // Fly to goes through the camera controller: its pace and range, and the dedicated
-    // renderer's destination prefetch.
+    // Fly to goes through the camera controller (its pace, range and the dedicated renderer's
+    // destination prefetch), and B and Escape are the app's keys (AppShell's GlobalHotkeys).
     this.camera.setDestinationPrefetch(prefetchScanDestination);
     this.sceneSelect = new SceneSelectController(this.viewer, {
       enabled: () => this.selectionWanted(),
       ownClicks: false,
+      ownKeys: false,
       fly: (sphere) => this.camera.flyToObject(sphere),
     });
     // One click, one answer: an object of a scan under the cursor first, else the cards.

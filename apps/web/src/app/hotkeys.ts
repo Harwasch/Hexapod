@@ -8,8 +8,8 @@ import { MOD_LABEL } from "@/lib/hotkeys";
  * scene handles itself — camera navigation (`cesium/KeyboardNavigator`) and explore mode
  * (`cesium/ExploreController`) — are listed with `scene: true`: shown, never bound here, so
  * the sheet is the whole truth without a second place to keep in step. So are the keys a
- * selected scan object answers to (`cesium/sceneSelect/SceneSelectController`), the brush
- * among them.
+ * selected scan object answers to (`cesium/sceneSelect/SceneSelectController`): the brush is
+ * bound here, the cycling keys are the controller's own.
  */
 export type HotkeyGroup = "General" | "Views" | "Tools" | "Objects" | "Camera" | "Explore mode";
 
@@ -52,17 +52,11 @@ export const HOTKEYS = {
   compare: { combo: "c", label: "Compare layers", group: "Tools" },
   sites: { combo: "s", label: "Switch site", group: "Tools" },
   bookmarks: { combo: "v", label: "Saved views", group: "Tools" },
-  brush: {
-    combo: "",
-    keys: ["B"],
-    label: "Paint to select objects (brush)",
-    group: "Objects",
-    scene: true,
-  },
+  brush: { combo: "b", label: "Paint to select objects (brush)", group: "Objects" },
   cycleObject: {
     combo: "",
     keys: ["[", "]"],
-    label: "Previous / next candidate of the selected object",
+    label: "Previous / next candidate (Tab from the card or the map)",
     group: "Objects",
     scene: true,
   },

@@ -233,10 +233,13 @@ the representation switcher:
   "water"); a typed property filter (`vegetation > 0.5`, `behaviour:movable`) still works but
   has no buttons;
 - one "Reset" whenever anything is hidden or highlighted, with what is hidden in words.
-- selecting in the scene (a click, the cycle keys or the brush; `SceneSelectChip.tsx`) opens
-  that object's category and marks it; clicking an object in the panel selects it in the scene,
-  so the chip offers its actions. The chip names a selection as the panel does (its top tag,
-  else its category, never an id) and shows its actions as icon buttons with tooltips.
+- selecting in the scene (a click, the cycle keys or the brush; the HUD's selection card,
+  `ObjectCard.tsx`) opens that object's category and marks it; clicking an object in the panel
+  selects it in the scene, so the card offers its actions, and flies to it as the card's Fly to
+  does. The card names a selection as the panel does (its top tag, else its category, never an
+  id).
+- the panel is a popover from the strip, marked `data-hud-popover` like the HUD's other
+  popovers; Escape closes it (and only it).
 
 The property scores and behaviours are not shown: they drive physics, not browsing (SigLIP's
 "vegetation" scored the pumpkins 0.88 -- true of a gourd, and confusing in a list).
@@ -788,20 +791,32 @@ the tiles the renderer draws now:
   The first choice is the smallest instance in the chain that is at least 48 px across on
   screen.
 
-- **Cycling**. `[` / `]`, Tab / Shift+Tab (from the scene), Alt+wheel or the wheel over the
-  chip move between candidates. Esc clears the selection.
-- **The chip** (`features/sites/SceneSelectChip.tsx`). It sits by the cursor and shows
-  "Tree · 2 of 4": the top tag, else the category, else "Object N". It offers **Hide**, **Show
-  only**, **Fly to**, the brush and **Clear**. The selection is the objects store's highlight:
-  the controller writes it through `useInstances.highlight`, expanded to descendants.
-- **Brush** (`B`, or the chip's brush; `lib/splatPaint.ts`). The camera holds still while you
-  paint. Every drawn splat is projected once, and 3 px cells keep the nearest depth of their
-  fairly solid splats (an approximation of the rendered depth). A splat counts as painted when
-  it is near its cell's front and the cell is under a stroke. Shift adds to the painted area,
-  Alt takes away, and a plain stroke starts again. The match is the instance, at any level,
-  with the best intersection over union. The IoU is weighted by opacity and counts only
-  visible splats, so an object's hidden back does not count against it.
-- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the chip offers
+- **Cycling**. `[` / `]`, Alt+wheel, the wheel over the card's arrows, or the arrows
+  themselves move between candidates. Tab / Shift+Tab do too, but only while the map (the
+  canvas) or the card itself has focus: a hit gives the map the keyboard, so Tab cycles right
+  after a click; from anywhere else, the page's body included, Tab moves focus as it always
+  does. Esc steps back: the brush away first, then the selection.
+- **The card** (`features/sites/ObjectCard.tsx`). The HUD's one selection card
+  (`features/mission/SelectionCard`) shows an object as it shows a machine or a zone, in the
+  right dock (a bottom sheet on a phone): the name (top tag, else the category, never an id)
+  and the category, "◀ 2 of 4 ▶", **Hide**, **Show only**, **Fly to**, the brush and **Clear**
+  (its close button). One selection at a time: picking an object clears a machine or zone, and
+  the reverse (`state/oneSelection.ts`). The selection is the objects store's highlight: the
+  controller writes it through `useInstances.highlight`, expanded to descendants. **Fly to**
+  goes through the app's camera controller (`CameraController.flyToObject`): the pace and
+  range of every fly-to, the dedicated renderer's destination prefetch, and a site flight
+  still settling gives the camera up to it.
+- **Brush** (`B`, bound in the app's hotkey registry, or the card's brush;
+  `lib/splatPaint.ts`). The camera holds still while you paint. Every drawn splat is projected
+  once, and 3 px cells keep the nearest depth of their fairly solid splats (an approximation
+  of the rendered depth). A splat counts as painted when it is near its cell's front and the
+  cell is under a stroke. Shift adds to the painted area, Alt takes away, and a plain stroke
+  starts again. A touch screen has none of those keys: there the card offers **New / Add /
+  Remove** for what a stroke does, and a brush size in place of Alt+wheel. The match is the
+  instance, at any level, with the best intersection over union. The IoU is weighted by
+  opacity and counts only visible splats, so an object's hidden back does not count against
+  it.
+- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the card offers
   **Use painted area**. This keeps the exact splats as an object of the viewer's own:
   - It is stored per scan in this browser (`localStorage`,
     `hexapod.customObjects.<asset>`) as `{ key, name, tiles: { checksum: [start, length, …] },
@@ -813,14 +828,20 @@ splats, bounds }`.
   - While the set exists, its splats no longer carry their segmented id.
 
 The controller is `cesium/sceneSelect/SceneSelectController.ts`, and its state is in
-`state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts`, and
-`e2e/sceneSelect.spec.ts` runs on the yard (`src/dev/sceneSelectHarness.ts`) under PlayCanvas,
-Spark and CesiumJS. The e2e checks that:
+`state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts` and
+`__tests__/selectionCard.test.tsx` (the card, its keys, one selection at a time), and
+`e2e/sceneSelect.spec.ts` runs on the yard (`src/dev/sceneSelectHarness.ts`, which mounts the
+card where the app's dock puts it) under PlayCanvas, Spark and CesiumJS. The e2e checks that:
 
-- clicking the tree's crown selects the tree or a part of it;
-- `]` goes to the parent and `[` comes back;
+- clicking the tree's crown selects the tree or a part of it, and gives the map the keyboard;
+- `]` goes to the parent and `[` comes back; Tab and Shift+Tab do the same from the map, and
+  from the page's body Tab moves focus instead;
 - painting over shrub 10 selects that shrub;
-- **Hide** in the chip removes it from the frame.
+- **Hide** in the card removes it from the frame.
+
+In the app, `e2e/app.spec.ts` ("a scan object in the selection card") checks the keys and the
+card around a selection: `B` and `V` once each, one Escape one step, Tab on the body, an object
+replacing a machine's card, and the touch screen's brush.
 
 ## 5. Storage by behaviour
 

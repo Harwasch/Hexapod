@@ -16,10 +16,25 @@
  * sheet): they open over the regions when asked for and close with Escape or a click away,
  * so they are held to the screen's edges but not to the regions'. The data credits are never
  * a popover: on a phone they are a strip of their own, held to the same rules as the rest.
+ *
+ * The selection card is checked for a machine and for an object of a scan (with the brush out,
+ * its tallest), one after the other in the same place. `CARD_SHOTS_DIR`, when set, keeps a
+ * screenshot of each at each size.
  */
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+
 import type { Page } from "@playwright/test";
 
-import { addGoogleCredit, expect, mockApi, test, type MockOptions } from "./fixtures";
+import {
+  addGoogleCredit,
+  expect,
+  mockApi,
+  selectObject,
+  stageObjects,
+  test,
+  type MockOptions,
+} from "./fixtures";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1440, height: 900 },
@@ -140,6 +155,14 @@ async function boot(page: Page, options: MockOptions = {}, onboarding = false): 
   await expect(page.getByTestId("status-line")).toBeVisible({ timeout: 60_000 });
 }
 
+/** A screenshot of the HUD with the selection card, kept in `CARD_SHOTS_DIR` when set. */
+async function cardShot(page: Page, name: string): Promise<void> {
+  const dir = process.env.CARD_SHOTS_DIR;
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  await page.screenshot({ path: join(dir, name) });
+}
+
 /** Presses a global shortcut with nothing focused, the way a person would from the map. */
 async function shortcut(page: Page, key: string): Promise<void> {
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -229,6 +252,47 @@ for (const viewport of VIEWPORTS) {
         await shortcut(page, "d");
         await expect(page.getByTestId("dev-panel")).toBeVisible();
         await expectNoOverlap(page, "everything in the right dock");
+      }
+    });
+
+    test("the selection card for a machine, then for a scan object with the brush out", async ({
+      page,
+    }) => {
+      test.setTimeout(240_000);
+      await boot(page, {}, true);
+      await loadDemo(page);
+      await stageObjects(page);
+      const card = page.getByTestId("selection-card");
+      await ask(page, "where is TR-04");
+      await expect(card).toContainText("TR-04 Kestrel");
+      await expectNoOverlap(page, "machine card");
+      await expect(card).toContainText("TR-04 Kestrel");
+      await cardShot(page, `${viewport.name}-machine-card.png`);
+
+      // The object replaces the machine: one card, in the same place.
+      await selectObject(page, [3, 2, 1], 1);
+      await expect(card).toHaveAttribute("data-kind", "object");
+      await expect(card).toHaveCount(1);
+      await expectNoOverlap(page, "object card");
+      await shortcut(page, "b");
+      await expect(card.getByTestId("object-paint-hint")).toBeVisible();
+      await expectNoOverlap(page, "object card with the brush");
+      await expect(card.getByTestId("object-paint-hint")).toBeVisible();
+      await cardShot(page, `${viewport.name}-object-card.png`);
+      if (viewport.name === "phone") {
+        // Above the strip, the credits' line, the status line and the tab bar.
+        const box = (await card.boundingBox())!;
+        const credits = page.getByTestId("credits").locator(".cesium-viewer-bottom");
+        for (const [name, below] of [
+          ["the credits strip", credits],
+          ["the status line", page.getByTestId("status-line")],
+          ["the tab bar", page.getByTestId("phone-tabs")],
+        ] as const) {
+          const top = (await below.boundingBox())!.y;
+          expect(box.y + box.height, `the card ends above ${name}`).toBeLessThanOrEqual(top + 1);
+        }
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
       }
     });
 

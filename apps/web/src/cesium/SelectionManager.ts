@@ -68,6 +68,8 @@ export class SelectionManager {
   private hoverEnabled = true;
   /** Asked first on every click: true when it took the click (scene selection hit a scan). */
   private claim: ((position: Cartesian2) => boolean) | null = null;
+  /** The selection last reported, until cleared: what a terrain sample may still refine. */
+  private current: Selection | null = null;
 
   constructor(
     private readonly viewer: CesiumWidget,
@@ -142,6 +144,7 @@ export class SelectionManager {
 
   clear(): void {
     this.unhighlight();
+    this.current = null;
     this.events.emit("selection", null);
   }
 
@@ -237,6 +240,7 @@ export class SelectionManager {
       selection = this.selectGround(base);
     }
     this.placeMarker(context.position, selection.kind === "ground");
+    this.current = selection;
     this.events.emit("selection", selection);
     void this.enrichWithTerrain(selection);
   }
@@ -393,8 +397,11 @@ export class SelectionManager {
       const [sample] = await sampleTerrainMostDetailed(provider, [
         Cartographic.fromDegrees(selection.longitude, selection.latitude),
       ]);
-      if (sample && Number.isFinite(sample.height)) {
-        this.events.emit("selection", { ...selection, terrainHeight: sample.height });
+      // Only while it is still what is selected: a sample arriving after the card was closed,
+      // or after something else was picked, must not bring the old place back.
+      if (sample && Number.isFinite(sample.height) && this.current === selection) {
+        this.current = { ...selection, terrainHeight: sample.height };
+        this.events.emit("selection", this.current);
       }
     } catch (error) {
       log.debug("terrain sample unavailable", { error: String(error) });

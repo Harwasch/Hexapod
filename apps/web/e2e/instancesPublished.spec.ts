@@ -416,7 +416,7 @@ for (const scan of SCANS) {
         } else {
           expect(picked.selected, JSON.stringify(result)).not.toBeNull();
         }
-        await expect(page.getByTestId("scene-select-label")).toBeVisible();
+        await expect(page.getByTestId("object-label")).toBeVisible();
         if (picked.candidates.length > 1) {
           await page.keyboard.press("]");
           expect((await call("state")).index).toBe((picked.index + 1) % picked.candidates.length);

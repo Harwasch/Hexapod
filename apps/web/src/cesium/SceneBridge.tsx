@@ -17,6 +17,7 @@ import { useLayers } from "@/state/layers";
 import { useLiving } from "@/state/living";
 import { useMission } from "@/state/mission";
 import { useMeasurements } from "@/state/measurements";
+import { bindOneSelection } from "@/state/oneSelection";
 import { useSelection } from "@/state/selection";
 import { useSettings, useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -94,6 +95,17 @@ export function SceneBridge() {
         mission.addArea(mission.project.id, reshapedZone(zone, footprint));
       }),
     ];
+    // One selection at a time: a machine or zone, an object of a scan, a place in the inspector.
+    offs.push(
+      bindOneSelection({
+        clearZone: () => scene.mission.setSelectedZone(null),
+        clearObject: () => {
+          scene.sceneSelect.setPainting(false);
+          scene.sceneSelect.clear();
+        },
+        clearInspector: () => scene.selection.clear(),
+      }),
+    );
     // The HUD's Retry beside a failed site load calls into the scene through the store.
     sites.setSiteLoadRetry((siteId) => void scene.sites.retry(siteId));
     // Events raised while the viewer was constructing happened before we subscribed.

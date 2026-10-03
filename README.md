@@ -124,7 +124,7 @@ plain drag orbits the point you clicked.
 `M` measure · `C` compare · `V` saved views · `B` the brush (paint a scan's objects to select
 them) · `[`/`]` cycle a selected object's candidates · `N` reset north · `T` top-down · `H`
 Earth · `G` explore mode · `,` settings · `1`/`2`/`3` Map / Plan / Fleet · `A` agent activity ·
-`D` developer panel (dev builds) · `Esc` closes. The list lives in one registry,
+`D` developer panel (dev builds) · `Esc` steps back one thing per press. The list lives in one registry,
 `apps/web/src/app/hotkeys.ts`, which the `?` sheet prints and the command box shows beside
 each action. Camera readouts (altitude, scale, renderer) are under Settings › Advanced ›
 Show developer readouts.

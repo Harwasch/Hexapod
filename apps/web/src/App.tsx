@@ -5,7 +5,6 @@ import { AppProviders } from "@/app/providers";
 import { useApplyTheme } from "@/app/theme";
 import { CesiumViewport } from "@/cesium/CesiumViewport";
 import { SceneBridge } from "@/cesium/SceneBridge";
-import { SceneSelectOverlay } from "@/features/sites/SceneSelectChip";
 import { AppShell } from "@/features/shell/AppShell";
 import { useSettings } from "@/state/settings";
 
@@ -21,7 +20,6 @@ function ThemedApp() {
         <SceneBridge />
         <ErrorBoundary>
           <AppShell />
-          <SceneSelectOverlay />
         </ErrorBoundary>
       </div>
     </MotionConfig>

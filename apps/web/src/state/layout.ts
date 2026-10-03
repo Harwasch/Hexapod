@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { useMission } from "./mission";
+import { objectSelected, useSceneSelect } from "./sceneSelect";
 import { useSettings } from "./settings";
 import { useUi } from "./ui";
 
@@ -32,11 +33,15 @@ export const useLayout = create<LayoutState>()((set) => ({
   setFocus: (focus) => set({ focus }),
 }));
 
-/** Anything showing in the right dock: a selection, the inspector, feeds, dev tools. */
+/**
+ * Anything showing in the right dock: a selection (a machine, a zone, a scan object or the
+ * brush), the inspector, feeds, dev tools.
+ */
 export function rightDockBusy(): boolean {
   const mission = useMission.getState();
   return (
     mission.selection !== null ||
+    objectSelected(useSceneSelect.getState()) ||
     mission.feedsOpen ||
     useUi.getState().inspectorOpen ||
     useSettings.getState().devToolsOpen
@@ -84,10 +89,18 @@ export function bindDockRules(): () => void {
     if (state.devToolsOpen && !prev.devToolsOpen) useLayout.getState().setFocus("right");
     settle();
   });
+  // An object picked in the scene, or the brush taken up, brings its card to the front.
+  const offObject = useSceneSelect.subscribe((state, prev) => {
+    const shown = objectSelected(state);
+    if (shown && (!objectSelected(prev) || state.candidates !== prev.candidates))
+      useLayout.getState().setFocus("right");
+    settle();
+  });
   return () => {
     offUi();
     offMission();
     offSettings();
+    offObject();
     bound = false;
   };
 }

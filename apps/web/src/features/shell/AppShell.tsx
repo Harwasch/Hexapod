@@ -38,6 +38,7 @@ import { TimelineControl } from "../timeline/TimelineControl";
 import { DevReadouts } from "./DevReadouts";
 import { MapCorner } from "./MapCorner";
 import { PhoneTabBar } from "./PhoneTabBar";
+import { stepBack } from "./stepBack";
 import { ToolRail } from "./ToolRail";
 
 const SettingsSheet = lazy(() =>
@@ -67,6 +68,10 @@ function GlobalHotkeys() {
       ? mission.setProjectsOpen(false)
       : openSiteSwitcher("views"),
   );
+  // The brush that paints a scan's objects to select them (cesium/sceneSelect).
+  useHotkey(HOTKEYS.brush.combo, (event) => {
+    if (scene?.sceneSelect.togglePainting()) event.preventDefault();
+  });
   useHotkey(HOTKEYS.resetNorth.combo, () => scene?.camera.resetNorth());
   useHotkey(HOTKEYS.topDown.combo, () => scene?.camera.topDown());
   useHotkey(HOTKEYS.home.combo, () => scene?.camera.flyHome());
@@ -84,23 +89,9 @@ function GlobalHotkeys() {
     HOTKEYS.devTools.combo,
     () => env.devToolsEnabled && settings.set({ devToolsOpen: !settings.devToolsOpen }),
   );
-  useHotkey(HOTKEYS.escape.combo, () => {
-    if (ui.shortcutsOpen) ui.setShortcutsOpen(false);
-    else if (ui.moreOpen) ui.setMoreOpen(false);
-    else if (ui.activityOpen) ui.setActivityOpen(false);
-    else if (ui.writeTokenPrompt) ui.setWriteTokenPrompt(false);
-    else if (ui.measureMode) ui.setMeasureMode(null);
-    else if (mission.projectsOpen) mission.setProjectsOpen(false);
-    else if (mission.feedsOpen) mission.setFeedsOpen(false);
-    else if (mission.composer && mission.composer.status !== "drafting") mission.closeComposer();
-    else if (mission.selection) {
-      mission.select(null);
-      scene?.mission.setSelectedZone(null);
-    } else if (mission.view !== "map") mission.setView("map");
-    else if (ui.inspectorOpen) {
-      ui.setInspectorOpen(false);
-      scene?.selection.clear();
-    } else if (ui.activePanel) ui.setPanel(null);
+  // One press, one step back (`stepBack.ts`): the brush or the selected object before panels.
+  useHotkey(HOTKEYS.escape.combo, (event) => {
+    if (stepBack(scene)) event.preventDefault();
   });
   return null;
 }
@@ -127,7 +118,8 @@ function SettingsSheetLazy() {
  * - **left dock**: the tool panel you opened.
  * - **drawer**: Plan or Fleet, full height on the right edge. The map beside it stays live:
  *   it takes clicks, and a machine picked from the Fleet table is flown to with its card open.
- * - **right dock**: messages (toasts), what you selected, the inspector.
+ * - **right dock**: messages (toasts), what you selected (one card: a machine, a zone or an
+ *   object of a scan, `SelectionCard`), the inspector.
  * - **center**: first-run welcome; otherwise the map.
  * - **strip**: controls for what is in view (representation and its load, dates, explore).
  * - **bar**: the status line on the left (fleet, agent, a degraded connection), developer
@@ -136,8 +128,8 @@ function SettingsSheetLazy() {
  * - **tabs**: on a phone only, Map / Plan / Fleet / More along the bottom.
  *
  * Things that float on purpose, over the regions, and close with Escape or a click away: the
- * command box's results, the site switcher, the agent's activity log, and on a phone the More
- * sheet (`data-hud-popover`).
+ * command box's results, the site switcher, the agent's activity log, the scan's objects panel
+ * (from the strip), and on a phone the More sheet (`data-hud-popover`).
  *
  * On narrow screens the docks and the drawer collapse into one bottom sheet; `data-sheet`
  * says which was touched last, and that one is shown (`state/layout.ts`).

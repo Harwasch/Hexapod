@@ -223,7 +223,7 @@ describe("the objects panel", () => {
     // Closing it is respected until the next selection.
     await user.click(screen.getByRole("button", { name: "Collapse Trees" }));
     expect(screen.queryByRole("list", { name: "Trees" })).not.toBeInTheDocument();
-    // A row selects its object in the scene (the chip then offers its actions)...
+    // A row selects its object in the scene (the selection card then offers its actions)...
     await user.click(screen.getByRole("button", { name: "Expand Trees" }));
     await user.click(screen.getByRole("button", { name: /^conifer 2/ }));
     expect(selectedId(useSceneSelect.getState())).toBe(4);

@@ -13,6 +13,8 @@ export interface GlassPopoverProps {
   className?: string;
   /** Accessible label for the popover content. */
   "aria-label"?: string;
+  /** Data attributes for the content (an app's layering marker, a test id). */
+  [data: `data-${string}`]: string | undefined;
 }
 
 export function GlassPopover({
@@ -24,7 +26,8 @@ export function GlassPopover({
   align = "center",
   sideOffset = 8,
   className,
-  ...aria
+  "aria-label": ariaLabel,
+  ...data
 }: GlassPopoverProps) {
   return (
     <Popover.Root open={open} onOpenChange={onOpenChange}>
@@ -35,8 +38,9 @@ export function GlassPopover({
           align={align}
           sideOffset={sideOffset}
           collisionPadding={12}
-          aria-label={aria["aria-label"]}
+          aria-label={ariaLabel}
           className={clsx("glass glass--strong glass-popover", className)}
+          {...data}
         >
           {children}
         </Popover.Content>
