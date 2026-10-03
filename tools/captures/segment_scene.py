@@ -22,9 +22,10 @@ scan's footprint is gridded `ANCHORS_PER_FOOTPRINT` times per footprint width, a
 anchor gets `OBLIQUE_VIEWS` obliques placed by line of sight (under a canopy they go low, in
 the open high) and `EYE_VIEWS` more eye-height views; every local view has a far plane a
 footprint past its target, so it shows what it resolves and not the horizon as specks. At
-most `MAX_VIEWS`. Views render in forked workers (`render_views`: the scan shared
+most `MAX_VIEWS`. Views render in forked workers (`RenderPool`: the scan shared
 copy-on-write, `splat_render.SplatIndex` culling what a view cannot reach, the same frames
-as one process) while this process masks and votes each view as it arrives.
+as one process; forked once, before the mask model starts, and kept for the coverage
+rounds) while this process masks and votes each view as it arrives.
 
 **Images** (`--renderer gsplat`, `make_renderer`). What the mask and image models see is
 rasterized by gsplat on a GPU, as a viewer draws the scan -- not the CPU renderer's point
@@ -108,6 +109,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib
 import json
@@ -115,10 +117,10 @@ import math
 import os
 import time
 from collections.abc import Iterator, Sequence
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, Self, runtime_checkable
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -139,6 +141,7 @@ __all__ = [
     "Mask",
     "MaskSource",
     "OracleMasks",
+    "RenderPool",
     "View",
     "describe",
     "footprint_anchors",
@@ -841,6 +844,116 @@ def render_view(
     )
 
 
+class RenderPool:
+    """Render processes for a run: forked once, when the pool is entered, and kept for
+    every batch of views (`views`) until it is left.
+
+    Forked, the processes share the scan copy-on-write rather than copying it; each renders
+    whole views (`_render_job`), and the views come back in camera order as they are done --
+    the same views as one process makes, so the run is deterministic. The caller can use
+    each view (mask it on a GPU) while the rest render. With `workers` 1, or where there is
+    no fork, the views render in this process.
+
+    Enter it before this process starts threads of its own. A fork copies a process's memory
+    but only the thread that forked: whatever lock another thread held -- in torch's host
+    threads or CUDA's, which the mask model and the gsplat renderer start with their first
+    view, or in OpenCV's pool -- stays held in the child for ever (Python 3.12 warns of a
+    fork from a multi-threaded process for that reason), and the BLAS libraries tear their
+    thread pools down at each fork and rebuild them after it, in this process too. So
+    `segment` forks once, at its first batch, before any view is masked, and renders the
+    coverage rounds' views in the same processes rather than forking a process that by then
+    runs a GPU model. The tests do not fork the pytest process at all (tests/conftest.py):
+    they render in one process, or fork in a subprocess of their own."""
+
+    def __init__(
+        self,
+        splats: Splats,
+        cells: np.ndarray,
+        *,
+        index: SplatIndex | None = None,
+        workers: int = 1,
+        cache: Path | None = None,
+        tag: str = "",
+    ) -> None:
+        self.workers = max(1, int(workers))
+        n_cells = int(cells.max()) + 1 if cells.size else 0
+        self._state: dict[str, object] = {
+            "splats": splats, "cells": cells, "index": index, "cache": cache,
+            "n_cells": n_cells, "tag": tag,
+        }  # fmt: skip
+        self._pool: ProcessPoolExecutor | None = None
+        self._peak: object | None = None
+
+    def __enter__(self) -> Self:
+        import multiprocessing as mp
+
+        if _POOL_STATE:
+            raise RuntimeError("one RenderPool at a time: the forked workers share _POOL_STATE")
+        _POOL_STATE.update(self._state)
+        if self.workers <= 1 or "fork" not in mp.get_all_start_methods():
+            self.workers = 1
+            return self
+        try:
+            context = mp.get_context("fork")
+            self._peak = context.Value("d", 0.0)
+            _POOL_STATE["peak"] = self._peak
+            # An executor, not a Pool: a worker that dies (out of memory) fails the run
+            # (BrokenProcessPool) rather than leaving it waiting for a view forever.
+            self._pool = ProcessPoolExecutor(
+                self.workers, mp_context=context, initializer=_worker_start
+            )
+            # With fork, an executor forks all its processes at its first task: now, then.
+            self._pool.submit(os.getpid).result()
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def views(self, cameras: Sequence[Camera], workers: int | None = None) -> Iterator[View]:
+        """The views of `cameras`, in order, with at most `workers` of the pool's processes
+        (all of them by default) rendering at a time."""
+        cameras = list(cameras)
+        pool = self._pool
+        if pool is None:
+            for camera in cameras:
+                yield _render_job(camera)
+            return
+        limit = self.workers if workers is None else max(1, min(int(workers), self.workers))
+        futures: list[Future[View]] = []
+        done = 0
+        try:
+            while done < len(cameras):
+                pending = [f for f in futures[done:] if not f.done()]
+                while len(futures) < len(cameras) and len(pending) < limit:
+                    pending.append(pool.submit(_render_job, cameras[len(futures)]))
+                    futures.append(pending[-1])
+                if not futures[done].done():
+                    wait(pending, return_when=FIRST_COMPLETED)
+                    continue
+                view = futures[done].result()
+                done += 1
+                yield view
+        finally:
+            for future in futures[done:]:
+                future.cancel()
+            self._note_peak()
+
+    def _note_peak(self) -> None:
+        if self._peak is not None:
+            value = float(self._peak.value)  # type: ignore[attr-defined]
+            _WORKER_PEAK["bytes"] = max(_WORKER_PEAK["bytes"], value)
+
+    def __exit__(self, *_exc: object) -> None:
+        try:
+            if self._pool is not None:
+                self._pool.shutdown(wait=True, cancel_futures=True)
+        finally:
+            self._note_peak()
+            self._pool = None
+            self._peak = None
+            _POOL_STATE.clear()
+
+
 def render_views(
     splats: Splats,
     cameras: Sequence[Camera],
@@ -851,40 +964,15 @@ def render_views(
     cache: Path | None = None,
     tag: str = "",
 ) -> Iterator[View]:
-    """The views, in camera order, rendered by `workers` processes. The processes are forked
-    (the scan is shared copy-on-write, not copied), each renders whole views, and the views
-    come back in order as they are done -- the same views as one process makes, so the run
-    is deterministic. The caller can use each view (mask it on a GPU) while the rest render.
-    Fork before anything starts a GPU context; with `workers` 1 or no fork, one process."""
-    import multiprocessing as mp
-
-    n_cells = int(cells.max()) + 1 if cells.size else 0
-    _POOL_STATE.update(
-        splats=splats, cameras=list(cameras), cells=cells, index=index, cache=cache,
-        n_cells=n_cells, tag=tag,
-    )  # fmt: skip
-    try:
-        if workers <= 1 or len(cameras) <= 1 or "fork" not in mp.get_all_start_methods():
-            for k in range(len(cameras)):
-                yield _render_job(k)
-            return
-        # An executor, not a Pool: a worker that dies (out of memory) fails the run
-        # (BrokenProcessPool) rather than leaving it waiting for a view forever.
-        context = mp.get_context("fork")
-        peak = context.Value("d", 0.0)
-        _POOL_STATE["peak"] = peak
-        try:
-            with ProcessPoolExecutor(
-                min(workers, len(cameras)), mp_context=context, initializer=_worker_start
-            ) as pool:
-                yield from pool.map(_render_job, range(len(cameras)))
-        finally:
-            _WORKER_PEAK["bytes"] = max(_WORKER_PEAK["bytes"], float(peak.value))
-    finally:
-        _POOL_STATE.clear()
+    """The views, in camera order, rendered by `workers` processes forked for them (a
+    `RenderPool` for one batch; `segment` keeps one for all of its batches)."""
+    cameras = list(cameras)
+    workers = min(workers, len(cameras))
+    with RenderPool(splats, cells, index=index, workers=workers, cache=cache, tag=tag) as pool:
+        yield from pool.views(cameras)
 
 
-#: What forked render workers read (set by `render_views` before the fork).
+#: What forked render workers read (set by `RenderPool` before the fork).
 _POOL_STATE: dict[str, object] = {}
 #: The most one render worker held of its own -- its peak resident set less the one it was
 #: forked with, which counts every page it shares with this process -- over this process's
@@ -906,14 +994,12 @@ def _peak_resident_bytes() -> float:
     return float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit)
 
 
-def _render_job(k: int) -> View:
+def _render_job(camera: Camera) -> View:
     state = _POOL_STATE
-    cameras = state["cameras"]
-    assert isinstance(cameras, list)
     view = cached_view(
         state["cache"],  # type: ignore[arg-type]
         state["splats"],  # type: ignore[arg-type]
-        cameras[k],
+        camera,
         state["cells"],  # type: ignore[arg-type]
         int(state["n_cells"]),  # type: ignore[arg-type]
         state["index"],  # type: ignore[arg-type]
@@ -2654,7 +2740,9 @@ def segment(
     `progress(message)` is told as each view is done. `workers`: render processes; by
     default `default_workers(cpus, memory_bytes, render_worker_bytes(...))` for each batch of
     views, once the scan and its index are held -- the container's reservation when `cpus` /
-    `memory_bytes` give it, else what this process may use.
+    `memory_bytes` give it, else what this process may use. The first batch's count is
+    forked (`RenderPool`, before any view is masked) and kept for the coverage rounds, each
+    of which renders with at most that many.
 
     `renderer` (`make_renderer("gsplat")`): the image of every view the mask and image
     models see is drawn by it (labels still come from the CPU renderer's samples, the same
@@ -2699,27 +2787,39 @@ def segment(
     clock = {"renderS": 0.0, "rasterS": 0.0, "masksS": 0.0, "votesS": 0.0}
     # Render processes per batch of views, for the summary (`stats["renderWorkers"]`).
     batch_sizes: list[int] = []
+    # The render processes, forked at the first batch and kept until the last (`RenderPool`).
+    renders = contextlib.ExitStack()
+    pool: RenderPool | None = None
 
     def run_views(batch: Sequence[Camera]) -> None:
-        # Views render in forked workers while this process masks the ones already done
-        # (the mask model's GPU context starts after the first fork). Each view's masks
-        # become its votes and are dropped; the views are kept for `describe`.
-        nonlocal source
-        if from_factory:
-            source = source_factory(list(batch))
+        # Views render in forked workers while this process masks the ones already done.
+        # Each view's masks become its votes and are dropped; the views are kept for
+        # `describe`.
+        nonlocal source, pool
         first = len(views)
         # Sized now, with the scan, its index and the views so far held (`default_workers`).
         batch_workers = workers or default_workers(
             cpus, memory_bytes, render_worker_bytes(len(view_splats))
         )
+        if pool is None:
+            # Forked now, before this process masks or rasterizes a view: the mask model and
+            # the renderer start threads of their own (torch's, CUDA's), which a later fork
+            # would copy a process in the middle of. Later batches render in the same
+            # processes, as many at a time as they are sized for.
+            pool = renders.enter_context(
+                RenderPool(
+                    view_splats, view_cell, index=index, workers=batch_workers, cache=cache,
+                    tag=tag,
+                )
+            )  # fmt: skip
+        batch_workers = min(batch_workers, pool.workers)
         batch_sizes.append(batch_workers)
         if progress is not None:
             progress(f"render workers: {batch_workers}")
+        if from_factory:
+            source = source_factory(list(batch))
         mark = time.perf_counter()
-        rendered = render_views(
-            view_splats, batch, view_cell, index=index,
-            workers=batch_workers, cache=cache, tag=tag,
-        )  # fmt: skip
+        rendered = pool.views(batch, workers=batch_workers)
         for k, view in enumerate(rendered):
             now = time.perf_counter()
             clock["renderS"] += now - mark
@@ -2761,26 +2861,27 @@ def segment(
         lifted.stats["levels"] = levels
         return lifted, levels
 
-    run_views(cameras)
-    mark = time.perf_counter()
-    lifted, levels = lift_all()
-    timings["liftS"] = time.perf_counter() - mark
     coverage: list[dict[str, float]] = []
-    for _ in range(coverage_rounds):
-        missing = np.where(lifted.cell_id == 0, counts, 0)
-        share = float(missing.sum()) / max(float(counts.sum()), 1.0)
-        if share < COVERAGE_MIN_SHARE:
-            break
-        mark = time.perf_counter()
-        extra = coverage_views(centroids, missing, edge, budget=coverage_budget)
-        timings["planS"] += time.perf_counter() - mark
-        if not extra:
-            break
-        coverage.append({"unassignedShare": round(share, 4), "views": len(extra)})
-        run_views(extra)
+    with renders:  # the render processes end with the last batch, before `describe`
+        run_views(cameras)
         mark = time.perf_counter()
         lifted, levels = lift_all()
-        timings["liftS"] += time.perf_counter() - mark
+        timings["liftS"] = time.perf_counter() - mark
+        for _ in range(coverage_rounds):
+            missing = np.where(lifted.cell_id == 0, counts, 0)
+            share = float(missing.sum()) / max(float(counts.sum()), 1.0)
+            if share < COVERAGE_MIN_SHARE:
+                break
+            mark = time.perf_counter()
+            extra = coverage_views(centroids, missing, edge, budget=coverage_budget)
+            timings["planS"] += time.perf_counter() - mark
+            if not extra:
+                break
+            coverage.append({"unassignedShare": round(share, 4), "views": len(extra)})
+            run_views(extra)
+            mark = time.perf_counter()
+            lifted, levels = lift_all()
+            timings["liftS"] += time.perf_counter() - mark
     final = np.where(lifted.cell_id == 0, counts, 0).sum() / max(float(counts.sum()), 1.0)
     lifted.stats["coverageRounds"] = coverage
     lifted.stats["unassignedShare"] = round(float(final), 4)
