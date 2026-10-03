@@ -20,6 +20,17 @@ export interface SortedSplats {
 }
 
 /**
+ * Splats that move rigidly as groups (`cesium/splatRigid.ts`): `groups[i]` is splat `i`'s group
+ * (0: none) and `eyes[3g..3g+2]` the eye carried back by group `g`'s motion. A rigid motion
+ * keeps distances, so a moved splat's distance from the eye is its rest position's distance
+ * from that eye: the order follows the motion without the moved positions.
+ */
+export interface SortGroups {
+  readonly groups: Uint8Array | Uint16Array;
+  readonly eyes: Float64Array;
+}
+
+/**
  * The back-to-front order of `count` splats (xyz in `positions`). A splat is left out when
  * `live` says 0 for it (a hidden or freed slot: splatSort.worker.ts) or when its position is
  * not finite (a slot never written), so the order can be shorter than `count`.
@@ -29,6 +40,7 @@ export function sortBackToFront(
   count: number,
   eye: readonly [number, number, number],
   live?: Uint8Array,
+  moving?: SortGroups,
 ): SortedSplats {
   if (keys.length < count) keys = new Uint16Array(count);
   if (logs.length < count) logs = new Float32Array(count);
@@ -42,9 +54,18 @@ export function sortBackToFront(
       logs[i] = Number.NaN;
       continue;
     }
-    const dx = (positions[i * 3] ?? 0) - ex;
-    const dy = (positions[i * 3 + 1] ?? 0) - ey;
-    const dz = (positions[i * 3 + 2] ?? 0) - ez;
+    let gx = ex;
+    let gy = ey;
+    let gz = ez;
+    const group = moving?.groups[i] ?? 0;
+    if (group > 0 && moving !== undefined && group * 3 + 2 < moving.eyes.length) {
+      gx = moving.eyes[group * 3] ?? ex;
+      gy = moving.eyes[group * 3 + 1] ?? ey;
+      gz = moving.eyes[group * 3 + 2] ?? ez;
+    }
+    const dx = (positions[i * 3] ?? 0) - gx;
+    const dy = (positions[i * 3 + 1] ?? 0) - gy;
+    const dz = (positions[i * 3 + 2] ?? 0) - gz;
     // The log of the squared distance orders as the distance does, without a square root.
     logs[i] = Math.log(dx * dx + dy * dy + dz * dz + 1e-12);
     // The range from the stored (float32) values, so every key falls inside it.

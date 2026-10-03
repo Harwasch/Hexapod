@@ -1,0 +1,11 @@
+{
+  "format": "hexapod.materials",
+  "version": 1,
+  "model": "skin wind v1 (packages/world/src/skinWind.ts): omega_j = stiffness * sqrt(eigenvalue_j) / scale; every anchored mode damped at `damping`; a handle's acceleration drag * |v| v / scale",
+  "note": "The yard was segmented with a stand-in embedder, so every instance reads behaviour movable and the priors drive none of them. These records stand in for what the video teacher (C2) fits: the tree (1), the snag (9) and one shrub (10) sway; the other shrub (12) keeps its prior and stays still.",
+  "materials": [
+    { "instance": 1, "stiffness": 3.5, "damping": 0.1, "drag": 0.025, "wind": true, "evidence": "prior" },
+    { "instance": 9, "wind": true, "evidence": "prior" },
+    { "instance": 10, "wind": true, "evidence": "prior" }
+  ]
+}

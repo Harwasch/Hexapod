@@ -17,6 +17,8 @@ export interface GlassSegmentedControlProps<T extends string> {
   options: readonly SegmentOption<T>[];
   /** Accessible group name. */
   "aria-label": string;
+  /** Forwarded to the group element, for tests. */
+  "data-testid"?: string;
   block?: boolean;
   className?: string;
 }
@@ -38,6 +40,7 @@ export function GlassSegmentedControl<T extends string>({
         if (next) onValueChange(next as T);
       }}
       aria-label={aria["aria-label"]}
+      data-testid={aria["data-testid"]}
       className={clsx("glass-segment", block && "glass-segment--block", className)}
     >
       {options.map((option) => (

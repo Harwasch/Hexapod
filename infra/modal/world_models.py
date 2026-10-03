@@ -1,5 +1,6 @@
 """World models on Modal GPUs: the three image/video models the teachers call. **Written
-against each model's own documented entry point; never run on a GPU.**
+against each model's own documented entry point; only Fixer has run on a GPU** (its
+image and class as in `infra/modal/fill.py`, which ran it on 2026-10-02).
 
     Fixer    nvidia/Fixer (Apache code, NVIDIA Open Model License weights). One image in,
              one image out: a render with 3DGS artifacts -> a clean one. Teacher B's filler.
@@ -14,6 +15,10 @@ against each model's own documented entry point; never run on a GPU.**
              facebook/sam2.1-hiera-tiny (Apache-2.0) and google/siglip2-base-patch16-224
              (Apache-2.0), run by `tools/captures/segment_models.py` itself (copied into
              the image): class-free masks at three granularities, image/text embeddings.
+    InpaintSDXL / InpaintQwen / InpaintFlux
+             Generative inpainting for Teacher B's holes, run by
+             `tools/captures/inpaint_models.py` (licences in its docstring): image + mask +
+             prompt -> the image painted. `world_model_client.GenerativeFiller` calls them.
 
 The request and response of every method are plain dicts of bytes, strings and numbers,
 so the client (`tools/captures/world_model_client.py`) needs `modal` and nothing else from
@@ -25,19 +30,23 @@ What was checked, 2026-10-01, and what was not:
 * Fixer: the repository at `FIXER_COMMIT` was read; its inference script's functions are
   what `Fixer.fix` calls, and it expects the base model at `/work/models/base/`, which is
   where the weights volume is mounted. The Hub repo `nvidia/Fixer` holds `base/` and
-  `pretrained/` (5.5 GB). Its base container is NGC's
-  `cosmos-predict2-container:1.2`, pulled with the `ngc` secret.
+  `pretrained/` (5.5 GB, not gated). Its own base container is NGC's
+  `cosmos-predict2-container:1.2` (needs an NGC key); the image here builds the same
+  environment from cosmos-predict2's uv.lock on a public CUDA base instead, and on
+  2026-10-02 it loaded every checkpoint key and cleaned Fixer's own examples.
 * Wan: the Hub model card's diffusers recipe, with `WanImageToVideoPipeline` for the
   image-conditioned case; 1280x704 is the 720p size, the aspect following the input.
 * Cosmos: the repository at `COSMOS_COMMIT` was read -- `examples/inference.py` with a
   JSON spec, `--inference-type=image2world --model=2B/post-trained`, output saved at 16 fps.
   The Hugging Face token must have accepted the licences of Cosmos-Predict2.5-2B,
   Cosmos-Reason1-7B and Cosmos-Guardrail1 (it had not, on 2026-10-01).
-* Nothing has been built by Modal or run. Package pins below are the first guess that
-  `modal deploy` proves; the runbook (docs/WORLD_MODEL_RUNBOOK.md) says what to try first.
+* Wan, Cosmos and Distill have not been built by Modal or run. Their package pins are the
+  first guess that `modal deploy` proves; the runbook (docs/WORLD_MODEL_RUNBOOK.md) says
+  what to try first.
 
-Secrets: `huggingface` (HF_TOKEN), `ngc` (REGISTRY_USERNAME=$oauthtoken,
-REGISTRY_PASSWORD=<NGC API key>). Weights are cached in the volume
+Secrets: `huggingface` (HF_TOKEN) for Wan, Cosmos, segmentation and inpainting; Fixer
+needs none.
+Weights are cached in the volume
 `hexapod-world-model-weights`, so only the first call downloads.
 
     modal deploy infra/modal/world_models.py
@@ -58,7 +67,6 @@ app = modal.App(APP_NAME)
 
 WEIGHTS = modal.Volume.from_name("hexapod-world-model-weights", create_if_missing=True)
 HF_SECRET = modal.Secret.from_name("huggingface")
-NGC_SECRET = modal.Secret.from_name("ngc")
 
 FIXER_REPO = "https://github.com/nv-tlabs/Fixer.git"
 FIXER_COMMIT = "b39dfcaf4eeec90dc943b057ff368c16252c6c6e"
@@ -93,13 +101,23 @@ HF_HOME = "/weights/hf"
 
 # --- Fixer ---------------------------------------------------------------------------------
 
+#: cosmos-predict2 at the commit that is its 1.0.9 (what Fixer's Dockerfile pip-installs).
+FIXER_COSMOS_REPO = "https://github.com/nvidia-cosmos/cosmos-predict2.git"
+FIXER_COSMOS_COMMIT = "661da4774b0ca41d082a0ecbeb47550bcf07e03f"
+
+#: Not FIXER_BASE (NGC, needs a key): the environment that container holds, built from
+#: cosmos-predict2's own uv.lock on its Dockerfile's public CUDA base, then Fixer's
+#: Dockerfile lines. The same recipe as `infra/modal/fill.py`, where it was run.
 fixer_image = (
-    modal.Image.from_registry(FIXER_BASE, secret=NGC_SECRET)
+    modal.Image.from_registry("nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04", add_python="3.10")
+    .apt_install("git", "curl", "ffmpeg", "libgl1", "libglib2.0-0")
     .run_commands(
-        # Fixer's Dockerfile.cosmos, line for line, then its repository at the pinned commit.
+        "pip install uv==0.8.12",
+        f"git clone {FIXER_COSMOS_REPO} /cosmos && git -C /cosmos checkout {FIXER_COSMOS_COMMIT}",
+        "cd /cosmos && UV_PROJECT_ENVIRONMENT=$(python -c 'import sys; print(sys.prefix)') "
+        "uv sync --frozen --inexact --no-install-project --extra cu126",
         'pip install --no-deps "cosmos-predict2==1.0.9"',
-        "pip install lpips vision-aided-loss natsort git+https://github.com/openai/CLIP.git "
-        '"torchmetrics[image]" "huggingface_hub>=0.30"',
+        "pip install lpips natsort",
         f"git clone {FIXER_REPO} /work/fixer && git -C /work/fixer checkout {FIXER_COMMIT}",
     )
     .env({"HF_HOME": HF_HOME})
@@ -110,7 +128,6 @@ fixer_image = (
     image=fixer_image,
     gpu="L40S",
     volumes={"/work/models": WEIGHTS},
-    secrets=[HF_SECRET],
     timeout=1800,
     scaledown_window=300,
 )
@@ -138,6 +155,7 @@ class Fixer:
             dtype=self.dtype,
             compile=False,
         )
+        self.model.set_eval()
 
     @modal.method()
     def fix(self, request: dict) -> dict:
@@ -312,7 +330,8 @@ DISTILL_SOURCE = (
 distill_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install("torch==2.4.1+cu124", index_url="https://download.pytorch.org/whl/cu124")
-    .pip_install("numpy==1.26.4", "ninja", "jaxtyping", "rich", GSPLAT_WHEEL)
+    # gsplat imports `packaging`, which nothing else here installs.
+    .pip_install("numpy==1.26.4", "ninja", "jaxtyping", "rich", "packaging", GSPLAT_WHEEL)
     .add_local_file(DISTILL_SOURCE, "/root/distill_fill.py")
 )
 
@@ -442,6 +461,106 @@ class SegmentEmbed:
         embedder = self._embedder(request)
         x = embedder.embed_texts(list(request["texts"]))
         return {"embeddings": self.sm.encode_array(x), "model": embedder.model}
+
+
+# --- Generative inpainting (Teacher B on holes Fixer cannot invent) --------------------------
+
+#: `tools/captures/inpaint_models.py` runs here as `infra/modal/fill.py` runs it.
+inpaint_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "torch==2.8.0",
+        "diffusers==0.40.0",
+        "transformers>=5,<6",
+        "accelerate>=1.6",
+        "sentencepiece",
+        "protobuf",
+        "safetensors",
+        "huggingface_hub>=1.23,<2",
+        "pillow",
+    )
+    .env({"HF_HOME": HF_HOME})
+    .add_local_file(CAPTURES / "inpaint_models.py", "/root/inpaint_models.py")
+)
+
+
+def _inpaint_models():  # noqa: ANN202 - the module, imported where it was copied
+    import sys
+
+    sys.path.insert(0, "/root")
+    import inpaint_models
+
+    inpaint_models.find_token()
+    return inpaint_models
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="L40S",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    timeout=3600,
+    scaledown_window=300,
+)
+class InpaintSDXL:
+    """SDXL inpainting (OpenRAIL++-M): `inpaint_models.inpaint` with `sdxl`."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_models()
+        self.pipe = self.im.load("sdxl")
+        self.lama = self.im.load_lama("/weights/lama")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("sdxl", self.pipe, request, lama=self.lama)
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="H100",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=131072,
+    timeout=3600,
+    scaledown_window=300,
+)
+class InpaintQwen:
+    """Qwen-Image with its inpainting ControlNet (Apache-2.0): `inpaint_models` `qwen`."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_models()
+        self.pipe = self.im.load("qwen")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("qwen", self.pipe, request)
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="H100",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=98304,
+    timeout=3600,
+    scaledown_window=300,
+)
+class InpaintFlux:
+    """FLUX.1 Fill [dev] (gated; non-commercial licence -- for comparison only)."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_models()
+        self.pipe = self.im.load("flux")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("flux", self.pipe, request)
 
 
 # --- shared --------------------------------------------------------------------------------

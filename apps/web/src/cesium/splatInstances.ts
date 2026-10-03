@@ -39,16 +39,13 @@ import { checksumPositions } from "@twin/world";
 import { BoundingSphere, Cartesian3, Matrix4, type Cesium3DTileset, type Scene } from "cesium";
 import * as CesiumBarrel from "cesium";
 
-import {
-  instancesRefOf,
-  loadInstances,
-  tileInstanceIds,
-  withDescendants,
-  type InstancesDoc,
-} from "@/lib/instances";
+import { instancesRefOf, loadInstances, tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import { useInstances } from "@/state/instances";
+import { effectiveDoc, onCustomSetsChange } from "@/state/sceneSelect";
 
+import { cesiumPickSource } from "./sceneSelect/cesiumPickSource";
+import { CESIUM_PRIORITY, registerPickSource } from "./sceneSelect/pickSources";
 import { invertAffine, unbakePositions } from "./splatFrames";
 import {
   splatTilesetOf,
@@ -194,9 +191,8 @@ export function stateTextureRows(maxId: number): number {
 }
 
 /**
- * The state texels: `r` 255 for a hidden id, `g` 255 for a highlighted one. Hidden and
- * highlighted sets are expected expanded to leaves (`withDescendants`); ids past `maxId` are
- * ignored.
+ * The state texels: `r` 255 for a hidden id, `g` 255 for a highlighted one. The sets are
+ * exact (the store expands an instance to what it contains); ids past `maxId` are ignored.
  */
 export function writeStateTexels(
   out: Uint8Array,
@@ -264,10 +260,10 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
   readonly visibilityFunction = "splatInstanceVisibility";
   /** First: one texel fetch, and a hidden splat skips everything after it. */
   readonly visibilityOrder = 0;
-  readonly doc: InstancesDoc;
+  #doc: InstancesDoc;
   readonly #gpu: InstanceGpu;
   readonly #tileset: SplatTilesetLike;
-  readonly #cache = new WeakMap<object, TileIds>();
+  #cache = new WeakMap<object, TileIds>();
   #primitive: InstancePrimitive | undefined;
   #context: unknown;
   /** The id of every splat index, four a texel. */
@@ -276,7 +272,7 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
   /** Rows of `#ids` written since the last upload, or `undefined`. */
   #dirtyRows: [number, number] | undefined;
   #idTextureRows = 0;
-  readonly #state: Uint8Array;
+  #state: Uint8Array;
   #stateTexture: InstanceTexture | undefined;
   #stateDirty = true;
   /** Where each drawn tile's ids are, by content object. */
@@ -285,6 +281,9 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
   #positions: Float32Array | undefined;
   #incremental = false;
   #covered = 0;
+  /** The first drawn tile's bake (local → the frame the shader sees), once ids are written. */
+  #bake: number[] | undefined;
+  #idsVersion = 0;
   #anyHidden = false;
   #anyHighlighted = false;
   #params: unknown;
@@ -306,13 +305,35 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
     tileset: SplatTilesetLike,
     style = HIGHLIGHT_STYLE,
   ) {
-    this.doc = doc;
+    this.#doc = doc;
     this.#gpu = gpu;
     this.#tileset = tileset;
     this.style = style;
     this.#state = new Uint8Array(INSTANCE_TEXTURE_WIDTH * stateTextureRows(doc.maxId) * 4);
     this.#tint = gpu.vec4(...style.tint);
     this.#dim = gpu.vec4(style.dim[0], style.dim[1], 0, 0);
+  }
+
+  /** The ids drawn from: the scan's `instances.json`, with its painted objects (`setDoc`). */
+  get doc(): InstancesDoc {
+    return this.#doc;
+  }
+
+  /**
+   * Draws from another document of the same scan (its painted objects changed,
+   * lib/customSets.ts): every tile's ids are written again on the next `sync`, and the state
+   * is sized for the new ids (call `setState` after).
+   */
+  setDoc(doc: InstancesDoc): void {
+    if (doc === this.#doc) return;
+    this.#doc = doc;
+    this.#cache = new WeakMap();
+    this.#state = new Uint8Array(INSTANCE_TEXTURE_WIDTH * stateTextureRows(doc.maxId) * 4);
+    this.#stateDirty = true;
+    this.#generation = -1;
+    this.#positions = undefined;
+    this.#incremental = false;
+    this.#paramsKey = "";
   }
 
   /** The id each splat index carries now (a copy of the CPU side of the id texture). */
@@ -323,6 +344,42 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
   /** Whether the shader would act this frame. */
   get active(): boolean {
     return this.#drawActive();
+  }
+
+  /**
+   * The per-splat id texture, for another part that keys on instances (the rigid motion of
+   * `splatRigid.ts`): RGBA32UI, four ids a texel, laid out as `splatInstanceId` reads it.
+   */
+  get idTexture(): InstanceTexture | undefined {
+    return this.#idTexture;
+  }
+
+  /** Splat indices the id texture covers. */
+  get covered(): number {
+    return this.#covered;
+  }
+
+  /** The ids match what the primitive draws now (see `#drawActive`, less the state). */
+  get idsCurrent(): boolean {
+    if (this.#idTexture === undefined || this.#generation < 0) return false;
+    const primitive = this.#primitive;
+    if (!primitive) return false;
+    return this.#incremental || primitive._snapshot?.generation === this.#generation;
+  }
+
+  /** The id of every splat index, as uploaded (read only: the CPU side of the id texture). */
+  get ids(): Uint32Array {
+    return this.#ids;
+  }
+
+  /** Bumped whenever the ids change. */
+  get idsVersion(): number {
+    return this.#idsVersion;
+  }
+
+  /** The first drawn tile's bake (tileset local → shader frame), once a snapshot is bound. */
+  get bake(): readonly number[] | undefined {
+    return this.#bake;
   }
 
   /** Called by the patched engine (through the visibility chain, and as `vertexColor`). */
@@ -387,17 +444,18 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
     if (primitive.vertexColor === this.colorHook) primitive.vertexColor = undefined;
   }
 
-  /** What is hidden and highlighted, as the store has it (ids not yet expanded to leaves). */
+  /**
+   * What is hidden and highlighted, as the store has it: exact id sets (a category's or an
+   * object's members, `state/instances.ts`), applied id for id.
+   */
   setState(
     hidden: ReadonlySet<number>,
     highlighted: ReadonlySet<number>,
     dimOthers: boolean,
   ): void {
-    const hiddenLeaves = withDescendants(this.doc, hidden);
-    const litLeaves = withDescendants(this.doc, highlighted);
-    writeStateTexels(this.#state, this.doc.maxId, hiddenLeaves, litLeaves);
-    this.#anyHidden = hiddenLeaves.size > 0;
-    this.#anyHighlighted = litLeaves.size > 0;
+    writeStateTexels(this.#state, this.doc.maxId, hidden, highlighted);
+    this.#anyHidden = hidden.size > 0;
+    this.#anyHighlighted = highlighted.size > 0;
     if (dimOthers !== this.#dimOthers) {
       this.#dimOthers = dimOthers;
       this.#dim = dimOthers
@@ -469,6 +527,10 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
     this.#covered = numSplats;
     this.#generation = generation;
     this.#positions = positions;
+    const first = listed.tiles[0];
+    if (first !== undefined && (this.#bake === undefined || !sameMatrix(this.#bake, first.bake)))
+      this.#bake = Array.from(first.bake);
+    this.#idsVersion += 1;
     this.#ensureTextures();
     return { changed: true, tiles: listed.tiles.length, matched };
   }
@@ -652,7 +714,50 @@ export function cesiumInstanceGpu(): InstanceGpu | undefined {
 // ---- Attachment --------------------------------------------------------------------------
 
 /** Loaded scans, by asset id, for flying to an instance. */
-const ATTACHED = new Map<string, { tileset: Cesium3DTileset; doc: InstancesDoc }>();
+const ATTACHED = new Map<
+  string,
+  { tileset: Cesium3DTileset; doc: InstancesDoc; hook: SplatInstances }
+>();
+
+/**
+ * Per asset id, per instance id: a motion of the scan's local frame (column-major 4x4) the
+ * instance is drawn under -- a split object away from where it was measured
+ * (`cesium/splitObjects.ts`). `instanceSphere` follows it.
+ */
+const OFFSETS = new Map<string, Map<number, Matrix4>>();
+
+/** Draws `ids` of `assetId`'s scan under `local` (scan frame) for `instanceSphere`; or not. */
+export function setInstanceOffset(
+  assetId: string,
+  ids: Iterable<number>,
+  local: Matrix4 | undefined,
+): void {
+  let offsets = OFFSETS.get(assetId);
+  if (!offsets) {
+    if (!local) return;
+    offsets = new Map();
+    OFFSETS.set(assetId, offsets);
+  }
+  for (const id of ids) {
+    if (local) offsets.set(id, local);
+    else offsets.delete(id);
+  }
+  if (offsets.size === 0) OFFSETS.delete(assetId);
+}
+
+/**
+ * The instances of `assetId`'s scan, once they loaded: what a dedicated splat renderer
+ * (scanView/scanInstances.ts) draws from, since CesiumJS keeps the scan's tileset loaded (hidden)
+ * under any renderer.
+ */
+export function instancesDocOf(assetId: string): InstancesDoc | undefined {
+  return ATTACHED.get(assetId)?.doc;
+}
+
+/** The hooks of `assetId`'s scan, once its instances loaded: what keys motion on instances. */
+export function instancesHookOf(assetId: string): SplatInstances | undefined {
+  return ATTACHED.get(assetId)?.hook;
+}
 
 /**
  * The world-space sphere around instance `id` of `assetId`'s scan: its bounds (tileset local
@@ -660,25 +765,32 @@ const ATTACHED = new Map<string, { tileset: Cesium3DTileset; doc: InstancesDoc }
  */
 export function instanceSphere(assetId: string, id: number): BoundingSphere | undefined {
   const entry = ATTACHED.get(assetId);
-  const instance = entry?.doc.byId.get(id);
+  // A painted object's id is past the file's (lib/customSets.ts).
+  const instance = entry ? effectiveDoc(assetId, entry.doc).byId.get(id) : undefined;
   const root = entry?.tileset.root as { computedTransform?: Matrix4 } | undefined;
   if (!instance || !root?.computedTransform) return undefined;
   const { min, max } = instance.bounds;
+  const offset = OFFSETS.get(assetId)?.get(id);
+  const transform = offset
+    ? Matrix4.multiply(root.computedTransform, offset, new Matrix4())
+    : root.computedTransform;
   const corners: Cartesian3[] = [];
   for (const x of [min[0], max[0]])
     for (const y of [min[1], max[1]])
       for (const z of [min[2], max[2]])
-        corners.push(
-          Matrix4.multiplyByPoint(
-            root.computedTransform,
-            new Cartesian3(x, y, z),
-            new Cartesian3(),
-          ),
-        );
+        corners.push(Matrix4.multiplyByPoint(transform, new Cartesian3(x, y, z), new Cartesian3()));
   return BoundingSphere.fromPoints(corners);
 }
 
 export type LoadInstances = typeof loadInstances;
+
+export interface AttachInstancesOptions {
+  /**
+   * A tileset that draws some of another's instances (a split object): its hooks follow the
+   * store's state for `assetId`, but the table, search and fly-to stay the scan's own.
+   */
+  follower?: boolean;
+}
 
 /**
  * Lets `tileset`'s objects be hidden and highlighted, when its root declares
@@ -693,6 +805,7 @@ export function attachInstances(
   assetId: string,
   gpu: InstanceGpu | undefined = cesiumInstanceGpu(),
   load: LoadInstances = loadInstances,
+  { follower = false }: AttachInstancesOptions = {},
 ): () => void {
   const ref = instancesRefOf((tileset.root as { extras?: unknown } | undefined)?.extras);
   const url = (tileset as unknown as { resource?: { url?: string } }).resource?.url;
@@ -719,12 +832,26 @@ export function attachInstances(
   const offUpdate = scene.preUpdate.addEventListener(() => {
     if (hook?.sync().changed) scene.requestRender();
   });
+  // The scan's painted objects (lib/customSets.ts) are drawn as ids past the file's.
+  let base: InstancesDoc | undefined;
+  const offCustom = onCustomSetsChange(assetId, () => {
+    if (!hook || !base) return;
+    hook.setDoc(effectiveDoc(assetId, base));
+    push();
+  });
+  // Scene selection picks from CesiumJS's splats while it draws them (cesium/sceneSelect).
+  const offPick = follower
+    ? () => undefined
+    : registerPickSource(assetId, cesiumPickSource(tileset), CESIUM_PRIORITY);
   load(url, ref)
     .then((doc) => {
       if (disposed) return;
-      hook = new SplatInstances(doc, gpu, splatTilesetOf(tileset));
-      ATTACHED.set(assetId, { tileset, doc });
-      useInstances.getState().setTable(assetId, doc);
+      base = doc;
+      hook = new SplatInstances(effectiveDoc(assetId, doc), gpu, splatTilesetOf(tileset));
+      if (!follower) {
+        ATTACHED.set(assetId, { tileset, doc, hook });
+        useInstances.getState().setTable(assetId, doc);
+      }
       push();
       log.info("instances attached", {
         asset: assetId,
@@ -743,8 +870,11 @@ export function attachInstances(
     disposed = true;
     offStore();
     offUpdate();
+    offCustom();
+    offPick();
     hook?.destroy();
     hook = undefined;
+    if (follower) return;
     if (ATTACHED.get(assetId)?.tileset === tileset) ATTACHED.delete(assetId);
     useInstances.getState().setTable(assetId, null);
   };

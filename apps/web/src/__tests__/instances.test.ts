@@ -34,7 +34,6 @@ import {
   parseQuery,
   PROMINENCE_FLOOR,
   prominence,
-  quickFilters,
   rankByEmbedding,
   resolveBeside,
   searchInstances,
@@ -297,15 +296,17 @@ describe("search", () => {
     expect(searchInstances(d.instances, "tree", 1)).toHaveLength(1);
   });
 
-  it("offers quick filters from what the file holds", () => {
-    const filters = quickFilters(doc());
-    expect(filters.map((f) => [f.label, f.query, f.count])).toEqual([
-      ["movable", "movable > 0.5", 2],
-      ["vegetation", "vegetation > 0.5", 2],
-      ["vehicle", "vehicle > 0.5", 1],
-      ["movable", "behaviour:movable", 2],
-      ["in-place", "behaviour:in-place", 2],
-    ]);
+  it("returns every match when asked for no limit, with each one's size", () => {
+    const many = Array.from({ length: 120 }, (_, k) => ({
+      ...(doc().instances[1] ?? ({} as never)),
+      id: k + 1,
+      splats: 1000 + k,
+    }));
+    expect(searchInstances(many, "vegetation")).toHaveLength(50);
+    const all = searchInstances(many, "vegetation", Number.POSITIVE_INFINITY);
+    expect(all).toHaveLength(120);
+    // Ties go to the larger instance; the size comes with the result.
+    expect(all[0]).toMatchObject({ id: 120, splats: 1119 });
   });
 
   it("walks the hierarchy down from a coarse instance", () => {
@@ -315,7 +316,7 @@ describe("search", () => {
     expect(withDescendants(d, []).size).toBe(0);
     expect(instanceLabel(d.instances[0] ?? ({} as never))).toBe("pickup truck");
     expect(instanceLabel({ ...(d.instances[0] ?? ({} as never)), tags: [], id: 9 })).toBe(
-      "Object 9",
+      "untagged",
     );
   });
 });
@@ -358,17 +359,56 @@ describe("search by meaning (the seam)", () => {
 });
 
 describe("the store", () => {
-  beforeEach(() => useInstances.setState({ assets: {}, dimOthers: true }));
+  beforeEach(() => useInstances.setState({ assets: {}, dimOthers: true, gaps: {} }));
+
+  it("hides all of a query's matches, or shows only them", () => {
+    const s = (): ReturnType<typeof useInstances.getState> => useInstances.getState();
+    const base = doc();
+    const many = Array.from({ length: 120 }, (_, k) => ({
+      ...(base.instances[1] ?? ({} as never)),
+      id: k + 1,
+      properties: { vegetation: k < 90 ? 0.9 : 0.1 },
+    }));
+    s().setTable("a", { instances: many });
+    s().setQuery("a", "vegetation > 0.5");
+    expect(s().assets.a?.matches).toHaveLength(90);
+    s().hideMatches("a");
+    expect(s().assets.a?.hidden.size).toBe(90);
+    expect(s().assets.a?.hidden.has(90)).toBe(true);
+    expect(s().assets.a?.hidden.has(91)).toBe(false);
+    s().showOnlyMatches("a");
+    expect([...(s().assets.a?.hidden ?? [])].sort((x, y) => x - y)).toEqual(
+      Array.from({ length: 30 }, (_, k) => 91 + k),
+    );
+    // No query, no matches: nothing changes.
+    s().setQuery("a", "");
+    const hidden = s().assets.a?.hidden;
+    s().hideMatches("a");
+    s().showOnlyMatches("a");
+    expect(s().assets.a?.hidden).toBe(hidden);
+  });
+
+  it("records a renderer that cannot draw a scan's objects", () => {
+    const s = (): ReturnType<typeof useInstances.getState> => useInstances.getState();
+    s().setGap("a", { renderer: "playcanvas", reason: "native" });
+    const gaps = s().gaps;
+    s().setGap("a", { renderer: "playcanvas", reason: "native" });
+    expect(s().gaps).toBe(gaps);
+    s().setGap("a", null);
+    expect(s().gaps.a).toBeUndefined();
+  });
 
   it("holds a scan's table, searches it, and hides and highlights", () => {
     const s = (): ReturnType<typeof useInstances.getState> => useInstances.getState();
     s().setTable("a", doc());
-    expect(s().assets.a?.filters.length).toBeGreaterThan(0);
+    expect(s().assets.a?.index.groups.length).toBeGreaterThan(0);
+    // The trunk (3) is part of the oak's object (2): the match is the object.
     s().setQuery("a", "tree");
-    expect(s().assets.a?.results.map((r) => r.id)).toEqual([2, 3]);
-    s().toggleHidden("a", 2);
-    expect([...(s().assets.a?.hidden ?? [])]).toEqual([2]);
-    s().toggleHidden("a", 2);
+    expect(s().assets.a?.matches).toEqual([2]);
+    // By id, an instance takes what it contains.
+    s().setHidden("a", [2], true);
+    expect([...(s().assets.a?.hidden ?? [])].sort()).toEqual([2, 3]);
+    s().setHidden("a", [2], false);
     expect(s().assets.a?.hidden.size).toBe(0);
     s().setHidden("a", [1, 4], true);
     s().setHidden("a", [4], false);
@@ -383,14 +423,14 @@ describe("the store", () => {
     expect(s().dimOthers).toBe(false);
     // An unknown asset is left alone; clearing removes the table.
     const before = s().assets;
-    s().toggleHidden("b", 1);
+    s().setHidden("b", [1], true);
     expect(s().assets).toBe(before);
     s().setTable("a", null);
     expect(s().assets.a).toBeUndefined();
   });
 
   it("keeps no table for a scan with no instances", () => {
-    useInstances.getState().setTable("a", { instances: [], propertyNames: [] });
+    useInstances.getState().setTable("a", { instances: [] });
     expect(useInstances.getState().assets.a).toBeUndefined();
   });
 });
@@ -574,7 +614,10 @@ describe("the hooks", () => {
 
     hook.setState(new Set([2]), new Set(), true);
     expect(hook.active).toBe(true);
-    // Hiding 2 hides its child 3.
+    // The sets are exact (the store expands an instance to what it contains): 2, not 3.
+    const exact = gpu.textures.at(-1)?.data as Uint8Array;
+    expect([exact[2 * 4], exact[3 * 4]]).toEqual([255, 0]);
+    hook.setState(new Set([2, 3]), new Set(), true);
     const state = gpu.textures.at(-1)?.data as Uint8Array;
     expect([state[2 * 4], state[3 * 4], state[1 * 4]]).toEqual([255, 255, 0]);
     expect(uniforms.u_instanceParams?.()).toEqual({ vec4: [1, 4, 12, 0] });
@@ -715,11 +758,53 @@ describe("attachInstances", () => {
     for (const f of listeners) f();
     expect(primitive.vertexVisibility).toBeDefined();
     const before = renders;
-    useInstances.getState().toggleHidden("scan", 1);
+    useInstances.getState().setHidden("scan", [1], true);
     expect(renders).toBe(before + 1);
     dispose();
     expect(useInstances.getState().assets.scan).toBeUndefined();
     expect(listeners).toHaveLength(0);
+    expect(primitive.vertexVisibility).toBeUndefined();
+  });
+
+  it("follows the scan's state for a split object without taking over its table", async () => {
+    useInstances.getState().setTable("scan", doc());
+    const { primitive } = fakeScene([{ positions: TILE_B.positions, start: 0 }], 4);
+    const tileset = {
+      root: { extras: { instances: { uri: "../../instances.json", count: 4 } } },
+      resource: { url: "https://x.test/scan/objects/4/tileset.json" },
+      gaussianSplatPrimitive: primitive,
+    } as unknown as Cesium3DTileset;
+    const listeners: (() => void)[] = [];
+    const scene = {
+      preUpdate: {
+        addEventListener: (f: () => void) => {
+          listeners.push(f);
+          return () => listeners.splice(listeners.indexOf(f), 1);
+        },
+      },
+      requestRender: () => undefined,
+    } as unknown as Pick<Scene, "preUpdate" | "requestRender">;
+    const asked: string[] = [];
+    const table = useInstances.getState().assets.scan;
+    const dispose = attachInstances(
+      tileset,
+      scene,
+      "scan",
+      fakeGpu(),
+      (url, ref) => {
+        asked.push(`${url} ${ref.uri}`);
+        return Promise.resolve(doc());
+      },
+      { follower: true },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(asked).toEqual(["https://x.test/scan/objects/4/tileset.json ../../instances.json"]);
+    expect(useInstances.getState().assets.scan).toBe(table);
+    for (const f of listeners) f();
+    expect(primitive.vertexVisibility).toBeDefined();
+    dispose();
+    expect(useInstances.getState().assets.scan).toBeDefined();
     expect(primitive.vertexVisibility).toBeUndefined();
   });
 

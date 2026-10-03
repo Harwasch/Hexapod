@@ -28,13 +28,18 @@ import {
 
 import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
+import { instancesRefOf } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
+import { DEDICATED_PRIORITY, registerPickSource } from "../sceneSelect/pickSources";
 import { Handover } from "./handover";
 import { scanPose } from "./pose";
+import { linkScanInstances } from "./scanInstances";
+import { ScanMotionLink } from "./scanMotion";
+import { ScanObjects } from "./scanObjects";
 import type { ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 const log = createLogger("scan-renderer");
@@ -43,6 +48,8 @@ const log = createLogger("scan-renderer");
 export interface ScanTarget {
   key: string;
   tileset: Cesium3DTileset;
+  /** The scan's asset id: whose objects (state/instances.ts) the renderer draws hidden or lit. */
+  assetId?: string;
 }
 
 /** How often the tile cut is re-planned while the camera moves (ms), as the viewer page. */
@@ -68,6 +75,85 @@ const CACHE_FACTOR = 1.5;
  *  tileset (PlayCanvas's streamed SOG, written by splat-transform). */
 export const NATIVE_LOD_PATH = "sog/lod-meta.json";
 
+/**
+ * Whether a tileset says where its native level of detail is: `root.extras.nativeLod` as a
+ * uri relative to the tileset (or `{ uri }`) says it has one there, `false` that it has none.
+ * `undefined` when it says nothing, as every scan packaged before the key existed.
+ */
+export function declaredNativeLod(extras: unknown): string | false | undefined {
+  if (typeof extras !== "object" || extras === null) return undefined;
+  const value = (extras as { nativeLod?: unknown }).nativeLod;
+  if (value === false) return false;
+  if (typeof value === "string" && value !== "") return value;
+  if (typeof value === "object" && value !== null) {
+    const uri = (value as { uri?: unknown }).uri;
+    if (typeof uri === "string" && uri !== "") return uri;
+  }
+  return undefined;
+}
+
+/** Where the scans found to have no native package are remembered (this device only). */
+const NO_NATIVE_KEY = "hexapod.scan.noNativeLod";
+/** Most tilesets remembered: the oldest go first. */
+const NO_NATIVE_MAX = 200;
+/** How long an absence is believed: a package can be published beside a tileset later. */
+export const NO_NATIVE_TTL_MS = 3 * 24 * 3600 * 1000;
+
+/** Tilesets probed and found without a native package, and when, from browser storage. */
+function rememberedWithout(): [string, number][] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(NO_NATIVE_KEY) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (e): e is [string, number] =>
+        Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function knownWithout(tilesetUrl: string, now: number): boolean {
+  return rememberedWithout().some(([url, at]) => url === tilesetUrl && now - at < NO_NATIVE_TTL_MS);
+}
+
+function rememberWithout(tilesetUrl: string, now: number): void {
+  try {
+    const list = rememberedWithout().filter(
+      ([url, at]) => url !== tilesetUrl && now - at < NO_NATIVE_TTL_MS,
+    );
+    list.push([tilesetUrl, now]);
+    localStorage.setItem(NO_NATIVE_KEY, JSON.stringify(list.slice(-NO_NATIVE_MAX)));
+  } catch {
+    // Storage may be blocked: the probe then runs again next time, as it always did.
+  }
+}
+
+/**
+ * The native level of detail of the tileset at `tilesetUrl`, or null. A declared one
+ * (`declaredNativeLod`) is taken as it is, and a declared absence costs no request. A scan
+ * that declares nothing is probed once -- a HEAD, so nothing is downloaded -- and a scan found
+ * without one is remembered on this device for a few days (`NO_NATIVE_TTL_MS`), so the
+ * probe's 404 -- which the browser logs as an error whatever the page does with it -- is not
+ * repeated on every visit. A scan that has one behaves as it always did.
+ */
+export async function findNativeLod(
+  tilesetUrl: string,
+  extras: unknown,
+  probe: (url: string) => Promise<boolean> = async (url) =>
+    (await fetch(url, { method: "HEAD" }).catch(() => null))?.ok === true,
+): Promise<string | null> {
+  const declared = declaredNativeLod(extras);
+  if (declared === false) return null;
+  if (typeof declared === "string") return new URL(declared, tilesetUrl).toString();
+  const now = Date.now();
+  if (knownWithout(tilesetUrl, now)) return null;
+  const lodUrl = new URL(NATIVE_LOD_PATH, tilesetUrl).toString();
+  if (await probe(lodUrl)) return lodUrl;
+  rememberWithout(tilesetUrl, now);
+  return null;
+}
+
 /** What the page's tests and the debug panel read. */
 export interface ScanRendererStatus {
   kind: SplatRendererKind;
@@ -82,17 +168,45 @@ export interface ScanRendererStatus {
   native: boolean;
   loading: number;
   cached: number;
+  /** Tiles that can carry object ids, and those the scan's instances.json lists, or null. */
+  instances: { tiles: number; matched: number } | null;
+  /**
+   * The scan's moving objects (scanMotion.ts): motions handed to the renderer, tiles carrying
+   * skin weights, and tile redraws for motion; null while the renderer moves nothing.
+   */
+  motion: { updates: number; skinned: number; redrawn: number } | null;
+  /** Split objects drawn beside the scan (scanObjects.ts). */
+  objects: number;
+  /** Whether the renderer shows what it was last asked for (`ScanBackend.settled`). */
+  settled: boolean;
 }
 
 interface Session {
   kind: SplatRendererKind;
   key: string;
   stop(): void;
-  status(): Omit<ScanRendererStatus, "kind" | "active">;
+  status(): Omit<
+    ScanRendererStatus,
+    "kind" | "active" | "instances" | "motion" | "objects" | "settled"
+  >;
+  instances(): { tiles: number; matched: number } | null;
+  motion(): ScanRendererStatus["motion"];
+  objects(): number;
+  settled(): boolean;
+}
+
+/** How the host makes its renderers. */
+export interface ScanRendererOptions {
+  /** Keeps each drawn frame readable after it is shown (harnesses read pixels back). */
+  preserveDrawingBuffer?: boolean;
 }
 
 interface BackendModule {
-  createBackend(canvas: HTMLCanvasElement, budget: number): Promise<ScanBackend<unknown>>;
+  createBackend(
+    canvas: HTMLCanvasElement,
+    budget: number,
+    options?: ScanRendererOptions,
+  ): Promise<ScanBackend<unknown>>;
 }
 
 /** Frames in a row the overlay waits for the globe's own while the camera moves. */
@@ -148,6 +262,27 @@ function loadBackend(kind: Exclude<SplatRendererKind, "cesium">): Promise<Backen
   return kind === "spark" ? import("./sparkBackend") : import("./playcanvasBackend");
 }
 
+/** The scan tileset's root extras (what it declares: instances, skin, objects, ...). */
+function rootExtrasOf(tileset: Cesium3DTileset): unknown {
+  return (tileset.root as { extras?: unknown } | undefined)?.extras;
+}
+
+/** The scan tileset's root transform as it is declared, column-major (the splats' frame). */
+function rootTransformArray(tileset: Cesium3DTileset): number[] {
+  const transform = (tileset.root as { transform?: Matrix4 } | undefined)?.transform;
+  return Matrix4.toArray(transform ?? Matrix4.IDENTITY);
+}
+
+/** What a session reports of its moving objects. */
+function motionStatus(
+  link: ScanMotionLink | null,
+  backend: ScanBackend<unknown>,
+): ScanRendererStatus["motion"] {
+  if (!link || !backend.setMotion) return null;
+  const tiles = backend.motionTiles?.() ?? { skinned: 0, redrawn: 0 };
+  return { updates: link.updates, ...tiles };
+}
+
 export class ScanRendererHost {
   private kind: SplatRendererKind = DEFAULT_SPLAT_RENDERER;
   private target: ScanTarget | null = null;
@@ -155,7 +290,10 @@ export class ScanRendererHost {
   private starting: Promise<void> | null = null;
   private lastError: string | null = null;
 
-  constructor(private readonly viewer: Pick<Viewer, "camera" | "canvas" | "scene">) {}
+  constructor(
+    private readonly viewer: Pick<Viewer, "camera" | "canvas" | "scene">,
+    private readonly options: ScanRendererOptions = {},
+  ) {}
 
   get renderer(): SplatRendererKind {
     return this.kind;
@@ -188,6 +326,10 @@ export class ScanRendererHost {
       kind: this.kind,
       active: this.session !== null,
       ...inner,
+      instances: this.session?.instances() ?? null,
+      motion: this.session?.motion() ?? null,
+      objects: this.session?.objects() ?? 0,
+      settled: this.session?.settled() ?? true,
       error: inner.error ?? this.lastError,
     };
   }
@@ -245,7 +387,7 @@ export class ScanRendererHost {
     const budget = deviceSplatBudget();
     let backend: ScanBackend<unknown>;
     try {
-      backend = await (await loadBackend(kind)).createBackend(canvas, budget);
+      backend = await (await loadBackend(kind)).createBackend(canvas, budget, this.options);
     } catch (error) {
       canvas.remove();
       throw error;
@@ -315,6 +457,13 @@ export class ScanRendererHost {
     streamer.onArrival = () => {
       arrived = true;
     };
+    // The scan's objects move as the shared drivers move them (scanMotion.ts), and its split
+    // objects are drawn where their poses put them (scanObjects.ts).
+    const extras = rootExtrasOf(target.tileset);
+    const motionLink = target.assetId
+      ? new ScanMotionLink(target.assetId, backend, { native: false, extras })
+      : null;
+    const objects = new ScanObjects<unknown>(backend, target.assetId);
 
     const toLocal = new Matrix4();
     const toWorld = new Matrix4();
@@ -399,6 +548,8 @@ export class ScanRendererHost {
         Cartesian3.clone(camera.directionWC, lastDirection);
         streamer.update(view(pose));
       }
+      motionLink?.update();
+      objects.tick();
       backend.render(pose);
       handover.tick(performance.now());
       frames += 1;
@@ -414,18 +565,44 @@ export class ScanRendererHost {
     }
     handover.show(root, performance.now());
     streamer.adopt(tree.root, root);
+    void objects.load(url, extras, rootTransformArray(target.tileset));
     stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
+    const unlinkInstances = target.assetId
+      ? linkScanInstances(target.assetId, backend, false)
+      : () => undefined;
+    // Scene selection picks from the tiles this renderer draws (cesium/sceneSelect).
+    const unlinkPick =
+      target.assetId && backend.pickTiles
+        ? registerPickSource(
+            target.assetId,
+            {
+              renderer: kind,
+              tiles: () => backend.pickTiles?.() ?? [],
+              toWorld: () =>
+                target.tileset.isDestroyed() ? undefined : target.tileset.root.computedTransform,
+            },
+            DEDICATED_PRIORITY,
+          )
+        : () => undefined;
     log.info("splat renderer started", { kind, tiles: tree.root.uri });
 
     return {
       kind,
       key: target.key,
       stop: () => {
+        unlinkPick();
+        unlinkInstances();
+        motionLink?.dispose();
+        objects.stop();
         stopDriving?.();
         streamer.stop();
         backend.destroy();
         canvas.remove();
       },
+      instances: () => backend.instanceTiles?.() ?? null,
+      motion: () => motionStatus(motionLink, backend),
+      objects: () => objects.count,
+      settled: () => backend.settled?.() ?? true,
       status: () => ({
         tiles: streamer.drawn.length,
         gaussians: streamer.drawnGaussians,
@@ -442,7 +619,10 @@ export class ScanRendererHost {
   /**
    * The scan in the renderer's own streamed format, when its package has one: the renderer
    * streams and chooses by itself and this only keeps its camera on Cesium's. Null when the
-   * package has none (older scans), and the tileset is streamed here instead.
+   * package has none (older scans), and the tileset is streamed here instead. Also null for
+   * a scan with objects (`extras.instances`): the native package's splats carry no object ids,
+   * so the objects could not be hidden or highlighted there (the published camp, which has
+   * both, drew every object whatever the panel said); its 3D Tiles carry them by checksum.
    */
   private async runNative(
     kind: Exclude<SplatRendererKind, "cesium">,
@@ -451,9 +631,11 @@ export class ScanRendererHost {
     backend: ScanBackend<unknown>,
     tilesetUrl: string,
   ): Promise<Session | null> {
-    const lodUrl = new URL(NATIVE_LOD_PATH, tilesetUrl).toString();
-    const probe = await fetch(lodUrl).catch(() => null);
-    if (!probe?.ok || !backend.streamNative) return null;
+    if (!backend.streamNative) return null;
+    const extras = rootExtrasOf(target.tileset);
+    if (target.assetId && instancesRefOf(extras) !== null) return null;
+    const lodUrl = await findNativeLod(tilesetUrl, extras);
+    if (lodUrl === null) return null;
     const stream = await backend.streamNative(lodUrl);
     const { viewer } = this;
     const toLocal = new Matrix4();
@@ -488,12 +670,32 @@ export class ScanRendererHost {
       );
       frames += 1;
     };
-    const stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
+    // The native package carries no tile checksums: no object ids, no skins (the panels say
+    // so); split objects are tiles of their own, drawn as in any session.
+    const motion = target.assetId
+      ? new ScanMotionLink(target.assetId, backend, { native: true, extras })
+      : null;
+    const objects = new ScanObjects<unknown>(backend, target.assetId);
+    void objects.load(tilesetUrl, extras, rootTransformArray(target.tileset));
+    const stopDriving = driveWithGlobe(viewer.scene, viewer.camera, () => {
+      objects.tick();
+      tick();
+    });
+    const unlinkInstances = target.assetId
+      ? linkScanInstances(target.assetId, backend, true)
+      : () => undefined;
     log.info("splat renderer streaming natively", { kind, url: lodUrl });
     return {
       kind,
       key: target.key,
+      instances: () => null,
+      motion: () => null,
+      objects: () => objects.count,
+      settled: () => backend.settled?.() ?? true,
       stop: () => {
+        unlinkInstances();
+        motion?.dispose();
+        objects.stop();
         stopDriving();
         stream.stop();
         backend.destroy();

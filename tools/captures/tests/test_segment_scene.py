@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 import rig_tiles
+import scene_categories
 import segment_scene as ss
 import synthetic_yard
 from synthetic_tree import checksum_positions, write_ply
@@ -312,7 +313,9 @@ def test_instances_json_follows_the_contract(written: Path, run: dict) -> None:
             "properties",
             "behaviour",
             "views",
+            "category",
         ]
+        assert r["category"] in scene_categories.category_ids()
         assert r["parent"] is None or 1 <= r["parent"] < r["id"]
         assert r["behaviour"] in ("static", "in-place", "movable")
         assert len(r["bounds"]["min"]) == len(r["centroid"]) == 3

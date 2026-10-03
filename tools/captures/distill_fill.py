@@ -82,6 +82,30 @@ def gsplat_rasterize(means, quats, scales, opacities, colours, viewmat, K, width
     return rgb[0], alpha[0, ..., 0]
 
 
+def gsplat_frame(means, quats, scales, opacities, colours, viewmat, K, width, height, *, near, far):
+    """gsplat's `rasterization` for one camera with its expected depth: `(rgb (h,w,3), alpha
+    (h,w), depth (h,w))`, depth along the view axis normalised by coverage (what
+    `splat_render.render` reports). `teacher_fill`'s views rendered on a GPU
+    (`splat_render.GsplatRenderer`)."""
+    from gsplat import rasterization
+
+    out, alpha, _ = rasterization(
+        means,
+        quats,
+        scales,
+        opacities,
+        colours,
+        viewmat[None],
+        K[None],
+        width,
+        height,
+        near_plane=near,
+        far_plane=far,
+        render_mode="RGB+ED",
+    )
+    return out[0, ..., :3], alpha[0, ..., 0], out[0, ..., 3]
+
+
 def torch_rasterize(means, quats, scales, opacities, colours, viewmat, K, width, height):
     """A reference rasteriser in plain torch: each gaussian an isotropic splat of its mean
     scale, composited front to back. Dense in (n, h, w): for tests on tiny images only."""
@@ -109,7 +133,7 @@ def torch_rasterize(means, quats, scales, opacities, colours, viewmat, K, width,
     return rgb, weight.sum(dim=0)
 
 
-def _camera_tensors(view: dict, torch, device):
+def camera_tensors(view: dict, torch, device):
     r = torch.tensor(view["rotation"], dtype=torch.float32, device=device)
     c = torch.tensor(view["centre"], dtype=torch.float32, device=device)
     viewmat = torch.eye(4, dtype=torch.float32, device=device)
@@ -162,7 +186,7 @@ def distill(
             {"params": [params["opacity_logits"]], "lr": 2.5e-2},
         ]
     )
-    views = [_camera_tensors(v, torch, device) for v in cameras]
+    views = [camera_tensors(v, torch, device) for v in cameras]
     filled = [t(im / 255.0) for im in np.asarray(images)]
     inside = [torch.tensor(np.asarray(m), dtype=torch.bool, device=device) for m in masks]
 

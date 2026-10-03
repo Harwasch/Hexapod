@@ -35,6 +35,7 @@ import { installSplatDecoder } from "./splatDecoder";
 import { installSplatSorter } from "./splatSorter";
 import { UiActivity } from "./uiActivity";
 import { ScanRendererHost, type ScanRendererStatus } from "./scanView/ScanRendererHost";
+import { SceneSelectController } from "./sceneSelect/SceneSelectController";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
@@ -81,6 +82,8 @@ export class CesiumSceneManager {
   readonly sites: SiteManager;
   readonly living: LivingSurveyManager;
   readonly selection: SelectionManager;
+  /** Selecting a scan's objects in the scene: click, cycle, paint (cesium/sceneSelect). */
+  readonly sceneSelect: SceneSelectController;
   readonly measurement: MeasurementManager;
   readonly mission: MissionManager;
   readonly areas: AreaEditor;
@@ -196,6 +199,9 @@ export class CesiumSceneManager {
       this.sites,
     );
     this.selection.setCollider(this.collider);
+    this.sceneSelect = new SceneSelectController(this.viewer, {
+      enabled: () => this.selectionWanted(),
+    });
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.areas = new AreaEditor(this.viewer, this.events);
@@ -433,6 +439,7 @@ export class CesiumSceneManager {
     this.mission.destroy();
     this.areas.destroy();
     this.selection.destroy();
+    this.sceneSelect.destroy();
     this.living.destroy();
     this.sites.destroy();
     this.collider.destroy();

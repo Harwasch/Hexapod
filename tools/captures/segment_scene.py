@@ -101,6 +101,8 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
+import rebind_instances
+import scene_categories
 import scene_plants
 import splat_tiles
 from splat_render import Camera, SplatIndex, Splats, _from_columns, render
@@ -1594,8 +1596,32 @@ def instances_document(
     dim: int,
     vocabulary_model: str,
     vocabulary_size: int,
+    categories: dict[str, str] | None = None,
 ) -> dict:
-    """`instances.json` v1 (docs/SCENE_OBJECTS.md §4), keys in the contract's order."""
+    """`instances.json` v1 (docs/SCENE_OBJECTS.md §4), keys in the contract's order. Each
+    instance also carries its broad scene `category` (`scene_categories.instance_categories`
+    over `categories`, label to category id; default the committed `data/categories.json`),
+    which the viewer otherwise works out from the tags itself."""
+    records = [
+        {
+            "id": i.id,
+            "parent": i.parent,
+            "level": i.level,
+            "splats": i.splats,
+            "bounds": {"min": _round(i.bounds_min), "max": _round(i.bounds_max)},
+            "centroid": _round(i.centroid),
+            "tags": i.tags,
+            "properties": i.properties,
+            "behaviour": i.behaviour,
+            "views": i.views,
+            "category": scene_categories.OTHER,
+        }
+        for i in instances
+    ]
+    labels = scene_categories.load() if categories is None else categories
+    assigned = scene_categories.instance_categories(records, labels)
+    for record in records:
+        record["category"] = assigned.get(int(record["id"]), scene_categories.OTHER)
     return {
         "format": FORMAT,
         "version": VERSION,
@@ -1607,21 +1633,7 @@ def instances_document(
             "dtype": "float16",
         },
         "vocabulary": {"model": vocabulary_model, "size": vocabulary_size},
-        "instances": [
-            {
-                "id": i.id,
-                "parent": i.parent,
-                "level": i.level,
-                "splats": i.splats,
-                "bounds": {"min": _round(i.bounds_min), "max": _round(i.bounds_max)},
-                "centroid": _round(i.centroid),
-                "tags": i.tags,
-                "properties": i.properties,
-                "behaviour": i.behaviour,
-                "views": i.views,
-            }
-            for i in instances
-        ],
+        "instances": records,
         "tiles": dict(sorted(tiles.items())),
         "tilesEncoding": TILES_ENCODING,
     }
@@ -1980,6 +1992,9 @@ def main() -> None:
             opacity_min=args.opacity_min,
             tile_gaussians=args.tile_gaussians,
         )
+    # Merged splats take what most of the leaf splats near them are, not only what all of
+    # them share (which left the coarse levels of detail almost without ids).
+    tiles = rebind_instances.rebind(args.tiles, tiles)
     document = instances_document(
         result.instances,
         tiles,
@@ -1988,6 +2003,7 @@ def main() -> None:
         vocabulary_model=embedder.name,
         vocabulary_size=len(vocabulary),
     )
+    document["tilesEncoding"] = rebind_instances.TILES_ENCODING
     out = args.out or args.tiles
     write_instances(out, document, result.instances)
     if out.resolve() == args.tiles.resolve():

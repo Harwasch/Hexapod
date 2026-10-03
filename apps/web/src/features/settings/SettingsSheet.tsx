@@ -9,6 +9,7 @@ import {
 } from "@twin/ui";
 
 import { env } from "@/app/env";
+import { MotionRendererNote } from "@/features/sites/MotionRendererNote";
 import {
   CPU_REASON_TEXT,
   DEFAULT_WIND_STRENGTH,
@@ -154,6 +155,7 @@ function WindSection() {
         }
       />
       <MotionReadout sites={status.sites} />
+      {on && <MotionRendererNote />}
       {on && !reducedMotion && (
         <>
           <Row

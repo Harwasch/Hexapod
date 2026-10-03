@@ -7,7 +7,9 @@
  * and a cost that grows with every gaussian of a level-of-detail view. Here the CPU does per
  * **node** work only — a few hundred affine rows and flutter coefficients, one small texture
  * upload — and the vertex shader applies them per splat through the engine patch's
- * `vertexMotion` hook (`patches/@cesium__engine@26.3.0.patch`).
+ * `vertexMotion` hook (`patches/@cesium__engine@26.3.0.patch`), as one part of its motion chain
+ * (`splatMotionChain.ts`: `splatRigMotion` returns a displacement, which the chain adds to the
+ * rest position, with any other part's, a scene object's skin among them).
  *
  * Three textures of our own, never the engine's:
  *
@@ -78,12 +80,13 @@ import {
 } from "@twin/world";
 
 import { invertAffine, type Mat4 } from "./splatFrames";
-import type {
-  SplatPrimitive,
-  SplatShaderBuilder,
-  SplatTexture,
-  SplatVertexMotion,
-} from "./splatInternals";
+import type { SplatPrimitive, SplatShaderBuilder, SplatTexture } from "./splatInternals";
+import {
+  addMotionPart,
+  hasMotionPart,
+  removeMotionPart,
+  type SplatMotionPart,
+} from "./splatMotionChain";
 import type { SplatTextureLayout } from "./splatTexels";
 
 /** Texels per row of the motion texture. A power of two, so the shader addresses by shift. */
@@ -387,9 +390,9 @@ float splatFlutterLookup(int row, vec3 position) {
     return splatFlutterSample(vec2(dot(gx.xyz, position) + gx.w, dot(gy.xyz, position) + gy.w));
 }
 
-vec3 splatVertexMotion(uint splatIndex, vec3 position) {
+vec3 splatRigMotion(uint splatIndex, vec3 position) {
     if (u_splatMotionActive < 0.5) {
-        return position;
+        return vec3(0.0);
     }
     uint rowMask = uint(u_splatRowMask);
     uint rowShift = uint(u_splatRowShift);
@@ -429,9 +432,10 @@ vec3 splatVertexMotion(uint splatIndex, vec3 position) {
         c += w * f;
     }
     if (!moves) {
-        return position;
+        return vec3(0.0);
     }
-    vec3 moved = position + delta;
+    // A displacement: the motion chain adds it to the rest position (splatMotionChain.ts).
+    vec3 moved = delta;
     if (c != vec4(0.0) && splatMotionTexel(${String(FLUTTER_FRAME_TEXEL)}).x > 0.5) {
         // Living Mode's advected field, looked up at the canonical (fetched) position.
         vec3 wind = vec3(
@@ -463,9 +467,9 @@ vec3 splatVertexMotion(uint splatIndex, vec3 position) {
 `;
 
 /**
- * `splatVertexMotion`, in TypeScript and float64: what the shader computes for one splat, read
- * from the same texture contents. Exists so the texture packing and the shader's arithmetic
- * can be checked against the CPU path without a GPU.
+ * `splatRigMotion` plus the rest position, in TypeScript and float64: what the shader computes
+ * for one splat, read from the same texture contents. Exists so the texture packing and the
+ * shader's arithmetic can be checked against the CPU path without a GPU.
  */
 export function evaluateSplatMotion(
   motion: Float32Array,
@@ -576,7 +580,9 @@ interface BoundSnapshot {
  * The hook object the patched primitive calls, plus the per-snapshot and per-frame writes.
  * One per deformer; installed on the primitive while the deformer is on the GPU path.
  */
-export class SplatGpuMotion implements SplatVertexMotion {
+export class SplatGpuMotion implements SplatMotionPart {
+  readonly motionFunction = "splatRigMotion";
+  readonly motionOrder = 0;
   readonly #factory: MotionTextureFactory;
   readonly #nodeCount: number;
   readonly #motion: Float32Array;
@@ -628,11 +634,14 @@ export class SplatGpuMotion implements SplatVertexMotion {
     uniformMap.u_splatMotionActive = () => (this.#drawActive() ? 1 : 0);
   }
 
-  /** Installs the hook on `primitive` (idempotent). */
+  /** Joins `primitive`'s motion chain (idempotent; `splatMotionChain.ts`). */
   install(primitive: SplatPrimitive): void {
-    if (this.#primitive === primitive && primitive.vertexMotion === this) return;
+    if (this.#primitive === primitive && hasMotionPart(primitive, this)) return;
+    if (this.#primitive !== undefined && this.#primitive !== primitive) {
+      removeMotionPart(this.#primitive, this);
+    }
     this.#primitive = primitive;
-    primitive.vertexMotion = this;
+    addMotionPart(primitive, this);
   }
 
   /** Binds a snapshot: its generation, and every splat's skin and flutter hash. */
@@ -742,14 +751,10 @@ export class SplatGpuMotion implements SplatVertexMotion {
     this.#bound = undefined;
     const primitive = this.#primitive;
     this.#primitive = undefined;
-    if (
-      primitive !== undefined &&
-      primitive.isDestroyed?.() !== true &&
-      primitive.vertexMotion === this
-    ) {
+    if (primitive !== undefined) {
       // The patched engine rebuilds the draw command before it next pushes it, so the textures
       // below are never bound again after this.
-      primitive.vertexMotion = undefined;
+      removeMotionPart(primitive, this);
     }
     this.#motionTexture?.destroy();
     this.#bindingTexture?.destroy();

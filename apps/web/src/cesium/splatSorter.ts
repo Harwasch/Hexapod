@@ -10,6 +10,11 @@
  * range for an incremental primitive, per snapshot generation otherwise -- so a sort request
  * is the eye and a count. For an incremental primitive the worker also keeps which slots are
  * drawn (show/hide/release), so a tile that left the view stays resident, out of the order.
+ *
+ * Splats a driver moves rigidly (`splatRigid.ts`) are ordered where they are drawn: the
+ * driver names each splat's group and each group's motion (`setSortMotion`), every sort
+ * carries the eye moved back by each group's motion (`groupEyes`), and a motion that has
+ * moved a group's eye as far as the camera would have to move calls for a sort.
  */
 
 import * as CesiumBarrel from "cesium";
@@ -69,6 +74,69 @@ export function resortDistance(nearest: number): number {
   return Math.min(RESORT_MAX_M, Math.max(RESORT_MIN_M, nearest * RESORT_SHARE));
 }
 
+/** What a driver says of a primitive's rigidly moving splats. */
+interface SortMotion {
+  /** Per splat index, its group (0: none). */
+  groups: Uint16Array;
+  /** Per group g, 12 numbers at 12g: the rows of `x' = M x + t` in the positions' frame. */
+  motions: Float64Array;
+}
+
+const SORT_MOTIONS = new WeakMap<object, SortMotion>();
+
+/**
+ * Tells the sorter that `primitive`'s splats move rigidly by group (or, with `undefined`, that
+ * none do). `groups` is kept, not copied: hand a new array when membership changes.
+ */
+export function setSortMotion(primitive: object, motion: SortMotion | undefined): void {
+  if (motion) SORT_MOTIONS.set(primitive, motion);
+  else SORT_MOTIONS.delete(primitive);
+}
+
+/** What the sorter was told of `primitive` (tests, diagnostics). */
+export function sortMotionOf(primitive: object): Readonly<SortMotion> | undefined {
+  return SORT_MOTIONS.get(primitive);
+}
+
+/**
+ * Per group, the eye carried back by its motion, `M⁻¹(eye − t)`, at `3g..3g+2`: a splat's
+ * distance from it is the moved splat's distance from the eye (exactly, for a rigid `M`).
+ * A group whose motion is all zeros (unused) keeps the eye.
+ */
+export function groupEyes(
+  motions: Float64Array,
+  eye: readonly [number, number, number],
+): Float64Array {
+  const groups = Math.floor(motions.length / 12);
+  const out = new Float64Array(groups * 3);
+  for (let g = 0; g < groups; g += 1) {
+    const m = (r: number, c: number): number => motions[g * 12 + r * 4 + c] ?? 0;
+    const det =
+      m(0, 0) * (m(1, 1) * m(2, 2) - m(1, 2) * m(2, 1)) -
+      m(0, 1) * (m(1, 0) * m(2, 2) - m(1, 2) * m(2, 0)) +
+      m(0, 2) * (m(1, 0) * m(2, 1) - m(1, 1) * m(2, 0));
+    if (!(Math.abs(det) > 1e-12)) {
+      out.set(eye, g * 3);
+      continue;
+    }
+    const v = [eye[0] - m(0, 3), eye[1] - m(1, 3), eye[2] - m(2, 3)];
+    // Cramer's rule: M e = v.
+    const solve = (col: number): number => {
+      const a = (r: number, c: number): number => (c === col ? (v[r] ?? 0) : m(r, c));
+      return (
+        (a(0, 0) * (a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1)) -
+          a(0, 1) * (a(1, 0) * a(2, 2) - a(1, 2) * a(2, 0)) +
+          a(0, 2) * (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0))) /
+        det
+      );
+    };
+    out[g * 3] = solve(0);
+    out[g * 3 + 1] = solve(1);
+    out[g * 3 + 2] = solve(2);
+  }
+  return out;
+}
+
 export function installSplatSorter(): () => void {
   const module = primitiveModule();
   if (!module || typeof Worker === "undefined") return () => undefined;
@@ -81,6 +149,11 @@ export function installSplatSorter(): () => void {
     pending: number;
     slots: boolean;
     nearest: number;
+    /** The groups last sent to the worker. */
+    groups: Uint16Array | undefined;
+    /** The eye and the group eyes of the last sort. */
+    eye: [number, number, number] | undefined;
+    eyes: Float64Array | undefined;
   }
   const owners = new WeakMap<object, Owner>();
   const ownerOf = (primitive: object): Owner => {
@@ -92,6 +165,9 @@ export function installSplatSorter(): () => void {
         pending: 0,
         slots: false,
         nearest: Number.POSITIVE_INFINITY,
+        groups: undefined,
+        eye: undefined,
+        eyes: undefined,
       };
       owners.set(primitive, owner);
     }
@@ -129,6 +205,18 @@ export function installSplatSorter(): () => void {
       );
       owner.generation = parameters.generation;
     }
+    const motion = SORT_MOTIONS.get(parameters.owner);
+    if (motion?.groups !== owner.groups) {
+      const groups = motion ? motion.groups.slice() : null;
+      worker.postMessage(
+        { kind: "groups", owner: owner.id, groups },
+        groups ? [groups.buffer] : [],
+      );
+      owner.groups = motion?.groups;
+    }
+    const eyes = motion ? groupEyes(motion.motions, parameters.eye) : undefined;
+    owner.eye = [...parameters.eye];
+    owner.eyes = eyes;
     const id = nextRequest++;
     const current = owner;
     current.pending += 1;
@@ -147,6 +235,7 @@ export function installSplatSorter(): () => void {
         generation: parameters.generation,
         count: parameters.count,
         eye: parameters.eye,
+        ...(eyes ? { eyes } : {}),
       });
     });
   };
@@ -170,7 +259,27 @@ export function installSplatSorter(): () => void {
   hook.hide = range("hide");
   hook.release = range("release");
   hook.compacts = true;
-  hook.resortDistance = (primitive) => resortDistance(ownerOf(primitive).nearest);
+  hook.resortDistance = (primitive) => {
+    const owner = ownerOf(primitive);
+    const distance = resortDistance(owner.nearest);
+    const motion = SORT_MOTIONS.get(primitive);
+    // Membership changed, or a group's eye has moved as far as the camera would have to.
+    if (motion?.groups !== owner.groups) return 0;
+    if (motion && owner.eye) {
+      const now = groupEyes(motion.motions, owner.eye);
+      const before = owner.eyes;
+      if (before?.length !== now.length) return 0;
+      for (let k = 0; k < now.length; k += 3) {
+        const d = Math.hypot(
+          (now[k] ?? 0) - (before[k] ?? 0),
+          (now[k + 1] ?? 0) - (before[k + 1] ?? 0),
+          (now[k + 2] ?? 0) - (before[k + 2] ?? 0),
+        );
+        if (d >= distance) return 0;
+      }
+    }
+    return distance;
+  };
   module.sortHook = hook;
   return () => {
     if (module.sortHook === hook) module.sortHook = undefined;

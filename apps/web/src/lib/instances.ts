@@ -52,6 +52,8 @@ export interface Instance {
   properties: Record<string, number>;
   behaviour: Behaviour;
   views: number;
+  /** Its broad scene category (`lib/categories.ts`), when the file says; newer runs do. */
+  category?: string;
 }
 
 export interface EmbeddingRef {
@@ -137,6 +139,7 @@ function instanceOf(raw: unknown): Instance | null {
     properties,
     behaviour: BEHAVIOURS.has(r.behaviour as Behaviour) ? (r.behaviour as Behaviour) : "static",
     views: Math.max(0, Math.round(finite(r.views))),
+    ...(typeof r.category === "string" && r.category !== "" ? { category: r.category } : {}),
   };
 }
 
@@ -290,7 +293,12 @@ export interface SearchResult {
   /** The tag (or property) that matched, or the top tag when only filters were given. */
   label: string;
   behaviour: Behaviour;
+  /** Gaussians the instance holds: tells apart rows that share a label. */
+  splats: number;
 }
+
+/** The default number of results a search lists; the whole match set is kept beside them. */
+export const RESULT_LIMIT = 50;
 
 const FILTER = /([a-z_][\w-]*)\s*(>=|<=|>|<|=|:)\s*([\w.-]+)/gi;
 
@@ -369,9 +377,16 @@ export function matchLabel(terms: readonly string[], label: string): number {
   return (sum / terms.length) * 0.95;
 }
 
-/** The label an instance is shown by: its top tag, or its id. */
+/** The label a search result goes by: its top tag (the panel names objects by category). */
 export function instanceLabel(instance: Instance): string {
-  return instance.tags[0]?.label ?? `Object ${String(instance.id)}`;
+  return instance.tags[0]?.label ?? "untagged";
+}
+
+/** A splat count, short: 940, 12.3k, 1.2M. */
+export function formatSplats(splats: number): string {
+  if (splats < 1000) return String(splats);
+  if (splats < 1_000_000) return `${(splats / 1000).toFixed(splats < 10_000 ? 1 : 0)}k`;
+  return `${(splats / 1_000_000).toFixed(1)}M`;
 }
 
 /**
@@ -397,11 +412,11 @@ export function prominence(splats: number, largest: number): number {
 export function searchInstances(
   instances: readonly Instance[],
   query: InstanceQuery | string,
-  limit = 50,
+  limit = RESULT_LIMIT,
 ): SearchResult[] {
   const q = typeof query === "string" ? parseQuery(query) : query;
   if (q.terms.length === 0 && q.filters.length === 0) return [];
-  const results: (SearchResult & { splats: number })[] = [];
+  const results: SearchResult[] = [];
   const sortBy = q.filters.find((f) => f.name !== "behaviour")?.name;
   const largest = instances.reduce((m, i) => Math.max(m, i.splats), 0);
   for (const instance of instances) {
@@ -437,40 +452,7 @@ export function searchInstances(
     });
   }
   results.sort((a, b) => b.score - a.score || b.splats - a.splats || a.id - b.id);
-  return results
-    .slice(0, limit)
-    .map(({ id, score, label, behaviour }) => ({ id, score, label, behaviour }));
-}
-
-/** One quick filter: a property name with a threshold, or a behaviour. */
-export interface QuickFilter {
-  label: string;
-  query: string;
-  /** Instances it matches. */
-  count: number;
-}
-
-/**
- * Quick filters from what the file holds, not from a class list: each property any instance
- * scores above `threshold` on (most common first), then each behaviour present.
- */
-export function quickFilters(
-  doc: Pick<InstancesDoc, "instances" | "propertyNames">,
-  threshold = 0.5,
-): QuickFilter[] {
-  const out: QuickFilter[] = [];
-  for (const name of doc.propertyNames) {
-    const count = doc.instances.filter((i) => (i.properties[name] ?? 0) > threshold).length;
-    if (count > 0) out.push({ label: name, query: `${name} > ${String(threshold)}`, count });
-  }
-  out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-  const behaviours = new Map<Behaviour, number>();
-  for (const i of doc.instances)
-    behaviours.set(i.behaviour, (behaviours.get(i.behaviour) ?? 0) + 1);
-  for (const [behaviour, count] of [...behaviours].sort((a, b) => b[1] - a[1])) {
-    out.push({ label: behaviour, query: `behaviour:${behaviour}`, count });
-  }
-  return out;
+  return Number.isFinite(limit) ? results.slice(0, limit) : results;
 }
 
 // ---- Search by meaning (the seam) --------------------------------------------------------

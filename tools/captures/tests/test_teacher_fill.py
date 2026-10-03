@@ -102,6 +102,36 @@ def test_the_gate_refuses_a_fill_that_repaints_what_it_was_told(
     assert len(lifted) == 0
 
 
+class _FullRender:
+    """A filler shown the full render (as Fixer is): `invert` repaints it, else it softens it,
+    as a model that re-renders the frame does."""
+
+    name = "full"
+    reads_full_render = True
+
+    def __init__(self, invert: bool) -> None:
+        self.invert = invert
+
+    def fill(self, rgb: np.ndarray, mask: np.ndarray) -> list[np.ndarray]:
+        import cv2
+
+        return [255 - rgb if self.invert else cv2.GaussianBlur(rgb, (0, 0), 1.0)]
+
+
+def test_a_full_render_filler_is_gated_on_the_frames_layout(
+    yard: tuple[Splats, vc.ConeGrid], centre: np.ndarray
+) -> None:
+    splats, grid = yard
+    camera = tf.plan_views(grid, centre[None], count=1, width=120, height=90, distance_m=3.0)[0]
+    mask = np.zeros((90, 120), bool)
+    mask[40:50, 55:65] = True
+    cond = tf.condition(splats, camera, None, mask=mask)
+    softened = tf.fill_views([cond], _FullRender(invert=False))[0]
+    repainted = tf.fill_views([cond], _FullRender(invert=True))[0]
+    assert softened.accepted and not repainted.accepted
+    assert repainted.gate_psnr_db < 10.0
+
+
 def test_lift_puts_discs_at_the_scan_depth_facing_the_camera() -> None:
     camera = Camera.look_at([0.0, -5.0, 1.0], [0.0, 0.0, 1.0], width=40, height=30)
     h, w = 30, 40
@@ -125,6 +155,64 @@ def test_lift_puts_discs_at_the_scan_depth_facing_the_camera() -> None:
     assert np.allclose(np.sum(normal * to_camera, axis=1), 1.0, atol=1e-9)
     assert np.allclose(lifted.colours, 200 / 255)
     assert np.allclose(confidence, 1.0) and np.allclose(lifted.opacities, 0.95)
+
+
+def _wall(y: float, colour: tuple[float, float, float], n: int, seed: int) -> Splats:
+    rng = np.random.default_rng(seed)
+    positions = np.column_stack(
+        [rng.uniform(-1.5, 1.5, n), y + rng.normal(0, 0.005, n), rng.uniform(-0.5, 2.5, n)]
+    )
+    return Splats(
+        positions,
+        np.tile([1.0, 0.0, 0.0, 0.0], (n, 1)),
+        np.full((n, 3), 0.04),
+        np.tile(colour, (n, 1)),
+        np.full(n, 0.95),
+    )
+
+
+def test_a_dropped_region_is_lifted_where_it_was_not_behind_it() -> None:
+    """A hole cut in a near wall shows the far wall through it: the drop test's fill must
+    land on the near wall (interpolated from around the hole), not on the far one."""
+    near, far = _wall(0.0, (0.8, 0.2, 0.2), 12000, 1), _wall(3.0, (0.2, 0.2, 0.8), 12000, 2)
+    scene = Splats.concat([near, far])
+    inside = np.all(np.abs(scene.positions - [0.0, 0.0, 1.0]) <= 0.3, axis=1)
+    kept, dropped = scene.take(np.flatnonzero(~inside)), scene.take(np.flatnonzero(inside))
+    camera = Camera.look_at([0.0, -5.0, 1.0], [0.0, 0.0, 1.0], width=80, height=60)
+    hole = tf._hole(tf.render(dropped, camera).alpha)
+    assert hole.sum() > 50
+    ones = np.ones(len(kept))
+    behind = tf.condition(kept, camera, None, mask=hole, seen_opacity=ones, hole_depth="scan")
+    around = tf.condition(kept, camera, None, mask=hole, seen_opacity=ones, hole_depth="surround")
+    assert np.nanmedian(behind.depth[hole]) == pytest.approx(8.0, abs=0.3)
+    assert np.all(np.isfinite(around.depth[hole]))
+    assert np.allclose(around.depth[hole], 5.0, atol=0.3)
+    # Narrowed to the scan just outside the region: its surface, even where the image
+    # around the hole is mostly the far wall.
+    reach = np.all(np.abs(scene.positions - [0.0, 0.0, 1.0]) <= 0.6, axis=1)
+    shell = scene.take(np.flatnonzero(reach & ~inside))
+    hole_far = hole.copy()
+    shelled = tf.condition(
+        far,
+        camera,
+        None,
+        mask=hole_far,
+        seen_opacity=np.ones(len(far)),
+        hole_depth="surround",
+        surround=shell,
+    )
+    assert np.allclose(shelled.depth[hole], 5.0, atol=0.3)
+    rgb = np.full((60, 80, 3), 200, np.uint8)
+    lifted, _ = tf.lift([tf.Filled(around, rgb, 40.0, True)])
+    assert np.allclose(lifted.positions[:, 1], 0.0, atol=0.3)
+    with pytest.raises(ValueError):
+        tf.condition(kept, camera, None, mask=hole, seen_opacity=ones, hole_depth="nope")
+
+
+def test_make_renderer_is_the_cpu_unless_asked() -> None:
+    assert tf.make_renderer("cpu") is tf.render
+    with pytest.raises(ValueError):
+        tf.make_renderer("opengl")
 
 
 def test_confidence_falls_away_from_what_was_measured() -> None:
@@ -234,9 +322,92 @@ def test_fill_scan_fills_the_side_a_capture_never_saw(tmp_path: Path) -> None:
     assert behind < 0.0  # discs on the wall's unseen face, towards the cameras that made them
 
 
+class _Painter:
+    """Paints what it is asked in one colour; chains its views and reads the void."""
+
+    name = "painter"
+    chain_views = True
+    reads_void = True
+
+    def __init__(self) -> None:
+        self.context: dict | None = None
+        self.asked: list[int] = []
+        self.voids: list[int] = []
+
+    def fill(self, rgb: np.ndarray, mask: np.ndarray, void: np.ndarray) -> list[np.ndarray]:
+        assert not (void & mask).any()
+        self.asked.append(int(mask.sum()))
+        self.voids.append(int(void.sum()))
+        return [np.where(mask[..., None], np.array([30, 200, 30], np.uint8), rgb)]
+
+
+def test_fill_scan_chains_a_filler_that_asks_and_tells_it_the_void(tmp_path: Path) -> None:
+    rng = np.random.default_rng(1)
+    n = 6000
+    positions = np.column_stack(
+        [rng.normal(0, 0.01, n), rng.uniform(-1, 1, n), rng.uniform(0, 2, n)]
+    )
+    wall = Splats(
+        positions,
+        np.tile([1.0, 0.0, 0.0, 0.0], (n, 1)),
+        np.full((n, 3), 0.03),
+        np.tile([0.6, 0.3, 0.2], (n, 1)),
+        np.full(n, 0.9),
+    )
+    ply = tmp_path / "wall.ply"
+    save_ply(ply, wall, comment="test wall")
+    measured = tmp_path / "measured"
+    splat_tiles.convert(ply, measured, 0.0, 0.0, 0.0, opacity_min=0.0)
+    layout = splat_tiles.ply_layout(ply)
+    grid = vc.cone_grid(layout, np.ones(layout.count, bool), observers=np.array([[6.0, 0, 1]]))
+    painter = _Painter()
+    evidence = tf.fill_scan(
+        wall, grid, painter, measured / "tileset.json", tmp_path / "inferred",
+        views=6, width=96, height=72, stride=2,
+    )  # fmt: skip
+    asked_total = [v["maskPx"] for v in evidence["perView"]]
+    assert len(painter.asked) == 6 and all(v > 0 for v in painter.voids)
+    # Later views reuse what earlier ones filled: asked less than they lift.
+    assert sum(painter.asked) < sum(asked_total)
+    assert evidence["gaussians"] > 0
+
+
+def test_fill_scan_can_condition_without_floaters(tmp_path: Path) -> None:
+    """`max_scale_m` leaves gaussians larger than that out of every view it renders (a
+    floater gsplat would draw over the frame; the CPU renderer barely shows it)."""
+    wall = _wall(0.0, (0.6, 0.3, 0.2), 4000, 3)
+    floater = Splats(
+        np.array([[0.0, -2.0, 1.0]]),
+        np.array([[1.0, 0.0, 0.0, 0.0]]),
+        np.full((1, 3), 3.0),
+        np.array([[0.9, 0.9, 0.9]]),
+        np.array([0.9]),
+    )
+    scene = Splats.concat([wall, floater])
+    ply = tmp_path / "scene.ply"
+    save_ply(ply, scene, comment="test floater")
+    measured = tmp_path / "measured"
+    splat_tiles.convert(ply, measured, 0.0, 0.0, 0.0, opacity_min=0.0)
+    layout = splat_tiles.ply_layout(ply)
+    grid = vc.cone_grid(layout, np.ones(layout.count, bool), observers=np.array([[0.0, -6.0, 1.0]]))
+    largest: list[float] = []
+
+    def spy(splats: Splats, camera: Camera, **kwargs: object) -> tf.Frame:
+        largest.append(float(splats.scales.max()))
+        return tf.render(splats, camera, **kwargs)  # type: ignore[arg-type]
+
+    evidence = tf.fill_scan(
+        scene, grid, tf.InpaintFiller(), measured / "tileset.json", tmp_path / "inferred",
+        views=4, width=64, height=48, renderer=spy, max_scale_m=1.0,
+    )  # fmt: skip
+    assert evidence["gaussians"] > 0
+    assert largest and max(largest) < 1.0
+
+
 def test_make_filler_names_the_stand_in_and_imports_the_rest() -> None:
     assert tf.make_filler("telea").name == "opencv-telea"
     assert isinstance(tf.make_filler("teacher_fill:InpaintFiller"), tf.InpaintFiller)
+    assert tf.make_filler("teacher_fill:InpaintFiller?radius=9&name=wide").radius == 9
     with pytest.raises(ValueError):
         tf.make_filler("fixer")
 

@@ -25,6 +25,7 @@ import {
   recordSplatCapture,
 } from "@/cesium/splatCaptureRegistry";
 import { bitsToFloat32, positionWordOffset, splatTextureLayout } from "@/cesium/splatTexels";
+import { hasMotionPart } from "@/cesium/splatMotionChain";
 
 import {
   bakeFixture,
@@ -111,7 +112,7 @@ describe("switching paths", () => {
     // The next frames run on the shader, and the attribute texture is never written again.
     let status = deformer.apply(...frameAt(2.1));
     expect(status.motion).toBe("gpu");
-    expect(primitive.vertexMotion).toBe(deformer.gpuMotion);
+    expect(hasMotionPart(primitive, deformer.gpuMotion)).toBe(true);
     const uniforms = buildDrawCommand(primitive);
     status = deformer.apply(...frameAt(2.2));
     expect(status.displaced).toBe(true);

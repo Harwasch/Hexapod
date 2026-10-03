@@ -1,0 +1,105 @@
+name: Fill scans (Modal GPU, NVIDIA Fixer)
+
+# Runs tools/captures/teacher_fill.py (Teacher B) on Modal with NVIDIA Fixer as the filler,
+# beside the CPU stand-in (Telea) for comparison: the drop test (scored against what was
+# there) and the fill from outside (an inferred layer). Uploads the reports, strips and
+# inferred tilesets as an artifact. Nothing is published. See infra/modal/fill.py and
+# docs/WORLD_MODEL_RUNBOOK.md.
+#
+# On a push to a `wm-*` working branch that touches the fill code (not `living-models`,
+# so merges there start no GPU run)
+# (workflow_dispatch only works once this file is on the default branch). The Modal token
+# is the repository's; Fixer needs no other secret.
+
+on:
+  push:
+    branches: ["wm-*"]
+    paths:
+      - infra/modal/fill.py
+      - tools/captures/teacher_fill.py
+      - tools/captures/split_objects.py
+      - tools/captures/splat_render.py
+      - tools/captures/tests/test_gsplat_parity.py
+      - tools/captures/world_model_client.py
+      - tools/captures/inpaint_models.py
+      - tools/captures/distill_fill.py
+      - .github/workflows/fill.yml
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: kind:scan pairs (drop|fill|split, scans in infra/modal/fill.py)
+        type: string
+        default: drop:yard,drop:spool,fill:camp
+      fillers:
+        description: Fillers (short names in infra/modal/fill.py FILLERS)
+        type: string
+        default: telea,fixer
+      distill:
+        description: Distill steps for fill jobs (0 = none)
+        type: string
+        default: "0"
+      renderer:
+        description: Render the views on the CPU or with gsplat on a GPU (cpu, gsplat)
+        type: string
+        default: gsplat
+
+concurrency:
+  group: fill-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  JOBS: ${{ inputs.jobs || 'fill:camp' }}
+  # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
+  PROBES: ""
+  FILLERS: ${{ inputs.fillers || 'qwen-chain,lama-chain' }}
+  DISTILL: ${{ inputs.distill || '1500' }}
+  RENDERER: ${{ inputs.renderer || 'gsplat' }}
+  # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.
+  PARITY: ""
+  # Fill jobs: condition without gaussians larger than this (m; 0 = keep all). The camp's
+  # edge floaters (scale 0.5-2.7 m) cover most of a gsplat view from outside.
+  MAX_SCALE: "0.5"
+
+jobs:
+  fill:
+    name: Fill on a Modal GPU
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the Modal token is there
+        run: |
+          test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
+            || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
+      - name: Modal secrets present (names only)
+        continue-on-error: true
+        run: uv run --with modal==1.5.5 modal secret list
+      - name: modal run infra/modal/fill.py
+        run: |
+          # The Hugging Face secret by its prefix (the workspace's is not named `huggingface`).
+          HEXAPOD_HF_SECRET=$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
+          import json, sys
+          def names(x):
+              if isinstance(x, dict):
+                  for v in x.values(): yield from names(v)
+              elif isinstance(x, list):
+                  for v in x: yield from names(v)
+              elif isinstance(x, str) and x.startswith("huggingface"):
+                  yield x
+          print(next(names(json.load(sys.stdin)), "huggingface"))') || HEXAPOD_HF_SECRET=huggingface
+          export HEXAPOD_HF_SECRET
+          echo "Hugging Face secret: $HEXAPOD_HF_SECRET"
+          uv run --with modal==1.5.5 modal run infra/modal/fill.py \
+            --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out \
+            --probes "$PROBES" --renderer "$RENDERER" ${PARITY:+--parity-test} \
+            --max-scale-m "$MAX_SCALE"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fill
+          path: fill-out
+          if-no-files-found: warn

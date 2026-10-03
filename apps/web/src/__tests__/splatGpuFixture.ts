@@ -6,8 +6,8 @@
 
 import { expect } from "vitest";
 
-import type { SplatGpuMotion, MotionTextureFactory, OwnedTexture } from "@/cesium/splatGpuMotion";
-import type { SplatShaderBuilder } from "@/cesium/splatInternals";
+import type { MotionTextureFactory, OwnedTexture } from "@/cesium/splatGpuMotion";
+import type { SplatShaderBuilder, SplatVertexMotion } from "@/cesium/splatInternals";
 
 import { FakeSplatPrimitive, FakeSplatTexture } from "./splatFixture";
 import { FakeTiledPrimitive } from "./splatTilesFixture";
@@ -43,7 +43,7 @@ export function fakeFactory(): MotionTextureFactory & { made: FakeOwnedTexture[]
 
 /** The tiled primitive, with the patch's accessor. */
 export class FakeHookedPrimitive extends FakeTiledPrimitive {
-  vertexMotion: SplatGpuMotion | undefined = undefined;
+  vertexMotion: SplatVertexMotion | undefined = undefined;
   isDestroyed(): boolean {
     return false;
   }
@@ -51,7 +51,7 @@ export class FakeHookedPrimitive extends FakeTiledPrimitive {
 
 /** The single-tile primitive, with the patch's accessor. */
 export class FakeHookedSinglePrimitive extends FakeSplatPrimitive {
-  vertexMotion: SplatGpuMotion | undefined = undefined;
+  vertexMotion: SplatVertexMotion | undefined = undefined;
   isDestroyed(): boolean {
     return false;
   }
@@ -59,7 +59,7 @@ export class FakeHookedSinglePrimitive extends FakeSplatPrimitive {
 
 /** What the patched `buildGSplatDrawCommand` does with the hook. */
 export function buildDrawCommand(primitive: {
-  vertexMotion: SplatGpuMotion | undefined;
+  vertexMotion: SplatVertexMotion | undefined;
 }): Record<string, () => unknown> {
   const uniformMap: Record<string, () => unknown> = {};
   const lines: string[] = [];

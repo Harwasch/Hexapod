@@ -70,6 +70,21 @@ def test_fixer_is_shown_the_full_render_and_answers_at_its_size() -> None:
     assert filled.accepted  # it changed nothing it was not asked to
 
 
+def test_fixer_sends_its_timestep_and_names_it() -> None:
+    sent: list[dict] = []
+
+    def remote(cls: str, method: str, request: dict) -> dict:
+        sent.append(request)
+        return {"images": request["images"], "model": "fake"}
+
+    rgb = np.full((8, 8, 3), 100, np.uint8)
+    wmc.FixerFiller(remote=remote).fill(rgb, np.zeros((8, 8), bool))
+    filler = wmc.FixerFiller(remote=remote, timestep=50)
+    filler.fill(rgb, np.zeros((8, 8), bool))
+    assert "timestep" not in sent[0] and sent[1]["timestep"] == 50
+    assert filler.name == "nvidia-fixer-t50"
+
+
 def test_video_clips_ask_every_still_once_per_seed_and_resize_back() -> None:
     calls: list[dict] = []
 
@@ -133,6 +148,101 @@ def test_the_client_calls_what_the_app_defines() -> None:
     # segment_models' Modal clients (ModalSam2Masks, ModalSiglipEmbedder) call these.
     assert methods["SegmentMasks"] == {"masks"}
     assert methods["SegmentEmbed"] == {"embed_images", "embed_texts"}
+    # GenerativeFiller calls one of these per model.
+    for cls in wmc.INPAINT_CLASSES.values():
+        assert methods[cls] == {"inpaint"}
     # The rates the client expects are the rates the app sends.
     assert constants["WAN_FPS"] == wmc.VideoClips(model="Wan", remote=None).fps  # type: ignore[arg-type]
     assert constants["COSMOS_FPS"] == wmc.VideoClips(model="Cosmos", remote=None).fps  # type: ignore[arg-type]
+
+
+def test_presmooth_fills_the_gaps_between_samples_and_leaves_empty_space_dark() -> None:
+    rgb = np.zeros((40, 40, 3), np.uint8)
+    rgb[::2, 0:20:2] = (200, 100, 50)  # samples on every other pixel, left half
+    out = wmc.presmooth(rgb, 1.0)
+    assert out[5:35, 5:15, 0].min() > 100  # the gaps took the samples' colour
+    assert out[:, 30:].max() == 0  # nothing drawn where nothing was
+
+
+def test_generative_filler_keeps_only_the_masked_pixels_and_sends_its_context() -> None:
+    sent: list[tuple[str, dict]] = []
+
+    def remote(cls: str, method: str, request: dict) -> dict:
+        assert method == "inpaint"
+        sent.append((cls, request))
+        image = wmc.decode_png(request["image"])
+        drawn = np.clip(image.astype(int) + 40, 0, 255).astype(np.uint8)  # repaints everything
+        return {"image": wmc.encode_png(drawn), "model": "fake", "seconds": 0.1}
+
+    rgb = _gradient(40, 60)
+    mask = np.zeros((40, 60), bool)
+    mask[10:20, 20:35] = True
+    filler = wmc.GenerativeFiller(model="qwen", remote=remote, grow_px=3, context_scale=0)
+    filler.context = {"prompt": "dirt and moss seen from above", "negative": "pumpkin"}
+    (out,) = filler.fill(rgb, mask)
+    (out2,) = filler.fill(rgb, mask)
+    cls, request = sent[0]
+    assert cls == "InpaintQwen" and filler.name == "inpaint-qwen"
+    assert request["prompt"] == "dirt and moss seen from above"
+    assert request["negative"].startswith("pumpkin, ")
+    assert sent[1][1]["seed"] == request["seed"]  # every view drawn from the same noise
+    # The model is shown a grown mask, so it blends across the edge...
+    asked = wmc.decode_png(request["mask"])[..., 0] > 127
+    assert asked[mask].all() and asked.sum() > mask.sum()
+    # ...but only the hole itself is taken from it: the gate sees the rest untouched.
+    assert np.array_equal(out[~mask], rgb[~mask])
+    assert np.all(out[mask].astype(int) >= rgb[mask].astype(int))
+    assert np.array_equal(out, out2)
+    assert filler.received[0]["rawOutsidePsnr"] < 30  # it did repaint the rest: recorded
+
+
+def test_generative_filler_chains_only_when_asked() -> None:
+    assert not wmc.GenerativeFiller(remote=None).chain_views  # type: ignore[arg-type]
+    chained = wmc.GenerativeFiller(model="sdxl", chain=1, remote=None)  # type: ignore[arg-type]
+    assert chained.chain_views and chained.name == "inpaint-sdxl-chain"
+    with pytest.raises(ValueError):
+        wmc.GenerativeFiller(model="dalle", remote=None)  # type: ignore[arg-type]
+    spec = "world_model_client:GenerativeFiller?model=qwen&chain=1"
+    assert tf.make_filler(spec).name == "inpaint-qwen-chain"
+    spec = "world_model_client:GenerativeFiller?model=sdxl&prefill=lama&strength=0.6"
+    assert tf.make_filler(spec).name == "inpaint-sdxl-lama"
+
+
+def test_generative_filler_shows_the_model_a_crop_around_the_hole() -> None:
+    sent: list[tuple[str, dict]] = []
+
+    def remote(cls: str, method: str, request: dict) -> dict:
+        sent.append((cls, request))
+        image = wmc.decode_png(request["image"])
+        half = image[::2, ::2]  # answers at another size: resized back to the crop
+        return {"image": wmc.encode_png(255 - half), "model": "fake"}
+
+    rgb = _gradient(300, 400)
+    mask = np.zeros((300, 400), bool)
+    mask[140:160, 300:330] = True
+    filler = wmc.GenerativeFiller(model="lama", remote=remote, grow_px=0, min_crop_px=64)
+    (out,) = filler.fill(rgb, mask)
+    cls, request = sent[0]
+    assert cls == "InpaintSDXL" and request["prefill"] == "lama" and request["strength"] == 0
+    assert filler.name == "inpaint-lama"
+    crop = wmc.decode_png(request["image"])
+    assert crop.shape[:2] == (75, 75)  # 2.5 times the hole's 30 px, square
+    x0, y0, w, h = filler.received[0]["crop"]
+    assert np.array_equal(crop, rgb[y0 : y0 + h, x0 : x0 + w])
+    assert 300 >= x0 + w - 75 and x0 <= 300 and y0 <= 140
+    assert np.array_equal(out[~mask], rgb[~mask])
+    assert not np.array_equal(out[mask], rgb[mask])
+    # The void (nothing measured) is repainted with the hole, so it is not read as context,
+    # and is discarded with the rest.
+    void = np.zeros_like(mask)
+    void[100:140, 290:340] = True
+    (out_v,) = filler.fill(rgb, mask, void=void)
+    asked = wmc.decode_png(sent[-1][1]["mask"])[..., 0] > 127
+    x0, y0, w, h = filler.received[-1]["crop"]
+    assert asked.sum() == (mask | void)[y0 : y0 + h, x0 : x0 + w].sum()
+    assert np.array_equal(out_v[~mask], rgb[~mask])
+    # Near the frame's edge the window slides inside it.
+    edge = np.zeros_like(mask)
+    edge[0:10, 390:400] = True
+    window = wmc.GenerativeFiller(remote=remote, min_crop_px=64).crop(edge)
+    assert window == (slice(0, 64), slice(336, 400))
