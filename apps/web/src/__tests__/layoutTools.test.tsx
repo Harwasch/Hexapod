@@ -269,7 +269,7 @@ describe("views saved with no site", () => {
 });
 
 describe("closing the site switcher with Escape", () => {
-  it("closes from the view-name field `b` focuses, and gives the keyboard back to the badge", async () => {
+  it("closes from the view-name field `v` focuses, and gives the keyboard back to the badge", async () => {
     const user = userEvent.setup();
     useMission.setState({ project, projectsOpen: true });
     useUi.setState({ switcherFocus: "views" });

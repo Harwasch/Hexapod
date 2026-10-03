@@ -3,12 +3,29 @@ import { AnimatePresence, motion } from "motion/react";
 
 import { GlassPanel, GlassProgress } from "@twin/ui";
 
+import { useScene } from "@/cesium/SceneContext";
 import { useMission } from "@/state/mission";
+import { objectSelected, useSceneSelect } from "@/state/sceneSelect";
 
+import { ObjectCard } from "../sites/ObjectCard";
 import { useMissionActions } from "./useMissionActions";
 
-/** Bottom-left machine / zone card (design: selection cards). */
+const ENTER = {
+  initial: { opacity: 0, y: 10, scale: 0.98 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: 8, scale: 0.98 },
+  transition: { type: "spring", stiffness: 380, damping: 32 },
+} as const;
+
+/**
+ * The one card for what is selected (design: selection cards): a machine, a zone, or an object
+ * of a scan picked in the scene (`ObjectCard`: a click, the brush, the objects panel). One
+ * selection at a time: a new one replaces the old (`state/oneSelection.ts`), so the card
+ * swaps rather than two cards showing.
+ */
 export function SelectionCard() {
+  const scene = useScene();
+  const objectShown = useSceneSelect(objectSelected);
   const project = useMission((s) => s.project);
   const selection = useMission((s) => s.selection);
   const openPlan = useMission((s) => s.openPlan);
@@ -25,18 +42,19 @@ export function SelectionCard() {
   const zone =
     selection?.kind === "zone" ? project?.zones.find((z) => z.id === selection.id) : undefined;
   // Shown in every view: the Plan / Fleet drawer leaves the map, and this card, in sight.
-  const show = Boolean(machine ?? zone);
+  const objectController = objectShown ? (scene?.sceneSelect ?? null) : null;
+  const show = objectController === null && Boolean(machine ?? zone);
 
+  // "wait": the card going out leaves before the next comes in, so two never show at once.
   return (
-    <AnimatePresence>
+    <AnimatePresence mode="wait">
+      {objectController && (
+        <motion.div key="object" {...ENTER}>
+          <ObjectCard controller={objectController} />
+        </motion.div>
+      )}
       {show && (
-        <motion.div
-          key={selection?.id}
-          initial={{ opacity: 0, y: 10, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 8, scale: 0.98 }}
-          transition={{ type: "spring", stiffness: 380, damping: 32 }}
-        >
+        <motion.div key={selection?.id} {...ENTER}>
           <GlassPanel
             className="mc-card"
             role="region"

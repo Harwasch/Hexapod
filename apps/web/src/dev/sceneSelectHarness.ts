@@ -1,7 +1,8 @@
 /**
  * A bare CesiumJS page that draws a segmented splat tileset -- by CesiumJS, PlayCanvas or Spark,
  * as the app does (`instancesHarness.ts`) -- with scene selection on it
- * (cesium/sceneSelect/SceneSelectController.ts) and its chip (SceneSelectChip.tsx): the
+ * (cesium/sceneSelect/SceneSelectController.ts) and the HUD's selection card for an object
+ * (features/sites/ObjectCard.tsx), in the right-hand corner where the app's dock puts it: the
  * driver for e2e/sceneSelect.spec.ts. The spec clicks, types and paints with the real mouse
  * and keyboard; this only points the camera, says where an object is on screen, and reads the
  * stores and the pixels back.
@@ -31,13 +32,14 @@ import { pickSourceOf } from "@/cesium/sceneSelect/pickSources";
 import { SceneSelectController } from "@/cesium/sceneSelect/SceneSelectController";
 import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats } from "@/cesium/splatInternals";
-import { SceneSelectChip } from "@/features/sites/SceneSelectChip";
+import { ObjectCard } from "@/features/sites/ObjectCard";
 import { tileInstanceIds, withDescendants } from "@/lib/instances";
 import { castRay } from "@/lib/splatPick";
 import { useInstances } from "@/state/instances";
-import { selectedId, useSceneSelect } from "@/state/sceneSelect";
-// The glass styles the chip is drawn with in the app (its buttons are @twin/ui's).
+import { objectSelected, selectedId, useSceneSelect } from "@/state/sceneSelect";
+// The styles the card is drawn with in the app: the glass, and the selection card's own.
 import "@twin/ui/styles.css";
+import "@/styles/mission.css";
 
 const BACKGROUND = "#10141a";
 const ASSET = "harness";
@@ -151,9 +153,25 @@ export async function startSceneSelectHarness(options: {
     host.setTarget({ key: ASSET, tileset, assetId: ASSET });
   }
   const controller = new SceneSelectController(widget);
-  const chipRoot = document.createElement("div");
-  document.body.appendChild(chipRoot);
-  createRoot(chipRoot).render(createElement(SceneSelectChip, { controller }));
+  const cardRoot = document.createElement("div");
+  Object.assign(cardRoot.style, {
+    position: "fixed",
+    right: "12px",
+    bottom: "12px",
+    width: "min(22rem, calc(100vw - 24px))",
+    zIndex: "10",
+  });
+  document.body.appendChild(cardRoot);
+  // The app's stylesheet (app.css) sizes every box by its border; the card is laid out so.
+  const sizing = document.createElement("style");
+  sizing.textContent =
+    "[data-card-root] *, [data-card-root] *::before, [data-card-root] *::after { box-sizing: border-box; }";
+  document.head.appendChild(sizing);
+  cardRoot.dataset.cardRoot = "";
+  // Shown as the app's selection card is: while an object is selected or the brush is out.
+  const Card = () =>
+    useSceneSelect(objectSelected) ? createElement(ObjectCard, { controller }) : null;
+  createRoot(cardRoot).render(createElement(Card));
 
   const settle = async (frames: number): Promise<void> => {
     for (let frame = 0; frame < frames; frame += 1) await nextFrame(scene);

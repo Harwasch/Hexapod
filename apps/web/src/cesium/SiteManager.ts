@@ -196,6 +196,12 @@ interface SiteFlight {
   state: "flying" | "landed" | "cancelled";
   /** Where and when it landed, to tell whether anybody has moved the camera since. */
   landed: { at: number; position: Cartesian3; heading: number } | null;
+  /**
+   * The camera controller's flight count once this leg left (`CameraController.flights`): a
+   * higher count later means another flight (an object flown to, a search result) has the
+   * camera, even before it has moved it.
+   */
+  cameraFlights?: number;
 }
 
 /**
@@ -736,6 +742,7 @@ export class SiteManager {
         settle();
       },
     });
+    flight.cameraFlights = this.camera.flights;
   }
 
   /**
@@ -780,6 +787,8 @@ export class SiteManager {
     }
     const landed = flight.landed;
     if (!landed || performance.now() - landed.at > SETTLE_WINDOW_MS) return;
+    // Another flight has the camera, though it may not have moved it yet.
+    if (flight.cameraFlights !== this.camera.flights) return;
     const untouched =
       Cartesian3.distance(landed.position, camera.positionWC) < 0.01 &&
       Math.abs(landed.heading - camera.heading) < 1e-4;

@@ -31,10 +31,10 @@ labelled tools above the bar.
   leaves room beside the name for a status chip. Its menu is where you change where you are:
   every catalog site (fly there; the one you are at is marked), the current site's saved
   views (open, save the current camera, delete; `features/bookmarks/savedViews.ts`), "Add a
-  site", and links to the scan gallery and the data console. `s` opens it on its sites, `b`
+  site", and links to the scan gallery and the data console. `s` opens it on its sites, `v`
   on its saved views; both are command-box actions ("Switch site", "Saved views"). Views saved
   in this browser before any site was visited are listed under "Other saved views". Escape
-  closes it from anywhere inside, the view-name field `b` focuses included, and hands the
+  closes it from anywhere inside, the view-name field `v` focuses included, and hands the
   keyboard back to the badge.
 - **Simulated motion badge** (`features/living/SimulatedBadge`) sits directly under it whenever
   the Living Survey is animating, in the same corner and the same voice the project badge uses
@@ -57,8 +57,22 @@ labelled tools above the bar.
   Above 50 km of altitude a project's markers and chips collapse into one **site pin** with
   the site's name and how many things it stands for; it flies to the site
   (`missions/sitePin.ts`).
-- **Selection card** shows a machine (battery, acres, shift, Pause / Camera) or a zone
-  (progress, Open plan / Reassign).
+- **Selection card** (`SelectionCard`) is the one card for what is selected: a machine
+  (battery, acres, shift, Pause / Camera), a zone (progress, Open plan / Reassign), or an
+  object of a scan picked in the scene (`features/sites/ObjectCard`: a click, the brush or the
+  objects panel; docs/SCENE_OBJECTS.md "Selecting in the scene"). For an object it shows its
+  name and category, the candidates the click offered (◀ 2 of 4 ▶), Hide, Show only, Fly to,
+  the brush (`B`) with what the painted area matched and "Use painted area", and Delete for an
+  object painted in this browser. One selection at a time: a new one replaces the old, so
+  picking an object clears a machine or zone and closes the inspector, and picking a machine
+  or zone clears the object and puts the brush away (`state/oneSelection.ts`); the outgoing
+  card leaves before the next comes in. On a phone it is the bottom sheet, above the strip,
+  the credits' line, the status line and the tab bar. A touch screen has no Shift, Alt, wheel
+  or Tab, so the brush offers New / Add / Remove and a brush size there instead, and the
+  keyboard hints are left out.
+- **Objects** beside the representation switcher (`features/sites/InstanceSearch`) opens the
+  scan's objects panel as a popover over the regions (`data-hud-popover`, like the site
+  switcher and the command box's results).
 - **Plans** and **Fleet** open as a drawer at the right edge, full height (a bottom sheet on a
   phone): plans with detail + "Show on map", and machines with a treatment log. The map
   beside it stays live — it takes clicks, and a Fleet row flies to its machine and opens its
@@ -82,6 +96,17 @@ labelled tools above the bar.
   typed while a plan is being drafted) are logged at once and answered in turn. `?` opens the
   shortcut sheet, printed from the same registry (`app/hotkeys.ts`) the box shows each
   action's key from.
+- **Keys** come from that one registry; `GlobalHotkeys` (`features/shell/AppShell`) binds
+  them. `B` is the brush that paints a scan's objects to select them; saved views are `V`.
+  `[` `]` cycle a selected object's candidates, and Tab / Shift+Tab do too while the map or the
+  object's card has focus (a click on an object gives the map the keyboard); from anywhere
+  else, the page's body included, Tab moves focus as it always does. Escape steps back one
+  thing per press (`features/shell/stepBack.ts`): what floats over the HUD (the shortcut
+  sheet, More, the activity log, the write-token prompt), then the brush, measuring, the site
+  switcher, the selected object, a machine's feeds, the plan composer, the machine or zone,
+  the Plan / Fleet drawer, the inspector and last the tool panel. A dialog, popover or tooltip
+  that closes itself on Escape marks the key as handled, and the app's keys leave a handled
+  key alone (`useHotkey`), so one press never does two things.
 - **Status line** (`StatusLine`, bottom left) is one pill: the fleet in view ("Fleet: 4
   working · 2 need attention", counted as the Fleet window's KPIs count it), the agent's
   line ("Agent: <current task> +N tasks"; a reply holds it for 15 s, so the answer to what
@@ -244,6 +269,9 @@ Fonts with system fallbacks; the light glass theme is opt-in in Settings.
 - `src/__tests__/intents.test.ts` — command parsing.
 - `src/__tests__/commandBox.test.tsx` — result groups (local before places), which row Enter
   runs, the combobox keyboard, the hotkey registry and the shortcut sheet.
+- `src/__tests__/selectionCard.test.tsx` — `B` the brush and `V` saved views, `useHotkey`
+  leaving a handled key alone, the object card (names, cycling, actions, the touch screen's
+  brush), one selection at a time, Escape's steps, Tab only from the map or the card.
 - `src/__tests__/layoutTools.test.tsx` — the four tools, every moved entry still a command,
   Layers' favourites and Compare, the site switcher, the drawer beside a selection, the phone
   tab bar, the site pin, the console's labels and the shared header.
@@ -252,7 +280,10 @@ Fonts with system fallbacks; the light glass theme is opt-in in Settings.
   activity log, globe-scale summary, model load feedback.
 - `e2e/app.spec.ts` "mission control" — tabs, plan → show on map, a fleet row → its card
   beside the drawer, the agent's replies on the status line, the layer favourites, the site
-  pin; "interaction" — the command box, `?`, Settings › Advanced; the site switcher.
-- `e2e/layout.spec.ts` — no surfaces overlap at desktop, laptop and phone sizes, and the
+  pin; "interaction" — the command box, `?`, Settings › Advanced; the site switcher; "a scan
+  object in the selection card" — one press of `B`, then of `V`; one Escape, one step; Tab
+  not trapped on the body; an object replacing a machine and back; the touch screen's brush.
+- `e2e/layout.spec.ts` — no surfaces overlap at desktop, laptop and phone sizes (the
+  selection card for a machine and for an object with the brush out among them), and the
   phone layout (tab bar, More, full-screen search, one-row status, the credits strip with and
   without Google's logo).

@@ -19,3 +19,11 @@ export function useMediaQuery(query: string): boolean {
     () => false,
   );
 }
+
+/**
+ * A touch screen as the main pointer (a phone, a tablet): no hover, a finger. There is no
+ * Shift, Alt or wheel, so what those keys do is offered as buttons there instead
+ * (features/sites/ObjectCard.tsx). A laptop with a touch screen has a fine main pointer and is
+ * not one.
+ */
+export const TOUCH_MEDIA = "(hover: none) and (pointer: coarse)";

@@ -13,11 +13,15 @@ export interface PaintResult {
   painted: number;
 }
 
+/** What a plain stroke of the brush does: start again, add to the painted area, take away. */
+export type StrokeMode = "replace" | "add" | "subtract";
+
 /**
  * Selecting a scan's objects in the scene (cesium/sceneSelect/): what a click offered, which
- * of it is chosen, where the chip stands, the brush, and per scan the objects painted in this
+ * of it is chosen, where it was clicked, the brush, and per scan the objects painted in this
  * browser (lib/customSets.ts). The highlight itself is the objects store's
- * (`state/instances.ts`); the controller keeps it on the chosen candidate.
+ * (`state/instances.ts`); the controller keeps it on the chosen candidate. The HUD's selection
+ * card (features/sites/ObjectCard.tsx) shows all of it.
  */
 interface SceneSelectState {
   /** The scan the candidates are of. */
@@ -28,12 +32,17 @@ interface SceneSelectState {
   chain: number;
   /** The chosen candidate, or -1. */
   index: number;
-  /** Where the chip stands (CSS px in the viewport). */
+  /** Where the click that made the selection was (CSS px in the viewport). */
   anchor: { x: number; y: number } | null;
   /** Clicking picks; painting collects splats under a brush. */
   mode: "pick" | "paint";
   /** Brush radius, CSS px. */
   brush: number;
+  /**
+   * What a stroke does with no modifier held: the card's New / Add / Remove, for a touch
+   * screen, which has no Shift or Alt. Back to "replace" whenever the brush is taken up.
+   */
+  strokeMode: StrokeMode;
   /** What the last stroke matched, while painting. */
   paint: PaintResult | null;
   /** Per asset id, its painted objects, once read from storage. */
@@ -49,6 +58,7 @@ interface SceneSelectState {
   clear: () => void;
   setMode: (mode: "pick" | "paint") => void;
   setBrush: (radius: number) => void;
+  setStrokeMode: (strokeMode: StrokeMode) => void;
   setPaint: (paint: PaintResult | null) => void;
   /** The scan's painted objects, read from storage the first time. */
   customOf: (assetId: string) => CustomSet[];
@@ -69,6 +79,7 @@ export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
   anchor: null,
   mode: "pick",
   brush: 18,
+  strokeMode: "replace",
   paint: null,
   custom: {},
   select: (assetId, candidates, chain, index, anchor) =>
@@ -84,8 +95,9 @@ export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
       s.candidates.length < 2 ? s : { index: cycleIndex(s.index, s.candidates.length, step) },
     ),
   clear: () => set({ candidates: [], chain: 0, index: -1, paint: null, anchor: null }),
-  setMode: (mode) => set({ mode, paint: null }),
+  setMode: (mode) => set({ mode, paint: null, strokeMode: "replace" }),
   setBrush: (radius) => set({ brush: Math.max(MIN_BRUSH, Math.min(MAX_BRUSH, radius)) }),
+  setStrokeMode: (strokeMode) => set({ strokeMode }),
   setPaint: (paint) => set({ paint }),
   customOf: (assetId) => {
     const known = get().custom[assetId];
@@ -114,6 +126,13 @@ export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
 /** The chosen candidate's id, or null. */
 export function selectedId(state: Pick<SceneSelectState, "candidates" | "index">): number | null {
   return state.candidates[state.index] ?? null;
+}
+
+/** Whether the selection card is about a scan object: one is chosen, or the brush is out. */
+export function objectSelected(
+  state: Pick<SceneSelectState, "candidates" | "index" | "mode">,
+): boolean {
+  return state.mode === "paint" || selectedId(state) !== null;
 }
 
 /**

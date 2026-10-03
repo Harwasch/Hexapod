@@ -1,6 +1,14 @@
 import type { Page } from "@playwright/test";
 
-import { addOnScreenCredit, expect, mockApi, test } from "./fixtures";
+import {
+  addOnScreenCredit,
+  expect,
+  mockApi,
+  selectionState,
+  selectObject,
+  stageObjects,
+  test,
+} from "./fixtures";
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
 function entityIds(app: Page): Promise<string[]> {
@@ -301,7 +309,7 @@ test.describe("interaction", () => {
     const input = app.getByRole("combobox", { name: "Search, run an action or ask the agent" });
     await expect(input).toBeFocused();
     const results = app.getByRole("listbox", { name: "Results" });
-    await expect(results.getByRole("option", { name: /Saved views/ })).toContainText("B");
+    await expect(results.getByRole("option", { name: /Saved views/ })).toContainText("V");
     await app.keyboard.type("settings");
     // Enter runs the highlighted row: the Settings action, not the agent.
     await expect(results.getByRole("option", { selected: true })).toContainText("Settings");
@@ -430,8 +438,8 @@ test.describe("the HUD over the map", () => {
     await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
       timeout: 30_000,
     });
-    // `b` opens the switcher at its saved views, ready to name the current one.
-    await app.keyboard.press("b");
+    // `v` opens the switcher at its saved views, ready to name the current one.
+    await app.keyboard.press("v");
     const switcher = app.getByTestId("site-switcher");
     await expect(switcher).toContainText("Saved views · Blackrock Mesa");
     await expect(switcher.getByTestId("saved-view-Overview")).toBeVisible();
@@ -440,7 +448,7 @@ test.describe("the HUD over the map", () => {
     await app.keyboard.press("Escape");
     await expect(switcher).toHaveCount(0);
     await expect(app.getByRole("button", { name: /switch site/ })).toBeFocused();
-    await app.keyboard.press("b");
+    await app.keyboard.press("v");
     await expect(switcher.getByRole("link", { name: /Scan gallery/ })).toHaveAttribute(
       "href",
       "/view.html",
@@ -870,5 +878,159 @@ test.describe("mission control", () => {
     await setHeight(3_000);
     await expect(app.getByTestId("site-pin")).toHaveCount(0, { timeout: 15_000 });
     await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6);
+  });
+});
+
+test.describe("a scan object in the selection card", () => {
+  /** Presses a key with nothing focused, the way a person would from the map. */
+  async function fromMap(app: Page, key: string): Promise<void> {
+    await app.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await app.keyboard.press(key);
+  }
+
+  async function loadDemo(app: Page): Promise<void> {
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+      timeout: 30_000,
+    });
+  }
+
+  test("one press of B is the brush, and one press of V the saved views", async ({ app }) => {
+    await loadDemo(app);
+    await stageObjects(app);
+    const card = app.getByTestId("selection-card");
+    const switcher = app.getByTestId("site-switcher");
+    await fromMap(app, "b");
+    await expect(card).toHaveAttribute("data-kind", "object");
+    await expect(card.getByTestId("object-paint-hint")).toContainText("Shift adds");
+    expect((await selectionState(app)).mode).toBe("paint");
+    await expect(switcher).toHaveCount(0);
+    await fromMap(app, "b");
+    await expect(card).toHaveCount(0);
+    expect((await selectionState(app)).mode).toBe("pick");
+
+    await fromMap(app, "v");
+    await expect(switcher).toContainText("Saved views · Blackrock Mesa");
+    await expect(card).toHaveCount(0);
+    expect((await selectionState(app)).mode).toBe("pick");
+    await app.keyboard.press("Escape");
+    await expect(switcher).toHaveCount(0);
+
+    // Both are in the shortcut sheet, from the one registry.
+    await fromMap(app, "Shift+?");
+    const sheet = app.getByTestId("shortcut-sheet");
+    await expect(sheet.getByRole("region", { name: "Objects" })).toContainText(
+      "Paint to select objects",
+    );
+    await expect(sheet.getByRole("region", { name: "Tools" })).toContainText("Saved views");
+    await app.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+  });
+
+  test("one Escape does one thing: the brush, then the object, then the panel", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await stageObjects(app);
+    await selectObject(app, [3, 2, 1]);
+    const card = app.getByTestId("selection-card");
+    await expect(card).toHaveAttribute("data-kind", "object");
+    await fromMap(app, "l");
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+    await fromMap(app, "b");
+    await expect(card.getByTestId("object-paint-hint")).toBeVisible();
+
+    await fromMap(app, "Escape");
+    await expect(card.getByTestId("object-paint-hint")).toHaveCount(0);
+    expect(await selectionState(app)).toMatchObject({ mode: "pick", selected: 3 });
+    await expect(card).toHaveAttribute("data-kind", "object");
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+
+    await fromMap(app, "Escape");
+    await expect(card).toHaveCount(0);
+    expect((await selectionState(app)).selected).toBeNull();
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+
+    await fromMap(app, "Escape");
+    await expect(app.getByTestId("layers-panel")).toHaveCount(0);
+  });
+
+  test("Tab moves focus from the page's body, and cycles only from the card", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await stageObjects(app);
+    await selectObject(app, [3, 2, 1]);
+    const card = app.getByTestId("selection-card");
+    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    // On the body Tab is the browser's: focus moves on, the candidates stay.
+    await fromMap(app, "Tab");
+    expect(await app.evaluate(() => document.activeElement !== document.body)).toBe(true);
+    await app.keyboard.press("Tab");
+    await app.keyboard.press("Tab");
+    expect((await selectionState(app)).index).toBe(0);
+    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    // With the card itself focused (a click on it), Tab and Shift+Tab cycle.
+    await card.focus();
+    await app.keyboard.press("Tab");
+    await expect(card.getByTestId("object-candidates")).toHaveText("2 of 3");
+    await app.keyboard.press("Shift+Tab");
+    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    // A button in the card keeps Tab's meaning: it moves on to the next one.
+    await card.getByRole("button", { name: "Next candidate" }).focus();
+    await app.keyboard.press("Tab");
+    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    // `]` cycles from anywhere but a field.
+    await fromMap(app, "]");
+    await expect(card.getByTestId("object-candidates")).toHaveText("2 of 3");
+    await expect(card.getByTestId("object-label")).toHaveText("Conifer");
+  });
+
+  test("an object picked replaces the machine's card, and a machine the object's", async ({
+    app,
+  }) => {
+    await loadDemo(app);
+    await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6);
+    await stageObjects(app);
+    const cards = app.getByTestId("selection-card");
+    await app.getByTestId("machine-marker-TR-04").dispatchEvent("click");
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText("TR-04 Kestrel");
+
+    await selectObject(app, [3, 2, 1]);
+    await expect(cards).toHaveAttribute("data-kind", "object");
+    await expect(cards).toHaveCount(1);
+    await expect(cards).not.toContainText("TR-04");
+    expect((await selectionState(app)).mission).toBeNull();
+
+    await app.getByTestId("machine-marker-TR-04").dispatchEvent("click");
+    await expect(cards).toContainText("TR-04 Kestrel");
+    await expect(cards).toHaveCount(1);
+    expect((await selectionState(app)).selected).toBeNull();
+  });
+});
+
+test.describe("a scan object's card on a touch screen", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test("offers New, Add and Remove and a brush size instead of Shift, Alt and the wheel", async ({
+    app,
+  }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await stageObjects(app);
+    await selectObject(app, [3, 2, 1], 1);
+    const card = app.getByTestId("selection-card");
+    await expect(card).toHaveAttribute("data-kind", "object");
+    // No keyboard to name: no Tab or [ ] hint beside the arrows, no key cap on the brush.
+    await expect(card.locator("kbd")).toHaveCount(0);
+    await card.getByRole("button", { name: "Paint to select" }).tap();
+    await expect(card.getByTestId("object-paint-hint")).toContainText("with a finger");
+    await expect(card.getByTestId("object-paint-hint")).not.toContainText("Shift");
+    const modes = card.getByRole("radiogroup", { name: "What a stroke does" });
+    await modes.getByRole("radio", { name: "Remove" }).tap();
+    await expect(modes.getByRole("radio", { name: "Remove" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await card.getByRole("button", { name: "Larger brush" }).tap();
+    await expect(card).toContainText("23 px");
+    const dir = process.env.CARD_SHOTS_DIR;
+    if (dir) await app.screenshot({ path: `${dir}/phone-touch-object-card.png` });
   });
 });
