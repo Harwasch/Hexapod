@@ -7,9 +7,14 @@ name: Living plants
 #   /captures/{id}/splat.ply redirect) and the level-of-detail tiles its run published,
 #   runs the scene step (tools/captures/scene_plants.py) -- ground, classes, plant
 #   instances, one forest rig, its motion sidecar, the per-tile plant binding -- and keeps
-#   all of it as an artifact to review, with the classes and plants in the job summary.
-#   `publish` (only when asked): puts rig.json, motion.json and plants.json beside the
-#   published tileset.json and points the splat asset's renderConfig.rigUrl at rig.json.
+#   all of it as an artifact to review, with the classes and plants in the job summary, and
+#   the request that attaches the rig (`attach.json`: the splat asset, `basedOn` the tileset
+#   whose tiles it bound, `rigUrl: rig.json`). `publish` (only when asked): stages rig.json,
+#   motion.json and plants.json in the private bucket and asks the API to attach them
+#   (tools/captures/attach_sidecars.py), which cuts a new generation and points the asset's
+#   renderConfig.rigUrl at rig.json in the same transaction as its new URL -- no separate
+#   PATCH of the render config, which raced every other writer of it. Nothing here writes
+#   the public bucket or a tileset.json (docs/DEPLOYMENT.md, "Sidecars: one publisher").
 # * **Identity is checked, not assumed.** The scene step replays the packer's plan over the
 #   PLY and refuses unless every published tile holds exactly the gaussians that plan puts in
 #   it; the rig is stamped with the published tiles' own checksums; and the viewer refuses a
@@ -19,8 +24,9 @@ name: Living plants
 #   to publish and `|assume_metric` for a capture whose scale source is unresolved but whose
 #   splat is known to be in metres (a phone app with ARKit, say).
 #
-# Secrets, for `publish` only: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
-# API_WRITE_TOKEN; variables R2_PUBLIC_BUCKET (or R2_BUCKET), R2_PUBLIC_URL, TWIN_API_URL.
+# Variables: TWIN_API_URL. For `publish` only, secrets CLOUDFLARE_ACCOUNT_ID,
+# R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, API_WRITE_TOKEN and the variable R2_BUCKET (the
+# private bucket).
 
 on:
   push:
@@ -32,7 +38,7 @@ on:
         type: string
         required: true
       publish:
-        description: "Publish the rig beside the tiles and point the asset at it"
+        description: "Attach the rig beside the tiles, through the API, and point the asset at it"
         type: boolean
         default: false
       assume_metric:
@@ -130,81 +136,69 @@ jobs:
                     f"| {p['boundSplats']:,} | {p['nodes']} |")
           print(f"\nRig: {scene['rig']['nodes']} joints over {scene['rig']['tiles']} tiles.")
           PY
+      - name: The request that attaches the rig
+        working-directory: tools/captures
+        run: |
+          uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, shutil
+          from pathlib import Path
+
+          import attach_sidecars
+
+          work = Path(os.environ["RUNNER_TEMP"]) / "work"
+          asset = json.loads((work / "capture.json").read_text())["asset"]
+          attach = work / "attach"
+          attach.mkdir()
+          for name in ("rig.json", "motion.json", "plants.json"):
+              shutil.copy(work / "living" / name, attach / name)
+          attach_sidecars.write_manifest(
+              attach, asset_id=asset["id"], based_on=asset["source"]["url"], rig_url="rig.json"
+          )
+          print(f"\nTo attach to asset `{asset['id']}` at {asset['source']['url']}.")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: living-plants
           path: |
             ${{ runner.temp }}/work/living/
+            ${{ runner.temp }}/work/attach/
             ${{ runner.temp }}/work/capture.json
           if-no-files-found: error
 
   publish:
-    name: Publish the rig beside the tiles
+    name: Attach the rig beside the tiles, through the API
     needs: [plan, plants]
     if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # One publish per capture at a time; the API serializes attaches to one asset anyway.
+    concurrency:
+      group: living-plants-${{ needs.plan.outputs.capture }}
+      cancel-in-progress: false
     env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
       OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
       OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
-      OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+      OBJECT_STORAGE_BUCKET: ${{ vars.R2_BUCKET || 'twin-assets' }}
       API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
       TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
     steps:
       - name: The secrets this job needs
         run: |
           missing=""
-          for name in OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY OBJECT_STORAGE_PUBLIC_URL API_WRITE_TOKEN; do
+          for name in CLOUDFLARE_ACCOUNT_ID OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY API_WRITE_TOKEN; do
             if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
             echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
             exit 1
           fi
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
       - uses: actions/download-artifact@v4
         with:
           name: living-plants
-          path: living
-      - uses: astral-sh/setup-uv@v6
-      - name: rig.json, motion.json, plants.json beside tileset.json; the asset's rigUrl
-        run: |
-          uv run --with boto3 python - <<'PY'
-          import json, os, urllib.request
-          import boto3
-          meta = json.load(open("living/capture.json"))
-          asset = meta["asset"]
-          tileset_url = asset["source"]["url"]
-          public = os.environ["OBJECT_STORAGE_PUBLIC_URL"].rstrip("/") + "/"
-          if not tileset_url.startswith(public):
-              raise SystemExit(f"{tileset_url} is not under the public bucket's URL {public}")
-          prefix = tileset_url[len(public):].rsplit("/", 1)[0]
-          s3 = boto3.client(
-              "s3",
-              endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
-              aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
-              aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
-              region_name="auto",
-          )
-          for name in ("rig.json", "motion.json", "plants.json"):
-              s3.upload_file(
-                  f"living/living/{name}" if os.path.exists(f"living/living/{name}") else f"living/{name}",
-                  os.environ["OBJECT_STORAGE_PUBLIC_BUCKET"],
-                  f"{prefix}/{name}",
-                  ExtraArgs={"ContentType": "application/json"},
-              )
-          render = dict(asset.get("renderConfig") or {})
-          render["rigUrl"] = "rig.json"
-          request = urllib.request.Request(
-              f"{os.environ['TWIN_API_URL'].rstrip('/')}/api/v1/assets/{asset['id']}",
-              data=json.dumps({"renderConfig": render}).encode(),
-              method="PATCH",
-              headers={
-                  "Authorization": f"Bearer {os.environ['API_WRITE_TOKEN']}",
-                  "Content-Type": "application/json",
-              },
-          )
-          with urllib.request.urlopen(request, timeout=60) as response:
-              print(response.status, json.loads(response.read())["renderConfig"].get("rigUrl"))
-          PY
+          path: ${{ runner.temp }}/living
+      - name: Stage rig.json, motion.json and plants.json, and attach them with rigUrl
+        run: uv run --no-project --with boto3 python tools/captures/attach_sidecars.py attach "$RUNNER_TEMP/living/attach"

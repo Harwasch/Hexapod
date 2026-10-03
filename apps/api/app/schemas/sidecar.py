@@ -2,9 +2,9 @@
 
 Shaped for `curl` from a GitHub workflow that already holds the R2 credentials: upload
 the files to `stagingPrefix` in the private bucket, laid out exactly as they should sit
-beside `tileset.json`, then POST this with the write token. docs/DEPLOYMENT.md
-("Sidecars: one publisher") has the whole recipe, and docs/SCENE_OBJECTS.md section 8
-what each workflow sends.
+beside `tileset.json`, then POST this with the write token. Every workflow does it through
+tools/captures/attach_sidecars.py; docs/DEPLOYMENT.md ("Sidecars: one publisher") has the
+whole recipe, and docs/SCENE_OBJECTS.md section 8 what each workflow sends.
 """
 
 from __future__ import annotations

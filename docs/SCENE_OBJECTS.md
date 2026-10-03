@@ -917,49 +917,73 @@ it, never to one a republish wrote.
 
 ### What each workflow sends
 
-The rewiring is a later wave; this is what each one will need. Common to all five: the
-publish job gets `API_WRITE_TOKEN` and `TWIN_API_URL` (living-plants.yml has both already)
-and the private bucket's name for staging (`vars.R2_BUCKET || 'twin-assets'`); it uploads to
-`staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` with the R2 pair it already
-has, laid out as beside `tileset.json`, and POSTs `{stagingPrefix, basedOn, files, extras}`
-(curl in docs/DEPLOYMENT.md). It no longer reads, diffs or uploads a `tileset.json`, and no
-longer writes to the public bucket. A 409 means the tiles changed under it: run it again on
-the asset's current tiles.
+All five go through one script, `tools/captures/attach_sidecars.py` (tested against a stub
+bucket and a stub API in `tools/captures/tests/test_attach_sidecars.py`). The `build` job
+finds the asset and its **current** tileset URL (`GET /api/v1/assets/{id}`, `source.url`),
+checks its files against that tileset, and writes the request beside them as `attach.json`
+(`attach_sidecars.py manifest`: `assetId`, `basedOn`, `files`, `extras`, `rigUrl`), so the
+review artifact is exactly what will be sent. The `publish` job (only when asked) runs
+`attach_sidecars.py attach` on that directory: it uploads the files to
+`staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` in the private bucket
+(`vars.R2_BUCKET || 'twin-assets'`) with the R2 pair, laid out as beside `tileset.json`,
+and POSTs `{stagingPrefix, basedOn, files, extras, rigUrl?}` with `API_WRITE_TOKEN` to
+`TWIN_API_URL`. A 409 because another attach holds the asset is retried; a 409 because the
+tiles changed under the run ends it (exit status 3): run it again on the asset's current
+tiles. No workflow reads, diffs or uploads a `tileset.json` any more, and none writes to the
+public bucket. docs/DEPLOYMENT.md ("Sidecars: one publisher") lists the secrets and
+variables.
 
-- **publish-instances.yml.** Needs each scan's **asset id**, not only its URL: once a scan
-  has been attached to, its URL is a generation, and the legacy URL in
-  `infra/modal/segment.py` `SCANS` no longer names what the site shows (it still serves the
-  same tiles, which is why it is accepted as `basedOn`). So `SCANS` becomes, or gains, a map
-  to asset ids, and the build reads the current URL from `GET /api/v1/assets/{id}`
-  (`source.url`). `build` keeps the binding check (every tile's checksum a key, runs covering
-  its gaussians) against those tiles and drops `link_instances` and the tileset diff;
-  `publish` stages `instances.json` and `instances.emb` and sends
-  `files: ["instances.json", "instances.emb"]`,
+- **publish-instances.yml.** A scan is named as in `infra/modal/segment.py` `SCANS`, whose
+  URLs are the legacy prefixes segment.yml read. The asset comes from the repository
+  variable `SCAN_ASSET_IDS` (`{"camp": "<asset id>", ...}`), or, where that has no entry,
+  from the one gaussian-splat asset whose tileset is the scan's run (`runs/<job>/…`, at the
+  legacy prefix or in a generation cut from it); anything else is a refusal naming the
+  variable. `build` fetches the asset's current tileset and every tile and keeps the binding
+  check (every tile's checksum a key, runs covering its gaussians) against **those** tiles;
+  `link_instances` and the tileset diff are gone. It sends
+  `files: ["instances.emb", "instances.json"]`,
   `extras: {"instances": {"uri": "instances.json", "count": <instances>}}`, `basedOn` the URL
   it bound against.
-- **publish-fill.yml.** The same asset-id lookup for `scan`. `build` keeps the layer checks
-  and the frame check (the layer's root transform against the **current** tileset's) and
-  drops the tileset rewrite; `publish` stages `inferred/<name>/…` (the layer's
-  `tileset.json`, tiles and sidecars) and sends only its own entry,
-  `extras: {"inferredLayers": [{"uri": "inferred/<name>/tileset.json", "evidence": {…}}]}`:
-  the API merges the list by uri, so another fill's entry stays.
-- **collision-backfill.yml.** It already has the asset (`capture.json`: `asset.id`,
-  `asset.source.url`). `build` keeps `splat_tiles.py collision` and its identity check and
-  keeps only `root.extras.collision` from the tileset it writes; `publish` stages
-  `collision.bin` and sends `files: ["collision.bin"]`, `extras: {"collision": {…}}`,
-  `basedOn: asset.source.url`. It gains `API_WRITE_TOKEN` and `TWIN_API_URL`.
-- **streamed-lod-backfill.yml.** Its input becomes an asset (or capture) id instead of a
-  tileset URL, the URL read from the API; `publish` stages `sog/lod-meta.json` and the
-  chunks under `sog/` and sends them in `files`, with `extras: {"nativeLod":
-"sog/lod-meta.json"}` so the viewer need not probe, and `basedOn` the tileset whose leaves
-  it merged. A staged `sog/` replaces the old one whole. It gains `API_WRITE_TOKEN` and
-  `TWIN_API_URL`.
-- **living-plants.yml.** `publish` stages `rig.json`, `motion.json` and `plants.json` and
-  sends `files` with those three, `rigUrl: "rig.json"` and `basedOn: asset.source.url`, in
-  place of the in-place upload **and** the separate `PATCH /assets/{id}` of
+- **publish-fill.yml.** The same asset lookup for `scan`. `build` keeps the layer checks and
+  the frame check, now against the **current** tileset's root transform, and stages
+  `inferred/<name>/…` (the layer's `tileset.json`, tiles and sidecars), sending only its own
+  entry, `extras: {"inferredLayers": [{"uri": "inferred/<name>/tileset.json", "evidence":
+{…}}]}`: the API merges the list by uri, so another fill's entry stays, and a staged
+  `inferred/<name>/` replaces that layer's old files whole.
+- **collision-backfill.yml.** The asset is the capture's splat asset (`fetch_capture.py`'s
+  `capture.json`). `build` keeps `splat_tiles.py collision`, its identity check, and the
+  check that the command changed the tileset by `extras.collision` alone; it sends
+  `files: ["collision.bin"]`, `extras: {"collision": {…}}` as the command declared it, and
+  `basedOn` the asset's URL the tiles were fetched from.
+- **streamed-lod-backfill.yml.** Its input is the asset id (`[streamedlod|asset=<uuid>]`),
+  the tileset read from the API. It stages `sog/lod-meta.json` and every chunk under `sog/`
+  and sends them in `files`, with `extras: {"nativeLod": "sog/lod-meta.json"}` so the viewer
+  need not probe, and `basedOn` the tileset whose leaves it merged. A staged `sog/` replaces
+  the old one whole.
+- **living-plants.yml.** It stages `rig.json`, `motion.json` and `plants.json` and sends
+  them in `files` with `rigUrl: "rig.json"` and `basedOn` the asset's URL the tiles were
+  fetched from, in place of the in-place upload **and** the separate `PATCH /assets/{id}` of
   `renderConfig.rigUrl` (which replaced the whole render config, racing every other writer
   of it).
 
-`segment.yml`, `fill.yml` and the Modal apps read tiles by URL and are unchanged, except
-that they too should take the current URL from the API rather than `SCANS` once a scan has
-moved.
+Each publish job is in a concurrency group of its workflow and target (streamed-lod-backfill,
+which publishes from its build job, puts that whole job in one), so two runs on one scan queue
+rather than interleave; the API's row lock is what makes interleaving safe in any case.
+
+**Split objects are not published, and stay out of this.** `split_objects.py` (C4) rewrites
+the scan's own tiles without the chosen objects and writes the objects as tilesets of their
+own under `objects/` and `fills/`, binding them in `instances.json`. fill.yml's `split:<scan>`
+jobs run it on Modal and keep the result (`split.tar.gz`) in the run's `fill` artifact for
+review; no workflow publishes it, and the attach refuses `objects/`, `fills/`,
+`extras.objects` and `extras.split` (`attachable=False`). Publishing one is a different
+operation from an attach — a **replace-tiles** publish: a new generation whose tiles are the
+split's, with `instances.json` re-bound to those tiles' checksums, and everything else bound
+to the old tiles (collision, view cones, `sog/`, a rig, skins) dropped and flagged as a
+republish would. That belongs beside the worker's publish (`carry.py` already decides what
+survives new tiles), and is left until something needs a split on the live site.
+
+`segment.yml`, `fill.yml` and the Modal apps read tiles by URL and are unchanged: they read
+`SCANS`' legacy URLs, which keep serving the same tiles after an attach (an attach copies
+tiles into a new generation and never deletes the legacy prefix). Once a scan is republished
+with new tiles, a segmentation of the legacy URL no longer binds the asset's tiles, and
+publish-instances refuses it at the binding check.
