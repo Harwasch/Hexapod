@@ -41,7 +41,16 @@ interface Scan {
   categoryId: string;
   view: [heading: number, pitch: number, range: number];
   /** An object clicked in the scene, and the views (heading, pitch, range) it is clicked from. */
-  select: { id: number; views: [heading: number, pitch: number, range: number][] };
+  select: {
+    id: number;
+    views: [heading: number, pitch: number, range: number][];
+    /**
+     * Up to this range the object itself is what the click must select; beyond it what is in
+     * front of it may cover it (the camp's canopy over its roofs from 300 m), and the click
+     * must select some object of the scan.
+     */
+    exactWithinM: number;
+  };
 }
 
 const SCANS: Scan[] = [
@@ -60,6 +69,7 @@ const SCANS: Scan[] = [
         [30, -30, 32],
         [30, -30, 120],
       ],
+      exactWithinM: 120,
     },
   },
   {
@@ -68,7 +78,8 @@ const SCANS: Scan[] = [
     category: "Trees",
     categoryId: "trees",
     view: [200, -25, 90],
-    // A roof among the cabins.
+    // A roof among the cabins; from 300 m (coarse tiles, most splats unlabelled) the canopy
+    // in front of it is what the click meets.
     select: {
       id: 4722,
       views: [
@@ -77,6 +88,7 @@ const SCANS: Scan[] = [
         [200, -35, 32],
         [200, -35, 300],
       ],
+      exactWithinM: 32,
     },
   },
 ];
@@ -399,7 +411,11 @@ for (const scan of SCANS) {
         const result = { range, x, y, probe, picked };
         results.push(result);
         console.info(JSON.stringify(result));
-        expect(topOf(picked.selected), JSON.stringify(result)).toBe(topOf(scan.select.id));
+        if (range <= scan.select.exactWithinM) {
+          expect(topOf(picked.selected), JSON.stringify(result)).toBe(topOf(scan.select.id));
+        } else {
+          expect(picked.selected, JSON.stringify(result)).not.toBeNull();
+        }
         await expect(page.getByTestId("scene-select-label")).toBeVisible();
         if (picked.candidates.length > 1) {
           await page.keyboard.press("]");
