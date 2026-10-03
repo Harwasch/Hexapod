@@ -31,10 +31,10 @@ labelled tools above the bar.
   leaves room beside the name for a status chip. Its menu is where you change where you are:
   every catalog site (fly there; the one you are at is marked), the current site's saved
   views (open, save the current camera, delete; `features/bookmarks/savedViews.ts`), "Add a
-  site", and links to the scan gallery and the data console. `s` opens it on its sites, `b`
+  site", and links to the scan gallery and the data console. `s` opens it on its sites, `v`
   on its saved views; both are command-box actions ("Switch site", "Saved views"). Views saved
   in this browser before any site was visited are listed under "Other saved views". Escape
-  closes it from anywhere inside, the view-name field `b` focuses included, and hands the
+  closes it from anywhere inside, the view-name field `v` focuses included, and hands the
   keyboard back to the badge.
 - **Simulated motion badge** (`features/living/SimulatedBadge`) sits directly under it whenever
   the Living Survey is animating, in the same corner and the same voice the project badge uses

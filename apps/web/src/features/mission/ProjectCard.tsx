@@ -33,7 +33,7 @@ import { siteDisplayName, useSiteName } from "../sites/siteNames";
  * happening there. Its menu is the one place to change where you are: every catalog site to
  * fly to, the current site's saved views (open, save the current camera, delete), "Add a
  * site", and the way to the scan gallery and the data console. It replaced the Sites and
- * Bookmarks panels; both are still command-box actions (`s`, `b`).
+ * Bookmarks panels; both are still command-box actions (`s`, `v`).
  */
 export function ProjectCard() {
   const scene = useScene();
@@ -114,7 +114,7 @@ export function ProjectCard() {
               onKeyDown={(event) => {
                 if (event.key !== "Escape") return;
                 // Escape closes it from anywhere inside, the "Name this view" field included
-                // (`b` opens the switcher with the keyboard there), and hands the keyboard back
+                // (`v` opens the switcher with the keyboard there), and hands the keyboard back
                 // to the badge. The app's own Escape ignores keys typed into a field, and the
                 // switcher has no close button: from that field, Escape did nothing at all.
                 event.preventDefault();

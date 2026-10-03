@@ -31,7 +31,7 @@ interface UiState {
   settingsOpen: boolean;
   /** The phone's "More" sheet above the tab bar: Layers, Measure, Add, Settings. */
   moreOpen: boolean;
-  /** Which part of the site switcher takes focus when it opens (`s` sites, `b` saved views). */
+  /** Which part of the site switcher takes focus when it opens (`s` sites, `v` saved views). */
   switcherFocus: SwitcherFocus;
   aboutLayerId: string | null;
   measureMode: MeasureMode | null;

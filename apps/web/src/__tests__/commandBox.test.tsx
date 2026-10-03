@@ -183,6 +183,10 @@ describe("the hotkey registry", () => {
     expect(hotkeyKeys(HOTKEYS.escape)).toEqual(["Esc"]);
     expect(hotkeyKeys(HOTKEYS.layers)).toEqual(["L"]);
     expect(hotkeyKeys(HOTKEYS.zoom)).toEqual(["+", "−"]);
+    // The brush keeps B; saved views moved to V.
+    expect(hotkeyKeys(HOTKEYS.brush)).toEqual(["B"]);
+    expect(hotkeyKeys(HOTKEYS.bookmarks)).toEqual(["V"]);
+    expect(hotkeyKeys(HOTKEYS.cycleObject)).toEqual(["[", "]"]);
   });
 
   it("binds no key twice, and lists developer keys only when they exist", () => {
@@ -196,6 +200,7 @@ describe("the hotkey registry", () => {
       "General",
       "Views",
       "Tools",
+      "Objects",
       "Camera",
       "Explore mode",
     ]);

@@ -184,7 +184,7 @@ const TOOLS = [
   ["u", "add-panel"],
   ["m", "measure-panel"],
   ["s", "site-switcher"],
-  ["b", "site-switcher"],
+  ["v", "site-switcher"],
 ] as const;
 
 for (const viewport of VIEWPORTS) {
@@ -204,7 +204,7 @@ for (const viewport of VIEWPORTS) {
         await expect(page.getByTestId(panel)).toBeVisible();
         await expectNoOverlap(page, `${key}: ${panel}`);
       }
-      await shortcut(page, "b");
+      await shortcut(page, "v");
       await expect(page.getByTestId("site-switcher")).toHaveCount(0);
       await shortcut(page, "m");
       await expect(page.getByTestId("measure-panel")).toHaveCount(0);

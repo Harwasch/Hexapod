@@ -7,9 +7,11 @@ import { MOD_LABEL } from "@/lib/hotkeys";
  * shows each action's key from it, and the shortcut sheet (`?`) prints all of it. Keys the
  * scene handles itself — camera navigation (`cesium/KeyboardNavigator`) and explore mode
  * (`cesium/ExploreController`) — are listed with `scene: true`: shown, never bound here, so
- * the sheet is the whole truth without a second place to keep in step.
+ * the sheet is the whole truth without a second place to keep in step. So are the keys a
+ * selected scan object answers to (`cesium/sceneSelect/SceneSelectController`), the brush
+ * among them.
  */
-export type HotkeyGroup = "General" | "Views" | "Tools" | "Camera" | "Explore mode";
+export type HotkeyGroup = "General" | "Views" | "Tools" | "Objects" | "Camera" | "Explore mode";
 
 export interface Hotkey {
   /** As `useHotkey` takes it: "mod+k", "shift+?", "l". Empty for scene keys. */
@@ -28,6 +30,7 @@ export const HOTKEY_GROUPS: readonly HotkeyGroup[] = [
   "General",
   "Views",
   "Tools",
+  "Objects",
   "Camera",
   "Explore mode",
 ];
@@ -48,7 +51,35 @@ export const HOTKEYS = {
   captures: { combo: "u", label: "Add: upload a capture", group: "Tools" },
   compare: { combo: "c", label: "Compare layers", group: "Tools" },
   sites: { combo: "s", label: "Switch site", group: "Tools" },
-  bookmarks: { combo: "b", label: "Saved views", group: "Tools" },
+  bookmarks: { combo: "v", label: "Saved views", group: "Tools" },
+  brush: {
+    combo: "",
+    keys: ["B"],
+    label: "Paint to select objects (brush)",
+    group: "Objects",
+    scene: true,
+  },
+  cycleObject: {
+    combo: "",
+    keys: ["[", "]"],
+    label: "Previous / next candidate of the selected object",
+    group: "Objects",
+    scene: true,
+  },
+  paintModifiers: {
+    combo: "",
+    keys: ["Shift", "Alt"],
+    label: "While painting: add to / take away from the painted area",
+    group: "Objects",
+    scene: true,
+  },
+  altWheel: {
+    combo: "",
+    keys: ["Alt", "Wheel"],
+    label: "Size the brush, or cycle candidates",
+    group: "Objects",
+    scene: true,
+  },
   resetNorth: { combo: "n", label: "Reset north", group: "Camera" },
   topDown: { combo: "t", label: "Top-down view", group: "Camera" },
   home: { combo: "h", label: "Earth view", group: "Camera" },

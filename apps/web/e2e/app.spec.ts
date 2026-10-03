@@ -301,7 +301,7 @@ test.describe("interaction", () => {
     const input = app.getByRole("combobox", { name: "Search, run an action or ask the agent" });
     await expect(input).toBeFocused();
     const results = app.getByRole("listbox", { name: "Results" });
-    await expect(results.getByRole("option", { name: /Saved views/ })).toContainText("B");
+    await expect(results.getByRole("option", { name: /Saved views/ })).toContainText("V");
     await app.keyboard.type("settings");
     // Enter runs the highlighted row: the Settings action, not the agent.
     await expect(results.getByRole("option", { selected: true })).toContainText("Settings");
@@ -430,8 +430,8 @@ test.describe("the HUD over the map", () => {
     await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
       timeout: 30_000,
     });
-    // `b` opens the switcher at its saved views, ready to name the current one.
-    await app.keyboard.press("b");
+    // `v` opens the switcher at its saved views, ready to name the current one.
+    await app.keyboard.press("v");
     const switcher = app.getByTestId("site-switcher");
     await expect(switcher).toContainText("Saved views · Blackrock Mesa");
     await expect(switcher.getByTestId("saved-view-Overview")).toBeVisible();
@@ -440,7 +440,7 @@ test.describe("the HUD over the map", () => {
     await app.keyboard.press("Escape");
     await expect(switcher).toHaveCount(0);
     await expect(app.getByRole("button", { name: /switch site/ })).toBeFocused();
-    await app.keyboard.press("b");
+    await app.keyboard.press("v");
     await expect(switcher.getByRole("link", { name: /Scan gallery/ })).toHaveAttribute(
       "href",
       "/view.html",
