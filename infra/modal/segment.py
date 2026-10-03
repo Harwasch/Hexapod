@@ -253,7 +253,7 @@ def segment_scan(
             text=True,
         )
         log += "\n--- report\n" + report.stdout[-20000:] + report.stderr[-20000:]
-        for k in ("compare.png", "report.json", "variants.json", "debug/views.jpg", "debug/crops.jpg"):
+        for k in ("compare.png", "report.json", "variants.json", "variants.npz", "debug/views.jpg", "debug/crops.jpg"):
             if (Path(work) / k).exists():
                 files[k.rsplit("/", 1)[-1]] = (Path(work) / k).read_bytes()
         if keep_masks and cache.exists():

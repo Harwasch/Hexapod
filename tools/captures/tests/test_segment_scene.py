@@ -532,7 +532,10 @@ def test_described_instances_carry_a_category_and_portraits_are_embedded(run: di
     assert {"context", "alone", "portrait"} <= set(by_kind)
     mixed = ss._normalise(sum(by_kind[k] for k in ss.DESCRIBE_KINDS))
     np.testing.assert_allclose(mixed, np.stack([i.embedding for i in again]), atol=1e-9)
-    variants = ss.describe_variants(ss.FakeEmbedder(), VOCABULARY, by_kind)
+    distributions: dict[str, np.ndarray] = {}
+    variants = ss.describe_variants(ss.FakeEmbedder(), VOCABULARY, by_kind, distributions)
+    rows = distributions["context/rows"]
+    assert distributions["context/head"].shape == (rows.size, len(distributions["categories"]))
     assert "context+alone+portrait@0.5" in variants
     assert variants["context+alone+portrait@0.5"]["category"] == [i.category for i in again]
     portraits = [i for i in seen if i.shape == (ss.PORTRAIT_PX, ss.PORTRAIT_PX, 3)]

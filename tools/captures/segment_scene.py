@@ -1561,8 +1561,15 @@ def behaviour(properties: dict[str, float]) -> str:
 #: The crops an instance can be described by: from the views' images in context and alone,
 #: the same from the CPU's point samples (when the views were drawn by another renderer),
 #: and portraits of its own splats.
-CROP_KINDS = ("context", "alone", "context-samples", "alone-samples", "portrait")
+CROP_KINDS = (
+    "context", "alone", "wide", "context-samples", "alone-samples", "wide-samples", "portrait",
+)  # fmt: skip
 DESCRIBE_KINDS = ("context", "alone", "portrait")
+#: The wide crop: this many times the instance's box, at least `WIDE_MIN_PX` a side, what is
+#: not the instance dimmed to `WIDE_DIM`.
+WIDE_FACTOR = 3.0
+WIDE_MIN_PX = 224
+WIDE_DIM = 0.7
 #: Crops embedded at a time (bounds what `describe` holds).
 EMBED_CHUNK = 512
 #: A view is used for an instance's crops when it shows at least this share of the pixels
@@ -1681,10 +1688,12 @@ def _save_gallery(path: Path, rows: list[list[np.ndarray]], side: int = 128) -> 
 def _crops(
     view: View, image: np.ndarray, box: np.ndarray, cell_id: np.ndarray, ids: np.ndarray
 ) -> list[np.ndarray]:
-    """Two square crops of an instance in a view: in context (its box padded `CROP_PAD`,
-    what is not the instance dimmed to `CONTEXT_DIM`) and alone (its box, what is not the
-    instance grey). The instance's pixels are those whose cell carries one of `ids` (it and
-    the instances below it), closed over the renderer's speckle (a 3x3 closing)."""
+    """Three square crops of an instance in a view: in context (its box padded `CROP_PAD`,
+    what is not the instance dimmed to `CONTEXT_DIM`), alone (its box, what is not the
+    instance grey) and wide (`WIDE_FACTOR` times its box, at least `WIDE_MIN_PX`, the rest
+    dimmed to `WIDE_DIM`: a part with the whole it is part of). The instance's pixels are
+    those whose cell carries one of `ids` (it and the instances below it), closed over the
+    renderer's speckle (a 3x3 closing)."""
     import cv2
 
     h, w = image.shape[:2]
@@ -1692,10 +1701,13 @@ def _crops(
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
     pad_x = max(CROP_PAD * bw, (MIN_CROP_PX - bw) / 2, 0)
     pad_y = max(CROP_PAD * bh, (MIN_CROP_PX - bh) / 2, 0)
+    half = max(WIDE_FACTOR * max(bw, bh), WIDE_MIN_PX) / 2
+    cx, cy = (x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2
     out = []
     for (xa, ya, xb, yb), outside in (
         (_square(x0 - pad_x, y0 - pad_y, x1 + 1 + pad_x, y1 + 1 + pad_y, w, h), "dim"),
         (_square(x0 - 1, y0 - 1, x1 + 2, y1 + 2, w, h), "grey"),
+        (_square(cx - half, cy - half, cx + half, cy + half, w, h), "wide"),
     ):
         owner = view.cell[ya:yb, xa:xb]
         pid = np.where(owner >= 0, cell_id[np.maximum(owner, 0)], 0)
@@ -1704,6 +1716,8 @@ def _crops(
         crop = image[ya:yb, xa:xb].astype(np.float64)
         if outside == "dim":
             crop = np.where(inside[..., None], crop, CONTEXT_DIM * crop)
+        elif outside == "wide":
+            crop = np.where(inside[..., None], crop, WIDE_DIM * crop)
         else:
             crop = np.where(inside[..., None], crop, 255.0 * BACKGROUND_GREY)
         if not crop.size:
@@ -1879,15 +1893,20 @@ def describe(
             gallery.append([])
         for v in _crop_views(area[:, k], boxes[:, k], views):
             view = views[v]
-            context, alone = _crops(view, view.rgb, boxes[v, k], lifted.cell_id, subtree_ids[k])
+            context, alone, wide = _crops(
+                view, view.rgb, boxes[v, k], lifted.cell_id, subtree_ids[k]
+            )
             add("context", int(k), context)
             add("alone", int(k), alone)
-            if view.samples is not None and collect & {"context-samples", "alone-samples"}:
-                context, alone = _crops(
+            add("wide", int(k), wide)
+            sampled = {"context-samples", "alone-samples", "wide-samples"}
+            if view.samples is not None and collect & sampled:
+                context, alone, wide = _crops(
                     view, view.samples, boxes[v, k], lifted.cell_id, subtree_ids[k]
                 )
                 add("context-samples", int(k), context)
                 add("alone-samples", int(k), alone)
+                add("wide-samples", int(k), wide)
             if portrait is not None and "portrait" in collect:
                 shot = portrait(subtree_ids[k], view.camera, lo[k], hi[k], centroid[k])
                 add("portrait", int(k), shot)
@@ -1977,9 +1996,31 @@ def _categories(
     label's probability added to its category and the sum normalised (the head alone when
     none of them has a category). None for what is not described."""
     out: list[str | None] = [None] * len(embedding)
-    rows = np.flatnonzero(described)
+    ids, rows, head, tags, total = _category_parts(
+        embedder, embedding, described, tag_scores, words, labels
+    )
     if rows.size == 0:
         return out
+    mixed = np.where(total > 0, head_weight * head + (1 - head_weight) * tags, head)
+    best = np.argmax(mixed, axis=1)
+    for r, k in enumerate(rows):
+        out[k] = ids[int(best[r])]
+    return out
+
+
+def _category_parts(
+    embedder: Embedder,
+    embedding: np.ndarray,
+    described: np.ndarray,
+    tag_scores: np.ndarray,
+    words: Sequence[str],
+    labels: dict[str, str] | None,
+) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """`_categories`' inputs: the category ids, the described rows, the head's and the
+    tags' distributions over the categories (rows), and the tags' total per row."""
+    rows = np.flatnonzero(described)
+    if rows.size == 0:
+        return [], rows, np.zeros((0, 0)), np.zeros((0, 0)), np.zeros((0, 1))
     labels = scene_categories.load() if labels is None else labels
     ids, head = category_scores(embedder, embedding[rows])
     column = {c: j for j, c in enumerate(ids)}
@@ -1993,11 +2034,16 @@ def _categories(
                     votes[r, column[c]] += tag_scores[rows[r], t]
     total = votes.sum(axis=1, keepdims=True)
     tags = np.divide(votes, total, out=np.zeros_like(votes), where=total > 0)
-    mixed = np.where(total > 0, head_weight * head + (1 - head_weight) * tags, head)
-    best = np.argmax(mixed, axis=1)
-    for r, k in enumerate(rows):
-        out[k] = ids[int(best[r])]
-    return out
+    return ids, rows, head, tags, total
+
+
+def _tag_scores(embedder: Embedder, embedding: np.ndarray, words: Sequence[str]) -> np.ndarray:
+    """(n, len(words)) tag probabilities, as `describe` scores them."""
+    own = getattr(embedder, "score_tags", None)
+    if own is not None:
+        return np.asarray(own(embedding, list(words)), np.float64)
+    text = np.asarray(embedder.embed_texts(list(words)), np.float64)
+    return _softmax(LOGIT_SCALE * embedding @ text.T)
 
 
 #: `describe_variants`: crop kinds compared, and the category head's weights.
@@ -2005,6 +2051,8 @@ VARIANT_KINDS = (
     ("context",), ("alone",), ("portrait",), ("context-samples",), ("alone-samples",),
     ("context", "alone"), ("context", "portrait"), ("context", "alone", "portrait"),
     ("context-samples", "alone-samples"), ("context", "context-samples"),
+    ("wide",), ("wide-samples",), ("context", "wide"), ("wide", "wide-samples"),
+    ("context", "context-samples", "wide", "wide-samples"),
 )  # fmt: skip
 VARIANT_HEAD_WEIGHTS = (0.0, 0.5, 1.0)
 
@@ -2013,24 +2061,33 @@ def describe_variants(
     embedder: Embedder,
     vocabulary: Sequence[str],
     by_kind: dict[str, np.ndarray],
+    distributions: dict[str, np.ndarray] | None = None,
 ) -> dict[str, dict[str, list]]:
     """Per variant (`VARIANT_KINDS` x `VARIANT_HEAD_WEIGHTS`, named `kinds@weight`), each
     instance's category and best label as `describe` would give them from those crops: to
-    measure which crops describe a scan best, on the same instances."""
+    measure which crops describe a scan best, on the same instances. `distributions`, when
+    given, gets per single crop kind its described rows' head and tag distributions over
+    the categories (`<kind>/head`, `<kind>/tags`, `<kind>/rows`) and `categories`."""
     words = list(vocabulary)
     labels = scene_categories.load()
     out: dict[str, dict[str, list]] = {}
+    if distributions is not None:
+        for kind, embedding in by_kind.items():
+            has = np.any(embedding != 0, axis=1)
+            scores = _tag_scores(embedder, embedding, words)
+            ids, rows, head, tags, _ = _category_parts(
+                embedder, embedding, has, scores, words, labels
+            )
+            distributions["categories"] = np.asarray(ids)
+            distributions[f"{kind}/rows"] = rows.astype(np.int32)
+            distributions[f"{kind}/head"] = head.astype(np.float16)
+            distributions[f"{kind}/tags"] = tags.astype(np.float16)
     for kinds in VARIANT_KINDS:
         if not all(k in by_kind for k in kinds):
             continue
         embedding = _normalise(sum(by_kind[k] for k in kinds))
         has = np.any(embedding != 0, axis=1)
-        own = getattr(embedder, "score_tags", None)
-        if own is not None:
-            scores = np.asarray(own(embedding, words), np.float64)
-        else:
-            text = np.asarray(embedder.embed_texts(words), np.float64)
-            scores = _softmax(LOGIT_SCALE * embedding @ text.T)
+        scores = _tag_scores(embedder, embedding, words)
         top = [words[int(t)] if h else None for t, h in zip(scores.argmax(axis=1), has)]
         for weight in VARIANT_HEAD_WEIGHTS:
             category = _categories(embedder, embedding, has, scores, words, labels, weight)
@@ -2650,10 +2707,10 @@ def main() -> None:
         debug_dir=args.debug_dir,
     )
     if args.variants:
-        args.variants.write_text(
-            json.dumps(describe_variants(embedder, vocabulary, by_kind), separators=(",", ":")),
-            encoding="utf-8",
-        )
+        distributions: dict[str, np.ndarray] = {}
+        variants = describe_variants(embedder, vocabulary, by_kind, distributions)
+        args.variants.write_text(json.dumps(variants, separators=(",", ":")), encoding="utf-8")
+        np.savez_compressed(args.variants.with_suffix(".npz"), **distributions)
     if from_tiles:
         tiles = tile_binding_by_position(args.tiles, splats.positions, result.splat_id)
     else:
