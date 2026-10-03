@@ -242,6 +242,15 @@ live one is never written again -- so `immutable` holds there and only there -- 
 republish that fails leaves the site, its thumbnail and its overlay as they were. A run's
 own keys are uploaded with the short lifetime for the same reason.
 
+A republish also reads the live generation first (`carry.py`) and carries into the new one
+each sidecar attached beside the old tiles that still holds for the new splats -- an
+inferred fill always; objects, `sog/`, a rig only onto the very same tiles -- and `register`
+flags the asset for each kind it drops (`assets.sidecar_flags`, "Objects need
+re-segmenting"). `register` takes the asset's row lock, the one the API's sidecar attach
+takes, and repoints only if the asset still points where the publish carried from;
+otherwise the run publishes again on top of the attach (docs/DEPLOYMENT.md, "Sidecars: one
+publisher").
+
 Every run that ends — finished, failed or cancelled — drops its `inputs/` (a copy of what
 is in the bucket, which a retry fetches again) and every stage's `work/` (scratch);
 `out/`, `step.json` and `checkpoint/` stay. It used to be finished runs only, and a failed
