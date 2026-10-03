@@ -47,9 +47,11 @@ jobs:
           fi
           printf '%s\n' "$changed"
           # What the web app is built and served from, the e2e fixtures it loads off disk
-          # (data/tiles), and this file. A backend-only diff (apps/api, tools/, infra/,
-          # docs/) matches none of it. `contracts` is under packages/.
-          web='^(apps/web/|packages/|data/tiles/|patches/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$|\.github/workflows/ci\.yml$)'
+          # (data/tiles), the pipeline data it bundles (tools/captures/data/categories.json,
+          # imported by apps/web/src/lib/categories.ts), and this file. A backend-only diff
+          # (apps/api, the rest of tools/, infra/, docs/) matches none of it. `contracts` is
+          # under packages/.
+          web='^(apps/web/|packages/|data/tiles/|tools/captures/data/|patches/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$|\.github/workflows/ci\.yml$)'
           if printf '%s\n' "$changed" | grep -qE "$web"; then
             echo "web=true" >> "$GITHUB_OUTPUT"
           else
