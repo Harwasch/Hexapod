@@ -105,6 +105,18 @@ describe("the renderer readout", () => {
     expect(fellBack.notice).toBe("WebGPU device lost: GPU process restarted");
   });
 
+  it("says when the trial draws a scan with WebGL2 for its objects or motion", () => {
+    const forObjects = rendererReadout("playcanvas-webgpu", {
+      ...status,
+      api: "webgl2",
+      notice: "WebGL2 for scans with objects or motion",
+      webgl2ForObjects: true,
+    });
+    // Not "WebGPU unavailable": WebGPU may well be there, the scan's modifiers are GLSL only.
+    expect(forObjects.label).toBe("PlayCanvas · WebGL2 (objects or motion)");
+    expect(forObjects.notice).toBe("WebGL2 for scans with objects or motion");
+  });
+
   it("gives the latest gesture's rate, p95 and draw time, marked once it is over", () => {
     const meter = { fps: 58.4, p95Ms: 21.2, cpuMs: 2.34, frames: 60, live: true };
     expect(rendererReadout("playcanvas-webgpu", { ...status, meter }).meter).toBe(

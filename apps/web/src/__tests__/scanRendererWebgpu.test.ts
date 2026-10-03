@@ -9,7 +9,12 @@
 import { Cartesian3, Event, Matrix4, PerspectiveFrustum, type Cesium3DTileset } from "cesium";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ScanRendererHost, type BackendModule } from "@/cesium/scanView/ScanRendererHost";
+import {
+  ScanRendererHost,
+  WEBGL2_FOR_OBJECTS_NOTICE,
+  declaresObjectsOrMotion,
+  type BackendModule,
+} from "@/cesium/scanView/ScanRendererHost";
 import type {
   BackendHooks,
   GraphicsApi,
@@ -74,7 +79,10 @@ interface Rig {
   globe: () => void;
   run: (ms: number, globe?: boolean) => Promise<void>;
   overlays: () => HTMLCanvasElement[];
-  tileset: (key: string) => { key: string; tileset: Cesium3DTileset };
+  tileset: (
+    key: string,
+    extras?: Record<string, unknown>,
+  ) => { key: string; tileset: Cesium3DTileset; assetId?: string };
 }
 
 /**
@@ -148,13 +156,19 @@ function rig(webgpu: "fails" | "webgpu" | "webgl2" | "unfetched"): Rig {
       }
     },
     overlays: () => [...document.querySelectorAll<HTMLCanvasElement>("canvas[data-scan-renderer]")],
-    tileset: (key) => ({
+    // With `extras`, the scan's own asset, as SiteManager hands one over (its objects and
+    // motion are linked by asset id).
+    tileset: (key, extras) => ({
       key,
       tileset: {
         resource: { url: `https://scan.test/${key}/tileset.json` },
-        root: { computedTransform: Matrix4.IDENTITY.clone(), extras: { nativeLod: false } },
+        root: {
+          computedTransform: Matrix4.IDENTITY.clone(),
+          extras: { nativeLod: false, ...extras },
+        },
         isDestroyed: () => false,
       } as unknown as Cesium3DTileset,
+      ...(extras ? { assetId: `asset-${key}` } : {}),
     }),
   };
 }
@@ -192,6 +206,58 @@ describe("the PlayCanvas WebGPU trial", () => {
     expect(r.made[0]?.fake.renders.length).toBeGreaterThan(0);
     expect(r.overlays().map((c) => c.dataset.api)).toEqual(["webgpu"]);
     r.host.destroy();
+  });
+
+  it("draws a scan with objects or motion with WebGL2, says why, and tries WebGPU for the next", async () => {
+    const r = rig("webgpu");
+    r.host.setRenderer("playcanvas-webgpu");
+    r.host.setTarget(r.tileset("camp", { instances: { uri: "instances.json", count: 12 } }));
+    await r.run(400);
+    // The modifiers that hide, highlight and move objects are GLSL only: WebGPU is not even
+    // tried for this scan, and the readouts say why -- not "WebGPU unavailable".
+    expect(r.host.status()).toMatchObject({
+      kind: "playcanvas-webgpu",
+      active: true,
+      api: "webgl2",
+      notice: WEBGL2_FOR_OBJECTS_NOTICE,
+      webgl2ForObjects: true,
+    });
+    expect(r.made.map((m) => m.module)).toEqual(["playcanvas"]);
+    expect(r.made[0]?.fake.renders.length).toBeGreaterThan(0);
+    expect(r.overlays().map((c) => c.dataset)).toMatchObject([
+      { scanRenderer: "playcanvas", api: "webgl2" },
+    ]);
+    // Not held against WebGPU: a scan without objects draws with it.
+    r.host.setTarget(r.tileset("yard"));
+    await r.run(400);
+    expect(r.made.map((m) => m.module)).toEqual(["playcanvas", "playcanvas-webgpu"]);
+    expect(r.host.status()).toMatchObject({ api: "webgpu", notice: null, webgl2ForObjects: false });
+    // Motion (a skin, telemetry) and split objects count as well.
+    for (const [key, extras] of [
+      ["wind", { skin: { uri: "skin.json", count: 3 } }],
+      ["telemetry", { telemetry: { uri: "telemetry.json", count: 1 } }],
+    ] as const) {
+      r.host.setTarget(r.tileset(key, extras));
+      await r.run(400);
+      expect(r.host.status(), key).toMatchObject({ api: "webgl2", webgl2ForObjects: true });
+    }
+    expect(r.made.map((m) => m.module)).toEqual([
+      "playcanvas",
+      "playcanvas-webgpu",
+      "playcanvas",
+      "playcanvas",
+    ]);
+    r.host.destroy();
+  });
+
+  it("knows a scan with objects or motion by its root's extras", () => {
+    expect(declaresObjectsOrMotion({ instances: { uri: "instances.json", count: 3 } })).toBe(true);
+    expect(declaresObjectsOrMotion({ skin: { uri: "skin.json", count: 1 } })).toBe(true);
+    expect(declaresObjectsOrMotion({ telemetry: { uri: "t.json", count: 1 } })).toBe(true);
+    const split = { uri: "objects/7/tileset.json", instance: 7, origin: [1, 2, 0] };
+    expect(declaresObjectsOrMotion({ objects: [split] })).toBe(true);
+    expect(declaresObjectsOrMotion({ nativeLod: "sog/lod-meta.json", gaussians: 9 })).toBe(false);
+    expect(declaresObjectsOrMotion(undefined)).toBe(false);
   });
 
   it("draws with PlayCanvas on WebGL2, on a fresh canvas, when WebGPU does not start", async () => {
