@@ -17,6 +17,7 @@ import json
 import subprocess
 import sys
 import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ import numpy as np
 import pytest
 
 import segment_scene as ss
-from splat_render import Camera, Splats
+from splat_render import Splats
 
 GIB = float(1 << 30)
 SEGMENT_APP = Path(__file__).resolve().parents[3] / "infra" / "modal" / "segment.py"
@@ -144,29 +145,43 @@ def test_peak_usage_reports_this_process_its_workers_and_the_container(
     assert "? a render worker" in line and "over 50.0 s" in line
 
 
+#: A forked render of a small scan, while the process holds ~0.4 GB more than the scan.
+FORKED_RENDERS = """
+import json
+import numpy as np
+import segment_scene as ss
+from splat_render import Camera, Splats
+
+rng = np.random.default_rng(0)
+n = 20_000
+splats = Splats(
+    rng.uniform(-1, 1, (n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.full((n, 3), 0.03),
+    rng.uniform(0, 1, (n, 3)), np.full(n, 0.8),
+)
+held = np.ones(50_000_000)
+cameras = [
+    Camera.look_at([3 * np.cos(a), 3 * np.sin(a), 1.0], [0, 0, 0], width=96, height=64)
+    for a in (0.0, 2.0, 4.0)
+]
+views = list(ss.render_views(splats, cameras, np.zeros(n, np.int64), workers=2))
+print(json.dumps({
+    "views": len(views), "held": float(held[-1]), "own": ss._WORKER_PEAK["bytes"],
+    "workerPeakGiB": ss.peak_usage(0.0, 1.0)["workerPeakGiB"],
+}))
+"""
+
+
 def test_forked_renders_report_what_each_holds_of_its_own(
-    monkeypatch: pytest.MonkeyPatch,
+    fresh_process: Callable[[str], dict],
 ) -> None:
     """A forked worker's resident set starts with every page it shares with this process;
-    what it holds of its own is its peak over that, kept for `peak_usage`."""
-    monkeypatch.setitem(ss._WORKER_PEAK, "bytes", 0.0)
-    rng = np.random.default_rng(0)
-    n = 20_000
-    splats = Splats(
-        rng.uniform(-1, 1, (n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.full((n, 3), 0.03),
-        rng.uniform(0, 1, (n, 3)), np.full(n, 0.8),
-    )  # fmt: skip
-    # This process holds ~0.4 GB more than the scan, which a worker shares but does not add.
-    held = np.ones(50_000_000)
-    cameras = [
-        Camera.look_at([3 * np.cos(a), 3 * np.sin(a), 1.0], [0, 0, 0], width=96, height=64)
-        for a in (0.0, 2.0, 4.0)
-    ]
-    views = list(ss.render_views(splats, cameras, np.zeros(n, np.int64), workers=2))
-    assert len(views) == 3 and float(held[-1]) == 1.0
-    own = ss._WORKER_PEAK["bytes"]
-    assert 0 < own < 0.3 * GIB
-    assert ss.peak_usage(0.0, 1.0)["workerPeakGiB"] == round(own / GIB, 2)
+    what it holds of its own is its peak over that, kept for `peak_usage`. (The workers fork
+    from a new interpreter, not this one: tests/conftest.py.)"""
+    out = fresh_process(FORKED_RENDERS)
+    assert out["views"] == 3 and out["held"] == 1.0
+    # The ~0.4 GB the process holds is shared, not counted.
+    assert 0 < out["own"] < 0.3 * GIB
+    assert out["workerPeakGiB"] == round(out["own"] / GIB, 2)
 
 
 def test_the_cli_writes_its_usage_into_the_summary(
