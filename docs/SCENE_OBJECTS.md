@@ -159,11 +159,11 @@ estimate's constants (in segment.py, with the runs they come from) can be tuned.
 **Estimated, not measured** -- v2's memory has not been measured yet, and the times are
 guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
 
-| scan    | leaf gaussians | request (limit)           | ~time  | ~$ a run |
-| ------- | -------------- | ------------------------- | ------ | -------- |
-| spool   | 153,566        | 6 cores (9), 16 GiB (32)  | 15 min | 0.30     |
-| pumpkin | 387,813        | 6 cores (9), 16 GiB (32)  | 15 min | 0.30     |
-| camp    | 22,577,243     | 6 cores (9), 22 GiB (44)  | 45 min | 0.94     |
+| scan    | leaf gaussians | request (limit)          | ~time  | ~$ a run |
+| ------- | -------------- | ------------------------ | ------ | -------- |
+| spool   | 153,566        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
+| pumpkin | 387,813        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
+| camp    | 22,577,243     | 6 cores (9), 22 GiB (44) | 45 min | 0.94     |
 
 ## 4. Data contract (v1)
 
