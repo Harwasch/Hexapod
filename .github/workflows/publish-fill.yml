@@ -27,7 +27,7 @@ name: Publish fill
 
 on:
   push:
-    branches: [living-models, publish-fill]
+    branches: [living-models]
   workflow_dispatch:
     inputs:
       run:
