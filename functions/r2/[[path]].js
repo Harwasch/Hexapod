@@ -10,8 +10,9 @@
  * published generation (`runs/<job>/p<generation>/...`, which every publish writes afresh
  * and nothing writes again: apps/api/app/services/published.py), and five minutes with a
  * week of stale-while-revalidate for anything else -- tileset JSON, which a backfill may
- * rewrite in place (collision-backfill.yml adds `extras.collision`), `sites/<slug>/...`,
- * which can be republished, and a run's copies from before generations, which were.
+ * rewrite in place (collision-backfill.yml adds `extras.collision`), the sidecars the
+ * backfills write beside it (`REWRITTEN_BESIDE`), `sites/<slug>/...`, which can be
+ * republished, and a run's copies from before generations, which were.
  *
  * **One host, and never the upstream's Content-Type.** Whatever this answers is served from
  * the web app's origin, which is the origin the console keeps the write token on
@@ -58,15 +59,29 @@ const SHORT_S = 300;
  * tests/test_worker_outputs.py holds this to.
  */
 const PUBLISHED_KEY = /^runs\/[^/]+\/p[0-9a-f]{16}\//;
+/**
+ * What a workflow writes beside a published tileset after the publish, under the same name
+ * each time it runs again -- inside the generation, since that is where the tileset is:
+ * `instances.emb` (publish-instances.yml, with the instances.json it goes with),
+ * `collision.bin` (collision-backfill.yml), `sog/...` (streamed-lod-backfill.yml) and
+ * `inferred/<layer>/...` (publish-fill.yml). Not written exactly once, so not immutable: a
+ * year of the old `instances.emb` under a new `instances.json` would pair one segmentation's
+ * embeddings with another's objects.
+ */
+const REWRITTEN_BESIDE = /\/(?:instances\.emb|collision\.bin|sog\/.+|inferred\/.+)$/;
 
 /**
  * What the public bucket holds, by extension, and the only types this will label anything
  * with. Binary formats Cesium reads as an ArrayBuffer are `application/octet-stream`: it
  * does not look at the type, and no browser renders that as a page.
  *
- * `.json` tilesets and catalogs; `.glb`/`.b3dm`/`.pnts` tile content; `.bin` glTF buffers;
- * `.emb`, `.f32`, `.u8` the splat packages' sidecars (embeddings, float and byte arrays);
- * `.ply`/`.spz` whole splats; the image types are site and capture thumbnails.
+ * `.json` tilesets and catalogs, and the JSON sidecars (instances, skin, materials, telemetry,
+ * rig, the streamed package's `lod-meta.json` and chunk `meta.json`); `.glb`/`.b3dm`/`.pnts`
+ * tile content (a split object's and an inferred layer's tiles too); `.bin` glTF buffers and
+ * the binary sidecars (`collision.bin`, `skin.bin`, `viewcones.bin`); `.emb`, `.f32`, `.u8`
+ * the splat packages' sidecars (embeddings, float and byte arrays); `.ply`/`.spz` whole
+ * splats; `.webp` the streamed package's planes and, with the other image types, site and
+ * capture thumbnails.
  *
  * A Map rather than an object literal so that `x.constructor` is not an extension.
  *
@@ -143,11 +158,12 @@ function contentTypeFor(name) {
 }
 
 /**
- * Whether a decoded key may be cached for a year: inside a published generation, and not
- * JSON. It was every non-JSON key under `runs/`, and a phone's Refine rewrites a run's
- * tiles under the same names -- so the preview's tiles stayed cached, at the edge and in
- * browsers, under the new `tileset.json`. A publish now writes a generation of its own, and
- * only a generation's keys are never rewritten.
+ * Whether a decoded key may be cached for a year: inside a published generation, not JSON,
+ * and not a sidecar a workflow writes there again (`REWRITTEN_BESIDE`). It was every non-JSON
+ * key under `runs/`, and a phone's Refine rewrites a run's tiles under the same names -- so
+ * the preview's tiles stayed cached, at the edge and in browsers, under the new
+ * `tileset.json`. A publish now writes a generation of its own, and only a generation's own
+ * keys are never rewritten.
  *
  * Its JSON test is the extension's, in any case, exactly as `contentTypeFor` reads it: it
  * once looked at the key as the browser encoded it, case and all, so
@@ -158,7 +174,7 @@ function contentTypeFor(name) {
  * @param {string} name the decoded key
  */
 function immutable(name) {
-  return PUBLISHED_KEY.test(name) && !/\.json$/i.test(name);
+  return PUBLISHED_KEY.test(name) && !/\.json$/i.test(name) && !REWRITTEN_BESIDE.test(name);
 }
 
 /** @param {string} name the decoded key */

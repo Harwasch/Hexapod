@@ -132,6 +132,69 @@ describe("the /r2 tile proxy", () => {
     }
   });
 
+  it("serves every file the scene-object and living-model pipelines publish beside a scan", async () => {
+    // What publish-instances, publish-fill, collision-backfill, streamed-lod-backfill and
+    // living-plants put beside a published tileset, what the package stage writes there, and
+    // what the web app then fetches (lib/instances, skin, skinMaterials, telemetry, viewCones,
+    // inferred, sceneObjects; PlayCanvas's streamed package).
+    const cases: [string, string][] = [
+      ["instances.json", "application/json"],
+      ["instances.emb", "application/octet-stream"],
+      ["collision.bin", "application/octet-stream"],
+      ["viewcones.bin", "application/octet-stream"],
+      ["skin.json", "application/json"],
+      ["skin.bin", "application/octet-stream"],
+      ["materials.json", "application/json"],
+      ["telemetry.json", "application/json"],
+      ["rig.json", "application/json"],
+      ["motion.json", "application/json"],
+      ["plants.json", "application/json"],
+      ["ground.f32", "application/octet-stream"],
+      ["classes.u8", "application/octet-stream"],
+      ["sog/lod-meta.json", "application/json"],
+      ["sog/1_0/meta.json", "application/json"],
+      ["sog/1_0/means_l.webp", "image/webp"],
+      ["sog/1_0/shN_labels.webp", "image/webp"],
+      ["inferred/teacher/tileset.json", "application/json"],
+      ["inferred/teacher/0.glb", "model/gltf-binary"],
+      ["objects/12/tileset.json", "application/json"],
+      ["objects/12/object.glb", "model/gltf-binary"],
+    ];
+    for (const [file, type] of cases) {
+      const response = await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/${file}`), env });
+      expect(response.status, file).toBe(200);
+      expect(response.headers.get("Content-Type"), file).toBe(type);
+      expect(response.headers.get("X-Content-Type-Options"), file).toBe("nosniff");
+    }
+    expect(fetch).toHaveBeenCalledTimes(cases.length);
+  });
+
+  it("does not promise a year for a sidecar a workflow writes into the generation again", async () => {
+    // Written beside the published tileset after the publish, under the same name on every
+    // run: a new segmentation's instances.json (minutes) must not meet the old embeddings.
+    for (const file of [
+      "instances.emb",
+      "collision.bin",
+      "sog/1_0/means_l.webp",
+      "inferred/teacher/0.glb",
+    ]) {
+      const response = await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/${file}`), env });
+      expect(response.headers.get("Cache-Control"), file).toBe(
+        "public, max-age=300, stale-while-revalidate=604800",
+      );
+    }
+    for (const { init } of fetched()) {
+      expect(edgeTtl(init)).toEqual({ "200-299": 300, "300-599": -1 });
+    }
+    // The package's own files stay written once: its tiles, its view cones, a split object.
+    for (const file of ["0/1.glb", "viewcones.bin", "objects/12/object.glb"]) {
+      const response = await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/${file}`), env });
+      expect(response.headers.get("Cache-Control"), file).toBe(
+        "public, max-age=31536000, immutable",
+      );
+    }
+  });
+
   it("404s an extension it does not know, before fetching anything", async () => {
     for (const key of [
       "x.html",
