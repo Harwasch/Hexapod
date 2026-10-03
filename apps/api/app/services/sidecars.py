@@ -29,14 +29,22 @@ it (as it uses `published.py`).
 **What a kind depends on** decides whether it survives new tiles, and it was read off the
 code that writes each one (docs/SCENE_OBJECTS.md, section 8, has the table):
 
-* `TILES` -- bound to the exact splats in the tiles. `instances.json`, `skin.json` and the
-  rig's `plants.json` key every tile by the FNV-1a checksum of its decoded positions
-  (`synthetic_tree.checksum_positions`, mirrored by `packages/world`'s `checksumPositions`)
-  and run-length encode ids in that tile's own gaussian order; the viewer refuses a tile
-  whose checksum the binding does not list. `collision.bin` and `viewcones.bin` are grids
-  computed from the kept splats; `sog/` is the leaves' gaussians themselves, re-encoded. A
-  new reconstruction moves every position, so these are carried only when the new tiles are
-  the same tiles (`tiles_fingerprint`).
+* `POSITIONS` -- bound to the splats' positions, tile by tile. `instances.json`,
+  `skin.json` and the rig's `plants.json` key every tile by the FNV-1a checksum of its
+  decoded positions (`synthetic_tree.checksum_positions`, mirrored by `packages/world`'s
+  `checksumPositions`) and run-length encode ids in that tile's own gaussian order;
+  `rig.json` lists the same checksums (`tileChecksums`). The viewer refuses a tile whose
+  checksum the binding does not list -- and accepts any tile whose checksum it does, so the
+  binding holds for new tiles exactly when every new tile's checksum is one it lists
+  (`checksums` says where each kind lists them, `bound_checksums` reads them). A re-pack
+  that left every position where it was -- another spherical-harmonics degree -- keeps
+  them; a new reconstruction, which moves every position, does not. The worker, which has
+  the new tiles, decides this (`app/worker/carry.py`, `app/worker/positions.py`).
+* `TILES` -- bound to the tiles' bytes. `collision.bin` and `viewcones.bin` are grids
+  computed from the kept splats with nothing recorded to check them by, and `sog/` is the
+  leaves' gaussians themselves, colours and harmonics included, re-encoded; a split
+  rewrote the tiles. These are carried only when the new tiles are the same tiles
+  (`tiles_fingerprint`).
 * `INSTANCES` -- keyed by `instances.json` ids (`materials.json`, `telemetry.json`). A
   re-segmentation renumbers them, so they go wherever `instances` goes.
 * `FRAME` -- placed in the tileset's local frame with no splat indices or checksums: an
@@ -67,6 +75,7 @@ from app.storage.base import ObjectSummary
 class Dependence(StrEnum):
     """What a sidecar kind is a function of; see the module docstring."""
 
+    POSITIONS = "positions"
     TILES = "tiles"
     INSTANCES = "instances"
     FRAME = "frame"
@@ -95,6 +104,11 @@ class SidecarKind:
     action: str = ""
     #: False for a kind that cannot be attached beside unchanged tiles.
     attachable: bool = True
+    #: For a `POSITIONS` kind: where it lists the tile checksums it is bound to, as
+    #: `(file beside tileset.json, field)` -- a field holding an object (keyed by checksum)
+    #: or a list of checksums. Every file of these that is present must list a tile for the
+    #: kind to hold on it.
+    checksums: tuple[tuple[str, str], ...] = ()
 
     def owns(self, rel: str) -> bool:
         return rel in self.files or any(rel.startswith(d) for d in self.dirs)
@@ -113,7 +127,8 @@ INSTANCES = SidecarKind(
     name="instances",
     extras=("instances",),
     files=("instances.json", "instances.emb"),
-    depends=Dependence.TILES,
+    depends=Dependence.POSITIONS,
+    checksums=(("instances.json", "tiles"),),
     basis=(
         "`tiles` maps each tile's position checksum (FNV-1a of its decoded float32 positions) "
         "to run-length instance ids in that tile's gaussian order (segment_scene.tile_binding, "
@@ -125,7 +140,8 @@ SKIN = SidecarKind(
     name="skin",
     extras=("skin",),
     files=("skin.json", "skin.bin"),
-    depends=Dependence.TILES,
+    depends=Dependence.POSITIONS,
+    checksums=(("skin.json", "tiles"),),
     basis=(
         "`tiles` maps tile checksums to skin runs and to rows of skin.bin in each tile's "
         "gaussian order; each skin moves an instances.json id"
@@ -210,7 +226,8 @@ RIG = SidecarKind(
     name="rig",
     extras=(),
     files=("rig.json", "motion.json", "plants.json"),
-    depends=Dependence.TILES,
+    depends=Dependence.POSITIONS,
+    checksums=(("rig.json", "tileChecksums"), ("plants.json", "tiles")),
     basis=(
         "scene_plants: rig.json is stamped with the tiles' checksums (rig_tiles.stamp) and "
         "plants.json binds per tile checksum; the asset's renderConfig.rigUrl points at it"
@@ -479,10 +496,11 @@ def tiles_fingerprint(
     hold the same bytes in the same tiles, so whatever was bound to one is bound to the
     other: a chain of attaches copies the tiles unchanged and keeps it; a new
     reconstruction, a Refine or a re-pack changes it. It is a sufficient test, not a
-    necessary one -- tiles re-encoded with the very same positions would fail it -- and
-    that is the safe side: a kind dropped by mistake is flagged and rebuilt, while one kept
-    by mistake hides the wrong splats. An object without an ETag cannot vouch for its
-    bytes, so neither can the fingerprint.
+    necessary one -- tiles re-encoded with the very same positions fail it -- and that is
+    the safe side: a kind dropped by mistake is flagged and rebuilt, while one kept by
+    mistake hides the wrong splats. A kind bound to positions has the necessary test too,
+    where the new tiles can be read (`bound_checksums`, applied by the worker). An object
+    without an ETag cannot vouch for its bytes, so neither can the fingerprint.
     """
     skeleton = copy.deepcopy(dict(document))
     skeleton["root"] = {k: v for k, v in dict(skeleton["root"]).items() if k != "extras"}
@@ -493,6 +511,36 @@ def tiles_fingerprint(
             return None
         lines.append(f"{uri}\t{found.size}\t{found.etag}")
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def bound_checksums(kind: SidecarKind, documents: Mapping[str, bytes]) -> frozenset[str] | None:
+    """The tile checksums a `POSITIONS` kind holds on, from its binding files' bytes.
+
+    `documents` are the files of `kind.checksums` that are beside the tileset, by name. A
+    tile is held when every one of them lists its checksum (the rig's `rig.json` and
+    `plants.json` both, where both are there), so the answer is what they list in common.
+    None where nothing can vouch: no binding file at all, or one that is not JSON or has no
+    such field -- a single-object rig's `canonicalChecksum` among them, which binds one
+    tile and says nothing of a tileset's.
+    """
+    found: frozenset[str] | None = None
+    for name, key in kind.checksums:
+        data = documents.get(name)
+        if data is None:
+            continue
+        try:
+            document = json.loads(data)
+        except ValueError:
+            return None
+        listed = document.get(key) if isinstance(document, dict) else None
+        if isinstance(listed, dict):
+            these = frozenset(str(checksum) for checksum in listed)
+        elif isinstance(listed, list) and all(isinstance(item, str) for item in listed):
+            these = frozenset(listed)
+        else:
+            return None
+        found = these if found is None else found & these
+    return found
 
 
 def assign(extras: Mapping[str, Any], rels: Collection[str]) -> dict[str, str]:

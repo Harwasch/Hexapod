@@ -6814,7 +6814,7 @@
       },
       "SidecarFlag": {
         "additionalProperties": false,
-        "description": "A sidecar a republish could not carry into the asset's new generation.\n\nSidecars (`instances.json`, `collision.bin`, an inferred fill, `sog/`, a plant rig) are\npublished beside the tiles. When a run publishes new tiles, each kind bound to the\nsplats is carried only if the new tiles are the very same ones; otherwise it is\ndropped, the viewer loses it, and this says so until the kind is attached again. See\ndocs/SCENE_OBJECTS.md, section 8.",
+        "description": "A sidecar a republish could not carry into the asset's new generation.\n\nSidecars (`instances.json`, `collision.bin`, an inferred fill, `sog/`, a plant rig) are\npublished beside the tiles. When a run publishes new tiles, each kind is carried only\nwhere it still holds for the new splats -- objects, skins and a rig where every new\ntile's positions are ones they bind, a grid or the streamed LOD only onto the very same\ntiles; otherwise it is dropped, the viewer loses it, and this says so until the kind is\nattached again. See docs/SCENE_OBJECTS.md, section 8.",
         "properties": {
           "action": {
             "title": "Action",

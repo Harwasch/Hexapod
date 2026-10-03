@@ -11,10 +11,19 @@ So before the copy, the live generation is read and each sidecar kind in it is d
 
 * **the run brings its own** (`collision`, `viewCones` from the packer): the new one wins
   and the old is not carried -- "superseded", which clears any flag for the kind;
-* **bound to the splats** (`TILES`: instances, skin, collision, view cones, sog, rig):
-  carried only when the new tiles are the live tiles (`sidecars.tiles_fingerprint`: the
-  same tree and every tile's size and ETag). A retried register or a republish of the same
-  bytes keeps them; a new reconstruction drops them;
+* **bound to the splats' positions** (`POSITIONS`: instances, skin, rig): carried when
+  every tile of the new tileset has a position checksum the kind's binding lists -- the
+  very test the viewer applies before it draws a tile with them. The checksums are
+  computed from the new tiles, the run's own (from the workdir where it still has them,
+  else from the private bucket), with the function the binding was written with
+  (`app/worker/positions.py`), and compared with what the live `instances.json`,
+  `skin.json`, `rig.json` and `plants.json` list. A re-pack that kept every position
+  (another spherical-harmonics degree) keeps them; a new reconstruction drops them. The
+  same tiles keep them without hashing anything;
+* **bound to the tiles' bytes** (`TILES`: collision, view cones, sog, a split): carried
+  only when the new tiles are the live tiles (`sidecars.tiles_fingerprint`: the same tree
+  and every tile's size and ETag). A retried register or a republish of the same bytes
+  keeps them; anything else drops them;
 * **keyed by instance ids** (`INSTANCES`: materials, telemetry): carried exactly when
   `instances` is;
 * **in the scan's frame only** (`FRAME`: inferred layers): carried.
@@ -35,23 +44,31 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from app.services import sidecars
 from app.services.sidecars import Dependence
-from app.storage import ObjectSummary
+from app.storage import ObjectStorage, ObjectSummary
+from app.worker import positions
 from app.worker.publish import Publisher, PublishError
 
 log = logging.getLogger("app.worker")
 
 #: Why a kind bound to the splats is dropped.
 NEW_TILES = "the run published new tiles, and it was bound to the previous ones ({basis})"
+NEW_POSITIONS = (
+    "the run published new tiles whose positions are not all ones it was bound to ({basis})"
+)
 SINGLE_BUCKET = (
     "this deployment publishes from one bucket, where a run's tileset is its own keys and "
     "cannot hold what was attached beside the previous one"
 )
+
+#: Which `POSITIONS` kinds still hold for the new tiles, of the ones asked about.
+PositionCheck = Callable[[Collection[str]], frozenset[str]]
 
 
 @dataclass(frozen=True)
@@ -93,13 +110,20 @@ class CarryPlan:
 
 
 def plan_carry(
-    publisher: Publisher, *, live_url: str | None, tiles_prefix: str, entry: str
+    publisher: Publisher,
+    *,
+    live_url: str | None,
+    tiles_prefix: str,
+    entry: str,
+    tiles_dir: Path | None = None,
 ) -> CarryPlan:
     """Decide what of the live generation at `live_url` goes into the run's new one.
 
     `tiles_prefix` and `entry` are the run's tileset directory and `tileset.json` in the
-    private bucket. A live URL outside the bucket a browser reads (an ion asset, a seeded
-    `sites/` scan) has nothing here to carry. A store that cannot be read raises
+    private bucket; `tiles_dir`, where the worker still has it, the same directory on disk,
+    which the position checksums are read from rather than downloaded (a tile missing there
+    is read from the bucket). A live URL outside the bucket a browser reads (an ion asset, a
+    seeded `sites/` scan) has nothing here to carry. A store that cannot be read raises
     `PublishError`, which withholds the publish: dropping every sidecar because R2 had a
     bad minute would take objects off a site that has nothing wrong with it.
     """
@@ -141,7 +165,105 @@ def plan_carry(
         new_objects=new_objects,
         new_entry=entry[len(directory) :],
         unreadable=unreadable,
+        held=_position_check(
+            source,
+            live_objects,
+            publisher.private,
+            new,
+            new_objects,
+            tiles_dir=tiles_dir,
+            live_url=live_url,
+        ),
     )
+
+
+def _position_check(
+    source: ObjectStorage,
+    live_objects: Mapping[str, ObjectSummary],
+    private: ObjectStorage,
+    new: Mapping[str, Any],
+    new_objects: Mapping[str, ObjectSummary],
+    *,
+    tiles_dir: Path | None,
+    live_url: str,
+) -> PositionCheck:
+    """The check `_decide` runs on the `POSITIONS` kinds it would otherwise drop.
+
+    Each kind's binding files are read from the live generation and every tile of the new
+    tileset is hashed (`positions.tile_checksum`), stopping as soon as no kind is left that
+    lists every tile so far: a new reconstruction is ruled out by its first tile. A tile
+    that is not a splat GLB this can read, or one the tileset names and the run does not
+    have, vouches for nothing. A store that cannot be read raises `PublishError`, as every
+    read of the plan does.
+    """
+
+    def check(names: Collection[str]) -> frozenset[str]:
+        try:
+            return held(names)
+        except Exception as error:
+            raise PublishError(f"could not read what {live_url} carries: {error}") from error
+
+    def held(names: Collection[str]) -> frozenset[str]:
+        accepted: dict[str, frozenset[str]] = {}
+        for name in names:
+            kind = sidecars.KINDS_BY_NAME[name]
+            documents = {
+                file: source.get_object(live_objects[file].key)
+                for file, _ in kind.checksums
+                if file in live_objects
+            }
+            listed = sidecars.bound_checksums(kind, documents)
+            if listed:
+                accepted[name] = listed
+        uris = sorted(sidecars.content_uris(new))
+        if not accepted or not uris:
+            return frozenset()
+        remaining = set(accepted)
+        for count, uri in enumerate(uris, start=1):
+            data = _tile_bytes(uri, private, new_objects, tiles_dir=tiles_dir)
+            if data is None:
+                log.info("carry: %s is not among the run's tiles; no binding holds", uri)
+                return frozenset()
+            try:
+                checksum = positions.tile_checksum(data)
+            except positions.TileFormatError as error:
+                log.info("carry: %s: no position checksum (%s); no binding holds", uri, error)
+                return frozenset()
+            remaining = {name for name in remaining if checksum in accepted[name]}
+            if not remaining:
+                log.info(
+                    "carry: %s (%s, tile %d of %d) is in no binding from %s",
+                    uri,
+                    checksum,
+                    count,
+                    len(uris),
+                    live_url,
+                )
+                return frozenset()
+        log.info(
+            "carry: every one of the run's %d tiles has positions %s binds",
+            len(uris),
+            sorted(remaining),
+        )
+        return frozenset(remaining)
+
+    return check
+
+
+def _tile_bytes(
+    uri: str,
+    private: ObjectStorage,
+    new_objects: Mapping[str, ObjectSummary],
+    *,
+    tiles_dir: Path | None,
+) -> bytes | None:
+    """One of the run's tiles: from disk where the worker has it, else from the bucket."""
+    if tiles_dir is not None and ".." not in uri.split("/"):
+        local = tiles_dir / uri
+        if local.is_file():
+            return local.read_bytes()
+    found = new_objects.get(uri)
+    return private.get_object(found.key) if found is not None else None
 
 
 def _decide(
@@ -155,6 +277,7 @@ def _decide(
     new_objects: Mapping[str, ObjectSummary],
     new_entry: str,
     unreadable: str | None = None,
+    held: PositionCheck | None = None,
 ) -> CarryPlan:
     live_extras, new_extras = sidecars.root_extras(live), sidecars.root_extras(new)
     live_rels = set(live_objects) - {live_entry} - sidecars.content_uris(live)
@@ -168,6 +291,22 @@ def _decide(
         and fingerprint == sidecars.tiles_fingerprint(new, new_objects)
     )
     owners = sidecars.assign(live_extras, live_rels)
+    # Not the same bytes: a kind bound to positions may still hold, which only hashing the
+    # new tiles can tell -- so they are hashed only when such a kind would otherwise go.
+    positional = [
+        name
+        for name in live_kinds
+        if name not in new_kinds and sidecars.KINDS_BY_NAME[name].depends is Dependence.POSITIONS
+    ]
+    kept_by_positions = (
+        held(positional)
+        if held is not None
+        and positional
+        and not same
+        and unreadable is None
+        and publisher.splits_buckets
+        else frozenset()
+    )
 
     carry_all = same and publisher.splits_buckets
     carried: list[str] = []
@@ -184,7 +323,13 @@ def _decide(
             None
             if carry_all
             else unreadable
-            or _why_not(kind, same=same, carried=carried, split=publisher.splits_buckets)
+            or _why_not(
+                kind,
+                same=same,
+                positioned=kept_by_positions,
+                carried=carried,
+                split=publisher.splits_buckets,
+            )
         )
         if reason is None:
             carried.append(name)
@@ -253,7 +398,12 @@ def _decide(
 
 
 def _why_not(
-    kind: sidecars.SidecarKind, *, same: bool, carried: list[str], split: bool
+    kind: sidecars.SidecarKind,
+    *,
+    same: bool,
+    positioned: Collection[str],
+    carried: list[str],
+    split: bool,
 ) -> str | None:
     """None to carry `kind`, else the reason it is dropped."""
     if not split:
@@ -265,7 +415,11 @@ def _why_not(
         if follows in carried:
             return None
         return f"it names {follows} ids, and {follows} was not carried"
-    return None if same else NEW_TILES.format(basis=kind.basis)
+    if same:
+        return None
+    if kind.depends is Dependence.POSITIONS:
+        return None if kind.name in positioned else NEW_POSITIONS.format(basis=kind.basis)
+    return NEW_TILES.format(basis=kind.basis)
 
 
 def _carried_extras(

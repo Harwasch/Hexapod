@@ -752,9 +752,12 @@ attaches made it).
 
 **A republish carries what still holds** (`app/worker/carry.py`). Before copying, the worker
 reads the live generation and decides each sidecar kind by what it depends on (the table is
-docs/SCENE_OBJECTS.md, section 8): a kind bound to the splats (objects, skins, collision,
-view cones, `sog/`, the rig) is carried only when the new tiles are the very same tiles; a
-kind keyed by instance ids (materials, telemetry) goes with `instances`; an inferred fill,
+docs/SCENE_OBJECTS.md, section 8): a kind bound to the splats' positions (objects, skins,
+the rig) is carried when every new tile's position checksum — computed by the worker from
+the run's own tiles, with the function the binding was written with — is one its binding
+lists, so a re-pack with another spherical-harmonics degree keeps it; a kind bound to the
+tiles' bytes (collision, view cones, `sog/`) is carried only when the new tiles are the very
+same tiles; a kind keyed by instance ids (materials, telemetry) goes with `instances`; an inferred fill,
 placed in the scan's frame with no splat indices, is always carried; a kind the run makes
 itself (the packer's `collision.bin`, `viewcones.bin`) is replaced by the run's. Every
 dropped kind becomes a flag on the asset — `sidecarFlags` in every asset response, e.g.

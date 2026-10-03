@@ -685,8 +685,8 @@ def test_every_kind_is_classified_by_what_it_depends_on() -> None:
     """docs/SCENE_OBJECTS.md section 8 prints this table; the code is what decides."""
     depends = {kind.name: kind.depends.value for kind in sidecars.KINDS}
     assert depends == {
-        "instances": "tiles",
-        "skin": "tiles",
+        "instances": "positions",
+        "skin": "positions",
         "materials": "instances",
         "telemetry": "instances",
         "objects": "tiles",
@@ -694,9 +694,13 @@ def test_every_kind_is_classified_by_what_it_depends_on() -> None:
         "viewCones": "tiles",
         "inferredLayers": "frame",
         "nativeLod": "tiles",
-        "rig": "tiles",
+        "rig": "positions",
     }
     assert {kind.name for kind in sidecars.KINDS if not kind.attachable} == {"objects"}
+    # Every kind bound to positions says where it lists them, in a file it owns.
+    for kind in sidecars.KINDS:
+        assert bool(kind.checksums) == (kind.depends is sidecars.Dependence.POSITIONS), kind
+        assert all(kind.owns(file) for file, _ in kind.checksums), kind
 
 
 def test_discovery_finds_each_kind_by_its_key_or_its_files() -> None:

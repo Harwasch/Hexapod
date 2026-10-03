@@ -5,7 +5,10 @@ beside the live tiles since -- objects, an inferred fill, the streamed LOD, a pl
 used to vanish when a republish repointed the asset at the run's new generation. Now each
 kind is carried by what it depends on (app/services/sidecars.py, app/worker/carry.py):
 bound to the splats, only onto the very same tiles; keyed by instance ids, with
-`instances`; in the scan's frame only (an inferred fill), always. What is dropped is
+`instances`; in the scan's frame only (an inferred fill), always. Objects, skins and a rig
+are bound to the splats' positions tile by tile, so for them "the same splats" is checked
+the way the viewer checks it: every new tile's position checksum must be one the binding
+lists -- a re-pack with another spherical-harmonics degree keeps them. What is dropped is
 flagged on the asset, where the console and the API show it.
 """
 
@@ -30,7 +33,7 @@ from app.services import sites as site_service
 from app.services.assets import asset_to_read
 from app.services.attach import attach_sidecars
 from app.storage import S3Storage
-from app.worker import registration
+from app.worker import positions, registration
 from app.worker.carry import plan_carry
 from app.worker.claim import claim_next
 from app.worker.publish import Publisher
@@ -45,9 +48,13 @@ from tests.sidecar_fixtures import (
     LEGACY_URL,
     PUBLIC_URL,
     TILES,
+    TREE_LOD,
+    TREE_SH,
     directory_of,
     files_under,
+    fixture_scan,
     put_scan,
+    splat_glb,
     stage,
     tileset_at,
     two_buckets,
@@ -431,6 +438,167 @@ def test_a_split_fill_goes_with_the_split(buckets: Publisher) -> None:
     extras = json.loads(plan.document)["root"]["extras"]
     assert extras["inferredLayers"] == FILL_EXTRAS
     assert "objects" in {gone.kind for gone in plan.dropped}
+
+
+# --- bound to positions: the viewer's own test ---------------------------------------------
+
+#: What a binding to the fixture tree's positions holds, beside the tiles: objects keyed by
+#: every tile's checksum, materials by their ids, the rig tools/captures stamped with the same
+#: checksums and a plant binding keyed by them -- and the streamed LOD, which is the old
+#: splats themselves and holds only for the same bytes.
+TREE_CHECKSUMS: list[str] = json.loads((TREE_LOD / "rig.json").read_text())["tileChecksums"]
+TREE_BOUND = {
+    "instances.json": json.dumps({"tiles": {c: [1, 1] for c in TREE_CHECKSUMS}}).encode(),
+    "instances.emb": b"\0\1",
+    "materials.json": b"{}",
+    "rig.json": (TREE_LOD / "rig.json").read_bytes(),
+    "motion.json": b"{}",
+    "plants.json": json.dumps({"tiles": {c: [0, 1] for c in TREE_CHECKSUMS}}).encode(),
+    **SOG_FILES,
+}
+POSITION_BOUND = {"instances", "materials", "rig"}
+
+
+def a_tree_run(buckets: Publisher, tiles: dict[str, bytes], document: dict[str, Any]) -> None:
+    """The run's package from a committed fixture tree, with its own grid and view cones."""
+    put_scan(
+        buckets.private,
+        RUN_DIR,
+        tiles=tiles,
+        sidecars={"collision.bin": b"grid", "viewcones.bin": b"cones"},
+        document=document,
+    )
+
+
+def a_tree_with_objects(db: Session, buckets: Publisher) -> Capture:
+    """The fixture tree published and registered, then objects, materials, the streamed LOD
+    and a plant rig attached beside it."""
+    document, tiles = fixture_scan(TREE_LOD)
+    a_tree_run(buckets, tiles, document)
+    capture = Capture(slug="tree", name="Tree", kind=CaptureKind.GAUSSIAN_SPLAT)
+    db.add(capture)
+    db.commit()
+    republish(db, buckets, capture)
+    attach(
+        db,
+        buckets,
+        the_splat(db, capture),
+        TREE_BOUND,
+        extras={
+            "instances": INSTANCES_EXTRAS,
+            "materials": MATERIALS_EXTRAS,
+            "nativeLod": "sog/lod-meta.json",
+        },
+        rig_url="rig.json",
+    )
+    return capture
+
+
+def test_a_repack_that_keeps_every_position_keeps_what_is_bound_to_positions(
+    db: Session, buckets: Publisher
+) -> None:
+    """The tree packed again with spherical harmonics: every tile's bytes are new, so the
+    byte fingerprint differs, and every tile's positions are the ones the objects, the
+    materials and the rig were bound to. They are carried; the streamed LOD, which is the
+    old encoding of the splats, is not."""
+    capture = a_tree_with_objects(db, buckets)
+    document, sh = fixture_scan(TREE_SH)
+    a_tree_run(buckets, sh, document)
+
+    republish(db, buckets, capture)
+
+    moved = the_splat(db, capture)
+    files = files_under(buckets.public, directory_of(moved.source["url"]))
+    assert files["splat.glb"] == sh["splat.glb"]
+    bound = {rel for rel in TREE_BOUND if not rel.startswith("sog/")}
+    assert {rel: files[rel] for rel in bound} == {rel: TREE_BOUND[rel] for rel in bound}
+    assert not any(rel.startswith("sog/") for rel in files)
+    extras = tileset_at(buckets.public, moved.source["url"])["root"]["extras"]
+    assert {"instances", "materials", "collision", "viewCones"} <= set(extras)
+    assert "nativeLod" not in extras
+    assert moved.render_config["rigUrl"] == "rig.json"
+    flags = {flag["kind"]: flag for flag in moved.sidecar_flags}
+    assert set(flags) == {"nativeLod"}
+    assert flags["nativeLod"]["action"] == "Streamed LOD needs a backfill"
+
+
+def test_moved_positions_drop_what_was_bound_to_them_and_flag_it(
+    db: Session, buckets: Publisher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One splat of the root tile a quantum higher: that tile's checksum is in no binding,
+    so the viewer would refuse it, and the objects, the materials keyed by their ids and the
+    rig all go, each flagged. Nothing past that first tile is hashed."""
+    capture = a_tree_with_objects(db, buckets)
+    document, sh = fixture_scan(TREE_SH)
+    nudged = positions.tile_positions(sh["splat.glb"]).astype("float64")
+    nudged[0, 2] += 1 / 4096
+    sh["splat.glb"] = splat_glb(nudged)
+    assert positions.tile_checksum(sh["splat.glb"]) not in TREE_CHECKSUMS
+    a_tree_run(buckets, sh, document)
+    hashed: list[bytes] = []
+    real = positions.tile_checksum
+
+    def counting(data: bytes) -> str:
+        hashed.append(data)
+        return real(data)
+
+    monkeypatch.setattr(positions, "tile_checksum", counting)
+
+    republish(db, buckets, capture)
+
+    moved = the_splat(db, capture)
+    files = files_under(buckets.public, directory_of(moved.source["url"]))
+    assert not set(TREE_BOUND) & set(files)
+    assert "rigUrl" not in moved.render_config
+    flags = {flag["kind"]: flag for flag in moved.sidecar_flags}
+    assert set(flags) == POSITION_BOUND | {"nativeLod"}
+    assert flags["instances"]["action"] == "Objects need re-segmenting"
+    assert "positions are not all ones it was bound to" in flags["instances"]["reason"]
+    assert flags["rig"]["action"] == "Plants need re-rigging"
+    assert "instances was not carried" in flags["materials"]["reason"]
+    assert hashed == [sh["splat.glb"]]
+
+
+def test_positions_are_read_from_the_workdir_where_the_worker_has_them(
+    db: Session, buckets: Publisher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture = a_tree_with_objects(db, buckets)
+    live = the_splat(db, capture).source["url"]
+    document, sh = fixture_scan(TREE_SH)
+    a_tree_run(buckets, sh, document)
+    for uri, data in sh.items():
+        (tmp_path / uri).write_bytes(data)
+    assert isinstance(buckets.private, S3Storage)
+    real = buckets.private.get_object
+
+    def no_tiles(key: str) -> bytes:
+        assert not key.endswith(".glb"), key
+        return real(key)
+
+    monkeypatch.setattr(buckets.private, "get_object", no_tiles)
+
+    plan = plan_carry(
+        buckets,
+        live_url=live,
+        tiles_prefix=RUN_DIR,
+        entry=f"{RUN_DIR}tileset.json",
+        tiles_dir=tmp_path,
+    )
+
+    assert set(plan.carried) >= POSITION_BOUND
+    assert [gone.kind for gone in plan.dropped] == ["nativeLod"]
+
+
+def test_a_tile_that_is_not_a_splat_vouches_for_no_binding(db: Session, buckets: Publisher) -> None:
+    capture = a_tree_with_objects(db, buckets)
+    live = the_splat(db, capture).source["url"]
+    document, sh = fixture_scan(TREE_SH)
+    sh["splat_7.glb"] = b"not a glb"
+    a_tree_run(buckets, sh, document)
+
+    plan = plan_carry(buckets, live_url=live, tiles_prefix=RUN_DIR, entry=f"{RUN_DIR}tileset.json")
+
+    assert {gone.kind for gone in plan.dropped} == POSITION_BOUND | {"nativeLod"}
 
 
 # --- the runner: an attach that lands mid-publish ----------------------------------------
