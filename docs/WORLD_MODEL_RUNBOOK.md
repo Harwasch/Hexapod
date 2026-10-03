@@ -267,6 +267,16 @@ reports what the token can read.
   Accept both licences on huggingface.co. A model whose start fails is retried by Modal
   without end (run 37054515134 waited 4 h), so `dream.py` now skips a model `access()`
   reports unreadable, and waits on every call with a timeout.
+- **Stopping cancels**: the clips are queued on the deployed app, which outlives the run, so
+  a run that raised or a cancelled job used to leave them all billing. `dream.py` now spawns
+  every call through `tools/captures/modal_calls.py` and, on an exception, SIGINT or SIGTERM
+  (the step runs under `exec` so they reach it), cancels the ones still out there
+  (`terminate_containers=True`) and exits non-zero; a clip given up on at its timeout is
+  cancelled too. A call that failed on its own is reported and ends the run non-zero once
+  the rest has come back. The C2 jobs' own Wan calls (`world_model_client`, inside the
+  `materials` container) are not spawned and cannot be cancelled from here: cancelling the
+  `materials` call terminates its container, and whether Modal then drops that container's
+  call in flight is unverified (at most one ~3 min Wan call per instance).
 - **Starts**: gsplat renders over a pale sky from eye-level candidates scored by coverage
   and depth (`starts/*-candidates.png`). The camp's two from its clearing look like
   photographs; the pumpkin's (1.4 m over the patch) is a close, low view.

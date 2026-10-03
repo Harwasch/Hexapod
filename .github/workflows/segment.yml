@@ -5,12 +5,15 @@ name: Segment scans (Modal GPU)
 # instances.emb, report.json and compare.png (against what is published) per scan as an
 # artifact. Nothing is published.
 #
-# On a push to `living-models` (or a `seg-*` working branch) that touches the segmentation code (workflow_dispatch only
-# works once this file is on the default branch). The Modal token is the repository's.
+# On a push to a `seg-*` working branch that touches the segmentation code, or by
+# workflow_dispatch (which only works once this file is on the default branch). Not on
+# `living-models`: a merge there re-ran the whole ~48 min L4 job (about $2) with nothing
+# about segmentation changed (run 37102914967 was such a duplicate). The Modal token is the
+# repository's.
 
 on:
   push:
-    branches: [living-models, "seg-*"]
+    branches: ["seg-*"]
     paths:
       - infra/modal/segment.py
       - tools/captures/segment_scene.py

@@ -499,7 +499,13 @@ def main(
 ) -> None:
     """Starts of every scan, a clip per start x prompt x model, contact sheets, and the
     camp's `instances` fitted (C2) from Wan clips `chain` calls long. Everything under
-    `out/`, with `out/summary.json`."""
+    `out/`, with `out/summary.json`.
+
+    Every call it spawns is tracked (`tools/captures/modal_calls.py`). If the run raises, or
+    is stopped by SIGINT or SIGTERM (a cancelled or timed-out GitHub job), the calls still
+    out there are cancelled -- the clips are on the deployed app, which outlives this run --
+    and it exits non-zero. A call that failed on its own, or a dream phase that raised, also
+    ends the run non-zero, once everything else has come back."""
     folder = Path(out)
     folder.mkdir(parents=True, exist_ok=True)
     summary: dict = {}
@@ -507,130 +513,162 @@ def main(
     def dump() -> None:  # after every result: a failed run still leaves what it got
         (folder / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
 
-    try:
-        access = modal.Function.from_name(WORLD_MODELS_APP, "access").remote()
-    except Exception as error:  # noqa: BLE001 - reported
-        access = {"error": repr(error)}
-    summary["access"] = access
-    sys.stdout.write(f"hugging face access: {json.dumps(access)}\n")
+    if str(LOCAL_CAPTURES) not in sys.path:  # standard library only: modal is all there is here
+        sys.path.insert(0, str(LOCAL_CAPTURES))
+    from modal_calls import SpawnedCalls
 
-    jobs = [int(i) for i in instances.split(",") if i.strip()]
-    options = {"model": "Wan", "seeds": seeds, "chain": chain, "strength": strength}
-    material_calls = [materials.spawn("camp", i, options) for i in jobs]
+    calls = SpawnedCalls()
 
-    def dream_phase() -> None:
-        names = [s.strip() for s in scans.split(",") if s.strip()]
-        summary["starts"] = []
-        views: list[tuple[str, bytes]] = []
-        for result in starts.map(names, return_exceptions=True):
-            if isinstance(result, BaseException):
-                summary["starts"].append({"error": repr(result)})
-                sys.stdout.write(f"starts raised: {result!r}\n")
-                continue
-            _write(folder / "starts", result["files"])
-            brief = {k: v for k, v in result.items() if k != "files"}
-            summary["starts"].append(brief)
-            for v in result["views"]:
-                views.append((v["name"], result["files"][f"{v['name']}.png"]))
-            sys.stdout.write(f"starts {result['scan']}: {[v['name'] for v in result['views']]}\n")
-            dump()
-
-        wanted = [m for m in models.split(",") if m]
-        # A model whose weights the token cannot read fails in its container's start, which
-        # Modal retries without end (run 37054515134 waited 4 h on Cosmos): it is skipped.
-        usable = [m for m in wanted if all(access.get(r) == "ok" for r in NEEDS.get(m, ()))]
-        summary["skippedModels"] = {
-            m: {r: access.get(r) for r in NEEDS.get(m, ())} for m in wanted if m not in usable
-        }
-        classes = {m: modal.Cls.from_name(WORLD_MODELS_APP, m)() for m in usable}
-        calls = []
-        for name, png in views:
-            for p in (p.strip() for p in prompts.split(",") if p.strip()):
-                for model, cls in classes.items():
-                    for seed in range(1, seeds + 1):
-                        request = {"image": png, "prompt": PROMPTS[p], "seed": seed}
-                        calls.append(
-                            (f"{name}-{p}-{model.lower()}-s{seed}", model, cls.clip.spawn(request))
-                        )
-        summary["clips"] = []
-        sheets = []
-        for label, model, call in calls:
-            started = time.time()
-            try:
-                response = call.get(timeout=CLIP_TIMEOUT_S)
-            except Exception as error:  # noqa: BLE001 - one failed model does not stop the rest
-                summary["clips"].append(
-                    {"clip": label, "model": model, "error": repr(error)[:2000]}
-                )
-                sys.stdout.write(f"clip {label}: {error!r}\n"[:2000])
-                continue
-            (folder / "clips").mkdir(exist_ok=True)
-            (folder / "clips" / f"{label}.mp4").write_bytes(response["mp4"])
-            entry = {k: v for k, v in response.items() if k != "mp4"}
-            entry |= {"clip": label, "waitedS": round(time.time() - started, 1)}
-            summary["clips"].append(entry)
-            sheets.append(
-                (label, sheet.spawn(response["mp4"], f"{label} ({response.get('model')})"))
-            )
-            sys.stdout.write(f"clip {label}: {json.dumps(entry)}\n")
-            dump()
-        for label, call in sheets:
-            try:
-                (folder / "sheets").mkdir(exist_ok=True)
-                (folder / "sheets" / f"{label}.png").write_bytes(call.get())
-            except Exception as error:  # noqa: BLE001
-                sys.stdout.write(f"sheet {label}: {error!r}\n")
-
-    try:
-        dream_phase()
-    except Exception as error:  # noqa: BLE001 - the materials jobs still come back
-        import traceback
-
-        summary["dreamError"] = traceback.format_exc()[-4000:]
-        sys.stdout.write(f"dream phase raised: {error!r}\n")
-        dump()
-
-    summary["materials"] = []
-    merged: dict[int, dict] = {}
-    for call in material_calls:
+    def run() -> None:
         try:
-            result = call.get(timeout=MATERIALS_TIMEOUT_S)
-        except Exception as error:  # noqa: BLE001
-            summary["materials"].append({"error": repr(error)[:2000]})
-            sys.stdout.write(f"materials raised: {error!r}\n")
-            continue
-        sub = folder / "materials" / f"instance-{result['instance']}"
-        sub.mkdir(parents=True, exist_ok=True)
-        _write(sub, result["files"])
-        (sub / "log.txt").write_text(result["log"], encoding="utf-8")
-        report = json.loads(result["files"].get("report.json", b"[]") or b"[]")
-        brief = {k: v for k, v in result.items() if k not in ("files", "log")} | {"report": report}
-        summary["materials"].append(brief)
-        dump()
-        if "materials.json" in result["files"]:
-            for record in json.loads(result["files"]["materials.json"])["materials"]:
-                merged[int(record["instance"])] = record
-        for clip in sorted(sub.rglob("clip-*.mp4")):
-            sheets_dir = folder / "sheets"
-            sheets_dir.mkdir(exist_ok=True)
-            label = f"camp-c2-instance-{result['instance']}-{clip.stem}"
+            access = modal.Function.from_name(WORLD_MODELS_APP, "access").remote()
+        except Exception as error:  # noqa: BLE001 - reported
+            access = {"error": repr(error)}
+        summary["access"] = access
+        sys.stdout.write(f"hugging face access: {json.dumps(access)}\n")
+
+        jobs = [int(i) for i in instances.split(",") if i.strip()]
+        options = {"model": "Wan", "seeds": seeds, "chain": chain, "strength": strength}
+        material_calls = [
+            calls.spawn(f"materials {i}", materials, "camp", i, options) for i in jobs
+        ]
+
+        def dream_phase() -> None:
+            names = [s.strip() for s in scans.split(",") if s.strip()]
+            summary["starts"] = []
+            views: list[tuple[str, bytes]] = []
+            start_calls = [calls.spawn(f"starts {name}", starts, name) for name in names]
+            for name, call in zip(names, start_calls, strict=True):
+                try:
+                    result = calls.get(call)
+                except Exception as error:  # noqa: BLE001 - reported; the other scans go on
+                    summary["starts"].append({"scan": name, "error": repr(error)})
+                    sys.stdout.write(f"starts raised: {error!r}\n")
+                    continue
+                _write(folder / "starts", result["files"])
+                brief = {k: v for k, v in result.items() if k != "files"}
+                summary["starts"].append(brief)
+                for v in result["views"]:
+                    views.append((v["name"], result["files"][f"{v['name']}.png"]))
+                sys.stdout.write(
+                    f"starts {result['scan']}: {[v['name'] for v in result['views']]}\n"
+                )
+                dump()
+
+            wanted = [m for m in models.split(",") if m]
+            # A model whose weights the token cannot read fails in its container's start, which
+            # Modal retries without end (run 37054515134 waited 4 h on Cosmos): it is skipped.
+            usable = [m for m in wanted if all(access.get(r) == "ok" for r in NEEDS.get(m, ()))]
+            summary["skippedModels"] = {
+                m: {r: access.get(r) for r in NEEDS.get(m, ())} for m in wanted if m not in usable
+            }
+            classes = {m: modal.Cls.from_name(WORLD_MODELS_APP, m)() for m in usable}
+            clip_calls = []
+            for name, png in views:
+                for p in (p.strip() for p in prompts.split(",") if p.strip()):
+                    for model, cls in classes.items():
+                        for seed in range(1, seeds + 1):
+                            request = {"image": png, "prompt": PROMPTS[p], "seed": seed}
+                            label = f"{name}-{p}-{model.lower()}-s{seed}"
+                            clip_calls.append(
+                                (label, model, calls.spawn(f"clip {label}", cls.clip, request))
+                            )
+            summary["clips"] = []
+            sheets = []
+            for label, model, call in clip_calls:
+                started = time.time()
+                try:
+                    # No result in time: the call is cancelled rather than left queued.
+                    response = calls.get(call, timeout=CLIP_TIMEOUT_S)
+                except Exception as error:  # noqa: BLE001 - one failed model does not stop the rest
+                    summary["clips"].append(
+                        {"clip": label, "model": model, "error": repr(error)[:2000]}
+                    )
+                    sys.stdout.write(f"clip {label}: {error!r}\n"[:2000])
+                    continue
+                (folder / "clips").mkdir(exist_ok=True)
+                (folder / "clips" / f"{label}.mp4").write_bytes(response["mp4"])
+                entry = {k: v for k, v in response.items() if k != "mp4"}
+                entry |= {"clip": label, "waitedS": round(time.time() - started, 1)}
+                summary["clips"].append(entry)
+                title = f"{label} ({response.get('model')})"
+                sheets.append((label, calls.spawn(f"sheet {label}", sheet, response["mp4"], title)))
+                sys.stdout.write(f"clip {label}: {json.dumps(entry)}\n")
+                dump()
+            for label, call in sheets:
+                try:
+                    (folder / "sheets").mkdir(exist_ok=True)
+                    (folder / "sheets" / f"{label}.png").write_bytes(calls.get(call))
+                except Exception as error:  # noqa: BLE001
+                    sys.stdout.write(f"sheet {label}: {error!r}\n")
+
+        try:
+            dream_phase()
+        except Exception as error:  # noqa: BLE001 - the materials jobs still come back
+            import traceback
+
+            summary["dreamError"] = traceback.format_exc()[-4000:]
+            sys.stdout.write(f"dream phase raised: {error!r}\n")
+            dump()
+            # Nothing will collect the clips and sheets it had spawned.
+            calls.cancel_outstanding("the dream phase raised", keep=material_calls)
+
+        summary["materials"] = []
+        merged: dict[int, dict] = {}
+        for call in material_calls:
             try:
-                png = sheet.remote(clip.read_bytes(), label, clip.suffix)
-                (sheets_dir / f"{label}.png").write_bytes(png)
+                result = calls.get(call, timeout=MATERIALS_TIMEOUT_S)
             except Exception as error:  # noqa: BLE001
-                sys.stdout.write(f"sheet {label}: {error!r}\n")
-        sys.stdout.write(
-            f"materials {result['instance']}: ok={result['ok']} {json.dumps(report)[:3000]}\n"
+                summary["materials"].append({"error": repr(error)[:2000]})
+                sys.stdout.write(f"materials raised: {error!r}\n")
+                continue
+            sub = folder / "materials" / f"instance-{result['instance']}"
+            sub.mkdir(parents=True, exist_ok=True)
+            _write(sub, result["files"])
+            (sub / "log.txt").write_text(result["log"], encoding="utf-8")
+            report = json.loads(result["files"].get("report.json", b"[]") or b"[]")
+            brief = {k: v for k, v in result.items() if k not in ("files", "log")}
+            summary["materials"].append(brief | {"report": report})
+            dump()
+            if "materials.json" in result["files"]:
+                for record in json.loads(result["files"]["materials.json"])["materials"]:
+                    merged[int(record["instance"])] = record
+            for clip in sorted(sub.rglob("clip-*.mp4")):
+                sheets_dir = folder / "sheets"
+                sheets_dir.mkdir(exist_ok=True)
+                label = f"camp-c2-instance-{result['instance']}-{clip.stem}"
+                try:
+                    png = calls.get(
+                        calls.spawn(f"sheet {label}", sheet, clip.read_bytes(), label, clip.suffix)
+                    )
+                    (sheets_dir / f"{label}.png").write_bytes(png)
+                except Exception as error:  # noqa: BLE001
+                    sys.stdout.write(f"sheet {label}: {error!r}\n")
+            brief_report = json.dumps(report)[:3000]
+            sys.stdout.write(f"materials {result['instance']}: ok={result['ok']} {brief_report}\n")
+        (folder / "materials.json").write_text(
+            json.dumps(
+                {
+                    "format": "hexapod.materials",
+                    "version": 1,
+                    "materials": [merged[k] for k in sorted(merged)],
+                },
+                indent=1,
+            ),
+            encoding="utf-8",
         )
-    (folder / "materials.json").write_text(
-        json.dumps(
-            {
-                "format": "hexapod.materials",
-                "version": 1,
-                "materials": [merged[k] for k in sorted(merged)],
-            },
-            indent=1,
-        ),
-        encoding="utf-8",
-    )
-    dump()
+        dump()
+
+    try:
+        with calls.guard():
+            run()
+        problems = [f"{f['call']}: {f['detail']}" for f in calls.failures()]
+        if "dreamError" in summary:
+            problems.append("the dream phase raised (summary.json, dreamError)")
+        if problems:
+            raise RuntimeError(
+                f"{len(problems)} problem(s), everything else collected: " + "; ".join(problems)
+            )
+    finally:
+        summary["calls"] = calls.report()
+        dump()
