@@ -169,29 +169,58 @@ describe("the /r2 tile proxy", () => {
     expect(fetch).toHaveBeenCalledTimes(cases.length);
   });
 
-  it("does not promise a year for a sidecar a workflow writes into the generation again", async () => {
-    // Written beside the published tileset after the publish, under the same name on every
-    // run: a new segmentation's instances.json (minutes) must not meet the old embeddings.
+  it("promises a year for a generation's sidecars, which only an attach writes, once", async () => {
+    // Every workflow attaches through the API now (apps/api/app/services/attach.py), which
+    // copies the generation into a new one with its files beside it: nothing writes a
+    // generation's instances.emb, collision.bin, sog/ or inferred/ layer twice any more.
+    const binary = [
+      "instances.emb",
+      "collision.bin",
+      "viewcones.bin",
+      "skin.bin",
+      "sog/1_0/means_l.webp",
+      "inferred/teacher/0.glb",
+      "objects/12/object.glb",
+      "0/1.glb",
+    ];
+    for (const file of binary) {
+      const response = await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/${file}`), env });
+      expect(response.headers.get("Cache-Control"), file).toBe(
+        "public, max-age=31536000, immutable",
+      );
+    }
+    for (const { init } of fetched()) {
+      expect(edgeTtl(init)).toEqual({ "200-299": 31536000, "300-599": -1 });
+    }
+    // Its JSON stays short: the worker's publish still writes it with the short lifetime.
+    for (const file of ["instances.json", "sog/lod-meta.json", "inferred/teacher/tileset.json"]) {
+      const response = await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/${file}`), env });
+      expect(response.headers.get("Cache-Control"), file).toBe(
+        "public, max-age=300, stale-while-revalidate=604800",
+      );
+    }
+  });
+
+  it("keeps the sidecars at a legacy prefix short: workflows wrote those in place", async () => {
+    // The spool, pumpkin and camp were published before generations, and the backfills
+    // rewrote instances.emb, collision.bin, sog/ and inferred/ beside them under the same
+    // names. Outside a generation nothing is promised for a year.
     for (const file of [
       "instances.emb",
       "collision.bin",
       "sog/1_0/means_l.webp",
       "inferred/teacher/0.glb",
     ]) {
-      const response = await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/${file}`), env });
+      const response = await onRequest({
+        request: get(`/r2/${OURS}/runs/a/package/splat/${file}`),
+        env,
+      });
       expect(response.headers.get("Cache-Control"), file).toBe(
         "public, max-age=300, stale-while-revalidate=604800",
       );
     }
     for (const { init } of fetched()) {
       expect(edgeTtl(init)).toEqual({ "200-299": 300, "300-599": -1 });
-    }
-    // The package's own files stay written once: its tiles, its view cones, a split object.
-    for (const file of ["0/1.glb", "viewcones.bin", "objects/12/object.glb"]) {
-      const response = await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/${file}`), env });
-      expect(response.headers.get("Cache-Control"), file).toBe(
-        "public, max-age=31536000, immutable",
-      );
     }
   });
 

@@ -843,11 +843,15 @@ aws s3api put-bucket-lifecycle-configuration --bucket twin-assets \
 
 And migration 0009 (`assets.sidecar_flags`), which `release_command` applies on deploy.
 
-`Cache-Control`, once more: an attach writes its whole generation immutable, JSON included.
-The worker's own publish still writes a generation's JSON with the short lifetime, and the
-tile proxy still serves JSON short whatever the object says — both from when workflows
-rewrote `tileset.json` in place. That is only slower than it needs to be, never wrong; both
-can move to immutable together once the workflows call the API.
+`Cache-Control`, once more: an attach writes its whole generation immutable, JSON included,
+and since every workflow goes through it nothing writes a generation twice — so the tile
+proxy now serves every non-JSON key inside a generation for a year, sidecars too
+(`collision.bin`, `instances.emb`, `sog/`, `inferred/…`; it used to keep those short, when
+backfills rewrote them in place). A legacy prefix (`runs/<job>/package/splat/`, written in
+place for years) is outside any generation and stays short. The worker's own publish still
+writes a generation's JSON with the short lifetime, and the proxy still serves JSON short
+whatever the object says; that is only slower than it needs to be, never wrong, and the two
+can move to immutable together.
 
 ### Narrowing the credentials: operator steps
 
