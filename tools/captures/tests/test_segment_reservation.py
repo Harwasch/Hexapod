@@ -136,7 +136,7 @@ def test_a_scan_past_the_threshold_gets_the_large_reservation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = _segment_app(monkeypatch)
-    assert app.reservation(260) == (8.0, 32 * 1024)  # the camp
+    assert app.reservation(514) == (8.0, 32 * 1024)  # the camp
     assert app.reservation(app.LARGE_TILES) == (8.0, 32 * 1024)
     assert app.reservation(app.LARGE_TILES + 1) == (16.0, 64 * 1024)
     tileset = {

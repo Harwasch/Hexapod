@@ -89,9 +89,10 @@ image = (
 CPU_CORES = 8.0
 MEMORY_MIB = 32 * 1024
 
-#: A scan of more tiles than this gets the large reservation. A tile is at most 100k
-#: gaussians (the package stage's `tile_gaussians`), so this is about 45M gaussians: twice
-#: the camp (about 260 tiles). What grows with the scan is what the main process holds --
+#: A scan of more tiles than this gets the large reservation: twice the camp, whose
+#: tileset.json names 514 (22.7M gaussians; `tiles_in` counts the LOD parents as well as
+#: the leaves, each at most 100k gaussians -- the package stage's `tile_gaussians`), so
+#: about 45M gaussians. What grows with the scan is what the main process holds --
 #: the scan whole, its index, every view kept for `describe` (segment_scene's docstring:
 #: the camp ran "on 15 GB") -- and at twice the camp that alone leaves 32 GiB room for one
 #: render at `RENDER_WORKER_BYTES`, so the renders, not the masks, would set the pace,
@@ -99,7 +100,7 @@ MEMORY_MIB = 32 * 1024
 #: `MAX_VIEWS` (480), so time grows about with the views: **expected, not measured**, about
 #: twice the camp's 24 min at 16 cores and 64 GiB, ~$1.6 a scan ($0.80/h of L4 and $1.27/h
 #: of cores and memory).
-LARGE_TILES = 500
+LARGE_TILES = 1000
 LARGE_CPU_CORES = 16.0
 LARGE_MEMORY_MIB = 64 * 1024
 

@@ -63,8 +63,9 @@ All of these are general models; none knows our scenes.
    sight, and more eye-height views -- each with a far plane, up to a cap (252 on the camp).
    They render in forked workers while the GPU masks the ones already done -- as many as
    the Modal call's reservation holds (8 CPUs and 32 GiB on an L4: the camp in 1,416 s for
-   $0.56; a scan past 500 tiles gets 16 and 64 GiB; `infra/modal/segment.py`), not a fixed
-   count, since the masks rather than the renders set the pace.
+   $0.56; a scan past 1,000 tiles -- twice the camp's 514 -- gets 16 and 64 GiB;
+   `infra/modal/segment.py`), not a fixed count, since the masks rather than the renders
+   set the pace.
 2. **Masks.** Class-free automatic masks at several scales per view (SAM 2 family). A mask
    over (nearly) the whole view is no evidence of what belongs together and is left out.
 3. **Lift.** Each mask votes for the splats it covers. Splats that co-occur in masks across
