@@ -40,6 +40,8 @@ interface Scan {
   category: string;
   categoryId: string;
   view: [heading: number, pitch: number, range: number];
+  /** An object clicked in the scene, and the views (heading, pitch, range) it is clicked from. */
+  select: { id: number; views: [heading: number, pitch: number, range: number][] };
 }
 
 const SCANS: Scan[] = [
@@ -49,6 +51,16 @@ const SCANS: Scan[] = [
     category: "Fruit, vegetables & crops",
     categoryId: "produce",
     view: [30, -40, 7],
+    // One of the big pumpkins, from close by to far out.
+    select: {
+      id: 51,
+      views: [
+        [30, -40, 6],
+        [30, -35, 14],
+        [30, -30, 32],
+        [30, -30, 120],
+      ],
+    },
   },
   {
     name: "camp",
@@ -56,6 +68,16 @@ const SCANS: Scan[] = [
     category: "Trees",
     categoryId: "trees",
     view: [200, -25, 90],
+    // A roof among the cabins.
+    select: {
+      id: 4722,
+      views: [
+        [200, -45, 8],
+        [200, -40, 14],
+        [200, -35, 32],
+        [200, -35, 300],
+      ],
+    },
   },
 ];
 
@@ -72,6 +94,13 @@ interface Harness {
   remember(): void;
   changed(): number;
   categories(): { id: string; name: string; objects: number; splats: number }[];
+  drawn(category: string): {
+    tiles: number;
+    tilesWithIds: number;
+    splats: number;
+    unlabelled: number;
+    inCategory: number;
+  };
   scan(): {
     kind: string;
     native: boolean;
@@ -132,7 +161,13 @@ function harnessHtml(scan: Scan, renderer: string): string {
 </html>`;
 }
 
-async function open(page: Page, scan: Scan, renderer: string): Promise<void> {
+async function open(
+  page: Page,
+  scan: Scan,
+  renderer: string,
+  path = "/published-harness.html",
+  global = "__instances",
+): Promise<void> {
   await page.route("**/published/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^.*\/published\//, "");
     if (path.includes("..")) return route.abort();
@@ -151,8 +186,8 @@ async function open(page: Page, scan: Scan, renderer: string): Promise<void> {
   await page.route("**/published-harness.html", (route) =>
     route.fulfill({ status: 200, contentType: "text/html", body: harnessHtml(scan, renderer) }),
   );
-  await page.goto("/published-harness.html");
-  await page.waitForFunction(() => "__instances" in window, undefined, { timeout: 600_000 });
+  await page.goto(path);
+  await page.waitForFunction((name) => name in window, global, { timeout: 600_000 });
 }
 
 function caller(page: Page) {
@@ -197,6 +232,8 @@ for (const scan of SCANS) {
       const baseline = await call("view", ...scan.view);
       const status = await call("scan");
       const categories = await call("categories");
+      // What is drawn now: tiles carrying ids, splats with none, splats of the category.
+      const drawn = await call("drawn", scan.categoryId);
       await page.screenshot({ path: shot("before") });
       await page.locator("#panel").screenshot({ path: shot("panel") });
 
@@ -229,6 +266,7 @@ for (const scan of SCANS) {
       const measures = {
         status,
         categories,
+        drawn,
         baseline,
         hidden,
         hiddenChanged,
@@ -255,6 +293,122 @@ for (const scan of SCANS) {
       // The highlight warms the category and dims the rest.
       expect(lit.warmth).toBeGreaterThan(baseline.warmth + 5);
       expect(lit.luma).toBeLessThan(baseline.luma);
+    });
+  }
+}
+
+// ---- Selecting in the scene -------------------------------------------------------------
+
+/** `src/dev/sceneSelectHarness.ts`, as the page exposes it. */
+interface SelectHarness {
+  view(id: number, headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
+  screenOf(id: number): { x: number; y: number; splats: number } | null;
+  instances(): { id: number; parent: number | null; splats: number }[];
+  state(): { candidates: number[]; chain: number; index: number; selected: number | null };
+  frames(count: number): Promise<void>;
+  probe(x: number, y: number): Record<string, unknown>;
+}
+
+function selectHarnessHtml(scan: Scan, renderer: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Published scene select</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #10141a; overflow: hidden; }
+      #viewer, #viewer .cesium-widget, #viewer canvas { width: 100vw; height: 100vh; display: block; }
+    </style>
+  </head>
+  <body>
+    <div id="viewer"></div>
+    <script type="module">
+      import RefreshRuntime from "/@react-refresh";
+      RefreshRuntime.injectIntoGlobalHook(window);
+      window.$RefreshReg$ = () => {};
+      window.$RefreshSig$ = () => (type) => type;
+      window.__vite_plugin_react_preamble_installed__ = true;
+    </script>
+    <script type="module">
+      const harness = await import("/src/dev/sceneSelectHarness.ts");
+      window.__select = await harness.startSceneSelectHarness({
+        container: document.getElementById("viewer"),
+        url: "/published/${scan.run}/package/splat/tileset.json",
+        renderer: "${renderer}",
+      });
+    </script>
+  </body>
+</html>`;
+}
+
+for (const scan of SCANS) {
+  for (const renderer of RENDERERS) {
+    test(`${scan.name} under ${renderer}: a click on an object selects it, near and far`, async ({
+      page,
+    }) => {
+      test.setTimeout(3_600_000);
+      await page.route("**/published-select.html", (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: selectHarnessHtml(scan, renderer),
+        }),
+      );
+      await open(page, scan, renderer, "/published-select.html", "__select");
+      const call = <K extends keyof SelectHarness>(
+        method: K,
+        ...args: Parameters<SelectHarness[K]>
+      ): Promise<Awaited<ReturnType<SelectHarness[K]>>> =>
+        page.evaluate(
+          ([m, a]) => {
+            const harness = (window as unknown as { __select: Record<string, unknown> }).__select;
+            return (harness[m] as (...x: unknown[]) => unknown)(...a);
+          },
+          [method, args] as [string, unknown[]],
+        ) as Promise<Awaited<ReturnType<SelectHarness[K]>>>;
+      const shot = (name: string): string => {
+        const file = `${scan.name}-${renderer}-select-${name}.png`;
+        if (!SHOTS) return test.info().outputPath(file);
+        mkdirSync(SHOTS, { recursive: true });
+        return join(SHOTS, file);
+      };
+      const [h0, p0, r0] = scan.select.views[0] ?? [0, -30, 10];
+      await call("view", scan.select.id, h0, p0, r0);
+      const parentOf = new Map((await call("instances")).map((i) => [i.id, i.parent]));
+      const topOf = (id: number | null): number | null => {
+        let at = id;
+        for (let up = at === null ? null : (parentOf.get(at) ?? null); up !== null;) {
+          at = up;
+          up = parentOf.get(at) ?? null;
+        }
+        return at;
+      };
+      const results: Record<string, unknown>[] = [];
+      for (const [heading, pitch, range] of scan.select.views) {
+        await page.keyboard.press("Escape");
+        await call("view", scan.select.id, heading, pitch, range);
+        const target = await call("screenOf", scan.select.id);
+        expect(target, `the object is on screen from ${String(range)} m`).not.toBeNull();
+        const x = target?.x ?? 0;
+        const y = target?.y ?? 0;
+        const probe = await call("probe", x, y);
+        await page.mouse.click(x, y);
+        await call("frames", 5);
+        const picked = await call("state");
+        await page.screenshot({ path: shot(`${String(range)}m`) });
+        const result = { range, x, y, probe, picked };
+        results.push(result);
+        console.info(JSON.stringify(result));
+        expect(topOf(picked.selected), JSON.stringify(result)).toBe(topOf(scan.select.id));
+        await expect(page.getByTestId("scene-select-label")).toBeVisible();
+        if (picked.candidates.length > 1) {
+          await page.keyboard.press("]");
+          expect((await call("state")).index).toBe((picked.index + 1) % picked.candidates.length);
+          await page.keyboard.press("[");
+          expect((await call("state")).index).toBe(picked.index);
+        }
+      }
+      test.info().annotations.push({ type: "measures", description: JSON.stringify(results) });
     });
   }
 }

@@ -66,6 +66,8 @@ export class SelectionManager {
   private collider: SplatCollider | null = null;
   private pickTicket = 0;
   private hoverEnabled = true;
+  /** Asked first on every click: true when it took the click (scene selection hit a scan). */
+  private claim: ((position: Cartesian2) => boolean) | null = null;
 
   constructor(
     private readonly viewer: Viewer,
@@ -82,7 +84,9 @@ export class SelectionManager {
     viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_CLICK);
     this.handler = new ScreenSpaceEventHandler(viewer.canvas);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
-      if (this.enabled) void this.select(event.position);
+      if (!this.enabled) return;
+      if (this.claimed(event.position)) return;
+      void this.select(event.position);
     }, ScreenSpaceEventType.LEFT_CLICK);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (this.enabled) void this.selectAndFly(event.position);
@@ -107,6 +111,30 @@ export class SelectionManager {
       clearTimeout(this.hoverTimer);
       this.hoverTimer = null;
     }
+  }
+
+  /**
+   * Who is asked first on a click (the scan's objects, SceneSelectController): when it takes
+   * the click, no card opens for it and an open one closes -- an object of the scan under the
+   * cursor is what was clicked, not the site's boundary or the ground beneath it.
+   */
+  setClickClaim(claim: ((position: Cartesian2) => boolean) | null): void {
+    this.claim = claim;
+  }
+
+  private claimed(position: Cartesian2): boolean {
+    let taken = false;
+    try {
+      taken = this.claim?.(position) ?? false;
+    } catch (error) {
+      log.warn("click claim failed", { error: String(error) });
+    }
+    if (taken) {
+      // A newer click supersedes a pick still being answered, and an open card closes.
+      this.pickTicket += 1;
+      this.clear();
+    }
+    return taken;
   }
 
   setEnabled(enabled: boolean): void {
@@ -220,7 +248,7 @@ export class SelectionManager {
     if (!current) return;
     const context = this.pickPosition(window, picked);
     if (!context) return;
-    void this.select(window);
+    if (!this.claimed(window)) void this.select(window);
     const distance = Cartesian3.distance(this.viewer.camera.positionWC, context.position);
     const pose = this.camera.pose();
     const lon = CesiumMath.toDegrees(context.carto.longitude);

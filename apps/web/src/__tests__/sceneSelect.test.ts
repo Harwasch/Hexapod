@@ -23,7 +23,7 @@ import {
   selectionLabel,
 } from "@/lib/sceneSelect";
 import { BrushMask, paintedSplats, projectTiles, visibleSplats } from "@/lib/splatPaint";
-import { buildTileIndex, castRay, hitWeights, type PickTile } from "@/lib/splatPick";
+import { buildTileIndex, castRay, hitWeights, labelsNear, type PickTile } from "@/lib/splatPick";
 
 const CHECKSUM = "fnv1a32:6:0000abcd";
 
@@ -175,6 +175,24 @@ describe("picking", () => {
     const weights = hitWeights(hits, (h) => ids?.[h.index] ?? 0);
     expect([...weights.keys()]).toEqual([3, 4, 2]);
     expect(weights.get(3)?.weight ?? 0).toBeGreaterThan(weights.get(4)?.weight ?? 0);
+  });
+
+  it("labels an unlabelled spot by the labelled splats drawn around it", () => {
+    // Splat 0 unlabelled where the ray meets the scan; 7 and 9 labelled beside it, 9 nearer.
+    const t = tile([0, 0, 5, 0.3, 0, 5, -0.1, 0, 5, 0, 0.1, 5, 4, 0, 5], 0.1, 0.9);
+    const ids = [0, 7, 9, 9, 3];
+    const near = labelsNear([t], [0, 0, 5], 0.5, (_tile, index) => ids[index] ?? 0);
+    expect([...near.keys()].sort()).toEqual([7, 9]);
+    expect(near.get(9)?.weight ?? 0).toBeGreaterThan(near.get(7)?.weight ?? 0);
+    // What is hidden does not label anything.
+    const shown = labelsNear(
+      [t],
+      [0, 0, 5],
+      0.5,
+      (_tile, index) => ids[index] ?? 0,
+      (_tile, index) => ids[index] !== 9,
+    );
+    expect([...shown.keys()]).toEqual([7]);
   });
 });
 

@@ -269,6 +269,62 @@ export function castRay(tiles: readonly PickTile[], ray: Ray, options: PickOptio
   return out;
 }
 
+/**
+ * The ids the labelled splats within `radius` of `point` carry, each weighted by opacity and
+ * nearness (`1 / (1 + (d / radius)²·4)`), for a click whose splats carry no id: a coarse
+ * level of detail's merged splats take an id only where the leaves under them agree (the
+ * published scans' first binding rule), so far off most of what a ray meets is unlabelled
+ * while labelled splats sit right beside it. As `rebind_instances.py` labels a merged splat
+ * by the leaves nearest it, but from what is drawn now. Splats `include` refuses are skipped.
+ */
+export function labelsNear(
+  tiles: readonly PickTile[],
+  point: Vec3,
+  radius: number,
+  idOf: (tile: number, index: number) => number,
+  include?: (tile: number, index: number) => boolean,
+): Map<number, { weight: number; t: number }> {
+  const out = new Map<number, { weight: number; t: number }>();
+  const r2 = radius * radius;
+  for (let ti = 0; ti < tiles.length; ti++) {
+    const tile = tiles[ti];
+    if (!tile || tile.count === 0) continue;
+    const index = tileIndexOf(tile);
+    const { positions, opacity } = tile;
+    const blocks = index.boxes.length / 6;
+    for (let b = 0; b < blocks; b++) {
+      const at = b * 6;
+      const bx = index.boxes;
+      // Outside the block's box by more than the radius: none of its splats is near.
+      let outside = 0;
+      for (let a = 0; a < 3; a++) {
+        const p = point[a] ?? 0;
+        const lo = (bx[at + a] ?? 0) - p;
+        const hi = p - (bx[at + 3 + a] ?? 0);
+        const gap = Math.max(0, lo, hi);
+        outside += gap * gap;
+      }
+      if (outside > r2) continue;
+      const end = Math.min(tile.count, (b + 1) * BLOCK);
+      for (let k = b * BLOCK; k < end; k++) {
+        const i = index.order[k] ?? 0;
+        const dx = (positions[i * 3] ?? 0) - point[0];
+        const dy = (positions[i * 3 + 1] ?? 0) - point[1];
+        const dz = (positions[i * 3 + 2] ?? 0) - point[2];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > r2) continue;
+        const id = idOf(ti, i);
+        if (id === 0 || (include && !include(ti, i))) continue;
+        const weight = (opacity[i] ?? 1) / (1 + (4 * d2) / r2);
+        const current = out.get(id);
+        if (current) current.weight += weight;
+        else out.set(id, { weight, t: 0 });
+      }
+    }
+  }
+  return out;
+}
+
 /** Per instance id (0: none), the share of the pixel its splats are and the nearest hit. */
 export function hitWeights(
   hits: readonly RayHit[],
