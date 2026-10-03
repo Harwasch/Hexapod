@@ -567,3 +567,48 @@ def test_given_categories_take_the_place_of_the_tags_vote() -> None:
     assert scene_categories.instance_categories(records, labels) == {1: "ground", 2: "ground"}
     given = scene_categories.instance_categories(records, labels, given={1: "produce"})
     assert given == {1: "produce", 2: "produce"}
+
+
+def test_each_batch_of_views_is_sized_from_the_reservation(
+    run: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no `workers`, the render processes come from the reservation the caller passed
+    (`default_workers(cpus, memory_bytes)`, infra/modal/segment.py's `--cpus` / `--memory-gb`),
+    asked again for each batch of views -- the first and every coverage round -- and said."""
+    splats, levels = run["splats"], run["levels"]
+    asked: list[tuple[object, object]] = []
+
+    def default_workers(cpus=None, memory_bytes=None):
+        asked.append((cpus, memory_bytes))
+        return 1
+
+    monkeypatch.setattr(ss, "default_workers", default_workers)
+    said: list[str] = []
+    cameras = [v.camera for v in run["result"].views][:2]
+    ss.segment(
+        splats,
+        None,
+        ss.FakeEmbedder(),
+        VOCABULARY,
+        cameras=cameras,
+        source_factory=lambda batch: ss.OracleMasks(splats, levels, batch),
+        progress=said.append,
+        cpus=8,
+        memory_bytes=32 * float(1 << 30),
+    )
+    assert asked and set(asked) == {(8, 32 * float(1 << 30))}
+    assert "render workers: 1" in said
+    # A count given is used as it is.
+    asked.clear()
+    ss.segment(
+        splats,
+        None,
+        ss.FakeEmbedder(),
+        VOCABULARY,
+        cameras=cameras,
+        source_factory=lambda batch: ss.OracleMasks(splats, levels, batch),
+        workers=1,
+        cpus=8,
+        memory_bytes=32 * float(1 << 30),
+    )
+    assert asked == []

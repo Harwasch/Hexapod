@@ -152,14 +152,82 @@ def test_the_command_passes_the_reservation_not_a_worker_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = _segment_app(monkeypatch)
-    argv = app.segment_argv(
-        Path("/w/tiles"), Path("/w/i.png"), views=24, cpus=16.0, memory_mib=65536
-    )
+    argv = app.segment_argv(Path("/w/tiles"), Path("/w"), views=24, cpus=16.0, memory_mib=65536)
     assert "--workers" not in argv
     assert argv[argv.index("--cpus") + 1] == "16"
     assert argv[argv.index("--memory-gb") + 1] == "64"
     assert "--cache" not in argv
     cached = app.segment_argv(
-        Path("/w/tiles"), Path("/w/i.png"), views=24, cpus=8.0, memory_mib=32768, cache=Path("/c")
+        Path("/w/tiles"), Path("/w"), views=24, cpus=8.0, memory_mib=32768, cache=Path("/c")
     )
     assert cached[-2:] == ["--cache", "/c"]
+
+
+def test_the_command_carries_segmentation_v2s_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The merged command line: v2's renderer, floater cut, coverage rounds and debug sheets
+    beside the reservation, and no `--render-instances` PNG (v2 hands back report.json and
+    compare.png instead)."""
+    app = _segment_app(monkeypatch)
+    argv = app.segment_argv(
+        Path("/w/tiles"), Path("/w"), views=24, cpus=8.0, memory_mib=32768, coverage_rounds=3
+    )
+    assert "--render-instances" not in argv
+    assert argv[argv.index("--renderer") + 1] == "gsplat"
+    assert argv[argv.index("--max-scale-m") + 1] == str(app.MAX_SCALE_M)
+    assert argv[argv.index("--coverage-rounds") + 1] == "3"
+    assert argv[argv.index("--coverage-views") + 1] == str(app.COVERAGE_VIEWS)
+    assert argv[argv.index("--debug-dir") + 1] == "/w/debug"
+    assert ("--variants" in argv) == app.VARIANTS
+    cpu = app.segment_argv(
+        Path("/w/tiles"), Path("/w"), views=24, cpus=8.0, memory_mib=32768, renderer="cpu"
+    )
+    assert cpu[cpu.index("--renderer") + 1] == "cpu"
+    assert cpu[cpu.index("--coverage-rounds") + 1] == str(app.COVERAGE_ROUNDS)
+
+
+def test_segment_scan_takes_v2s_options_and_the_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`main` spawns `segment_scan(name, url, views, keep_masks, renderer, coverage_rounds,
+    cpus, memory_mib)` positionally: the function's parameters must stay in that order."""
+    import inspect
+
+    app = _segment_app(monkeypatch)
+    names = list(inspect.signature(app.app.functions["segment_scan"].fn).parameters)
+    assert names == [
+        "name",
+        "url",
+        "views",
+        "keep_masks",
+        "renderer",
+        "coverage_rounds",
+        "cpus",
+        "memory_mib",
+    ]
+
+
+def test_the_cli_takes_v2s_flags_with_the_reservation(
+    host: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`segment_scene.py` parses the merged command line (one `--workers`, v2's flags, the
+    reservation) and hands all of it to `segment`."""
+    seen: dict[str, Any] = {}
+
+    def stop(*_args: Any, **kwargs: Any) -> None:
+        seen.update(kwargs)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(ss, "segment", stop)
+    monkeypatch.setattr(ss, "load_source", lambda *_a: (None, None, 0))
+    monkeypatch.setattr(ss, "load_embedder", lambda _name: None)
+    monkeypatch.setattr(ss, "load_masks", lambda _name: None)
+    monkeypatch.setattr(ss, "make_renderer", lambda name: name)
+    argv = ["segment_scene.py", str(tmp_path / "s.ply"), str(tmp_path), "--masks", "m:M"]
+    flags = ["--renderer", "cpu", "--max-scale-m", "0.5", "--coverage-rounds", "2"]
+    reservation = ["--cpus", "8", "--memory-gb", "32"]
+    monkeypatch.setattr(sys, "argv", [*argv, *flags, *reservation])
+    with pytest.raises(SystemExit):
+        ss.main()
+    assert seen["renderer"] == "cpu" and seen["max_scale_m"] == 0.5
+    assert seen["coverage_rounds"] == 2
+    assert seen["cpus"] == 8 and seen["memory_bytes"] == 32 * GIB and seen["workers"] is None
