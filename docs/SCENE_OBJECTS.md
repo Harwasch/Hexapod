@@ -61,7 +61,13 @@ All of these are general models; none knows our scenes.
    than one view's footprint (a 0.24 m cell spanning ~4 px: ~30 m on the camp) also gets
    local views that scale with its area -- obliques per footprint anchor, placed by line of
    sight, and more eye-height views -- each with a far plane, up to a cap (252 on the camp).
-   They render in forked workers while the GPU masks the ones already done.
+   They render in forked workers while the GPU masks the ones already done. On a GPU the
+   image the mask model sees is rasterized by gsplat (`--renderer gsplat`, as a viewer
+   draws it; the per-pixel splat ids still come from the CPU's samples of the same camera),
+   without the floaters larger than `--max-scale-m` (0.5 m). Then **coverage rounds**
+   (`coverage_views`, two by default): after a lift, views are aimed at what is still
+   without an instance -- unassigned splats binned in 3D, each target seen by two obliques
+   and once from eye height (into a canopy) -- and everything is lifted again.
 2. **Masks.** Class-free automatic masks at several scales per view (SAM 2 family). A mask
    over (nearly) the whole view is no evidence of what belongs together and is left out.
 3. **Lift.** Each mask votes for the splats it covers. Splats that co-occur in masks across
@@ -72,6 +78,11 @@ All of these are general models; none knows our scenes.
    specks and slivers between masks take their neighbours' instance.
 4. **Meaning.** For each instance, crop its best views and embed them with an
    image-text model (SigLIP/CLIP family). Text search is cosine similarity at query time.
+   The crops (`DESCRIBE_KINDS`) are square, from the CPU's point samples: uncut (box
+   padded), and alone (the rest black, and grey); each kind is embedded on its own and the
+   kinds averaged. Measured on the pumpkin and the camp (`describe_variants`, 2026-10-03):
+   gsplat's images, dimmed context, wide crops and portraits of an instance's own splats all
+   read worse to SigLIP (a conifer's parts as "bush", crops on grey as "plume" or "map").
    An instance too small in every view for a useful crop (`DESCRIBE_MIN_PX`) keeps no
    embedding and no tags (its row in `instances.emb` is zero) and its nearest described
    ancestor's properties.
@@ -114,6 +125,18 @@ All of these are general models; none knows our scenes.
    instance. Classifying each instance's embedding against the category prompts directly
    (instead of through its top five labels) is no better there (instance 4: ground 0.20,
    produce 0.19). Hiding "pumpkins" exactly needs finer segmentation, not another rule here.
+
+   **v2 (published 2026-10-03, segment.yml run 37100026825).** The category of a described
+   instance is now `segment_scene`'s own: per crop kind, its 10 best labels' probabilities
+   summed per category; averaged over kinds; then mixed 1:1 with its parent's (a part is
+   seen with what it is part of). The zero-shot head over the category prompts was measured
+   and is weighed 0 (it pulled crowns to Shrubs and hay to Sky). Before -> after:
+   splats without an instance 8.3% -> 1.7% on the camp (rim 54% -> 12%), 2.4% -> 0.2% on
+   the pumpkin, 3.1% -> 0.3% on the spool; the red pumpkin 57% -> 98% in Fruit, vegetables
+   & crops, orange splats 75% -> 89%, hay 65% -> 22% in it; the camp's canopy (over 3 m)
+   21% -> 28% Trees, 13% -> 12% Shrubs. Worse: the camp now has 6% Household and 4% Sky
+   (labels such as "map" and "plume" on crowns), and only 4.3k of 28.4k instances are
+   described.
 
 ## 4. Data contract (v1)
 
@@ -161,7 +184,8 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
   published tiles.
 - What the segmentation never saw keeps 0 and can be neither hidden nor highlighted: on the
   camp that is the sparse rim of the capture (its shallow leaf tiles, 2.7 M splats, are 36-94%
-  unassigned), which a view from above the whole camp is mostly made of.
+  unassigned), which a view from above the whole camp is mostly made of. (Before v2's
+  coverage rounds; now 12% of the rim and 1.7% of the camp.)
 - `instances.emb`: `float16`, `count × dim`, row `k` is instance id `k + 1`, L2-normalised; an
   instance that was not described (no `tags`) has a zero row.
 
