@@ -7,8 +7,7 @@
  * splats' solids (SplatCollider, CPU), and the depth pick runs only where no splat is.
  */
 
-import * as CesiumBarrel from "cesium";
-import type { Cartesian2, Cartesian3, Ray } from "cesium";
+import { ScreenSpaceCameraController, type Cartesian2, type Cartesian3, type Ray } from "cesium";
 
 import type { SplatCollider } from "./SplatCollider";
 
@@ -19,8 +18,7 @@ interface ControllerModule {
 }
 
 function controllerModule(): ControllerModule | undefined {
-  const candidate = (CesiumBarrel as unknown as Record<string, unknown>)
-    .ScreenSpaceCameraController;
+  const candidate: unknown = ScreenSpaceCameraController;
   return typeof candidate === "function" ? (candidate as unknown as ControllerModule) : undefined;
 }
 

@@ -1,8 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { useScene } from "@/cesium/SceneContext";
+import { collapsesToPin, pinCounts, pinLabel } from "@/missions/sitePin";
 import type { Machine, Zone } from "@/missions/types";
 import { useMission } from "@/state/mission";
+import { useViewer } from "@/state/viewer";
 
 import { useMissionActions } from "./useMissionActions";
 
@@ -16,6 +18,10 @@ const STATUS_CLASS: Record<Machine["status"], string> = {
  * Machine markers and zone chips as DOM elements positioned by the
  * MissionManager every frame (design: MACHINE MARKER, ZONE GEOMETRY chips).
  * Positions are written straight to the DOM; React never re-renders per frame.
+ *
+ * At globe scale (above `GLOBE_SCALE_ALTITUDE_M`) the whole project is a few pixels across,
+ * so its markers and chips collapse into one site pin with the site's name and a count;
+ * the pin flies to the site. React re-renders only when the camera crosses that height.
  */
 export function MissionOverlays() {
   const scene = useScene();
@@ -24,7 +30,8 @@ export function MissionOverlays() {
   const hovered = useMission((s) => s.hoveredMachineId);
   const setHovered = useMission((s) => s.setHoveredMachine);
   const zonesOn = useMission((s) => s.layers.zones);
-  const { selectMachine, selectZone } = useMissionActions();
+  const collapsed = useViewer((s) => collapsesToPin(s.camera.altitude));
+  const { selectMachine, selectZone, flyToProject } = useMissionActions();
   const nodes = useRef(new Map<string, HTMLElement>());
 
   useEffect(() => {
@@ -41,13 +48,45 @@ export function MissionOverlays() {
         node.style.transform = `translate3d(${anchor.x.toFixed(1)}px, ${anchor.y.toFixed(1)}px, 0)`;
       }
     });
-  }, [scene, project]);
+    // Re-subscribing when the pin swaps in asks for a frame, so it is placed straight away.
+  }, [scene, project, collapsed]);
+
+  const register = useCallback(
+    (id: string) => (el: HTMLElement | null) => {
+      if (el) nodes.current.set(id, el);
+      else nodes.current.delete(id);
+    },
+    [],
+  );
 
   if (!project) return null;
-  const register = (id: string) => (el: HTMLElement | null) => {
-    if (el) nodes.current.set(id, el);
-    else nodes.current.delete(id);
-  };
+
+  if (collapsed) {
+    const counts = pinCounts(project, zonesOn);
+    // The "Anywhere" project has nothing on the ground to stand for until an area is drawn.
+    if (counts.total === 0) return null;
+    const label = pinLabel(project.name, counts);
+    return (
+      <div className="mc-overlays" aria-label="Sites on map">
+        <button
+          ref={register(`site:${project.id}`)}
+          type="button"
+          className="mc-site-pin"
+          style={{ visibility: "hidden" }}
+          onClick={flyToProject}
+          aria-label={`${label}. Fly to the site`}
+          title={label}
+          data-testid="site-pin"
+        >
+          <span className="mc-site-pin__dot" aria-hidden="true" />
+          <span className="mc-site-pin__name">{project.name}</span>
+          <span className="mc-site-pin__count mc-mono" aria-hidden="true">
+            {counts.total}
+          </span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="mc-overlays" aria-label="Fleet on map">

@@ -15,12 +15,13 @@ from app.schemas.asset import (
     CrsMetadata,
     RenderConfig,
     ResolutionMetadata,
+    SidecarFlag,
     TilesUrlSource,
     provider_for_source,
 )
 from app.schemas.common import Attribution, LicenseMetadata, Provenance
 from app.services import geometry
-from app.services.errors import NotFoundError
+from app.services.errors import InvalidInputError, NotFoundError
 from app.services.urls import validate_dataset_url
 
 
@@ -103,7 +104,7 @@ def update_asset(db: Session, asset_id: uuid.UUID, payload: AssetUpdate) -> Asse
             geometry.footprint_to_wkb(payload.footprint) if payload.footprint else None
         )
     if asset.valid_from and asset.valid_to and asset.valid_to < asset.valid_from:
-        raise ValueError("validTo must not precede validFrom")
+        raise InvalidInputError("validTo must not precede validFrom")
     db.commit()
     db.refresh(asset)
     return asset
@@ -143,6 +144,7 @@ def asset_to_read(asset: Asset) -> AssetRead:
         provenance=Provenance.model_validate(provenance_raw) if provenance_raw else None,
         render_config=RenderConfig.model_validate(render_raw),
         default_visible=asset.default_visible,
+        sidecar_flags=[SidecarFlag.model_validate(entry) for entry in asset.sidecar_flags or []],
         created_at=asset.created_at,
         updated_at=asset.updated_at,
     )

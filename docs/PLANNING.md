@@ -49,12 +49,12 @@ without manual replan). The console records the first three per session (dev pan
 ## 3. Design
 
 **UX flow.** Plans window → "+ New plan" (or Fleet "Plan a mission", a zone's "Plan here",
-or the command bar `plan: …`) → composer (goal, zone and machine chips, examples) →
+or the command box `plan: …`) → composer (goal, zone and machine chips, examples) →
 "Draft with the agent" → review (source note, title, objective, estimates with assumptions,
 schedule lanes, steps, what changed, risks, questions, refine box) → Approve → plan detail
 (schedule, steps, progress, lifecycle) → Dispatch / Pause / Resume / Revise.
 
-**States.** Composer: idle, drafting (agent stream shows a running thread), ready, error.
+**States.** Composer: idle, drafting (the status line says so; the activity log shows the running thread), ready, error.
 Plan: Scheduled → Dispatched → (Paused ⇄) → Done. Revisions increment on every approval of a
 revise flow; the detail shows the history.
 

@@ -28,6 +28,7 @@ from app.schemas.pipeline import (
     RecipeRead,
     RecipeStageRead,
 )
+from app.services.errors import InvalidInputError
 
 if TYPE_CHECKING:  # pragma: no cover - import is for typing only
     from app.worker.pipeline_bridge import Recipe
@@ -159,23 +160,40 @@ def check_overrides(name: str, params: dict[str, Any]) -> None:
 
     Silent where the pipeline is not on the path: the worker performs the same merge when
     the run starts, so the check is a better error message, never the only one.
+
+    One value is checked as well as the shape: `ship_sh_degree`, wherever a stage takes
+    it, by the pipeline's own `harmonics.check_degree` (0-3). A stage refuses a bad one
+    with a `ValueError`, which is not among the failures the worker declines to retry
+    (`errors.BAD_INPUT_ERRORS`) -- so `{"train": {"ship_sh_degree": 7}}` was queued, and
+    then failed and was retried until the attempt budget ran out, a GPU stage each time,
+    where it can be a 422 while the form is still open. Checked on the merged parameters,
+    so a recipe's own default is held to the same rule as an override.
     """
     if not params:
         return
     recipes = _load_recipes()
     if recipes is None:
         return
-    from app.worker.pipeline_bridge import PipelineError
+    from app.worker.pipeline_bridge import PipelineError, check_sh_degree
 
     for recipe in recipes:
         if recipe.name == name:
             try:
-                recipe.with_params(_stage_keyed(name, params))
+                merged = recipe.with_params(_stage_keyed(name, params))
             except PipelineError as error:
-                # Re-raised as a ValueError only to reach the 422 handler; the message is
+                # Re-raised as InvalidInputError only to reach the 422 handler; the message is
                 # the pipeline's, word for word, because it is the one that knows which
                 # stages the recipe has.
-                raise ValueError(str(error)) from error
+                raise InvalidInputError(str(error)) from error
+            for stage in merged.stages:
+                if "ship_sh_degree" not in stage.params:
+                    continue
+                try:
+                    check_sh_degree(stage.params["ship_sh_degree"])
+                except ValueError as error:
+                    raise InvalidInputError(
+                        f"recipe '{name}': `params[{stage.id!r}]`: {error}"
+                    ) from error
             return
 
 
@@ -189,7 +207,7 @@ def _stage_keyed(recipe: str, params: dict[str, Any]) -> dict[str, dict[str, Any
     keyed: dict[str, dict[str, Any]] = {}
     for stage_id, overrides in params.items():
         if not isinstance(overrides, dict):
-            raise ValueError(
+            raise InvalidInputError(
                 f"recipe '{recipe}': `params[{stage_id!r}]` must be an object of that "
                 f"stage's parameters, for example "
                 f"{{'georeference': {{'lat': 51.5, 'lon': -0.12}}}}"

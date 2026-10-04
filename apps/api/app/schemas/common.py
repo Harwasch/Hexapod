@@ -89,3 +89,13 @@ class Problem(CamelModel):
     status: int
     detail: str | None = None
     errors: list[dict[str, object]] | None = None
+    #: An RFC 9457 extension member, present where the endpoint gives a reason a client
+    #: can act on (`ConflictError.code`).
+    code: str | None = Field(
+        default=None,
+        description=(
+            "A machine-readable reason, where the endpoint gives one: what a client "
+            "branches on, rather than the words of `detail`. The sidecar attach's 409s "
+            "say `tiles_changed`, `busy` or `not_attachable`."
+        ),
+    )

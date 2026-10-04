@@ -13,6 +13,8 @@ import type { ArtifactKind } from "@twin/contracts";
 
 import { EmptyState, GlassBadge, GlassSelect, Spinner, useFieldId } from "@twin/ui";
 
+import { artifactKindLabel } from "@/lib/labels";
+
 import { formatBytes, formatDate, shortId } from "./format";
 import { useArtifacts } from "./queries";
 
@@ -66,7 +68,7 @@ export function OutputsView() {
             <option value="all">All kinds</option>
             {kinds.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {artifactKindLabel(value)}
               </option>
             ))}
           </GlassSelect>
@@ -114,7 +116,7 @@ export function OutputsView() {
             {rows.map((row) => (
               <tr key={row.id} data-testid="output-row">
                 <td>
-                  <GlassBadge>{row.kind}</GlassBadge>
+                  <GlassBadge title={row.kind}>{artifactKindLabel(row.kind)}</GlassBadge>
                 </td>
                 <td className="admin-mono admin-ellipsis">{row.storageKey}</td>
                 <td className="admin-num">{formatBytes(row.bytes)}</td>

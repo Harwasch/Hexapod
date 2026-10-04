@@ -132,7 +132,7 @@ export function selectionLabel(
   return id > 0 ? "Unnamed object" : "Nothing";
 }
 
-/** The chip's text: "Tree · 2 of 4". */
+/** A selection with its place among the candidates, "Tree · 2 of 4": the card's name. */
 export function chipText(label: string, index: number, count: number): string {
   return count > 1 ? `${label} · ${String(index + 1)} of ${String(count)}` : label;
 }

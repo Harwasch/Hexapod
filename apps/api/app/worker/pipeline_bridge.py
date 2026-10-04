@@ -54,9 +54,12 @@ def ensure_importable(directory: Path = PIPELINE_DIR) -> None:
 ensure_importable()
 
 from adapters import FakeAdapter, LocalTransfer, SubprocessAdapter  # noqa: E402
-from artifacts import ArtifactRef  # noqa: E402
+from artifacts import ArtifactRef, checksum_of  # noqa: E402
 from cloud import (  # noqa: E402
+    CALL_BOOK,
     AttemptLedger,
+    CallBook,
+    CallRecord,
     CloudRunner,
     Placement,
     ProviderAdapter,
@@ -65,8 +68,17 @@ from cloud import (  # noqa: E402
     run_cost,
 )
 from contracts import StepResult  # noqa: E402
-from errors import PipelineError, PreemptedError, StageFailedError  # noqa: E402
+from errors import (  # noqa: E402
+    BAD_INPUT_ERRORS,
+    CancelRequested,
+    DetachRequested,
+    PipelineError,
+    PreemptedError,
+    StageFailedError,
+    StopRequested,
+)
 from executor import RunResult, execute  # noqa: E402
+from harmonics import check_degree as check_sh_degree  # noqa: E402
 from live import latest as latest_live  # noqa: E402
 from modal_adapter import ModalAdapter  # noqa: E402
 from plan import Plan, PlannedStage, plan_recipe  # noqa: E402
@@ -74,15 +86,21 @@ from progress import latest as latest_progress  # noqa: E402
 from progress import tail as tail_of  # noqa: E402
 from providers import PROVIDERS, Provider, Rate, rates_from_env, with_rates  # noqa: E402
 from recipe import Recipe, load_recipe, recipe_dir  # noqa: E402
-from runners import RunnerSet  # noqa: E402
+from runners import RunnerSet, checkpoint_key  # noqa: E402
 from workdir import Workdir  # noqa: E402
 
 __all__ = [
+    "BAD_INPUT_ERRORS",
+    "CALL_BOOK",
     "PIPELINE_DIR",
     "PROVIDERS",
     "ArtifactRef",
     "AttemptLedger",
+    "CallBook",
+    "CallRecord",
+    "CancelRequested",
     "CloudRunner",
+    "DetachRequested",
     "FakeAdapter",
     "LocalTransfer",
     "ModalAdapter",
@@ -100,9 +118,13 @@ __all__ = [
     "RunnerSet",
     "StageFailedError",
     "StepResult",
+    "StopRequested",
     "SubprocessAdapter",
     "Transfer",
     "Workdir",
+    "check_sh_degree",
+    "checkpoint_key",
+    "checksum_of",
     "ensure_importable",
     "execute",
     "latest_live",

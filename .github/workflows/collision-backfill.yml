@@ -4,24 +4,28 @@ name: Collision backfill
 # splat_tiles.py, `COLLISION_FORMAT`). Opt-in, and never run by default.
 #
 # * **What it does.** `build`: fetches the capture's canonical.ply (the API's
-#   /captures/{id}/splat.ply redirect) and its published tileset.json, runs
+#   /captures/{id}/splat.ply redirect) and its splat asset's current tileset.json, runs
 #   `splat_tiles.py collision` -- the same collision.bin `convert` now writes beside the
-#   tiles -- and adds `root.extras.collision` to that tileset.json, and keeps both as an
-#   artifact to review. `publish` (only when asked): puts collision.bin and the updated
-#   tileset.json beside the published tiles, at the tileset's own URL. The asset's URL does
-#   not change, so nothing in the API is touched.
+#   tiles -- and writes the request beside the grid (`attach.json`: the asset, `basedOn` the
+#   tileset it was checked against, `extras.collision` as the command declared it), kept as
+#   an artifact to review. `publish` (only when asked): stages collision.bin in the private
+#   bucket and asks the API to attach it (tools/captures/attach_sidecars.py), which cuts a
+#   new generation and repoints the asset. Nothing here writes the public bucket or a
+#   tileset.json (docs/DEPLOYMENT.md, "Sidecars: one publisher").
 # * **Identity is checked, not assumed.** The backfill refuses unless the tileset's leaves
 #   hold exactly as many gaussians as the PLY keeps at `opacity_min` (the package stage's
-#   parameter; 0.02 unless the run set another), and the build refuses unless the new
-#   tileset.json differs from the published one by `root.extras.collision` alone.
+#   parameter; 0.02 unless the run set another), and the build refuses unless the command
+#   changed the tileset by `root.extras.collision` alone. The API refuses (409) when the
+#   asset's tiles have changed since.
 # * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
 #   that, push a commit whose message carries `[collision|capture=<uuid>]`, adding
 #   `|publish` to publish and `|opacity_min=<value>` for a run packed with another value.
 #   A re-run of the capture through the API after the worker is deployed with the new
 #   packer does the same without this workflow, at the cost of re-packing every tile.
 #
-# Secrets, for `publish` only: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY;
-# variables R2_PUBLIC_BUCKET (or R2_BUCKET), R2_PUBLIC_URL, TWIN_API_URL.
+# Variables: TWIN_API_URL. For `publish` only, secrets CLOUDFLARE_ACCOUNT_ID,
+# R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, API_WRITE_TOKEN and the variable R2_BUCKET (the
+# private bucket).
 
 on:
   push:
@@ -33,7 +37,7 @@ on:
         type: string
         required: true
       publish:
-        description: "Publish collision.bin and the updated tileset.json beside the tiles"
+        description: "Attach collision.bin beside the tiles, through the API"
         type: boolean
         default: false
       opacity_min:
@@ -109,25 +113,40 @@ jobs:
           mkdir -p "$RUNNER_TEMP/out"
           cp "$RUNNER_TEMP/work/tiles/tileset.json" "$RUNNER_TEMP/out/tileset.json"
           cp "$RUNNER_TEMP/work/capture.json" "$RUNNER_TEMP/out/capture.json"
-      - name: The grid, and the tileset that declares it
+      - name: The grid, and the request that attaches it
         working-directory: tools/captures
         run: |
           uv run python splat_tiles.py collision "$RUNNER_TEMP/work/canonical.ply" \
             "$RUNNER_TEMP/out" --tileset "$RUNNER_TEMP/out/tileset.json" \
             --opacity-min "$OPACITY_MIN" | tee "$RUNNER_TEMP/out/collision.json"
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json, os
-          temp = os.environ["RUNNER_TEMP"]
-          before = json.load(open(f"{temp}/work/tiles/tileset.json"))
-          after = json.load(open(f"{temp}/out/tileset.json"))
+          uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, shutil
+          from pathlib import Path
+
+          import attach_sidecars
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          before = json.loads((temp / "work/tiles/tileset.json").read_text())
+          after = json.loads((temp / "out/tileset.json").read_text())
           extras = after["root"]["extras"].pop("collision")
           before["root"].get("extras", {}).pop("collision", None)
           if before != after:
-              raise SystemExit("the new tileset.json differs by more than extras.collision")
-          size = os.path.getsize(f"{temp}/out/collision.bin")
+              raise SystemExit("the command changed tileset.json by more than extras.collision")
+          asset = json.loads((temp / "out/capture.json").read_text())["asset"]
+          attach = temp / "out/attach"
+          attach.mkdir()
+          shutil.move(temp / "out/collision.bin", attach / "collision.bin")
+          attach_sidecars.write_manifest(
+              attach,
+              asset_id=asset["id"],
+              based_on=asset["source"]["url"],
+              extras={"collision": extras},
+          )
+          size = (attach / "collision.bin").stat().st_size
           print("## Collision grid\n")
           print(f"cell {extras['cell']} m, origin {extras['origin']}, {extras['bricks']:,} "
-                f"bricks, {extras['solidCells']:,} solid cells, {size:,} bytes gzipped.")
+                f"bricks, {extras['solidCells']:,} solid cells, {size:,} bytes gzipped; for "
+                f"asset `{asset['id']}` at {asset['source']['url']}.")
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -137,57 +156,39 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish it beside the tiles
+    name: Attach it beside the tiles, through the API
     needs: [plan, build]
     if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # One publish per capture at a time; the API serializes attaches to one asset anyway.
+    concurrency:
+      group: collision-backfill-${{ needs.plan.outputs.capture }}
+      cancel-in-progress: false
     env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
       OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
       OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
-      OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+      OBJECT_STORAGE_BUCKET: ${{ vars.R2_BUCKET || 'twin-assets' }}
+      API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+      TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
     steps:
       - name: The secrets this job needs
         run: |
           missing=""
-          for name in OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY OBJECT_STORAGE_PUBLIC_URL; do
+          for name in CLOUDFLARE_ACCOUNT_ID OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY API_WRITE_TOKEN; do
             if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
             echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
             exit 1
           fi
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
       - uses: actions/download-artifact@v4
         with:
           name: collision
-          path: out
-      - uses: astral-sh/setup-uv@v6
-      - name: collision.bin, then the tileset.json that names it
-        run: |
-          uv run --with boto3 python - <<'PY'
-          import json, os
-          import boto3
-          meta = json.load(open("out/capture.json"))
-          tileset_url = meta["asset"]["source"]["url"]
-          public = os.environ["OBJECT_STORAGE_PUBLIC_URL"].rstrip("/") + "/"
-          if not tileset_url.startswith(public):
-              raise SystemExit(f"{tileset_url} is not under the public bucket's URL {public}")
-          prefix = tileset_url[len(public):].rsplit("/", 1)[0]
-          s3 = boto3.client(
-              "s3",
-              endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
-              aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
-              aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
-              region_name="auto",
-          )
-          bucket = os.environ["OBJECT_STORAGE_PUBLIC_BUCKET"]
-          # The grid first: a tileset.json naming a file not there yet would be a 404 to
-          # every client that loads it in between.
-          for name, kind in (("collision.bin", "application/octet-stream"),
-                             ("tileset.json", "application/json")):
-              s3.upload_file(f"out/{name}", bucket, f"{prefix}/{name}",
-                             ExtraArgs={"ContentType": kind})
-              print(f"{bucket}/{prefix}/{name} ({kind})")
-          PY
+          path: ${{ runner.temp }}/out
+      - name: Stage collision.bin, and attach it
+        run: uv run --no-project --with boto3 python tools/captures/attach_sidecars.py attach "$RUNNER_TEMP/out/attach"

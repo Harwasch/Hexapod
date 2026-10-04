@@ -13,7 +13,7 @@ import {
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import type { Footprint } from "@twin/contracts";
@@ -83,7 +83,7 @@ export class AreaEditor {
   };
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
   ) {
     this.scene = viewer.scene;

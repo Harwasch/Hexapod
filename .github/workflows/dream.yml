@@ -9,6 +9,11 @@ name: Dream clips (Modal GPU, Wan 2.2 and Cosmos-Predict2)
 # On a push to a `wm-*` working branch that touches the dream code (not `living-models`, so
 # merges there start no GPU run). The Modal token is the repository's; the video models read
 # the Modal secret `huggingface` (HF_TOKEN).
+#
+# Cancelling the run (or its timeout) cancels the Modal calls it started: dream.py tracks
+# every call and cancels the ones still out there on SIGINT, SIGTERM or an exception
+# (tools/captures/modal_calls.py). Without that, the clips -- queued on the deployed app,
+# which outlives the run -- went on billing H100s after the job had gone.
 
 on:
   push:
@@ -37,8 +42,13 @@ on:
         type: string
         default: "3"
 
+# One dream run at a time, whichever branch or dispatch started it: every run redeploys the
+# same `hexapod-world-models` app and shares its 4 Wan and 2 Cosmos containers, so a second
+# run alongside only queues behind the first (each wait counting against its clips'
+# timeouts) and swaps the app's code under it. Not cancel-in-progress: a push does not throw
+# away a run already paid for.
 concurrency:
-  group: dream-${{ github.ref }}
+  group: dream
   cancel-in-progress: false
 
 env:
@@ -80,9 +90,15 @@ jobs:
           echo "HEXAPOD_HF_SECRET=$name" >> "$GITHUB_ENV"
       - name: modal deploy infra/modal/world_models.py
         run: uv run --with modal==1.5.5 modal deploy infra/modal/world_models.py
+      # `exec`, so the runner's SIGINT and SIGTERM reach dream.py (uv passes them on) and it
+      # can cancel its calls. GitHub signals only the step's shell, which otherwise sits out
+      # SIGINT and dies on SIGTERM, and modal is killed afterwards without ever seeing one.
+      # The step's own timeout stops it the same way, before the job's, so the artifact
+      # below is still uploaded.
       - name: modal run infra/modal/dream.py
+        timeout-minutes: 200
         run: |
-          uv run --with modal==1.5.5 modal run infra/modal/dream.py \
+          exec uv run --with modal==1.5.5 modal run infra/modal/dream.py \
             --scans "$SCANS" --models "$MODELS" --prompts "$PROMPTS" \
             --instances "$INSTANCES" --chain "$CHAIN" --out dream-out
       - uses: actions/upload-artifact@v4

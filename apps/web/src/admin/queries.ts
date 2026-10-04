@@ -20,6 +20,7 @@ import type {
   JobCreate,
   PipelineCatalogue,
   Site,
+  SiteAsset,
   SiteSummary,
   StorageReconciliation,
 } from "@twin/contracts";
@@ -33,6 +34,7 @@ export const adminKeys = {
   reconciliation: ["admin", "reconciliation"] as const,
   recipes: ["admin", "recipes"] as const,
   sites: ["admin", "sites"] as const,
+  assets: ["admin", "assets"] as const,
 };
 
 /**
@@ -81,15 +83,30 @@ export function useSites() {
 }
 
 /**
+ * Every asset, for what a republish could not carry onto new tiles (`sidecarFlags`): the
+ * notices beside each capture's site and the list above the table. Polled with the tables,
+ * because a run finishing is what sets them and an attach is what clears them.
+ */
+export function useAssets() {
+  return useQuery({
+    queryKey: adminKeys.assets,
+    queryFn: () => unwrap<SiteAsset[]>(api.GET("/api/v1/assets", {})),
+    refetchInterval: POLL_MS,
+  });
+}
+
+/**
  * Storage against the database, in both directions.
  *
  * Not polled: it walks a bucket. It is fetched when the Captures view opens and when
- * somebody asks for it again, which is the honest cost of the question.
+ * somebody asks for it again, which is the honest cost of the question. A POST, though it
+ * changes nothing: the API keeps it behind the write token, and the client attaches the
+ * token (and asks for it on a 401) to writes only.
  */
 export function useReconciliation(enabled: boolean) {
   return useQuery({
     queryKey: adminKeys.reconciliation,
-    queryFn: () => unwrap<StorageReconciliation>(api.GET("/api/v1/storage/reconciliation", {})),
+    queryFn: () => unwrap<StorageReconciliation>(api.POST("/api/v1/storage/reconciliation", {})),
     enabled,
     staleTime: Infinity,
     retry: false,

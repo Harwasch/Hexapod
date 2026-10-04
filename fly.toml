@@ -2,8 +2,8 @@
 #
 # One app, one image (infra/api.Dockerfile), two process groups:
 #
-#   app     uvicorn, behind Fly's proxy and TLS      -- bursty, scales to zero-ish
-#   worker  `python -m app.worker`, a poll loop      -- long-lived, holds a volume
+#   app     uvicorn, behind Fly's proxy and TLS      -- bursty, suspends when idle
+#   worker  `python -m app.worker`, a poll loop      -- runs while there is work, holds a volume
 #
 # Why Fly and not Cloudflare Containers, which would have consolidated this with Pages
 # and R2 on one bill: docs/DECISIONS/0007-fly-for-the-api-cloudflare-for-the-edge.md.
@@ -13,6 +13,13 @@
 # the workaround (cron-triggered wakeups) couples the worker to one provider -- which is
 # the coupling app/worker/runner.py's runner seam exists to avoid. The static site and
 # the buckets are still Cloudflare's (wrangler.toml, infra/cors/production.json).
+#
+# Since 2026-10 the worker does stop when it is idle -- but on its own terms, which is the
+# difference: it exits 0 after WORKER_IDLE_EXIT_S with nothing running or queued (never
+# mid-run, so nothing about the lease changes), the machine stays stopped, and the API
+# starts it through the Machines API when it queues a job (app/services/worker_wake.py,
+# FLY_API_TOKEN). With nobody polling, Neon's compute scales to zero too. ADR 0007's
+# addendum has the reasoning.
 #
 # Deploy:  fly deploy --remote-only       (from the repository root, so the build
 #                                          context is the repo -- the Dockerfile copies
@@ -100,10 +107,28 @@ kill_timeout = "30s"
   # budget ran out. Fixed in app/worker/claim.py: a per-job LeaseKeeper thread renews the
   # lease whatever the supervisor is doing, and a lease is computed from
   # statement_timestamp(), not now(). Guarded by tests/test_worker_concurrency.py (slow
-  # uploads, slow download) and tests/test_worker.py. Still "1" here until "2" has been
-  # validated in production; the worker README says why 2 fits the 2 GB machine. If it
-  # recurs, look for a second "claimed job <id>" and "lost job" in the worker's logs.
+  # uploads, slow download) and tests/test_worker.py. If it recurs, look for a second
+  # "claimed job <id>" and "lost job" in the worker's logs.
+  #
+  # Still "1", and now deliberately rather than pending validation: a second general slot
+  # could run two Lane 2 videos at once -- two GPUs billed, and two captures' inputs on a
+  # volume sized for one (see [[mounts]]). What "2" was wanted for -- a one-minute
+  # splat-ingest not waiting behind a two-hour training run -- is the CPU-only slot below.
   WORKER_CONCURRENCY = "1"
+  # One more slot that claims only recipes with no `gpu:` stage (today `splat-ingest`),
+  # worked out from the recipes when the worker starts. Two slots in all, so the lease
+  # fix above is what keeps them from trading jobs. Memory: the worker README's figures
+  # put the worst overlap -- Lane 2's ffmpeg (~0.45 GB) beside Lane 1's out-of-core
+  # `package` of an 8M splat (~0.38 GB) -- near 1.1 GB with the supervisor, on 2 GB.
+  WORKER_CPU_ONLY_SLOTS = "1"
+  # Exit 0 after 15 minutes with nothing running or queued (the empty queue is polled
+  # every 2 s for a minute, then backs off to every 30 s). The machine stays stopped --
+  # Fly restarts the group only on a failure -- and Neon, with nobody polling, scales to
+  # zero five minutes later. Queueing a job starts the machine again: the `app` group
+  # needs the FLY_API_TOKEN secret for that (docs/DEPLOYMENT.md § Waking the worker),
+  # and without it a stopped worker stays stopped until `fly machine start`. "0" polls
+  # forever, the old behaviour.
+  WORKER_IDLE_EXIT_S = "900"
 
 [processes]
   app = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -113,10 +138,20 @@ kill_timeout = "30s"
   internal_port = 8000
   force_https = true
   processes = ["app"]
-  # A single-user, bursty API: let the machine stop when nobody is looking and start on
-  # the next request. The worker group is deliberately not in `processes` here -- it has
-  # no service, so it is never stopped by the proxy and never waits for a request.
-  auto_stop_machines = "stop"
+  # A single-user, bursty API: let the machine sleep when nobody is looking and wake on
+  # the next request. "suspend" rather than "stop": the machine's memory is snapshotted
+  # and restored, so a request after a quiet spell resumes a running uvicorn in well
+  # under a second instead of booting Python and importing the app (Fly suspends
+  # machines of up to 2 GB; this one is 1 GB). Two things it does not change: the first
+  # request after a deploy still boots cold, as a new image has no snapshot; and sockets
+  # held open across a suspend -- the database pool, an R2 or Anthropic keep-alive --
+  # may be found reset once on resume. The pool checks before use (pool_pre_ping in
+  # app/db.py); an HTTP client retries on a new connection.
+  #
+  # The worker group is deliberately not in `processes` here -- it has no service, so it
+  # is never stopped by the proxy and never waits for a request. It stops itself when it
+  # is idle, and the API starts it (WORKER_IDLE_EXIT_S above).
+  auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0
 
@@ -136,8 +171,9 @@ kill_timeout = "30s"
   processes = ["worker"]
   # Lane 1 (splat-ingest) runs its stages in this machine -- packing tiles, not training.
   # Lane 2's `pose` (Modal cpu4) and `train` (Modal L4) run elsewhere, so this machine
-  # supervises rather than computes. Raise it when a stage starts being the bottleneck;
-  # `fly scale vm` does not need a redeploy.
+  # supervises rather than computes. With the CPU-only slot it may do both at once: one
+  # Lane 2 run and one Lane 1 run, each in a recipe process of its own. Raise it when a
+  # stage starts being the bottleneck; `fly scale vm` does not need a redeploy.
   size = "shared-cpu-2x"
   memory = "2gb"
 
@@ -159,8 +195,28 @@ kill_timeout = "30s"
   # 20 GB is enough for one capture in flight because the worker drops each finished
   # run's `inputs/` and stages' `work/` (WorkerConfig.tidy_finished_runs): what stays per
   # Lane 2 run is its outputs, a few hundred MB, while a run in flight briefly holds the
-  # video, its candidate frames and COLMAP's database as well.
+  # video, its candidate frames and COLMAP's database as well. That is also why there is
+  # one general slot (WORKER_CONCURRENCY): a second video in flight is a second of those.
+  # The CPU-only slot's splat-ingest beside it holds the uploaded splat, its normalized
+  # copy, the packer's sorted working file (about the splat's size) and the tiles: a few
+  # times the upload while `package` runs (not measured on this volume). A very large
+  # ingest beside a very large video is the case that wants the volume extended.
   #
   # A volume binds the worker to one region and one machine, which is correct here: there
-  # is exactly one worker, and a second one would not share this directory.
+  # is exactly one worker, and a second one would not share this directory. A stopped
+  # machine keeps its volume; an idle exit loses nothing in the workdir.
   initial_size = "20gb"
+
+# Restart the worker when it dies -- an OOM kill, a crash at start-up against a database
+# that was briefly away -- rather than leaving the queue with nobody to claim it until
+# someone notices. `on-failure`, not `always`: a worker that exits 0 meant to (it ran out
+# of work and is idling the machine down to save it), and `always` would start it straight
+# back up and undo that. Ten tries, then Fly leaves it stopped; by then the cause is not
+# going away on its own, and WORKER_HEARTBEAT_URL / QUEUE_CHECK_URL are what say so (a run
+# that went quiet, a job queued and never claimed). A job the dead worker held is not
+# lost either way: its lease lapses and the restarted worker resumes it, re-attaching to
+# a GPU call it left running (apps/api/app/worker/README.md).
+[[restart]]
+  policy = "on-failure"
+  retries = 10
+  processes = ["worker"]

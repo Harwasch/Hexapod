@@ -165,6 +165,19 @@ stages:
       # the gaussians that painted it (holdout.py). Writes `holdout/`, which `quality`
       # verifies keep with. Seconds of GPU; it cannot fail the stage.
       holdout_error: true
+      # The view-dependent colour that ships: spherical-harmonic bands above the DC term
+      # (0-3). gsplat always fits degree 3 -- 45 of a gaussian's 59 trained floats -- and
+      # this is how many of those bands trained.ply keeps, and so gated.ply, canonical.ply
+      # (turned into east/north/up with the splat by `place`: harmonics.py) and the tiles.
+      # The held-out error above is rendered at this degree, so `quality` gates what is
+      # published. 0 is every capture so far: one colour from every side. Not yet chosen
+      # for the deployment: measured on the packer's SH-3 samples, degree 1 makes the
+      # tileset 1.17-1.20x the bytes of degree 0 and degree 3 1.6-1.7x; frame rate and
+      # GPU memory in the viewers are what experiments/sh_compare.py packs one site three
+      # ways to look at (tools/pipeline/README.md, "Shipping SH"). A run may set it
+      # (`{"train": {"ship_sh_degree": 3}}`) without a recipe change. Not gsplat's own
+      # `--sh_degree`, the degree it trains at: that stays at its default, 3.
+      ship_sh_degree: 0
       # What is written here is the Standard run. A run may override any of it per
       # capture (`jobs.params`), and two named presets are:
       #
@@ -192,7 +205,8 @@ stages:
       #   pose_opt: true      -- refines each training frame's pose (phone video poses
       #     are rolling-shutter and slightly off).
       #   app_opt: true       -- a per-frame appearance embedding for exposure drift; the
-      #     PLY is baked to degree-0 colour, which is all canonical.ply keeps anyway.
+      #     PLY is baked to degree-0 colour (v1.5.3's export writes no higher bands with
+      #     it), so such a run ships DC only whatever `ship_sh_degree` asks, and says so.
       #   bilateral_grid: true -- a per-frame colour/exposure correction (gsplat's
       #     --use_bilateral_grid); train_metrics.json then also has `colorCorrected`.
       #   These three are the phone-capture recipe the commercial apps are believed to
@@ -343,6 +357,9 @@ stages:
       # tile; how many are drawn is the viewer's budget (the phone's Detail choice).
       tile_gaussians: *tile_gaussians
       opacity_min: *opacity_min
+      # The tiles carry every SH band canonical.ply does -- `train`'s `ship_sh_degree` --
+      # so `ship_sh_degree` is deliberately absent here: a cap would ship less colour
+      # than the held-out error measured. It exists for re-packaging by hand.
 
   # The same three stages Lane 1 ends in, reading the same `canonical.ply` and the same
   # `splat/`. Both lanes end in one artifact set, so the console cannot tell which one

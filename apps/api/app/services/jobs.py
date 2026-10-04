@@ -11,14 +11,16 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import Select, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Job, JobStep
 from app.models.enums import RunStatus, UploadStatus
+from app.models.job import ACTIVE_JOB_INDEX
 from app.schemas.job import JobCreate, JobRead, JobStepLog
 from app.services import recipes as recipe_service
 from app.services.captures import get_capture
-from app.services.errors import ConflictError, NotFoundError
+from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.storage import ObjectStorage
 
 #: A run that has not finished. A capture may be run many times -- comparing two runs
@@ -38,12 +40,15 @@ def create_job(db: Session, capture_id: uuid.UUID, payload: JobCreate) -> Job:
     version = recipe_service.version_of(payload.recipe)
     if version is None:
         known = ", ".join(recipe_service.known_names())
-        raise ValueError(f"unknown recipe '{payload.recipe}'; known recipes are {known}")
+        raise InvalidInputError(f"unknown recipe '{payload.recipe}'; known recipes are {known}")
     recipe_service.check_overrides(payload.recipe, payload.params)
     if not any(file.status is UploadStatus.COMPLETE for file in capture.files):
         raise ConflictError(
             f"capture {capture.id} has no uploaded files; finish an upload before processing"
         )
+    # The friendly check, which can name the run in the way. It is not the guarantee: two
+    # requests in flight both pass it, and the partial unique index behind `_commit_active`
+    # is what refuses the second.
     running = db.scalar(
         select(Job.id).where(Job.capture_id == capture.id, Job.status.in_(ACTIVE_STATUSES))
     )
@@ -59,9 +64,25 @@ def create_job(db: Session, capture_id: uuid.UUID, payload: JobCreate) -> Job:
         tier=payload.tier,
     )
     db.add(job)
-    db.commit()
+    _commit_active(db, capture.id)
     db.refresh(job)
     return job
+
+
+def _commit_active(db: Session, capture_id: uuid.UUID) -> None:
+    """Commit a change that leaves a job of this capture queued, or answer 409.
+
+    `uq_jobs_one_active_per_capture` (migration 0008) allows one queued-or-running job per
+    capture. Losing the race to it -- the second of a double-click -- is the same conflict
+    the SELECT before it reports, so it gets the same answer rather than a 500.
+    """
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        if ACTIVE_JOB_INDEX not in str(error.orig):
+            raise
+        raise ConflictError(f"capture {capture_id} already has a job queued or running") from error
 
 
 def _newest_first() -> Select[tuple[Job]]:
@@ -162,7 +183,9 @@ def retry_job(db: Session, job_id: uuid.UUID, from_stage: str | None = None) -> 
     job.claimed_by = None
     job.claimed_at = None
     job.lease_expires_at = None
-    db.commit()
+    # Re-queueing an old run while a newer one of the same capture is still going would
+    # make two active at once, which the index refuses: a 409, as for a second Process.
+    _commit_active(db, job.capture_id)
     db.refresh(job)
     return job
 
@@ -177,29 +200,45 @@ def _retry_target(job: Job, from_stage: str | None) -> JobStep:
         if step.stage_id == from_stage:
             return step
     known = ", ".join(step.stage_id for step in ordered)
-    raise ValueError(f"job {job.id} has no stage '{from_stage}'; its stages are {known}")
+    raise InvalidInputError(f"job {job.id} has no stage '{from_stage}'; its stages are {known}")
+
+
+#: How much of a step log one read returns: the end, which is where a run says why it
+#: stopped. A training stage logs for hours, and the whole object used to be read into
+#: memory -- and then into one JSON string -- on every open of the console's log drawer.
+STEP_LOG_TAIL_BYTES = 256 * 1024
 
 
 def read_step_log(
     db: Session, storage: ObjectStorage, job_id: uuid.UUID, step_id: uuid.UUID
 ) -> JobStepLog:
-    """Fetch one step's log out of object storage.
+    """Fetch the end of one step's log out of object storage.
 
     Logs are not in the database on purpose — a run's logs are unbounded — so this reads
-    the object `job_steps.log_key` names. A step that has not written one yet is a 404,
-    not an empty string, because "no log" and "an empty log" are different answers.
+    the object `job_steps.log_key` names: its last `STEP_LOG_TAIL_BYTES`, in one ranged
+    read, never the whole object. A longer log starts at its first whole line within
+    that and is headed by a line saying how much is not shown, so a cut is never
+    mistaken for the start of the run. A step that has not written one yet is a 404, not
+    an empty string, because "no log" and "an empty log" are different answers.
     """
     step = db.get(JobStep, step_id)
     if step is None or step.job_id != job_id:
         raise NotFoundError("job step", step_id)
     if not step.log_key:
         raise NotFoundError("log for job step", step_id)
-    return JobStepLog(
-        step_id=step.id,
-        stage_id=step.stage_id,
-        log_key=step.log_key,
-        text=storage.get_object(step.log_key).decode("utf-8", errors="replace"),
-    )
+    data, size = storage.get_object_tail(step.log_key, STEP_LOG_TAIL_BYTES)
+    if size > len(data):
+        # Cut mid-line, and perhaps mid-character: start at the first whole line.
+        newline = data.find(b"\n")
+        if 0 <= newline < len(data) - 1:
+            data = data[newline + 1 :]
+        text = (
+            f"[earlier output not shown: the last {len(data):,} of {size:,} bytes follow]\n"
+            + data.decode("utf-8", errors="replace")
+        )
+    else:
+        text = data.decode("utf-8", errors="replace")
+    return JobStepLog(step_id=step.id, stage_id=step.stage_id, log_key=step.log_key, text=text)
 
 
 def job_to_read(job: Job) -> JobRead:

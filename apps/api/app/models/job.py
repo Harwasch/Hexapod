@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -26,6 +27,9 @@ from app.models.enums import ArtifactKind, RunStatus
 
 if TYPE_CHECKING:
     from app.models.capture import Capture
+
+#: The partial unique index that allows one queued-or-running job per capture.
+ACTIVE_JOB_INDEX = "uq_jobs_one_active_per_capture"
 
 # One PostgreSQL type shared by `jobs.status` and `job_steps.status`: the same five
 # states, declared once so the two columns cannot drift apart.
@@ -48,6 +52,18 @@ class Job(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         # handful of claimable rows; `lease_expires_at` makes the reclaim half a range
         # scan instead of a sequential one over every job ever run.
         Index("ix_jobs_status_lease_expires_at", "status", "lease_expires_at"),
+        # A capture may be run many times, but not twice at once -- and the check for that
+        # in `create_job` is a SELECT before an INSERT, which two requests in flight both
+        # pass: a double-click on Process queued two runs of one capture. This is the
+        # check that cannot race. `app.services.jobs` turns a violation into the same 409
+        # the SELECT gives, and a retry that would make a second active run is refused by
+        # it too. Migration 0008, which also resolves any duplicates already queued.
+        Index(
+            ACTIVE_JOB_INDEX,
+            "capture_id",
+            unique=True,
+            postgresql_where=text("status IN ('not-started', 'in-progress')"),
+        ),
     )
 
     capture_id: Mapped[uuid.UUID] = mapped_column(

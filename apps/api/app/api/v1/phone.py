@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Final, Literal
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import Field
 from sqlalchemy import func, select
@@ -21,16 +21,22 @@ from app.models.enums import CaptureKind
 from app.models.job import Job
 from app.schemas.base import CamelModel
 from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureCreate, CaptureRead
+from app.schemas.common import Problem
 from app.schemas.job import JobCreate, JobRead
 from app.services import captures as capture_service
-from app.services import handoff, phone_key
+from app.services import handoff, phone_key, worker_wake
 from app.services import jobs as job_service
 from app.services import recipes as recipe_service
 from app.services.errors import ConflictError, UnauthorizedError
+from app.services.ratelimit import client_key, limits_of
 from app.storage import ObjectStorage
 from app.worker.outputs import artifact_key
 
-router = APIRouter(prefix="/phone", tags=["phone"])
+router = APIRouter(
+    prefix="/phone",
+    tags=["phone"],
+    responses={429: {"model": Problem, "description": "Too many wrong keys; see `Retry-After`"}},
+)
 
 #: What a phone capture is marked with, and how the key's routes recognise their own.
 ORIGIN = "phone-key"
@@ -227,10 +233,22 @@ phone_key_scheme = HTTPBearer(
 
 
 def require_phone_key(
+    request: Request,
     settings: SettingsDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(phone_key_scheme)],
 ) -> None:
+    """The phone key, rate-limited by the wrong ones.
+
+    The token is taken *before* the 200,000-round hash -- bounding what a loop of bad keys
+    costs is the point -- and given back when the key was right, so the limit counts
+    wrong keys only and a phone holding the key is never slowed down. See
+    app/services/ratelimit.py.
+    """
+    bucket = limits_of(request).phone_key
+    client = client_key(request, settings)
+    bucket.take(client)
     phone_key.check(settings, credentials.credentials if credentials is not None else "")
+    bucket.give_back(client)
 
 
 RequirePhoneKey = Depends(require_phone_key)
@@ -299,7 +317,9 @@ def create_phone_capture(
     dependencies=[RequirePhoneKey],
     summary="Queue a run over a capture this phone key started",
 )
-def process_phone_capture(capture_id: uuid.UUID, payload: JobCreate, db: DbSession) -> JobRead:
+def process_phone_capture(
+    capture_id: uuid.UUID, payload: JobCreate, db: DbSession, background: BackgroundTasks
+) -> JobRead:
     capture = capture_service.get_capture(db, capture_id)
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
         # Same answer as a wrong key: the phone key does not reach other captures.
@@ -307,9 +327,9 @@ def process_phone_capture(capture_id: uuid.UUID, payload: JobCreate, db: DbSessi
     if payload.recipe not in PHONE_RECIPES:
         raise ConflictError(f"A phone can start {', '.join(sorted(PHONE_RECIPES))}, not that.")
     params = _checked_options(payload.recipe, payload.params)
-    return job_service.job_to_read(
-        job_service.create_job(db, capture_id, JobCreate(recipe=payload.recipe, params=params))
-    )
+    job = job_service.create_job(db, capture_id, JobCreate(recipe=payload.recipe, params=params))
+    worker_wake.schedule(background)
+    return job_service.job_to_read(job)
 
 
 #: Where a Refine resumes a finished run: training, keeping the frames and poses.
@@ -344,7 +364,11 @@ class PhoneRefine(CamelModel):
     ),
 )
 def refine_phone_capture(
-    capture_id: uuid.UUID, payload: PhoneRefine, db: DbSession, storage: Storage
+    capture_id: uuid.UUID,
+    payload: PhoneRefine,
+    db: DbSession,
+    storage: Storage,
+    background: BackgroundTasks,
 ) -> JobRead:
     capture = capture_service.get_capture(db, capture_id)
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
@@ -396,6 +420,8 @@ def refine_phone_capture(
     except ValueError as error:
         db.rollback()
         raise ConflictError(f"That run cannot be refined: {error}") from error
+    # Re-queued and committed, like a new run: the worker may have to be started for it.
+    worker_wake.schedule(background)
     return job_service.job_to_read(refined)
 
 
@@ -405,7 +431,9 @@ def refine_phone_capture(
     dependencies=[RequirePhoneKey],
     summary="Stop the run in progress over a capture this phone key started",
 )
-def stop_phone_capture(capture_id: uuid.UUID, db: DbSession) -> JobRead:
+def stop_phone_capture(
+    capture_id: uuid.UUID, db: DbSession, background: BackgroundTasks
+) -> JobRead:
     """The phone's Stop button. The same cancel as `POST /jobs/{id}/cancel`, reached with
     the phone key and only for this phone's own captures, so a run that is taking far
     too long can be stopped from the phone that started it."""
@@ -419,7 +447,10 @@ def stop_phone_capture(capture_id: uuid.UUID, db: DbSession) -> JobRead:
     ).first()
     if active is None:
         raise ConflictError("Nothing is running for that capture.")
-    return job_service.job_to_read(job_service.cancel_job(db, active.id))
+    job = job_service.cancel_job(db, active.id)
+    # As for `POST /jobs/{id}/cancel`: wake a worker to cancel any GPU call left running.
+    worker_wake.schedule_reap(background, job)
+    return job_service.job_to_read(job)
 
 
 def _support_mask(storage: ObjectStorage, job_id: uuid.UUID) -> dict[str, object] | None:

@@ -26,7 +26,9 @@ provider-specific claim in here.
 Why Fly for the compute and Cloudflare for the edge, when consolidating on one provider was
 on the table: [ADR 0007](DECISIONS/0007-fly-for-the-api-cloudflare-for-the-edge.md). The
 short version is the worker: it is a poll loop that supervises hours-long runs and renews a
-lease every two seconds, and a sleep-on-idle runtime has nowhere to put that.
+lease every two seconds, and a sleep-on-idle runtime has nowhere to put that. (It does stop
+when there is nothing to do — on its own terms, never mid-run; see
+[waking the worker](#waking-the-worker-and-letting-neon-sleep).)
 
 The frontend never serves large 3D assets. The browser streams them from Cesium ion or from
 R2, and uploads go browser → R2 directly over presigned URLs. The API carries metadata.
@@ -74,6 +76,13 @@ SPA fallback: Pages serves each document, and a catch-all rewrite to `index.html
 every typo into a silently-served globe instead of a 404. The handoff URL the API mints is
 `<PUBLIC_WEB_BASE>/upload.html#<token>` — a literal path, which must keep working.
 
+Only `index.html` may load CesiumJS. `node apps/web/scripts/check-bundle.mjs [dist]` reads a
+build the way a browser would (entry scripts, modulepreloads, stylesheets, then every static
+import) and exits non-zero if `admin.html`, `upload.html` or `view.html` reaches a Cesium
+chunk; it also prints what each page loads, raw and gzipped. e2e cannot see this — the dev
+server does no chunking — and it is exactly what broke once: a shared `tslib` bundled inside
+`cesium-*.js` made the console modulepreload the whole engine (`vite.config.ts` says how).
+
 Build-time environment, all public once the bundle ships:
 
 | Variable                       | Production value                                                                    |
@@ -88,9 +97,48 @@ Build-time environment, all public once the bundle ships:
 `infra/pages/_headers` sets caching and a few conservative security headers. Two notes worth
 keeping: there is no `Content-Security-Policy`, because CesiumJS spawns workers and
 instantiates WebAssembly and a policy written without a browser to test it against breaks
-the globe on first load; and `/cesium/*` is _not_ `immutable`, because `vite.config.ts`
-copies Cesium's static directories to fixed, unhashed paths, so upgrading the dependency
-changes the contents of URLs that keep their names.
+the globe on first load; and `/cesium/*` is `immutable` only because `vite.config.ts` copies
+Cesium's static directories (which are not content-hashed) under a path named for the
+installed version, `/cesium/<version>/`, so upgrading the dependency changes the URLs rather
+than the contents behind them. A patch to the `cesium` package's `Build/` would have to change
+that name too; the engine patch does not touch it. `/fonts/*` (self-hosted, licences beside
+them) is immutable on the same terms: a new cut of a font gets a new file name.
+
+### The `/r2/` tile proxy, and the one host it serves
+
+`functions/r2/[[path]].js` is a Pages Function that serves the public bucket's `r2.dev`
+URL from the web app's own origin, over HTTP/2-3 and with cache lifetimes (r2.dev gives
+HTTP/1.1 and neither). `HEAD /r2/` answers `X-Tile-Proxy: <the pinned host>`, and the web
+app (`apps/web/src/lib/tileProxy.ts`) sends a URL through it only when the URL is on that
+host. Any other `r2.dev` bucket — a tileset added through Add data, a demo or seed bucket —
+loads from its own URL, as it would with no proxy. (The probe used to answer `1`, and every
+`pub-*.r2.dev` URL was rewritten to a function that 404s all but one host.)
+
+Whatever it answers is served from the origin where the console keeps the write token in
+`localStorage`, so it is locked to exactly what it is for:
+
+- **One host.** `TILE_PROXY_HOST`, in `wrangler.toml`'s `[vars]`, names the public bucket's
+  `pub-<32 hex>.r2.dev` hostname. It is committed empty; `deploy.yml` writes it in before
+  `wrangler pages deploy`, from the `public_bucket_url` input `provision.yml` passes, else
+  the `R2_PUBLIC_URL` variable, else the host of the offline catalog URL. Any other host
+  is a 404 that is never fetched. (It used to fetch _any_ `pub-*.r2.dev` host — every public
+  R2 bucket in the world.)
+- **Our Content-Type, by extension.** `.json`, `.glb`, `.b3dm`, `.pnts`, `.bin`, `.emb`,
+  `.f32`, `.u8`, `.ply`, `.spz`, `.webp`, `.jpg`/`.jpeg`, `.png` — what the bucket actually
+  holds. Anything else, including `.html` and `.svg`, is a 404. The upstream's own
+  Content-Type is never passed through.
+- **`X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox; default-src
+'none'`** on every proxied response, so a mislabelled object opened as a page can run
+  nothing.
+
+**Unset is off, not open.** With no `TILE_PROXY_HOST` — a custom domain on the public
+bucket, a dispatch that could not work the host out, a `wrangler pages deploy` run by hand —
+the probe answers 404 without the header, every proxied path is a 404, and the web app
+loads tiles from the bucket's own URL. A custom domain needs no proxy: Cloudflare already
+serves it over HTTP/2 with caching, and the web app only ever routes `r2.dev` hosts here.
+Tiles published under a _previous_ r2.dev host (an older public bucket) are not served
+through the proxy: the web app loads them from that host directly, over HTTP/1.1 and
+uncached, until they are republished into the current bucket.
 
 ## API and worker — Fly.io
 
@@ -111,17 +159,36 @@ without them.
 
 - **two process groups from one image.** `app` runs uvicorn behind Fly's proxy and TLS;
   `worker` runs `python -m app.worker` with no service at all.
-- **`auto_stop_machines = "stop"`, `min_machines_running = 0`** on the `app` group only.
-  A single-user API idles for hours; the worker must never be stopped by a proxy that sees
-  no requests, and it is not in `http_service.processes` for that reason.
+- **`auto_stop_machines = "suspend"`, `min_machines_running = 0`** on the `app` group
+  only. A single-user API idles for hours. Suspend rather than stop: Fly snapshots the
+  machine's memory (it allows this up to 2 GB; the API's is 1 GB), so the next request
+  resumes a running uvicorn instead of booting Python and importing the app. The first
+  request after a deploy is still a cold boot — a new image has no snapshot — and a socket
+  held across a suspend (the database pool, an R2 or Anthropic keep-alive) may be found
+  reset once on resume; `pool_pre_ping` (`app/db.py`) checks a pooled connection before
+  using it. The worker must never be stopped by a proxy that sees no requests, and it is
+  not in `http_service.processes` for that reason.
+- **the worker stops itself when idle.** `WORKER_IDLE_EXIT_S=900`: with nothing running
+  or queued for 15 minutes it exits 0 and its machine stays stopped; queueing a job starts
+  it again. See [waking the worker](#waking-the-worker-and-letting-neon-sleep).
+- **two worker slots**: `WORKER_CONCURRENCY=1` general slot and `WORKER_CPU_ONLY_SLOTS=1`,
+  which claims only recipes with no `gpu:` stage, so a one-minute `splat-ingest` is not
+  queued behind a two-hour training run and two training runs never share the machine.
 - **a health check** on `GET /api/v1/health`.
 - **`kill_signal = "SIGTERM"`, `kill_timeout = "30s"`.** The worker treats SIGTERM as a stop
   flag: on its next tick it stops the recipe process, clears the lease on the job it holds
   and exits, so the next worker can take that job immediately instead of waiting the lease
-  out. 30 s is fourteen ticks of headroom. (Both keys are at the _top_ of `fly.toml`,
-  before any table header. TOML gives a bare key to whichever table precedes it, so written
-  next to the health check — where they read most naturally — they silently become fields of
-  that check and Fly never sees them. CI asserts they are top-level.)
+  out. 30 s is fourteen ticks of headroom. A deploy does not stop a GPU call in flight: the
+  recipe process is told it is a shutdown (SIGUSR1), leaves the Modal call running and
+  writes down its id, and the next worker re-attaches to it at the same attempt
+  (`apps/api/app/worker/README.md`, "A GPU call outlives the process that made it"). A
+  cancelled job's call is cancelled within seconds. (Both keys are at the _top_ of
+  `fly.toml`, before any table header. TOML gives a bare key to whichever table precedes
+  it, so written next to the health check — where they read most naturally — they
+  silently become fields of that check and Fly never sees them. CI asserts they are
+  top-level.)
+- **`[[restart]]` for the worker, `on-failure`.** A worker that crashes is restarted (ten
+  tries); one that exits 0 on purpose is left stopped.
 - **a 20 GB volume** at `/data`, on the `worker` group only, with
   `WORKER_WORKDIR=/data/worker`. See [the workdir](#the-workers-workdir). It asked for
   50 GB until the first real provisioning run met Fly's "To create more than 20GB in
@@ -152,6 +219,9 @@ committed.
 | `PUBLIC_WEB_BASE`                                         | the web origin, for the handoff URL a QR code encodes                        |
 | `CESIUM_ION_SERVER_TOKEN`                                 | optional; `assets:read` for job monitoring. Never a `VITE_` variable         |
 | `ANTHROPIC_API_KEY`                                       | optional; without it the plan drafter is rule-based and says so              |
+| `FLY_API_TOKEN`                                           | a token that can start this app's machines; see waking the worker, below     |
+| `QUEUE_CHECK_URL`                                         | optional; a healthchecks.io-style check for jobs queued and never claimed    |
+| `SENTRY_DSN`                                              | optional; error reporting, see [Observability](#observability)               |
 
 ### Production refuses to start when it cannot do its job
 
@@ -207,6 +277,84 @@ the job to the next worker, which starts the recipe over. What you lose is the w
 completed stage is recomputed, and a Lane 2 run that was two hours into `train` pays those
 two hours again. You also need a root disk big enough for the largest capture plus the
 image. Size the machine accordingly and treat restarts as expensive.
+
+### Waking the worker, and letting Neon sleep
+
+A worker that polls the queue every two seconds forever keeps two things awake that need
+not be: its own machine, and Neon's compute, which scales to zero only after five minutes
+with no queries. So the worker now stops when it has nothing to do, and the API starts it
+when it queues something.
+
+**The worker side** (`app/worker/loop.py`):
+
+| Setting                       | `fly.toml` | Default | What it does                                                          |
+| ----------------------------- | ---------- | ------- | --------------------------------------------------------------------- |
+| `WORKER_IDLE_S`               | —          | 2       | how often an empty queue is polled at first                           |
+| `WORKER_IDLE_BACKOFF_AFTER_S` | —          | 60      | then doubling once a period: 4, 8, 16 s a minute at a time…           |
+| `WORKER_IDLE_MAX_S`           | —          | 30      | …up to this                                                           |
+| `WORKER_IDLE_EXIT_S`          | 900        | 900     | exit 0 after this long with nothing running or claimed; 0 never exits |
+
+The exit is only ever between jobs — a slot holding a job counts as busy, and the clock
+restarts when a job ends — so nothing about leases or SIGTERM changes. An exit status of 0
+leaves the machine **stopped**: `fly.toml`'s `[[restart]]` policy for the group is
+`on-failure`, so Fly restarts a worker that crashed and leaves one that finished alone.
+The volume and the workdir stay as they are. `.env.example` sets `WORKER_IDLE_EXIT_S=0`,
+because a checkout has nothing that would start the worker again.
+
+**The API side** (`app/services/worker_wake.py`). Every route that queues a job —
+`POST /captures/{id}/process`, the phone's process and refine, `POST /jobs/{id}/retry` —
+adds a background task that runs after the commit and after the response has been sent.
+It lists the app's machines through Fly's Machines API
+(`https://api.machines.dev/v1/apps/$FLY_APP_NAME/machines`; Fly sets `FLY_APP_NAME` on
+every machine), and starts each one whose `config.metadata.fly_process_group` is `worker`
+and whose state is `stopped` or `suspended`. Every request has a 5 s timeout, a failure is
+a warning in the log and never an error to the caller, and with no `FLY_API_TOKEN` the
+whole thing is a no-op — which is what development gets.
+
+A **cancel** of a job a worker had claimed (`POST /jobs/{id}/cancel`, the phone's stop)
+wakes the worker the same way, without the queue check's `/start`: a worker that was not
+there to see the cancel — crashed, out of restarts, or stopped with `fly machine stop` —
+may have left a GPU call running, and the worker cancels the calls of every job that is
+over when it starts (`app/worker/reaper.py`), and every five minutes after.
+
+**The race** is a job committed just as the worker decides to exit. The worker asks the
+queue once more, under the lock every claim takes, immediately before exiting; a job that
+lands after that question finds the machine still `started`, which a start request does not
+change. So when the wake call finds a worker machine already up, it looks again 20 s later
+and starts any that have stopped by then. A worker that took the job cannot be among them:
+it would not exit for another 15 minutes.
+
+**`FLY_API_TOKEN`** is a Fly **secret on the app** (`fly secrets set`), read by the `app`
+machines — not the GitHub secret of the same name, which is org-scoped so that
+provisioning can create the app. Mint the narrowest token that can start machines:
+
+```bash
+fly tokens create deploy -a twin-api     # app-scoped; can start (and deploy) this app's machines
+fly secrets set -a twin-api FLY_API_TOKEN='FlyV1 fm2_…'
+```
+
+The value is used as Fly prints it (`FlyV1 …`); an older personal token without that prefix
+is sent as a bearer token. A deploy token can do more than start machines — it can deploy
+the app — and Fly's macaroon tokens can be attenuated further; a narrower token that still
+reaches `/machines/{id}/start` has not been tried here. `provision.yml` does not set this
+secret yet. Without it, a worker that has exited stays stopped until a person runs
+`fly machine start` — so either set it or set `WORKER_IDLE_EXIT_S = "0"` in `fly.toml`.
+
+**`QUEUE_CHECK_URL`** (optional) is a [healthchecks.io](https://healthchecks.io)-style check
+URL. Queueing a job onto an idle worker pings `<url>/start`; the worker pings `<url>`
+whenever it claims a job. Set the check's **period long (30 days)** — it hears nothing
+while nobody queues anything — and its **grace longer than a cold start (10 minutes)**, and
+a job that is queued and never claimed — an expired token, a machine that will not boot —
+becomes an alert instead of a phone that says "queued" forever. No `/start` is sent for a
+job queued while a worker is running another (a job in progress under a live lease): it
+waits for that run, two hours of training and more, and a `/start` for it alerted after
+the grace every time. The run in progress has `WORKER_HEARTBEAT_URL`, and the worker pings
+this check when it claims the queued job afterwards.
+
+**Neon** then sees no queries from an idle deployment and suspends its compute five
+minutes after the worker's last poll. The first query after that waits for the compute to
+start (Neon quotes a few hundred milliseconds); a connection the pool held across the
+suspend is checked before use (`pool_pre_ping`) and replaced.
 
 ## GPU training — Modal
 
@@ -303,6 +451,13 @@ Priced 2026-09-23, `iad`: a Fly worker big enough (`performance-4x`, 8 GB) is
 $0.17 for the 40 minutes above. The cost of that choice is one more round trip: the
 frames go up to R2 and the poses come back, which for 100 JPEG frames is tens of MB.
 
+**Why COLMAP is still in the image, then.** Checked 2026-10-02 with dropping its ~370 MB
+in mind: `georeference` (`exif_gps`) declares no `gpu:`, so it runs on the worker under
+every runner, and it calls `colmap model_aligner`. With `WORKER_RUNNER=local` — a
+development box, a deployment without Modal — `pose` runs on the worker as well. And CI's
+`image` job asserts `sfm.colmap_version() == "3.9.1"` in the built image. Taking it out
+would mean moving `georeference` to Modal too, or reimplementing the alignment.
+
 ### Disk: the 20 GB volume
 
 A Lane 2 run in flight holds several things on the worker's volume at once:
@@ -314,14 +469,27 @@ A Lane 2 run in flight holds several things on the worker's volume at once:
 - the trained PLY coming back from Modal (hundreds of MB);
 - the packaged tiles.
 
-When a run finishes, the worker deletes `inputs/` and every stage's `work/`
-(`WorkerConfig.tidy_finished_runs`, on by default). That leaves `out/`, `step.json` and
-`checkpoint/`, which is everything "retry from this stage" reads: a few hundred MB per
-finished Lane 2 run. **20 GB is therefore enough for one capture of up to about 8 GB in
-flight, with room for dozens of finished runs.** Past that, run `fly volumes extend`,
-which needs no redeploy. A failed run keeps its scratch on purpose, for diagnosis. Clear
-it by hand if the volume fills (`fly ssh console`, then remove
-`/data/worker/runs/<job id>`).
+When a run ends — finished, failed or cancelled — the worker deletes `inputs/` and every
+stage's `work/` (`WorkerConfig.tidy_finished_runs`, on by default). That leaves `out/`,
+`step.json` and `checkpoint/`, which is everything "retry from this stage" reads: a few
+hundred MB per Lane 2 run. **20 GB is therefore enough for one capture of up to about 8 GB
+in flight, with room for dozens of finished runs.** Past that, run `fly volumes extend`,
+which needs no redeploy.
+
+The worker also checks before it claims. Below `WORKER_MIN_FREE_GB` (5) free it evicts
+the workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7) ago, oldest
+first; if that is not enough it does **not** claim, and logs `NOT CLAIMING` at error
+level once a minute — the job stays queued (and alerts, with `QUEUE_CHECK_URL`) instead of
+failing on a full disk after its download. A run whose workdir was evicted still retries;
+it starts over from the upload.
+
+That is also why the worker has one general slot and not two: a second Lane 2 run in
+flight is a second upload, frame set and database on the same volume (and a second GPU
+billed). The second slot is CPU-only (`WORKER_CPU_ONLY_SLOTS`) and takes only
+`splat-ingest`, whose run holds the uploaded splat, its normalized copy, the packer's
+sorted working file (about the splat's size) and the tiles — a few times the upload while
+`package` runs, not measured on this volume. A very large ingest beside a very large video
+is the case that wants `fly volumes extend`.
 
 ### Uploads: what the API accepts
 
@@ -357,6 +525,11 @@ selector), which is **not** the scheme the provider hands you — rewrite it.
 Migrations run from `fly.toml`'s `release_command`, so a deploy whose migration fails does
 not replace the running version. Back up with the provider's tooling; the schema is small
 and the heavy data lives in ion and R2.
+
+Neon scales its compute to zero after five minutes with no queries, which an idle
+deployment now gives it: the worker exits once it has been idle for `WORKER_IDLE_EXIT_S`
+and the API machine suspends. See
+[waking the worker](#waking-the-worker-and-letting-neon-sleep).
 
 ## Object storage and CORS — R2
 
@@ -402,7 +575,8 @@ database, in the Outputs view, and in the URLs the console renders. Nothing abou
 deployment looks wrong — the globe works.
 
 So production runs two buckets and one key scheme. A published object keeps the key it
-already had; only the bucket differs.
+already had, with the publish's generation added after the job id —
+`runs/<job>/p<generation>/<stage>/…` (below) — and the bucket differs.
 
 | Bucket                         | Holds                                                                                                                    | Public |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------ |
@@ -411,11 +585,54 @@ already had; only the bucket differs.
 
 Two paths put things in the public bucket, and they differ for a reason.
 `app/seed/publish.py` writes `sites/` and `catalog.json` **straight there**, because those
-exist only to be fetched by a browser and never hold anything else.
+exist only to be fetched by a browser and never hold anything else — and so does
+`POST /sites/{id}/thumbnail`, at `sites/<site id>/thumbnail.<ext>`. (It used to write to the
+private bucket while saving a URL on the public host, so every uploaded thumbnail 404'd once
+there were two buckets.)
 `app/worker/publish.py` **copies** a finished run's tileset and thumbnail across with a
 server-side `CopyObject`, because a run produces those into the private bucket alongside
 things that must stay there. A copy, not a move: the private bucket keeps the originals,
 which are what the artifacts table and reconciliation read.
+
+The copies go eight at a time, and `tileset.json` goes **last**, once every tile's copy has
+returned, so a public `tileset.json` always means the files it names are there. A copy
+that fails stops the publish before the root is copied, and the run registers no site
+(as before). The first real 514-tile capture took about eight minutes to publish one copy
+and one read-back at a time; against a fake store with a fixed 20 ms a request, the same
+514 objects went from 21.4 s (1,029 requests) to 1.4 s (515). The artifact uploads before
+it run eight at a time as well.
+
+**Every publish writes a generation of its own** (`app/services/published.py`). A run's own
+keys are not written once: a phone's Refine re-runs the _same_ job from `train`, and
+`package` and `thumbnail` write the same tile names again with new geometry ("Retry from
+this stage" does the same). Those keys used to be copied across unchanged while every
+non-JSON key under `runs/` was served `immutable` for a year, so after a Refine browsers
+and the edge kept the preview's tiles under the new, short-cached `tileset.json` —
+geometry from two reconstructions in one scan — and a republish that failed half way had
+already overwritten part of the live site. Now the copies go to
+`runs/<job>/p<generation>/…`, the site's asset (and thumbnail, and coverage overlay) are
+repointed there only once the whole tileset is in, and the live generation is never
+written again: a republish that fails changes nothing a viewer sees, and leaves the site
+as it was. The generation is a hash of the published objects' keys, sizes and ETags, so
+publishing the same bytes again lands on the same keys (a retried `register` keeps the
+browser's cache); without ETags it is random. What was attached beside the live tiles —
+objects, a fill, a backfilled grid, the streamed LOD, a plant rig — is carried into the new
+generation only where it still holds for the new splats, and what is not is flagged on the
+asset ("Sidecars: one publisher", below).
+
+`Cache-Control` follows from that, by one rule shared with the tile proxy
+(`functions/r2/[[path]].js`, `outputs.cache_control_for`): a year and `immutable` for a
+non-JSON key inside a generation, five minutes with a week of `stale-while-revalidate`
+for everything else — JSON (backfill workflows used to rewrite `tileset.json` in place), `sites/`, the
+run's own keys in the private bucket (uploaded with the short lifetime, because a Refine
+rewrites them), and copies published before generations existed. Each copy is written
+with the lifetime of the key it lands on, so a browser reading the public bucket's own
+URL is told the same as one going through the proxy.
+
+**Old generations stay.** A Refined or re-registered run leaves its previous generation
+in the public bucket, unreferenced; nothing deletes it yet. Removing a generation no
+site's asset or thumbnail URL names (`runs/<job>/p<generation>/`) is a safe cleanup, and
+a follow-up — like the gap below, it is about the public bucket, which nothing walks.
 
 One consequence worth stating plainly: **reconciliation does not see the public bucket.**
 `app/services/reconcile.py` walks `captures/` and `runs/` in the private bucket, so a
@@ -459,6 +676,255 @@ has to be committed), applies the document with `aws s3api put-bucket-cors` agai
 `https://<account-id>.r2.cloudflarestorage.com` with `--region auto`, and then prints what
 the bucket reports back. **Read that output.** It is the first time any of this meets a real
 R2 API.
+
+### Sidecars: one publisher
+
+A scan's directory holds more than its tiles. Other steps add files beside them and declare
+them on the root tile's `extras`, where the web finds them: the segmentation's
+`instances.json` (+ `.emb`), a backfilled `collision.bin`, an inferred fill under
+`inferred/<name>/`, PlayCanvas's streamed level of detail under `sog/`, a plant rig
+(`rig.json`, `motion.json`, `plants.json`, named by the asset's `renderConfig.rigUrl`). The
+GitHub workflows that make them (`publish-instances.yml`, `publish-fill.yml`,
+`collision-backfill.yml`, `streamed-lod-backfill.yml`, `living-plants.yml`) used to write
+them **in place**: read the live `tileset.json`, inject a key, write it back. That breaks
+three ways — two runs at once drop each other's key; inside a generation, served
+`immutable` for a year, a rewritten file is stale in every cache that holds it; and a worker
+republish cuts a generation from the run's own outputs, which have none of them, so
+objects, collision, fill and streamed LOD vanished from the live site.
+
+So there is **one publisher: the API.** A workflow stages its files and asks the API to
+attach them; the API cuts a new generation and repoints the asset. Nothing writes a
+published directory in place any more.
+
+**`POST /api/v1/assets/{asset_id}/sidecars`**, with `Authorization: Bearer
+$API_WRITE_TOKEN`:
+
+| Field           | Required | Meaning                                                                                                                                                                                                                                         |
+| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stagingPrefix` | yes      | `staging/assets/<asset id>/<token>/` in the **private** bucket (`OBJECT_STORAGE_BUCKET`); the token is letters, digits, `.`, `_`, `-` (a run id and attempt). Every object under it is attached.                                                |
+| `basedOn`       | yes      | the tileset URL the files were computed against. Accepted when the asset's current tiles are those tiles — the same URL, or a later generation another attach cut from them; **409** after a republish.                                         |
+| `files`         | no       | exactly the paths that must be staged; a partial upload is then a 422 instead of an attach.                                                                                                                                                     |
+| `extras`        | no       | root `extras` keys to set, each replaced whole; `null` removes one, and the kind's files where none is staged. A list of `{uri, …}` entries (`inferredLayers`) is merged **by uri**, so send only your own entry. Every `uri` named must exist. |
+| `rigUrl`        | no       | sets `renderConfig.rigUrl` in the same transaction as the new URL (`null` clears it) — the separate PATCH `living-plants.yml` made raced with everything else.                                                                                  |
+
+The staged layout is the layout beside `tileset.json`: `staging/…/run-7/instances.json`
+lands at `<new generation>/instances.json`, `staging/…/run-7/inferred/fixer/0.glb` at
+`<new generation>/inferred/fixer/0.glb`. A staged file is refused (422, before anything is
+copied) unless every path segment is plain (letters, digits, `.`, `_`, `-`, not starting
+with `.`; at most six segments), its extension is one the tile proxy serves (`json`, `glb`,
+`bin`, `emb`, `f32`, `u8`, `webp`), it is at most 1 GiB, and the attach holds at most 5,000
+files and 8 GiB. It may not be `tileset.json` (the API writes that) or one of the scan's tiles,
+and nothing under `objects/` or `fills/` (a split rewrites the scan's tiles; it is a new
+tileset, not files beside one). `extras.gaussians` belongs to the tileset and cannot be set.
+
+What the API does, holding the asset's row lock (`app/services/attach.py`):
+
+1. lists the asset's current directory in the public bucket — a generation, or a **legacy
+   prefix** published before generations (`runs/<job>/package/splat/`: the spool, pumpkin
+   and camp scans, infra/modal/segment.py `SCANS`) — and refuses an asset that is not a
+   run's tileset there (an ion asset, a seeded `sites/` scan: 409);
+2. checks `basedOn` holds the same tiles (the tileset without its root extras, and every
+   tile's size and ETag);
+3. writes a **new** generation, `runs/<job>/p<generation>/…`: every current object — tiles
+   and every sidecar already there — copied server side, eight at a time; the staged files
+   beside them; and **last**, once every copy has returned, `tileset.json` with the merged
+   root extras. Every object gets `Cache-Control: public, max-age=31536000, immutable`,
+   `tileset.json` included: nothing ever writes a generation twice. What the request
+   replaces is not copied:
+   - a staged file under `inferred/<name>/` or `sog/` replaces that whole directory, so a
+     smaller rebuild leaves no stale chunk; a staged file of any other kind replaces the
+     kind's whole file set — a new `instances.json` alone leaves no old `instances.emb`
+     behind. Stage a sibling again to keep it;
+   - a kind's key set to `null`, with none of its files staged, takes its files with it;
+   - a kind keyed by the ids of one the request replaces — `materials` and `telemetry`,
+     when it stages an `instances` file or sets or removes `extras.instances` — is dropped,
+     files and key, unless the request sends it too (docs/SCENE_OBJECTS.md, section 8);
+4. moves the asset's URL to the new `tileset.json`, clears the asset's flags for the kinds it
+   attached, flags each kind it dropped (as a republish does, with no `jobId`), commits, and
+   deletes the staged files.
+
+It answers with `url`, `previousUrl`, `generation`, `copied`, `staged`, `attached`,
+`carried` and `dropped` (sidecar kinds), `removed` (the previous generation's paths the new
+one lacks), the root `extras` keys now declared, and the asset. A failure before the commit
+leaves the asset exactly as it was: the half-written generation is keys nothing points at,
+and the staged files stay for a retry.
+
+Every 409 says why in the Problem's `code` (an RFC 9457 extension member; other errors
+have none), so a client branches on it rather than on the words of `detail`:
+
+| `code`           | Means                                                                                                                                                            | Do                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `tiles_changed`  | `basedOn` no longer holds the asset's tiles: a republish replaced them                                                                                           | compute the files again on the asset's current tileset |
+| `busy`           | another attach, or a worker's register, held the asset past the 60 s lock wait                                                                                   | retry                                                  |
+| `not_attachable` | the asset cannot take an attach: not a run's 3D Tiles in the public bucket, its `tileset.json` missing or not a tileset, too many objects, one too large to copy | neither; fix the asset or the bucket                   |
+
+**Serialised per asset.** The attach takes `SELECT … FOR UPDATE` on the asset, so a second
+attach waits (up to 60 s, then 409 — retry) and builds on the first's generation; neither
+loses the other's files. The lock is held across the copies — seconds for a thousand tiles
+— with `idle_in_transaction_session_timeout` set to ten minutes for that transaction alone,
+so a process that freezes holding it is cut off by the database rather than by TCP hours
+later. The worker's `register` takes the same lock before it repoints: if an attach moved
+the asset while the run was publishing, it publishes again on top of the attach's
+generation (up to three times, then the run's tiles are withheld and the site is left as the
+attaches made it).
+
+**A republish carries what still holds** (`app/worker/carry.py`). Before copying, the worker
+reads the live generation and decides each sidecar kind by what it depends on (the table is
+docs/SCENE_OBJECTS.md, section 8): a kind bound to the splats' positions (objects, skins,
+the rig) is carried when every new tile's position checksum — computed by the worker from
+the run's own tiles, with the function the binding was written with — is one its binding
+lists, so a re-pack with another spherical-harmonics degree keeps it; a kind bound to the
+tiles' bytes (collision, view cones, `sog/`) is carried only when the new tiles are the very
+same tiles; a kind keyed by instance ids (materials, telemetry) goes with `instances`; an inferred fill,
+placed in the scan's frame with no splat indices, is always carried; a kind the run makes
+itself (the packer's `collision.bin`, `viewcones.bin`) is replaced by the run's. Every
+dropped kind becomes a flag on the asset — `sidecarFlags` in every asset response, e.g.
+`{"kind": "instances", "action": "Objects need re-segmenting", "reason": …, "jobId": …}` —
+and a warning in the worker's log; attaching that kind again clears it. With one bucket
+nothing can be carried (a run's tileset is its own keys), so everything is dropped and
+flagged.
+
+**What a run provides is only what this attempt wrote.** A Refine re-runs the same job, and
+its `package` uploads into the same `runs/<job>/<stage>/splat/` in the private bucket as the
+first attempt did. The worker now removes whatever is under that prefix and not in the
+upload (`outputs._prune`): a `collision.bin` the first packer wrote and the second did not
+would otherwise have been published beside the new tiles and read by the carry plan as the
+new run's own grid, replacing the live one.
+
+**The workflows' side: one script.** The five workflows that publish beside the tiles —
+`publish-instances.yml`, `publish-fill.yml`, `collision-backfill.yml`,
+`streamed-lod-backfill.yml`, `living-plants.yml` — all go through
+`tools/captures/attach_sidecars.py`, and none of them writes the public bucket or a
+`tileset.json` any more. The build job resolves the asset's **current** tileset
+(`attach_sidecars.py resolve`: `GET /api/v1/assets/{id}`), checks its files against it, and
+writes the request beside them as `attach.json` (`attach_sidecars.py manifest`), kept in the
+review artifact. The publish job runs `attach_sidecars.py attach <dir>`: it uploads the files
+with the R2 pair to `staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` in the
+private bucket (clearing anything a failed earlier try left under that prefix), POSTs the
+request, retries a 409 whose `code` is `busy`, and ends with exit status 3 on one whose
+`code` is `tiles_changed` — run the workflow again on the asset's current tiles — and with
+exit status 1 and the API's own `detail` on any other refusal. By hand, the same request is:
+
+```bash
+PREFIX="staging/assets/$ASSET_ID/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/"
+curl --fail-with-body -sS -X POST "$TWIN_API_URL/api/v1/assets/$ASSET_ID/sidecars" \
+  -H "Authorization: Bearer $API_WRITE_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg prefix "$PREFIX" --arg base "$BASED_ON" --slurpfile extras extras.json \
+        '{stagingPrefix: $prefix, basedOn: $base, extras: $extras[0]}')"
+```
+
+What each workflow stages and sends is in docs/SCENE_OBJECTS.md, section 8. What their
+publish jobs read:
+
+| Name                    | Kind     | Read by                                       | For                                                        |
+| ----------------------- | -------- | --------------------------------------------- | ---------------------------------------------------------- |
+| `API_WRITE_TOKEN`       | secret   | all five                                      | the attach is a write                                      |
+| `CLOUDFLARE_ACCOUNT_ID` | secret   | all five                                      | the R2 endpoint, `https://<id>.r2.cloudflarestorage.com`   |
+| `R2_ACCESS_KEY_ID`      | secret   | all five                                      | staging in the private bucket                              |
+| `R2_SECRET_ACCESS_KEY`  | secret   | all five                                      | its other half                                             |
+| `R2_BUCKET`             | variable | all five (default `twin-assets`)              | the **private** bucket the API reads `staging/` from       |
+| `TWIN_API_URL`          | variable | all five (default `https://twin-api.fly.dev`) | the API the asset is read from and the attach is sent to   |
+| `SCAN_ASSET_IDS`        | variable | publish-instances, publish-fill               | which asset each scan of infra/modal/segment.py `SCANS` is |
+
+None of them needs the public bucket's name or URL any more. They still use the repository's
+one R2 pair, which can write the public bucket too; a pair scoped to the private bucket alone
+would do for all five, but it would have to live under other secret names, because
+`R2_ACCESS_KEY_ID` is also what provisioning gives the API (below).
+
+**`SCAN_ASSET_IDS`: what the owner fills in.** publish-instances and publish-fill name a scan
+the way segment.yml and fill.yml do (`spool`, `pumpkin`, `camp`: infra/modal/segment.py
+`SCANS`, legacy public URLs), but an attach is to an **asset**, and asset ids are random
+UUIDs the production database made, not knowable from the repository (the seed data has no
+run scans). Set the repository variable to a JSON object naming the three:
+
+```bash
+curl -s "$TWIN_API_URL/api/v1/assets" | jq '[.[] | select(.source.url? // "" |
+  test("/runs/(8e1cc115-cb80-4af2-81fc-dccaf6b65891|430c1932-5b6a-47b1-bb71-bb7fa2fec86b|50c25673-0940-4574-9b96-0b21362f83ca)/"))
+  | {id, name, url: .source.url}]'
+# then, in Settings → Secrets and variables → Actions → Variables:
+#   SCAN_ASSET_IDS = {"spool": "<id>", "pumpkin": "<id>", "camp": "<id>"}
+```
+
+Until it is set, `attach_sidecars.py resolve --scan` finds a scan's asset by its run — the
+one gaussian-splat asset whose tileset is under `runs/<job>/` of the scan's legacy URL — and
+says so in the log; no match, or more than one, is a refusal that names the variable. The
+other three workflows take the asset from the capture (collision-backfill, living-plants:
+`fetch_capture.py`) or as their input (streamed-lod-backfill: `asset=<uuid>`).
+
+**Split objects are not attached.** `split_objects.py` rewrites the scan's own tiles, so a
+split is a new tileset, not files beside one; fill.yml's `split:<scan>` jobs only keep it in
+their artifact for review, nothing publishes it, and the attach refuses `objects/`, `fills/`,
+`extras.objects` and `extras.split`. Publishing a split needs a replace-tiles publish
+(docs/SCENE_OBJECTS.md, section 8), left until a split is wanted on the live site.
+
+**Two operator steps.** A lifecycle rule that expires `staging/` in the private bucket after
+a week, for attaches that failed and were never retried:
+
+```bash
+aws s3api put-bucket-lifecycle-configuration --bucket twin-assets \
+  --endpoint-url https://<account-id>.r2.cloudflarestorage.com --region auto \
+  --lifecycle-configuration '{"Rules":[{"ID":"staging","Status":"Enabled","Filter":{"Prefix":"staging/"},"Expiration":{"Days":7}}]}'
+```
+
+And migration 0009 (`assets.sidecar_flags`), which `release_command` applies on deploy.
+
+`Cache-Control`, once more: an attach writes its whole generation immutable, JSON included,
+and since every workflow goes through it nothing writes a generation twice — so the tile
+proxy now serves every non-JSON key inside a generation for a year, sidecars too
+(`collision.bin`, `instances.emb`, `sog/`, `inferred/…`; it used to keep those short, when
+backfills rewrote them in place). A legacy prefix (`runs/<job>/package/splat/`, written in
+place for years) is outside any generation and stays short. The worker's own publish still
+writes a generation's JSON with the short lifetime, and the proxy still serves JSON short
+whatever the object says; that is only slower than it needs to be, never wrong, and the two
+can move to immutable together.
+
+### Narrowing the credentials: operator steps
+
+Two credentials are broader than they need to be today. Neither is a code change — the
+runtime configuration is deliberately left as it is — so these are steps for whoever holds
+the accounts, in the order to take them.
+
+**One R2 key pair does three jobs.** `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` become the
+API's and the worker's `OBJECT_STORAGE_*` pair on Fly, _and_ `modal.yml` copies the same
+pair into the Modal secret `twin-object-storage` for the GPU container. They need different
+things:
+
+| Who                   | Needs                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------- |
+| API and worker (Fly)  | Object Read & Write on the **private** bucket, and on the **public** one (publishing is a `CopyObject`) |
+| GPU container (Modal) | Object Read & Write on the **private** bucket only: inputs in, `runs/<id>/` out                         |
+
+So a leak from Modal's side today is write access to the bucket the world reads. To split it:
+
+1. R2 → Manage API tokens → Create API token: **Object Read & Write**, "Specify bucket(s)" →
+   the **private** bucket only (`R2_BUCKET`, `twin-assets` by default). Note the pair.
+2. Replace the Modal secret with it — from a file, so the values are not on a command line:
+   write `OBJECT_STORAGE_ENDPOINT_URL`, `OBJECT_STORAGE_ACCESS_KEY`,
+   `OBJECT_STORAGE_SECRET_KEY`, `OBJECT_STORAGE_BUCKET` and `OBJECT_STORAGE_REGION=auto` as a
+   JSON object and run `modal secret create twin-object-storage --force --from-json <file>`.
+   Delete the file. **Re-running `modal.yml` puts the broad pair back** (it builds the
+   secret from `R2_ACCESS_KEY_ID`), so repeat this step after any run of it.
+3. Make sure the repository's pair — the one Fly gets — is scoped to **exactly the two
+   buckets** (`R2_BUCKET` and `R2_PUBLIC_BUCKET`) and nothing else on the account. If it
+   was minted for "all buckets", mint a two-bucket token, put it in `R2_ACCESS_KEY_ID` /
+   `R2_SECRET_ACCESS_KEY`, and re-run **Provision** (it re-sets the Fly secrets).
+4. Revoke the old token in R2 → Manage API tokens once uploads, a Lane 2 run and a publish
+   have all worked on the new ones.
+
+**The phone key's hash is in `fly.toml`.** A salted PBKDF2 hash, 200,000 rounds, of a key of
+about 59 bits — not the key, and slow to attack — but it is in a public repository, where an
+offline guesser has all the time it likes and the API's rate limit does not apply. To take
+it out of the repository:
+
+1. Generate a new key (the old hash has been public, so rotate rather than move it) and its
+   hash, in `apps/api`:
+   `uv run python -c "import secrets, sys; from app.services.phone_key import hash_key; k = '-'.join(secrets.token_hex(2) for _ in range(4)); print(k); print(hash_key(k, salt=secrets.token_bytes(16)), file=sys.stderr)"`
+   — the key on stdout is for the phone; the hash on stderr is for Fly.
+2. `fly secrets set -a twin-api API_PHONE_KEY_HASH='<the hash>'` — single quotes, because
+   the hash contains `$`.
+3. In the same change, delete the `API_PHONE_KEY_HASH` line from `fly.toml`'s `[env]`, so
+   the old value cannot come back with a later deploy, and deploy.
+4. On each phone: **Forget key**, then type the new one.
 
 ### MinIO, for development
 
@@ -677,7 +1143,8 @@ is optional; the default is in the right-hand column.
 | `NEON_PROJECT_NAME`          | `hexapod-twin`             | which Neon project to find or create                                                          |
 | `NEON_REGION_ID`             | `aws-us-east-1`            | Neon's name for the region `fly.toml`'s `primary_region` is in                                |
 | `FLY_ORG`                    | `personal`                 | the Fly organization to create the app in                                                     |
-| `TWIN_API_URL`               | `https://twin-api.fly.dev` | the API `living-plants.yml` reads a capture from and patches its splat asset through          |
+| `TWIN_API_URL`               | `https://twin-api.fly.dev` | the API the five sidecar workflows read an asset from and attach through                      |
+| `SCAN_ASSET_IDS`             | _(found by run)_           | `{"spool": "<asset id>", …}`: which asset each segmented scan is ("Sidecars: one publisher")  |
 
 The first two are marked _(passed in)_ because `provision.yml` computes them and hands them
 to `deploy.yml` directly — a provisioned first deploy needs no variables set at all. A
@@ -724,13 +1191,98 @@ object in the bucket behind. Deleting them is a console job; leaving them is har
 - `pnpm audit --audit-level high` and `pip-audit` run in CI.
 - Dataset URLs are validated (scheme, credentials, private hosts in production).
 - Reads are open so the world stays viewable; every mutating endpoint requires
-  `Authorization: Bearer $API_WRITE_TOKEN`, and the worker uses the same token.
+  `Authorization: Bearer $API_WRITE_TOKEN`, and the worker uses the same token. So does one
+  read: storage reconciliation (`POST /storage/reconciliation`), which walks the private
+  bucket and lists what is in it.
+- The routes whose cost is the attack are rate-limited per client, in process
+  (`app/services/ratelimit.py`): wrong phone keys (each is 200,000 PBKDF2 rounds; a right
+  key is never limited), reconciliation, and step-log reads. A refusal is a `429` with
+  `Retry-After`. The client is the address in `API_CLIENT_IP_HEADER` (default
+  `Fly-Client-IP`, which Fly's proxy sets on every request, and which is believed only when
+  `FLY_APP_NAME` says the process is on Fly — anywhere else any client could send it, so
+  the socket address is used); behind another proxy set the header that proxy sets, or
+  empty to use the socket address. An IPv6 client is its /64, since every address in a
+  subscriber's /64 is theirs to rotate through. None of it is reachable by the phone page's
+  10-second polling.
+- The `/r2/` tile proxy fetches from one pinned bucket host and labels what it serves
+  itself; see [the tile proxy](#the-r2-tile-proxy-and-the-one-host-it-serves).
+- One queued-or-running job per capture is a partial unique index (migration `0008`), not
+  only a check in code, so a double-click on Process is a `409`, not a second run.
 
 ## Observability
 
 `apps/web/src/lib/log.ts` and `lib/timing.ts` expose sinks for a vendor (Sentry,
-OpenTelemetry). The API adds a `Server-Timing` header and logs slow requests to stdout;
-`fly logs` is the shipper until there is a reason for another.
+OpenTelemetry). The API adds a `Server-Timing` header, and `fly logs` is the shipper until
+there is a reason for another.
+
+**API logs are JSON lines in production** (`app/observability.py`): `time`, `level`,
+`logger`, `message`, any structured fields, and `exception` with the traceback. Until this
+was configured the API set up no logging at all, so every `twin.api` INFO line (the
+production tiles notice, among others) was dropped and warnings came out with no time or
+logger name. uvicorn's access and error lines go through the same handler, so one format is
+interleaved, not two.
+
+| Variable                    | Default                           | What it does                                                         |
+| --------------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| `LOG_LEVEL`                 | `INFO`                            | level of the API's own `twin.*` loggers; libraries stay at `WARNING` |
+| `LOG_FORMAT`                | `json` in production, else `text` | one JSON object per line, or a line a person reads                   |
+| `SENTRY_DSN`                | unset                             | error reporting; unset, `sentry-sdk` is never even imported          |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0`                               | the share of requests traced; `0` sends errors only                  |
+
+All four are optional; set `SENTRY_DSN` as a Fly secret (`fly secrets set SENTRY_DSN=…`) —
+it is account-specific — and the others the same way if you want something other than the
+default. Nothing in `fly.toml` needs to change.
+
+**No line carries a credential.** Every line is redacted before it is written: `Bearer`
+values, phone-handoff tokens (`h1.…`), the query string of any presigned URL (its signature
+is a working credential for an hour), PBKDF2 hashes, and the literal value of every secret
+the process was configured with — `FLY_API_TOKEN`, the password in `DATABASE_URL`, and the
+path of `WORKER_HEARTBEAT_URL` and `QUEUE_CHECK_URL` (whoever has a check's URL can ping it,
+or keep it quiet) among them. Sentry gets the same treatment, breadcrumbs' `data` included
+(its httpx integration records every outgoing request's URL there), and is configured with
+no request bodies and no stack-frame locals — a frame holding `Settings` holds every secret
+the API has. The wake-up code logs as `twin.worker_wake`, so its INFO lines (which worker
+machines a queued job started) are written; as `app.worker_wake` they were dropped.
+
+**A 422 is the caller's fault and a 500 is ours.** Only deliberate validation failures
+(`InvalidInputError` in `app/services/errors.py`, URL checks, request validation) are
+`422`s. Any other `ValueError` — a failed parse of something the API produced itself, a
+pydantic model rejecting a stored row — used to be a 422 too, carrying the bug's own message
+as if the caller had made it, and logged nowhere. It is now a `500` whose body says nothing
+of the internals, and an `ERROR` line (and so a Sentry event) with the traceback.
+
+The worker's runs have a dead-man's switch, off until it is given URLs (Fly secrets, both
+optional; a free healthchecks.io check each is the shape they are written for):
+
+| Secret                 | Pinged                                                                                                                                                  | Alerts when                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `WORKER_HEARTBEAT_URL` | `/start` when a job is claimed and every minute while it runs; success at the end; `/fail` with the reason when it is dead-lettered. Nothing while idle | a run fails, or goes quiet: the worker died, hung or was stopped and nobody resumed the job |
+| `QUEUE_CHECK_URL`      | `/start` by the API when a job is queued and none is running; success by the worker when it claims one                                                  | a job is queued and never claimed: no worker, or one that cannot claim (a full disk)        |
+
+**Set the two checks up like this** (healthchecks.io, Simple schedule), or they alert for the
+wrong things. healthchecks.io keeps two clocks: the _period_, from the last success, and the
+_grace_, which also runs from each `/start` — a run must end within the grace of its last
+`/start`, and every `/start` starts it again.
+
+| Check                  | Period  | Grace      | Why                                                                                                                                                   |
+| ---------------------- | ------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKER_HEARTBEAT_URL` | 30 days | 5 minutes  | the keep-alive is a `/start` a minute, so a run that goes quiet alerts five minutes later; nothing is sent while idle, which must not alert for weeks |
+| `QUEUE_CHECK_URL`      | 30 days | 10 minutes | a cold start: the machine boots and the worker claims; the long period because an idle deployment queues nothing                                      |
+
+The keep-alive used to be a success ping, which only fed the period: a short period alerted
+every time the worker sat idle, and one long enough to stay quiet through that missed a run
+that went quiet for hours. A grace shorter than a deploy's handover of a running job (the next worker's claim
+sends the next `/start`) alerts on every deploy mid-run.
+
+A ping never blocks the worker and never fails a job (a thread each, a 5 s timeout,
+errors logged and dropped). `fly.toml`'s `[[restart]]` restarts a worker that dies
+(`on-failure`, ten tries); one that keeps dying is what the two checks report.
+
+**What a job may cost.** `WORKER_JOB_COST_CAP_USD` (default 20, 0 turns it off) is a
+ceiling on one job's `costUsd`, across stages and attempts: no GPU call starts past it, a
+running one is cancelled when its cost would go over it, and the job is dead-lettered
+saying so. `costUsd` on Modal includes the 2 cores and 8 GiB each GPU function reserves
+(+$0.158/h on an L4); it does not include a container's idle minute after its last call.
 
 ## Handover
 
@@ -778,9 +1330,11 @@ Note the account id while you are there: it is the 32-hex string in the dashboar
 → `CLOUDFLARE_ACCOUNT_ID`
 
 **Cloudflare R2, separately** — R2 → Manage API tokens → Create API token.
-_Scope:_ **Object Read & Write**, and under "Specify bucket(s)" choose **only** the bucket
-this deployment uses (`twin-assets` unless you set the `R2_BUCKET` variable). This is an
-S3-compatible key pair, a different kind of credential from the token above, and there is no
+_Scope:_ **Object Read & Write**, and under "Specify bucket(s)" choose **only** the two
+buckets this deployment uses (`twin-assets` and `twin-assets-public` unless you set the
+`R2_BUCKET` / `R2_PUBLIC_BUCKET` variables): publishing copies from one into the other with
+this pair. See [Narrowing the credentials](#narrowing-the-credentials-operator-steps) for
+giving Modal a pair that reaches only the private one. This is an S3-compatible key pair, a different kind of credential from the token above, and there is no
 API that mints one — which is why it is on this list. The API needs it in any case:
 `OBJECT_STORAGE_ACCESS_KEY` and `OBJECT_STORAGE_SECRET_KEY` are what presign every upload.
 → `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
@@ -937,6 +1491,13 @@ below is still true of this repository's evidence, whatever it now says about th
 - **Handover commands were written from documentation.** Every command in the handover was
   written from the tools' documented interfaces, and none has been run from this
   repository.
+- **Waking the worker has not met Fly's API.** `app/services/worker_wake.py` is written
+  against the Machines API's documented shapes (`GET /v1/apps/{app}/machines`,
+  `config.metadata.fly_process_group`, `POST …/machines/{id}/start`, a `FlyV1 …` token in
+  `Authorization`) and tested against a stand-in for it. That a deploy token may start
+  machines, that a stopped worker comes back with its volume, and Fly's suspend of the
+  1 GB `app` machine have not been observed from here. `QUEUE_CHECK_URL`'s worker half
+  (the ping on claim) is a separate change.
 - **`provision.yml` has never run, and could not have been tested from where it was
   written.** `api.cloudflare.com`, `api.fly.io`, `api.neon.tech` and `registry.fly.io` are
   all unreachable from that environment — which is the workflow's whole premise, and also

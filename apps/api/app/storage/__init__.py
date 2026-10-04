@@ -7,7 +7,7 @@ from app.storage.base import (
     ObjectSummary,
     StoredObject,
 )
-from app.storage.factory import build_storage, get_storage
+from app.storage.factory import build_storage, get_public_storage, get_storage
 from app.storage.null import NullStorage, StorageUnavailableError
 from app.storage.s3 import S3Storage
 
@@ -23,5 +23,6 @@ __all__ = [
     "StorageUnavailableError",
     "StoredObject",
     "build_storage",
+    "get_public_storage",
     "get_storage",
 ]

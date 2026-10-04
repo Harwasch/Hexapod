@@ -150,6 +150,8 @@ def test_the_right_token_is_accepted(client: TestClient) -> None:
         # Mutate no rows, but spend the account's Anthropic credits per request.
         ("post", "/api/v1/agent/plan-draft", {"goal": "x", "projectId": "p"}),
         ("post", "/api/v1/agent/outline", {"image": "x", "point": [0, 0]}),
+        # Mutates nothing either, but walks the bucket and lists the private half of it.
+        ("post", "/api/v1/storage/reconciliation", None),
     ],
 )
 def test_every_mutating_route_is_gated(

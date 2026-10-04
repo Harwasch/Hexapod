@@ -74,13 +74,13 @@ def test_storage_factory() -> None:
 
 
 def test_thumbnail_upload_without_storage_is_503(client: TestClient) -> None:
-    from app.storage import NullStorage, get_storage
+    from app.storage import NullStorage, get_public_storage
     from tests.conftest import site_payload
 
     # Assert the unconfigured case explicitly rather than relying on OBJECT_STORAGE_* being
     # absent from the ambient environment: a developer who followed the README has a .env
     # that configures storage, and this test would then fail on a connection error instead.
-    client.app.dependency_overrides[get_storage] = NullStorage  # type: ignore[attr-defined]
+    client.app.dependency_overrides[get_public_storage] = NullStorage  # type: ignore[attr-defined]
 
     site = client.post("/api/v1/sites", json=site_payload()).json()
     response = client.post(
@@ -91,7 +91,58 @@ def test_thumbnail_upload_without_storage_is_503(client: TestClient) -> None:
         f"/api/v1/sites/{site['id']}/thumbnail", files={"file": ("t.txt", b"hi", "text/plain")}
     )
     assert bad_type.status_code == 415
-    client.app.dependency_overrides.pop(get_storage, None)  # type: ignore[attr-defined]
+    client.app.dependency_overrides.pop(get_public_storage, None)  # type: ignore[attr-defined]
+
+
+def test_a_thumbnail_lands_in_the_bucket_its_url_is_served_from(client: TestClient) -> None:
+    """The private bucket is where it went, and the public host is what its URL named: in
+    production, with two buckets, every uploaded thumbnail was a 404. It goes to the
+    public bucket now -- and the route is a plain `def`, so its blocking calls run in the
+    threadpool rather than on the event loop."""
+    import inspect
+
+    import boto3
+    from moto import mock_aws
+
+    from app.api.v1 import sites as site_routes
+    from app.storage import S3Storage, get_public_storage, get_storage
+    from tests.conftest import site_payload
+
+    assert not inspect.iscoroutinefunction(site_routes.upload_thumbnail)
+
+    def bucket(name: str, public_url: str | None) -> S3Storage:
+        return S3Storage(
+            bucket=name,
+            endpoint_url=None,
+            access_key="key",
+            secret_key="secret",
+            region="us-east-1",
+            public_base_url=public_url,
+        )
+
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="twin-private")
+        s3.create_bucket(Bucket="twin-public")
+        private = bucket("twin-private", None)
+        public = bucket("twin-public", "https://tiles.example.com")
+        overrides = client.app.dependency_overrides  # type: ignore[attr-defined]
+        overrides[get_storage] = lambda: private
+        overrides[get_public_storage] = lambda: public
+        try:
+            site = client.post("/api/v1/sites", json=site_payload()).json()
+            response = client.post(
+                f"/api/v1/sites/{site['id']}/thumbnail",
+                files={"file": ("t.png", b"\x89PNG thumbnail", "image/png")},
+            )
+        finally:
+            overrides.pop(get_storage, None)
+            overrides.pop(get_public_storage, None)
+        assert response.status_code == 200, response.text
+        key = f"sites/{site['id']}/thumbnail.png"
+        assert response.json()["thumbnailUrl"] == f"https://tiles.example.com/{key}"
+        assert public.get_object(key) == b"\x89PNG thumbnail"
+        assert private.head_object(key) is None
 
 
 def test_url_validation() -> None:

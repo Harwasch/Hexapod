@@ -500,8 +500,21 @@ The training side had its own fixed numbers — a fixed 1600 px, `budget_max` 2M
 1600 px: its foliage read as noise; it now reads the capture's floor), the count by the
 density budget and the placed GPU's memory, and past that by blocks.
 
-The splat keeps degree-0 colour only: `splat_tiles` packs SH0, as for every capture. The
-degree-3 training is still what makes those colours right from every side.
+The splat keeps degree-0 colour only: `real_tree.py` reads the trained PLY's fourteen
+canonical columns and none of its `f_rest_*`, so the rig's tiles are SH0 whatever the
+run's `ship_sh_degree` (tools/pipeline/README.md, "Shipping SH"). The degree-3 training is
+still what makes those colours right from every side. Carrying the bands here would mean
+reading them and turning them with `transform_splats`' similarity, as the pipeline's
+`place` does (`harmonics.rotate`); it waits on the choice of a degree for every capture.
+
+### Comparing SH degrees on one capture
+
+Whether view-dependent colour is worth its bytes and its frame time is measured on the
+devices that draw it, not here. `tools/pipeline/experiments/sh_compare.py` packs one splat
+that still has its `f_rest_*` at degrees 0, 1 and 3 with the `package` stage's packer, as
+three sites side by side for the console, with a manifest of what each costs on disk.
+The steps -- including why a run must be trained with `ship_sh_degree: 3` to have such a
+splat at all -- are in tools/pipeline/README.md, "Shipping SH".
 
 ### What happened in S6
 

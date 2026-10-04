@@ -50,9 +50,16 @@ export const OFFSCREEN_WEIGHT = 0.5;
 /** Updates in a row a fetch may go unwanted before it is aborted (~0.3 s at the replan rate). */
 export const ABANDON_AFTER_UPDATES = 2;
 /** A tile that failed is tried again after this long, up to `MAX_LOAD_FAILURES` times: one
- *  dropped request used to leave its region coarse for the rest of the visit. */
+ *  dropped request used to leave its region coarse for the rest of the visit. `onArrival` is
+ *  called once it is due, so a page that only updates when told (the globe's overlay, still
+ *  at rest) tries it too. */
 export const RETRY_FAILED_MS = 5000;
 export const MAX_LOAD_FAILURES = 3;
+
+/** A flight's destination is reached once the camera is this close to it (metres, or this
+ *  share of how far away it was asked for, whichever is more): its prefetch is done. */
+export const DESTINATION_REACHED_M = 1;
+export const DESTINATION_REACHED_SHARE = 0.02;
 
 /** Nearer than this (metres, or a twentieth of a small tile) a tile's error stops growing:
  *  the camera is at or in it, and a closer look shows it no worse. */
@@ -224,6 +231,22 @@ export interface StreamOptions {
 }
 
 /**
+ * What a fetch is for: the view (`view`), the cache around the camera (`prefetch`, abandoned
+ * once the camera has left its ring), or a flight's destination (`destination`, kept until
+ * the destination is reached or replaced).
+ */
+type FetchKind = "view" | "prefetch" | "destination";
+
+/** A flight's destination being fetched ahead (`prefetchView`). */
+interface Destination {
+  eye: [number, number, number];
+  /** The destination's cut and every tile above it: what the swaps there go through. */
+  tiles: Set<TileNode>;
+  /** How close counts as there (`DESTINATION_REACHED_*`). */
+  reachedM: number;
+}
+
+/**
  * Drives a REPLACE tileset towards the cut the current view wants: call `update(view)` as the
  * camera moves (it is cheap: a few hundred tiles), and again when `onArrival` says a tile came.
  */
@@ -231,21 +254,23 @@ export class TileStreamer<M> {
   private readonly parentOf: Map<TileNode, TileNode | null>;
   private readonly loaded = new Map<TileNode, M>();
   private readonly used = new Map<TileNode, number>();
-  /** Fetches under way, how many updates in a row each has not been wanted, and whether it
-   *  is a prefetch (fetched for the cache, not for the view). */
+  /** Fetches under way, how many updates in a row each has not been wanted, and what it is
+   *  for (`FetchKind`). */
   private readonly inFlight = new Map<
     TileNode,
-    { abort: AbortController; unwanted: number; prefetch: boolean }
+    { abort: AbortController; unwanted: number; kind: FetchKind }
   >();
   /** Tiles that failed to load: how often, and when to try again. */
   private readonly broken = new Map<TileNode, { failures: number; retryAt: number }>();
   private readonly shown = new Set<TileNode>();
   private desired = new Set<TileNode>();
+  private destination: Destination | null = null;
   private clock = 0;
   /** Where the camera was at the last update, for eviction: what is near stays. */
   private eye: [number, number, number] | null = null;
   private stopped = false;
-  /** Called when a fetch finishes, so the page can run `update` again. */
+  /** Called when a fetch finishes (or a failed one is due again), so the page can run
+   *  `update` again. */
   onArrival: (() => void) | null = null;
 
   constructor(
@@ -298,11 +323,69 @@ export class TileStreamer<M> {
     return this.inFlight.size > 0;
   }
 
+  /** Whether a flight's destination is being fetched ahead (`prefetchView`). */
+  get prefetchingDestination(): boolean {
+    return this.destination !== null;
+  }
+
+  /**
+   * Fetches what `view` -- where a camera flight will end -- will draw, ahead of the camera,
+   * or with null forgets the last one (the flight was cancelled).
+   *
+   * During a flight the streamer otherwise only ever sees the views on the way: each is
+   * planned, fetched and abandoned a few hundred milliseconds later (`ABANDON_AFTER_UPDATES`),
+   * and the scan at the destination starts loading only once the camera is there. CesiumJS
+   * preloads a flight's destination for its own tilesets (`preloadFlightDestinations`); this is
+   * the same for a dedicated renderer. The destination's cut is planned with the current
+   * budget, and it and every tile above it -- the swaps there go one level at a time, and a
+   * tile swaps for its children only once all of them are in -- are fetched before anything
+   * for the views on the way (one fetch slot stays theirs), kept from the cache's eviction,
+   * and never abandoned. It ends once an update finds the camera there.
+   */
+  prefetchView(view: View | null): void {
+    if (this.stopped) return;
+    if (!view) {
+      this.destination = null;
+      return;
+    }
+    const cut = chooseCut(this.tree, view, this.options.budget, this.options.targetErrorPx).tiles;
+    const tiles = new Set<TileNode>();
+    for (const tile of cut) {
+      for (
+        let up: TileNode | null = tile;
+        up && !tiles.has(up);
+        up = this.parentOf.get(up) ?? null
+      ) {
+        tiles.add(up);
+      }
+    }
+    const away = this.eye
+      ? Math.hypot(view.eye[0] - this.eye[0], view.eye[1] - this.eye[1], view.eye[2] - this.eye[2])
+      : 0;
+    this.destination = {
+      eye: [...view.eye],
+      tiles,
+      reachedM: Math.max(DESTINATION_REACHED_M, away * DESTINATION_REACHED_SHARE),
+    };
+    this.fetchDestination(performance.now());
+  }
+
   /** Moves the drawn tiles towards what `view` wants; returns whether anything changed. */
   update(view: View): boolean {
     if (this.stopped) return false;
     const { budget, targetErrorPx } = this.options;
     this.eye = view.eye;
+    const there = this.destination;
+    if (
+      there &&
+      Math.hypot(
+        view.eye[0] - there.eye[0],
+        view.eye[1] - there.eye[1],
+        view.eye[2] - there.eye[2],
+      ) <= there.reachedM
+    ) {
+      this.destination = null;
+    }
     this.desired = chooseCut(this.tree, view, budget, targetErrorPx).tiles;
     const isLoaded = (tile: TileNode): boolean => this.loaded.has(tile);
     let changed = false;
@@ -350,6 +433,7 @@ export class TileStreamer<M> {
   /** Disposes everything and ignores fetches still on their way. */
   stop(): void {
     this.stopped = true;
+    this.destination = null;
     for (const { abort } of this.inFlight.values()) abort.abort();
     this.inFlight.clear();
     for (const [tile, mesh] of this.loaded) {
@@ -382,13 +466,18 @@ export class TileStreamer<M> {
   private abandon(missing: TileNode[]): void {
     const needed = new Set(missing);
     const radius = this.options.prefetchRadiusM ?? 0;
+    const destination = this.destination?.tiles;
     for (const [tile, fetch] of this.inFlight) {
-      if (needed.has(tile)) fetch.prefetch = false;
+      if (needed.has(tile)) fetch.kind = "view";
       fetch.unwanted = needed.has(tile) ? 0 : fetch.unwanted + 1;
-      // A prefetch is never "wanted"; it goes only once the camera has left its ring.
-      const stale = fetch.prefetch
-        ? this.distance(tile) > 2 * radius
-        : fetch.unwanted >= ABANDON_AFTER_UPDATES;
+      // A prefetch is never "wanted"; it goes only once the camera has left its ring. A
+      // destination's goes only once the destination is reached or replaced.
+      const stale =
+        fetch.kind === "destination"
+          ? !destination?.has(tile)
+          : fetch.kind === "prefetch"
+            ? this.distance(tile) > 2 * radius
+            : fetch.unwanted >= ABANDON_AFTER_UPDATES;
       if (stale) {
         fetch.abort.abort();
         this.inFlight.delete(tile);
@@ -396,9 +485,52 @@ export class TileStreamer<M> {
     }
   }
 
+  /** Whether `tile` may be fetched now: not under way, and not failed too often or too recently. */
+  private fetchable(tile: TileNode, now: number): boolean {
+    if (this.inFlight.has(tile) || this.loaded.has(tile)) return false;
+    const broken = this.broken.get(tile);
+    return !broken || (broken.failures < MAX_LOAD_FAILURES && now >= broken.retryAt);
+  }
+
+  /**
+   * A flight's destination (`prefetchView`), shallowest first -- the swaps there go a level at
+   * a time -- then nearest its eye, in every fetch slot but one: that one stays for the views
+   * on the way, so the screen keeps refining while the camera flies.
+   */
+  private fetchDestination(now: number): void {
+    const there = this.destination;
+    if (!there) return;
+    const slots = Math.max(1, this.options.concurrency - 1);
+    let running = 0;
+    for (const fetch of this.inFlight.values()) if (fetch.kind === "destination") running += 1;
+    if (running >= slots) return;
+    const depth = (tile: TileNode): number => {
+      let d = 0;
+      for (let up = this.parentOf.get(tile) ?? null; up; up = this.parentOf.get(up) ?? null) d++;
+      return d;
+    };
+    const from = (tile: TileNode): number => {
+      const bounds = tile.bounds;
+      if (tile.box) return boxDistance(tile.box, there.eye);
+      if (!bounds) return 0;
+      const [cx, cy, cz] = bounds.center;
+      return Math.hypot(there.eye[0] - cx, there.eye[1] - cy, there.eye[2] - cz);
+    };
+    const wanted = [...there.tiles]
+      .filter((tile) => this.fetchable(tile, now))
+      .map((tile) => ({ tile, depth: depth(tile), distance: from(tile) }))
+      .sort((a, b) => a.depth - b.depth || a.distance - b.distance);
+    for (const { tile } of wanted) {
+      if (running >= slots || this.inFlight.size >= this.options.concurrency) break;
+      this.start(tile, "destination");
+      running += 1;
+    }
+  }
+
   /** Starts the most needed fetches: by their parent's priority (what a refine buys). */
   private fetch(missing: TileNode[], view: View): void {
     const now = performance.now();
+    this.fetchDestination(now);
     const wanted = missing.filter((tile) => {
       if (this.inFlight.has(tile)) return false;
       const broken = this.broken.get(tile);
@@ -411,7 +543,7 @@ export class TileStreamer<M> {
     wanted.sort((a, b) => worth(b) - worth(a));
     for (const tile of wanted) {
       if (this.inFlight.size >= this.options.concurrency) break;
-      this.start(tile, false);
+      this.start(tile, "view");
     }
     if (
       this.inFlight.size < this.options.concurrency &&
@@ -443,13 +575,13 @@ export class TileStreamer<M> {
       if (this.inFlight.size >= this.options.concurrency) break;
       if (gaussiansOf(tile) > room) break;
       room -= gaussiansOf(tile);
-      this.start(tile, true);
+      this.start(tile, "prefetch");
     }
   }
 
-  private start(tile: TileNode, prefetch: boolean): void {
+  private start(tile: TileNode, kind: FetchKind): void {
     const abort = new AbortController();
-    this.inFlight.set(tile, { abort, unwanted: 0, prefetch });
+    this.inFlight.set(tile, { abort, unwanted: 0, kind });
     this.host.load(tile, abort.signal).then(
       (mesh) => {
         if (abort.signal.aborted || this.stopped) {
@@ -470,6 +602,12 @@ export class TileStreamer<M> {
         if (!this.stopped) {
           this.host.failed?.(tile, error);
           this.onArrival?.();
+          // Due again later: a page that updates only when told is told then.
+          if (failures < MAX_LOAD_FAILURES) {
+            setTimeout(() => {
+              if (!this.stopped) this.onArrival?.();
+            }, RETRY_FAILED_MS);
+          }
         }
       },
     );
@@ -489,7 +627,8 @@ export class TileStreamer<M> {
   /**
    * Farthest from the camera first, then least recently used, until the cache fits. Never a
    * drawn or wanted tile, nor an ancestor of a drawn one: those are what a step back or a zoom
-   * out swaps to, and merged parents are an eighth or less of what they stand for.
+   * out swaps to, and merged parents are an eighth or less of what they stand for. Nor, while
+   * a flight is on its way there, anything its destination will draw (`prefetchView`).
    *
    * It used to drop the finest tiles first -- but the finest tiles loaded are the ones right
    * around the camera, which turning away takes off screen and turning back wants again:
@@ -508,8 +647,15 @@ export class TileStreamer<M> {
         up = this.parentOf.get(up) ?? null;
       }
     }
+    const destination = this.destination?.tiles;
     const spare = [...this.loaded.keys()]
-      .filter((tile) => !this.shown.has(tile) && !this.desired.has(tile) && !kept.has(tile))
+      .filter(
+        (tile) =>
+          !this.shown.has(tile) &&
+          !this.desired.has(tile) &&
+          !kept.has(tile) &&
+          !destination?.has(tile),
+      )
       .sort(
         (a, b) =>
           this.distance(b) - this.distance(a) || (this.used.get(a) ?? 0) - (this.used.get(b) ?? 0),

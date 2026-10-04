@@ -731,6 +731,13 @@
               }
             ]
           },
+          "sidecarFlags": {
+            "items": {
+              "$ref": "#/components/schemas/SidecarFlag"
+            },
+            "title": "Sidecarflags",
+            "type": "array"
+          },
           "siteId": {
             "anyOf": [
               {
@@ -809,6 +816,7 @@
           "provenance",
           "renderConfig",
           "defaultVisible",
+          "sidecarFlags",
           "createdAt",
           "updatedAt"
         ],
@@ -6096,6 +6104,18 @@
         "additionalProperties": false,
         "description": "RFC 9457-style error payload.",
         "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A machine-readable reason, where the endpoint gives one: what a client branches on, rather than the words of `detail`. The sidecar attach's 409s say `tiles_changed`, `busy` or `not_attachable`.",
+            "title": "Code"
+          },
           "detail": {
             "anyOf": [
               {
@@ -6676,6 +6696,193 @@
         ],
         "title": "ScaleSource",
         "type": "string"
+      },
+      "SidecarAttach": {
+        "additionalProperties": false,
+        "description": "Attach the files staged under `stagingPrefix` to an asset's tileset.",
+        "properties": {
+          "basedOn": {
+            "description": "The tileset URL the sidecars were computed against. The attach goes ahead when the asset's current tiles are those tiles -- the same URL, or a later generation cut by another attach, which copies the tiles unchanged -- and is refused with 409 when a republish has replaced them.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Basedon",
+            "type": "string"
+          },
+          "extras": {
+            "additionalProperties": true,
+            "description": "Keys to set on the root tile's `extras`, each replaced whole -- except a list of `{uri, ...}` entries (`inferredLayers`), merged into the current list by `uri`, so send only your own entry; `null` removes a key, and with it the kind's files where none of them is staged. A `uri` a key names must be in the new generation. Setting or removing a kind's key, like staging one of its files, drops the kinds keyed by its ids (materials and telemetry by `instances`) unless they are sent too.",
+            "title": "Extras",
+            "type": "object"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 5000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional: exactly the paths that must be staged. A partial upload is then refused instead of attached.",
+            "title": "Files"
+          },
+          "rigUrl": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional: the asset's `renderConfig.rigUrl`, relative to the tileset, set in the same transaction as the new URL; `null` clears it. Omitted, unchanged.",
+            "title": "Rigurl"
+          },
+          "stagingPrefix": {
+            "description": "Where the files were staged in the private bucket: `staging/assets/<asset id>/<token>/`, the token a workflow run id or similar. Every object under it is attached at its path relative to it, beside `tileset.json`.",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Stagingprefix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stagingPrefix",
+          "basedOn"
+        ],
+        "title": "SidecarAttach",
+        "type": "object"
+      },
+      "SidecarAttachment": {
+        "additionalProperties": false,
+        "description": "The generation an attach cut, and the asset now pointing at it.",
+        "properties": {
+          "asset": {
+            "$ref": "#/components/schemas/AssetRead"
+          },
+          "attached": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Attached",
+            "type": "array"
+          },
+          "carried": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Carried",
+            "type": "array"
+          },
+          "copied": {
+            "title": "Copied",
+            "type": "integer"
+          },
+          "dropped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dropped",
+            "type": "array"
+          },
+          "extras": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Extras",
+            "type": "array"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "string"
+          },
+          "previousUrl": {
+            "title": "Previousurl",
+            "type": "string"
+          },
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Removed",
+            "type": "array"
+          },
+          "staged": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Staged",
+            "type": "array"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "previousUrl",
+          "generation",
+          "copied",
+          "staged",
+          "attached",
+          "carried",
+          "dropped",
+          "removed",
+          "extras",
+          "asset"
+        ],
+        "title": "SidecarAttachment",
+        "type": "object"
+      },
+      "SidecarFlag": {
+        "additionalProperties": false,
+        "description": "A sidecar a republish or an attach could not carry into the asset's new generation.\n\nSidecars (`instances.json`, `collision.bin`, an inferred fill, `sog/`, a plant rig) are\npublished beside the tiles. When a run publishes new tiles, each kind is carried only\nwhere it still holds for the new splats -- objects, skins and a rig where every new\ntile's positions are ones they bind, a grid or the streamed LOD only onto the very same\ntiles; otherwise it is dropped, the viewer loses it, and this says so until the kind is\nattached again. An attach that replaces `instances` drops what is keyed by its ids\n(materials, telemetry) the same way. See docs/SCENE_OBJECTS.md, section 8.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "flaggedAt": {
+            "format": "date-time",
+            "title": "Flaggedat",
+            "type": "string"
+          },
+          "jobId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobid"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "action",
+          "reason",
+          "jobId",
+          "flaggedAt"
+        ],
+        "title": "SidecarFlag",
+        "type": "object"
       },
       "SiteCreate": {
         "additionalProperties": false,
@@ -8400,6 +8607,105 @@
         ]
       }
     },
+    "/api/v1/assets/{asset_id}/sidecars": {
+      "post": {
+        "description": "The one way to publish files beside a scan's tiles (`instances.json`, `collision.bin`, an inferred fill under `inferred/<name>/`, `sog/`, a plant rig). Stage them in the private bucket under `staging/assets/<asset id>/<token>/`, laid out as they should sit beside `tileset.json`, then call this. The asset's current tiles and every sidecar it already has are copied server side into a **new** generation with the staged files beside them, `tileset.json` with the merged root `extras` is written last, all of it immutable, and the asset's URL moves to it. What the request replaces is not copied: a staged kind's old files (its whole file set, or the directory unit), and the kinds keyed by a replaced kind's ids (materials and telemetry by `instances`), which are dropped and flagged on the asset unless the request sends them too. Attaches to one asset are serialized: a second waits and builds on the first's generation. 409, with the Problem's `code`, when `basedOn` no longer holds the asset's tiles (`tiles_changed`: a republish replaced them), when another attach held the asset too long (`busy`), or when the asset cannot take an attach (`not_attachable`: not a run's tileset in the public bucket, say); 422 for a staged file outside the rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md.",
+        "operationId": "attach_sidecars_api_v1_assets__asset_id__sidecars_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SidecarAttach"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SidecarAttachment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Refused, and `code` says why: `tiles_changed` -- `basedOn` no longer holds the asset's tiles, so compute the sidecars again on its current tileset; `busy` -- another attach or a publish held the asset, so retry; `not_attachable` -- the asset or its directory cannot take an attach (not a run's 3D Tiles in the public bucket, not a tileset, too many objects, an object too large to copy)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Attach sidecars to an asset by cutting a new generation",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
     "/api/v1/captures": {
       "get": {
         "operationId": "list_captures_api_v1_captures_get",
@@ -9992,7 +10298,7 @@
     },
     "/api/v1/jobs/{job_id}/steps/{step_id}/log": {
       "get": {
-        "description": "Logs live in object storage, not in the database: `logKey` on a step is a key, and this is what turns it into text. 404 when the step has not written one.",
+        "description": "Logs live in object storage, not in the database: `logKey` on a step is a key, and this is what turns it into text. 404 when the step has not written one. A long log is returned as its last 256 KiB, after a line saying how much was left out: the end of a log is where a run says why it stopped.",
         "operationId": "read_step_log_api_v1_jobs__job_id__steps__step_id__log_get",
         "parameters": [
           {
@@ -10066,6 +10372,16 @@
               }
             },
             "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Asked too often; see `Retry-After`"
           },
           "503": {
             "content": {
@@ -10514,6 +10830,16 @@
               }
             },
             "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too many wrong keys; see `Retry-After`"
           }
         },
         "security": [
@@ -10602,6 +10928,16 @@
               }
             },
             "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too many wrong keys; see `Retry-After`"
           }
         },
         "security": [
@@ -10691,6 +11027,16 @@
               }
             },
             "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too many wrong keys; see `Retry-After`"
           }
         },
         "security": [
@@ -10770,6 +11116,16 @@
               }
             },
             "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too many wrong keys; see `Retry-After`"
           }
         },
         "security": [
@@ -10830,6 +11186,16 @@
               }
             },
             "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too many wrong keys; see `Retry-After`"
           }
         },
         "security": [
@@ -12222,9 +12588,9 @@
       }
     },
     "/api/v1/storage/reconciliation": {
-      "get": {
-        "description": "Walks `captures/` and `runs/` and reports **orphans** \u2014 objects no row claims, which is what a run that died after uploading leaves behind \u2014 then takes every row whose object should exist and reports the **missing** ones. The walk stops at `maxObjects` and says so; the row check asks storage directly, so it is exact either way.",
-        "operationId": "get_reconciliation_api_v1_storage_reconciliation_get",
+      "post": {
+        "description": "Walks `captures/` and `runs/` and reports **orphans** \u2014 objects no row claims, which is what a run that died after uploading leaves behind \u2014 then takes every row whose object should exist and reports the **missing** ones. The walk stops at `maxObjects` and says so; the row check asks storage directly, so it is exact either way. Changes nothing, but needs the write token: the answer lists the private bucket, and the walk is costly enough to be rate-limited.",
+        "operationId": "reconcile_storage_api_v1_storage_reconciliation_post",
         "parameters": [
           {
             "in": "query",
@@ -12290,6 +12656,16 @@
             },
             "description": "Validation error"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Asked too often; see `Retry-After`"
+          },
           "503": {
             "content": {
               "application/json": {
@@ -12301,6 +12677,11 @@
             "description": "Object storage is not configured"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Reconcile object storage against the database, in both directions",
         "tags": [
           "storage"

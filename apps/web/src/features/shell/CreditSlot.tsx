@@ -9,14 +9,15 @@ import { useScene } from "@/cesium/SceneContext";
  * which is how it ended up over the tool rail and under panels. The providers' terms need
  * it on screen, so instead of chasing it with offsets the element itself is moved into
  * this slot; the layout then gives it space like any other surface. It is moved back on
- * unmount so the viewer can tear down the tree it built.
+ * unmount so the viewer can tear down the tree it built — or so the next slot can take it,
+ * when the layout moves the credits (`MapCorner`).
  */
-export function CreditSlot() {
+export function CreditSlot({ className }: { className?: string }) {
   const scene = useScene();
   const slot = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const host = slot.current;
-    const credits = scene?.viewer.bottomContainer as HTMLElement | undefined;
+    const credits = scene?.viewer.creditContainer as HTMLElement | undefined;
     if (!host || !credits) return;
     const home = credits.parentElement;
     host.appendChild(credits);
@@ -25,5 +26,11 @@ export function CreditSlot() {
       else credits.remove();
     };
   }, [scene]);
-  return <div ref={slot} className="credit-slot" data-testid="credits" />;
+  return (
+    <div
+      ref={slot}
+      className={className ? `credit-slot ${className}` : "credit-slot"}
+      data-testid="credits"
+    />
+  );
 }

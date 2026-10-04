@@ -60,7 +60,9 @@ def test_a_second_attempt_keeps_the_checkpoint_and_clears_the_outputs(tmp_path: 
     # a produced artifact.
     assert not (workdir.out_dir("step") / "half-written.tmp").exists()
     assert second.attempt == 2
-    assert second.checkpoint_key == "runs/run/step/checkpoint"
+    # Each attempt syncs to a key of its own (`runners.per_attempt`), so a call nobody
+    # stopped cannot write over the next attempt's; the first keeps the plain key.
+    assert second.checkpoint_key == "runs/run/step/checkpoint-a2"
 
 
 def test_a_step_result_carries_artifacts_metrics_and_a_log(tmp_path: Path) -> None:

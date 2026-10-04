@@ -75,7 +75,7 @@ export function instanceStyle(
 }
 
 /**
- * The GLSL both GPU back-ends share: the id's state texel, and the colour rule. `id` is the
+ * The GLSL both WebGL back-ends share: the id's state texel, and the colour rule. `id` is the
  * splat's instance id (0 for none); the caller declares the uniforms named here.
  */
 export const SCAN_INSTANCE_RULE_GLSL = `
@@ -102,6 +102,41 @@ vec4 hexapodInstanceColor(uint id, vec4 color) {
         return vec4(mix(color.rgb, uInstanceTint.rgb, uInstanceTint.a) + 0.06, color.a);
     }
     return vec4(color.rgb * uInstanceDim.x, color.a * uInstanceDim.y);
+}
+`;
+
+/**
+ * The same rule in WGSL, for PlayCanvas on WebGPU (Spark has no WebGPU path). A line-for-line
+ * port of `SCAN_INSTANCE_RULE_GLSL` -- same names, same constants, same order of tests -- so
+ * that hiding and highlighting look the same on either API; `scanInstances.test.ts` holds the
+ * two to that. PlayCanvas's WGSL reads uniforms through its `uniform.` block and declares a
+ * texture without a sampler as `var name: texture_2d<f32>`, read with `textureLoad` (GLSL's
+ * `texelFetch`). The caller declares the uniforms and the texture.
+ */
+export const SCAN_INSTANCE_RULE_WGSL = `
+fn hexapodInstanceState(id: u32) -> vec4f {
+    if (id == 0u || f32(id) > uniform.uInstanceParams.y) {
+        return vec4f(0.0);
+    }
+    let i = i32(id);
+    return textureLoad(uInstanceState, vec2i(i & ${String(INSTANCE_TEXTURE_WIDTH - 1)}, i >> ${String(Math.log2(INSTANCE_TEXTURE_WIDTH))}u), 0);
+}
+
+fn hexapodInstanceColor(id: u32, color: vec4f) -> vec4f {
+    if (uniform.uInstanceParams.x < 0.5) {
+        return color;
+    }
+    let state = hexapodInstanceState(id);
+    if (state.r > 0.5) {
+        return vec4f(color.rgb, 0.0);
+    }
+    if (uniform.uInstanceParams.z < 0.5) {
+        return color;
+    }
+    if (state.g > 0.5) {
+        return vec4f(mix(color.rgb, uniform.uInstanceTint.rgb, uniform.uInstanceTint.a) + 0.06, color.a);
+    }
+    return vec4f(color.rgb * uniform.uInstanceDim.x, color.a * uniform.uInstanceDim.y);
 }
 `;
 
@@ -147,6 +182,8 @@ export function instanceGap(
 /**
  * Keeps `backend` drawing asset `assetId`'s objects as the store has them, from the moment
  * its instances load. `native` is a session that streams a package without object ids.
+ * `restyled` is called after each style the back-end is handed: the overlay draws only when
+ * something changes (overlayFrames.ts), and a hide or highlight is a change no camera makes.
  * Returns the disposer, which also clears any gap it reported.
  */
 export function linkScanInstances(
@@ -154,6 +191,7 @@ export function linkScanInstances(
   backend: ScanBackend<unknown>,
   native: boolean,
   docOf: (assetId: string) => InstancesDoc | undefined = paintedDocOf,
+  restyled: () => void = () => undefined,
 ): () => void {
   const gap = instanceGap(backend, native);
   const store = useInstances;
@@ -168,7 +206,10 @@ export function linkScanInstances(
     const entry = state.assets[assetId];
     const doc = entry ? docOf(assetId) : undefined;
     if (!entry || !doc) {
-      if (last !== null) backend.setInstances?.(null);
+      if (last !== null) {
+        backend.setInstances?.(null);
+        restyled();
+      }
       last = null;
       return;
     }
@@ -182,6 +223,7 @@ export function linkScanInstances(
     }
     last = { doc, hidden: entry.hidden, highlighted: entry.highlighted, dim: state.dimOthers };
     backend.setInstances?.(instanceStyle(doc, entry.hidden, entry.highlighted, state.dimOthers));
+    restyled();
   };
   const off = store.subscribe(push);
   const offCustom = onCustomSetsChange(assetId, push);

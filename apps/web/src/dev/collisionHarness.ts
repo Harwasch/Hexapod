@@ -14,13 +14,13 @@ import {
   BoundingSphere,
   Cartesian2,
   Cartesian3,
+  CesiumWidget,
   Color,
   HeadingPitchRange,
   Math as CesiumMath,
   Matrix4,
   Ray,
   SceneTransforms,
-  Viewer,
 } from "cesium";
 import type { SiteAsset } from "@twin/contracts";
 
@@ -82,18 +82,9 @@ export async function startCollisionHarness(
   tilesetUrl: string,
   options: { hidden?: boolean } = {},
 ): Promise<CollisionHarness> {
-  const viewer = new Viewer(container, {
+  // The same widget the app runs on (CesiumSceneManager), so the managers see what they get there.
+  const viewer = new CesiumWidget(container, {
     baseLayer: false,
-    animation: false,
-    timeline: false,
-    geocoder: false,
-    homeButton: false,
-    sceneModePicker: false,
-    baseLayerPicker: false,
-    navigationHelpButton: false,
-    fullscreenButton: false,
-    infoBox: false,
-    selectionIndicator: false,
     requestRenderMode: false,
     msaaSamples: 1,
   });

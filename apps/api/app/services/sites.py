@@ -75,6 +75,26 @@ def list_sites(db: Session) -> list[Site]:
     return list(db.scalars(stmt).all())
 
 
+def _area_m2() -> Any:
+    """A site's footprint area in square metres: on the geography, not the degrees."""
+    return func.ST_Area(func.geography(Site.boundary))
+
+
+def list_sites_with_area(db: Session) -> list[tuple[Site, float]]:
+    """Every site with its area, in one query plus the two eager loads.
+
+    `GET /sites` used to ask PostGIS for each site's area separately -- one query per
+    row, on the request every page load makes first. The area is a column of the same
+    SELECT now, so the list costs three queries however many sites there are.
+    """
+    stmt = (
+        select(Site, _area_m2())
+        .options(selectinload(Site.assets), selectinload(Site.bookmarks))
+        .order_by(Site.created_at.asc())
+    )
+    return [(site, float(area or 0.0)) for site, area in db.execute(stmt).all()]
+
+
 def get_site(db: Session, site_id: uuid.UUID) -> Site:
     stmt = (
         select(Site)
@@ -135,7 +155,7 @@ def delete_site(db: Session, site_id: uuid.UUID) -> None:
 
 
 def site_area_m2(db: Session, site: Site) -> float:
-    value = db.scalar(select(func.ST_Area(func.geography(Site.boundary))).where(Site.id == site.id))
+    value = db.scalar(select(_area_m2()).where(Site.id == site.id))
     return float(value or 0.0)
 
 
@@ -148,7 +168,8 @@ def _summary_fields(site: Site) -> tuple[list[str], datetime | None, SiteQuality
     return representations, latest, quality
 
 
-def site_to_summary(db: Session, site: Site) -> SiteSummary:
+def site_to_summary(db: Session, site: Site, area_m2: float | None = None) -> SiteSummary:
+    """`area_m2` when the caller already has it (`list_sites_with_area`); else one query."""
     representations, latest, quality = _summary_fields(site)
     return SiteSummary(
         id=site.id,
@@ -156,7 +177,7 @@ def site_to_summary(db: Session, site: Site) -> SiteSummary:
         name=site.name,
         description=site.description,
         centroid=geometry.wkb_to_position(site.centroid, site.centroid_height),
-        area_m2=site_area_m2(db, site),
+        area_m2=site_area_m2(db, site) if area_m2 is None else area_m2,
         thumbnail_url=site.thumbnail_url,
         representations=representations,
         latest_observed_at=latest,
@@ -197,6 +218,7 @@ __all__ = [
     "get_site",
     "get_site_by_slug",
     "list_sites",
+    "list_sites_with_area",
     "site_to_read",
     "site_to_summary",
     "update_site",

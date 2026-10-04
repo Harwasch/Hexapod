@@ -61,10 +61,13 @@ All of these are general models; none knows our scenes.
    than one view's footprint (a 0.24 m cell spanning ~4 px: ~30 m on the camp) also gets
    local views that scale with its area -- obliques per footprint anchor, placed by line of
    sight, and more eye-height views -- each with a far plane, up to a cap (252 on the camp).
-   They render in forked workers while the GPU masks the ones already done. On a GPU the
-   image the mask model sees is rasterized by gsplat (`--renderer gsplat`, as a viewer
-   draws it; the per-pixel splat ids still come from the CPU's samples of the same camera),
-   without the floaters larger than `--max-scale-m` (0.5 m). Then **coverage rounds**
+   They render in forked workers while the GPU masks the ones already done -- as many as
+   the Modal call's request holds (sized from the scan: "What a run reserves", below), not
+   a fixed count, since the masks rather than the renders set the pace. On a GPU the image
+   the mask model sees is rasterized by gsplat
+   (`--renderer gsplat`, as a viewer draws it; the per-pixel splat ids still come from the
+   CPU's samples of the same camera), without the floaters larger than `--max-scale-m`
+   (0.5 m). Then **coverage rounds**
    (`coverage_views`, two by default): after a lift, views are aimed at what is still
    without an instance -- unassigned splats binned in 3D, each target seen by two obliques
    and once from eye height (into a canopy) -- and everything is lifted again.
@@ -137,6 +140,30 @@ All of these are general models; none knows our scenes.
    21% -> 28% Trees, 13% -> 12% Shrubs. Worse: the camp now has 6% Household and 4% Sky
    (labels such as "map" and "plume" on crowns), and only 4.3k of 28.4k instances are
    described.
+
+**What a run reserves** (`infra/modal/segment.py`, `sizing`). Each scan is sized before it
+is spawned, from its tileset.json (every tile names its gaussians). An L4; 6 cores whatever
+the scan -- 4 render processes, enough to keep SAM 2.1's masks fed (v1 on the camp: 2.8 s
+of masks against ~8 s of rendering a view, so 32 cores were only 14% faster than 8: 1,217 s
+for $1.04 against 1,416 s for $0.56), and 2 for the process that rasterizes, masks and
+votes; and memory for what that process holds at its peak, the end of the last coverage
+round: 4 GiB of process and models, 256 bytes a gaussian (the scan in float64 and the copy
+its views are drawn from), ~3.8 MB for each of up to 672 views kept for describing, and
+2.5 GB for each render process. Both go to Modal as (request, limit), the limit 1.5x the
+cores and 2x the memory: Modal bills max(request, used), so an estimate that is low costs a
+little more, or throttles, instead of failing; and the render processes follow the request,
+never the limit. Every run writes its peaks into its summary.json (`usage`: the main
+process's and a render process's peak memory, the container's, CPU seconds, cores busy, the
+GPU's busy share) beside the estimate (`sizing`), and prints them in one line, so the
+estimate's constants (in segment.py, with the runs they come from) can be tuned.
+**Estimated, not measured** -- v2's memory has not been measured yet, and the times are
+guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
+
+| scan    | leaf gaussians | request (limit)          | ~time  | ~$ a run |
+| ------- | -------------- | ------------------------ | ------ | -------- |
+| spool   | 153,566        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
+| pumpkin | 387,813        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
+| camp    | 22,577,243     | 6 cores (9), 22 GiB (44) | 45 min | 0.94     |
 
 ## 4. Data contract (v1)
 
@@ -211,7 +238,9 @@ from its 3D Tiles instead when it has objects (`extras.instances`): the native p
 no tile checksums, so its splats have no object ids: before this, the published camp (which
 has both) streamed natively under the default renderer, and hide and highlight did nothing
 there but a note offering CesiumJS. A scan with a native package and no objects still
-streams natively.
+streams natively. The rule is one switch, `NATIVE_SOG_FOR_SCANS_WITH_OBJECTS`
+(`cesium/scanView/ScanRendererHost.ts`, off), to be flipped to measure what the native package
+would gain such a scan.
 
 **The objects panel** (`features/sites/InstanceSearch.tsx`), from the "Objects" button beside
 the representation switcher:
@@ -227,10 +256,13 @@ the representation switcher:
   "water"); a typed property filter (`vegetation > 0.5`, `behaviour:movable`) still works but
   has no buttons;
 - one "Reset" whenever anything is hidden or highlighted, with what is hidden in words.
-- selecting in the scene (a click, the cycle keys or the brush; `SceneSelectChip.tsx`) opens
-  that object's category and marks it; clicking an object in the panel selects it in the scene,
-  so the chip offers its actions. The chip names a selection as the panel does (its top tag,
-  else its category, never an id) and shows its actions as icon buttons with tooltips.
+- selecting in the scene (a click, the cycle keys or the brush; the HUD's selection card,
+  `ObjectCard.tsx`) opens that object's category and marks it; clicking an object in the panel
+  selects it in the scene, so the card offers its actions, and flies to it as the card's Fly to
+  does. The card names a selection as the panel does (its top tag, else its category, never an
+  id).
+- the panel is a popover from the strip, marked `data-hud-popover` like the HUD's other
+  popovers; Escape closes it (and only it).
 
 The property scores and behaviours are not shown: they drive physics, not browsing (SigLIP's
 "vegetation" scored the pumpkins 0.88 -- true of a gourd, and confusing in a list).
@@ -584,9 +616,15 @@ objects is always streamed from its 3D Tiles (C4 above), so PlayCanvas's own pac
 has motion to lose. A back-end that cannot move objects (no `setMotion`, or a scan streamed
 without checksums) still reports it: one line in the objects panel and under the wind
 control, "Wind and telemetry need the Cesium renderer", with the reason as its tooltip and a
-"Use Cesium" button (`motionGaps` in `state/instances.ts`, `MotionRendererNote`). Scene
-selection picks a split object where its pose puts it (`pickTiles` returns the placed
-positions); a rigidly or skin-moved object is picked at rest.
+"Use Cesium" button (`motionGaps` in `state/instances.ts`, `MotionRendererNote`). Under the
+PlayCanvas WebGPU trial a scan with objects or motion is drawn with WebGL2: these modifiers are
+GLSL only for now (docs/WEBGPU_TRIAL.md). The overlay draws only when something changes
+(`overlayFrames.ts`): a new motion handed over, or a split object moved, is such a change, and
+the drivers ask the globe for a frame as they move something, so a still scene costs no
+frames. Scene selection picks a split object where its pose puts it (`pickTiles` returns the
+placed positions, made when a pick asks); a rigidly or skin-moved object is picked at rest.
+PlayCanvas's tiles arrive in Morton order (its tile worker), and `pickTiles` puts each tile
+back in its own order, the order `instances.json` lists ids by.
 
 ### Split objects (step C4)
 
@@ -776,20 +814,32 @@ the tiles the renderer draws now:
   The first choice is the smallest instance in the chain that is at least 48 px across on
   screen.
 
-- **Cycling**. `[` / `]`, Tab / Shift+Tab (from the scene), Alt+wheel or the wheel over the
-  chip move between candidates. Esc clears the selection.
-- **The chip** (`features/sites/SceneSelectChip.tsx`). It sits by the cursor and shows
-  "Tree · 2 of 4": the top tag, else the category, else "Object N". It offers **Hide**, **Show
-  only**, **Fly to**, the brush and **Clear**. The selection is the objects store's highlight:
-  the controller writes it through `useInstances.highlight`, expanded to descendants.
-- **Brush** (`B`, or the chip's brush; `lib/splatPaint.ts`). The camera holds still while you
-  paint. Every drawn splat is projected once, and 3 px cells keep the nearest depth of their
-  fairly solid splats (an approximation of the rendered depth). A splat counts as painted when
-  it is near its cell's front and the cell is under a stroke. Shift adds to the painted area,
-  Alt takes away, and a plain stroke starts again. The match is the instance, at any level,
-  with the best intersection over union. The IoU is weighted by opacity and counts only
-  visible splats, so an object's hidden back does not count against it.
-- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the chip offers
+- **Cycling**. `[` / `]`, Alt+wheel, the wheel over the card's arrows, or the arrows
+  themselves move between candidates. Tab / Shift+Tab do too, but only while the map (the
+  canvas) or the card itself has focus: a hit gives the map the keyboard, so Tab cycles right
+  after a click; from anywhere else, the page's body included, Tab moves focus as it always
+  does. Esc steps back: the brush away first, then the selection.
+- **The card** (`features/sites/ObjectCard.tsx`). The HUD's one selection card
+  (`features/mission/SelectionCard`) shows an object as it shows a machine or a zone, in the
+  right dock (a bottom sheet on a phone): the name (top tag, else the category, never an id)
+  and the category, "◀ 2 of 4 ▶", **Hide**, **Show only**, **Fly to**, the brush and **Clear**
+  (its close button). One selection at a time: picking an object clears a machine or zone, and
+  the reverse (`state/oneSelection.ts`). The selection is the objects store's highlight: the
+  controller writes it through `useInstances.highlight`, expanded to descendants. **Fly to**
+  goes through the app's camera controller (`CameraController.flyToObject`): the pace and
+  range of every fly-to, the dedicated renderer's destination prefetch, and a site flight
+  still settling gives the camera up to it.
+- **Brush** (`B`, bound in the app's hotkey registry, or the card's brush;
+  `lib/splatPaint.ts`). The camera holds still while you paint. Every drawn splat is projected
+  once, and 3 px cells keep the nearest depth of their fairly solid splats (an approximation
+  of the rendered depth). A splat counts as painted when it is near its cell's front and the
+  cell is under a stroke. Shift adds to the painted area, Alt takes away, and a plain stroke
+  starts again. A touch screen has none of those keys: there the card offers **New / Add /
+  Remove** for what a stroke does, and a brush size in place of Alt+wheel. The match is the
+  instance, at any level, with the best intersection over union. The IoU is weighted by
+  opacity and counts only visible splats, so an object's hidden back does not count against
+  it.
+- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the card offers
   **Use painted area**. This keeps the exact splats as an object of the viewer's own:
   - It is stored per scan in this browser (`localStorage`,
     `hexapod.customObjects.<asset>`) as `{ key, name, tiles: { checksum: [start, length, …] },
@@ -801,14 +851,20 @@ splats, bounds }`.
   - While the set exists, its splats no longer carry their segmented id.
 
 The controller is `cesium/sceneSelect/SceneSelectController.ts`, and its state is in
-`state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts`, and
-`e2e/sceneSelect.spec.ts` runs on the yard (`src/dev/sceneSelectHarness.ts`) under PlayCanvas,
-Spark and CesiumJS. The e2e checks that:
+`state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts` and
+`__tests__/selectionCard.test.tsx` (the card, its keys, one selection at a time), and
+`e2e/sceneSelect.spec.ts` runs on the yard (`src/dev/sceneSelectHarness.ts`, which mounts the
+card where the app's dock puts it) under PlayCanvas, Spark and CesiumJS. The e2e checks that:
 
-- clicking the tree's crown selects the tree or a part of it;
-- `]` goes to the parent and `[` comes back;
+- clicking the tree's crown selects the tree or a part of it, and gives the map the keyboard;
+- `]` goes to the parent and `[` comes back; Tab and Shift+Tab do the same from the map, and
+  from the page's body Tab moves focus instead;
 - painting over shrub 10 selects that shrub;
-- **Hide** in the chip removes it from the frame.
+- **Hide** in the card removes it from the frame.
+
+In the app, `e2e/app.spec.ts` ("a scan object in the selection card") checks the keys and the
+card around a selection: `B` and `V` once each, one Escape one step, Tab on the body, an object
+replacing a machine's card, and the touch screen's brush.
 
 ## 5. Storage by behaviour
 
@@ -852,3 +908,144 @@ See [LIVING_PLAN.md](LIVING_PLAN.md).
   Storing ∇w would cost 3·(m−1) more numbers per splat. Revisit if a driver pushes handles
   past their `support` radius.
 - SAM 3 / some lifting methods carry their own licences; SAM 2 is Apache-2.0.
+
+## 8. Publishing beside the tiles: one publisher
+
+Everything in §4 is published beside a scan's tiles, and since the one-publisher change only
+the API writes it there: `POST /api/v1/assets/{id}/sidecars` cuts a new generation holding
+the current tiles, every sidecar they already have and the staged files, with the merged
+root extras in a `tileset.json` written last, and repoints the asset under a row lock
+(docs/DEPLOYMENT.md, "Sidecars: one publisher"; `apps/api/app/services/attach.py`). A
+worker republish carries each sidecar of the live generation into the run's new one only
+where it still holds for the new splats (`apps/api/app/worker/carry.py`), and flags the
+asset for each kind it drops (`sidecarFlags` on the asset: "Objects need re-segmenting").
+
+### What each kind depends on
+
+Read off the code that writes each one; `apps/api/app/services/sidecars.py` (`KINDS`) is
+the table the API and the worker use, and `tests/test_sidecar_attach.py` holds it to this.
+
+| Kind             | Beside `tileset.json`                    | Declared by                                   | Written by                                              | Bound to                                                                                                                                                                                                                                                                  | Class             | On a republish of new tiles                                                                               | Flag when dropped                                      |
+| ---------------- | ---------------------------------------- | --------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `instances`      | `instances.json`, `instances.emb`        | `extras.instances`                            | `segment_scene.py` (segment.yml, publish-instances.yml) | `tiles`: each tile's FNV-1a checksum of its decoded float32 positions (`synthetic_tree.checksum_positions`) to run-length ids in that tile's gaussian order; coarse tiles' ids by kNN from the leaf splats (`rebind_instances.py`), still keyed by those tiles' checksums | positions         | carried when every new tile's position checksum is in `instances.json`                                    | Objects need re-segmenting                             |
+| `skin`           | `skin.json`, `skin.bin`                  | `extras.skin`                                 | `skin_scene.py`                                         | tile checksums to skin runs and rows of `skin.bin` in each tile's order; each skin moves an instance id                                                                                                                                                                   | positions         | carried when every new tile's position checksum is in `skin.json`                                         | Skins need refitting                                   |
+| `materials`      | `materials.json`                         | `extras.materials`                            | the video teacher (C2)                                  | one record per `instances.json` id                                                                                                                                                                                                                                        | follows instances | carried exactly when `instances` is                                                                       | Materials need re-pointing at the new objects          |
+| `telemetry`      | `telemetry.json`                         | `extras.telemetry`                            | deployment data (C3)                                    | bindings by `instances.json` id                                                                                                                                                                                                                                           | follows instances | carried exactly when `instances` is                                                                       | Telemetry bindings need re-pointing                    |
+| `objects`        | `objects/<id>/…`, `fills/<id>/…`         | `extras.objects`, `extras.split`              | `split_objects.py` (C4)                                 | rewrites the scan's own tiles without the objects and binds the object tiles in `instances.json`. **Not attachable**: a split is a new tileset, not files beside one                                                                                                      | tile bytes        | carried only onto the same tiles                                                                          | Split objects need re-splitting                        |
+| `collision`      | `collision.bin`                          | `extras.collision`                            | the packer (`convert`), or collision-backfill.yml       | `splat_tiles.collision_grid`: the solid cells of the kept splats (`opacity_min`) in the tileset's local ENU frame; the backfill refuses unless the leaves hold exactly the PLY's kept gaussians                                                                           | tile bytes        | the run's own replaces it; else dropped                                                                   | Collision needs a backfill                             |
+| `viewCones`      | `viewcones.bin`                          | `extras.viewCones`                            | the packer, or `splat_tiles.py viewcones`               | per cell of the splats' grid, the directions it was seen from                                                                                                                                                                                                             | tile bytes        | the run's own replaces it; else dropped                                                                   | View cones need rebuilding                             |
+| `inferredLayers` | `inferred/<name>/…`                      | `extras.inferredLayers` (`[{uri, evidence}]`) | `teacher_fill.py` (fill.yml, publish-fill.yml)          | nothing of the splats: a tileset of its own whose root transform is the scan's (publish-fill.yml checks it), drawn with the scan's model matrix. World-space in the scan's frame, no splat indices, no checksums                                                          | independent       | carried                                                                                                   | (only when it cannot be carried at all)                |
+| `nativeLod`      | `sog/lod-meta.json`, `sog/*.webp`        | `extras.nativeLod` (optional: the web probes) | streamed-lod-backfill.yml (splat-transform)             | every leaf tile's SPZ merged, Morton-ordered and decimated: the splats themselves, re-encoded                                                                                                                                                                             | tile bytes        | carried only onto the same tiles                                                                          | Streamed LOD needs a backfill                          |
+| `rig`            | `rig.json`, `motion.json`, `plants.json` | the asset's `renderConfig.rigUrl`             | living-plants.yml (`scene_plants.py`)                   | the rig is stamped with the published tiles' checksums (`rig_tiles.stamp`) and `plants.json` binds per tile checksum; the viewer refuses a tile the binding does not list                                                                                                 | positions         | carried when every new tile's position checksum is in `rig.json` and `plants.json`; else `rigUrl` cleared | Plants need re-rigging                                 |
+| anything else    | —                                        | an extras key none of the above               | —                                                       | unknown                                                                                                                                                                                                                                                                   | —                 | carried onto the same tiles; else dropped                                                                 | Unrecognised sidecar extras.`<key>` needs re-attaching |
+
+**"The same splats"** is checked, not assumed, and how depends on the class. A kind bound to
+**positions** (objects, skins, the rig) holds on new tiles exactly when the viewer would draw
+them with it: every tile of the new tileset must have a position checksum its binding lists
+(`instances.json` and `skin.json` key their `tiles` by it, `rig.json` lists `tileChecksums`
+and `plants.json` keys its `tiles`). The worker has the new tiles, so it computes each tile's
+checksum with the function the bindings were written with (`apps/api/app/worker/positions.py`,
+a transcription of `rig_tiles.tile_positions` and `synthetic_tree.checksum_positions`, held to
+`checksum_vectors.json` and the fixture tree's stamped `rig.json`) and stops at the first tile
+no binding lists: a re-pack that left every position where it was — another `--sh-degree`,
+`ship_sh_degree` — keeps them (`data/tiles/synthetic-tree-sh` against `synthetic-tree-lod`
+is the test), a new reconstruction or a Refine does not. A kind bound to the **splats' bytes**
+(collision, view cones, `sog/`, a split) is carried only when the tileset without its root
+extras (the tree, its bounds and errors, every content uri) and every tile's size and ETag
+are equal (`sidecars.tiles_fingerprint`): nothing records what a grid was computed from, and
+`sog/` is the old encoding itself, harmonics and all. Both err on the safe side — a kind
+dropped by mistake is flagged and rebuilt, one kept by mistake hides and moves the wrong
+splats. The attach's `basedOn` check is the byte test (the API does not download tiles):
+sidecars computed on the legacy prefix may be attached to a generation an attach cut from
+it, never to one a republish wrote.
+
+**An attach replaces what it sends, and what was keyed by it** (`attach._plan`). A staged
+file replaces the same path; under `inferred/<name>/` or `sog/` it replaces that whole
+directory, and of any other kind it replaces the kind's whole file set: a new
+`instances.json` without an `instances.emb` leaves the generation with no `instances.emb`,
+since the old one's rows were the old ids. A sibling meant to stay is staged again; there is
+no "keep" — one tool writes a kind's files together, and the API cannot tell an old one still
+matches a new one. A kind's key set to `null` with none of its files staged removes the kind,
+files and key. And the class "follows instances" holds on an attach as on a republish: an
+attach that replaces `instances` (stages one of its files, or sets or removes
+`extras.instances`) drops the `skin`, `materials` and `telemetry`, files and keys, and flags
+each on the asset ("Materials need re-pointing at the new objects", "Skins need refitting"; reason "it names instances ids, and
+an attach replaced instances…", no `jobId`) — unless the same request sends them too, which
+is the caller's word that they name the new ids. The response lists them in `dropped`, and
+every path of the previous generation the new one lacks in `removed`. An attach of anything
+else (a fill, a grid, the streamed LOD, a rig) leaves objects, the skin, materials and
+telemetry as they were.
+
+### What each workflow sends
+
+All five go through one script, `tools/captures/attach_sidecars.py` (tested against a stub
+bucket and a stub API in `tools/captures/tests/test_attach_sidecars.py`). The `build` job
+finds the asset and its **current** tileset URL (`GET /api/v1/assets/{id}`, `source.url`),
+checks its files against that tileset, and writes the request beside them as `attach.json`
+(`attach_sidecars.py manifest`: `assetId`, `basedOn`, `files`, `extras`, `rigUrl`), so the
+review artifact is exactly what will be sent. The `publish` job (only when asked) runs
+`attach_sidecars.py attach` on that directory: it uploads the files to
+`staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` in the private bucket
+(`vars.R2_BUCKET || 'twin-assets'`) with the R2 pair, laid out as beside `tileset.json`,
+and POSTs `{stagingPrefix, basedOn, files, extras, rigUrl?}` with `API_WRITE_TOKEN` to
+`TWIN_API_URL`. The API says why it refused in the 409's `code`: `busy` (another attach
+holds the asset) is retried; `tiles_changed` (the tiles changed under the run) ends it with
+exit status 3, so run it again on the asset's current tiles; `not_attachable` and every other
+refusal end it with exit status 1 and the API's words. No workflow reads, diffs or uploads a `tileset.json` any more, and none writes to the
+public bucket. docs/DEPLOYMENT.md ("Sidecars: one publisher") lists the secrets and
+variables.
+
+- **publish-instances.yml.** A scan is named as in `infra/modal/segment.py` `SCANS`, whose
+  URLs are the legacy prefixes segment.yml read. The asset comes from the repository
+  variable `SCAN_ASSET_IDS` (`{"camp": "<asset id>", ...}`), or, where that has no entry,
+  from the one gaussian-splat asset whose tileset is the scan's run (`runs/<job>/…`, at the
+  legacy prefix or in a generation cut from it); anything else is a refusal naming the
+  variable. `build` fetches the asset's current tileset and every tile and keeps the binding
+  check (every tile's checksum a key, runs covering its gaussians) against **those** tiles;
+  `link_instances` and the tileset diff are gone. It sends
+  `files: ["instances.emb", "instances.json"]`,
+  `extras: {"instances": {"uri": "instances.json", "count": <instances>}}`, `basedOn` the URL
+  it bound against.
+- **publish-fill.yml.** The same asset lookup for `scan`. `build` keeps the layer checks and
+  the frame check, now against the **current** tileset's root transform, and stages
+  `inferred/<name>/…` (the layer's `tileset.json`, tiles and sidecars), sending only its own
+  entry, `extras: {"inferredLayers": [{"uri": "inferred/<name>/tileset.json", "evidence":
+{…}}]}`: the API merges the list by uri, so another fill's entry stays, and a staged
+  `inferred/<name>/` replaces that layer's old files whole.
+- **collision-backfill.yml.** The asset is the capture's splat asset (`fetch_capture.py`'s
+  `capture.json`). `build` keeps `splat_tiles.py collision`, its identity check, and the
+  check that the command changed the tileset by `extras.collision` alone; it sends
+  `files: ["collision.bin"]`, `extras: {"collision": {…}}` as the command declared it, and
+  `basedOn` the asset's URL the tiles were fetched from.
+- **streamed-lod-backfill.yml.** Its input is the asset id (`[streamedlod|asset=<uuid>]`),
+  the tileset read from the API. It stages `sog/lod-meta.json` and every chunk under `sog/`
+  and sends them in `files`, with `extras: {"nativeLod": "sog/lod-meta.json"}` so the viewer
+  need not probe, and `basedOn` the tileset whose leaves it merged. A staged `sog/` replaces
+  the old one whole.
+- **living-plants.yml.** It stages `rig.json`, `motion.json` and `plants.json` and sends
+  them in `files` with `rigUrl: "rig.json"` and `basedOn` the asset's URL the tiles were
+  fetched from, in place of the in-place upload **and** the separate `PATCH /assets/{id}` of
+  `renderConfig.rigUrl` (which replaced the whole render config, racing every other writer
+  of it).
+
+Each publish job is in a concurrency group of its workflow and target (streamed-lod-backfill,
+which publishes from its build job, puts that whole job in one), so two runs on one scan queue
+rather than interleave; the API's row lock is what makes interleaving safe in any case.
+
+**Split objects are not published, and stay out of this.** `split_objects.py` (C4) rewrites
+the scan's own tiles without the chosen objects and writes the objects as tilesets of their
+own under `objects/` and `fills/`, binding them in `instances.json`. fill.yml's `split:<scan>`
+jobs run it on Modal and keep the result (`split.tar.gz`) in the run's `fill` artifact for
+review; no workflow publishes it, and the attach refuses `objects/`, `fills/`,
+`extras.objects` and `extras.split` (`attachable=False`). Publishing one is a different
+operation from an attach — a **replace-tiles** publish: a new generation whose tiles are the
+split's, with `instances.json` re-bound to those tiles' checksums, and everything else bound
+to the old tiles (collision, view cones, `sog/`, a rig, skins) dropped and flagged as a
+republish would. That belongs beside the worker's publish (`carry.py` already decides what
+survives new tiles), and is left until something needs a split on the live site.
+
+`segment.yml`, `fill.yml` and the Modal apps read tiles by URL and are unchanged: they read
+`SCANS`' legacy URLs, which keep serving the same tiles after an attach (an attach copies
+tiles into a new generation and never deletes the legacy prefix). Once a scan is republished
+with new tiles, a segmentation of the legacy URL no longer binds the asset's tiles, and
+publish-instances refuses it at the binding check.

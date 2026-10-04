@@ -14,6 +14,8 @@ import type { Job } from "@twin/contracts";
 
 import { EmptyState, GlassBadge, GlassButton, Spinner } from "@twin/ui";
 
+import { runStatusLabel } from "@/lib/labels";
+
 import { compareRuns } from "./compare";
 import { elapsed, formatCost, formatDate, formatDuration, shortId } from "./format";
 import { useCancelRun, useCaptures, useJobs, useRetryRun, useStepLog } from "./queries";
@@ -93,7 +95,9 @@ function Steps({ job }: { job: Job }) {
               <td>{step.stageId}</td>
               <td className="admin-mono">{step.impl}</td>
               <td>
-                <GlassBadge tone={STATUS_TONE[step.status] ?? "neutral"}>{step.status}</GlassBadge>
+                <GlassBadge tone={STATUS_TONE[step.status] ?? "neutral"}>
+                  {runStatusLabel(step.status)}
+                </GlassBadge>
               </td>
               <td className="admin-num">
                 {formatDuration(elapsed(step.startedAt, step.finishedAt))}
@@ -338,8 +342,11 @@ export function RunsView() {
                         {job.recipe} <span className="admin-dim">v{job.recipeVersion}</span>
                       </td>
                       <td>
-                        <GlassBadge tone={STATUS_TONE[job.status] ?? "neutral"}>
-                          {job.status}
+                        <GlassBadge
+                          tone={STATUS_TONE[job.status] ?? "neutral"}
+                          data-testid="run-status"
+                        >
+                          {runStatusLabel(job.status)}
                         </GlassBadge>
                       </td>
                       <td>{job.provider ?? "—"}</td>

@@ -13,7 +13,7 @@ import {
   ScreenSpaceEventType,
   sampleTerrainMostDetailed,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import type { Site } from "@twin/contracts";
@@ -68,20 +68,20 @@ export class SelectionManager {
   private hoverEnabled = true;
   /** Asked first on every click: true when it took the click (scene selection hit a scan). */
   private claim: ((position: Cartesian2) => boolean) | null = null;
+  /** The selection last reported, until cleared: what a terrain sample may still refine. */
+  private current: Selection | null = null;
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
     private readonly camera: CameraController,
     private readonly layers: LayerManager,
     private readonly sites: SiteManager,
   ) {
     this.scene = viewer.scene;
-    // Cesium's default double-click "track entity" behaviour would fight our navigation.
-    viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
-      ScreenSpaceEventType.LEFT_DOUBLE_CLICK,
-    );
-    viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_CLICK);
+    // The clicks are ours alone. `Viewer` installed select-on-click and track-on-double-click,
+    // which fought this navigation and were removed here; the `CesiumWidget` the scene now runs
+    // on installs no input actions at all, so there is nothing left to take away.
     this.handler = new ScreenSpaceEventHandler(viewer.canvas);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (!this.enabled) return;
@@ -144,6 +144,7 @@ export class SelectionManager {
 
   clear(): void {
     this.unhighlight();
+    this.current = null;
     this.events.emit("selection", null);
   }
 
@@ -239,6 +240,7 @@ export class SelectionManager {
       selection = this.selectGround(base);
     }
     this.placeMarker(context.position, selection.kind === "ground");
+    this.current = selection;
     this.events.emit("selection", selection);
     void this.enrichWithTerrain(selection);
   }
@@ -395,8 +397,11 @@ export class SelectionManager {
       const [sample] = await sampleTerrainMostDetailed(provider, [
         Cartographic.fromDegrees(selection.longitude, selection.latitude),
       ]);
-      if (sample && Number.isFinite(sample.height)) {
-        this.events.emit("selection", { ...selection, terrainHeight: sample.height });
+      // Only while it is still what is selected: a sample arriving after the card was closed,
+      // or after something else was picked, must not bring the old place back.
+      if (sample && Number.isFinite(sample.height) && this.current === selection) {
+        this.current = { ...selection, terrainHeight: sample.height };
+        this.events.emit("selection", this.current);
       }
     } catch (error) {
       log.debug("terrain sample unavailable", { error: String(error) });

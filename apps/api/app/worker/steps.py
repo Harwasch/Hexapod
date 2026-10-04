@@ -21,6 +21,17 @@ from app.models import Artifact, JobStep
 from app.models.enums import RunStatus
 from app.worker.outputs import UploadedArtifact
 
+#: The step metric that says a stage was interrupted by its worker shutting down, so the
+#: next worker resumes it at the same attempt (`JobSupervisor._attempts`). `start_step`
+#: clears it with the rest of the metrics when the stage runs again.
+DETACHED = "detached"
+#: The step metric holding the stage's remote calls in flight, copied from its `CallBook`
+#: (`JobSupervisor._report_calls`): what a worker without the workdir cancels them by.
+REMOTE_CALLS = "remoteCalls"
+#: Calls of a run that was over, cancelled by id after nobody was left to watch them
+#: (`app.worker.reaper`): id -> when, and how ("cancelled", or "expired" unasked).
+REAPED_CALLS = "reapedCalls"
+
 
 def utcnow() -> datetime:
     return datetime.now(tz=UTC)
@@ -41,8 +52,12 @@ def start_step(
     ordinal: int,
     impl: str,
     attempt: int,
+    started_at: datetime | None = None,
 ) -> JobStep:
-    """The row exists while the stage is still running, which is what makes it live."""
+    """The row exists while the stage is still running, which is what makes it live.
+
+    `started_at` is when the recipe process started the stage, when it said; now, when
+    it did not. The supervisor can read a quick stage's start after the stage is over."""
     step = db.scalar(select(JobStep).where(JobStep.job_id == job_id, JobStep.ordinal == ordinal))
     if step is None:
         step = JobStep(job_id=job_id, stage_id=stage_id, ordinal=ordinal, impl=impl)
@@ -51,7 +66,7 @@ def start_step(
     step.impl = impl
     step.attempt = attempt
     step.status = RunStatus.IN_PROGRESS
-    step.started_at = utcnow()
+    step.started_at = started_at or utcnow()
     # A restarted step (a retry, the phone's Refine) starts with nothing measured: the
     # previous attempt's metrics, its progress bar included, describe a run that is over.
     step.metrics = {}

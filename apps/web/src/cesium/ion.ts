@@ -115,6 +115,22 @@ export function rememberIonAssetMissing(assetId: number, now = Date.now()): void
   }
 }
 
+/**
+ * Forgets that ion answered 404 for `assetId` with this key: an asset chosen on purpose (the
+ * load pill's Retry, a version picked) is asked for again; only loads by proximity rely on
+ * the memory.
+ */
+export function forgetIonAssetMissing(assetId: number): void {
+  const entry = missingEntry(assetId);
+  try {
+    const list = rememberedMissing();
+    const kept = list.filter(([key]) => key !== entry);
+    if (kept.length !== list.length) localStorage.setItem(MISSING_KEY, JSON.stringify(kept));
+  } catch {
+    // Storage may be blocked: then nothing was remembered either.
+  }
+}
+
 /** Thrown instead of asking ion for an asset it answered 404 for lately. */
 export class IonAssetMissingError extends Error {
   constructor(assetId: number) {

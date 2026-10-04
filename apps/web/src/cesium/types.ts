@@ -1,6 +1,6 @@
 import type { Attribution, Footprint, Representation } from "@twin/contracts";
 
-import type { AssetRuntime } from "@/state/sites";
+import type { AssetRuntime, SiteLoad } from "@/state/sites";
 import type { LayerRuntime, LoadState } from "@/state/layers";
 import type { LivingSurveyStatus } from "@/state/living";
 import type { Measurement } from "@/state/measurements";
@@ -28,6 +28,10 @@ export interface SceneEvents extends Record<string, unknown> {
    */
   "site-in-view": string | null;
   "site-active": string | null;
+  /** One site's load (record, model, first tiles), whole; null once the site is unloaded. */
+  "site-load": { siteId: string; load: SiteLoad | null };
+  /** The site a fly-to is taking the camera to, until the camera has left it; else null. */
+  "site-flight": string | null;
   representation: { siteId: string; representation: Representation };
   selection: Selection | null;
   hover: string | null;

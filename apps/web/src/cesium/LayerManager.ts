@@ -9,7 +9,7 @@ import {
   type ImageryProvider,
   type Scene,
   type Terrain,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import type { Layer } from "@twin/contracts";
@@ -90,7 +90,7 @@ export class LayerManager {
   private generation = 0;
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
     private readonly clipping: ClippingManager,
   ) {

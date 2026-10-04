@@ -88,6 +88,32 @@ test("the gallery lists your scans and not the demo sites", async ({ page }) => 
   await expect(card).toHaveAttribute("href", `#${SITE}`);
 });
 
+test("the gallery wears the product's design and header, and leads back to the globe", async ({
+  page,
+}) => {
+  await page.goto("/view.html");
+  await expect(page.locator("#gallery-status")).toContainText("1 scan");
+  const bar = page.getByTestId("product-bar");
+  await expect(bar.getByRole("link", { name: "Globe" })).toHaveAttribute("href", "/");
+  await expect(bar.getByRole("link", { name: "Scans" })).toHaveAttribute("aria-current", "page");
+  await expect(bar.getByRole("link", { name: "Data console" })).toHaveAttribute(
+    "href",
+    "/admin.html",
+  );
+  // The shared tokens and fonts, not the system's.
+  const style = await page.evaluate(() => {
+    const body = getComputedStyle(document.body);
+    return { font: body.fontFamily, background: body.backgroundColor };
+  });
+  expect(style.font).toContain("Instrument Sans");
+  expect(style.background).toBe("rgb(11, 12, 10)");
+  // Nothing on a phone scrolls sideways.
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+});
+
 test("a scan opens on its own and renders", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));

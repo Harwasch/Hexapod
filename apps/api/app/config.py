@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -89,6 +90,13 @@ class Settings(BaseSettings):
     api_phone_key_hash: str | None = None
     # How many captures the phone key may create in any 24 hours.
     api_phone_daily_captures: int = 20
+    # The request header holding the real client address, for the per-client rate limits
+    # (app/services/ratelimit.py). Fly's proxy sets `Fly-Client-IP` on every request, so
+    # behind Fly it cannot be forged; without it every client shares the proxy's address.
+    # The default is believed only on Fly (FLY_APP_NAME set); elsewhere anyone could send
+    # it, and the socket's peer is used. Name another proxy's header to believe that one,
+    # or set it empty to always use the socket's peer. An IPv6 client is its /64.
+    api_client_ip_header: str = "Fly-Client-IP"
 
     cesium_ion_server_token: str | None = None
     cesium_ion_api_base: str = "https://api.cesium.com"
@@ -180,15 +188,83 @@ class Settings(BaseSettings):
     # Being taken off a cheap interruptible box is not the stage failing, so it does not
     # spend the budget meant for one that is -- but the ceiling is still hard.
     worker_max_preemptions: int = 4
+    # The most one job may be billed, across every stage and attempt, in dollars: no
+    # remote call starts past it and a running one is cancelled when its cost would go
+    # over it, and the job is dead-lettered saying so. A typical Lane 2 run is a dollar
+    # or two (an L4 hour is ~$0.96 with its reservation); 20 is a runaway guard, not a
+    # budget. 0 turns it off.
+    worker_job_cost_cap_usd: float = 20.0
+    # A remote call whose trainer stops printing progress is cancelled as timed out once
+    # it has run this many times what its newest progress line projected (plus 30 min).
+    # 0 turns it off; the provider's own limit (six hours on Modal) still applies.
+    worker_deadline_factor: float = 2.0
+    # A healthchecks.io-style URL pinged for active runs only: `<url>/start` when a job
+    # is claimed and every minute while it runs, `<url>` when it succeeds, `<url>/fail`
+    # when it fails. Nothing while idle, so the check wants a long period (30 days) and a
+    # grace of a few minutes (5): app/worker/alerts.py. Unset, nothing is pinged.
+    worker_heartbeat_url: str | None = None
+    # Below this many GB free on the workdir's volume the worker does not claim, says so
+    # in its log, and evicts finished runs' workdirs older than `worker_evict_after_days`
+    # to make room. 0 turns the check off.
+    worker_min_free_gb: float = 5.0
+    worker_evict_after_days: float = 7.0
     # Pause between attempts at the same stage.
     worker_retry_backoff_s: float = 2.0
     # Jobs one worker process supervises at once, each in its own slot with its own claim,
     # lease, heartbeat and recipe process (app/worker/loop.py). 1 until raised: the
     # worker's README gives the memory each slot costs on the 2 GB machine.
     worker_concurrency: int = Field(default=1, ge=1, le=8)
+    # Slots on top of those that only claim a recipe with no `gpu:` stage -- today
+    # `splat-ingest` -- so a one-minute ingest does not wait behind a two-hour training
+    # run, and two training runs (two GPUs billed, two videos on the 20 GB volume) never
+    # share the machine. The worker reads the recipes at start-up to know which qualify.
+    worker_cpu_only_slots: int = Field(default=0, ge=0, le=4)
+    # An idle worker polls every `worker_idle_s` for this long, then backs off -- doubling
+    # a period at a time -- to `worker_idle_max_s`. A queue checked every 2 s forever is a
+    # database that never scales to zero.
+    worker_idle_backoff_after_s: float = 60.0
+    worker_idle_max_s: float = 30.0
+    # With nothing running and nothing claimed for this long, the worker exits 0 and its
+    # machine stops (fly.toml restarts it only on failure); the API starts it again when
+    # it queues a job (app/services/worker_wake.py). 0 polls forever -- which is what a
+    # checkout wants, having nothing to start it again: .env.example sets 0.
+    worker_idle_exit_s: float = Field(default=900.0, ge=0)
+
+    # --- Waking the worker (app/services/worker_wake.py) ----------------------------
+    # A Fly token that may start this app's machines (`fly tokens create deploy`). Unset,
+    # queueing a job wakes nothing, which is right for development: there is no machine.
+    fly_api_token: str | None = None
+    # Set by Fly on every machine; the app whose `worker` machines a new job starts.
+    fly_app_name: str | None = None
+    # A healthchecks.io-style check URL. Queueing a job onto an idle worker pings
+    # `<url>/start` (not while one is running: the job waits for it); the worker pings
+    # `<url>` when it claims one, so a job queued and never claimed raises an alert. A long
+    # period (30 days), a grace longer than a cold start (10 min). A secret: logs redact it.
+    queue_check_url: str | None = None
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000
+
+    # --- Observability (app/observability.py) ---------------------------------------
+    # The level of the API's own `twin.*` loggers; libraries stay at WARNING.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # `json` (one object per line) or `text`. Unset: json in production, text elsewhere.
+    log_format: Literal["json", "text"] | None = None
+    # Error reporting. Unset, sentry-sdk is never imported.
+    sentry_dsn: str | None = None
+    # The share of requests traced for performance. 0 sends errors only.
+    sentry_traces_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @field_validator("log_level", "log_format", mode="before")
+    @classmethod
+    def _case_insensitive(cls, value: object, info: ValidationInfo) -> object:
+        # `LOG_LEVEL=info` and `LOG_FORMAT=JSON` mean what they say; an empty value is unset.
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return "INFO" if info.field_name == "log_level" else None
+            return value.upper() if info.field_name == "log_level" else value.lower()
+        return value
 
     @field_validator(
         "api_cors_origins", "worker_impl_modules", "worker_cloud_providers", mode="before"

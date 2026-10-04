@@ -32,13 +32,20 @@ class NullStorage:
         deciding whether it has anywhere to publish to, which must not be an error."""
         return ""
 
-    def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject:
+    def put_object(
+        self, key: str, data: bytes, content_type: str, *, cache_control: str | None = None
+    ) -> StoredObject:
         raise StorageUnavailableError(_UNAVAILABLE)
 
-    def upload_file(self, key: str, source: Path, content_type: str) -> StoredObject:
+    def upload_file(
+        self, key: str, source: Path, content_type: str, *, cache_control: str | None = None
+    ) -> StoredObject:
         raise StorageUnavailableError(_UNAVAILABLE)
 
     def get_object(self, key: str) -> bytes:
+        raise StorageUnavailableError(_UNAVAILABLE)
+
+    def get_object_tail(self, key: str, max_bytes: int) -> tuple[bytes, int]:
         raise StorageUnavailableError(_UNAVAILABLE)
 
     def download_file(self, key: str, target: Path) -> int:
@@ -59,7 +66,15 @@ class NullStorage:
     def delete_object(self, key: str) -> None:
         raise StorageUnavailableError(_UNAVAILABLE)
 
-    def copy_object(self, source_bucket: str, source_key: str, key: str) -> StoredObject:
+    def copy_object(
+        self,
+        source_bucket: str,
+        source_key: str,
+        key: str,
+        *,
+        content_type: str | None = None,
+        cache_control: str | None = None,
+    ) -> str | None:
         raise StorageUnavailableError(_UNAVAILABLE)
 
     def public_url(self, key: str) -> str:

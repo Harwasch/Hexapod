@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,15 +9,19 @@ import { GlassTooltipProvider } from "@twin/ui";
 import type { Site, SiteAsset } from "@twin/contracts";
 
 import { api } from "@/api/client";
+import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
+import { sceneRegistry } from "@/cesium/SceneContext";
 import { InspectorPanel } from "@/features/inspector/InspectorPanel";
 import { DevPanel } from "@/features/dev/DevPanel";
 import { SimulatedBadge } from "@/features/living/SimulatedBadge";
 import { LayersPanel } from "@/features/layers/LayersPanel";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { OnboardingCard } from "@/features/onboarding/OnboardingCard";
-import { SetupNotices } from "@/features/notices/SetupNotices";
-import { CommandBar } from "@/features/mission/CommandBar";
+import { DevReadouts } from "@/features/shell/DevReadouts";
+import { MapCorner } from "@/features/shell/MapCorner";
+import { StatusLine } from "@/features/mission/StatusLine";
 import { ToolRail } from "@/features/shell/ToolRail";
+import { PHONE_MEDIA } from "@/lib/media";
 import {
   DEFAULT_WIND_STRENGTH,
   LIVING_SURVEY_IDLE,
@@ -129,8 +133,8 @@ describe("InspectorPanel", () => {
   });
 });
 
-describe("CommandBar + Onboarding", () => {
-  it("renders altitude in the selected unit system", () => {
+describe("Developer readouts + Onboarding", () => {
+  it("are off by default and render altitude in the selected unit system when on", () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
     useViewer.getState().setCamera({
       ...useViewer.getState().camera,
@@ -138,11 +142,44 @@ describe("CommandBar + Onboarding", () => {
       scaleBand: "city",
       metersPerPixel: 2,
     });
-    const { rerender } = render(wrap(<CommandBar />));
+    const { rerender } = render(wrap(<DevReadouts />));
+    // An operator reads the map, not its telemetry: nothing until Settings › Advanced asks.
+    expect(screen.queryByTestId("status-bar")).not.toBeInTheDocument();
+    useSettings.getState().set({ devReadouts: true });
+    rerender(wrap(<DevReadouts />));
     expect(screen.getByTestId("status-altitude")).toHaveTextContent("1.5 km");
     useSettings.getState().set({ units: "imperial" });
-    rerender(wrap(<CommandBar />));
+    rerender(wrap(<DevReadouts />));
     expect(screen.getByTestId("status-altitude")).toHaveTextContent("ft");
+    vi.restoreAllMocks();
+  });
+
+  it("name the splat renderer's API, its latest frame rate, and why WebGPU fell back", async () => {
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    useSettings.getState().set({ devReadouts: true, splatRenderer: "playcanvas-webgpu" });
+    useSites.setState({ activeSiteId: "site", representation: { site: "gaussian-splat" } });
+    const status = {
+      kind: "playcanvas-webgpu",
+      active: true,
+      api: "webgl2",
+      notice: "WebGPU device lost: GPU process restarted",
+      meter: { fps: 31.6, p95Ms: 48.2, cpuMs: 4.04, frames: 40, live: false },
+    };
+    sceneRegistry.set({ scanRendererStatus: status } as unknown as CesiumSceneManager);
+    render(wrap(<DevReadouts />));
+    expect(await screen.findByTestId("status-splat-renderer")).toHaveTextContent(
+      "PlayCanvas · WebGL2 (WebGPU unavailable)",
+    );
+    expect(screen.getByTestId("status-splat-meter")).toHaveTextContent(
+      "last move 32 fps · p95 48 ms · draw 4.0 ms",
+    );
+    expect(screen.getByTestId("status-splat-notice")).toHaveTextContent(
+      "WebGPU device lost: GPU process restarted",
+    );
+    sceneRegistry.set(null);
+    useSites.setState({ activeSiteId: null, representation: {} });
+    useSettings.getState().reset();
+    vi.restoreAllMocks();
   });
 
   it("onboarding appears once the viewer is ready and stays dismissed", async () => {
@@ -157,11 +194,16 @@ describe("CommandBar + Onboarding", () => {
   });
 });
 
-describe("SetupNotices", () => {
+describe("Setup and connection notices", () => {
   it("lets the evaluation-token hint be dismissed for good, and keeps a rejected token loud", async () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
     useViewer.getState().setTokenState("default");
-    const { unmount } = render(wrap(<SetupNotices />));
+    // The hint is for whoever deployed this build, so it rides the developer readouts.
+    const { unmount: unmountQuiet } = render(wrap(<DevReadouts />));
+    expect(screen.queryByTestId("notice-default-token")).not.toBeInTheDocument();
+    unmountQuiet();
+    useSettings.getState().set({ devReadouts: true });
+    const { unmount } = render(wrap(<DevReadouts />));
     expect(await screen.findByTestId("notice-default-token")).toBeInTheDocument();
 
     // A real, labelled, keyboard-reachable control — not a click handler on a div.
@@ -185,16 +227,18 @@ describe("SetupNotices", () => {
 
     // Dismissed means dismissed: the setting is persisted, so a later mount stays quiet.
     unmount();
-    const remount = render(wrap(<SetupNotices />));
+    const remount = render(wrap(<DevReadouts />));
     await waitFor(() =>
       expect(screen.queryByTestId("notice-default-token")).not.toBeInTheDocument(),
     );
     remount.unmount();
 
-    // A rejected token is a fault, not a setup note: it is never dismissible.
+    // A rejected token is a fault, not a setup note: it is on the status line for everyone,
+    // readouts or not, and never dismissible.
+    useSettings.getState().set({ devReadouts: false });
     useViewer.getState().setTokenState("invalid");
-    render(wrap(<SetupNotices />));
-    expect(await screen.findByTestId("notice-token")).toBeInTheDocument();
+    render(wrap(<StatusLine />));
+    expect(await screen.findByTestId("notice-token")).toHaveTextContent("Map key rejected");
     expect(screen.queryByTestId("notice-default-token-dismiss")).not.toBeInTheDocument();
     useViewer.getState().setTokenState("unknown");
     vi.restoreAllMocks();
@@ -554,5 +598,64 @@ describe("SettingsSheet: the wind control", () => {
     // The person's choice is kept; only the scene is forced calm (by SceneBridge).
     expect(useLiving.getState().wind.strength).toBe(DEFAULT_WIND_STRENGTH);
     expect(screen.queryByRole("slider", { name: "Wind strength" })).not.toBeInTheDocument();
+  });
+});
+
+describe("MapCorner", () => {
+  /** `matchMedia` with a phone switch, and the change events a rotation would fire. */
+  function fakeMedia(phone: { matches: boolean }) {
+    const listeners = new Set<() => void>();
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) =>
+        ({
+          get matches() {
+            return query === PHONE_MEDIA && phone.matches;
+          },
+          media: query,
+          addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+          removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+        }) as unknown as MediaQueryList,
+    );
+    return (matches: boolean) =>
+      act(() => {
+        phone.matches = matches;
+        for (const listener of listeners) listener();
+      });
+  }
+
+  it("moves Cesium's credit container out of the pill into a strip of its own on a phone", () => {
+    // The widget's own container, where CesiumSceneManager leaves it.
+    const viewport = document.createElement("div");
+    const credits = document.createElement("div");
+    credits.className = "cesium-viewer-bottom";
+    viewport.appendChild(credits);
+    document.body.appendChild(viewport);
+    sceneRegistry.set({ viewer: { creditContainer: credits } } as unknown as CesiumSceneManager);
+    const rotate = fakeMedia({ matches: false });
+
+    const { unmount } = render(wrap(<MapCorner />));
+    // Wide: in the pill, beside the compass.
+    expect(screen.getByTestId("map-corner")).toContainElement(credits);
+    expect(credits.parentElement).toBe(screen.getByTestId("credits"));
+
+    // Phone: out of the pill into the strip, the same element (moved, never copied), and no
+    // button to fold it behind — the providers' terms want it on screen.
+    rotate(true);
+    const strip = screen.getByTestId("credits");
+    expect(strip).toHaveClass("credit-slot--strip");
+    expect(screen.getByTestId("map-corner")).not.toContainElement(strip);
+    expect(credits.parentElement).toBe(strip);
+    expect(document.querySelectorAll(".cesium-viewer-bottom")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /credits/i })).not.toBeInTheDocument();
+
+    rotate(false);
+    expect(screen.getByTestId("map-corner")).toContainElement(credits);
+
+    // Unmounted, the container goes home so the viewer can tear down what it built.
+    unmount();
+    expect(credits.parentElement).toBe(viewport);
+    viewport.remove();
+    sceneRegistry.set(null);
+    vi.restoreAllMocks();
   });
 });

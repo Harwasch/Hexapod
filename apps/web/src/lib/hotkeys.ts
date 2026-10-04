@@ -4,7 +4,9 @@ type Handler = (event: KeyboardEvent) => void;
 
 /**
  * Registers a keyboard shortcut like "mod+k", "escape", "shift+/" or "n".
- * Ignores keystrokes typed into inputs unless `allowInInputs` is set.
+ * Ignores keystrokes typed into inputs unless `allowInInputs` is set, and keys something else
+ * already acted on (`defaultPrevented`): a dialog, popover or tooltip closing on Escape, the
+ * measuring tool or explore mode taking theirs. One press does one thing.
  */
 export function useHotkey(
   combo: string,
@@ -20,6 +22,7 @@ export function useHotkey(
     const wantShift = parts.includes("shift");
     const wantAlt = parts.includes("alt");
     const listener = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (!allowInInputs && isTyping(event.target)) return;
       const mod = event.metaKey || event.ctrlKey;
       if (wantMod !== mod) return;

@@ -9,28 +9,22 @@ import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
 import { describeEvidence } from "@/lib/inferred";
 import { useInferred } from "@/state/inferred";
-import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
 import { InstanceSearch } from "./InstanceSearch";
+import { siteDisplayName } from "./siteNames";
 
 const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
 
-/** Who draws the splat, side by side for comparison (settings `splatRenderer`). */
-const RENDERERS: { value: SplatRenderer; label: string; ariaLabel: string }[] = [
-  { value: "playcanvas", label: "PlayCanvas", ariaLabel: "Draw splats with PlayCanvas" },
-  { value: "spark", label: "Spark", ariaLabel: "Draw splats with Spark" },
-  { value: "cesium", label: "Cesium", ariaLabel: "Draw splats with CesiumJS" },
-];
-
 /**
- * [Splat] [Mesh] [Points] — appears while the camera is near a loaded site or still frames it
- * (SiteManager `framesSite`). Switching keeps the camera.
+ * [Splat] [Mesh] [Points] — appears while the camera is near a site that has a model or still
+ * frames it (SiteManager `framesSite`), beside the site's one display name (`siteNames.ts`),
+ * never the record of the tileset it came from. Switching keeps the camera. Which engine
+ * draws a splat is a comparison for developers, so that choice lives in Settings › Advanced,
+ * not here.
  */
 export function RepresentationSwitcher() {
   const scene = useScene();
-  const splatRenderer = useSettings((s) => s.splatRenderer);
-  const setSettings = useSettings((s) => s.set);
   const activeSiteId = useSites((s) => s.activeSiteId);
   const nearSiteId = useSites((s) => s.nearSiteId);
   const inViewSiteId = useSites((s) => s.inViewSiteId);
@@ -44,11 +38,14 @@ export function RepresentationSwitcher() {
   const setShowInferred = useInferred((s) => s.setShow);
   const shownAsset = site?.assets.find((a) => a.representation === representation);
   const evidence = shownAsset ? (inferred[shownAsset.id] ?? []) : [];
+  const available = ORDER.filter((rep) => site?.assets.some((a) => a.representation === rep));
   // Up while the active site is near or still framed (a pitched view kilometres out).
   const visible = Boolean(
-    site && activeSiteId && (nearSiteId === activeSiteId || inViewSiteId === activeSiteId),
+    site &&
+    activeSiteId &&
+    (nearSiteId === activeSiteId || inViewSiteId === activeSiteId) &&
+    available.length > 0,
   );
-  const available = ORDER.filter((rep) => site?.assets.some((a) => a.representation === rep));
   const options = ORDER.map((rep) => {
     const asset = site?.assets.find((a) => a.representation === rep);
     const loading = asset ? assets[asset.id]?.loadState === "loading" : false;
@@ -78,8 +75,8 @@ export function RepresentationSwitcher() {
           transition={{ type: "spring", stiffness: 380, damping: 30 }}
         >
           <GlassPanel strong pill className="rep-switch" data-testid="representation-switcher">
-            <span className="rep-switch__label" title={site.name}>
-              {site.name}
+            <span className="rep-switch__label" title={siteDisplayName(site)}>
+              {siteDisplayName(site)}
             </span>
             <GlassSegmentedControl
               aria-label="Reality model representation"
@@ -89,15 +86,6 @@ export function RepresentationSwitcher() {
             />
             {available.length === 1 && (
               <span className="sr-only">Only one representation is available for this site.</span>
-            )}
-            {representation === "gaussian-splat" && (
-              <GlassSegmentedControl
-                aria-label="Splat renderer"
-                data-testid="splat-renderer"
-                value={splatRenderer}
-                onValueChange={(next) => setSettings({ splatRenderer: next })}
-                options={RENDERERS}
-              />
             )}
             {representation === "gaussian-splat" && evidence.length > 0 && (
               <span

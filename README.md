@@ -32,7 +32,8 @@ attribution. Sites, assets and layers persist in PostGIS.
 A public demo site (Cesium's Gaussian-splat sample, ion asset 4547222) works out of the box
 using the evaluation token bundled with CesiumJS. On top of the world sits **mission control**
 for autonomous land-management robots: project badge, Map / Plan / Fleet views, zone and
-machine overlays, plans, fleet and treatment log, an agent activity stream and a command bar.
+machine overlays, plans, fleet and treatment log, one command box (search, actions and the
+agent) and a status line for the fleet, the agent and the connection.
 The demo fleet is simulated and labeled as such (see [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md)).
 
 A **Living Survey** prototype makes one tree sway under a wind setting without its measurement
@@ -109,7 +110,7 @@ then `pnpm contracts:generate`. CI fails if the committed contract is stale.
 `pnpm samples` (with the API and dev server running) downloads two CC0 photoscanned objects,
 a 14 cm rock and a 2 m weed, and places them on the demo site so millimetre-scale zoom can be
 tested without capturing anything. Press `S` and pick them, or type `fly to rock` in the
-command bar. See [docs/COMPARISON.md](docs/COMPARISON.md).
+command box. See [docs/COMPARISON.md](docs/COMPARISON.md).
 
 ## Mouse and keyboard
 
@@ -119,16 +120,22 @@ the horizon. Arrow keys pan, `Shift`+arrows orbit the view centre (left/right tu
 tilt), `+`/`-` zoom towards it; held keys move continuously. Beside a hand-sized object a
 plain drag orbits the point you clicked.
 
-`⌘K`/`Ctrl+K` command palette · `/` search · `L` layers · `S` sites · `M` measure · `C` compare ·
-`B` bookmarks · `N` reset north · `T` top-down · `H` Earth · `G` explore mode · `,` settings ·
-`1`/`2`/`3` Map / Plan / Fleet · `A` agent stream · `D` developer panel (dev builds) · `Esc` closes.
+`⌘K`/`Ctrl+K` or `/` the command box · `?` every shortcut · `L` layers · `S` sites · `U` upload ·
+`M` measure · `C` compare · `V` saved views · `B` the brush (paint a scan's objects to select
+them) · `[`/`]` cycle a selected object's candidates · `N` reset north · `T` top-down · `H`
+Earth · `G` explore mode · `,` settings · `1`/`2`/`3` Map / Plan / Fleet · `A` agent activity ·
+`D` developer panel (dev builds) · `Esc` steps back one thing per press. The list lives in one registry,
+`apps/web/src/app/hotkeys.ts`, which the `?` sheet prints and the command box shows beside
+each action. Camera readouts (altitude, scale, renderer) are under Settings › Advanced ›
+Show developer readouts.
 
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — why CesiumJS, 3D Tiles, PostGIS; the seams for STAC/S3/COPC/robotics
 - [docs/COMPARISON.md](docs/COMPARISON.md) — mesh vs point cloud vs Gaussian splat comparison sites and how to benchmark them
-- [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md) — robot mission layer: views, overlays, command bar, provider seam
+- [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md) — robot mission layer: views, overlays, command box, status line, provider seam
 - [docs/CESIUM.md](docs/CESIUM.md) — scene manager, clipping, LOD/adaptive quality, splat internals, tokens, current API notes
+- [docs/WEBGPU_TRIAL.md](docs/WEBGPU_TRIAL.md) — the PlayCanvas WebGPU splat renderer trial: how to switch, what to compare in person, devices, criteria for the default
 - [docs/LIVING_SURVEY.md](docs/LIVING_SURVEY.md) — simulated motion over measured geometry: the mechanism, what is measured vs simulated, and the limits
 - [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — sites, assets, layers, bookmarks, provenance
 - [docs/ADDING_DATA.md](docs/ADDING_DATA.md) — every supported input, validation rules, ion reconstruction

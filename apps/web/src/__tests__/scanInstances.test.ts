@@ -151,6 +151,33 @@ describe("linking a renderer to the store", () => {
     expect(backend.styles).toHaveLength(count);
   });
 
+  it("asks the overlay for a frame after each style (it draws only on change)", () => {
+    const d = doc();
+    const backend = fakeBackend();
+    let wakes = 0;
+    const unlink = linkScanInstances(
+      "scan",
+      backend,
+      false,
+      () => d,
+      () => (wakes += 1),
+    );
+    expect(wakes).toBe(0);
+    useInstances.getState().setTable("scan", d);
+    expect(wakes).toBe(1);
+    useInstances.getState().setHidden("scan", [3], true);
+    useInstances.getState().highlight("scan", [1]);
+    expect(wakes).toBe(3);
+    // Nothing drawn changed: no frame.
+    useInstances.getState().setQuery("scan", "oak");
+    expect(wakes).toBe(3);
+    // The scan's instances going away is a change too.
+    useInstances.setState({ assets: {} });
+    expect(backend.styles.at(-1)).toBeNull();
+    expect(wakes).toBe(4);
+    unlink();
+  });
+
   it("reports a renderer that cannot draw them, and clears it when it stops", () => {
     const off = linkScanInstances("scan", fakeBackend("spark", false), false, () => doc());
     expect(useInstances.getState().gaps.scan?.renderer).toBe("spark");

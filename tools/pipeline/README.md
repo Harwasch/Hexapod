@@ -212,8 +212,15 @@ than an error:
 - `checkpoint/` is **kept** across attempts. It is the one directory the executor does not
   clear. A stage sees `ctx.has_checkpoint` and `ctx.checkpoint_dir`;
 - `ctx.checkpoint_key` is the object-storage key `CloudRunner` syncs that directory to
-  (`runs/<run id>/<stage id>/checkpoint`), and it lands in the StepResult when the stage
-  left anything behind, so `job_step.checkpoint_key` has something to record.
+  (`runs/<run id>/<stage id>/checkpoint`, and `checkpoint-a<N>` from attempt 2 on), and
+  it lands in the StepResult when the stage left anything behind, so
+  `job_step.checkpoint_key` has something to record. One key **per attempt**
+  (`runners.per_attempt`; the outputs' and each piece's keys follow it): a remote call
+  nobody stopped would otherwise go on syncing over the next attempt's checkpoint — a
+  mirrored sync deletes what it does not have — and could land its `out/` just before
+  the next attempt's is fetched. The contents still carry over: each attempt's
+  checkpoint comes home into the workdir and the next attempt sends it out again under
+  its own key.
 
 The sync is on an **interval** while the stage runs, not at the end: a checkpoint that
 only appears when the stage finishes is worth nothing to an attempt that never does.
@@ -289,6 +296,40 @@ adapter reports `pending` until `run_stage`'s own first line appears in the call
 and `CloudRunner` cancels a stage still pending after `max_pending_s` (30 minutes) rather
 than holding the worker for `max_wait_s` (a day).
 
+### When the process watching a call stops
+
+A remote call does not stop because the process polling it did, so every call is written
+down the moment it is submitted — `stages/<id>/calls.json`, the `CallBook` — and struck
+off once it has ended, come home and been entered in `attempts.json`. The worker stops
+its recipe process by raising one of two `errors.StopRequested` (BaseExceptions, so no
+`except Exception` on the way swallows one), and `CloudRunner` answers each differently:
+
+- **`CancelRequested`** (a cancelled job, a lost lease): the call is cancelled and what it
+  billed so far goes into the ledger as a `failed` entry whose detail says `cancelled:`.
+- **`DetachRequested`** (the worker shutting down): a call whose adapter is
+  `Reattachable` is left running and the book is marked `detached`. The next runner finds
+  it there and re-attaches — `ModalAdapter.reattach`, over `FunctionCall.from_id` — with
+  nothing staged again and nothing submitted twice; a fan-out is picked up at the pieces
+  it left (`fan_out`, `parts_done`). An adapter without `reattach` is cancelled instead.
+
+A killed process leaves the book as it was and the next attempt re-attaches the same way,
+on the call's own keys. Ledger entries carry the call's id, so an entry already written
+for a re-attached call is not written twice. `CloudRunner.reap` cancels every book no
+stage of the run is about to resume, and one the worker marks `orphaned` (known only
+from the database, its workdir gone). `shield` is how the worker holds a stop back while
+a call is between being created and being written down. `tests/test_cloud_stops.py`.
+
+**What a stage may cost, and how long.** `cost_cap_usd` refuses a call once the run's
+ledgers reach it and cancels a running call — or a fan-out's pieces, priced together —
+whose running cost would take the run over it (`CostCapError`). A call that runs out of
+time ends as `RemoteTimeoutError` rather than `RemoteStageError`, which the worker does
+not retry: the deployed function's own limit (`Poll.timed_out`, from Modal's
+`FunctionTimeoutError`), `max_wait_s`, and `deadline_factor` — a call whose trainer's own
+newest progress line projected T seconds is cancelled once it has run 2T plus 30 min,
+which a slow trainer that keeps printing never reaches and a hung one does, hours before
+the six-hour limit. And a failed call's last log lines are read once more after its
+verdict, where a traceback (a CUDA out-of-memory) can arrive late.
+
 ### The remote half
 
 A provider's container fetches its own bytes, which is the one thing `SubprocessAdapter`
@@ -330,6 +371,14 @@ were paid for too. `run_cost(workdir)` totals it, and the worker writes that ont
 measured**. A tier with no rate records its billed seconds and no cost; it does not get
 an invented number, because a plausible price in a cost column is a price that will be
 believed. A deployment supplies its own through `PIPELINE_GPU_RATES`.
+
+On Modal a GPU hour is the GPU **and** the 2 cores and 8 GiB every GPU function reserves
+(`modal_adapter.GPU_RESERVATION`, billed at max(reserved, used)): `ModalAdapter.rate`
+adds $0.158 an hour, from Modal's per-core and per-GiB list prices
+(`providers.MODAL_CORE_HOUR_USD`, `MODAL_GIB_HOUR_USD`), to every GPU tier's rate,
+operator-supplied ones included — an L4 hour is $0.958, not $0.80. Still not in
+`costUsd`: a container's idle scale-down window after its last call (Modal's default, a
+minute; `infra/modal/app.py` sets none), which Modal bills and no call owns.
 
 Everything that is not "run the implementation" — clearing the previous attempt, keeping the
 checkpoint, checking the declared `produces` exist, hashing them, writing the StepResult —
@@ -413,9 +462,15 @@ untouched by them, and `StubRunner` fabricates the new artifacts with no edit of
 `pose` runs on the **worker's CPU**, not the GPU box. The GPU is billed by the second and
 only `train` needs one. COLMAP's CPU path is the one every finding in `sfm.py` was measured
 on. And shipping frames to Modal for SfM and back would add a round trip the stage does
-not otherwise need. What it costs, measured on 4 cores of this development container
-(COLMAP 3.9.1, the Ubuntu 24.04 package; real iPhone-portrait frames, 1080×1920, orbiting
-one object), with the machine partly contended, so these numbers are upper bounds:
+not otherwise need. (Since then `pose` is dispatched to Modal's `cpu4` box, a 4-core,
+8 GiB CPU function; there COLMAP's thread count is the box's reservation -- 8, two
+hardware threads a core, `COLMAP_NUM_THREADS` in the CPU image, read by
+`sfm.default_threads` when a run gives no `threads` -- rather than COLMAP's -1, which in a
+container counts the host's dozens of cores and starts a SIFT thread, each holding a
+frame's scale space, for every one.) What it costs, measured on 4 cores of this
+development container (COLMAP 3.9.1, the Ubuntu 24.04 package; real iPhone-portrait
+frames, 1080×1920, orbiting one object), with the machine partly contended, so these
+numbers are upper bounds:
 
 | Matcher                        | Frames | Features / max side | Extract | Match | Map   | Total     | Registered |
 | ------------------------------ | ------ | ------------------- | ------- | ----- | ----- | --------- | ---------- |
@@ -679,7 +734,8 @@ from the clock; else `containerBootedAt`) or its entry (a warm call) to `remoteF
 a call that reported no clocks (failed, preempted, an older image). In `call_phases`,
 `start` is then the cold start alone and `queue` sits beside the sum. Not counted by
 either: a container's idle scale-down window after its last call, which Modal bills and
-no call owns; and the reserved CPU and memory, which `providers.py` does not price.
+no call owns. (The reserved CPU and memory used not to be priced either; since the
+2026-10 audit `ModalAdapter.rate` adds them -- "What a run cost" above.)
 
 **A part may start on an L40S** (`modal_adapter.GPU_FALLBACKS`: `l4 -> (l4, l40s)`,
 deployed as `run_stage_l4_fallback` with `gpu=["L4", "L40S"]`, Modal's ranked list: the
@@ -797,6 +853,84 @@ grows 125 MB) and, with `PIPELINE_BENCH=1`, the 8M run under a 1.5 GB address-sp
 Each stage takes `chunk_gaussians` (2^18 rows by default); nothing it computes depends on
 it.
 
+## Shipping SH (view-dependent colour)
+
+gsplat trains spherical harmonics to degree 3 -- 45 `f_rest_*` of a gaussian's 59 floats
+-- and until `ship_sh_degree` every capture shipped degree 0: one colour from every side.
+The packer and both web renderers already carry and draw SH when a PLY has it; the
+pipeline was dropping it in the middle. **`ship_sh_degree`** (0-3, **0 by default**, so
+nothing changes until it is chosen) is how many bands ship:
+
+| lane | where it is set                  | what carries it                                                                                  |
+| ---- | -------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 2    | `train: {ship_sh_degree: N}`     | `trained.ply` -> `quality`'s `gated.ply` -> `place`'s `canonical.ply` -> `package`'s tiles       |
+| 1    | `normalize: {ship_sh_degree: N}` | the upload's own bands (a gsplat-style PLY, a Scaniverse `.spz`) -> `canonical.ply` -> the tiles |
+
+It is not gsplat's own `--sh_degree` (the degree it trains at, left at its default 3):
+training at 3 and shipping the first N bands is the least-squares best degree-N colour,
+since the bands are orthonormal. The bands are truncated channel-major -- degree 1 of a
+degree-3 file is `f_rest_{0-2, 15-17, 30-32}`, renumbered `f_rest_0-8` -- and written after
+`f_dc_*`, where the trainers put them (`gaussians.ply_properties`; degree 0 is the
+fourteen, byte for byte).
+
+**Turning them.** A gaussian's SH colour is a function of direction in the frame it was
+fitted in, so every stage that turns the splat turns the bands: `place` (COLMAP's frame
+into east/north/up: the EXIF similarity or camera-up levelling, and a heading) and Lane
+1's `normalize` (up axis and heading), both through `gaussians.transform`, which now
+applies `harmonics.rotate` -- each band by the rotation's real Wigner D-matrix in the
+trainers' basis, fitted exactly against Inria's `eval_sh` rather than taken from a
+recurrence whose conventions differ in every source. `tests/test_harmonics.py` holds it to
+the definition for degrees 1, 2 and 3: turn the splat by R and look from R d, and every
+gaussian shows the colour it showed from d (to 2e-6), through `place` and `normalize` as
+well as on arrays; degree 1 is also held to its closed form `P R P^T`, and each band's
+matrices to being an orthogonal representation (D(R1 R2) = D(R1) D(R2)). The recentring
+is a translation and turns nothing; a mirror is refused. Nothing else in the pipeline
+turns a splat: `real_tree.py`'s similarity (the Minnetonka rig step) reads only the
+fourteen, so its tiles stay degree 0 whatever the run shipped.
+
+**Measured as shipped.** `holdout_error.py --sh-degree N` renders the held-out frames at
+the degree `trained.ply` ships, so the per-gaussian error `quality` gates with is the
+error of what is published; `meanPsnrFullSh` (every band trained) sits beside `meanPsnr`
+in `holdout.json`, `train_metrics.json` and `quality.json`, so what the cut costs is
+visible. A block run merges the same truncation into `trained.ply` and measures it the
+same way. `train_metrics.json`'s settings, `place`'s metrics, `source_meta.json` and the
+manifest's `splat.shDegree` (read back off the tiles, as CesiumJS counts their
+attributes) say what shipped.
+
+**What it costs, and choosing.** On disk, from the packer (`splat_tiles.convert`): real
+SH-3 scans (nianticlabs/spz's samples) 1.17-1.20x the tileset bytes at degree 1 and
+1.6-1.7x at degree 3; synthetic 300k-gaussian splats with trained-looking coefficients
+(Laplace, b = 0.03) 1.15x and 1.51x (16.1, 18.5 and 24.4 bytes a gaussian), with larger
+coefficients (b = 0.1) 1.27x and 2.15x; packing 1.6, 2.1 and 3.2 s. `canonical.ply` grows
+from 56 to 92 (degree 1) or 236 (degree 3) bytes a gaussian, read a chunk at a time like
+the rest. What it costs the viewers -- frame rate, GPU memory, load time -- is what has
+not been measured, and what `experiments/sh_compare.py` exists for:
+
+```bash
+# 1. A run of the capture that ships degree 3: jobs.params
+#      {"train": {"ship_sh_degree": 3}}
+#    Raw PLYs with f_rest_* are not kept by a run: gsplat's export is in the training
+#    container's work/, and a block run's parts leave checkpoint/ once merged. So a run at
+#    degree 3 is the source; its canonical.ply is already placed, its SH turned.
+# 2. One site, three ways, as three sites side by side (1.5 scan-widths apart, east):
+cd tools/pipeline
+uv run python experiments/sh_compare.py <run>/stages/place/out/canonical.ply ../../data/tiles \
+  --georef <run>/stages/georeference/out/georef.json --site spool
+#    or from the run's trained.ply (COLMAP's frame), placed by the real place stage:
+#    ... <run>/stages/train/out/trained.ply out/ --georef georef.json --place [--poses poses/]
+# 3. Seed and look: data/tiles/spool-sh{0,1,3}/ each hold splat/ and a site.json.
+cd ../../apps/api && uv run python -m app.seed && cd ../.. && pnpm dev
+```
+
+`sh_compare.json` beside them has, per degree, the tiles, bytes, bytes a gaussian, the ratio
+to degree 0 and the seconds to pack. In the console, with the renderer under comparison
+chosen (settings; PlayCanvas by default, Cesium, Spark): fly to each, read frame rate and
+GPU memory in the developer panel (`D`) with the others out of view, time the first tile
+and the whole tileset in the browser's network panel, and look at shine and colour as the
+view goes round. Then set `ship_sh_degree` in `recipes/photo-reconstruct.yaml` (and
+`splat-ingest.yaml`) to the degree chosen. The site folders are local only
+(`data/tiles/*-sh[0-3]/` is gitignored).
+
 ## Lane 1
 
 ```
@@ -812,8 +946,9 @@ upload/capture.ply ──▶ canonical.ply ──▶ splat/ ──▶ thumbnail.
 OpenSplat, gsplat) or an **`.spz`** — the format Scaniverse exports natively and the one
 `splat_tiles.pack_spz` already writes, so ingesting it is a 38-line inverse and nothing
 else. A PLY that carries `red/green/blue/alpha` instead of `f_dc_*`/`opacity` is converted;
-`f_rest_*` is read and dropped, because `convert` never reads it and carrying it would
-quadruple `canonical.ply` for nothing.
+`f_rest_*` is read and dropped unless the run ships SH (`ship_sh_degree`, 0 by default --
+see [Shipping SH](#shipping-sh-view-dependent-colour)): at degree 3 it would quadruple
+`canonical.ply`, and whether the colour is worth that is still to be chosen.
 
 Everything else **refuses with a message that names the file and the problem** rather than
 producing a splat-shaped nothing: ASCII PLY, a vertex element with list properties, a
@@ -838,9 +973,9 @@ both landed tipped 90 degrees, and `splat_ground` measured "ground" along the ca
 depth, which the viewer's clamp then dutifully rested on the terrain.
 
 `ingest_splat` now turns the file into east/north/up (`gaussians.orient`): positions, each
-gaussian's quaternion (`q' = q_R * q`), and nothing else -- the colour is exactly
-invariant, because `canonical.ply` keeps only the view-independent SH DC term. Which axis
-is up:
+gaussian's quaternion (`q' = q_R * q`), and -- when the run ships them -- the SH bands
+above DC, by the rotation's Wigner D-matrix ([Shipping SH](#shipping-sh-view-dependent-colour));
+the DC colour is exactly invariant. Which axis is up:
 
 | Source                                    | Default | Evidence                                                                                                                                                                   |
 | ----------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

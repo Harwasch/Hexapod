@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, _stop)
 
     if args.once:
+        worker.reap_abandoned()
         outcome = worker.run_one()
         log.info("worker %s: %s", worker.worker_id, outcome or "nothing queued")
         return 0

@@ -68,3 +68,11 @@ def get_storage() -> ObjectStorage:
 @lru_cache
 def get_publish_storage() -> ObjectStorage:
     return build_publish_storage(get_settings())
+
+
+@lru_cache
+def get_public_storage() -> ObjectStorage:
+    """`build_public_storage`, as a dependency: for a route that writes something a
+    browser will fetch by URL (a site thumbnail), which has to land in the bucket that URL
+    is served from."""
+    return build_public_storage(get_settings())

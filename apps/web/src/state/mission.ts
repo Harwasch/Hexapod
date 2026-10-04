@@ -52,6 +52,11 @@ interface MissionState {
   selection: MissionSelection;
   hoveredMachineId: string | null;
   planId: string | null;
+  /**
+   * Raised by flows that want the operator to see what the agent just said (a reply, a
+   * question). The status line answers by drawing the eye to its agent line, then lowers it;
+   * the full activity log opens only when the operator asks for it (`ui.activityOpen`).
+   */
   streamOpen: boolean;
   projectsOpen: boolean;
   feedsOpen: boolean;

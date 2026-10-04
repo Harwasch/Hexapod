@@ -10,6 +10,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import "./admin.css";
+import "@/shared/product.css";
 
 import { AdminApp } from "./AdminApp";
 

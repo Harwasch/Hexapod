@@ -14,11 +14,16 @@ import { planFromRecord, zonesFromRecord } from "@/missions/planDraft";
 import { planProgress, replanRefinement } from "@/missions/progress";
 
 import { PlanCard } from "./PlanCard";
+import { openSiteSwitcher } from "./siteSwitcher";
 import { PlanSchedule } from "./PlanSchedule";
 import { plansInvalidate, setPlanStatus } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
 
-/** Plans list and plan detail window (design: Plan view). */
+/**
+ * Plans list and plan detail (design: Plan view), in the right-hand drawer: the map beside it
+ * stays live, so "Show on map", a click on the ground for the agent, and dragging an area's
+ * corners all happen without closing it.
+ */
 export function PlansPanel() {
   const project = useMission((s) => s.project);
   const view = useMission((s) => s.view);
@@ -26,7 +31,7 @@ export function PlansPanel() {
   const openPlan = useMission((s) => s.openPlan);
   const composer = useMission((s) => s.composer);
   const openComposer = useMission((s) => s.openComposer);
-  const setAddDataOpen = useUi((s) => s.setAddDataOpen);
+  const openAdd = useUi((s) => s.openAdd);
   const plan = project?.plans.find((p) => p.id === planId) ?? null;
   const open = view === "plan";
   // While the agent waits for a click the window shrinks out of the map's way.
@@ -66,9 +71,9 @@ export function PlansPanel() {
         <motion.div
           key="plans"
           className="mc-window-wrap"
-          initial={{ opacity: 0, y: 10, scale: 0.985 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 8, scale: 0.985 }}
+          initial={{ opacity: 0, x: 16 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 16 }}
           transition={{ type: "spring", stiffness: 360, damping: 32 }}
         >
           <GlassPanel
@@ -89,12 +94,12 @@ export function PlansPanel() {
                   <button
                     type="button"
                     className="mc-btn mc-btn--accent"
-                    onClick={() => useMission.getState().setProjectsOpen(true)}
+                    onClick={() => openSiteSwitcher("sites")}
                     data-testid="plans-pick-site"
                   >
                     Pick a site
                   </button>
-                  <button type="button" className="mc-btn" onClick={() => setAddDataOpen(true)}>
+                  <button type="button" className="mc-btn" onClick={() => openAdd("link")}>
                     Add a site
                   </button>
                 </div>

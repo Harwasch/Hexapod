@@ -8,18 +8,23 @@
  * - **Click**: the ray through the cursor is composited front to back over the splats it
  *   meets; the instance with most of the pixel, its chain up to the top level and the other
  *   instances met near the front are the candidates (lib/sceneSelect.ts), and the smallest of
- *   the chain that is big enough on screen is chosen. `[` / `]`, Tab / Shift+Tab, or the wheel
- *   with Alt held (or over the chip) cycle; Escape clears. In the app the click is the map's
- *   own (SelectionManager asks `click` first, so a hit on the scan takes the click from the
+ *   the chain that is big enough on screen is chosen. `[` / `]`, Alt and the wheel, or Tab /
+ *   Shift+Tab while the map or the selection card has focus, cycle; Escape clears. A hit
+ *   gives the keyboard to the map (the canvas), so Tab cycles straight away; from anywhere
+ *   else Tab moves focus as it always does. In the app the click is the map's own
+ *   (SelectionManager asks `click` first, so a hit on the scan takes the click from the
  *   Location and site cards); standalone it is a press released where it began.
- * - **Brush** (`B`, or the chip's brush): strokes on screen collect the front-most splats under
- *   them -- Shift adds to the painted area, Alt takes away, a plain stroke starts again -- and
- *   the instance (any level) with the best intersection over union is selected. Below
- *   `PAINT_MIN_IOU` the painted splats can be kept as an object of their own
- *   (lib/customSets.ts), drawn through the same hide and highlight pipeline.
+ * - **Brush** (`B`, or the card's Brush): strokes on screen collect the front-most splats under
+ *   them -- Shift (or the card's Add) adds to the painted area, Alt (or Remove) takes away, a
+ *   plain stroke starts again -- and the instance (any level) with the best intersection over
+ *   union is selected. Below `PAINT_MIN_IOU` the painted splats can be kept as an object of
+ *   their own (lib/customSets.ts), drawn through the same hide and highlight pipeline.
  *
- * The chosen candidate is the objects store's highlight (`state/instances.ts`); the chip
- * (features/sites/SceneSelectChip.tsx) shows it and offers Hide, Show only, Fly to and Clear.
+ * The chosen candidate is the objects store's highlight (`state/instances.ts`); the HUD's
+ * selection card (features/sites/ObjectCard.tsx) shows it and offers Hide, Show only, Fly to,
+ * the brush and Clear. In the app `B` and Escape are the app's keys (`ownKeys: false`): the
+ * hotkey registry binds the brush, and Escape steps back through GlobalHotkeys' chain, so one
+ * press does one thing.
  */
 
 import {
@@ -103,7 +108,22 @@ export interface SceneSelectOptions {
    * them through `click` (the app: SelectionManager's click, so one click opens one thing).
    */
   ownClicks?: boolean;
+  /**
+   * Whether `B` (the brush) and Escape are the controller's own keys (true, the default), or
+   * the app's (false): the app binds `B` from its hotkey registry and routes Escape through
+   * its step-back chain, so a press is answered once (`togglePainting`, `escape`).
+   */
+  ownKeys?: boolean;
+  /**
+   * How Fly to moves the camera: the app's camera controller (`CameraController.flyToObject`,
+   * the pace, range and destination prefetch of every fly-to there). Standalone, CesiumJS's
+   * own flight.
+   */
+  fly?: (sphere: BoundingSphere) => void;
 }
+
+/** Marks an element whose focus counts as the scene's for Tab (the selection card). */
+export const SCENE_FOCUS_ATTRIBUTE = "data-scene-select-focus";
 
 /** One scan's view while painting: its tiles projected, and the brush. */
 interface PaintView {
@@ -133,10 +153,17 @@ function editable(target: EventTarget | null): boolean {
   return element.closest("input, textarea, select, [contenteditable='true']") !== null;
 }
 
-/** Takes the focus from a field (a panel's search box), so the scene's keys reach the scene. */
-function blurEditable(): void {
+/**
+ * Whether Tab cycles the candidates: only while the map (the canvas) or the selection card
+ * itself has focus. Anywhere else, the page's body included, Tab moves focus as it always does
+ * -- cycling from the body trapped the keyboard on the map.
+ */
+function tabCycles(canvas: HTMLCanvasElement): boolean {
   const active = document.activeElement;
-  if (active instanceof HTMLElement && editable(active)) active.blur();
+  return (
+    active === canvas ||
+    (active instanceof HTMLElement && active.hasAttribute(SCENE_FOCUS_ATTRIBUTE))
+  );
 }
 
 /** Instance ids of a tile in a document, decoded once per document. */
@@ -162,6 +189,8 @@ export class SceneSelectController {
   readonly #viewer: SelectViewer;
   readonly #enabled: () => boolean;
   readonly #ownClicks: boolean;
+  readonly #ownKeys: boolean;
+  readonly #fly: ((sphere: BoundingSphere) => void) | null;
   readonly #ids = new TileIds();
   readonly #off: (() => void)[] = [];
   #down: { x: number; y: number; id: number } | null = null;
@@ -169,6 +198,10 @@ export class SceneSelectController {
   #paintView: PaintView | null = null;
   #painted: Painted | null = null;
   #overlay: HTMLCanvasElement | null = null;
+  /** The brush overlay's pixels, kept between strokes (one buffer a size, not one a move). */
+  #overlayImage: ImageData | null = null;
+  /** Removes the wheel listener while one is attached (`#syncWheel`). */
+  #wheelOff: (() => void) | null = null;
   /** The highlight this controller set: cleared when the selection is. */
   #lit: { assetId: string; id: number } | null = null;
   #cameraInputs: boolean | null = null;
@@ -177,7 +210,15 @@ export class SceneSelectController {
     this.#viewer = viewer;
     this.#enabled = options.enabled ?? (() => true);
     this.#ownClicks = options.ownClicks ?? true;
+    this.#ownKeys = options.ownKeys ?? true;
+    this.#fly = options.fly ?? null;
     const canvas = viewer.canvas;
+    // Focusable, out of the tab order: a hit gives the map the keyboard (`#focusScene`), and a
+    // click on it takes focus from whatever had it, as CesiumJS's own blur on press intends.
+    if (!canvas.hasAttribute("tabindex")) {
+      canvas.tabIndex = -1;
+      this.#off.push(() => canvas.removeAttribute("tabindex"));
+    }
     const on = <K extends keyof HTMLElementEventMap>(
       target: HTMLElement | Window,
       type: K,
@@ -194,15 +235,42 @@ export class SceneSelectController {
     on(window, "pointerup", (e) => this.#onUp(e));
     on(window, "pointercancel", () => this.#endStroke(false));
     on(window, "keydown", (e) => this.#onKey(e));
-    on(window, "wheel", (e) => this.#onWheel(e), true);
     this.#off.push(useSceneSelect.subscribe((state, previous) => this.#follow(state, previous)));
+    this.#syncWheel(useSceneSelect.getState());
   }
 
   destroy(): void {
     for (const off of this.#off.splice(0)) off();
+    this.#wheelOff?.();
+    this.#wheelOff = null;
     this.#setCameraInputs(true);
     this.#overlay?.remove();
     this.#overlay = null;
+    this.#overlayImage = null;
+  }
+
+  /** Whether a wheel listener is attached now (tests). */
+  get listensToWheel(): boolean {
+    return this.#wheelOff !== null;
+  }
+
+  /**
+   * The wheel (with Alt) sizes the brush or cycles the candidates -- so it is listened to only
+   * while there is a brush or more than one candidate. A window listener in the capture phase
+   * that may cancel (`passive: false`) makes the browser wait for script on every wheel tick
+   * before it scrolls or zooms anything; attached for good, it did so for the globe's own zoom
+   * all the time.
+   */
+  #syncWheel(state: ReturnType<typeof useSceneSelect.getState>): void {
+    const wanted = state.mode === "paint" || (state.index >= 0 && state.candidates.length > 1);
+    if (wanted && !this.#wheelOff) {
+      const listener = (e: WheelEvent): void => this.#onWheel(e);
+      window.addEventListener("wheel", listener, { capture: true, passive: false });
+      this.#wheelOff = () => window.removeEventListener("wheel", listener, { capture: true });
+    } else if (!wanted && this.#wheelOff) {
+      this.#wheelOff();
+      this.#wheelOff = null;
+    }
   }
 
   // ---- Picking ---------------------------------------------------------------------------
@@ -218,9 +286,22 @@ export class SceneSelectController {
     if (useSceneSelect.getState().mode === "paint") return true;
     const rect = this.#viewer.canvas.getBoundingClientRect();
     const hit = this.pickAt(x, y, { x: x + rect.left, y: y + rect.top });
-    // The keys cycle at once: a search box still focused would take them.
-    if (hit) blurEditable();
+    if (hit) this.#focusScene();
     return hit;
+  }
+
+  /**
+   * Gives the keyboard to the map after a hit: a search box still focused would take the
+   * cycling keys, and on the body Tab moves focus rather than cycling. On the canvas `[`, `]`
+   * and Tab cycle, the arrows still pan (KeyboardNavigator counts it as the map), and Escape
+   * clears.
+   */
+  #focusScene(): void {
+    const canvas = this.#viewer.canvas;
+    if (document.activeElement === canvas) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && editable(active)) active.blur();
+    canvas.focus({ preventScroll: true });
   }
 
   /** Picks at (`x`, `y`), CSS px from the canvas's top left; true when an object was hit. */
@@ -405,11 +486,20 @@ export class SceneSelectController {
     if (assetId) useInstances.getState().showAll(assetId);
   }
 
+  /**
+   * Flies to the selection. In the app through the camera controller (`fly`), so the flight
+   * paces, ranges and prefetches as every other fly-to and a site flight still settling gives
+   * the camera up to it; standalone, CesiumJS's own flight.
+   */
   flyTo(): void {
     const s = this.selection();
     if (!s) return;
     const sphere = instanceSphere(s.assetId, s.id);
     if (!sphere) return;
+    if (this.#fly) {
+      this.#fly(BoundingSphere.clone(sphere));
+      return;
+    }
     const camera = this.#viewer.camera;
     camera.flyToBoundingSphere(BoundingSphere.clone(sphere), {
       offset: new HeadingPitchRange(camera.heading, CesiumMath.toRadians(-35), 0),
@@ -441,6 +531,34 @@ export class SceneSelectController {
     const store = useSceneSelect.getState();
     if ((store.mode === "paint") === on) return;
     store.setMode(on ? "paint" : "pick");
+  }
+
+  /** Whether there is a scan with objects to paint over (the brush means nothing without). */
+  get canPaint(): boolean {
+    return this.#assets().length > 0;
+  }
+
+  /**
+   * The brush on or off (`B`); true when it changed. It is not taken up without a scan with
+   * objects, or while measuring or exploring has the pointer.
+   */
+  togglePainting(): boolean {
+    const painting = useSceneSelect.getState().mode === "paint";
+    if (!painting && (!this.#enabled() || !this.canPaint)) return false;
+    this.setPainting(!painting);
+    return true;
+  }
+
+  /**
+   * One step back (Escape): the brush away first, else the selection cleared. True when it did
+   * something, so the app's chain stops there.
+   */
+  escape(): boolean {
+    const state = useSceneSelect.getState();
+    if (state.mode === "paint") this.setPainting(false);
+    else if (state.index >= 0) this.clear();
+    else return false;
+    return true;
   }
 
   /** Paints a stroke through `points` (CSS px from the canvas's top left), then matches it. */
@@ -539,10 +657,12 @@ export class SceneSelectController {
   #onDown(e: PointerEvent): void {
     if (e.button !== 0 || !this.#enabled()) return;
     const p = this.#local(e);
-    if (useSceneSelect.getState().mode === "paint") {
+    const state = useSceneSelect.getState();
+    if (state.mode === "paint") {
       e.preventDefault();
       e.stopPropagation();
-      this.#beginStroke(p.x, p.y, e.altKey ? "subtract" : e.shiftKey ? "add" : "replace");
+      // Shift and Alt where there is a keyboard; the card's New / Add / Remove on a touch screen.
+      this.#beginStroke(p.x, p.y, e.altKey ? "subtract" : e.shiftKey ? "add" : state.strokeMode);
       return;
     }
     if (this.#ownClicks) this.#down = { ...p, id: e.pointerId };
@@ -571,28 +691,23 @@ export class SceneSelectController {
   #onKey(e: KeyboardEvent): void {
     if (e.defaultPrevented || editable(e.target) || e.ctrlKey || e.metaKey) return;
     const state = useSceneSelect.getState();
-    const has = state.index >= 0;
-    if ((e.key === "b" || e.key === "B") && !e.altKey) {
-      if (this.#assets().length === 0) return;
-      this.setPainting(state.mode !== "paint");
-      e.preventDefault();
-      return;
+    if (this.#ownKeys) {
+      if ((e.key === "b" || e.key === "B") && !e.altKey) {
+        if (this.togglePainting()) e.preventDefault();
+        return;
+      }
+      if (e.key === "Escape") {
+        if (this.escape()) e.preventDefault();
+        return;
+      }
     }
-    if (e.key === "Escape") {
-      if (state.mode === "paint") this.setPainting(false);
-      else if (has) this.clear();
-      else return;
-      e.preventDefault();
-      return;
-    }
-    if (!has || state.candidates.length < 2) return;
+    if (state.index < 0 || state.candidates.length < 2) return;
     let step = 0;
     if (e.key === "]" || (e.key === "Tab" && !e.shiftKey)) step = 1;
     else if (e.key === "[" || (e.key === "Tab" && e.shiftKey)) step = -1;
     if (step === 0) return;
-    // Tab moves focus only from the scene: inside a panel it keeps its meaning.
-    if (e.key === "Tab" && document.activeElement && document.activeElement !== document.body)
-      return;
+    // Tab cycles only from the map or the card; anywhere else it moves focus.
+    if (e.key === "Tab" && !tabCycles(this.#viewer.canvas)) return;
     e.preventDefault();
     this.cycle(step);
   }
@@ -616,6 +731,7 @@ export class SceneSelectController {
     state: ReturnType<typeof useSceneSelect.getState>,
     previous: ReturnType<typeof useSceneSelect.getState>,
   ): void {
+    this.#syncWheel(state);
     const id = selectedId(state);
     if (id !== selectedId(previous) || state.assetId !== previous.assetId) {
       const lit = this.#lit;
@@ -752,6 +868,7 @@ export class SceneSelectController {
     if (best) {
       const chain = chainOf(view.doc, best.id);
       store.select(view.assetId, chain, chain.length, 0, null);
+      this.#focusScene();
     } else {
       store.clear();
       store.setPaint({ best: null, iou: 0, painted: count });
@@ -790,15 +907,27 @@ export class SceneSelectController {
       this.#overlay = overlay;
     }
     const { cols, rows, data } = view.mask;
-    overlay.width = cols;
-    overlay.height = rows;
+    // Resized only when the view's grid changes: setting a canvas's size reallocates and
+    // clears it, and this runs on every move of a stroke.
+    if (overlay.width !== cols) overlay.width = cols;
+    if (overlay.height !== rows) overlay.height = rows;
     overlay.style.imageRendering = "pixelated";
     const context = overlay.getContext("2d");
     if (!context) return;
-    const image = context.createImageData(cols, rows);
+    let image = this.#overlayImage;
+    if (image?.width !== cols || image.height !== rows) {
+      image = context.createImageData(cols, rows);
+      this.#overlayImage = image;
+    }
+    const pixels = image.data;
+    pixels.fill(0);
     for (let i = 0; i < data.length; i++) {
       if (!data[i]) continue;
-      image.data.set([90, 170, 255, 90], i * 4);
+      const at = i * 4;
+      pixels[at] = 90;
+      pixels[at + 1] = 170;
+      pixels[at + 2] = 255;
+      pixels[at + 3] = 90;
     }
     context.putImageData(image, 0, 0);
   }

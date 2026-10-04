@@ -154,7 +154,7 @@ def test_without_the_restore_it_never_finishes(
     """
     workdir = seeded_workdir(tmp_path / "run", upload=False)
     runner, _ = cloud(tmp_path)
-    monkeypatch.setattr(CloudRunner, "_restore_checkpoint", lambda _self, _context: 0)
+    monkeypatch.setattr(CloudRunner, "_restore_checkpoint", lambda _self, _context, _key=None: 0)
 
     with pytest.raises(PreemptedError):
         attempt(workdir, runner, 1)

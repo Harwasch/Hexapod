@@ -1,4 +1,4 @@
-import type { ImageryLayer, Scene, Viewer } from "cesium";
+import type { CesiumWidget, ImageryLayer, Scene } from "cesium";
 
 import type { SiteManager } from "./SiteManager";
 
@@ -22,7 +22,7 @@ export class DebugManager {
   };
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly sites: SiteManager,
     private readonly onClippingToggle: (enabled: boolean) => void,
   ) {

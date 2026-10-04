@@ -1,6 +1,7 @@
 /* ---------------------------------------------------------------------------
-   Mission-control surfaces: project badge, view tabs, layer pills, markers,
-   zone chips, selection cards, plan / fleet windows, agent stream, command bar.
+   Mission-control surfaces: the site switcher, view tabs, layer pills (the favourites at
+   the top of Layers), markers, zone chips and site pins, selection cards, the Plan / Fleet
+   drawer, the status line and agent log.
    Built on the glass tokens; no duplicated material definitions.
    --------------------------------------------------------------------------- */
 
@@ -34,6 +35,16 @@
 
 .mc-link:hover {
   color: var(--accent-strong);
+}
+
+a.mc-link {
+  text-decoration: none;
+}
+
+.mc-link:focus-visible {
+  outline: none;
+  border-radius: 6px;
+  box-shadow: var(--focus-ring);
 }
 
 .mc-row {
@@ -128,7 +139,7 @@
   color: var(--text-secondary);
 }
 
-/* ---- Project badge ----------------------------------------------------- */
+/* ---- Site switcher (the project badge and its menu) -------------------- */
 .mc-project {
   position: relative;
   width: 19.25rem;
@@ -141,7 +152,8 @@
   position: absolute;
   top: 100%;
   left: 0;
-  right: 0;
+  width: max(100%, 23rem);
+  max-width: calc(100vw - 2 * var(--edge-gap));
 }
 
 .mc-project__badge {
@@ -161,17 +173,12 @@
   background: var(--glass-bg-hover);
 }
 
-.mc-project__mark,
-.mc-bar__mark {
+.mc-project__mark {
   width: 26px;
   height: 26px;
   border-radius: 9px;
   background: linear-gradient(140deg, var(--accent), var(--warn));
   flex: none;
-}
-
-.mc-bar__mark {
-  background: linear-gradient(140deg, var(--agent), #6f8fd8);
 }
 
 .mc-project__text {
@@ -182,7 +189,17 @@
   gap: 2px;
 }
 
+/* The name takes only the room it needs, leaving space beside it for a status chip. */
+.mc-project__title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .mc-project__name {
+  flex: 0 1 auto;
+  min-width: 0;
   font: 600 15px var(--font-sans);
   white-space: nowrap;
   overflow: hidden;
@@ -199,8 +216,13 @@
 
 .mc-project__menu {
   margin-top: 0.5rem;
+  max-height: calc(100vh - 6.5rem);
+  max-height: calc(100dvh - 6.5rem);
   border-radius: 18px;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* Dense text over the map and the panels under it: nearly opaque, like the command box. */
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
 }
 
 .mc-project__menu-head,
@@ -218,13 +240,58 @@
 }
 
 .mc-project__menu-foot {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.5rem 1.1rem;
   border-top: 1px solid var(--divider);
 }
 
 .mc-project__menu-list {
-  padding: 0.5rem;
-  max-height: 18rem;
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  max-height: 14rem;
   overflow: auto;
+  list-style: none;
+}
+
+.mc-project__views {
+  border-top: 1px solid var(--divider);
+}
+
+.mc-project__view {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.mc-project__view .mc-project__row {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.7rem;
+}
+
+.mc-project__save {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.35rem 0.95rem 0;
+}
+
+.mc-project__save-input.mc-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.65rem;
+  resize: none;
+}
+
+.mc-project__note,
+.mc-project__empty {
+  margin: 0;
+  padding: 0.4rem 0.95rem 0.7rem;
+  font: 400 12px / 1.4 var(--font-sans);
+}
+
+.mc-project__empty {
+  padding: 0.65rem 0.7rem;
 }
 
 .mc-project__row {
@@ -244,8 +311,17 @@
 
 .mc-project__row:hover,
 .mc-project__row:focus-visible {
-  background: rgba(255, 255, 255, 0.09);
+  background: var(--control-bg);
   outline: none;
+}
+
+.mc-project__row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent-ring);
+}
+
+/* The site the camera is at. */
+.mc-project__row.is-here {
+  background: var(--accent-soft);
 }
 
 .mc-project__row-text {
@@ -503,6 +579,68 @@
   box-shadow: var(--focus-ring);
 }
 
+/* ---- Site pin: a project at globe scale -------------------------------- */
+/* One pin with the site's name and how many markers and chips it stands for. It hangs above
+   its anchor, so the point it names stays visible under it. */
+.mc-site-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: -2.6rem 0 0 -0.6rem;
+  padding: 0.35rem 0.4rem 0.35rem 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-solid) 88%, transparent);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  color: var(--text-primary);
+  font: 600 12.5px var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  will-change: transform;
+}
+
+/* The stem from the pin down to the ground it names. */
+.mc-site-pin::after {
+  content: "";
+  position: absolute;
+  left: 0.55rem;
+  top: 100%;
+  width: 2px;
+  height: 0.95rem;
+  background: linear-gradient(var(--accent), transparent);
+}
+
+.mc-site-pin__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 9px var(--accent);
+}
+
+.mc-site-pin__count {
+  min-width: 1.4rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.mc-site-pin:hover {
+  border-color: var(--accent-border);
+}
+
+.mc-site-pin:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 /* ---- Selection card ---------------------------------------------------- */
 .mc-card {
   width: 100%;
@@ -533,6 +671,93 @@
   margin-top: 0.5rem;
   font: 400 12px/1.45 var(--font-sans);
   color: rgba(242, 246, 239, 0.78);
+}
+
+/* An object of a scan in the same card (features/sites/ObjectCard): the candidates a click
+   offered, the brush, and what can be done with the object. It takes focus from a click on
+   it (never from Tab), and Tab then cycles the candidates. */
+.mc-card--object:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.mc-card--object .mc-card__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-cycle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.mc-cycle__count {
+  min-width: 4.5rem;
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.mc-cycle__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: auto;
+  font: 400 11px var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.mc-card__brush {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.mc-card__brush-size {
+  min-width: 3.2rem;
+  font-size: 12px;
+  text-align: center;
+}
+
+.mc-card--object .mc-actions {
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.mc-card--object .mc-actions--tools {
+  margin-top: 0.5rem;
+}
+
+.mc-card--object .mc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.55rem 0.5rem;
+  white-space: nowrap;
+}
+
+.mc-card--object .mc-btn .glass-kbd {
+  margin-left: 0.15rem;
+}
+
+/* A finger needs more than a mouse: the small square buttons grow on a touch screen. */
+@media (hover: none) and (pointer: coarse) {
+  .mc-card--object .mc-close {
+    width: 36px;
+    height: 36px;
+  }
+
+  .mc-card--object .mc-btn {
+    padding: 0.7rem 0.5rem;
+  }
 }
 
 .mc-close {
@@ -714,9 +939,10 @@
   box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
 }
 
-/* ---- Windows (Plan / Fleet) ------------------------------------------- */
-/* The Plan / Fleet window lives in the left dock, which it has to itself (one replaces the
-   other, see `state/layout.ts`). It is as tall as its content and scrolls past the dock. */
+/* ---- Plan / Fleet drawer ---------------------------------------------- */
+/* The Plan / Fleet window is the right-hand drawer (`.hud-drawer` in app.css): full height at
+   the right edge on a wide screen, a bottom sheet on a narrow one. A tool panel and the
+   drawer replace each other (`state/layout.ts`), so the map between them keeps its width. */
 .mc-window-wrap {
   display: flex;
   flex-direction: column;
@@ -1060,49 +1286,195 @@
   color: var(--text-secondary);
 }
 
-/* ---- Agent stream ------------------------------------------------------ */
-.mc-stream {
+/* ---- Status line --------------------------------------------------------- */
+/* One pill, bottom left: a degraded connection, the fleet in view, and the agent's line with
+   the chevron that opens its activity log. Everything else it replaced lives a click away. */
+.status-line-wrap {
+  position: relative;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
-  width: 100%;
-  min-height: 0;
+  min-width: 0;
+  max-width: min(56rem, 100%);
 }
 
-.mc-stream__pill {
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.5rem;
+  padding: 0.2rem 0.25rem 0.2rem 0.85rem;
+  border-radius: var(--glass-radius-pill);
+  font: 500 12.5px / 1.3 var(--font-sans);
+  color: var(--text-primary);
+}
+
+/* The fleet and any fault keep their words; when the bar is short of room the agent's
+   line is the one that clips (its full text is a click away). */
+.status-line__text {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
   flex: none;
 }
 
-.mc-stream.is-open {
-  gap: 0.6rem;
+.status-line__seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  white-space: nowrap;
 }
 
-.mc-stream__panel {
-  width: 100%;
-  max-height: 0;
-  opacity: 0;
+.status-line__seg--warn {
+  flex: none;
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.status-line__clip {
+  min-width: 0;
   overflow: hidden;
-  border-radius: 15px;
-  transform: scale(0.62, 0.7);
-  transform-origin: 100% 100%;
-  border-color: transparent;
-  transition:
-    max-height var(--motion-slow) var(--ease-out),
-    opacity var(--motion-base) ease,
-    transform var(--motion-slow) var(--ease-out),
-    border-color var(--motion-base) ease,
-    border-radius var(--motion-slow) ease;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.mc-stream.is-open .mc-stream__panel {
-  min-height: 0;
-  max-height: min(30rem, 48vh);
-  opacity: 1;
-  transform: scale(1);
-  border-radius: 20px;
-  border-color: var(--glass-border);
+.status-line__tag {
+  flex: none;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--glass-radius-pill);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.status-line__agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin-left: 0.35rem;
+  padding: 0.4rem 0.6rem 0.4rem 0.75rem;
+  border: 0;
+  border-left: 1px solid var(--divider);
+  border-radius: 0 var(--glass-radius-pill) var(--glass-radius-pill) 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.status-line__agent:hover {
+  background: var(--control-bg);
+}
+
+.status-line__agent:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.status-line__agent-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  border-radius: 6px;
+}
+
+/* A flow asked the operator to read the agent: its line lights up once, in the agent's blue. */
+.status-line__agent-text.is-flash {
+  animation: status-flash 1.6s var(--ease-out);
+}
+
+.status-line__agent.is-idle .status-line__clip {
+  color: var(--text-secondary);
+}
+
+.status-line__label {
+  color: var(--agent);
+  font-weight: 600;
+}
+
+.status-line__more {
+  flex: none;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-line__agent > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+@keyframes status-flash {
+  0%,
+  60% {
+    background: var(--agent-soft);
+    box-shadow: 0 0 0 4px var(--agent-soft);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+/* ---- Agent activity log (above the status line) -------------------------- */
+.status-log {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + var(--space-2));
+  z-index: 2;
+  width: min(26rem, calc(100vw - 2 * var(--edge-gap)));
+  max-height: min(28rem, 55vh);
   overflow: auto;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  animation: status-log-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes status-log-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.status-log__issues {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.85rem 1.1rem 0.75rem;
+  border-bottom: 1px solid var(--divider);
+  list-style: none;
+}
+
+.status-log__issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font: 500 12px / 1.45 var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.status-log__issue svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
+}
+
+.status-log__issue strong {
+  color: var(--text-primary);
+}
+
+.status-log__empty {
+  margin: 0;
+  padding: 0 1.1rem 1rem;
+  font: 400 12px / 1.45 var(--font-sans);
+  color: var(--text-secondary);
 }
 
 .mc-stream__head {
@@ -1130,16 +1502,6 @@
   align-items: flex-start;
   gap: 0.7rem;
   font: 500 12px/1.4 var(--font-sans);
-  opacity: 0;
-  transform: translateY(14px);
-  transition:
-    opacity var(--motion-base) ease,
-    transform var(--motion-slow) var(--ease-out);
-}
-
-.mc-stream.is-open .mc-stream__item {
-  opacity: 1;
-  transform: none;
 }
 
 .mc-stream__dot {
@@ -1163,7 +1525,7 @@
 }
 
 .mc-stream__item.is-wait .mc-stream__text {
-  color: rgba(242, 246, 239, 0.74);
+  color: var(--text-secondary);
 }
 
 .mc-stream__item.is-you .mc-stream__dot {
@@ -1184,35 +1546,6 @@
   border-top: 1px solid var(--divider);
   font: 500 12px var(--font-sans);
   color: var(--text-secondary);
-}
-
-.mc-stream__pill {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  padding: 0.55rem 0.9rem 0.55rem 0.8rem;
-  border-radius: 15px;
-  border-color: var(--agent-border);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-family: var(--font-sans);
-  max-width: 100%;
-}
-
-.mc-stream__pill:hover {
-  border-color: rgba(157, 184, 240, 0.7);
-}
-
-.mc-stream__pill:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.mc-stream__headline {
-  font: 600 12.5px var(--font-sans);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .mc-spinner {
@@ -1247,72 +1580,6 @@
 
 .mc-blink i:nth-child(3) {
   animation-delay: 0.36s;
-}
-
-/* ---- Command bar ------------------------------------------------------- */
-.mc-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.85rem;
-  height: 60px;
-  padding: 0 1rem;
-  border-radius: 18px;
-}
-
-.mc-bar__form {
-  flex: 1;
-  min-width: 0;
-}
-
-.mc-bar__input {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  color: var(--text-primary);
-  font: 400 14px var(--font-sans);
-  outline: none;
-}
-
-.mc-bar__input::placeholder {
-  color: var(--text-secondary);
-}
-
-.mc-bar__readout {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex: none;
-  font-size: 12px;
-  color: var(--text-primary);
-  white-space: nowrap;
-}
-
-.mc-bar__readout strong {
-  font-weight: 600;
-}
-
-.mc-bar__sep {
-  width: 1px;
-  height: 0.9rem;
-  background: var(--divider);
-}
-
-.mc-bar__button {
-  width: 38px;
-  height: 38px;
-  border-radius: 13px;
-  border: 1px solid var(--agent-border);
-  background: var(--agent-soft);
-  color: var(--agent);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  flex: none;
-}
-
-.mc-bar__button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 /* ---- Feeds ------------------------------------------------------------- */
@@ -1416,9 +1683,16 @@
 @media (prefers-reduced-motion: reduce) {
   .mc-marker__pulse,
   .mc-blink i,
-  .mc-spinner {
+  .mc-spinner,
+  .status-log {
     animation: none;
   }
+}
+
+/* The app's own reduced-motion switch, whatever the system says. The agent line's flash
+   stays: it is a change of colour, not of place. */
+:root[data-motion="reduced"] .status-log {
+  animation: none;
 }
 
 /* ---- Responsive --------------------------------------------------------- */
@@ -1426,15 +1700,158 @@
   .mc-project {
     width: auto;
   }
-  .mc-bar__readout {
-    display: none;
-  }
   .mc-tabs__tab {
     padding: 0.45rem 0.7rem;
   }
   .mc-window-wrap,
   .mc-window-wrap--wide {
     width: 100%;
+  }
+  /* On a phone the status line is two rows: the fleet (and any fault), then the agent, each
+     with the width to be read rather than clipped to "Flee…". */
+  .status-line {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    width: 100%;
+    padding: 0.15rem;
+    border-radius: 16px;
+  }
+  .status-line__text {
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+    padding: 0.4rem 0.6rem 0.35rem;
+  }
+  .status-line__agent {
+    margin-left: 0;
+    border-left: 0;
+    border-top: 1px solid var(--divider);
+    border-radius: 0 0 14px 14px;
+  }
+}
+
+/* On a phone the status line is one row above the tab bar, beside the compass, and it shows
+   less than it says: "4 working · 2 need attention" with its simulated tag, then the agent's
+   spinner and "+N". The labels, the agent's sentence and the word after "+N" are hidden
+   from view, not from screen readers (the live regions keep the whole sentence), and the
+   full text of each is one tap away in the log (`StatusLine`). */
+@media (max-width: 640px) {
+  .status-line-wrap {
+    max-width: none;
+  }
+  .status-line {
+    flex-direction: row;
+    align-items: center;
+    gap: 0;
+    min-height: 2.75rem;
+    padding: 0.15rem 0.15rem 0.15rem 0.55rem;
+    border-radius: var(--glass-radius-pill);
+    font-size: 12px;
+  }
+  /* The counts keep their words; the agent's part takes the room that is left. */
+  .status-line__text {
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+    min-width: 0;
+    padding: 0;
+  }
+  .status-line__text .status-line__seg {
+    gap: 0.35rem;
+    min-width: 0;
+  }
+  .status-line__tag {
+    padding: 0.05rem 0.3rem;
+    font-size: 11px;
+  }
+  .status-line .mc-blink {
+    display: none;
+  }
+  .status-line__agent {
+    container-type: inline-size;
+    flex: 1 1 0;
+    gap: 0.3rem;
+    min-width: 4rem;
+    margin-left: 0.2rem;
+    padding: 0.35rem 0.35rem 0.35rem 0.45rem;
+    border-top: 0;
+    border-left: 1px solid var(--divider);
+    border-radius: 0 var(--glass-radius-pill) var(--glass-radius-pill) 0;
+  }
+  .status-line__agent .mc-spinner {
+    width: 14px;
+    height: 14px;
+  }
+  .status-line__agent > svg {
+    margin-left: auto;
+  }
+  /* Hidden from view, not from the accessibility tree: the same rules as `.sr-only`. */
+  .status-line__prefix,
+  .status-line__label,
+  .status-line__more-word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  /* Short of room for a few words, the agent's part is its spinner and "+N"; "idle" is short
+     enough to stay. Its sentence stays in the live region and in the log. */
+  @container (width < 9rem) {
+    .status-line__agent:not(.is-idle) .status-line__clip {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  }
+
+  /* Plan and Fleet as a bottom sheet: a tighter head and stats, so the table's rows show. */
+  .hud-drawer .mc-window__head {
+    align-items: center;
+    padding: 0.85rem 1rem 0.75rem;
+  }
+  .hud-drawer .mc-window__title {
+    font-size: 17px;
+  }
+  .hud-drawer .mc-window__sub {
+    display: none;
+  }
+  .hud-drawer .mc-stats--row {
+    gap: 1.1rem;
+    padding: 0.6rem 1rem 0.7rem;
+  }
+  .hud-drawer .mc-stat__value--lg {
+    font-size: 18px;
+  }
+  .hud-drawer .mc-stat__label {
+    margin-top: 3px;
+  }
+  .hud-drawer .mc-table-wrap {
+    padding: 0.25rem 0.5rem 0.6rem;
+  }
+  .hud-drawer .mc-table--fleet .mc-table__head,
+  .hud-drawer .mc-table--fleet .mc-table__row {
+    grid-template-columns: 1.5fr 1fr 0.9fr 44px;
+    padding: 0.55rem 0.5rem;
+  }
+  /* Hours on shift: in the machine's card, a tap away. */
+  .hud-drawer .mc-table--fleet .mc-table__head > :nth-child(5),
+  .hud-drawer .mc-table--fleet .mc-table__row > :nth-child(5) {
+    display: none;
+  }
+  .hud-drawer .mc-window__foot {
+    padding: 0.6rem 1rem;
+    font-size: 12px;
   }
 }
 

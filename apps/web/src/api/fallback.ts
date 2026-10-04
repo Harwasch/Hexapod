@@ -98,6 +98,7 @@ function envAsset(
       heightOffsetM: 0,
     },
     defaultVisible: false,
+    sidecarFlags: [],
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -148,6 +149,7 @@ export function builtinDemoSite(): Site {
         heightOffsetM: 0,
       },
       defaultVisible: true,
+      sidecarFlags: [],
       createdAt: NOW,
       updatedAt: NOW,
     },

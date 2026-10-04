@@ -79,6 +79,7 @@ def splat_tiles_convert(
     opacity_min: float = 0.02,
     tile_gaussians: int | None = TILE_GAUSSIANS,
     parents: ParentOverrides | None = None,
+    sh_degree: int | None = None,
 ) -> dict[str, float | int]:
     """Call the sibling project's packer and return its statistics.
 
@@ -89,5 +90,17 @@ def splat_tiles_convert(
     The statistics include `parent_gaussians` and `storage_overhead`, what the merged
     levels cost on top of the scan itself, and `optimised_parent_gaussians`, how many of
     those are `parents` -- optimised on the GPU by `optimise_lod` -- rather than merged.
+    `sh_degree` caps the SH bands the tiles carry (None: every band the PLY has, which
+    is the run's own `ship_sh_degree`); `sh_degree` in the statistics is what they carry.
     """
-    return convert(ply, out_dir, lat, lon, height, opacity_min, tile_gaussians, parents=parents)
+    return convert(
+        ply,
+        out_dir,
+        lat,
+        lon,
+        height,
+        opacity_min,
+        tile_gaussians,
+        parents=parents,
+        sh_degree=sh_degree,
+    )

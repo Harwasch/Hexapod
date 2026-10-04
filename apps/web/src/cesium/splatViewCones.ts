@@ -21,8 +21,16 @@
  * Off with `?viewCones=off` in the page's URL, to compare.
  */
 
-import type { Cesium3DTileset } from "cesium";
-import * as CesiumBarrel from "cesium";
+import {
+  Cartesian4,
+  Matrix4,
+  PixelDatatype,
+  PixelFormat,
+  Sampler,
+  ShaderDestination,
+  Texture,
+  type Cesium3DTileset,
+} from "cesium";
 
 import { createLogger } from "@/lib/log";
 import {
@@ -194,9 +202,20 @@ interface Barrel {
   Cartesian4?: new (x: number, y: number, z: number, w: number) => unknown;
 }
 
+/** By name, not `import * as`: a namespace read by key keeps every engine export in the bundle. */
+const CESIUM = {
+  Texture,
+  Sampler,
+  PixelFormat,
+  PixelDatatype,
+  ShaderDestination,
+  Matrix4,
+  Cartesian4,
+} as unknown as Barrel;
+
 /** The real `ViewConeGpu`, or `undefined` when this CesiumJS build lacks what it needs. */
 export function cesiumViewConeGpu(): ViewConeGpu | undefined {
-  const barrel = CesiumBarrel as unknown as Barrel;
+  const barrel = CESIUM;
   const { Texture, Matrix4, Cartesian4 } = barrel;
   const nearest = barrel.Sampler?.NEAREST;
   const rgba = barrel.PixelFormat?.RGBA;

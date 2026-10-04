@@ -118,6 +118,26 @@ export interface paths {
         patch: operations["update_asset_api_v1_assets__asset_id__patch"];
         trace?: never;
     };
+    "/api/v1/assets/{asset_id}/sidecars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach sidecars to an asset by cutting a new generation
+         * @description The one way to publish files beside a scan's tiles (`instances.json`, `collision.bin`, an inferred fill under `inferred/<name>/`, `sog/`, a plant rig). Stage them in the private bucket under `staging/assets/<asset id>/<token>/`, laid out as they should sit beside `tileset.json`, then call this. The asset's current tiles and every sidecar it already has are copied server side into a **new** generation with the staged files beside them, `tileset.json` with the merged root `extras` is written last, all of it immutable, and the asset's URL moves to it. What the request replaces is not copied: a staged kind's old files (its whole file set, or the directory unit), and the kinds keyed by a replaced kind's ids (materials and telemetry by `instances`), which are dropped and flagged on the asset unless the request sends them too. Attaches to one asset are serialized: a second waits and builds on the first's generation. 409, with the Problem's `code`, when `basedOn` no longer holds the asset's tiles (`tiles_changed`: a republish replaced them), when another attach held the asset too long (`busy`), or when the asset cannot take an attach (`not_attachable`: not a run's tileset in the public bucket, say); 422 for a staged file outside the rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md.
+         */
+        post: operations["attach_sidecars_api_v1_assets__asset_id__sidecars_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/captures": {
         parameters: {
             query?: never;
@@ -455,7 +475,7 @@ export interface paths {
         };
         /**
          * Read one step's log
-         * @description Logs live in object storage, not in the database: `logKey` on a step is a key, and this is what turns it into text. 404 when the step has not written one.
+         * @description Logs live in object storage, not in the database: `logKey` on a step is a key, and this is what turns it into text. 404 when the step has not written one. A long log is returned as its last 256 KiB, after a line saying how much was left out: the end of a log is where a run says why it stopped.
          */
         get: operations["read_step_log_api_v1_jobs__job_id__steps__step_id__log_get"];
         put?: never;
@@ -803,13 +823,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Reconcile object storage against the database, in both directions
-         * @description Walks `captures/` and `runs/` and reports **orphans** — objects no row claims, which is what a run that died after uploading leaves behind — then takes every row whose object should exist and reports the **missing** ones. The walk stops at `maxObjects` and says so; the row check asks storage directly, so it is exact either way.
+         * @description Walks `captures/` and `runs/` and reports **orphans** — objects no row claims, which is what a run that died after uploading leaves behind — then takes every row whose object should exist and reports the **missing** ones. The walk stops at `maxObjects` and says so; the row check asks storage directly, so it is exact either way. Changes nothing, but needs the write token: the answer lists the private bucket, and the walk is costly enough to be rate-limited.
          */
-        get: operations["get_reconciliation_api_v1_storage_reconciliation_get"];
-        put?: never;
-        post?: never;
+        post: operations["reconcile_storage_api_v1_storage_reconciliation_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1065,6 +1085,8 @@ export interface components {
             renderConfig: components["schemas"]["RenderConfig"];
             representation: components["schemas"]["Representation"];
             resolution: components["schemas"]["ResolutionMetadata"] | null;
+            /** Sidecarflags */
+            sidecarFlags: components["schemas"]["SidecarFlag"][];
             /** Siteid */
             siteId: string | null;
             /** Source */
@@ -2853,6 +2875,11 @@ export interface components {
          * @description RFC 9457-style error payload.
          */
         Problem: {
+            /**
+             * Code
+             * @description A machine-readable reason, where the endpoint gives one: what a client branches on, rather than the words of `detail`. The sidecar attach's 409s say `tiles_changed`, `busy` or `not_attachable`.
+             */
+            code?: string | null;
             /** Detail */
             detail?: string | null;
             /** Errors */
@@ -3084,6 +3111,93 @@ export interface components {
          * @enum {string}
          */
         ScaleSource: "arkit" | "exif-gps" | "manual" | "unresolved";
+        /**
+         * SidecarAttach
+         * @description Attach the files staged under `stagingPrefix` to an asset's tileset.
+         */
+        SidecarAttach: {
+            /**
+             * Basedon
+             * @description The tileset URL the sidecars were computed against. The attach goes ahead when the asset's current tiles are those tiles -- the same URL, or a later generation cut by another attach, which copies the tiles unchanged -- and is refused with 409 when a republish has replaced them.
+             */
+            basedOn: string;
+            /**
+             * Extras
+             * @description Keys to set on the root tile's `extras`, each replaced whole -- except a list of `{uri, ...}` entries (`inferredLayers`), merged into the current list by `uri`, so send only your own entry; `null` removes a key, and with it the kind's files where none of them is staged. A `uri` a key names must be in the new generation. Setting or removing a kind's key, like staging one of its files, drops the kinds keyed by its ids (materials and telemetry by `instances`) unless they are sent too.
+             */
+            extras?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Files
+             * @description Optional: exactly the paths that must be staged. A partial upload is then refused instead of attached.
+             */
+            files?: string[] | null;
+            /**
+             * Rigurl
+             * @description Optional: the asset's `renderConfig.rigUrl`, relative to the tileset, set in the same transaction as the new URL; `null` clears it. Omitted, unchanged.
+             */
+            rigUrl?: string | null;
+            /**
+             * Stagingprefix
+             * @description Where the files were staged in the private bucket: `staging/assets/<asset id>/<token>/`, the token a workflow run id or similar. Every object under it is attached at its path relative to it, beside `tileset.json`.
+             */
+            stagingPrefix: string;
+        };
+        /**
+         * SidecarAttachment
+         * @description The generation an attach cut, and the asset now pointing at it.
+         */
+        SidecarAttachment: {
+            asset: components["schemas"]["AssetRead"];
+            /** Attached */
+            attached: string[];
+            /** Carried */
+            carried: string[];
+            /** Copied */
+            copied: number;
+            /** Dropped */
+            dropped: string[];
+            /** Extras */
+            extras: string[];
+            /** Generation */
+            generation: string;
+            /** Previousurl */
+            previousUrl: string;
+            /** Removed */
+            removed: string[];
+            /** Staged */
+            staged: string[];
+            /** Url */
+            url: string;
+        };
+        /**
+         * SidecarFlag
+         * @description A sidecar a republish or an attach could not carry into the asset's new generation.
+         *
+         *     Sidecars (`instances.json`, `collision.bin`, an inferred fill, `sog/`, a plant rig) are
+         *     published beside the tiles. When a run publishes new tiles, each kind is carried only
+         *     where it still holds for the new splats -- objects, skins and a rig where every new
+         *     tile's positions are ones they bind, a grid or the streamed LOD only onto the very same
+         *     tiles; otherwise it is dropped, the viewer loses it, and this says so until the kind is
+         *     attached again. An attach that replaces `instances` drops what is keyed by its ids
+         *     (materials, telemetry) the same way. See docs/SCENE_OBJECTS.md, section 8.
+         */
+        SidecarFlag: {
+            /** Action */
+            action: string;
+            /**
+             * Flaggedat
+             * Format: date-time
+             */
+            flaggedAt: string;
+            /** Jobid */
+            jobId: string | null;
+            /** Kind */
+            kind: string;
+            /** Reason */
+            reason: string;
+        };
         /** SiteCreate */
         SiteCreate: {
             /** Assets */
@@ -3526,6 +3640,9 @@ export type SchemaRepresentation = components['schemas']['Representation'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
 export type SchemaRunStatus = components['schemas']['RunStatus'];
 export type SchemaScaleSource = components['schemas']['ScaleSource'];
+export type SchemaSidecarAttach = components['schemas']['SidecarAttach'];
+export type SchemaSidecarAttachment = components['schemas']['SidecarAttachment'];
+export type SchemaSidecarFlag = components['schemas']['SidecarFlag'];
 export type SchemaSiteCreate = components['schemas']['SiteCreate'];
 export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
@@ -4074,6 +4191,77 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    attach_sidecars_api_v1_assets__asset_id__sidecars_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SidecarAttach"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SidecarAttachment"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Refused, and `code` says why: `tiles_changed` -- `basedOn` no longer holds the asset's tiles, so compute the sidecars again on its current tileset; `busy` -- another attach or a publish held the asset, so retry; `not_attachable` -- the asset or its directory cannot take an attach (not a run's 3D Tiles in the public bucket, not a tileset, too many objects, an object too large to copy) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Object storage is not configured */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5301,6 +5489,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Asked too often; see `Retry-After` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Object storage is not configured */
             503: {
                 headers: {
@@ -5662,6 +5859,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     process_phone_capture_api_v1_phone_captures__capture_id__process_post: {
@@ -5717,6 +5923,15 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5786,6 +6001,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     stop_phone_capture_api_v1_phone_captures__capture_id__stop_post: {
@@ -5844,6 +6068,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     check_key_api_v1_phone_check_post: {
@@ -5891,6 +6124,15 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6959,7 +7201,7 @@ export interface operations {
             };
         };
     };
-    get_reconciliation_api_v1_storage_reconciliation_get: {
+    reconcile_storage_api_v1_storage_reconciliation_post: {
         parameters: {
             query?: {
                 maxObjects?: number;
@@ -7008,6 +7250,15 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Asked too often; see `Retry-After` */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

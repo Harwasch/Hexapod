@@ -241,6 +241,8 @@ export async function startLivingSceneHarness(
     ionToken: undefined,
     home: { longitude: options.longitude, latitude: options.latitude, height: 40 },
     splatGpuMotion: options.splatGpuMotion,
+    // The stars arrive after boot (deferNightSky), too late for the hiding below to catch.
+    nightSky: false,
   });
   const viewer = scene.viewer;
   const gl = viewer.scene;

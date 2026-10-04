@@ -11,14 +11,17 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-import anthropic
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.schemas.agent import Outline, OutlinePoint, OutlineRequest
 from app.services.planner import PlannerError
+
+if TYPE_CHECKING:
+    # Imported where it is used, for the reason app/services/planner.py gives.
+    import anthropic
 
 MIN_POINTS = 3
 MAX_POINTS = 32
@@ -68,11 +71,15 @@ def _decode(image: str) -> tuple[str, Literal["image/jpeg", "image/png"]]:
 class Outliner:
     def __init__(self, settings: Settings, client: anthropic.Anthropic | None = None) -> None:
         self._settings = settings
-        self._client = client or anthropic.Anthropic(
-            api_key=settings.anthropic_api_key, timeout=60.0
-        )
+        if client is None:
+            import anthropic  # deferred: see the TYPE_CHECKING import at the top
+
+            client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=60.0)
+        self._client = client
 
     def outline(self, request: OutlineRequest) -> Outline:
+        import anthropic  # for its exception types; already loaded once a client exists
+
         data, media_type = _decode(request.image)
         text = (
             f"The image is {request.width}x{request.height} pixels. The operator clicked at "

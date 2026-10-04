@@ -1,6 +1,7 @@
 # Adding data
 
-Open **Add data** from the left rail (or `⌘K → Add data`). Everything you register is
+Open **Add data** from the left rail (or `⌘K → Add data`). Uploading a capture leads the
+sheet; the forms below are under **Link a hosted source**, folded until opened. Everything you register is
 validated in the browser and again by the API, then persisted in PostGIS and appears in
 the Layers or Sites panel. Nothing is fetched by the server: the browser streams from the
 source you register.

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Emitter } from "@/lib/emitter";
 import { formatDate, representationLabel, sourceLabel } from "@/lib/format";
-import { throttle } from "@/lib/throttle";
+import { throttle, throttleProgress } from "@/lib/throttle";
 import { recentSpans, recordSpan } from "@/lib/timing";
 
 describe("lib", () => {
@@ -28,6 +28,52 @@ describe("lib", () => {
     vi.advanceTimersByTime(60);
     expect(fn).toHaveBeenCalledTimes(2);
     expect(fn).toHaveBeenLastCalledWith(3);
+    vi.useRealTimers();
+  });
+
+  it("throttle flushes a waiting call at once, and only one", () => {
+    vi.useFakeTimers();
+    const fn = vi.fn();
+    const throttled = throttle(fn, 250);
+    throttled("loading 9");
+    throttled("loading 4");
+    throttled("done");
+    expect(fn).toHaveBeenCalledTimes(1);
+    // An end state is shown now, not at the end of the window.
+    throttled.flush();
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(fn).toHaveBeenLastCalledWith("done");
+    vi.advanceTimersByTime(300);
+    expect(fn).toHaveBeenCalledTimes(2);
+    // Nothing waiting: a flush calls nothing.
+    throttled.flush();
+    expect(fn).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("loading progress reaches the UI four times a second, and the end of loading at once", () => {
+    vi.useFakeTimers();
+    const reports: [number, number][] = [];
+    const progress = throttleProgress((pending, processing) => reports.push([pending, processing]));
+    // Cesium reports once a rendered frame: 60 frames of loading.
+    for (let frame = 0; frame < 60; frame++) {
+      progress(60 - frame, 2);
+      vi.advanceTimersByTime(1000 / 60);
+    }
+    expect(reports.length).toBeGreaterThanOrEqual(4);
+    expect(reports.length).toBeLessThanOrEqual(5);
+    // Done: shown now, not a quarter of a second later.
+    progress(0, 0);
+    expect(reports.at(-1)).toEqual([0, 0]);
+    const shown = reports.length;
+    vi.advanceTimersByTime(1000);
+    expect(reports).toHaveLength(shown);
+    // A tileset unloaded mid-load: nothing arrives after it.
+    progress(5, 1);
+    progress(4, 1);
+    progress.cancel();
+    vi.advanceTimersByTime(1000);
+    expect(reports.at(-1)).toEqual([5, 1]);
     vi.useRealTimers();
   });
 

@@ -6,8 +6,19 @@ import type { UnitSystem } from "@twin/geo";
 export type ThemeMode = "auto" | "light" | "dark";
 export type QualityPreset = "performance" | "balanced" | "ultra";
 export type WorldMode = "open" | "photorealistic";
-/** Who draws splat scans on the globe (cesium/scanView): CesiumJS, Spark or PlayCanvas. */
-export type SplatRenderer = "cesium" | "spark" | "playcanvas";
+/**
+ * Who draws splat scans on the globe (cesium/scanView): CesiumJS, Spark or PlayCanvas -- on
+ * WebGL2, or on WebGPU where the device has it (`playcanvas-webgpu`, a trial: docs/WEBGPU_TRIAL.md).
+ */
+export type SplatRenderer = "cesium" | "spark" | "playcanvas" | "playcanvas-webgpu";
+
+/** Every renderer, in the order Settings › Advanced lists them. */
+export const SPLAT_RENDERERS: readonly SplatRenderer[] = [
+  "playcanvas",
+  "playcanvas-webgpu",
+  "spark",
+  "cesium",
+];
 /**
  * Who draws splat scans unless chosen otherwise: PlayCanvas, streaming a scan's own streamed
  * level of detail as superspl.at does (scanView/ScanRendererHost.runNative). CesiumJS still
@@ -15,6 +26,41 @@ export type SplatRenderer = "cesium" | "spark" | "playcanvas";
  * not beside the renderers, so pages without the globe (admin.html) never load cesium/.
  */
 export const DEFAULT_SPLAT_RENDERER: SplatRenderer = "playcanvas";
+
+/** Short forms `?renderer=` also takes, for typing on a phone. */
+const RENDERER_ALIASES: Record<string, SplatRenderer> = {
+  webgpu: "playcanvas-webgpu",
+  webgl: "playcanvas",
+};
+
+/**
+ * The renderer a page address asks for (`?renderer=playcanvas-webgpu`, or `webgpu` / `webgl`
+ * for short), or null when it asks for none or for something that is not a renderer.
+ */
+export function rendererFromQuery(search: string): SplatRenderer | null {
+  const asked = new URLSearchParams(search).get("renderer")?.trim().toLowerCase();
+  if (!asked) return null;
+  if ((SPLAT_RENDERERS as readonly string[]).includes(asked)) return asked as SplatRenderer;
+  return RENDERER_ALIASES[asked] ?? null;
+}
+
+function rendererFromLocation(): SplatRenderer | null {
+  try {
+    return typeof window === "undefined" ? null : rendererFromQuery(window.location.search);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The renderer the page address chose for this visit (`?renderer=`), over the saved setting: a
+ * quick A/B on a phone without opening Settings, which never outlives the visit -- a link to
+ * the WebGPU trial cannot leave a device on it. Choosing a renderer in the app (Settings, the
+ * objects panel's switch to CesiumJS) ends it: `useSettings.set` clears it.
+ */
+export const useRendererOverride = create<{ renderer: SplatRenderer | null }>(() => ({
+  renderer: rendererFromLocation(),
+}));
 
 export interface SettingsState {
   theme: ThemeMode;
@@ -32,6 +78,12 @@ export interface SettingsState {
       operator's concern; once they have read it, it stays gone. */
   ionTokenNoticeDismissed: boolean;
   devToolsOpen: boolean;
+  /**
+   * Camera and renderer readouts in the bottom bar (altitude, scale, metres per pixel, which
+   * world and renderer) and the deployer's setup notes. Settings › Advanced; off by default,
+   * because an operator reads the map, not its telemetry.
+   */
+  devReadouts: boolean;
   exploreSpeed: number;
   /**
    * Living Survey motion in the splat vertex shader ("Motion on GPU"). On by default; off puts
@@ -46,8 +98,10 @@ export interface SettingsState {
   livingGpuMotion: boolean;
   /**
    * Who draws splat scans: a dedicated splat renderer laid over the globe -- PlayCanvas
-   * (SuperSplat's engine, the default) or Spark (three.js) -- or CesiumJS's own splat
-   * primitive. The globe, navigation and tools stay CesiumJS's either way.
+   * (SuperSplat's engine, the default; on WebGL2, or on WebGPU as a trial) or Spark
+   * (three.js) -- or CesiumJS's own splat primitive. The globe, navigation and tools stay
+   * CesiumJS's either way. A page address can choose another for one visit
+   * (`useRendererOverride`); what is drawn is `useSplatRenderer`.
    */
   splatRenderer: SplatRenderer;
   /**
@@ -81,6 +135,7 @@ const defaults = {
   onboardingDismissed: false,
   ionTokenNoticeDismissed: false,
   devToolsOpen: false,
+  devReadouts: false,
   exploreSpeed: 4,
   livingGpuMotion: true,
   splatRenderer: DEFAULT_SPLAT_RENDERER,
@@ -91,8 +146,15 @@ export const useSettings = create<SettingsState>()(
   persist(
     (set) => ({
       ...defaults,
-      set: (patch) => set(patch),
-      reset: () => set({ ...defaults }),
+      set: (patch) => {
+        // A renderer chosen in the app replaces whatever the page address chose.
+        if (patch.splatRenderer !== undefined) useRendererOverride.setState({ renderer: null });
+        set(patch);
+      },
+      reset: () => {
+        useRendererOverride.setState({ renderer: null });
+        set({ ...defaults });
+      },
     }),
     {
       name: "twin.settings.v1",
@@ -109,6 +171,13 @@ export const useSettings = create<SettingsState>()(
     },
   ),
 );
+
+/** The splat renderer in use: the page address's choice for this visit, else the setting. */
+export function useSplatRenderer(): SplatRenderer {
+  const override = useRendererOverride((s) => s.renderer);
+  const chosen = useSettings((s) => s.splatRenderer);
+  return override ?? chosen;
+}
 
 /** Base screen-space error for each quality preset (lower = sharper). */
 export const QUALITY_SSE: Record<QualityPreset, { base: number; min: number; max: number }> = {

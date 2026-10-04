@@ -17,23 +17,28 @@ that flattened them would test nothing.
 from __future__ import annotations
 
 import importlib.util
+import sys
+import time
+import types
 from dataclasses import replace
 from typing import Any
 
 import pytest
 
 from artifacts import ArtifactDecl
-from cloud import RemoteHandle, StageRequest
+from cloud import Reattachable, RemoteHandle, StageRequest
 from contracts import FANOUT_PARAM
 from modal_adapter import (
     GPU_FALLBACKS,
     GPU_NAMES,
+    GPU_RESERVATION,
     MAX_LOG_LINES,
     ModalAdapter,
     fallback_tier,
+    reservation_rate,
     tier_of_gpu,
 )
-from providers import provider
+from providers import Rate, provider
 
 
 def modal_exception(name: str, base: type[BaseException] = Exception) -> type[BaseException]:
@@ -533,3 +538,87 @@ def test_every_fallback_list_is_of_deployed_priced_tiers() -> None:
         assert chain[0] == tier
         for one in chain:
             assert one in modal.tiers and one in GPU_NAMES and modal.rate(one) is not None
+
+
+# --- a call picked up by another process, and what an hour of it costs ----------------
+
+
+def test_a_call_is_re_attached_to_by_its_id_and_polls_and_cancels_as_before(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker that comes up after a deploy rebuilds the call the last one left running
+    with `FunctionCall.from_id` -- no `spawn`, so no second call -- and the proxy for its
+    billed time keeps counting from the original submit."""
+    call = FakeCall(raises=TimeoutError())
+    looked_up: list[str] = []
+
+    def from_id(call_id: str) -> FakeCall:
+        looked_up.append(call_id)
+        return call
+
+    namespace = types.SimpleNamespace(FunctionCall=types.SimpleNamespace(from_id=from_id))
+    monkeypatch.setitem(sys.modules, "modal", namespace)
+    adapter = ModalAdapter("twin")
+    assert isinstance(adapter, Reattachable)
+    handle = RemoteHandle(id="fc-left-running", provider="modal", tier="l4")
+
+    adapter.reattach(handle, request(), submitted_at=time.time() - 600.0)
+
+    assert looked_up == ["fc-left-running"]
+    poll = adapter.poll(handle)
+    assert poll.state == "running"
+    assert poll.billed_s >= 600.0
+    adapter.cancel(handle)
+    assert call.cancelled_with == {"terminate_containers": True}
+
+
+def test_a_call_known_only_by_id_can_still_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A call whose workdir is gone is known from the database by id alone, with no
+    request: enough to stop paying for it."""
+    call = FakeCall(raises=TimeoutError())
+    namespace = types.SimpleNamespace(
+        FunctionCall=types.SimpleNamespace(from_id=lambda _call_id: call)
+    )
+    monkeypatch.setitem(sys.modules, "modal", namespace)
+    adapter = ModalAdapter("twin")
+    handle = RemoteHandle(id="fc-orphan", provider="modal", tier="l4")
+
+    adapter.reattach(handle, None, submitted_at=0.0)
+    adapter.cancel(handle)
+
+    assert call.cancelled_with == {"terminate_containers": True}
+
+
+def test_outrunning_the_function_s_limit_is_marked_as_a_timeout() -> None:
+    """The worker does not retry a timeout: the next attempt would outrun the same six
+    hours. Every other failure is not one."""
+    adapter, handle, _ = adapter_over(FakeCall(raises=FunctionTimeout("6h")))
+    poll = adapter.poll(handle)
+    assert poll.state == "failed" and poll.timed_out
+    adapter, handle, _ = adapter_over(FakeCall(raises=OutputExpired()))
+    assert not adapter.poll(handle).timed_out
+    adapter, handle, _ = adapter_over(FakeCall(raises=RuntimeError("boom")))
+    assert not adapter.poll(handle).timed_out
+
+
+def test_a_gpu_hour_is_priced_with_the_cpu_and_memory_its_function_reserves() -> None:
+    """2 cores and 8 GiB reserved beside every GPU, billed at Modal's list prices: +$0.158
+    an hour on top of the L4's $0.80 -- a fifth of the bill that `costUsd` left out."""
+    assert GPU_RESERVATION == (2.0, 8192)
+    reserved = reservation_rate("l4")
+    assert reserved is not None
+    assert reserved.usd_per_hour == pytest.approx(2 * 0.04716 + 8 * 0.007992)
+    adapter = ModalAdapter("twin")
+    l4 = adapter.rate("l4")
+    assert l4 is not None
+    assert l4.usd_per_hour == pytest.approx(0.7992 + 0.158256)
+    assert "reserved" in l4.source
+    # The CPU box's rate already *is* its cores and memory; nothing is added to it.
+    cpu = adapter.rate("cpu4")
+    assert cpu is not None and cpu.usd_per_hour == pytest.approx(0.2526)
+    assert reservation_rate("cpu4") is None
+    # A deployment's own GPU price gets the reservation too: Modal bills it either way.
+    own = ModalAdapter("twin", rates={"l4": Rate(0.50, "PIPELINE_GPU_RATES")}).rate("l4")
+    assert own is not None and own.usd_per_hour == pytest.approx(0.50 + 0.158256)
+    # And an unpriced GPU stays unpriced, rather than priced at its reservation alone.
+    assert ModalAdapter("twin").rate("t4") is None

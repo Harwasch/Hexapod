@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import type {
   AssetCreate,
@@ -243,6 +249,27 @@ export function useCreateAsset() {
       void client.invalidateQueries({ queryKey: queryKeys.sites });
       if (body.siteId) void client.invalidateQueries({ queryKey: queryKeys.site(body.siteId) });
     },
+  });
+}
+
+/**
+ * Calls `onRecord` with every site record the API answers through the query cache: a site's
+ * own query (`queryKeys.site`) fetched, refetched after a bookmark was saved or deleted or an
+ * asset added (the mutations below invalidate it), or set by hand. Only what the API sent:
+ * `useSite`'s offline fallback is made in the hook and never stored here.
+ *
+ * The scene keeps its own copy of each record it has flown to (SiteManager, so a second
+ * flight leaves for the bookmark at once), and a bookmark mutation leaves the catalog list --
+ * all the scene is otherwise handed -- equal, so react-query keeps its identity and nothing
+ * told the scene. This is how it hears.
+ */
+export function watchSiteRecords(client: QueryClient, onRecord: (site: Site) => void): () => void {
+  return client.getQueryCache().subscribe((event) => {
+    if (event.type !== "updated" || event.action.type !== "success") return;
+    const key = event.query.queryKey as readonly unknown[];
+    if (key.length !== 2 || key[0] !== queryKeys.sites[0]) return;
+    const site = event.query.state.data as Site | null | undefined;
+    if (site && typeof site === "object" && Array.isArray(site.cameraBookmarks)) onRecord(site);
   });
 }
 

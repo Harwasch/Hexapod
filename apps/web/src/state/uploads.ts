@@ -1,6 +1,9 @@
 import { create } from "zustand";
 
-import type { UploadedPart } from "@twin/contracts";
+import type { components, UploadedPart } from "@twin/contracts";
+
+/** A minted phone handoff: the QR code and the link it encodes, and until when it works. */
+export type CaptureHandoff = components["schemas"]["CaptureHandoff"];
 
 /**
  * Client-side upload state: the bytes this browser has actually put on the wire.
@@ -34,6 +37,20 @@ export interface UploadItem {
   startedAt: number;
 }
 
+/**
+ * Making a capture -- from dropped files, or an empty one for a phone -- and how the last one
+ * went: what the Add panel's drop zone and phone button say. Here, not in the panel, for the
+ * same reason as `phone` below.
+ */
+export interface CaptureCreation {
+  /** A capture is being made (and, for dropped files, uploaded): the panel's controls wait. */
+  busy: boolean;
+  /** Why the last one failed, in words, or null. */
+  error: string | null;
+  /** The last drop can be tried again as it was (after a refused write token). */
+  canRetryDrop: boolean;
+}
+
 interface UploadsState {
   items: Record<string, UploadItem>;
   begin: (item: Pick<UploadItem, "id" | "captureId" | "filename" | "bytes">) => void;
@@ -41,10 +58,30 @@ interface UploadsState {
   remove: (id: string) => void;
   /** Drops finished rows; anything still moving is left alone. */
   clearSettled: () => void;
+  creation: CaptureCreation;
+  setCreation: (patch: Partial<CaptureCreation>) => void;
+  /**
+   * "New capture from phone": the capture made for a phone to upload into, and its handoff
+   * (the QR code) once minted; null when none is showing.
+   *
+   * Kept here rather than in the Add panel, which unmounts when Add closes or its tab changes:
+   * the Captures panel before it stayed mounted and kept them. A handoff in progress has a
+   * phone pointing at its code, and minting another on the way back would replace that code.
+   */
+  phone: { captureId: string; handoff: CaptureHandoff | null } | null;
+  setPhone: (captureId: string | null) => void;
+  /** The handoff minted for `captureId`, if that is still the phone capture showing. */
+  setPhoneHandoff: (captureId: string, handoff: CaptureHandoff) => void;
 }
 
 export const useUploads = create<UploadsState>()((set) => ({
   items: {},
+  creation: { busy: false, error: null, canRetryDrop: false },
+  setCreation: (patch) => set((s) => ({ creation: { ...s.creation, ...patch } })),
+  phone: null,
+  setPhone: (captureId) => set({ phone: captureId ? { captureId, handoff: null } : null }),
+  setPhoneHandoff: (captureId, handoff) =>
+    set((s) => (s.phone?.captureId === captureId ? { phone: { captureId, handoff } } : s)),
   begin: (item) =>
     set((s) => ({
       items: {

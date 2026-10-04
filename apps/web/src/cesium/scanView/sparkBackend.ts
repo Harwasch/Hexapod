@@ -22,6 +22,12 @@
  * rigid motions, the covariance through the motion's linear part) and the hide-and-highlight
  * rule (scanInstances.ts). A change has Spark regenerate only the tiles holding what changed.
  * Spark sorts what its generators output, so a moved splat is sorted where it is drawn.
+ *
+ * Drawn on demand: Spark has no loop of its own -- it sorts in a worker when a frame is drawn
+ * and the view or the splats changed -- and says when a sort it started has finished
+ * (`onDirty`), which is when the host draws the frame that shows it (overlayFrames.ts); what
+ * it says while a frame is being drawn is that frame's, and asks for none. A tile's centres are
+ * digested within the main thread's frame budget (`hooks.work`).
  */
 
 import { dyno, SparkRenderer, type SplatMesh } from "@sparkjsdev/spark";
@@ -32,13 +38,13 @@ import { checksumPositions } from "@twin/world";
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
-import { spzPickData } from "@/lib/spzPositions";
+import { gunzip, spzPickDataOf } from "@/lib/spzPositions";
 import { loadSplatTile } from "@/view/sparkStream";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
 import type { InstanceStyle } from "./scanInstances";
 import { MOTION_TEXTURE_WIDTH, SCAN_MOTION_GLSL, type ScanMotion } from "./scanMotion";
-import type { ScanBackend, ScanPose } from "./types";
+import type { BackendHooks, ScanBackend, ScanPose } from "./types";
 
 /** Splats a row of a tile's per-splat textures holds (one a texel). */
 const SPARK_SPLATS_WIDTH = 4096;
@@ -113,7 +119,9 @@ interface SparkTile {
   modified: boolean;
   /** The tile's splats for picking, in its own order (cesium/sceneSelect). */
   pick: PickTile;
-  /** `pick` where `place` last put the tile (a split object at its pose), or null at rest. */
+  /** Where `place` last put the tile (a split object at its pose), or null at rest. */
+  placement: THREE.Matrix4 | null;
+  /** `pick` at `placement`: made on first need, so a moving object costs no copy a frame. */
   placedPick: PickTile | null;
 }
 
@@ -160,15 +168,10 @@ function tableTexture(data: Float32Array | Uint32Array, rows: number): THREE.Dat
   return texture;
 }
 
-export interface BackendOptions {
-  /** Keeps the drawn frame readable after it is shown (harnesses read pixels back). */
-  preserveDrawingBuffer?: boolean;
-}
-
 export function createBackend(
   canvas: HTMLCanvasElement,
-  _budget?: number,
-  options: BackendOptions = {},
+  _budget: number,
+  hooks: BackendHooks,
 ): Promise<ScanBackend<SplatMesh>> {
   const renderer = new THREE.WebGLRenderer({
     canvas,
@@ -176,11 +179,25 @@ export function createBackend(
     antialias: false,
     premultipliedAlpha: true,
     powerPreference: "high-performance",
-    preserveDrawingBuffer: options.preserveDrawingBuffer === true,
+    preserveDrawingBuffer: hooks.preserveDrawingBuffer === true,
   });
   renderer.setClearColor(0x000000, 0);
   const scene = new THREE.Scene();
-  const spark = new SparkRenderer({ renderer, enableLod: false });
+  /** Inside `renderer.render`: what Spark says there is about the frame being drawn. */
+  let drawing = false;
+  // A sort finished: the next frame shows it. Spark says so as well while a frame it draws
+  // regenerates the splats (`onBeforeRender`), which is no reason for another: that frame draws
+  // the new splats, and new tiles come in with the sort that lands them, which says so. Asked
+  // for, the next frame regenerated again -- Spark does whenever the camera is away from where
+  // the sort in flight was taken -- and asked again: a still view after a move drew the same
+  // frame every display frame until that sort landed, seconds under a software GPU.
+  const spark = new SparkRenderer({
+    renderer,
+    enableLod: false,
+    onDirty: () => {
+      if (!drawing) hooks.frameWanted();
+    },
+  });
   scene.add(spark);
   const camera = new THREE.PerspectiveCamera();
   const target = new THREE.Vector3();
@@ -394,9 +411,26 @@ export function createBackend(
         extSplats: true,
         signal,
       });
-      const data = await spzPickData(bytes).catch(() => undefined);
-      if (data) {
-        const checksum = checksumPositions(data.positions);
+      // Bands above the device's (a phone keeps one: quality.ts).
+      if (mesh.maxSh > hooks.maxShDegree) {
+        mesh.maxSh = hooks.maxShDegree;
+        mesh.updateGenerator();
+      }
+      const raw = await gunzip(bytes).catch(() => undefined);
+      // Reading and digesting every centre is main-thread work: within the frame's budget.
+      const read = raw
+        ? await hooks.work
+            .run(() => {
+              const data = spzPickDataOf(raw);
+              return data ? { data, checksum: checksumPositions(data.positions) } : undefined;
+            })
+            .catch((error: unknown) => {
+              mesh.dispose();
+              throw error;
+            })
+        : undefined;
+      if (read) {
+        const { data, checksum } = read;
         const count = data.positions.length / 3;
         const binding: SparkTile = {
           checksum,
@@ -411,6 +445,7 @@ export function createBackend(
           weights: null,
           skinSet: new Set(),
           modified: false,
+          placement: null,
           placedPick: null,
         };
         tiles.set(mesh, binding);
@@ -438,13 +473,20 @@ export function createBackend(
     place: (mesh, matrix) => {
       const tile = tiles.get(mesh);
       if (matrix === null) {
-        if (tile) tile.placedPick = null;
+        if (tile) {
+          tile.placement = null;
+          tile.placedPick = null;
+        }
         mesh.position.set(0, 0, 0);
         mesh.quaternion.identity();
         return;
       }
       placement.fromArray(Array.from(matrix));
-      if (tile) tile.placedPick = placedPickTile(tile.pick, placement);
+      // Only the matrix is kept: a pick moves the tile's splats there when it asks.
+      if (tile) {
+        (tile.placement ??= new THREE.Matrix4()).copy(placement);
+        tile.placedPick = null;
+      }
       placement.decompose(mesh.position, mesh.quaternion, placedScale);
     },
     setInstances,
@@ -452,7 +494,13 @@ export function createBackend(
       const out: PickTile[] = [];
       for (const mesh of shown) {
         const tile = tiles.get(mesh);
-        if (tile) out.push(tile.placedPick ?? tile.pick);
+        if (!tile) continue;
+        if (tile.placement) {
+          tile.placedPick ??= placedPickTile(tile.pick, tile.placement);
+          out.push(tile.placedPick);
+        } else {
+          out.push(tile.pick);
+        }
       }
       return out;
     },
@@ -503,7 +551,12 @@ export function createBackend(
       camera.near = pose.near;
       camera.far = pose.far;
       camera.updateProjectionMatrix();
-      renderer.render(scene, camera);
+      drawing = true;
+      try {
+        renderer.render(scene, camera);
+      } finally {
+        drawing = false;
+      }
     },
     destroy: () => {
       for (const tile of tiles.values()) {
@@ -518,7 +571,14 @@ export function createBackend(
       emptyFloat.dispose();
       emptySplats.dispose();
       renderer.setAnimationLoop(null);
+      // Spark's own: its accumulators' targets and textures, and its sort worker -- never
+      // let go before, so each session left a worker running.
+      scene.remove(spark);
+      spark.dispose();
       renderer.dispose();
+      // three's dispose frees what three made but keeps the context; losing it frees the
+      // rest now rather than when the browser collects the canvas.
+      renderer.forceContextLoss();
     },
   };
   return Promise.resolve(backend);

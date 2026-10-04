@@ -43,6 +43,7 @@ import exif
 import gaussian_budget
 import gaussians
 import global_sfm
+import harmonics
 import holdout
 import init_seed
 import keyframes
@@ -248,12 +249,19 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     vertical, and `recentre` puts the origin at the footprint's centre and the capture's
     own ground. What was done is written into `source_meta.json` as `frame`, so a capture
     that lands wrong carries the reason with it.
+
+    `ship_sh_degree` (0 by default: DC colour only, as always) ships that many of the upload's
+    own SH bands -- a phone app's gsplat-style PLY or a Scaniverse `.spz` often carries
+    degree 3 -- turned with the splat by the up-axis and heading rotation
+    (`harmonics.rotate`); an upload with fewer bands ships what it has, and
+    `source_meta.json`'s `shDegree` says which.
     """
     # A chunk at a time (`splat_stream`): a phone app's PLY of several million gaussians
     # is placed in the worker's fixed memory, with the same bytes out as `gaussians.orient`.
     splat = splat_stream.open_splat(
         gaussians.pick_splat_file(ctx.input("upload")),
         chunk=int(ctx.param("chunk_gaussians", splat_io.CHUNK)),
+        sh_degree=harmonics.check_degree(ctx.param("ship_sh_degree"), name="ship_sh_degree"),
     )
     requested = ctx.param("up_axis")
     median_gaussian = splat_stream.median_gaussian_m(splat)
@@ -276,9 +284,11 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
         "gaussians": splat.count,
         "nonFinite": placed.non_finite,
         "properties": list(splat.properties_in),
-        # Spherical-harmonic bands above the DC term, normals, vertex colours already
+        # Spherical-harmonic bands above `ship_sh_degree`, normals, vertex colours already
         # folded into f_dc: read, and deliberately not carried into canonical.ply.
         "dropped": list(splat.dropped),
+        # The SH bands above DC that canonical.ply does carry, turned with the splat.
+        "shDegree": splat.sh_degree,
         "bboxLocalM": {"min": low, "max": high},
         "extentM": _extent(low, high),
         "medianGaussianM": median_gaussian,
@@ -313,6 +323,7 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
         "canonicalBytes": written,
         "nonFinite": placed.non_finite,
         "droppedProperties": len(splat.dropped),
+        "shDegree": splat.sh_degree,
     }
     return StageOutcome(
         metrics=metrics, summary=f"{splat.count} gaussians from a {splat.source_format}"
@@ -830,7 +841,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
     width, height = _image_size(images[0])
     focal_prior = _optional_float(ctx.param("focal_px"))
     params = None if focal_prior is None else (focal_prior, width / 2.0, height / 2.0, 0.0)
-    threads = _optional_int(ctx.param("threads"))
+    # A run's own `threads`, else the image's (`sfm.THREADS_ENV`: the CPU box's reservation).
+    threads = _optional_int(ctx.param("threads")) or sfm.default_threads()
     seconds = {"extract": 0.0, "match": 0.0, "map": 0.0}
 
     def timed(phase: str, argv: list[str]) -> None:
@@ -1277,6 +1289,15 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `batch_size` (1-8, default 1): images per training step, with gsplat's own
       sqrt(batch) learning-rate scaling and the schedule divided by it so the images
       trained on stay the same (`training.gsplat_argv`). Not with `depth_loss`.
+    * `ship_sh_degree` (0-3, default 0): the spherical-harmonic bands above DC that
+      `trained.ply` ships -- and so `gated.ply`, `canonical.ply` and the tiles, which
+      carry whatever it has (`place` turning them into east/north/up). The trainer always
+      fits degree 3 (gsplat's own `--sh_degree`, left at its default -- a different knob,
+      which is why this one is not called that); this is how many of its bands survive,
+      truncated channel-major (`harmonics.sources`). Truncation is the least-squares best
+      of the lower degree, since the bands are orthonormal. The held-out error is rendered
+      at this degree (`holdout_error.py --sh-degree`), so `quality` gates what ships. 0 is
+      every capture before this existed: the DC colour only.
 
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
@@ -1286,6 +1307,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         raise ValueError(
             training.VARIANT_REFUSALS.get(variant, f"variant={variant!r} is not one of: 3dgs")
         )
+    # Refused before any GPU time is spent on a run that could not ship it.
+    sh_degree = harmonics.check_degree(ctx.param("ship_sh_degree"), name="ship_sh_degree")
     frames = ctx.input(FRAMES.name)
     poses = ctx.input(POSES.name)
     full_iterations = int(ctx.param("iterations", 30_000))
@@ -1607,7 +1630,13 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"the trainer wrote no .ply under {result}; there is nothing to normalise "
             f"into {TRAINED_PLY.name}"
         )
-    splat = gaussians.read_splat(ply)
+    # The DC colour, and `ship_sh_degree` of the trainer's SH bands (all of it fits degree 3).
+    splat = gaussians.read_splat(ply, sh_degree=sh_degree)
+    if splat.sh_degree < sh_degree:
+        ctx.log(
+            f"gsplat: ship_sh_degree {sh_degree} asked for, and {ply.name} carries degree "
+            f"{splat.sh_degree}; shipping {splat.sh_degree}"
+        )
     columns = splat.columns
     trained_count = splat.count
     cropped_rows = None
@@ -1622,7 +1651,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 else f"roi ({training.ROI_KEEP_RADII:g} radii)"
             )
         )
-    written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), columns)
+    written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), columns, sh_degree=splat.sh_degree)
     in_ply = int(columns["x"].shape[0])
     # Per-gaussian error on the held-out frames, in trained.ply's order. After the splat
     # is written, and unable to fail the stage: `holdout.measure` says why.
@@ -1640,6 +1669,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         antialiased=antialiased,
         script=_optional_path(ctx.param("holdout_script")),
         budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
+        # Rendered as trained.ply ships it, so quality's verdict is on what is published.
+        sh_degree=splat.sh_degree,
     )
     _save_seed(ctx, splat.columns, poses, steps_scaler, iterations, seeded, cap_max)
     metrics_document = training.parse_metrics(
@@ -1678,12 +1709,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "batchSize": batch_size,
         "variant": variant,
         "initFrom": "sfm" if seeded is None else "preview",
+        # SH bands above DC: asked for, shipped in trained.ply, and what the trainer fitted.
+        "shDegreeRequested": sh_degree,
+        "shDegree": splat.sh_degree,
+        "shDegreeTrained": _trained_sh_degree(splat.properties_in),
     }
-    document["holdout"] = {
-        key: held_out[key]
-        for key in ("status", "reason", "views", "meanPsnr", "gaussiansMeasured", "seconds")
-        if key in held_out
-    }
+    document["holdout"] = {key: held_out[key] for key in HOLDOUT_SUMMARY_KEYS if key in held_out}
     document["init"] = None if seeded is None else seeded.to_dict()
     # The gaussian budget, every input to it, and the bound that applied.
     document["budget"] = None if budget is None else budget.to_dict()
@@ -1772,10 +1803,35 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     if roi is not None:
         metrics["gaussiansTrained"] = trained_count
     metrics["holdoutError"] = str(held_out.get("status"))
+    metrics["shDegree"] = splat.sh_degree
     if batch_size > 1:
         metrics["batchSize"] = batch_size
     return StageOutcome(metrics=metrics, summary=f"{in_ply} gaussians trained")
 
+
+def _trained_sh_degree(properties: Sequence[str]) -> int | None:
+    """The SH degree the trainer's export carries, for the record; None for a run of
+    `f_rest_*` that is not one -- a description, which must not fail a trained stage."""
+    try:
+        return harmonics.degree_of(properties)
+    except ValueError:
+        return None
+
+
+#: What `train_metrics.json`'s `holdout` keeps of `holdout.json`: whether it ran, on how
+#: many frames, the mean PSNR -- at `shDegree`, the degree trained.ply ships, beside
+#: `meanPsnrFullSh`, every band the trainer fitted, so the cost of what is not shipped
+#: shows -- and how long it took.
+HOLDOUT_SUMMARY_KEYS = (
+    "status",
+    "reason",
+    "views",
+    "meanPsnr",
+    "meanPsnrFullSh",
+    "shDegree",
+    "gaussiansMeasured",
+    "seconds",
+)
 
 #: The wrapper that ends a converged run (`convergence.py`), run with the trainer's own
 #: interpreter in place of the trainer; beside this file, as `holdout_error.py` is.
@@ -1878,6 +1934,7 @@ def _train_in_blocks(
                 summary=f"{len(todo)} blocks to train in parallel",
             )
     run = blocks.train(ctx, settings, plan, ctx.output(TRAINED_PLY.name), phases=call)
+    shipped = harmonics.degree_of(splat_io.read_layout(ctx.output(TRAINED_PLY.name)).properties)
     registered = _registered_count(settings.poses, images)
     train_frames, val_frames = training.held_out_split(registered)
     split = training.TrainMetrics(
@@ -1914,13 +1971,12 @@ def _train_in_blocks(
         "variant": variant,
         "initFrom": "prior",
         "blocks": record["count"],
+        # Read back off the merged trained.ply rather than trusted from the params.
+        "shDegreeRequested": harmonics.check_degree(settings.params.get("ship_sh_degree")),
+        "shDegree": shipped,
     }
     held_out = run.document["holdoutSummary"]
-    document["holdout"] = {
-        key: held_out[key]
-        for key in ("status", "reason", "views", "meanPsnr", "gaussiansMeasured", "seconds")
-        if key in held_out
-    }
+    document["holdout"] = {key: held_out[key] for key in HOLDOUT_SUMMARY_KEYS if key in held_out}
     document["init"] = {"from": "prior", "prior": record["prior"]}
     document["budget"] = None if settings.budget is None else settings.budget.to_dict()
     steps_max = sum(int(block["stepsMax"]) for block in record["blocks"])
@@ -1956,6 +2012,7 @@ def _train_in_blocks(
         "stepsMax": steps_max,
         "stepsRun": steps_run,
         "holdoutError": str(held_out.get("status")),
+        "shDegree": shipped,
         **run.metrics,
     }
     total_cap = document["settings"]["capMax"]
@@ -2358,6 +2415,12 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     and recentring (`place_points`) into `coverage_enu.ply`, so a viewer can lay it over
     the splat; with no quality stage that file holds no points.
 
+    The SH bands `train` shipped (`ship_sh_degree`; none by default) are carried into
+    `canonical.ply` and **turned with the splat**: each band by the frame rotation's
+    Wigner D-matrix (`gaussians.transform` -> `harmonics.rotate`), so a gaussian placed in
+    east/north/up shows, from every direction, the colour it was trained to show from the
+    same direction in COLMAP's frame. The recentring is a translation and touches no band.
+
     A `georef.json` with no `frame` (written by `manual_placement`) is levelled by the
     camera-up estimate in `poses`, if there is one, and otherwise passed through with a
     warning that nothing levelled it.
@@ -2365,9 +2428,12 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     georef = _read_json(ctx.input(GEOREF.name))
     source = quality.GATED_PLY.name if ctx.has_input(quality.GATED_PLY.name) else TRAINED_PLY.name
     # A chunk at a time (`splat_stream`), so the worker places a splat of any size in the
-    # same memory; canonical.ply is byte-identical to transforming it whole.
+    # same memory; canonical.ply is byte-identical to transforming it whole. Every SH band
+    # the trained splat carries comes along (`sh_degree=None`), turned by each step.
     trained = splat_stream.open_splat(
-        ctx.input(source), chunk=int(ctx.param("chunk_gaussians", splat_io.CHUNK))
+        ctx.input(source),
+        chunk=int(ctx.param("chunk_gaussians", splat_io.CHUNK)),
+        sh_degree=None,
     )
     frame = georef.get("frame")
     if not isinstance(frame, dict):
@@ -2415,6 +2481,8 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         "extentUpM": round(extent["up"], 3),
         "source": source,
         "coveragePoints": coverage_points,
+        # The SH bands carried into canonical.ply, turned with the splat (0: DC only).
+        "shDegree": trained.sh_degree,
     }
     return StageOutcome(metrics=metrics, summary=f"placed by {frame.get('source')}")
 
@@ -2692,8 +2760,24 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     fixture byte-identity gate (tools/captures tests/test_synthetic_tree.py) still covers
     what it writes: the committed tree is one tile, and its `splat.glb` did not change by
     a byte when merged parents arrived -- only `tileset.json`'s `refine` did.
+
+    **Colour.** The tiles carry every SH band `canonical.ply` does -- the run's own
+    `ship_sh_degree`, chosen on `train` (Lane 2) or `normalize` (Lane 1), 0 by default -- so
+    what ships is what the held-out error measured. `ship_sh_degree` here only caps that, for
+    a re-package of a canonical.ply that carries more; a cap below what `train` measured
+    is logged, since the held-out error then describes more colour than the tiles hold.
+    Degree 3 is measured at 1.6-1.7x the tileset bytes of degree 0 on real SH-3 scans,
+    degree 1 at 1.17-1.20x (`splat_tiles.convert`).
     """
     georef = _read_json(ctx.input(GEOREF.name))
+    cap = ctx.param("ship_sh_degree")
+    sh_cap = None if cap is None else harmonics.check_degree(cap)
+    carried = harmonics.degree_of(splat_io.read_layout(ctx.input(CANONICAL_PLY.name)).properties)
+    if sh_cap is not None and sh_cap < carried:
+        ctx.log(
+            f"package: canonical.ply carries SH degree {carried} and ship_sh_degree caps the tiles "
+            f"at {sh_cap}; train's held-out error was rendered at the degree it shipped"
+        )
     for retired in ("max_gaussians", "geometric_error"):
         # A run queued before the hierarchy (or a Refine copying a preview's params) may
         # still carry these. Say so, rather than silently honouring or refusing them.
@@ -2711,6 +2795,7 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
             opacity_min=float(ctx.param("opacity_min", 0.02)),
             tile_gaussians=int(ctx.param("tile_gaussians", TILE_GAUSSIANS)),
             parents=parents,
+            sh_degree=sh_cap,
         )
 
     try:
@@ -2725,7 +2810,7 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
         f"packaged {stats['gaussians']} gaussians ({stats['dropped']} dropped) in "
         f"{stats['tiles']} tiles, {stats['depth']} levels deep, "
         f"extent {stats['extent_m']:.2f} m; merged parents add {stats['parent_gaussians']} "
-        f"({float(stats['storage_overhead']):.1%})"
+        f"({float(stats['storage_overhead']):.1%}); SH degree {stats['sh_degree']}"
     )
     if stats.get("optimised_parent_gaussians"):
         ctx.log(f"drew {stats['optimised_parent_gaussians']} optimised parents (optimise_lod)")
@@ -2886,6 +2971,8 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
             "gaussiansPackaged": packaged["gaussians"],
             "bytes": packaged["bytes"],
             "tiles": packaged["tiles"],
+            # The view-dependent colour that ships: SH bands above DC, read off the tiles.
+            "shDegree": packaged["shDegree"],
             "bboxLocalM": packaged["bbox"],
             "extentM": _extent(packaged["bbox"]["min"], packaged["bbox"]["max"]),
         },
@@ -3182,9 +3269,15 @@ def _glb_summary(path: Path) -> dict[str, Any]:
         raise ValueError(f"{path.name}: the first GLB chunk is not JSON")
     document = json.loads(blob[20 : 20 + length].decode("utf-8"))
     position = document["accessors"][0]
+    # The SH degree as CesiumJS learns it: by counting the `SH_DEGREE_` attributes (3, 8
+    # or 15 for degree 1, 2 or 3; `splat_tiles.sh_attributes`).
+    meshes = document.get("meshes") or [{}]
+    attributes = (meshes[0].get("primitives") or [{}])[0].get("attributes") or {}
+    bands = sum("SH_DEGREE_" in name for name in attributes)
     return {
         "gaussians": int(position["count"]),
         "bytes": len(blob),
+        "shDegree": harmonics.SH_DIMS.index(bands) if bands in harmonics.SH_DIMS else 0,
         "bbox": {
             "min": [float(v) for v in position["min"]],
             "max": [float(v) for v in position["max"]],
@@ -3220,6 +3313,9 @@ def _tileset_summary(tiles: Path) -> dict[str, Any]:
         "gaussians": sum(summary["gaussians"] for summary in summaries),
         "bytes": sum(summary["bytes"] for summary in summaries),
         "tiles": len(summaries),
+        # Every tile has one degree (CesiumJS draws a tileset at its first tile's); the
+        # lowest is reported, so a tileset that broke that rule cannot claim more colour.
+        "shDegree": min(summary["shDegree"] for summary in summaries),
         "bbox": {
             "min": [min(s["bbox"]["min"][axis] for s in summaries) for axis in range(3)],
             "max": [max(s["bbox"]["max"][axis] for s in summaries) for axis in range(3)],

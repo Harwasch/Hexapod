@@ -25,9 +25,10 @@ import enum
 import logging
 import threading
 import uuid
+from collections.abc import Collection
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, and_, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Job
@@ -82,17 +83,44 @@ def _expiry(lease_s: float) -> ColumnElement[datetime]:
     return expiry
 
 
-def claim_next(db: Session, *, worker_id: str, lease_s: float) -> Job | None:
+def claim_next(
+    db: Session,
+    *,
+    worker_id: str,
+    lease_s: float,
+    recipes: Collection[str] | None = None,
+    only: ColumnElement[bool] | None = None,
+) -> Job | None:
     """Take the oldest claimable job, or return None.
 
     One statement and one commit. The inner `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1`
     is what stops two workers choosing the same row — the second one skips it rather than
     blocking — and the `UPDATE` that wraps it is what turns the momentary lock into a
     lease that outlives the transaction.
+
+    `recipes`, when given, narrows "oldest claimable" to jobs of those recipes: the
+    oldest *splat-ingest* rather than the oldest job. It is how a CPU-only slot
+    (`WORKER_CPU_ONLY_SLOTS`, `loop.Worker`) takes a one-minute ingest that would
+    otherwise queue behind a two-hour training run, without ever taking the training
+    run itself. It is a filter inside the same `SKIP LOCKED` select, not a second query,
+    so the claim stays one statement and a filtered slot and an unfiltered one can no
+    more both win a row than two workers can. None means any recipe; an empty set means
+    none, and asks the database nothing.
+
+    `only` narrows it further, inside the same select: the disk guard's "a detached run
+    whose workdir is here", which is all a worker short of room still claims
+    (`disk.DiskGuard.resumable_here`).
     """
+    if recipes is not None and not recipes:
+        return None
+    eligible = claimable()
+    if recipes is not None:
+        eligible = and_(eligible, Job.recipe.in_(sorted(recipes)))
+    if only is not None:
+        eligible = and_(eligible, only)
     candidate = (
         select(Job.id)
-        .where(claimable())
+        .where(eligible)
         .order_by(Job.created_at, Job.id)
         .limit(1)
         .with_for_update(skip_locked=True)
@@ -114,6 +142,21 @@ def claim_next(db: Session, *, worker_id: str, lease_s: float) -> Job | None:
     if claimed is None:
         return None
     return db.get(Job, claimed)
+
+
+def anything_claimable(db: Session) -> bool:
+    """Is there a job any worker could claim right now? One `EXISTS`, then commit.
+
+    What an idle worker asks immediately before it exits (`loop._Idle`): the last poll
+    found nothing, but a job committed between that poll and the exit would otherwise sit
+    with nobody running to take it until the next enqueue wakes a machine. This narrows
+    that window to the moment between this statement and the process ending; the API's
+    wake call closes the rest (`app/services/worker_wake.py`). Unfiltered by recipe on
+    purpose: a worker exits as a whole, so a job any of its slots could take keeps it up.
+    """
+    found = bool(db.scalar(select(exists().where(claimable()))))
+    db.commit()
+    return found
 
 
 class Heartbeat(enum.Enum):
@@ -154,6 +197,15 @@ def heartbeat(db: Session, job_id: uuid.UUID, *, worker_id: str, lease_s: float)
     status = db.scalar(select(Job.status).where(Job.id == job_id))
     db.commit()
     return Heartbeat.CANCELLED if status is RunStatus.CANCELLED else Heartbeat.LOST
+
+
+def resumed_elsewhere(db: Session, job_id: uuid.UUID) -> bool:
+    """For a job this worker has just lost: is it still in progress -- another worker's
+    now, or about to be? Then its run goes on there, and so should its remote call. A job
+    finished, dead-lettered or gone is not, and its call is nobody's. Commits."""
+    status = db.scalar(select(Job.status).where(Job.id == job_id))
+    db.commit()
+    return status is RunStatus.IN_PROGRESS
 
 
 def holder(db: Session, job_id: uuid.UUID) -> str:

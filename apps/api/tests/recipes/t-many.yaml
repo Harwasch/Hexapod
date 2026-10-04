@@ -1,0 +1,9 @@
+# A quick stage, then one whose only artifact is a directory of forty members, so a stop
+# can land between two of their uploads (tests/test_worker_recovery.py).
+name: t-many
+version: 1
+description: A stage with a many-membered directory artifact.
+inputs: []
+stages:
+  - { id: one, impl: t_first }
+  - { id: many, impl: t_many, params: { members: 40 } }

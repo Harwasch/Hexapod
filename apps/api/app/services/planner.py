@@ -16,9 +16,8 @@ import json
 import math
 import re
 from datetime import date, timedelta
-from typing import Literal, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol
 
-import anthropic
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
@@ -34,6 +33,14 @@ from app.schemas.agent import (
     PlannerStatus,
     PlanStep,
 )
+
+if TYPE_CHECKING:
+    # The SDK is imported where it is called, not here. It is ~0.5 s of the API's ~1.9 s
+    # import (`python -X importtime -c "import app.main"`), and app.api.deps reaches this
+    # module on every boot -- including every worker process, every alembic run and every
+    # boot of a deployment with no ANTHROPIC_API_KEY, none of which ever call the model.
+    # tests/test_imports.py holds the line.
+    import anthropic
 
 # Assumed treatment rate for the rule-based estimate (a mid-size mower on brush); the note on
 # every rules draft states it so the number is never taken as measured.
@@ -751,7 +758,7 @@ class RulesPlanner:
         crew = _answer_text(request.answers, "crew")
         if crew == "all":
             wanted = len(request.machines)
-        elif crew and crew.isdigit():
+        elif crew and crew.isdecimal():
             wanted = int(crew)
         chosen = list(dict.fromkeys([*request.preferred_machine_ids, *mentioned]))
         chosen = [
@@ -863,9 +870,11 @@ Dates are ISO (YYYY-MM-DD); end_date is null when the plan repeats on a cadence.
 class ClaudePlanner:
     def __init__(self, settings: Settings, client: anthropic.Anthropic | None = None) -> None:
         self._settings = settings
-        self._client = client or anthropic.Anthropic(
-            api_key=settings.anthropic_api_key, timeout=120.0
-        )
+        if client is None:
+            import anthropic  # deferred: see the TYPE_CHECKING import at the top
+
+            client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=120.0)
+        self._client = client
 
     def status(self) -> PlannerStatus:
         return PlannerStatus(
@@ -873,6 +882,8 @@ class ClaudePlanner:
         )
 
     def draft(self, request: PlanDraftRequest) -> PlanDraft:
+        import anthropic  # for its exception types; already loaded once a client exists
+
         context = request.model_dump(mode="json", by_alias=True, exclude={"goal", "refinement"})
         context["today"] = _today(request).isoformat()
         parts = [

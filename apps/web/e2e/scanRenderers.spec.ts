@@ -3,12 +3,18 @@
  * draw the yard fixture from the same camera, and the dedicated renderers must cover the
  * screen where CesiumJS does -- their camera is Cesium's, converted into the scan's own
  * frame each frame, so a wrong frame or axis shows here as a scan drawn somewhere else.
+ *
+ * The `@webgpu` tests do the same for the PlayCanvas WebGPU trial (docs/WEBGPU_TRIAL.md), in
+ * the Playwright project with software WebGPU: it must come up on WebGPU, not its WebGL2
+ * fallback, and cover the screen where CesiumJS and PlayCanvas on WebGL2 do.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
+
+import { webgpuAdapter } from "./webgpu";
 
 const TILES = resolve(process.cwd(), "../../data/tiles");
 const BACKGROUND = [0x10, 0x14, 0x1a];
@@ -138,3 +144,66 @@ test("PlayCanvas streams the tiles for a scan with no streamed package", async (
   expect(status.tiles).toBeGreaterThan(0);
   expect(share(await coverage(page))).toBeGreaterThan(0.1);
 });
+
+interface WebgpuStatus {
+  kind: string;
+  api: string | null;
+  notice: string | null;
+  native: boolean;
+  tiles: number;
+  frames: number;
+  error: string | null;
+}
+
+for (const native of [true, false]) {
+  test(
+    `PlayCanvas on WebGPU draws the scan where CesiumJS and WebGL2 do (${native ? "streamed package" : "tiles"})`,
+    { tag: "@webgpu" },
+    async ({ page }, testInfo) => {
+      test.setTimeout(600_000);
+      await page.setViewportSize({ width: 960, height: 600 });
+      const errors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") errors.push(message.text());
+      });
+      page.on("pageerror", (error) => errors.push(error.message));
+      await open(page, { native });
+      const adapter = await webgpuAdapter(page);
+      test.skip(adapter === null, "this browser has no WebGPU adapter");
+      const masks: Record<string, boolean[]> = {};
+      const statuses: Record<string, WebgpuStatus> = {};
+      for (const kind of ["cesium", "playcanvas", "playcanvas-webgpu"] as const) {
+        statuses[kind] = await page.evaluate(
+          `window.__scan.use(${JSON.stringify(kind)}, ${native ? 40 : 90})`,
+        );
+        await page.screenshot({ path: testInfo.outputPath(`${kind}.png`) });
+        masks[kind] = await coverage(page);
+      }
+      const webgpu = statuses["playcanvas-webgpu"];
+      const results = {
+        adapter,
+        statuses,
+        coverage: Object.fromEntries(Object.entries(masks).map(([k, m]) => [k, share(m)])),
+        overlap: {
+          cesium: overlap(masks.cesium ?? [], masks["playcanvas-webgpu"] ?? []),
+          webgl2: overlap(masks.playcanvas ?? [], masks["playcanvas-webgpu"] ?? []),
+        },
+        errors,
+      };
+      writeFileSync(testInfo.outputPath("webgpu.json"), JSON.stringify(results, null, 1));
+      console.info(JSON.stringify(results, null, 1));
+      expect(webgpu?.error).toBeNull();
+      expect(webgpu?.api).toBe("webgpu");
+      expect(webgpu?.notice).toBeNull();
+      expect(webgpu?.native).toBe(native);
+      if (!native) expect(webgpu?.tiles).toBeGreaterThan(0);
+      expect(errors.filter((e) => /wgsl|webgpu|shader|pipeline/i.test(e))).toEqual([]);
+      const cesium = share(masks.cesium ?? []);
+      expect(cesium).toBeGreaterThan(0.02);
+      expect(share(masks["playcanvas-webgpu"] ?? [])).toBeGreaterThan(cesium * 0.5);
+      expect(results.overlap.cesium).toBeGreaterThan(0.6);
+      // The same engine on the other API, from the same camera: nearly the same cells.
+      expect(results.overlap.webgl2).toBeGreaterThan(0.8);
+    },
+  );
+}

@@ -3,9 +3,16 @@ import type { TileNode } from "@/view/tiles";
 
 import type { InstanceStyle } from "./scanInstances";
 import type { ScanMotion } from "./scanMotion";
+import type { TileWork } from "./tileWork";
 
-/** What draws a splat scan on the globe: CesiumJS itself, or a dedicated splat renderer. */
-export type SplatRendererKind = "cesium" | "spark" | "playcanvas";
+/**
+ * What draws a splat scan on the globe: CesiumJS itself, or a dedicated splat renderer --
+ * PlayCanvas on WebGL2, PlayCanvas on WebGPU where the device has it (a trial), or Spark.
+ */
+export type SplatRendererKind = "cesium" | "spark" | "playcanvas" | "playcanvas-webgpu";
+
+/** The graphics API a dedicated renderer draws with. */
+export type GraphicsApi = "webgl2" | "webgpu";
 
 /** Cesium's camera in the scan's own east/north/up metres (the frame its splats are in). */
 export interface ScanPose {
@@ -22,6 +29,31 @@ export interface ScanPose {
   pixelRatio: number;
 }
 
+/** What the host hands a back-end when it creates it. */
+export interface BackendHooks {
+  /**
+   * The renderer has something new to show that the host did not cause -- a sort finished,
+   * streamed detail arrived -- and wants a frame (overlayFrames.ts). Without it the overlay
+   * would only draw when the camera or the tiles change.
+   */
+  frameWanted(): void;
+  /** Main-thread tile work, within the frame's budget (tileWork.ts). */
+  work: TileWork;
+  /** Spherical-harmonic bands a tile keeps (quality.ts). */
+  maxShDegree: number;
+  /**
+   * The renderer lost its GPU device for good and draws nothing more (a WebGPU device lost
+   * to a driver reset, a GPU process crash, memory pressure): the host replaces it with the
+   * WebGL2 renderer and draws again. `reason` is one line for the developer readouts.
+   */
+  deviceLost?(reason: string): void;
+  /**
+   * Keeps each drawn frame readable after it is shown (`preserveDrawingBuffer`): harnesses
+   * read the overlay's pixels back. Off in the app, where it costs a copy per frame.
+   */
+  preserveDrawingBuffer?: boolean;
+}
+
 /** A scan the renderer streams by itself (ScanBackend.streamNative). */
 export interface NativeStream {
   /** Splats it draws now, when it can say. */
@@ -36,6 +68,13 @@ export interface NativeStream {
  */
 export interface ScanBackend<M> {
   readonly name: SplatRendererKind;
+  /** What it draws with (the developer readouts); WebGL2 when it does not say. */
+  readonly api?: GraphicsApi;
+  /**
+   * Why it does not draw with what was asked of it, in one line, or null: a WebGPU back-end
+   * that came up on WebGL2 because the browser has no WebGPU or no adapter for it.
+   */
+  readonly apiNote?: string | null;
   /**
    * Gaussians streamed per gaussian drawn: a renderer with its own level of detail (Spark's
    * LoD trees) is given more than it draws and picks; one without draws all it is given.
@@ -91,5 +130,16 @@ export interface ScanBackend<M> {
    * frame; a rigid motion), or where it was decoded with null.
    */
   place?(mesh: M, matrix: readonly number[] | null): void;
+  /**
+   * A time (`performance.now()` ms) by which the renderer wants another frame for work it held
+   * back -- a moving object's re-sort, throttled while it moves -- or null. The host draws one
+   * by then even when nothing else changes, so the last pose of a motion is sorted at rest.
+   */
+  frameDueBy?(): number | null;
+  /**
+   * Lets go of everything, the GPU context included: a lost context (`WEBGL_lose_context`)
+   * is what frees its memory at once rather than whenever the browser collects the canvas,
+   * and every session gets a new canvas and a new context.
+   */
   destroy(): void;
 }

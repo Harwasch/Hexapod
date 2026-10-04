@@ -6,9 +6,22 @@ Sandcastle sources. Everything below was verified against that version.
 
 ## Viewer setup
 
-`CesiumSceneManager` creates one `Viewer` with every stock widget disabled, `scene3DOnly`,
-`baseLayer: false` (imagery is a catalog layer), MSAA off until the still frame is sharpened, `depthTestAgainstTerrain`
-and a WebGL2 context. The credit display is restyled into a glass chip but never hidden;
+`CesiumSceneManager` creates one `CesiumWidget` — the engine's own widget, not `Viewer` — with
+`scene3DOnly`, `baseLayer: false` (imagery is a catalog layer), MSAA off until the still frame is
+sharpened, `depthTestAgainstTerrain` and a WebGL2 context. Every one of `Viewer`'s widgets was
+switched off, and since 1.145 the widget owns everything the app used of `Viewer` (entities,
+data sources, the clock, resizing), so constructing a `Viewer` only bought `@cesium/widgets`
+and its stylesheet: 226 kB of the engine chunk and 21 kB of CSS. The scene manager rebuilds the
+two pieces of `Viewer`'s DOM the app relies on, the `.cesium-viewer` host and the
+`.cesium-viewer-bottom` credit bar, and the `Widgets/` static directory is no longer deployed.
+The globe's other managers take a `CesiumWidget`; the field is still called `viewer`.
+
+The splat hooks reach engine internals the typings do not declare (`GaussianSplatPrimitive`,
+`GltfSpzLoader`, `Texture`, …). They import them by name, declared `unknown` in
+`cesium/undeclared.d.ts`, never through `import * as Cesium`: a namespace read by key keeps
+every export of the engine in the bundle (653 kB of it, measured).
+
+The credit display is restyled into a glass chip but never hidden;
 provider credits stay visible, and the chip's **Data attribution** link opens CesiumJS's
 dialog with the full list. That dialog is hosted on `<body>` (`creditViewport`) so it can sit
 on the sheet layer instead of inside `.viewport`, which is pinned below the HUD.
@@ -77,7 +90,11 @@ The viewer runs in **request-render mode** (`requestRenderMode: true`,
 manager calls `scene.requestRender()` after mutating the scene. An idle view costs nothing on
 the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touching it. The one
 manager that renders continuously is `LivingSurveyManager`, and only while wind is non-zero: at
-calm it writes nothing and asks for nothing, so an idle survey is as idle as it ever was.
+calm it writes nothing and asks for nothing, so an idle survey is as idle as it ever was. A
+scan drawn by a dedicated splat renderer (PlayCanvas, the default, or Spark) follows the same
+rule on its own canvas: it draws only when something it is drawn from changes, and nothing
+once the scan is in and the camera still (_Dedicated splat renderers_, below). It used to
+redraw the identical frame on every display frame.
 
 `PerformanceManager` counts rendered frames on `postRender` and every 500 ms runs
 `decideScreenSpaceError` (pure, unit-tested) within the active preset's bounds:
@@ -173,7 +190,18 @@ tiles mid-gesture. Ladder evidence comes from every motion frame
 as one long one. The dev panel shows the profile (`full` or `reduced`) and the step taken. Gaussian
 splats never refine below SSE 12 / 8 / 4 (performance / balanced / ultra): they are sorted on
 the CPU every camera change, so their cost grows with splat count far faster than a mesh.
-Tile cache budgets come from `navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset
+Tile cache budgets come from `navigator.deviceMemory` (256/384/512 MB a tileset, + 50%
+overflow; 192 MB on a phone or tablet, or with Save-Data), and every mesh, point-cloud and
+world tileset also shares one device total (`totalTileCacheBudget`: 256 MB on a phone, 384 /
+768 / 1024 MB on a desktop), an equal share each, re-shared as tilesets come and go: CesiumJS
+gives each tileset a cache of its own, and the Google world, a site's mesh and its point cloud
+preloading hidden used to hold three budgets, over a gigabyte on a phone. The sum is a memory
+source of both groups, so the device total coarsens the view like any budget. Splat tilesets
+are budgeted by what they draw instead. A browser that reports no memory (Safari, Firefox) is
+taken as 8 GB on a desktop and as the smallest on a phone. On a phone or tablet, or with
+Save-Data, the world is never asked for finer than 6 CSS pixels of error (`groupBounds`),
+moving or at rest: idle refinement to 2 px fetched the Google world's finest tiles for
+everything in view, for detail a small screen barely shows. A per-asset
 `maximumScreenSpaceError` acts as a quality floor. Manual SSE in Settings › Advanced disables
 adaptation. Mesh coverage clips (the hole cut in the globe under a photogrammetry model) are
 re-derived as tiles arrive but only swapped in at rest.
@@ -182,7 +210,7 @@ While the camera moves the root element carries `data-moving`; glass panels drop
 backdrop blur for the duration (a full-screen pass per panel otherwise) and use a flat tint,
 and the HUD's continuous animations (agent blink, marker pulse, spinners) pause. At rest the
 blur is 24 px (it was 40: a blur costs radius² per canvas repaint under the panel, and every
-arriving tile is a repaint), and the agent stream's spinner only spins while something runs.
+arriving tile is a repaint), and the status line's agent spinner only spins while something runs.
 
 A CPU profile of a drag (software GL, so GL calls are inflated, but the shape holds) put
 Cesium's own JavaScript under 2 % and the main thread in three WebGL stalls instead:
@@ -201,6 +229,54 @@ Things that are deliberately _not_ done per frame: hover picking waits until the
 rested 120 ms and never runs while the camera moves (each `scene.pick` is a render pass);
 overlay anchors use `globe.getHeight` (a CPU lookup) while moving and call `sampleHeight`
 only at rest, once per anchor every few seconds; the camera pose is throttled to 10 Hz.
+
+## Dedicated splat renderers
+
+A splat scan is drawn by default by PlayCanvas (SuperSplat's engine), or by Spark, on a
+transparent canvas over the globe from Cesium's camera (`cesium/scanView`); CesiumJS keeps the
+tileset hidden for its frame and solids. The overlay is held to the globe's rules:
+
+- **It draws only on change** (`overlayFrames.ts`). A frame is drawn when the globe renders
+  and the overlay's own inputs moved with it (camera, canvas, the globe's resolution, the scan's
+  frame: wind on another site redraws the globe and draws nothing here); when a tile arrives,
+  fails, is deferred or is due for its retry; when the renderer finishes a sort or streams
+  detail (PlayCanvas's `frame:request`, Spark's `onDirty`); on a hide or highlight; when the
+  budget moves; and by deadlines (the full-resolution frame 200 ms after the camera rests, a
+  re-plan the 150 ms throttle held back, a replaced tile's longest wait). A fade draws every
+  frame. A new PlayCanvas tile counts as drawn once a rendered frame reports it sorted
+  (`frame:ready`), and PlayCanvas's own update loop pauses once nothing loads or sorts. A
+  disposed PlayCanvas tile asks for the three frames that let its GPU resource go: one evicted
+  at rest used to wait for ever and keep that loop ticking every display frame.
+  Measured on the yard fixture (software GL, `e2e/scanOverlayIdle.spec.ts`): 5 s at rest after
+  loading drew 27 PlayCanvas frames and 27 loop ticks before, none after; Spark 5, then none.
+  `window.__twinStats` (development builds, or `?stats`) counts draws, loop ticks and wakes.
+- **Its resolution is the globe's** (`quality.ts`): never more device pixels per CSS pixel
+  than the globe renders at now (preset, ladder step, sharpened still frame), at most 2 (1.5
+  on a phone), and while moving its own cut (60% of the preset's full ratio, at least 0.75)
+  where that is lower. A 2× display on the performance preset used to blend every splat over
+  four times the globe's pixels. PlayCanvas's smallest kept splat stays half a CSS pixel.
+- **Tile work is budgeted.** Decoding happens in workers (PlayCanvas's Morton reorder too);
+  what must run on the main thread (building a PlayCanvas resource, digesting a Spark tile)
+  runs within 4 ms a frame while the camera moves, 12 ms at rest (`tileWork.ts`). A phone keeps
+  one spherical-harmonic band of a tile.
+- **A flight's destination is fetched ahead** (`prefetchScanDestination`, called as a fly-to
+  starts): the overlay's tileset copy is hidden without preloading, so it used to see only the
+  views on the way, fetching and abandoning each.
+- **A stopped session lets go of its GPU context** (`WEBGL_lose_context`) and Spark of its
+  workers; every session gets a new canvas.
+- **Nothing it throws reaches the globe.** Its frame is drawn inside the globe's `postRender`,
+  which CesiumJS raises outside the try that turns a render error into `renderError`: a throw
+  there (the renderer, the tile planner, the hand-over) stopped CesiumWidget's render loop for
+  good, with no recovery. A frame that throws now stops the overlay (`overlayFrames.ts`); the
+  host retires that session, says why in a toast and its status, and does not start the same
+  renderer on that scan again until it is chosen again.
+- **PlayCanvas can draw on WebGPU, as a trial** (`playcanvas-webgpu`, Settings › Advanced or
+  `?renderer=webgpu`; off by default): the same renderer on an asynchronously made WebGPU
+  device, with WGSL ports of the objects' shader and the GPU sort PlayCanvas uses there, which
+  needs one confirming frame per batch of tiles and none at rest. It falls back to WebGL2 when
+  WebGPU is missing, when PlayCanvas starts only its Null device, or when the device is lost,
+  and the developer readouts say which API draws and how fast the last camera motion drew.
+  How to judge it, and when it becomes the default: [WEBGPU_TRIAL.md](WEBGPU_TRIAL.md).
 
 ## Judging performance
 
@@ -239,8 +315,38 @@ passes `pitchAdjustHeight`, so the camera looks straight down at the top of the 
 back to the arrival tilt on the way down instead of interpolating the pitch linearly and
 spending the high part staring at the horizon. `flyToBoundingSphere` with that offset is the
 standard arrival; hand-sized objects arrive at a few times their radius.
-Cesium's default double-click entity tracking is removed; double-click flies halfway to the
-clicked point instead.
+Double-click flies halfway to the clicked point (the widget installs no click handlers of its
+own; `Viewer`'s entity tracking used to be removed here).
+
+### Flying to a site
+
+`SiteManager.flyTo` leaves on the click and loads the site during the flight. It used to wait
+first — for the site's record (a GET that meets the API's cold start), for the model's tileset
+(a proxy probe and `tileset.json`, retried up to four times) and, without a bookmark, for the
+model to be clamped to the terrain — and for ever if one of those stalled. Now the first leg
+leaves at once for the best pose known: the authored bookmark when the record is already here
+(a second visit, the built-in demo), else the catalog summary's centre and size. The kept
+record follows every copy of it the app fetches (`watchSiteRecords`, `SiteManager.updateRecord`),
+so a bookmark saved or deleted is where the next flight goes. The record
+and the model load meanwhile, with deadlines (12 s for the record; for a tileset attempt, 15 s
+without an answer or, while its JSON downloads, without a new byte, so a large tileset.json on
+a slow link is not cut off half-way and started again; `lib/timeout.ts`), and Cesium preloads the flight's destination tiles for the site's tileset
+as soon as it exists (`preloadFlightDestinations`). As better poses arrive (the bookmark with
+the record, the model's bounds once it rests on the ground) the flight is re-pointed without
+a jolt: the new leg's easing leaves at the speed the camera already has and still arrives at
+rest (`flightRetarget.ts`). After landing, a better pose still moves a camera nobody has
+touched, for 8 s. A flight somebody else cancelled is never re-pointed.
+
+Each site's load is a record in `state/sites.ts` (`siteLoads`): phase `details` → `model` →
+`streaming` → `ready`, or `error` with a message and whether retrying can help;
+`retrySiteLoad(siteId)` tries again (flying there again if a fly-to had asked). The HUD's load
+pill reads the record of the site the latest fly-to is taking the camera to (`flightSiteId`,
+the `site-flight` event) before the active site's, until the camera has left it: a site only
+becomes active once its record has arrived, so a record that failed (a cold API past its
+deadline, a 5xx, no network) used to land the camera at the summary's pose with nothing on
+screen saying why, and no Retry. Each leg also
+hands its destination to the splat overlay (`prefetchScanDestination`, above); a re-pointed
+leg replaces that prefetch and a cancelled flight stops it.
 
 ## Explore mode
 

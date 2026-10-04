@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from geoalchemy2 import Geometry, WKBElement
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -47,5 +47,13 @@ class Asset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     attribution: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     render_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     default_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # What a republish could not carry into the asset's new generation, one entry per
+    # sidecar kind: `{kind, action, reason, jobId, flaggedAt}` -- "Objects need
+    # re-segmenting" after new tiles made `instances.json` untrue (app/worker/carry.py).
+    # Cleared for a kind when it is attached again (app/services/attach.py) or when a run
+    # brings its own. Migration 0009.
+    sidecar_flags: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
 
     site: Mapped[Site | None] = relationship(back_populates="assets")

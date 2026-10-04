@@ -1,0 +1,12 @@
+# A CPU stage, then a GPU stage long enough to stop the worker in the middle of: what
+# tests/test_worker_stops.py dispatches to the fake Modal in tests/fake_modal.
+name: t-gpu-slow
+version: 1
+description: A remote stage a worker can be stopped, killed or cancelled in the middle of.
+inputs: []
+stages:
+  - { id: one, impl: t_first }
+  - id: train
+    impl: t_gpu_slow
+    params: { iterations: 12, step_s: 0.5 }
+    gpu: { tier: l4 }

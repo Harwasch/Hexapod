@@ -12,7 +12,7 @@ import {
   SceneTransforms,
   sampleTerrainMostDetailed,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import {
@@ -25,6 +25,7 @@ import {
 } from "@twin/geo";
 
 import type { Emitter } from "@/lib/emitter";
+import { siteAnchor } from "@/missions/sitePin";
 import type { Machine, PlanOverlay, Project, Zone } from "@/missions/types";
 
 import type { CameraController } from "./CameraController";
@@ -114,7 +115,7 @@ export class MissionManager {
   private readonly scratchToCamera = new Cartesian3();
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
     private readonly camera: CameraController,
   ) {
@@ -353,6 +354,9 @@ export class MissionManager {
 
   onFrame(listener: FrameListener): () => void {
     this.listeners.add(listener);
+    // A new listener has nodes waiting for a position (overlays that just mounted, the site
+    // pin that replaced them); in request-render mode the next frame may be a while coming.
+    this.scene.requestRender();
     return () => this.listeners.delete(listener);
   }
 
@@ -482,6 +486,9 @@ export class MissionManager {
     if (this.zonesVisible)
       for (const zone of project.zones)
         push(`zone:${zone.id}`, zone.anchor.longitude, zone.anchor.latitude, 0.5);
+    // The site pin that stands for all of the above at globe scale (`missions/sitePin.ts`).
+    const site = siteAnchor(project);
+    if (site) push(`site:${project.id}`, site.longitude, site.latitude, 0);
     for (const listener of this.listeners) listener(anchors);
   }
 

@@ -918,6 +918,122 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
   return state;
 }
 
+/**
+ * Shows a credit on screen the way a data provider's would: a CesiumJS `Credit` with
+ * `showOnScreen`, added to the viewer's credit display (`Credit` is reached through the public
+ * `CreditDisplay.cesiumCredit`, as the page has no `Cesium` global).
+ */
+export async function addOnScreenCredit(page: Page, html: string): Promise<void> {
+  await page.evaluate((creditHtml) => {
+    type CreditType = new (html: string, showOnScreen: boolean) => unknown;
+    const viewer = (
+      window as unknown as {
+        __twin: {
+          viewer: {
+            creditDisplay: {
+              constructor: { cesiumCredit: { constructor: CreditType } };
+              addStaticCredit: (credit: unknown) => void;
+            };
+            scene: { requestRender: () => void };
+          };
+        };
+      }
+    ).__twin.viewer;
+    const Credit = viewer.creditDisplay.constructor.cesiumCredit.constructor;
+    viewer.creditDisplay.addStaticCredit(new Credit(creditHtml, true));
+    viewer.scene.requestRender();
+  }, html);
+}
+
+/**
+ * Google's logo in the credits, as Photorealistic 3D Tiles put it there: the HTML of
+ * CesiumJS's `GoogleMaps.getDefaultCredit`, with its image served locally at its real size
+ * (98 × 18), since the tileset itself needs a key and the network.
+ */
+export async function addGoogleCredit(page: Page): Promise<void> {
+  const src = "https://assets.ion.cesium.com/google-credit.png";
+  await page.route(src, (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="98" height="18"><text x="0" y="14" font-family="sans-serif" font-size="15" fill="#fff">Google</text></svg>',
+    }),
+  );
+  await addOnScreenCredit(page, `<img alt="Google" src="${src}" style="vertical-align:-6px">`);
+}
+
+/** The scan `stageObjects` puts in the app: its asset id. */
+export const STAGED_SCAN = "e2e-scan";
+
+/**
+ * Runs `body` in the page with the app's own stores in scope (`useSceneSelect`,
+ * `useInstances`, `useMission`, `registerPickSource`, `parseInstances`): the dev server serves
+ * each module at one URL, so importing it here is importing the instance the app uses. A
+ * string, so the test's transpiler leaves the dynamic imports alone.
+ */
+export function inApp<T>(page: Page, body: string): Promise<T> {
+  return page.evaluate(`(async () => {
+    const { useSceneSelect, selectedId } = await import("/src/state/sceneSelect.ts");
+    const { useInstances } = await import("/src/state/instances.ts");
+    const { useMission } = await import("/src/state/mission.ts");
+    const { registerPickSource } = await import("/src/cesium/sceneSelect/pickSources.ts");
+    const { parseInstances } = await import("/src/lib/instances.ts");
+    ${body}
+  })()`);
+}
+
+/**
+ * A scan with objects, as the app has one once its tileset and `instances.json` loaded: the
+ * objects store's table (a forest floor 1 holding conifer 2, whose branch is 3) and a pick
+ * source, so the brush has something to paint over. Nothing is drawn: what the HUD does with a
+ * selection is what is under test, not the picking (e2e/sceneSelect.spec.ts).
+ */
+export async function stageObjects(page: Page): Promise<void> {
+  await inApp(
+    page,
+    `const box = { min: [0, 0, 0], max: [1, 1, 1] };
+    const doc = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [
+        { id: 1, bounds: box, splats: 900, tags: [{ label: "forest floor", score: 0.6 }] },
+        { id: 2, parent: 1, bounds: box, splats: 400, tags: [{ label: "conifer", score: 0.6 }] },
+        { id: 3, parent: 2, bounds: box, splats: 100 },
+      ],
+      tiles: {},
+    });
+    useInstances.getState().setTable("${STAGED_SCAN}", doc);
+    registerPickSource(
+      "${STAGED_SCAN}",
+      { renderer: "e2e", tiles: () => [], toWorld: () => undefined },
+      0,
+    );`,
+  );
+}
+
+/** Selects `candidates` of the staged scan, as a click on it would (the first chosen). */
+export async function selectObject(page: Page, candidates: number[], index = 0): Promise<void> {
+  await inApp(
+    page,
+    `useSceneSelect.getState().select("${STAGED_SCAN}", ${JSON.stringify(candidates)}, ${String(
+      candidates.length,
+    )}, ${String(index)}, null);`,
+  );
+}
+
+/** The scene selection and the mission's, as the stores have them. */
+export function selectionState(page: Page): Promise<{
+  selected: number | null;
+  index: number;
+  mode: string;
+  mission: { kind: string; id: string } | null;
+}> {
+  return inApp(
+    page,
+    `const s = useSceneSelect.getState();
+    return { selected: selectedId(s), index: s.index, mode: s.mode, mission: useMission.getState().selection };`,
+  );
+}
+
 export const test = base.extend<{ app: Page }>({
   app: async ({ page }, use) => {
     await mockApi(page);
@@ -933,7 +1049,7 @@ export const test = base.extend<{ app: Page }>({
     await page.goto("/");
     await expect(page.getByTestId("cesium-viewport")).toBeVisible();
     await expect(page.locator("canvas").first()).toBeVisible();
-    await expect(page.getByTestId("status-bar")).toContainText("Alt");
+    await expect(page.getByTestId("status-line")).toBeVisible();
     await use(page);
   },
 });

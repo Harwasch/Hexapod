@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { GlassTooltipProvider } from "@twin/ui";
 
 import { ApiError, api, auth } from "@/api/client";
 import { uploadCaptureFile } from "@/api/uploads";
-import { CapturesPanel } from "@/features/captures/CapturesPanel";
+import { AddPanel } from "@/features/add-data/AddPanel";
 import { captureName, classify, extensionOf, unsupported } from "@/features/captures/recipes";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { formatBytes, formatDuration } from "@/lib/format";
@@ -124,7 +124,11 @@ beforeEach(() => {
   FakeXhr.etag = '"etag"';
   FakeXhr.status = 200;
   vi.stubGlobal("XMLHttpRequest", FakeXhr);
-  useUploads.setState({ items: {} });
+  useUploads.setState({
+    items: {},
+    phone: null,
+    creation: { busy: false, error: null, canRetryDrop: false },
+  });
   useUi.setState({ activePanel: null, writeTokenPrompt: false });
   useSettings.getState().reset();
 });
@@ -338,11 +342,11 @@ describe("what the API client puts on the wire", () => {
   });
 });
 
-describe("CapturesPanel", () => {
+describe("Add › Upload a capture", () => {
   it("disables the drop zone when the API is offline", async () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
-    useUi.getState().setPanel("captures");
-    render(wrap(<CapturesPanel />));
+    useUi.getState().openAdd("upload");
+    render(wrap(<AddPanel />));
     expect(await screen.findByTestId("captures-offline")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("capture-file-input")).toBeDisabled());
     expect(screen.getByTestId("capture-dropzone")).toHaveClass("dropzone--disabled");
@@ -353,13 +357,91 @@ describe("CapturesPanel", () => {
       data: [],
       response: new Response(null, { status: 200 }),
     });
-    useUi.getState().setPanel("captures");
+    useUi.getState().openAdd("upload");
     useUi.getState().setWriteTokenPrompt(true);
-    render(wrap(<CapturesPanel />));
+    render(wrap(<AddPanel />));
     await userEvent.type(await screen.findByTestId("write-token-input"), "from-the-operator");
     await userEvent.click(screen.getByTestId("write-token-save"));
     expect(useSettings.getState().writeToken).toBe("from-the-operator");
     expect(useUi.getState().writeTokenPrompt).toBe(false);
+  });
+});
+
+describe("a phone handoff outlives the Add panel", () => {
+  /** The API: an empty capture list, a capture made on request, a handoff minted on request. */
+  function phoneApi(createCapture: () => Promise<unknown> = () => ok({ id: "cap-9" }, 201)) {
+    vi.spyOn(api, "GET").mockResolvedValue({
+      data: [],
+      response: new Response(null, { status: 200 }),
+    });
+    const minted: string[] = [];
+    mockPost((path) => {
+      if (path === "/api/v1/captures") return createCapture();
+      if (path === "/api/v1/captures/{capture_id}/handoff") {
+        minted.push(path);
+        return ok({
+          captureId: "cap-9",
+          token: "t",
+          url: "https://example.invalid/phone#t",
+          qrSvg: `<svg data-code="${String(minted.length)}"></svg>`,
+          expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          expiresIn: 600,
+          renewableUntil: new Date(Date.now() + 3_600_000).toISOString(),
+        });
+      }
+      return Promise.reject(new Error(`unexpected POST ${path}`));
+    });
+    return minted;
+  }
+  /** Closes Add and waits until its panel, and everything mounted in it, is gone. */
+  const closeAdd = async () => {
+    act(() => useUi.getState().setPanel(null));
+    await waitFor(() => expect(screen.queryByTestId("captures-panel")).not.toBeInTheDocument(), {
+      timeout: 3000,
+    });
+  };
+  const openAdd = () => act(() => useUi.getState().openAdd("upload"));
+
+  it("shows the same code when Add is opened again, without minting another", async () => {
+    const minted = phoneApi();
+    useUi.getState().openAdd("upload");
+    render(wrap(<AddPanel />));
+    await userEvent.click(await screen.findByTestId("capture-from-phone"));
+    const code = await screen.findByTestId("handoff-qr");
+    expect(code.innerHTML).toContain('data-code="1"');
+    await closeAdd();
+    openAdd();
+    expect((await screen.findByTestId("handoff-qr")).innerHTML).toContain('data-code="1"');
+    expect(minted).toHaveLength(1);
+    // Closed on purpose, it is gone for good.
+    await userEvent.click(screen.getByRole("button", { name: "Close the phone handoff" }));
+    expect(useUploads.getState().phone).toBeNull();
+  });
+
+  it("finishes making the phone's capture while Add is closed, and shows it on return", async () => {
+    let finish: () => void = () => undefined;
+    const minted = phoneApi(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ data: { id: "cap-9" }, response: new Response(null) });
+        }),
+    );
+    useUi.getState().openAdd("upload");
+    render(wrap(<AddPanel />));
+    await userEvent.click(await screen.findByTestId("capture-from-phone"));
+    await waitFor(() => expect(screen.getByTestId("capture-from-phone")).toBeDisabled());
+    await closeAdd();
+    openAdd();
+    // Still being made: the button still waits rather than offering a second capture.
+    expect(await screen.findByTestId("capture-from-phone")).toBeDisabled();
+    await closeAdd();
+    await act(async () => {
+      finish();
+      await Promise.resolve();
+    });
+    openAdd();
+    expect(await screen.findByTestId("handoff-qr")).toBeInTheDocument();
+    expect(minted).toHaveLength(1);
   });
 });
 

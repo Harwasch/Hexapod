@@ -45,6 +45,9 @@ def main() -> int:
     parser.add_argument("--test_every", type=int, default=8)
     parser.add_argument("--budget-s", dest="budget_s", type=float, default=900.0)
     parser.add_argument("--antialiased", action="store_true")
+    # The degree trained.ply ships, which the real script renders at; recorded, so a test
+    # can see the stage asked for what it shipped.
+    parser.add_argument("--sh-degree", dest="sh_degree", type=int, default=0)
     args = parser.parse_args()
     mode = os.environ.get("HOLDOUT_STAND_IN", "ok")
     if not (args.data_dir / "images").is_dir():
@@ -73,6 +76,7 @@ def main() -> int:
         "meanPsnr": 23.0,
         "seconds": 0.01,
         "antialiased": args.antialiased,
+        "shDegree": args.sh_degree,
         "note": "written by tests/holdout_stand_in.py -- not a measurement",
     }
     holdout_maths.write(args.out, error, weight, views, summary)

@@ -23,13 +23,25 @@
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
-# CesiumJS's static build directories are *not* hashed -- vite.config.ts copies them to
-# the fixed CESIUM_BASE_URL (`/cesium/`), so upgrading the `cesium` dependency changes
-# the contents of URLs that keep their names. `immutable` here would hand a returning
-# browser last year's workers beside this year's engine, with no way to invalidate it.
-# A day is long enough to be free on a session and short enough to heal after a deploy.
+# CesiumJS's static build directories (workers, WebAssembly, star and moon textures).
+# vite.config.ts copies them under a path named for the installed `cesium` version,
+# CESIUM_BASE_URL = `/cesium/<version>/` (`/cesium/1.145.0/` today), so upgrading the
+# dependency changes every URL instead of the contents behind one. That is what makes
+# `immutable` safe here: a returning browser can never pair last year's workers with this
+# year's engine, because this year's engine asks for different names. They used to sit at a
+# fixed `/cesium/` with a day's lifetime, which re-validated 40-odd files on the first visit
+# of every day. Nothing else is served under /cesium/. (The version alone names the contents
+# because `Build/Cesium` ships prebuilt in the npm package; the pnpm patch only touches
+# @cesium/engine's sources. A patch to the `cesium` package itself would have to change the
+# name too.)
 /cesium/*
-  Cache-Control: public, max-age=86400
+  Cache-Control: public, max-age=31536000, immutable
+
+# Self-hosted fonts (apps/web/public/fonts) and their licences. The file names carry the
+# upstream release (`-v4-`, `-v21-`), and a new cut of a font gets a new name, so these are as
+# immutable as the hashed bundle.
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
 
 # The entry documents name the hashed assets, so they must not be cached past a deploy.
 /

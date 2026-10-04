@@ -37,6 +37,10 @@ on:
         description: catalog.json's public URL (blank = VITE_OFFLINE_CATALOG_URL)
         type: string
         default: ""
+      public_bucket_url:
+        description: The public bucket's URL, whose r2.dev host /r2/ proxies (blank = R2_PUBLIC_URL, else the catalog's host)
+        type: string
+        default: ""
   # provision.yml calls this workflow rather than repeating its steps: there is one
   # deploy, described in one place, whoever starts it. `workflow_call` cannot take a
   # `choice`, so `target` is a string here and the two `if:` comparisons below accept
@@ -62,6 +66,10 @@ on:
         default: ""
       offline_catalog_url:
         description: catalog.json's public URL, overriding VITE_OFFLINE_CATALOG_URL
+        type: string
+        default: ""
+      public_bucket_url:
+        description: The public bucket's URL, overriding R2_PUBLIC_URL for the tile proxy's host
         type: string
         default: ""
 
@@ -208,6 +216,31 @@ jobs:
       # existed; the cost is this one line, which wrangler.toml also documents.
       - name: Add the Pages headers
         run: cp infra/pages/_headers apps/web/dist/_headers
+      # functions/r2/ fetches from exactly one host, named by TILE_PROXY_HOST in
+      # wrangler.toml's [vars] -- committed empty, because the hostname belongs to the
+      # account and not to the repository. It is written in here, from the public
+      # bucket's URL: provision.yml passes the one it computed; a dispatch falls back to
+      # the R2_PUBLIC_URL variable and then to the offline catalog's host, which lives in
+      # the same bucket. Only an r2.dev hostname is written. A custom domain, or nothing at
+      # all, leaves the variable empty, the function answers its probe without
+      # `X-Tile-Proxy`, and the web app loads tiles from the bucket's own URL -- which is
+      # what it should do for a custom domain, and the safe fallback for nothing.
+      - name: Pin the tile proxy to the public bucket
+        env:
+          PUBLIC_BUCKET_URL: ${{ inputs.public_bucket_url || vars.R2_PUBLIC_URL }}
+          CATALOG_URL: ${{ inputs.offline_catalog_url || vars.VITE_OFFLINE_CATALOG_URL }}
+        run: |
+          set -euo pipefail
+          source="${PUBLIC_BUCKET_URL:-$CATALOG_URL}"
+          host="$(printf '%s' "$source" | sed -E 's|^[a-zA-Z]+://||; s|[/?#].*$||' | tr 'A-Z' 'a-z')"
+          if ! printf '%s' "$host" | grep -Eq '^pub-[0-9a-f]{32}\.r2\.dev$'; then
+            echo "::notice::no r2.dev public bucket URL (got '${host}'): /r2/ stays off and the web app loads tiles directly."
+            exit 0
+          fi
+          sed -i -E "s|^TILE_PROXY_HOST = .*$|TILE_PROXY_HOST = \"${host}\"|" wrangler.toml
+          grep -qxF "TILE_PROXY_HOST = \"${host}\"" wrangler.toml \
+            || { echo "::error::could not write TILE_PROXY_HOST into wrangler.toml"; exit 1; }
+          echo "the tile proxy serves https://${host} and nothing else."
       # wrangler from npm rather than a third-party action, for the reason flyctl is
       # installed by hand above. `--branch main` marks this a production deployment;
       # without it wrangler infers a preview from the current branch name.

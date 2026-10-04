@@ -37,7 +37,39 @@ from errors import (
 from plan import PlannedStage
 from workdir import Workdir
 
-__all__ = ["BaseRunner", "LocalRunner", "Runner", "RunnerSet", "StubRunner"]
+__all__ = [
+    "BaseRunner",
+    "LocalRunner",
+    "Runner",
+    "RunnerSet",
+    "StubRunner",
+    "checkpoint_key",
+    "per_attempt",
+]
+
+
+def per_attempt(name: str, attempt: int) -> str:
+    """`name` for attempt 1, `name-a<N>` after it: one object-storage key per attempt.
+
+    A remote call that nobody stopped -- its worker was SIGKILLed before it could cancel
+    it, or the record of it was lost with the disk -- keeps syncing its checkpoint and
+    uploads its `out/` when it finishes. On a key shared by every attempt it would write
+    over the next attempt's checkpoint (a mirrored sync deletes what it does not have) and
+    could land its outputs between the next attempt's upload and the worker's download.
+    Attempt 1 keeps the key it always had, so a run that never retries -- nearly all of
+    them -- looks exactly as it did.
+    """
+    return name if attempt <= 1 else f"{name}-a{attempt}"
+
+
+def checkpoint_key(run_id: str, stage_id: str, attempt: int = 1) -> str:
+    """Where attempt `attempt` of a stage syncs its `checkpoint/`: `StageContext`'s
+    `checkpoint_key`, the StepResult's, and so `job_steps.checkpoint_key` -- which is what
+    the reconciliation view claims, so each attempt's key is claimed by the row that
+    names it. The *contents* still carry across attempts: the runner brings each one home
+    into the workdir's `checkpoint/`, and the next attempt sends it out again under its
+    own key (`cloud.CloudRunner._stage_in`)."""
+    return f"runs/{run_id}/{stage_id}/{per_attempt('checkpoint', attempt)}"
 
 
 class Runner(ABC):
@@ -98,7 +130,7 @@ class BaseRunner(Runner, ABC):
             work_dir=workdir.work_dir(stage.id),
             checkpoint_dir=workdir.checkpoint_dir(stage.id),
             log_path=log_path,
-            checkpoint_key=f"runs/{workdir.root.name}/{stage.id}/checkpoint",
+            checkpoint_key=checkpoint_key(workdir.root.name, stage.id, attempt),
             attempts_path=workdir.attempts_path(stage.id),
             _inputs={name: workdir.root / path for name, path in stage.inputs.items()},
             _produces={decl.name: decl for decl in stage.impl.produces},

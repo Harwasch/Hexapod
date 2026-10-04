@@ -3,19 +3,21 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query
 
-from app.api.deps import DbSession, RequireWriteToken, Storage
+from app.api.deps import DbSession, LimitStepLog, RequireWriteToken, Storage
 from app.models.enums import RunStatus
 from app.schemas.common import Problem
 from app.schemas.job import JobRead, JobRetry, JobStepLog
 from app.services import jobs as job_service
+from app.services import worker_wake
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 #: Reading a log needs a bucket, and says so in the contract.
 LOG_RESPONSES: dict[int | str, dict[str, Any]] = {
-    503: {"model": Problem, "description": "Object storage is not configured"}
+    429: {"model": Problem, "description": "Asked too often; see `Retry-After`"},
+    503: {"model": Problem, "description": "Object storage is not configured"},
 }
 
 
@@ -44,8 +46,12 @@ def get_job(job_id: uuid.UUID, db: DbSession) -> JobRead:
     dependencies=[RequireWriteToken],
     summary="Cancel a job",
 )
-def cancel_job(job_id: uuid.UUID, db: DbSession) -> JobRead:
-    return job_service.job_to_read(job_service.cancel_job(db, job_id))
+def cancel_job(job_id: uuid.UUID, db: DbSession, background: BackgroundTasks) -> JobRead:
+    job = job_service.cancel_job(db, job_id)
+    # Committed: a worker that had the job may not be there to see it, and is woken to
+    # cancel the GPU call it may have left (worker_wake.schedule_reap).
+    worker_wake.schedule_reap(background, job)
+    return job_service.job_to_read(job)
 
 
 @router.post(
@@ -61,18 +67,26 @@ def cancel_job(job_id: uuid.UUID, db: DbSession) -> JobRead:
         "can be retried by a person after the worker has stopped retrying it by itself."
     ),
 )
-def retry_job(job_id: uuid.UUID, payload: JobRetry, db: DbSession) -> JobRead:
-    return job_service.job_to_read(job_service.retry_job(db, job_id, payload.from_stage))
+def retry_job(
+    job_id: uuid.UUID, payload: JobRetry, db: DbSession, background: BackgroundTasks
+) -> JobRead:
+    job = job_service.retry_job(db, job_id, payload.from_stage)
+    # A retry is an enqueue: committed `not-started`, so the worker may need starting.
+    worker_wake.schedule(background)
+    return job_service.job_to_read(job)
 
 
 @router.get(
     "/{job_id}/steps/{step_id}/log",
     response_model=JobStepLog,
     responses=LOG_RESPONSES,
+    dependencies=[LimitStepLog],
     summary="Read one step's log",
     description=(
         "Logs live in object storage, not in the database: `logKey` on a step is a key, "
-        "and this is what turns it into text. 404 when the step has not written one."
+        "and this is what turns it into text. 404 when the step has not written one. "
+        "A long log is returned as its last 256 KiB, after a line saying how much was "
+        "left out: the end of a log is where a run says why it stopped."
     ),
 )
 def read_step_log(

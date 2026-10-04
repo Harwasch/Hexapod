@@ -1,22 +1,42 @@
-import { Layers, Plus, Search } from "lucide-react";
+import { Columns2, Layers, List, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { LAYER_CATEGORIES, type Layer, type LayerCategory } from "@twin/contracts";
-import { EmptyState, GlassBadge, GlassButton, GlassInput, Spinner } from "@twin/ui";
+import {
+  EmptyState,
+  GlassBadge,
+  GlassButton,
+  GlassInput,
+  GlassSegmentedControl,
+  Spinner,
+} from "@twin/ui";
 
 import { useLayers as useLayerCatalog } from "@/api/queries";
 import { categoryLabel } from "@/lib/format";
-import { useUi } from "@/state/ui";
+import { useUi, type LayersMode } from "@/state/ui";
 
+import { CompareControls } from "../compare/Compare";
 import { FloatingPanel } from "../shell/FloatingPanel";
 import { LayerCard } from "./LayerCard";
+import { LayerFavourites } from "./LayerFavourites";
 
 const CATEGORY_ORDER: LayerCategory[] = [...LAYER_CATEGORIES];
 
+const MODES: { value: LayersMode; label: string; icon: typeof Layers }[] = [
+  { value: "browse", label: "All layers", icon: List },
+  { value: "compare", label: "Compare", icon: Columns2 },
+];
+
+/**
+ * Layers: the favourites (imagery, vegetation, zones, tracks) at the top, then either the
+ * whole catalog or Compare, a swipe between two of its layers.
+ */
 export function LayersPanel() {
   const open = useUi((s) => s.activePanel === "layers");
   const setPanel = useUi((s) => s.setPanel);
-  const setAddDataOpen = useUi((s) => s.setAddDataOpen);
+  const mode = useUi((s) => s.layersMode);
+  const setMode = useUi((s) => s.setLayersMode);
+  const openAdd = useUi((s) => s.openAdd);
   const catalog = useLayerCatalog();
   const [filter, setFilter] = useState("");
 
@@ -47,64 +67,111 @@ export function LayersPanel() {
         <GlassButton
           size="sm"
           variant="ghost"
-          onClick={() => setAddDataOpen(true)}
+          onClick={() => openAdd("link")}
           leadingIcon={<Plus size={14} aria-hidden="true" />}
+          aria-label="Add a layer"
         >
           Add
         </GlassButton>
       }
     >
       <div className="glass-stack">
-        <div style={{ position: "relative" }}>
-          <Search
-            size={14}
-            className="glass-subtle"
-            aria-hidden="true"
-            style={{ position: "absolute", left: 10, top: 11 }}
-          />
-          <GlassInput
-            aria-label="Filter layers"
-            placeholder="Filter layers…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            style={{ paddingLeft: "2rem" }}
-            data-testid="layers-filter"
-          />
-        </div>
-        {catalog.builtin && <GlassBadge tone="warning">Built-in catalog (API offline)</GlassBadge>}
-        {catalog.isLoading && (
-          <div className="glass-row" style={{ justifyContent: "center", padding: "1rem" }}>
-            <Spinner label="Loading catalog" />
-          </div>
-        )}
-        {!catalog.isLoading && groups.length === 0 && (
-          <EmptyState
-            icon={<Layers size={28} />}
-            title="No layers match"
-            body="Try another term, or add your own data source."
-            action={
-              <GlassButton size="sm" onClick={() => setAddDataOpen(true)}>
-                Add data
-              </GlassButton>
-            }
+        <LayerFavourites />
+        <GlassSegmentedControl
+          aria-label="Layers mode"
+          data-testid="layers-mode"
+          block
+          value={mode}
+          onValueChange={setMode}
+          options={MODES.map(({ value, label, icon: Icon }) => ({
+            value,
+            label,
+            icon: <Icon size={13} aria-hidden="true" />,
+          }))}
+        />
+        {mode === "compare" ? (
+          <CompareControls />
+        ) : (
+          <LayerCatalog
+            filter={filter}
+            onFilter={setFilter}
+            groups={groups}
+            loading={catalog.isLoading}
+            builtin={catalog.builtin}
+            onAdd={() => openAdd("link")}
           />
         )}
-        {groups.map(({ category, layers }) => (
-          <section key={category} aria-label={categoryLabel(category)}>
-            <div className="category">
-              <p className="glass-eyebrow">{categoryLabel(category)}</p>
-              <span className="glass-subtle" style={{ fontSize: "var(--text-xs)" }}>
-                {layers.length}
-              </span>
-            </div>
-            <ul className="glass-list">
-              {layers.map((layer) => (
-                <LayerCard key={layer.id} layer={layer} />
-              ))}
-            </ul>
-          </section>
-        ))}
       </div>
     </FloatingPanel>
+  );
+}
+
+function LayerCatalog({
+  filter,
+  onFilter,
+  groups,
+  loading,
+  builtin,
+  onAdd,
+}: {
+  filter: string;
+  onFilter: (value: string) => void;
+  groups: { category: LayerCategory; layers: Layer[] }[];
+  loading: boolean;
+  builtin: boolean;
+  onAdd: () => void;
+}) {
+  return (
+    <>
+      <div style={{ position: "relative" }}>
+        <Search
+          size={14}
+          className="glass-subtle"
+          aria-hidden="true"
+          style={{ position: "absolute", left: 10, top: 11 }}
+        />
+        <GlassInput
+          aria-label="Filter layers"
+          placeholder="Filter layers…"
+          value={filter}
+          onChange={(e) => onFilter(e.target.value)}
+          style={{ paddingLeft: "2rem" }}
+          data-testid="layers-filter"
+        />
+      </div>
+      {builtin && <GlassBadge tone="warning">Built-in catalog (API offline)</GlassBadge>}
+      {loading && (
+        <div className="glass-row" style={{ justifyContent: "center", padding: "1rem" }}>
+          <Spinner label="Loading catalog" />
+        </div>
+      )}
+      {!loading && groups.length === 0 && (
+        <EmptyState
+          icon={<Layers size={28} />}
+          title="No layers match"
+          body="Try another term, or add your own data source."
+          action={
+            <GlassButton size="sm" onClick={onAdd}>
+              Add data
+            </GlassButton>
+          }
+        />
+      )}
+      {groups.map(({ category, layers }) => (
+        <section key={category} aria-label={categoryLabel(category)}>
+          <div className="category">
+            <p className="glass-eyebrow">{categoryLabel(category)}</p>
+            <span className="glass-subtle" style={{ fontSize: "var(--text-xs)" }}>
+              {layers.length}
+            </span>
+          </div>
+          <ul className="glass-list">
+            {layers.map((layer) => (
+              <LayerCard key={layer.id} layer={layer} />
+            ))}
+          </ul>
+        </section>
+      ))}
+    </>
   );
 }

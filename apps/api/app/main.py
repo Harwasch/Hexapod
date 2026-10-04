@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -15,8 +16,15 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_v1
 from app.config import REPO_ROOT, Settings, get_settings
+from app.observability import configure_logging, init_sentry
 from app.schemas.common import Problem
-from app.services.errors import ConflictError, NotFoundError, UnauthorizedError
+from app.services.errors import (
+    ConflictError,
+    InvalidInputError,
+    NotFoundError,
+    UnauthorizedError,
+)
+from app.services.ratelimit import RateLimited, RateLimits
 from app.services.urls import UrlValidationError
 from app.storage import StorageUnavailableError
 
@@ -45,8 +53,9 @@ def _problem(
     title: str,
     detail: str | None = None,
     errors: list[dict[str, object]] | None = None,
+    code: str | None = None,
 ) -> JSONResponse:
-    payload = Problem(title=title, status=status_code, detail=detail, errors=errors)
+    payload = Problem(title=title, status=status_code, detail=detail, errors=errors, code=code)
     return JSONResponse(
         status_code=status_code,
         content=payload.model_dump(mode="json", by_alias=True, exclude_none=True),
@@ -55,6 +64,11 @@ def _problem(
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    # First: without it the INFO lines below and every `twin.api` line after them went
+    # nowhere (see app/observability.py). Sentry before the app is built, which is when
+    # its FastAPI integration has to be in place.
+    configure_logging(settings)
+    init_sentry(settings)
     # Fail at startup, not at the first unauthenticated POST. An unset API_WRITE_TOKEN
     # means "writes are open", which is how a fresh checkout and the test suite run with
     # no configuration; this line is what stops that convenience reaching production.
@@ -151,13 +165,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(ConflictError)
     async def conflict_handler(_: Request, exc: ConflictError) -> JSONResponse:
-        return _problem(status.HTTP_409_CONFLICT, "Conflict", str(exc))
+        return _problem(status.HTTP_409_CONFLICT, "Conflict", str(exc), code=exc.code)
 
     @app.exception_handler(UnauthorizedError)
     async def unauthorized_handler(_: Request, exc: UnauthorizedError) -> JSONResponse:
         response = _problem(status.HTTP_401_UNAUTHORIZED, "Unauthorized", str(exc))
         # RFC 9110 requires this on a 401, and it tells a client which scheme to use.
         response.headers["WWW-Authenticate"] = "Bearer"
+        return response
+
+    @app.exception_handler(RateLimited)
+    async def rate_limited_handler(_: Request, exc: RateLimited) -> JSONResponse:
+        response = _problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests", str(exc))
+        response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after_s)))
         return response
 
     @app.exception_handler(StorageUnavailableError)
@@ -168,9 +188,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def url_handler(_: Request, exc: UrlValidationError) -> JSONResponse:
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid URL", str(exc))
 
-    @app.exception_handler(ValueError)
-    async def value_error_handler(_: Request, exc: ValueError) -> JSONResponse:
+    @app.exception_handler(InvalidInputError)
+    async def invalid_input_handler(_: Request, exc: InvalidInputError) -> JSONResponse:
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid input", str(exc))
+
+    # Every other ValueError is a bug, not a bad request: a failed parse of something the
+    # API produced itself, a pydantic model refusing a row the database already held. It
+    # used to be a 422 carrying the bug's own message as if the caller had made it, and
+    # logged nowhere. Now it is a 500 that says nothing about the internals, and a log line
+    # that says everything -- which, being ERROR with the exception attached, is also what
+    # Sentry's logging integration turns into an event where SENTRY_DSN is set. Handled
+    # here rather than left to the server-error middleware so the response still passes
+    # through CORS and the browser can read the status.
+    @app.exception_handler(ValueError)
+    async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+        logger.error(
+            "unexpected %s on %s %s",
+            type(exc).__name__,
+            request.method,
+            request.url.path,
+            exc_info=exc,
+            extra={"method": request.method, "path": request.url.path},
+        )
+        return _problem(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Internal error",
+            "Something went wrong on the server. It has been logged.",
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -183,6 +227,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Read by app.api.deps._settings, so a test app built with explicit settings is
     # governed by them rather than by the process-wide lru_cached environment.
     app.state.settings = settings
+    # Per app rather than per process, for the same reason: a test's app starts with full
+    # buckets instead of whatever the previous test left in them.
+    app.state.rate_limits = RateLimits()
     app.include_router(api_v1)
     # **Development only.** Capture tiles kept on a developer's disk
     # (data/tiles/<slug>/<representation>/tileset.json) are served as static 3D Tiles under

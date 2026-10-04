@@ -16,7 +16,7 @@ import {
   VerticalOrigin,
   sampleTerrainMostDetailed,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import { formatArea, formatLength, ringAreaM2, type UnitSystem } from "@twin/geo";
@@ -60,7 +60,7 @@ export class MeasurementManager {
   };
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
   ) {
     this.scene = viewer.scene;

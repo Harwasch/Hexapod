@@ -1,6 +1,14 @@
 import type { Page } from "@playwright/test";
 
-import { expect, mockApi, test } from "./fixtures";
+import {
+  addOnScreenCredit,
+  expect,
+  mockApi,
+  selectionState,
+  selectObject,
+  stageObjects,
+  test,
+} from "./fixtures";
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
 function entityIds(app: Page): Promise<string[]> {
@@ -28,7 +36,10 @@ test.describe("boot", () => {
   test("app boots, viewer initializes and onboarding shows", async ({ app }) => {
     await expect(app.getByTestId("onboarding")).toBeVisible();
     await expect(app.getByRole("heading", { name: "Explore the living world" })).toBeVisible();
-    await expect(app.getByTestId("status-bar")).toContainText("Planet");
+    // At globe scale with no site, the status line sums up the catalog; the camera readouts
+    // are developer telemetry and stay off unless Settings › Advanced turns them on.
+    await expect(app.getByTestId("status-fleet")).toContainText("1 site");
+    await expect(app.getByTestId("status-bar")).toHaveCount(0);
     const errors: string[] = [];
     app.on("pageerror", (e) => errors.push(e.message));
     await app.waitForTimeout(500);
@@ -72,8 +83,9 @@ test.describe("boot", () => {
     await page.goto("/");
     await expect(page.locator("canvas").first()).toBeVisible();
     await expect(page.getByTestId("notice-api-offline")).toBeVisible();
-    await page.getByTestId("tool-sites").click();
-    await expect(page.getByTestId("site-card-cesium-splat-demo")).toBeVisible();
+    // Sites are in the site switcher, behind the site's name at the top left.
+    await page.getByTestId("project-card").getByRole("button").first().click();
+    await expect(page.getByTestId("site-row-cesium-splat-demo")).toBeVisible();
     await expect(page.getByText("Built-in demo (API offline)")).toBeVisible();
   });
 });
@@ -81,21 +93,60 @@ test.describe("boot", () => {
 test.describe("catalog", () => {
   test("site catalog loads and fly-to-site works", async ({ app }) => {
     await app.getByTestId("onboarding-explore").click();
-    await app.getByTestId("tool-sites").click();
-    await expect(app.getByTestId("sites-panel")).toBeVisible();
-    const card = app.getByTestId("site-card-cesium-splat-demo");
-    await expect(card).toContainText("Cesium Gaussian splat demo");
+    // `s` opens the site switcher on its list of sites.
+    await app.keyboard.press("s");
+    await expect(app.getByTestId("site-switcher")).toBeVisible();
+    const card = app.getByTestId("site-row-cesium-splat-demo");
+    // One name per site: its project's, not the catalog record's.
+    await expect(card).toContainText("Blackrock Mesa");
+    await expect(card).not.toContainText("Cesium Gaussian splat demo");
     await expect(card).toContainText("Splat");
+    await expect(card).toBeFocused();
     await card.click();
+    await expect(app.getByTestId("site-switcher")).toHaveCount(0);
+    const strip = app.getByTestId("representation-switcher");
+    await expect(strip).toBeVisible({ timeout: 30_000 });
+    await expect(strip).toContainText("Blackrock Mesa");
+    await expect(strip).not.toContainText("Cesium Gaussian splat demo");
+    // At the site the status line reports the site's own fleet, not the catalog's.
+    await expect(app.getByTestId("status-fleet")).toContainText("Fleet:");
+    await expect(app.getByTestId("status-fleet")).not.toContainText("site");
+  });
+
+  test("a fly-to whose site record fails says so beside the switcher, and Retry flies on", async ({
+    app,
+  }) => {
+    // The site's record answers 503 (a cold or failing API). The camera still leaves on the
+    // click, for the catalog summary's pose; the site never becomes active, so the pill has to
+    // follow the flight's site to say why no model came.
+    // The record alone: one path segment after /sites/ (not the list, not its bookmarks).
+    const record = "**/api/v1/sites/*";
+    await app.route(record, (route) =>
+      route.fulfill({ status: 503, contentType: "application/json", body: '{"detail":"cold"}' }),
+    );
+    await app.getByTestId("onboarding-explore").click();
+    await app.keyboard.press("s");
+    await app.getByTestId("site-row-cesium-splat-demo").click();
+    const load = app.getByTestId("site-load");
+    await expect(load).toContainText("Couldn’t load the 3D model", { timeout: 30_000 });
+    await expect(app.getByTestId("representation-switcher")).toHaveCount(0);
+    // The API recovers; Retry flies there again and the site loads.
+    await app.unroute(record);
+    await load.getByRole("button", { name: "Retry" }).click();
     await expect(app.getByTestId("representation-switcher")).toBeVisible({ timeout: 30_000 });
-    await expect(app.getByTestId("status-bar")).not.toContainText("Planet");
+    await expect(app.getByText("Couldn’t load the 3D model")).toHaveCount(0);
   });
 
   test("representation switch keeps the camera", async ({ app }) => {
     await app.getByTestId("onboarding-demo").click();
     const switcher = app.getByTestId("representation-switcher");
     await expect(switcher).toBeVisible({ timeout: 30_000 });
-    await expect(app.getByTestId("status-bar")).toContainText("Splat");
+    await expect(switcher.getByRole("radio", { name: /Splat/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    // Which engine draws the splat is a developer's comparison, in Settings › Advanced.
+    await expect(switcher.getByTestId("splat-renderer")).toHaveCount(0);
     const readCamera = () =>
       app.evaluate(() => {
         interface Handle {
@@ -131,7 +182,10 @@ test.describe("catalog", () => {
       .toBeLessThan(0.01);
     const before = await readCamera();
     await switcher.getByRole("radio", { name: /Mesh/ }).click();
-    await expect(app.getByTestId("status-bar")).toContainText("Mesh");
+    await expect(switcher.getByRole("radio", { name: /Mesh/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     await app.waitForTimeout(800);
     // Cesium re-normalises the camera frame every frame; compare within float noise.
     const after = await readCamera();
@@ -141,6 +195,23 @@ test.describe("catalog", () => {
     expect(Math.abs(after.heading - before.heading)).toBeLessThan(1e-9);
     expect(Math.abs(after.pitch - before.pitch)).toBeLessThan(1e-9);
     await expect(switcher.getByRole("radio", { name: /Points/ })).toBeDisabled();
+    // The fixture's mesh lives at example.invalid, so it never loads: the failure is said
+    // beside the switch, with a way to try again, and trying again asks for it again.
+    const load = app.getByTestId("site-load");
+    await expect(load).toContainText("Couldn’t load the 3D model", { timeout: 30_000 });
+    // Said once: the pill, not also a toast naming the asset's file.
+    await expect(app.getByText(/failed to load/)).toHaveCount(0);
+    const tilesetRequests: string[] = [];
+    app.on("request", (request) => {
+      if (request.url().includes("example.invalid/mesh")) tilesetRequests.push(request.url());
+    });
+    await load.getByRole("button", { name: "Retry" }).click();
+    await expect.poll(() => tilesetRequests.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect(load).toContainText("Couldn’t load the 3D model", { timeout: 30_000 });
+    // Back to the splat: the mesh's failure is not said about it. (Ion is out of reach here,
+    // so the splat is being asked for again; it used to keep the mesh's error from the start.)
+    await switcher.getByRole("radio", { name: /Splat/ }).click();
+    await expect(load).toContainText("Loading 3D model", { timeout: 5_000 });
   });
 
   test("layer toggle updates runtime state and About sheet shows provenance", async ({ app }) => {
@@ -231,25 +302,78 @@ test.describe("interaction", () => {
     await expect(app.getByTestId("measure-active")).toHaveCount(0);
   });
 
-  test("command palette and keyboard shortcuts drive the UI", async ({ app }) => {
+  test("the command box and keyboard shortcuts drive the UI", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    // ⌘K / Ctrl+K focuses the one box; with nothing typed it lists every action and its key.
     await app.keyboard.press("Control+k");
-    const palette = app.getByTestId("command-palette");
-    await expect(palette).toBeVisible();
-    await app.getByTestId("palette-input").fill("settings");
+    const input = app.getByRole("combobox", { name: "Search, run an action or ask the agent" });
+    await expect(input).toBeFocused();
+    const results = app.getByRole("listbox", { name: "Results" });
+    await expect(results.getByRole("option", { name: /Saved views/ })).toContainText("V");
+    await app.keyboard.type("settings");
+    // Enter runs the highlighted row: the Settings action, not the agent.
+    await expect(results.getByRole("option", { selected: true })).toContainText("Settings");
     await app.keyboard.press("Enter");
     await expect(app.getByTestId("settings-sheet")).toBeVisible();
     await expect(app.getByRole("radiogroup", { name: "Quality preset" })).toBeVisible();
+
+    // The developer readouts live behind Settings › Advanced, off until turned on.
+    await expect(app.getByTestId("status-bar")).toHaveCount(0);
+    await app.getByTestId("settings-advanced").getByText("Advanced").click();
+    await app.getByRole("switch", { name: "Show developer readouts" }).click();
+    await expect(app.getByTestId("status-bar")).toContainText("Alt");
+    await expect(app.getByRole("radiogroup", { name: "Splat renderer" })).toBeVisible();
     await app.keyboard.press("Escape");
     await expect(app.getByTestId("settings-sheet")).toHaveCount(0);
+
+    // "/" also focuses the box; Escape closes its list without running anything.
+    await app.keyboard.press("/");
+    await expect(input).toBeFocused();
+    await app.keyboard.type("compare");
+    await expect(results).toBeVisible();
+    await app.keyboard.press("Escape");
+    await expect(results).toHaveCount(0);
+    await expect(app.getByTestId("compare-controls")).toHaveCount(0);
+
+    // Local matches are listed above geocoded places: the highlighted best match is on top,
+    // and a place that arrives a beat later lands below it rather than above.
+    await app.route(/nominatim\.openstreetmap\.org/, (route) =>
+      route.fulfill({
+        json: [
+          {
+            display_name: "Layers Lake, Ontario",
+            boundingbox: ["45.0", "45.1", "-79.1", "-79.0"],
+          },
+        ],
+      }),
+    );
+    await app.keyboard.press("/");
+    await app.keyboard.type("layers");
+    await expect(results.getByRole("option", { name: /Layers Lake/ })).toBeVisible();
+    const options = results.getByRole("option");
+    await expect(options.first()).toHaveAttribute("aria-selected", "true");
+    await expect(options.first()).toContainText("Layers");
+    await expect(options.first()).not.toContainText("Layers Lake");
+    await app.keyboard.press("Escape");
+
     await app.keyboard.press("l");
     await expect(app.getByTestId("layers-panel")).toBeVisible();
     await app.keyboard.press("Escape");
     await expect(app.getByTestId("layers-panel")).toHaveCount(0);
+
+    // "?" lists every key, from the same registry the box shows its keys from.
+    await app.keyboard.press("Shift+?");
+    const sheet = app.getByTestId("shortcut-sheet");
+    await expect(sheet).toBeVisible();
+    await expect(sheet.getByRole("region", { name: "Camera" })).toContainText("Reset north");
+    await expect(sheet).toContainText("Walk / explore mode");
+    await app.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
   });
 
   test("major UI is keyboard accessible", async ({ app }) => {
     await app.getByTestId("onboarding-explore").click();
-    await app.getByTestId("search-input").focus();
+    await app.getByTestId("command-input").focus();
     // Tab through the top-right controls to the tool rail; every stop must be a real control.
     for (let i = 0; i < 12; i++) {
       await app.keyboard.press("Tab");
@@ -260,24 +384,30 @@ test.describe("interaction", () => {
     await app.keyboard.press("Enter");
     await expect(app.getByTestId("layers-panel")).toBeVisible();
     await app.keyboard.press("Tab");
-    await expect(app.getByTestId("tool-sites")).toBeFocused();
+    await expect(app.getByTestId("tool-measure")).toBeFocused();
     const rail = app.getByRole("toolbar", { name: "Tools" });
-    // Six panel tools (layers, sites, captures, measure, compare, bookmarks) plus
-    // add data, settings and developer tools.
-    await expect(rail.getByRole("button")).toHaveCount(9);
-    for (const button of await rail.getByRole("button").all()) {
-      expect(await button.getAttribute("aria-label")).toBeTruthy();
-    }
+    // Four tools, each labelled in words on the button itself.
+    await expect(rail.getByRole("button")).toHaveText(["Layers", "Measure", "Add", "Settings"]);
+    await expect(rail.getByRole("button", { name: "Layers" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The developer console left the rail for Settings › Advanced (and `D`).
+    await expect(app.getByTestId("tool-dev")).toHaveCount(0);
+    await app.getByTestId("tool-settings").click();
+    await app.getByTestId("settings-advanced").getByText("Advanced").click();
+    await app.getByRole("switch", { name: "Developer tools" }).click();
+    await expect(app.getByTestId("dev-panel")).toBeVisible();
   });
 });
 
 test.describe("the HUD over the map", () => {
-  test("the project switcher's menu opens over the tool rail, not under it", async ({ app }) => {
+  test("the site switcher's menu opens over the tool rail, not under it", async ({ app }) => {
     await app.getByTestId("onboarding-explore").click();
     const rail = app.getByRole("toolbar", { name: "Tools" });
     await expect(rail).toBeVisible();
     await app.getByTestId("project-card").getByRole("button").first().click();
-    const menu = app.getByRole("menu", { name: "Projects" });
+    const menu = app.getByRole("dialog", { name: "Switch site" });
     await expect(menu).toBeVisible();
 
     // The menu drops down the left edge, over the tool rail below the top bar. Hit-test the
@@ -301,38 +431,119 @@ test.describe("the HUD over the map", () => {
     expect(owner).toBe("menu");
   });
 
-  test("attribution stays on screen, and the setup advice is not what is on it", async ({
+  test("the site switcher saves, opens and deletes the site's views, and leads to the other pages", async ({
     app,
   }) => {
-    await app.getByTestId("onboarding-explore").click();
-    // Cesium ion's terms and Google Photorealistic 3D Tiles' terms both require the credit
-    // to remain visible. It is a chip in the bottom bar; it is never removed or hidden.
-    const credits = app.getByTestId("credits").locator(".cesium-viewer-bottom");
-    await expect(credits).toBeVisible();
-    await expect(credits.locator(".cesium-credit-logoContainer img")).toBeVisible();
-
-    // What must NOT be on screen is CesiumJS's default-token setup advice, which is a
-    // paragraph and inflates the chip into a slab over the globe.
-    await expect(credits).not.toContainText("default ion access token");
-    const box = await credits.boundingBox();
-    expect(box?.height ?? 0).toBeLessThan(48);
-
-    // It is demoted, not deleted: the "Data attribution" dialog still carries it, and the
-    // dialog itself is reachable — it is hosted on <body>, over the HUD, not under it.
-    const expand = credits.getByRole("button", { name: "Data attribution" });
-    await expect(expand).toBeVisible();
-    await expand.click();
-    const dialog = app.getByRole("dialog", { name: "Data attribution" });
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("default ion access token");
-    await app.getByRole("button", { name: "Close data attribution" }).click();
-    await expect(dialog).toBeHidden();
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+      timeout: 30_000,
+    });
+    // `v` opens the switcher at its saved views, ready to name the current one.
+    await app.keyboard.press("v");
+    const switcher = app.getByTestId("site-switcher");
+    await expect(switcher).toContainText("Saved views · Blackrock Mesa");
+    await expect(switcher.getByTestId("saved-view-Overview")).toBeVisible();
+    await expect(switcher.getByRole("textbox", { name: "View name" })).toBeFocused();
+    // Escape from that field closes it and hands the keyboard back to the site's badge.
+    await app.keyboard.press("Escape");
+    await expect(switcher).toHaveCount(0);
+    await expect(app.getByRole("button", { name: /switch site/ })).toBeFocused();
+    await app.keyboard.press("v");
+    await expect(switcher.getByRole("link", { name: /Scan gallery/ })).toHaveAttribute(
+      "href",
+      "/view.html",
+    );
+    await expect(switcher.getByRole("link", { name: /Data console/ })).toHaveAttribute(
+      "href",
+      "/admin.html",
+    );
+    await switcher.getByTestId("saved-view-Overview").click();
+    await expect(switcher).toHaveCount(0);
   });
+
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 900 },
+    { name: "phone", width: 390, height: 844 },
+  ]) {
+    test.describe(`at ${viewport.name} size`, () => {
+      test.use({ viewport: { width: viewport.width, height: viewport.height } });
+
+      test("attribution stays on screen, and the setup advice is not what is on it", async ({
+        app,
+      }) => {
+        await app.getByTestId("onboarding-explore").click();
+        // Cesium ion's terms and Google Photorealistic 3D Tiles' terms both require the
+        // credit to remain visible. It is a chip in the bottom bar (on a phone, a strip of its
+        // own above the status line); it is never removed, hidden or folded behind a button.
+        const credits = app.getByTestId("credits").locator(".cesium-viewer-bottom");
+        await expect(credits).toBeVisible();
+        await expect(credits.locator(".cesium-credit-logoContainer img")).toBeVisible();
+
+        // What must NOT be on screen is CesiumJS's default-token setup advice, which is a
+        // paragraph and inflates the chip into a slab over the globe.
+        await expect(credits).not.toContainText("default ion access token");
+        const box = await credits.boundingBox();
+        expect(box?.height ?? 0).toBeLessThan(48);
+
+        // It is demoted, not deleted: the "Data attribution" dialog still carries it, and the
+        // dialog itself is reachable — it is hosted on <body>, over the HUD, not under it.
+        const expand = credits.getByRole("button", { name: "Data attribution" });
+        await expect(expand).toBeVisible();
+        await expand.click();
+        const dialog = app.getByRole("dialog", { name: "Data attribution" });
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toContainText("default ion access token");
+        await app.getByRole("button", { name: "Close data attribution" }).click();
+        await expect(dialog).toBeHidden();
+
+        // A provider's linked credit reads in the accent on the glass, in either theme and
+        // when hovered: not the browser's default blue, nor the white and #48b that CesiumJS's
+        // own stylesheet (appended after the app's) would give it.
+        await addOnScreenCredit(
+          app,
+          '<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>',
+        );
+        const link = credits.getByRole("link", { name: "© OpenStreetMap contributors" });
+        await expect(link).toBeVisible();
+        const expectAccent = async () => {
+          const colours = await link.evaluate((el) => {
+            const root = document.documentElement;
+            const probe = document.body.appendChild(document.createElement("span"));
+            probe.style.color = "var(--accent-strong)";
+            const read = () => [getComputedStyle(el).color, getComputedStyle(probe).color];
+            const dark = read();
+            root.dataset.theme = "light";
+            const light = read();
+            delete root.dataset.theme;
+            probe.remove();
+            return { dark, light };
+          });
+          expect(colours.dark[0]).toBe(colours.dark[1]);
+          expect(colours.light[0]).toBe(colours.light[1]);
+          expect(colours.light[1]).not.toBe(colours.dark[1]);
+        };
+        await expectAccent();
+        await link.hover();
+        await expectAccent();
+        const withLink = await credits.boundingBox();
+        expect(withLink?.height ?? 0).toBeLessThan(48);
+      });
+    });
+  }
 
   // Raw `page`, not the `app` fixture: that fixture seeds `twin.settings.v1` on every
   // navigation, which would wipe the dismissal this test reloads to check.
   test("the evaluation-token notice can be dismissed and stays dismissed", async ({ page }) => {
     await mockApi(page);
+    // The notice is for whoever deployed this, so it rides the developer readouts. Seeded
+    // only once: a reload must find the dismissal this test is about, not a fresh seed.
+    await page.addInitScript(() => {
+      if (!window.localStorage.getItem("twin.settings.v1"))
+        window.localStorage.setItem(
+          "twin.settings.v1",
+          JSON.stringify({ state: { devReadouts: true }, version: 3 }),
+        );
+    });
     await page.goto("/");
     await expect(page.getByTestId("cesium-viewport")).toBeVisible();
     const notice = page.getByTestId("notice-default-token");
@@ -382,10 +593,14 @@ test.describe("add data", () => {
       ),
     );
     await page.goto("/");
-    await expect(page.getByTestId("status-bar")).toContainText("Alt");
-    await page.getByTestId("tool-add-data").click();
-    const sheet = page.getByTestId("add-data");
+    await expect(page.getByTestId("status-line")).toBeVisible();
+    await page.getByTestId("tool-add").click();
+    const sheet = page.getByTestId("add-panel");
     await expect(sheet).toBeVisible();
+    // Uploading leads; linking something already hosted is the second tab.
+    await expect(sheet.getByTestId("capture-dropzone")).toBeVisible();
+    await expect(page.getByTestId("site-submit")).toHaveCount(0);
+    await sheet.getByRole("radio", { name: /Link a source/ }).click();
     await page.getByTestId("site-submit").click();
     await expect(sheet.getByText("Give it a name")).toBeVisible();
     await expect(sheet.getByText("Paste or upload a GeoJSON Polygon footprint.")).toBeVisible();
@@ -418,7 +633,10 @@ test.describe("add data", () => {
   });
 
   test("layer form rejects bad URL templates", async ({ app }) => {
-    await app.getByTestId("tool-add-data").click();
+    // "Link a hosted source" from the command box opens Add on its second tab.
+    await app.getByTestId("command-input").fill("hosted source");
+    await app.getByTestId("command-input").press("Enter");
+    await expect(app.getByTestId("add-panel")).toBeVisible();
     await app.getByTestId("add-tab-imagery").click();
     await app.getByTestId("layer-name").fill("My tiles");
     await app.getByTestId("layer-url").fill("https://tiles.example.com/{z}/{x}.png");
@@ -441,7 +659,8 @@ test.describe("mission control", () => {
     await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6);
     await app.getByTestId("view-tab-plan").click({ force: true });
     await expect(app.getByTestId("plans-panel")).toBeVisible();
-    await expect(app.getByTestId("representation-switcher")).toHaveCount(0);
+    // A drawer, not a window over the map: the tool panel it replaced is gone, the map stays.
+    await expect(app.getByTestId("layers-panel")).toHaveCount(0);
     await app.getByTestId("plan-thistle").click({ force: true });
     await expect(app.getByTestId("plan-detail")).toContainText("Remove all invasive star thistle");
     await expect(app.getByTestId("plan-show-on-map")).toBeVisible();
@@ -455,8 +674,17 @@ test.describe("mission control", () => {
     await app.getByTestId("toggle-work-log").click({ force: true });
     await expect(app.getByTestId("work-log")).toContainText("Treatment log");
     await app.getByTestId("fleet-row-TR-04").click({ force: true });
+    // The Fleet drawer stays open beside the map; the machine's card opens next to it.
     await expect(app.getByTestId("selection-card").last()).toContainText("TR-04 Kestrel");
-    await expect(app.getByTestId("fleet-panel")).toHaveCount(0);
+    await expect(app.getByTestId("fleet-panel")).toBeVisible();
+    const drawer = await app.getByTestId("fleet-panel").boundingBox();
+    const card = await app.getByTestId("selection-card").last().boundingBox();
+    if (!drawer || !card) throw new Error("the drawer or the card is not laid out");
+    expect(card.x + card.width).toBeLessThanOrEqual(drawer.x + 1);
+    // The map beside it still takes clicks: another machine's marker selects that machine.
+    await app.getByTestId("machine-marker-TR-12").dispatchEvent("click");
+    await expect(app.getByTestId("selection-card").last()).toContainText("TR-12 Pipit");
+    await expect(app.getByTestId("fleet-panel")).toBeVisible();
   });
 
   test("the agent drafts a plan from a sentence in the bar and the operator approves it", async ({
@@ -475,7 +703,11 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-source")).toContainText(/Claude|Rule-based/);
     await expect(app.getByTestId("plan-review")).toContainText("Z-21");
     await expect(app.getByTestId("plan-schedule")).toBeVisible();
+    // The status line carries the agent's latest line; the chevron opens the whole thread.
+    await app.getByTestId("agent-stream-toggle").click();
     await expect(app.getByTestId("agent-stream")).toContainText("Drafted");
+    await app.getByTestId("agent-stream-toggle").click();
+    await expect(app.getByTestId("agent-stream")).toHaveCount(0);
     // The draft is drawn on the map: coverage passes for Z-21, a step marker, no route (one zone).
     await expect
       .poll(() => planEntityIds(app))
@@ -530,7 +762,7 @@ test.describe("mission control", () => {
     await app.getByTestId("command-input").fill("3D scan this field into a splat");
     await app.getByTestId("command-input").press("Enter");
     await expect(app.getByTestId("plan-awaiting-ground")).toBeVisible({ timeout: 15_000 });
-    await expect(app.getByTestId("agent-stream")).toContainText("Click the ground");
+    await expect(app.getByTestId("status-agent")).toContainText("Click the ground");
     // One click on the map: the mapped field under it becomes the ground, corners on the map.
     const canvas = app.locator("canvas").first();
     const box = await canvas.boundingBox();
@@ -583,23 +815,222 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-detail")).toContainText("A-01 Test Field");
   });
 
-  test("command bar drives the agent stream and layer pills toggle overlays", async ({ app }) => {
+  test("the agent answers on the status line and the layer favourites toggle overlays", async ({
+    app,
+  }) => {
     await app.getByTestId("onboarding-demo").click();
     await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
       timeout: 30_000,
     });
+    // The site's fleet, counted the way the Fleet window counts it, and labelled simulated.
+    await expect(app.getByTestId("status-fleet")).toContainText(
+      "Fleet: 4 working · 2 need attention",
+    );
+    await expect(app.getByTestId("status-fleet")).toContainText("simulated");
+    // An instruction highlights "Ask the agent", so Enter asks rather than searches.
     await app.getByTestId("command-input").fill("where is TR-07");
+    await expect(app.getByTestId("command-row-agent")).toHaveAttribute("aria-selected", "true");
     await app.keyboard.press("Enter");
-    await expect(app.getByTestId("agent-stream")).toContainText("Locating TR-07 Harrier");
+    await expect(app.getByTestId("status-agent")).toContainText("Locating TR-07 Harrier");
     await expect(app.getByTestId("selection-card").last()).toContainText("Service due");
     await app.getByTestId("command-input").fill("hide zones");
     await app.keyboard.press("Enter");
-    await expect(app.getByTestId("agent-stream")).toContainText("Zones off");
-    await expect(app.getByTestId("pill-zones")).toHaveAttribute("aria-pressed", "false");
+    await expect(app.getByTestId("status-agent")).toContainText("Zones off");
     await expect(app.locator('[data-testid^="zone-chip-"]')).toHaveCount(0);
+    // The quick toggles are the favourites at the top of Layers, not pills over the map.
+    await expect(app.getByTestId("layer-favourites")).toHaveCount(0);
+    await app.getByTestId("tool-layers").click();
+    await expect(app.getByTestId("pill-zones")).toHaveAttribute("aria-pressed", "false");
     await app.getByTestId("pill-zones").click({ force: true });
     await expect(app.getByTestId("pill-zones")).toHaveAttribute("aria-pressed", "true");
+    await expect(app.locator('[data-testid^="zone-chip-"]').first()).toBeAttached();
     await app.keyboard.press("Escape");
     await expect(app.getByTestId("selection-card")).toHaveCount(0);
+  });
+
+  test("from far away a site is one pin with its name and a count", async ({ app }) => {
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6, {
+      timeout: 30_000,
+    });
+    const setHeight = (height: number) =>
+      app.evaluate((h) => {
+        const twin = (
+          window as unknown as {
+            __twin?: {
+              camera: {
+                cancelFlight: () => void;
+                setView: (lon: number, lat: number, h: number, hd: number, p: number) => void;
+              };
+            };
+          }
+        ).__twin;
+        twin?.camera.cancelFlight();
+        twin?.camera.setView(-122.138, 47.6445, h, 0, -90);
+      }, height);
+    await setHeight(400_000);
+    const pin = app.getByTestId("site-pin");
+    await expect(pin).toBeVisible({ timeout: 15_000 });
+    await expect(pin).toContainText("Blackrock Mesa");
+    await expect(pin).toContainText("9");
+    await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(0);
+    await expect(app.locator('[data-testid^="zone-chip-"]')).toHaveCount(0);
+    await setHeight(3_000);
+    await expect(app.getByTestId("site-pin")).toHaveCount(0, { timeout: 15_000 });
+    await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6);
+  });
+});
+
+test.describe("a scan object in the selection card", () => {
+  /** Presses a key with nothing focused, the way a person would from the map. */
+  async function fromMap(app: Page, key: string): Promise<void> {
+    await app.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await app.keyboard.press(key);
+  }
+
+  async function loadDemo(app: Page): Promise<void> {
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+      timeout: 30_000,
+    });
+  }
+
+  test("one press of B is the brush, and one press of V the saved views", async ({ app }) => {
+    await loadDemo(app);
+    await stageObjects(app);
+    const card = app.getByTestId("selection-card");
+    const switcher = app.getByTestId("site-switcher");
+    await fromMap(app, "b");
+    await expect(card).toHaveAttribute("data-kind", "object");
+    await expect(card.getByTestId("object-paint-hint")).toContainText("Shift adds");
+    expect((await selectionState(app)).mode).toBe("paint");
+    await expect(switcher).toHaveCount(0);
+    await fromMap(app, "b");
+    await expect(card).toHaveCount(0);
+    expect((await selectionState(app)).mode).toBe("pick");
+
+    await fromMap(app, "v");
+    await expect(switcher).toContainText("Saved views · Blackrock Mesa");
+    await expect(card).toHaveCount(0);
+    expect((await selectionState(app)).mode).toBe("pick");
+    await app.keyboard.press("Escape");
+    await expect(switcher).toHaveCount(0);
+
+    // Both are in the shortcut sheet, from the one registry.
+    await fromMap(app, "Shift+?");
+    const sheet = app.getByTestId("shortcut-sheet");
+    await expect(sheet.getByRole("region", { name: "Objects" })).toContainText(
+      "Paint to select objects",
+    );
+    await expect(sheet.getByRole("region", { name: "Tools" })).toContainText("Saved views");
+    await app.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+  });
+
+  test("one Escape does one thing: the brush, then the object, then the panel", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await stageObjects(app);
+    await selectObject(app, [3, 2, 1]);
+    const card = app.getByTestId("selection-card");
+    await expect(card).toHaveAttribute("data-kind", "object");
+    await fromMap(app, "l");
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+    await fromMap(app, "b");
+    await expect(card.getByTestId("object-paint-hint")).toBeVisible();
+
+    await fromMap(app, "Escape");
+    await expect(card.getByTestId("object-paint-hint")).toHaveCount(0);
+    expect(await selectionState(app)).toMatchObject({ mode: "pick", selected: 3 });
+    await expect(card).toHaveAttribute("data-kind", "object");
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+
+    await fromMap(app, "Escape");
+    await expect(card).toHaveCount(0);
+    expect((await selectionState(app)).selected).toBeNull();
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+
+    await fromMap(app, "Escape");
+    await expect(app.getByTestId("layers-panel")).toHaveCount(0);
+  });
+
+  test("Tab moves focus from the page's body, and cycles only from the card", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await stageObjects(app);
+    await selectObject(app, [3, 2, 1]);
+    const card = app.getByTestId("selection-card");
+    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    // On the body Tab is the browser's: focus moves on, the candidates stay.
+    await fromMap(app, "Tab");
+    expect(await app.evaluate(() => document.activeElement !== document.body)).toBe(true);
+    await app.keyboard.press("Tab");
+    await app.keyboard.press("Tab");
+    expect((await selectionState(app)).index).toBe(0);
+    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    // With the card itself focused (a click on it), Tab and Shift+Tab cycle.
+    await card.focus();
+    await app.keyboard.press("Tab");
+    await expect(card.getByTestId("object-candidates")).toHaveText("2 of 3");
+    await app.keyboard.press("Shift+Tab");
+    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    // A button in the card keeps Tab's meaning: it moves on to the next one.
+    await card.getByRole("button", { name: "Next candidate" }).focus();
+    await app.keyboard.press("Tab");
+    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    // `]` cycles from anywhere but a field.
+    await fromMap(app, "]");
+    await expect(card.getByTestId("object-candidates")).toHaveText("2 of 3");
+    await expect(card.getByTestId("object-label")).toHaveText("Conifer");
+  });
+
+  test("an object picked replaces the machine's card, and a machine the object's", async ({
+    app,
+  }) => {
+    await loadDemo(app);
+    await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6);
+    await stageObjects(app);
+    const cards = app.getByTestId("selection-card");
+    await app.getByTestId("machine-marker-TR-04").dispatchEvent("click");
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText("TR-04 Kestrel");
+
+    await selectObject(app, [3, 2, 1]);
+    await expect(cards).toHaveAttribute("data-kind", "object");
+    await expect(cards).toHaveCount(1);
+    await expect(cards).not.toContainText("TR-04");
+    expect((await selectionState(app)).mission).toBeNull();
+
+    await app.getByTestId("machine-marker-TR-04").dispatchEvent("click");
+    await expect(cards).toContainText("TR-04 Kestrel");
+    await expect(cards).toHaveCount(1);
+    expect((await selectionState(app)).selected).toBeNull();
+  });
+});
+
+test.describe("a scan object's card on a touch screen", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test("offers New, Add and Remove and a brush size instead of Shift, Alt and the wheel", async ({
+    app,
+  }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await stageObjects(app);
+    await selectObject(app, [3, 2, 1], 1);
+    const card = app.getByTestId("selection-card");
+    await expect(card).toHaveAttribute("data-kind", "object");
+    // No keyboard to name: no Tab or [ ] hint beside the arrows, no key cap on the brush.
+    await expect(card.locator("kbd")).toHaveCount(0);
+    await card.getByRole("button", { name: "Paint to select" }).tap();
+    await expect(card.getByTestId("object-paint-hint")).toContainText("with a finger");
+    await expect(card.getByTestId("object-paint-hint")).not.toContainText("Shift");
+    const modes = card.getByRole("radiogroup", { name: "What a stroke does" });
+    await modes.getByRole("radio", { name: "Remove" }).tap();
+    await expect(modes.getByRole("radio", { name: "Remove" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await card.getByRole("button", { name: "Larger brush" }).tap();
+    await expect(card).toContainText("23 px");
+    const dir = process.env.CARD_SHOTS_DIR;
+    if (dir) await app.screenshot({ path: `${dir}/phone-touch-object-card.png` });
   });
 });

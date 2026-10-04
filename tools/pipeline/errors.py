@@ -9,6 +9,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 __all__ = [
+    "BAD_INPUT_ERRORS",
+    "CancelRequested",
+    "CostCapError",
+    "DetachRequested",
     "DuplicateArtifactError",
     "DuplicateImplError",
     "MissingArtifactError",
@@ -18,9 +22,11 @@ __all__ = [
     "PreemptedError",
     "RecipeError",
     "RemoteStageError",
+    "RemoteTimeoutError",
     "ResumeError",
     "StageContractError",
     "StageFailedError",
+    "StopRequested",
     "UndeclaredArtifactError",
     "UnknownImplError",
     "UnresolvedArtifactError",
@@ -188,3 +194,89 @@ class StageFailedError(PipelineError):
         self.recipe = recipe
         self.stage_id = stage_id
         self.impl = impl
+
+
+class RemoteTimeoutError(RemoteStageError):
+    """A remote stage ran out of time rather than failing at something.
+
+    Its own class because the worker's retry policy treats it differently from a failure:
+    a stage that outran the deployed function's own limit (Modal's `FunctionTimeoutError`,
+    six hours in `infra/modal/app.py`), the runner's `max_wait_s`, or the deadline its
+    planned steps imply (`CloudRunner`'s `deadline_factor`) will outrun it again on the
+    next attempt, and every such attempt costs the whole limit in GPU time. A stage that is
+    merely slow and then *finishes* never raises this.
+    """
+
+
+class CostCapError(PipelineError):
+    """A run reached the dollar ceiling its worker was configured with.
+
+    Raised before a call is submitted when what the run has already been billed is at or
+    over the cap, and in place of a running call's result when the call was cancelled
+    because its own running cost would have taken the run over it. Never retried: the
+    next attempt would start from the same spend.
+    """
+
+    def __init__(
+        self, recipe: str, stage_id: str, spent_usd: float, cap_usd: float, why: str
+    ) -> None:
+        super().__init__(
+            f"recipe {recipe!r}, stage {stage_id!r}: the run has been billed "
+            f"${spent_usd:.2f} against a cap of ${cap_usd:.2f} (WORKER_JOB_COST_CAP_USD); "
+            f"{why}"
+        )
+        self.recipe = recipe
+        self.stage_id = stage_id
+        self.spent_usd = spent_usd
+        self.cap_usd = cap_usd
+
+
+#: The errors that say the recipe, its parameters or its stage code are wrong rather than
+#: that a run was unlucky: another attempt fails the same way, so the worker dead-letters
+#: on the first one instead of spending the attempt budget on it. Kept to the classes
+#: whose every raise is a contract or configuration mistake -- not `MissingArtifactError`
+#: (outputs that did not come back can be a transfer that failed), not `ResumeError` (the
+#: next attempt re-reads the workdir and does not skip), and not a stage's own
+#: `ValueError`, which is raised for bad input and for a trainer that died alike. By name,
+#: because a name is how a failure crosses the worker's line protocol.
+BAD_INPUT_ERRORS: frozenset[str] = frozenset(
+    {
+        "RecipeError",
+        "UnknownImplError",
+        "UnresolvedArtifactError",
+        "DuplicateArtifactError",
+        "MissingInputError",
+        "StageContractError",
+        "NoRunnerError",
+    }
+)
+
+
+class StopRequested(BaseException):
+    """The process running a recipe was asked to stop, and the subclass says why.
+
+    A `BaseException`, like `KeyboardInterrupt`, and not a `PipelineError`: it is raised
+    from a signal handler wherever the main thread happens to be, and that is often inside
+    an `except Exception` that exists for a different reason -- `ModalAdapter.poll`
+    classifies whatever its `get` raises, `ModalAdapter.logs` suppresses every exception.
+    Caught there, a stop would be read as a failed stage or swallowed outright.
+
+    The worker's supervisor raises one of the two subclasses in its recipe process with a
+    signal (`app/worker/child.py`), and `CloudRunner` is what tells them apart: a cancel
+    stops paying for the remote call, a detach leaves it running for the next worker.
+    """
+
+    reason = "stopped"
+
+
+class CancelRequested(StopRequested):
+    """The job was cancelled, or this worker lost its lease: stop the remote call now."""
+
+    reason = "cancelled"
+
+
+class DetachRequested(StopRequested):
+    """The worker is shutting down (a deploy): leave the remote call running, write down
+    where it is, and let the next worker re-attach to it instead of paying for it twice."""
+
+    reason = "detached"

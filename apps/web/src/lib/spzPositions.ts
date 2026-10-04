@@ -10,7 +10,8 @@
 const SPZ_MAGIC = 0x5053474e; // "NGSP"
 const HEADER_BYTES = 16;
 
-async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
+/** The SPZ in `bytes` unzipped: off the main thread (the browser's `DecompressionStream`). */
+export async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
   const body = new Response(bytes as BodyInit).body;
   if (!body) return new Uint8Array(0);
   const stream = body.pipeThrough(new DecompressionStream("gzip"));
@@ -39,7 +40,14 @@ export interface SpzPickData {
  * Undefined where `spzPositions` is.
  */
 export async function spzPickData(bytes: Uint8Array): Promise<SpzPickData | undefined> {
-  const raw = await gunzip(bytes);
+  return spzPickDataOf(await gunzip(bytes));
+}
+
+/**
+ * `spzPickData` of an SPZ already unzipped (`gunzip`): the synchronous part, a pass over every
+ * splat, which a renderer runs within its main-thread frame budget.
+ */
+export function spzPickDataOf(raw: Uint8Array): SpzPickData | undefined {
   const positions = positionsOf(raw);
   if (!positions) return undefined;
   const count = positions.length / 3;

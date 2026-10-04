@@ -87,8 +87,16 @@ extensible parts (render config, resolution, license) without a migration per fi
 - `apps/web/src/api/` — `openapi-fetch` client typed from `@twin/contracts`, TanStack
   Query hooks, and a labeled built-in fallback catalog for when the API is down.
 - `apps/web/src/features/` — one directory per surface (search, layers, sites, inspector,
-  measure, compare, bookmarks, add-data, settings, palette, dev, nav, timeline, explore,
-  onboarding, mission, living). Panels are lazy where large.
+  measure, compare, bookmarks, add-data, captures, settings, command-palette — the command
+  box — dev, nav, timeline, explore, onboarding, mission, living, shell). The rail has four
+  tools (Layers, Measure, Add, Settings); Plan and Fleet are a drawer on the right; the site
+  switcher holds sites and saved views. Panels are lazy where large.
+  `apps/web/src/app/hotkeys.ts` is the one list of keyboard shortcuts. See
+  [MISSION_CONTROL.md](MISSION_CONTROL.md) for the layout and [GLOSSARY.md](GLOSSARY.md) for
+  the one word each thing goes by.
+- `apps/web/src/shared/` — what the three pages (`index.html`, `view.html`, `admin.html`)
+  share: the slim product header. `src/lib/labels.ts` gives the API's enum values their
+  words on every page.
 - `apps/web/src/missions/` — the mission domain (`Project`, `Machine`, `Zone`, `Plan`) and the
   `MissionProvider` seam; `MissionManager` draws zones/tracks and projects overlay anchors.
   See [MISSION_CONTROL.md](MISSION_CONTROL.md).
@@ -129,5 +137,5 @@ kind is one Pydantic model, one enum value and one provider adapter.
 | Robotics (ROS/MCAP)           | a live `MissionProvider` replaces the simulated demo; poses feed `MissionManager` tracks and markers                                                              |
 | A living world (wind, growth) | `packages/world` holds the motion model; `LivingSurveyManager` drives it and `SplatDeformer` writes it; a rig is declared by the catalog as `renderConfig.rigUrl` |
 | Simulation (Isaac/OpenUSD)    | consumes the same canonical store; the viewer stays a 3D Tiles client                                                                                             |
-| LLM geospatial assistant      | the command palette is the entry point; managers expose a small imperative API to drive                                                                           |
+| LLM geospatial assistant      | the command box's "Ask the agent" row is the entry point; managers expose a small imperative API to drive                                                         |
 | Observability vendor          | `lib/log.ts` sinks and `lib/timing.ts` spans                                                                                                                      |

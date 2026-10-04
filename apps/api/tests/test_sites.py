@@ -37,6 +37,8 @@ def test_slug_uniqueness_and_conflict(client: TestClient) -> None:
     assert second["slug"] == "test-site-2"
     conflict = client.post("/api/v1/sites", json=site_payload(slug="test-site"))
     assert conflict.status_code == 409
+    # A conflict with no machine-readable reason has no `code` (the attach's 409s do).
+    assert set(conflict.json()) == {"title", "status", "detail"}
     bad_slug = client.post("/api/v1/sites", json=site_payload(slug="Not A Slug"))
     assert bad_slug.status_code == 422
 

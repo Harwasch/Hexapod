@@ -12,8 +12,9 @@
  * With `renderer: "playcanvas"` the scan is drawn as the app draws it by default: CesiumJS's
  * tileset hidden (but loaded, for its frame and its instances.json) and PlayCanvas streaming
  * the same tiles over it (cesium/scanView), with the objects bound by tile checksum there
- * (scanView/scanInstances.ts); `renderer: "spark"` the same with Spark. Measures then read both canvases, the globe's under the
- * renderer's.
+ * (scanView/scanInstances.ts); `renderer: "spark"` the same with Spark, and
+ * `renderer: "playcanvas-webgpu"` PlayCanvas on WebGPU (its WGSL modifier) where the browser
+ * has it. Measures then read both canvases, the globe's under the renderer's.
  *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: pixels are counted, not eyeballed.
@@ -35,6 +36,7 @@ import {
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { ScanRendererHost, type ScanRendererStatus } from "@/cesium/scanView/ScanRendererHost";
 import { paintedDocOf } from "@/cesium/scanView/scanInstances";
+import type { SplatRendererKind } from "@/cesium/scanView/types";
 import { pickSourceOf } from "@/cesium/sceneSelect/pickSources";
 import { attachInstances, instanceSphere, type InstancePrimitive } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
@@ -123,6 +125,9 @@ function nextFrame(scene: Scene): Promise<void> {
   });
 }
 
+/** The last frame a WebGPU overlay drew, copied before it was presented (see below). */
+const webgpuMirror = document.createElement("canvas");
+
 /** Amber: red high, green below it, blue well below green (HIGHLIGHT_STYLE.tint, mixed in). */
 function isAmber(r: number, g: number, b: number): boolean {
   return r > 110 && g > 0.5 * r && g < 0.92 * r && b < 0.62 * g;
@@ -174,11 +179,11 @@ export async function startInstancesHarness(options: {
   /** 16 by default; a low one draws the leaves wherever the camera is. */
   maximumScreenSpaceError?: number;
   /** Who draws the splats: CesiumJS (default) or PlayCanvas over it, as the app's default. */
-  renderer?: "cesium" | "playcanvas" | "spark";
+  renderer?: SplatRendererKind;
   /** Where to mount the app's objects panel (`InstancePanel`), driving this scan. */
   panel?: HTMLElement;
 }): Promise<InstancesHarness> {
-  const dedicated = options.renderer === "playcanvas" || options.renderer === "spark";
+  const dedicated = options.renderer !== undefined && options.renderer !== "cesium";
   if (dedicated) {
     // The renderer's own canvas keeps its pixels between frames, so they can be counted.
     const getContext = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "getContext")
@@ -193,6 +198,34 @@ export async function startInstancesHarness(options: {
         : attributes;
       return getContext.call(this, type, forced);
     } as typeof HTMLCanvasElement.prototype.getContext;
+    // A WebGPU canvas has no such attribute: once its frame is presented, reading it gives
+    // transparent black. So each frame the renderer draws is copied, still unpresented, into a
+    // 2D mirror -- a microtask queued as the frame takes its texture runs once PlayCanvas's
+    // `render` (which takes the texture and submits the frame in one go) has returned.
+    const contexts = (
+      globalThis as {
+        GPUCanvasContext?: {
+          prototype: { getCurrentTexture: (this: { canvas: HTMLCanvasElement }) => unknown };
+        };
+      }
+    ).GPUCanvasContext;
+    if (contexts) {
+      const getCurrentTexture = contexts.prototype.getCurrentTexture;
+      let queued = false;
+      contexts.prototype.getCurrentTexture = function (this: { canvas: HTMLCanvasElement }) {
+        const canvas = this.canvas;
+        if (!queued && canvas.dataset.scanRenderer) {
+          queued = true;
+          queueMicrotask(() => {
+            queued = false;
+            webgpuMirror.width = canvas.width;
+            webgpuMirror.height = canvas.height;
+            webgpuMirror.getContext("2d")?.drawImage(canvas, 0, 0);
+          });
+        }
+        return getCurrentTexture.call(this);
+      };
+    }
   }
   const widget = new CesiumWidget(options.container, {
     baseLayer: false,
@@ -260,7 +293,9 @@ export async function startInstancesHarness(options: {
     if (!context) return null;
     context.drawImage(canvas, 0, 0);
     const overlay = document.querySelector<HTMLCanvasElement>("canvas[data-scan-renderer]");
-    if (host && overlay) context.drawImage(overlay, 0, 0, copy.width, copy.height);
+    // On WebGPU, the last frame drawn as the mirror kept it (see above).
+    const drawn = overlay?.dataset.api === "webgpu" ? webgpuMirror : overlay;
+    if (host && drawn) context.drawImage(drawn, 0, 0, copy.width, copy.height);
     return context;
   }
   let remembered: Uint8ClampedArray | null = null;

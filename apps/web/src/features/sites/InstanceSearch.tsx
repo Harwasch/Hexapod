@@ -183,7 +183,10 @@ function CategoryRow({
     if (selectedAt >= 0) selectedRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [selectedAt, open]);
 
-  /** Highlights the object, selects it in the scene (the chip offers its actions), flies to it. */
+  /**
+   * Highlights the object, selects it in the scene (the selection card offers its actions),
+   * and flies to it as the card's Fly to does (`CameraController.flyToObject`).
+   */
   const selectObject = (object: SceneObject): void => {
     const focus: Focus = { kind: "object", id: object.id };
     const clearing = sameFocus(entry.focus, focus) || selected === object.id;
@@ -196,7 +199,7 @@ function CategoryRow({
     toggleFocus(assetId, focus);
     picking.select(assetId, [object.id], 1, 0, null);
     const sphere = instanceSphere(assetId, object.id);
-    if (sphere && scene) scene.camera.flyToBoundingSphere(sphere, { pitch: -35 });
+    if (sphere && scene) scene.camera.flyToObject(sphere);
   };
 
   return (
@@ -476,7 +479,11 @@ export function InstancePanel({ assetId }: { assetId: string }) {
   );
 }
 
-/** A compact button beside the representation switcher that opens the objects panel. */
+/**
+ * A compact button beside the representation switcher that opens the objects panel: a
+ * popover over the HUD's regions (`data-hud-popover`, as the site switcher and the command
+ * box's results), closed with Escape or a click away.
+ */
 export function InstanceSearch({ assetId }: { assetId: string }) {
   const count = useInstances((s) => s.assets[assetId]?.instances.length ?? 0);
   const [open, setOpen] = useState(false);
@@ -488,6 +495,8 @@ export function InstanceSearch({ assetId }: { assetId: string }) {
       side="top"
       aria-label="Objects in this scan"
       className="instance-popover"
+      data-hud-popover=""
+      data-testid="instance-popover"
       trigger={
         <GlassButton
           size="sm"

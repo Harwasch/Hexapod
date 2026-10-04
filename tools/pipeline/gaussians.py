@@ -12,9 +12,12 @@ Three shapes arrive at this project and one leaves it:
   writes, so ingesting it is `unpack_spz` and nothing else;
 * a PLY that uses **`red`/`green`/`blue`/`alpha`** instead, which some exporters do;
 
-and out of all three comes `canonical.ply`: binary little-endian, exactly the fourteen
-properties `splat_tiles.convert` reads, in one fixed order. Both lanes converge on that
-file, which is why one `package` implementation serves Lane 1 and Lane 2 alike.
+and out of all three comes `canonical.ply`: binary little-endian, the fourteen properties
+`splat_tiles.convert` reads, in one fixed order -- plus, when a run ships spherical
+harmonics (`ship_sh_degree` 1-3; 0 by default), the `f_rest_*` of those bands after `f_dc_*`,
+where the trainers put them (`ply_properties`; `harmonics.py` says why and how they turn).
+Both lanes converge on that file, which is why one `package` implementation serves Lane 1
+and Lane 2 alike.
 
 **`canonical.ply` is east/north/up, z up, and that is a conversion, not an assumption.**
 Everything downstream -- the tileset's node matrix, the thumbnail, the ground samples --
@@ -37,6 +40,7 @@ import numpy as np
 import numpy.typing as npt
 from PIL import Image, ImageFilter
 
+import harmonics
 from captures_bridge import SplatFormatError, read_ply, sigmoid, unpack_spz
 
 __all__ = [
@@ -49,6 +53,7 @@ __all__ = [
     "ground_samples",
     "normalise",
     "orient",
+    "ply_properties",
     "read_splat",
     "render_thumbnail",
     "transform",
@@ -76,7 +81,18 @@ CANONICAL_PROPERTIES: tuple[str, ...] = (
 )
 
 #: The zeroth spherical-harmonic coefficient: colour = SH_C0 * f_dc + 0.5.
-SH_C0 = 0.28209479177387814
+SH_C0 = harmonics.SH_C0
+
+
+def ply_properties(sh_degree: int = 0) -> tuple[str, ...]:
+    """`canonical.ply`'s properties when it ships SH bands 1..`sh_degree`: the fourteen,
+    with the bands' `f_rest_*` after `f_dc_*` and before `opacity` -- the trainers' own
+    order (gsplat's `export_splats`, Inria's `save_ply`), so a tool that assumes it reads
+    the file. Degree 0 is exactly `CANONICAL_PROPERTIES`, and so the same bytes as ever."""
+    rest = harmonics.rest_names(sh_degree)
+    split = CANONICAL_PROPERTIES.index("opacity")
+    return (*CANONICAL_PROPERTIES[:split], *rest, *CANONICAL_PROPERTIES[split:])
+
 
 #: Vertex-colour property names, and the SH DC term each one becomes.
 _COLOUR_ALIASES: Mapping[str, str] = {
@@ -107,12 +123,16 @@ class Splat:
     source_checksum: str
     #: Every property the file declared, in file order -- including the ones dropped.
     properties_in: tuple[str, ...]
-    #: Properties the file had that `canonical.ply` does not carry (`f_rest_*`, normals).
+    #: Properties the file had that `canonical.ply` does not carry (normals, and the SH
+    #: bands above `sh_degree`).
     dropped: tuple[str, ...]
     #: Gaussians whose position or opacity was not finite. Kept, not removed: `convert`
     #: already neutralises them, and removing them here would make two stages disagree
     #: about how many gaussians the capture has.
     non_finite: int
+    #: The SH bands above DC that `columns` carries (`f_rest_*`, channel-major): what was
+    #: asked for, or fewer when the file has fewer. 0 -- the default -- is DC only.
+    sh_degree: int = 0
 
     @property
     def count(self) -> int:
@@ -170,14 +190,19 @@ def pick_splat_file(directory: Path) -> Path:
     )
 
 
-def read_splat(path: Path) -> Splat:
-    """Read a `.ply` or `.spz` and normalise it to the canonical property set."""
+def read_splat(path: Path, *, sh_degree: int = 0) -> Splat:
+    """Read a `.ply` or `.spz` and normalise it to the canonical property set.
+
+    `sh_degree` keeps that many SH bands above DC as well, truncated from whatever the file
+    carries (`harmonics.sources`), or every band it has if it has fewer; `Splat.sh_degree`
+    says which. 0 keeps none, as this always did.
+    """
     suffix = path.suffix.lower()
     raw = path.read_bytes()
     checksum = f"sha256:{hashlib.sha256(raw).hexdigest()}"
     if suffix == ".spz":
         source: SourceFormat = "spz"
-        data: dict[str, F32] = {k: _f32(v) for k, v in unpack_spz(raw).items()}
+        data: dict[str, F32] = {k: _f32(v) for k, v in unpack_spz(raw, sh=sh_degree > 0).items()}
     elif suffix == ".ply":
         source = "ply"
         data = {k: _f32(v) for k, v in read_ply(path).items()}
@@ -188,6 +213,16 @@ def read_splat(path: Path) -> Splat:
         )
     properties_in = tuple(data)
     columns = _normalise(path.name, data)
+    # Only when bands are asked for is the f_rest_* run read, and so checked: a DC-only read
+    # drops it unread, a malformed one included, as this always did.
+    carried = (
+        min(sh_degree, harmonics.degree_of(properties_in, source=path.name)) if sh_degree else 0
+    )
+    used = set(columns)
+    if carried:
+        mapping = harmonics.sources(carried, harmonics.stride_of(properties_in))
+        columns.update({out: data[name] for out, name in mapping.items()})
+        used.update(mapping.values())
     xyz = np.stack([columns["x"], columns["y"], columns["z"]], axis=1)
     non_finite = int((~(np.isfinite(xyz).all(axis=1) & np.isfinite(columns["opacity"]))).sum())
     return Splat(
@@ -197,8 +232,9 @@ def read_splat(path: Path) -> Splat:
         source_bytes=len(raw),
         source_checksum=checksum,
         properties_in=properties_in,
-        dropped=tuple(name for name in properties_in if name not in columns),
+        dropped=tuple(name for name in properties_in if name not in used),
         non_finite=non_finite,
+        sh_degree=carried,
     )
 
 
@@ -234,19 +270,29 @@ def _normalise(name: str, data: dict[str, F32]) -> dict[str, F32]:
     return {prop: columns[prop] for prop in CANONICAL_PROPERTIES}
 
 
-def write_ply(path: Path, columns: Mapping[str, F32]) -> int:
-    """Write `canonical.ply`: binary little-endian, the fourteen properties, in order.
+def write_ply(path: Path, columns: Mapping[str, F32], *, sh_degree: int = 0) -> int:
+    """Write `canonical.ply`: binary little-endian, the fourteen properties, in order, and
+    with `sh_degree` the `f_rest_*` of that many SH bands (`ply_properties`), which
+    `columns` must hold at that degree's own numbering (`harmonics.truncate` makes it).
+    Nothing else in `columns` is written: a reader's raw dict, every band and normal
+    included, writes the fourteen unless a degree is asked for.
 
     Byte-identical for identical arrays -- there is no timestamp, no generator string and
     no dictionary iteration order in it.
     """
     count = int(columns["x"].shape[0])
-    dtype = np.dtype([(prop, "<f4") for prop in CANONICAL_PROPERTIES])
+    properties = ply_properties(sh_degree)
+    if sh_degree and harmonics.stride_of(columns, source=path.name) != harmonics.SH_DIMS[sh_degree]:
+        raise ValueError(
+            f"{path.name}: sh_degree {sh_degree} needs f_rest_0..f_rest_"
+            f"{3 * harmonics.SH_DIMS[sh_degree] - 1} at that degree's numbering; truncate first"
+        )
+    dtype = np.dtype([(prop, "<f4") for prop in properties])
     record = np.empty(count, dtype=dtype)
-    for prop in CANONICAL_PROPERTIES:
+    for prop in properties:
         record[prop] = columns[prop]
     header = ["ply", "format binary_little_endian 1.0", f"element vertex {count}"]
-    header += [f"property float {prop}" for prop in CANONICAL_PROPERTIES]
+    header += [f"property float {prop}" for prop in properties]
     header.append("end_header")
     payload = ("\n".join(header) + "\n").encode("ascii") + record.tobytes()
     path.write_bytes(payload)
@@ -396,7 +442,7 @@ def transform(
 ) -> dict[str, F32]:
     """Apply `x' = scale * R @ x + t` to every gaussian, not just to its centre.
 
-    Three things move and one deliberately does not:
+    Four things move and one deliberately does not:
 
     * **positions** by the whole similarity;
     * **orientations**: a gaussian's `rot_*` is the rotation from its own axes to the
@@ -404,11 +450,14 @@ def transform(
       splat whose centres were rotated and whose quaternions were not keeps every
       ellipsoid pointing the old way, which is visible as a capture made of needles;
     * **log-scales** by `ln(scale)`, since a uniform scale multiplies every axis length;
-    * **colour does not**, and that is exact rather than approximate: `canonical.ply`
-      carries only the DC spherical-harmonic term, which is view-independent and so
-      invariant under rotation. Bands above DC are dropped on read (`Splat.dropped`),
-      so there is nothing here that would need a Wigner rotation -- and if they are ever
-      carried, this function is where that rotation has to be added.
+    * **view-dependent colour**, when the columns carry SH bands above DC (`f_rest_*`, a
+      run that ships `ship_sh_degree` 1-3): each band is turned by R's Wigner D-matrix in the
+      trainers' basis (`harmonics.rotate`), so the turned gaussian seen from `R d` shows
+      the colour the original showed from `d`. Without it every highlight would face the
+      way it did in the file's frame. Exact for degrees 1-3; a partial degree is refused;
+    * **the DC colour does not**, and that is exact rather than approximate: it is
+      view-independent and so invariant under rotation -- and neither the scale nor the
+      translation touches any band, since a direction is a direction at any distance.
     """
     r = np.asarray(rotation, dtype=np.float64)
     if r.shape != (3, 3) or not np.allclose(r @ r.T, np.eye(3), atol=1e-6):
@@ -433,6 +482,7 @@ def transform(
         for index, axis in enumerate(("x", "y", "z")):
             row = r[index]
             out[axis] = _f32(scale * (row[0] * x + row[1] * y + row[2] * z) + t[index])
+    out.update(harmonics.rotate(columns, r))
     qw, qx, qy, qz = matrix_to_quat(r)
     w, x, y, z = (np.asarray(columns[f"rot_{i}"], dtype=np.float64) for i in range(4))
     out["rot_0"] = _f32(qw * w - qx * x - qy * y - qz * z)

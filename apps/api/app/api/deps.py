@@ -16,8 +16,9 @@ from app.services import handoff
 from app.services.errors import UnauthorizedError
 from app.services.ion import IonClient
 from app.services.planner import Planner, build_planner
+from app.services.ratelimit import client_key, limits_of
 from app.services.vision import Outliner, build_outliner
-from app.storage import ObjectStorage, get_storage
+from app.storage import ObjectStorage, get_public_storage, get_storage
 
 
 def _db() -> Generator[Session, None, None]:
@@ -53,6 +54,10 @@ Ion = Annotated[IonClient, Depends(_ion)]
 PlannerDep = Annotated[Planner, Depends(_planner)]
 OutlinerDep = Annotated[Outliner | None, Depends(_outliner)]
 Storage = Annotated[ObjectStorage, Depends(get_storage)]
+#: Where something a browser fetches by URL is written: the public bucket where there are
+#: two, the only bucket where there is one. Never `Storage` for that -- in production
+#: `Storage` is the private bucket, which no browser can read.
+PublicStorage = Annotated[ObjectStorage, Depends(get_public_storage)]
 
 #: `Authorization: Bearer <API_WRITE_TOKEN>`. auto_error=False so a missing header
 #: reaches the check below and is answered with the same RFC-7807 Problem as a wrong
@@ -158,3 +163,18 @@ def require_upload_token(
 
 #: Spelled once so the upload routes read `dependencies=[RequireUploadToken]`.
 RequireUploadToken = Depends(require_upload_token)
+
+
+def limit_reconcile(request: Request, settings: SettingsDep) -> None:
+    """One bucket walk per token: see app/services/ratelimit.py. Listed after the write
+    token on its route, so a request without one is refused before it spends anything."""
+    limits_of(request).reconcile.take(client_key(request, settings))
+
+
+def limit_step_log(request: Request, settings: SettingsDep) -> None:
+    """One object-storage read per token: see app/services/ratelimit.py."""
+    limits_of(request).step_log.take(client_key(request, settings))
+
+
+LimitReconcile = Depends(limit_reconcile)
+LimitStepLog = Depends(limit_step_log)

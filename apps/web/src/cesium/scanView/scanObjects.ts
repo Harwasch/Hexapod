@@ -73,7 +73,12 @@ interface Placed<M> {
   key: string;
 }
 
-/** One session's split objects: loaded once, placed every frame. */
+/**
+ * One session's split objects: loaded once, placed at their poses as each frame is drawn
+ * (`tick`, which says whether any moved). `onLoaded` is told as each object is added: the
+ * overlay draws only when something changes (overlayFrames.ts), and an object arriving is a
+ * change no camera makes.
+ */
 export class ScanObjects<M> {
   readonly #placed: Placed<M>[] = [];
   #stopped = false;
@@ -81,6 +86,7 @@ export class ScanObjects<M> {
   constructor(
     private readonly backend: Pick<ScanBackend<M>, "load" | "add" | "remove" | "dispose" | "place">,
     private readonly assetId: string | undefined,
+    private readonly onLoaded: () => void = () => undefined,
   ) {}
 
   /** Objects drawn now. */
@@ -120,6 +126,7 @@ export class ScanObjects<M> {
           const placed: Placed<M> = { ref, mesh, base, key: "" };
           this.#placed.push(placed);
           this.#place(placed);
+          this.onLoaded();
         } catch (error) {
           log.warn("split object did not load", {
             instance: ref.instance,

@@ -17,6 +17,7 @@ import boto3
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import _db
@@ -24,6 +25,7 @@ from app.main import create_app
 from app.models import Artifact, Capture, CaptureFile, Job, JobStep
 from app.models.enums import ArtifactKind, CaptureKind, RunStatus, UploadStatus
 from app.services import recipes as recipe_service
+from app.services.published import published_key
 from app.storage import NullStorage, S3Storage, get_storage
 
 BUCKET = "twin-test"
@@ -153,7 +155,7 @@ def test_reconciliation_finds_a_deliberate_orphan_and_a_deliberate_absence(
     db.commit()
     absent = make_run(db, storage, other, upload=False)
 
-    body = client.get("/api/v1/storage/reconciliation").json()
+    body = client.post("/api/v1/storage/reconciliation").json()
 
     orphans = {row["key"] for row in body["orphans"]}
     assert orphans == {f"runs/{ghost}/train/point_cloud.ply"}
@@ -194,7 +196,7 @@ def test_reconciliation_does_not_call_an_unfinished_upload_missing(
     )
     db.commit()
 
-    body = client.get("/api/v1/storage/reconciliation").json()
+    body = client.post("/api/v1/storage/reconciliation").json()
     assert body["missing"] == []
     assert body["rowsChecked"] == 0
 
@@ -206,7 +208,7 @@ def test_reconciliation_caps_the_walk_and_says_so(
     for index in range(5):
         storage.put_object(f"runs/{uuid.uuid4()}/train/{index}.bin", b"x", "application/x-binary")
 
-    body = client.get("/api/v1/storage/reconciliation", params={"maxObjects": 3}).json()
+    body = client.post("/api/v1/storage/reconciliation", params={"maxObjects": 3}).json()
     assert body["scanned"] == 3
     assert body["truncated"] is True
     # The row half is exact regardless: it asks storage per row rather than reading the walk.
@@ -229,18 +231,22 @@ def test_reconciliation_needs_a_bucket(db: Session) -> None:
     app.dependency_overrides[_db] = override_db
     app.dependency_overrides[get_storage] = NullStorage
     with TestClient(app) as client:
-        response = client.get("/api/v1/storage/reconciliation")
+        response = client.post("/api/v1/storage/reconciliation")
     assert response.status_code == 503, response.text
 
 
 # --- outputs ------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("generation", [None, "0123456789abcdef"])
 def test_artifacts_carry_their_run_and_what_references_them(
-    client: TestClient, db: Session, storage: S3Storage
+    client: TestClient, db: Session, storage: S3Storage, generation: str | None
 ) -> None:
+    """With one bucket a site points at the run's own key; with two, at a copy in a
+    publish generation (`runs/<job>/p<generation>/...`). Either is a reference."""
     capture = make_capture(db, storage)
     job = make_run(db, storage, capture)
+    key = f"runs/{job.id}/package/splat/tileset.json"
 
     # A site pointing at the tileset, exactly as `register` writes it.
     site = client.post(
@@ -265,7 +271,9 @@ def test_artifacts_carry_their_run_and_what_references_them(
                     "representation": "gaussian-splat",
                     "source": {
                         "type": "3d-tiles-url",
-                        "url": storage.public_url(f"runs/{job.id}/package/splat/tileset.json"),
+                        "url": storage.public_url(
+                            key if generation is None else published_key(key, generation)
+                        ),
                     },
                 }
             ],
@@ -376,6 +384,35 @@ def test_an_override_naming_a_stage_the_recipe_lacks_is_refused_in_its_own_words
     assert "does not have" in detail
     # Names the stages it *does* have, which is what makes the message actionable.
     assert "georeference" in detail and "package" in detail
+
+
+@pytest.mark.parametrize("value", [7, -1, "three", True, 1.5])
+def test_a_ship_sh_degree_the_stage_would_refuse_is_refused_at_launch(
+    client: TestClient, db: Session, storage: S3Storage, value: object
+) -> None:
+    """The stage refuses it with a ValueError, which the worker retries -- three failed
+    attempts, a GPU stage each time on Lane 2 -- so it is a 422 here and nothing is
+    queued."""
+    capture = make_capture(db, storage)
+    response = client.post(
+        f"/api/v1/captures/{capture.id}/process",
+        json={"recipe": "splat-ingest", "params": {"normalize": {"ship_sh_degree": value}}},
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert "ship_sh_degree" in detail and "normalize" in detail and "0, 1, 2, 3" in detail
+    assert db.scalars(select(Job).where(Job.capture_id == capture.id)).all() == []
+
+
+def test_a_ship_sh_degree_in_range_is_queued(
+    client: TestClient, db: Session, storage: S3Storage
+) -> None:
+    capture = make_capture(db, storage)
+    response = client.post(
+        f"/api/v1/captures/{capture.id}/process",
+        json={"recipe": "splat-ingest", "params": {"normalize": {"ship_sh_degree": 3}}},
+    )
+    assert response.status_code == 202, response.text
 
 
 def test_two_runs_of_one_capture_are_comparable(

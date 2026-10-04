@@ -170,7 +170,9 @@ def test_a_gpu_stage_is_dispatched_preempted_and_resumed_and_the_job_says_what_i
     assert steps["train"].metrics["provider"] == "subprocess"
     assert steps["train"].metrics["tier"] == "a100"
     assert steps["train"].metrics["preemptions"] == 1
-    assert steps["train"].checkpoint_key == f"runs/{job.id}/train/checkpoint"
+    # Attempt 2's own key: each attempt syncs to one of its own, so a call nobody stopped
+    # cannot write over the next attempt's checkpoint (`runners.per_attempt`).
+    assert steps["train"].checkpoint_key == f"runs/{job.id}/train/checkpoint-a2"
 
     workdir = tmp_path / "runs" / str(job.id)
     trained = json.loads((workdir / "stages" / "train" / "out" / "trained.json").read_text())

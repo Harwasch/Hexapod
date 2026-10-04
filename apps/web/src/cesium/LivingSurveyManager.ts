@@ -25,7 +25,7 @@
  * (see `WindStrength` in `@twin/world`).
  */
 
-import { JulianDate, type Viewer } from "cesium";
+import { JulianDate, type CesiumWidget } from "cesium";
 
 import {
   createLivingMotion,
@@ -258,7 +258,7 @@ interface LivingEntry {
 export type LivingMotionModel = "auto" | "legacy";
 
 export class LivingSurveyManager {
-  readonly #viewer: Viewer;
+  readonly #viewer: CesiumWidget;
   readonly #events: Emitter<SceneEvents>;
   readonly #sites: SiteManager;
   readonly #performance: PerformanceManager;
@@ -300,7 +300,7 @@ export class LivingSurveyManager {
   readonly #skinCost = new RollingMean(MOTION_COST_WINDOW);
 
   constructor(
-    viewer: Viewer,
+    viewer: CesiumWidget,
     events: Emitter<SceneEvents>,
     sites: SiteManager,
     performance: PerformanceManager,

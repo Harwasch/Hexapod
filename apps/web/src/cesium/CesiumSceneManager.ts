@@ -2,11 +2,14 @@ import {
   Cartesian2,
   type Cartesian3,
   Cartographic,
+  CesiumWidget,
   Color,
   Math as CesiumMath,
+  Moon,
   RequestScheduler,
   type Scene,
-  Viewer,
+  SkyBox,
+  Sun,
 } from "cesium";
 
 import { Emitter } from "@/lib/emitter";
@@ -34,7 +37,11 @@ import { installCameraPickHook } from "./cameraPickHook";
 import { installSplatDecoder } from "./splatDecoder";
 import { installSplatSorter } from "./splatSorter";
 import { UiActivity } from "./uiActivity";
-import { ScanRendererHost, type ScanRendererStatus } from "./scanView/ScanRendererHost";
+import {
+  prefetchScanDestination,
+  ScanRendererHost,
+  type ScanRendererStatus,
+} from "./scanView/ScanRendererHost";
 import { SceneSelectController } from "./sceneSelect/SceneSelectController";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Geocoder, SceneEvents } from "./types";
@@ -52,12 +59,19 @@ export interface SceneManagerOptions {
    * is the fallback either way when the engine or a snapshot cannot take the shader path.
    */
   splatGpuMotion?: boolean;
+  /**
+   * The stars and the moon, added once the globe has its first tiles (deferNightSky). Default
+   * true; false for a harness that compares frames and must not have the sky arrive mid-run.
+   */
+  nightSky?: boolean;
 }
 
 /** Below this altitude over a splat site the view is the scan, shown ungraded. */
 const SCAN_GRADE_ALTITUDE_M = 400;
 /** Inside a scan and this close to the ground, the scan is the ground: no terrain under it. */
 const SCAN_FLOORLESS_ALTITUDE_M = 30;
+/** The stars wait for the globe's first tiles at most this long (deferNightSky). */
+const NIGHT_SKY_DEADLINE_MS = 5_000;
 
 /**
  * The single owner of the CesiumJS viewer. React talks to this object through
@@ -65,7 +79,14 @@ const SCAN_FLOORLESS_ALTITUDE_M = 30;
  * destroy once.
  */
 export class CesiumSceneManager {
-  readonly viewer: Viewer;
+  /**
+   * The engine's own widget: canvas, scene, clock, entities and data sources. Named `viewer`
+   * because it used to be one (see the constructor) and because e2e reads
+   * `__twin.viewer.entities` and `.clock`, which the widget has too.
+   */
+  readonly viewer: CesiumWidget;
+  /** `.cesium-viewer`: the widget and its credit bar, removed as one on destroy. */
+  private readonly host: HTMLElement;
   readonly scene: Scene;
   readonly events = new Emitter<SceneEvents>();
   readonly camera: CameraController;
@@ -105,21 +126,27 @@ export class CesiumSceneManager {
   constructor(container: HTMLElement, options: SceneManagerOptions) {
     const tokenState = configureIonToken(options.ionToken);
     this.tokenState = tokenState;
-    this.viewer = new Viewer(container, {
-      animation: false,
-      timeline: false,
-      baseLayerPicker: false,
-      geocoder: false,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      fullscreenButton: false,
-      infoBox: false,
-      selectionIndicator: false,
-      vrButton: false,
+    // A `CesiumWidget`, not a `Viewer`. Every one of Viewer's widgets was switched off here, and
+    // since 1.145 the widget itself owns what the app used of Viewer -- entities, data sources,
+    // the clock and its ticking, resizing. Constructing a Viewer is what put `@cesium/widgets`
+    // in the bundle (the widgets, knockout, their view models: 226 kB of the engine chunk, and
+    // widgets.css): code that ran only to build DOM nobody saw. The DOM of Viewer's that the
+    // app does rely on is rebuilt here: a `.cesium-viewer` host and, after the widget, the
+    // `.cesium-viewer-bottom` credit bar that CreditSlot moves into the HUD. The host is
+    // removed on destroy, so CreditSlot's cleanup finds the bar's home gone and drops it too.
+    const host = document.createElement("div");
+    host.className = "cesium-viewer";
+    container.appendChild(host);
+    this.host = host;
+    const credits = document.createElement("div");
+    credits.className = "cesium-viewer-bottom";
+    this.viewer = new CesiumWidget(host, {
       scene3DOnly: true,
       shouldAnimate: true,
       baseLayer: false,
+      // No sky box (and so, from the widget, no sun or moon) yet: deferNightSky adds them once
+      // the globe has its first tiles.
+      skyBox: false,
       // Render only when something changed (camera, tiles, entities, explicit requests).
       // Every manager calls scene.requestRender() after it mutates the scene.
       requestRenderMode: true,
@@ -136,7 +163,9 @@ export class CesiumSceneManager {
       // Hosting it on <body> takes it out of that context; `app.css` then puts it on the
       // sheet layer and dresses it in the glass material.
       creditViewport: document.body,
+      creditContainer: credits,
     });
+    host.appendChild(credits);
     this.scene = this.viewer.scene;
     const scene = this.scene;
     // Before any tileset can load. The interception only sees `generateFromAttributes` calls
@@ -144,6 +173,9 @@ export class CesiumSceneManager {
     // reporting `no-capture` until that tileset next rebuilds. Idempotent; returns its own
     // uninstaller, which `destroy()` runs with the rest.
     this.unsubscribe.push(installSplatTextureInterception());
+    // The sun is drawn procedurally (no download), so it is there from the first frame.
+    scene.sun = new Sun();
+    if (options.nightSky !== false) this.unsubscribe.push(this.deferNightSky());
     scene.globe.depthTestAgainstTerrain = true;
     scene.globe.enableLighting = false;
     scene.globe.showGroundAtmosphere = true;
@@ -170,9 +202,20 @@ export class CesiumSceneManager {
     const interfaceBusy = (): boolean => this.uiActivity.active;
     this.splatGate = new SplatMotionGate(this.viewer.scene, this.events, interfaceBusy);
     this.uninstallSplatSorter = installSplatSorter();
+    // Installs the hook only: the decode workers start with the first splat tile, not here
+    // before the first frame (splatDecoder.ts).
     this.uninstallSplatDecoder = installSplatDecoder(interfaceBusy);
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
     this.scanRenderer = new ScanRendererHost(this.viewer);
+    // A dedicated splat renderer that throws while drawing is retired on the spot, and the
+    // globe carries on (overlayFrames.ts); the scan it drew is gone from the view, so say why.
+    this.scanRenderer.onFailure = (message) =>
+      this.events.emit("toast", {
+        tone: "error",
+        title: "The scan stopped drawing",
+        body: `${message.replace(/\.$/, "")}. The map carries on; Settings › Advanced › Splat renderer can draw the scan with another renderer.`,
+        id: "scan-renderer-failed",
+      });
     this.camera.setCollider(this.collider);
     // Cesium's own camera control asks the splats' solids before reading depth back from
     // the GPU (engine patch, ScreenSpaceCameraController.pickHook).
@@ -199,9 +242,14 @@ export class CesiumSceneManager {
       this.sites,
     );
     this.selection.setCollider(this.collider);
+    // Fly to goes through the camera controller (its pace, range and the dedicated renderer's
+    // destination prefetch), and B and Escape are the app's keys (AppShell's GlobalHotkeys).
+    this.camera.setDestinationPrefetch(prefetchScanDestination);
     this.sceneSelect = new SceneSelectController(this.viewer, {
       enabled: () => this.selectionWanted(),
       ownClicks: false,
+      ownKeys: false,
+      fly: (sphere) => this.camera.flyToObject(sphere),
     });
     // One click, one answer: an object of a scan under the cursor first, else the cards.
     this.selection.setClickClaim((position) => this.sceneSelect.click(position.x, position.y));
@@ -288,6 +336,60 @@ export class CesiumSceneManager {
 
   get geocoder(): Geocoder {
     return this.geocoderInstance;
+  }
+
+  /**
+   * The stars and the moon, once the globe has its first tiles rather than before it.
+   *
+   * The engine's default sky box is six 1024² star maps, 868 kB of JPEG from
+   * `CESIUM_BASE_URL` (plus 18 kB of moon), requested by the widget's constructor -- the
+   * biggest static download of the boot, queued beside the first terrain and imagery tiles
+   * that the opening view is actually waiting for. Deferred, it loads in the first idle moment
+   * after the globe's initial tiles are in (or after `NIGHT_SKY_DEADLINE_MS` regardless), and
+   * the stars appear a moment later on an otherwise identical view.
+   *
+   * Deferring rather than replacing it with a lighter sky, because there is no flash to hide:
+   * until a sky box's textures arrive it draws nothing, so space shows the scene's black
+   * background either way -- exactly what the default showed while those 868 kB downloaded.
+   * Only the ordering changes. Near the ground the atmosphere hides the stars in any case.
+   */
+  private deferNightSky(): () => void {
+    const scene = this.scene;
+    let sawLoading = false;
+    let cancelIdle: (() => void) | undefined;
+    let removeFrame: (() => void) | undefined;
+    const install = (): void => {
+      cancelIdle = undefined;
+      if (this.destroyed || scene.isDestroyed()) return;
+      scene.skyBox = SkyBox.createEarthSkyBox();
+      scene.moon = new Moon();
+      scene.requestRender();
+    };
+    const schedule = (): void => {
+      if (!removeFrame) return;
+      removeFrame();
+      removeFrame = undefined;
+      clearTimeout(deadline);
+      if (typeof requestIdleCallback === "function") {
+        const handle = requestIdleCallback(install, { timeout: 1_000 });
+        cancelIdle = () => cancelIdleCallback(handle);
+      } else {
+        const handle = window.setTimeout(install, 0);
+        cancelIdle = () => clearTimeout(handle);
+      }
+    };
+    removeFrame = scene.postRender.addEventListener(() => {
+      // The first frame reports an empty queue before the globe has asked for anything.
+      if (!scene.globe.tilesLoaded) sawLoading = true;
+      else if (sawLoading) schedule();
+    });
+    const deadline = window.setTimeout(schedule, NIGHT_SKY_DEADLINE_MS);
+    return () => {
+      removeFrame?.();
+      removeFrame = undefined;
+      clearTimeout(deadline);
+      cancelIdle?.();
+    };
   }
 
   /**
@@ -458,6 +560,7 @@ export class CesiumSceneManager {
     this.camera.destroy();
     this.events.clear();
     if (!this.viewer.isDestroyed()) this.viewer.destroy();
+    this.host.remove();
     log.info("viewer destroyed");
   }
 }

@@ -1,37 +1,87 @@
-import {
-  Bookmark,
-  CloudUpload,
-  Columns2,
-  Layers,
-  MapPin,
-  Plus,
-  Ruler,
-  Settings2,
-  Terminal,
-} from "lucide-react";
+import { Layers, Plus, Ruler, Settings2, type LucideIcon } from "lucide-react";
 
 import { GlassButton, GlassPanel, GlassTooltip } from "@twin/ui";
 
-import { env } from "@/app/env";
-import { useSettings } from "@/state/settings";
+import { HOTKEYS, hotkeyKeys, type HotkeyId } from "@/app/hotkeys";
 import { useUi, type ToolPanel } from "@/state/ui";
 
-const tools: { id: ToolPanel; label: string; icon: typeof Layers; shortcut: string }[] = [
-  { id: "layers", label: "Layers", icon: Layers, shortcut: "L" },
-  { id: "sites", label: "Sites", icon: MapPin, shortcut: "S" },
-  { id: "captures", label: "Captures", icon: CloudUpload, shortcut: "U" },
-  { id: "measure", label: "Measure", icon: Ruler, shortcut: "M" },
-  { id: "compare", label: "Compare", icon: Columns2, shortcut: "C" },
-  { id: "bookmarks", label: "Bookmarks", icon: Bookmark, shortcut: "B" },
+interface Tool {
+  id: ToolPanel | "settings";
+  label: string;
+  icon: LucideIcon;
+  hotkey: HotkeyId;
+}
+
+/**
+ * The four tools, in rail order. Everything that used to have its own icon is inside one of
+ * them or in the site switcher, and every one of those is still a command-box action:
+ * Compare is a mode of Layers; Captures and "Add data" are the two tabs of Add; Sites and
+ * Saved views are in the site switcher; the developer console is in Settings › Advanced.
+ */
+const TOOLS: readonly Tool[] = [
+  { id: "layers", label: "Layers", icon: Layers, hotkey: "layers" },
+  { id: "measure", label: "Measure", icon: Ruler, hotkey: "measure" },
+  { id: "add", label: "Add", icon: Plus, hotkey: "captures" },
+  { id: "settings", label: "Settings", icon: Settings2, hotkey: "settings" },
 ];
 
-export function ToolRail() {
+/**
+ * The tool buttons, labelled: an icon with its word under it, so nothing on the rail has to
+ * be hovered to be understood. The same buttons fill the phone's More sheet (`layout="sheet"`),
+ * where `onPick` closes the sheet behind the choice.
+ */
+export function ToolButtons({
+  layout = "rail",
+  onPick,
+}: {
+  layout?: "rail" | "sheet";
+  onPick?: () => void;
+}) {
   const activePanel = useUi((s) => s.activePanel);
+  const settingsOpen = useUi((s) => s.settingsOpen);
   const togglePanel = useUi((s) => s.togglePanel);
-  const setAddDataOpen = useUi((s) => s.setAddDataOpen);
   const setSettingsOpen = useUi((s) => s.setSettingsOpen);
-  const devToolsOpen = useSettings((s) => s.devToolsOpen);
-  const setSettings = useSettings((s) => s.set);
+  return (
+    <>
+      {TOOLS.map(({ id, label, icon: Icon, hotkey }) => {
+        const active = id === "settings" ? settingsOpen : activePanel === id;
+        const button = (
+          <GlassButton
+            variant="ghost"
+            className="tool-rail__tool"
+            active={active}
+            onClick={() => {
+              if (id === "settings") setSettingsOpen(true);
+              else togglePanel(id);
+              onPick?.();
+            }}
+            data-testid={layout === "rail" ? `tool-${id}` : `more-${id}`}
+          >
+            <Icon size={18} aria-hidden="true" />
+            <span className="tool-rail__label">{label}</span>
+          </GlassButton>
+        );
+        // The tooltip adds only the key: the word is already on the button.
+        return layout === "rail" ? (
+          <GlassTooltip
+            key={id}
+            content={label}
+            shortcut={hotkeyKeys(HOTKEYS[hotkey]).join(" ")}
+            side="right"
+          >
+            {button}
+          </GlassTooltip>
+        ) : (
+          <span key={id} className="tool-rail__cell">
+            {button}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+export function ToolRail() {
   return (
     <GlassPanel
       strong
@@ -41,57 +91,7 @@ export function ToolRail() {
       aria-label="Tools"
       aria-orientation="vertical"
     >
-      {tools.map(({ id, label, icon: Icon, shortcut }) => (
-        <GlassTooltip key={id} content={label} shortcut={shortcut} side="right">
-          <GlassButton
-            iconOnly
-            variant="ghost"
-            aria-label={label}
-            active={activePanel === id}
-            onClick={() => togglePanel(id)}
-            data-testid={`tool-${id}`}
-          >
-            <Icon size={18} aria-hidden="true" />
-          </GlassButton>
-        </GlassTooltip>
-      ))}
-      <div className="tool-rail__divider" role="separator" />
-      <GlassTooltip content="Add data" side="right">
-        <GlassButton
-          iconOnly
-          variant="ghost"
-          aria-label="Add data"
-          onClick={() => setAddDataOpen(true)}
-          data-testid="tool-add-data"
-        >
-          <Plus size={18} aria-hidden="true" />
-        </GlassButton>
-      </GlassTooltip>
-      <GlassTooltip content="Settings" shortcut="," side="right">
-        <GlassButton
-          iconOnly
-          variant="ghost"
-          aria-label="Settings"
-          onClick={() => setSettingsOpen(true)}
-          data-testid="tool-settings"
-        >
-          <Settings2 size={18} aria-hidden="true" />
-        </GlassButton>
-      </GlassTooltip>
-      {env.devToolsEnabled && (
-        <GlassTooltip content="Developer tools" shortcut="D" side="right">
-          <GlassButton
-            iconOnly
-            variant="ghost"
-            aria-label="Developer tools"
-            active={devToolsOpen}
-            onClick={() => setSettings({ devToolsOpen: !devToolsOpen })}
-            data-testid="tool-dev"
-          >
-            <Terminal size={18} aria-hidden="true" />
-          </GlassButton>
-        </GlassTooltip>
-      )}
+      <ToolButtons />
     </GlassPanel>
   );
 }

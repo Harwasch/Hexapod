@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +68,7 @@ def run(source: Path) -> dict:
         VOCABULARY,
         view_count=VIEWS,
         source_factory=lambda cameras: ss.OracleMasks(splats, levels, cameras),
+        workers=1,  # rendered here: the pytest process does not fork (tests/conftest.py)
     )
     return {
         "splats": splats,
@@ -435,7 +437,12 @@ def test_a_cached_run_resumes_with_the_same_result(run: dict, tmp_path: Path) ->
         return Counting()
 
     cameras = [v.camera for v in run["result"].views][:4]
-    args = {"cameras": cameras, "source_factory": factory, "cache": tmp_path / "cache"}
+    args = {
+        "cameras": cameras,
+        "source_factory": factory,
+        "cache": tmp_path / "cache",
+        "workers": 1,
+    }
     first = ss.segment(splats, None, ss.FakeEmbedder(), VOCABULARY, **args)
     assert len(calls) == 4
     second = ss.segment(splats, None, ss.FakeEmbedder(), VOCABULARY, **args)
@@ -497,6 +504,7 @@ def test_coverage_rounds_assign_more_of_the_scan(run: dict) -> None:
         "cameras": cameras,
         "source_factory": lambda c: ss.OracleMasks(splats, levels, c),
         "cells": run["result"].cells,
+        "workers": 1,
     }
     before = ss.segment(splats, None, ss.FakeEmbedder(), VOCABULARY, **args)
     after = ss.segment(
@@ -567,3 +575,131 @@ def test_given_categories_take_the_place_of_the_tags_vote() -> None:
     assert scene_categories.instance_categories(records, labels) == {1: "ground", 2: "ground"}
     given = scene_categories.instance_categories(records, labels, given={1: "produce"})
     assert given == {1: "produce", 2: "produce"}
+
+
+def test_each_batch_of_views_is_sized_from_the_reservation(
+    run: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no `workers`, the render processes come from the reservation the caller passed
+    (`default_workers(cpus, memory_bytes, worker_bytes)`, infra/modal/segment.py's `--cpus` /
+    `--memory-gb`, and what a render of this scan may hold), asked again for each batch of
+    views -- the first and every coverage round -- said, and kept in the stats. The first
+    batch's are forked (one `RenderPool`) and kept: a coverage round renders in them, as many
+    at a time as it is sized for, rather than forking again."""
+    splats, levels = run["splats"], run["levels"]
+    asked: list[tuple[object, object, object]] = []
+    sizes = iter([3, 2])
+
+    def default_workers(cpus=None, memory_bytes=None, worker_bytes=None):
+        asked.append((cpus, memory_bytes, worker_bytes))
+        return next(sizes)
+
+    pools: list[int] = []
+    batches: list[tuple[int, int | None]] = []
+
+    class Pool(ss.RenderPool):
+        """A pool of the processes asked for, that renders in this process (tests/conftest.py:
+        the pytest process does not fork)."""
+
+        def __init__(self, *args, workers: int = 1, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            pools.append(workers)
+
+        def __enter__(self):
+            super().__enter__()
+            self.workers = pools[-1]
+            return self
+
+        def views(self, cameras, workers=None):
+            batches.append((len(cameras), workers))
+            return super().views(cameras, workers)
+
+    monkeypatch.setattr(ss, "default_workers", default_workers)
+    monkeypatch.setattr(ss, "RenderPool", Pool)
+    said: list[str] = []
+    cameras = [v.camera for v in run["result"].views][:2]
+    sized = ss.segment(
+        splats,
+        None,
+        ss.FakeEmbedder(),
+        VOCABULARY,
+        cameras=cameras,
+        source_factory=lambda batch: ss.OracleMasks(splats, levels, batch),
+        progress=said.append,
+        cpus=8,
+        memory_bytes=32 * float(1 << 30),
+        coverage_rounds=1,
+        coverage_budget=4,
+    )
+    assert asked == [(8, 32 * float(1 << 30), ss.RENDER_WORKER_BYTES)] * 2
+    extra = len(sized.views) - len(cameras)
+    assert pools == [3] and batches == [(2, 3), (extra, 2)] and extra > 0
+    assert "render workers: 3" in said and "render workers: 2" in said
+    assert sized.lifted.stats["renderWorkers"] == [3, 2]
+    # A count given is used as it is.
+    asked.clear()
+    ss.segment(
+        splats,
+        None,
+        ss.FakeEmbedder(),
+        VOCABULARY,
+        cameras=cameras,
+        source_factory=lambda batch: ss.OracleMasks(splats, levels, batch),
+        workers=1,
+        cpus=8,
+        memory_bytes=32 * float(1 << 30),
+    )
+    assert asked == []
+
+
+#: Two batches through one pool of three processes, a thread started between them.
+RENDER_POOL = """
+import json
+import os
+import threading
+import numpy as np
+import segment_scene as ss
+from splat_render import Camera, Splats
+
+forks = []
+os.register_at_fork(before=lambda: forks.append(threading.active_count()))
+rng = np.random.default_rng(1)
+n = 5_000
+splats = Splats(
+    rng.uniform(-1, 1, (n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.full((n, 3), 0.03),
+    rng.uniform(0, 1, (n, 3)), np.full(n, 0.8),
+)
+cells = rng.integers(0, 40, n)
+cameras = [
+    Camera.look_at([3 * np.cos(a), 3 * np.sin(a), 1.0], [0, 0, 0], width=64, height=48)
+    for a in np.linspace(0.0, 6.0, 7)
+]
+expected = [ss.render_view(splats, camera, cells) for camera in cameras]
+with ss.RenderPool(splats, cells, workers=3) as pool:
+    forked = len(forks)
+    first = list(pool.views(cameras[:4]))
+    stop = threading.Event()
+    busy = threading.Thread(target=stop.wait)
+    busy.start()
+    second = list(pool.views(cameras[4:], workers=1))
+    stop.set()
+    busy.join()
+same = [
+    bool(np.array_equal(a.rgb, b.rgb) and np.array_equal(a.cell, b.cell))
+    for a, b in zip(first + second, expected, strict=True)
+]
+print(json.dumps({
+    "forkedOnEnter": forked, "threadsAtFork": forks, "same": same,
+    "batches": [len(first), len(second)], "peak": ss._WORKER_PEAK["bytes"],
+}))
+"""
+
+
+def test_a_runs_render_processes_are_forked_once(fresh_process: Callable[[str], dict]) -> None:
+    """A `RenderPool` forks its processes as it is entered, from a process with no thread
+    but the one forking, and renders every batch in them, in order, the views this process
+    renders -- the second batch after this process has started a thread of its own, as the
+    mask model does, and without a fork. (Run in a new interpreter: tests/conftest.py.)"""
+    out = fresh_process(RENDER_POOL)
+    assert out["forkedOnEnter"] == 3 and out["threadsAtFork"] == [1, 1, 1]
+    assert out["batches"] == [4, 3] and all(out["same"]) and out["peak"] > 0

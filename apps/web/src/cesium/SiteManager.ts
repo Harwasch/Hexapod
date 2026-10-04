@@ -8,7 +8,7 @@ import {
   type Cesium3DTileset,
   type Rectangle,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
   type Cesium3DTile,
   sampleTerrainMostDetailed,
 } from "cesium";
@@ -25,16 +25,32 @@ import {
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
+import type { SiteLoad } from "@/state/sites";
 
+import { prefetchScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 import { withRetry } from "@/lib/retry";
+import { throttleProgress } from "@/lib/throttle";
+import { withTimeout } from "@/lib/timeout";
 import { timed } from "@/lib/timing";
 
 import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
-import { isIonAuthError, isIonNotFound, rememberIonAssetMissing } from "./ion";
+import {
+  quadraticInOut,
+  retarget,
+  samePose,
+  type ArrivalPose,
+  type Easing,
+} from "./flightRetarget";
+import {
+  forgetIonAssetMissing,
+  isIonAuthError,
+  isIonNotFound,
+  rememberIonAssetMissing,
+} from "./ion";
 import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
 import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
@@ -84,6 +100,35 @@ const ENGAGE_ALTITUDE_RADII = 2.5;
 const DISENGAGE_ALTITUDE_RADII = 3.5;
 const ENGAGE_DISTANCE_RADII = 3;
 const DISENGAGE_DISTANCE_RADII = 4.5;
+/**
+ * The site's catalog record must answer within this (ms). The API scales to zero between
+ * visits (fly.toml), and a cold start takes a few seconds; a request that has not answered by
+ * now is stalled, not slow, and is cut off so the HUD can say so and offer Retry.
+ */
+const DETAIL_TIMEOUT_MS = 12_000;
+/**
+ * One attempt at creating a site's tileset -- the tile proxy probe, `tileset.json`, ion's
+ * endpoint -- fails after this long without an answer or, while a tileset's JSON downloads,
+ * without a new byte (ms; `TilesetDeadlines`). A stall used to hold the load forever: withRetry
+ * only retries what fails. Then it was a total for the attempt, which a large tileset.json on
+ * a slow phone link never met: every retry started the download over and failed the same way.
+ */
+const TILESET_STALL_MS = 15_000;
+/**
+ * A site whose record failed is not fetched again by proximity for this long (ms): the camera
+ * moving near it re-checks every 400 ms, and an API that is down would be asked each time.
+ * A fly-to or Retry asks at once.
+ */
+const PROXIMITY_RETRY_MS = 30_000;
+/** A flight re-pointed on the way never lands sooner than this (s). */
+const RETARGET_MIN_S = 1.2;
+/**
+ * After landing, a better destination (the authored bookmark, the model's real bounds) still
+ * moves the camera for this long (ms), and only if nobody has touched the camera since.
+ */
+const SETTLE_WINDOW_MS = 8_000;
+/** Where the load bar stands as each phase begins (state/sites.ts `SiteLoad`). */
+const LOAD_PROGRESS = { details: 0.05, model: 0.15, streaming: 0.3 } as const;
 
 interface AssetHandle {
   asset: SiteAsset;
@@ -136,6 +181,40 @@ interface ActiveSite {
   engaged: boolean;
 }
 
+/** The flight `flyTo` is steering: where it is headed, and enough to re-point it smoothly. */
+interface SiteFlight {
+  /** Which `flyTo` call this belongs to; a later call supersedes it. */
+  serial: number;
+  siteId: string;
+  pose: ArrivalPose;
+  /** `performance.now()` when this leg left. */
+  startedAt: number;
+  durationS: number;
+  easing: Easing;
+  /** Chord from where this leg left to `pose` (m). */
+  lengthM: number;
+  state: "flying" | "landed" | "cancelled";
+  /** Where and when it landed, to tell whether anybody has moved the camera since. */
+  landed: { at: number; position: Cartesian3; heading: number } | null;
+  /**
+   * The camera controller's flight count once this leg left (`CameraController.flights`): a
+   * higher count later means another flight (an object flown to, a search result) has the
+   * camera, even before it has moved it.
+   */
+  cameraFlights?: number;
+}
+
+/**
+ * Settles with the promise's value if it already has one (a cached record, the built-in demo
+ * site), or with undefined at the next macrotask: what a fly-to may use without waiting.
+ */
+function settledNow<T>(promise: Promise<T>): Promise<T | undefined> {
+  return Promise.race([
+    promise.catch(() => undefined),
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 0)),
+  ]);
+}
+
 /** Splat tiles kept in memory, as a multiple of what the Detail budget draws: the view,
  *  its coarser ancestors, and what was looked at a moment ago, so looking back finds it. */
 const SPLAT_CACHE_FACTOR = 2.5;
@@ -173,7 +252,24 @@ function sizeSplatCache(tileset: Cesium3DTileset, tile: Cesium3DTile, budget: nu
 export class SiteManager {
   private readonly scene: Scene;
   private summaries: SiteSummary[] = [];
-  private detailResolver: (id: string) => Promise<Site | null> = () => Promise.resolve(null);
+  /**
+   * Fetches a site's catalog record: null when the catalog has no such site, a rejection for
+   * any other failure. `signal` is aborted at DETAIL_TIMEOUT_MS.
+   */
+  private detailResolver: (id: string, signal?: AbortSignal) => Promise<Site | null> = () =>
+    Promise.resolve(null);
+  /** Records already fetched, so a second flight to a site leaves for its bookmark at once. */
+  private readonly details = new Map<string, Site>();
+  /** Record fetches in flight, shared by a flight and the activation it starts. */
+  private readonly pendingDetails = new Map<string, Promise<Site | null>>();
+  /** Each site's load, as the HUD shows it (`site-load` events, state/sites.ts). */
+  private readonly loads = new Map<string, SiteLoad>();
+  /** When each site's record last failed (`Date.now()`), for PROXIMITY_RETRY_MS. */
+  private readonly detailFailedAt = new Map<string, number>();
+  private flight: SiteFlight | null = null;
+  private flightSerial = 0;
+  /** Stops the scan renderer's prefetch of the current leg's destination. */
+  private cancelPrefetch: (() => void) | null = null;
   /** Every site currently loaded in the scene, keyed by site id. Sites can overlap (a hand-sized
    *  object registered on top of a campus), so several stay loaded at once. */
   private readonly loaded = new Map<string, ActiveSite>();
@@ -201,11 +297,18 @@ export class SiteManager {
   private metersPerPixel = Number.POSITIVE_INFINITY;
   private appliedMetersPerPixel = Number.POSITIVE_INFINITY;
   private flightTarget: string | null = null;
+  /**
+   * The site the latest fly-to is taking the camera to, for the HUD's load pill
+   * (`site-flight`), until the camera has left it (`checkProximity`). Unlike `flightTarget` it
+   * outlives the flight: a site whose record failed never becomes active, and once the camera
+   * has landed at the summary's pose the pill must still say why nothing loaded and offer Retry.
+   */
+  private flightSiteId: string | null = null;
   private readonly unsubscribe: (() => void)[] = [];
   private lastProximityCheck = 0;
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
     private readonly camera: CameraController,
     private readonly clipping: ClippingManager,
@@ -239,10 +342,32 @@ export class SiteManager {
   }
 
   /** Catalog summaries used for proximity activation; details are fetched lazily. */
-  setCatalog(summaries: SiteSummary[], resolver: (id: string) => Promise<Site | null>): void {
+  setCatalog(
+    summaries: SiteSummary[],
+    resolver: (id: string, signal?: AbortSignal) => Promise<Site | null>,
+  ): void {
     this.summaries = summaries;
     this.detailResolver = resolver;
+    // A new catalog may carry edited sites (a new bookmark); fetch their records afresh.
+    this.details.clear();
     this.checkProximity(true);
+  }
+
+  /**
+   * A fresh copy of a site's record, fetched elsewhere in the app (the query cache,
+   * `watchSiteRecords`): a bookmark saved or deleted, the site edited. The records kept for
+   * flights (`details`) and the loaded site's own copy were otherwise cleared only with a new
+   * catalog, and a bookmark changes nothing the catalog list carries -- so the next fly-to used
+   * to leave for a deleted bookmark, or for the footprint of a site that now has one. Every
+   * fly-to used to fetch the record afresh; the copy kept now has to be kept fresh instead.
+   *
+   * A loaded site takes the new bookmarks only: its assets are in the scene as they were
+   * loaded, and swapping them is a reload, not an update.
+   */
+  updateRecord(site: Site): void {
+    this.details.set(site.id, site);
+    const entry = this.loaded.get(site.id);
+    if (entry) entry.site = { ...entry.site, cameraBookmarks: site.cameraBookmarks };
   }
 
   private get active(): ActiveSite | null {
@@ -313,17 +438,45 @@ export class SiteManager {
       .sort((a, b) => (b.observedAt ?? "").localeCompare(a.observedAt ?? ""));
   }
 
-  /** Loads a site's assets into the scene without moving the camera. */
-  async activate(siteId: string, options: { primary?: boolean } = {}): Promise<Site | null> {
+  /**
+   * Loads a site's assets into the scene without moving the camera. `flight` marks the load as
+   * one a fly-to is waiting on (the HUD shows those). Resolves null when the record could not be
+   * had; the site's load record (`site-load`) says whether it is gone or failed, and why.
+   */
+  async activate(
+    siteId: string,
+    options: { primary?: boolean; flight?: boolean } = {},
+  ): Promise<Site | null> {
     const makePrimary = options.primary ?? true;
     const existing = this.loaded.get(siteId);
     if (existing) {
       if (makePrimary) this.setPrimary(siteId);
+      if (options.flight && this.loads.has(siteId)) this.reportLoad(siteId, { flight: true });
       return existing.site;
     }
-    const site = await this.detailResolver(siteId);
-    if (!site) return null;
+    const failedAt = this.detailFailedAt.get(siteId);
+    if (!options.flight && failedAt !== undefined && Date.now() - failedAt < PROXIMITY_RETRY_MS)
+      return null;
+    if (!this.pendingDetails.has(siteId) || options.flight) {
+      const flight = options.flight === true || (this.loads.get(siteId)?.flight ?? false);
+      this.startLoad(siteId, "details", flight);
+    }
+    let site: Site | null;
+    try {
+      site = await this.detailFor(siteId);
+    } catch (error) {
+      log.warn("site details failed", { site: siteId, error: describeError(error) });
+      this.detailFailedAt.set(siteId, Date.now());
+      this.failLoad(siteId, `The site's details did not load: ${describeError(error)}`, true);
+      return null;
+    }
+    if (!site) {
+      this.failLoad(siteId, "The catalog no longer has this site.", false);
+      return null;
+    }
+    this.detailFailedAt.delete(siteId);
     if (this.loaded.has(siteId)) return site;
+    this.reportLoad(siteId, { phase: "model", progress: LOAD_PROGRESS.model });
     const defaultAsset = site.assets.find((a) => a.defaultVisible) ?? site.assets[0];
     const representation = defaultAsset?.representation ?? "gaussian-splat";
     const entry: ActiveSite = {
@@ -339,6 +492,12 @@ export class SiteManager {
     if (makePrimary || !this.primaryId) this.setPrimary(siteId);
     await this.showRepresentation(entry, representation);
     return site;
+  }
+
+  private setFlightSite(siteId: string | null): void {
+    if (this.flightSiteId === siteId) return;
+    this.flightSiteId = siteId;
+    this.events.emit("site-flight", siteId);
   }
 
   private setPrimary(siteId: string): void {
@@ -361,6 +520,8 @@ export class SiteManager {
       for (const handle of entry.handles.values()) this.disposeHandle(handle);
       this.clipping.setFootprint(id, null);
       this.loaded.delete(id);
+      if (this.loads.delete(id)) this.events.emit("site-load", { siteId: id, load: null });
+      if (this.flightSiteId === id) this.setFlightSite(null);
     }
     if (this.primaryId && !this.loaded.has(this.primaryId)) {
       this.primaryId = null;
@@ -376,41 +537,410 @@ export class SiteManager {
     this.scene.requestRender();
   }
 
-  /** Flies to a site and loads it. The camera pose comes from the default bookmark or the model bounds. */
+  /**
+   * Flies to a site and loads it, at the same time. The camera leaves on the click, for the
+   * best pose known at that moment, and the site's record and model load during the flight.
+   *
+   * It used to wait first: for the site's record (a GET that meets the API's cold start), then
+   * for the model's tileset (a proxy probe and `tileset.json`, retried up to four times), and
+   * without a bookmark for the model to be clamped to the terrain -- seconds of a dead click
+   * before anything moved, and forever if one of those stalled. Now:
+   *
+   * 1. The flight leaves at once, for the authored bookmark if the record is already here (a
+   *    second visit, the built-in demo), else for the catalog summary's centre and size.
+   * 2. The record and the model load meanwhile (`activate`), with deadlines on both, and the
+   *    flight itself is what Cesium preloads destination tiles for (`preloadFlightDestinations`).
+   * 3. As better poses arrive -- the bookmark with the record, the model's real bounds once it
+   *    rests on the ground -- the flight is re-pointed without a jolt: the new leg leaves at
+   *    the speed the camera already has (flightRetarget.ts). After landing, a better pose still
+   *    moves a camera nobody has touched, for a few seconds; never one somebody has.
+   *
+   * Progress and failure go to the site's load record (`site-load`, state/sites.ts), where the
+   * HUD shows them with Retry; a failed record leaves the camera at the summary's pose.
+   */
   async flyTo(siteId: string): Promise<void> {
     const summary = this.summaries.find((s) => s.id === siteId);
     // Protected from proximity unloading from the very start: the catalog can finish loading
     // while the site details are still being fetched, and the camera is usually far away.
     this.flightTarget = siteId;
-    const site = await this.activate(siteId);
-    if (!site) {
-      this.flightTarget = null;
-      this.events.emit("toast", {
-        tone: "error",
-        title: "Site not found",
-        body: "The catalog no longer has this site.",
-      });
+    // The pill speaks for this site from the click: its record is what it waits on first.
+    this.setFlightSite(siteId);
+    const serial = ++this.flightSerial;
+    const detail = this.detailFor(siteId);
+    // Swallowed here: `activate` turns a failure into the site's load record.
+    detail.catch(() => undefined);
+    const activation = this.activate(siteId, { flight: true });
+    const early =
+      this.loaded.get(siteId)?.site ?? this.details.get(siteId) ?? (await settledNow(detail));
+    if (serial !== this.flightSerial) return;
+    if (early === null) {
+      this.siteNotFound(siteId);
       return;
     }
-    const bookmark = site.cameraBookmarks.find((b) => b.isDefault) ?? site.cameraBookmarks[0];
-    const onComplete = () => {
-      this.flightTarget = null;
+    const first = early
+      ? this.arrivalFor(early)
+      : summary
+        ? this.summaryArrival(summary)
+        : undefined;
+    if (first) this.startFlight(serial, siteId, first);
+
+    let site: Site | null;
+    try {
+      site = early ?? (await detail);
+    } catch {
+      // The record failed; the load record says so and offers Retry. Wherever the camera is
+      // going (the summary's pose), it is allowed to arrive.
+      if (!first && this.flightTarget === siteId) this.flightTarget = null;
+      return;
+    }
+    if (serial !== this.flightSerial) return;
+    if (!site) {
+      this.siteNotFound(siteId);
+      return;
+    }
+    if (!early) {
+      const pose = this.arrivalFor(site);
+      if (first) this.steer(serial, pose);
+      else this.startFlight(serial, siteId, pose);
+    }
+    // With an authored bookmark that is the destination. Without one, the model's own bounds
+    // are, once it is loaded and resting on the ground (a clamped object has no usable
+    // catalog height, so its record's sphere can be metres off).
+    if (this.bookmarkOf(site)) return;
+    await activation;
+    if (serial !== this.flightSerial) return;
+    const sphere = await this.boundingSphere(site);
+    if (sphere && serial === this.flightSerial)
+      this.steer(serial, this.camera.sphereArrival(sphere));
+  }
+
+  private siteNotFound(siteId: string): void {
+    if (this.flightTarget === siteId) this.flightTarget = null;
+    // Said by the toast below; there is nothing for the pill to retry.
+    if (this.flightSiteId === siteId) this.setFlightSite(null);
+    this.events.emit("toast", {
+      tone: "error",
+      title: "Site not found",
+      body: "The catalog no longer has this site.",
+    });
+  }
+
+  /** The default camera bookmark of a site, if it has any. */
+  private bookmarkOf(site: Site): Site["cameraBookmarks"][number] | undefined {
+    return site.cameraBookmarks.find((b) => b.isDefault) ?? site.cameraBookmarks[0];
+  }
+
+  /** Where a site's record says to arrive: its bookmark, else above its footprint. */
+  private arrivalFor(site: Site): ArrivalPose {
+    const bookmark = this.bookmarkOf(site);
+    if (bookmark) {
+      return {
+        longitude: bookmark.longitude,
+        latitude: bookmark.latitude,
+        height: bookmark.height,
+        heading: bookmark.heading,
+        pitch: bookmark.pitch,
+      };
+    }
+    const center = centerOf(site.boundary);
+    const radius = Math.max(boundingRadiusM(site.boundary), 20);
+    const ground = this.groundGuess(center.longitude, center.latitude, site.centroid.height);
+    return this.camera.sphereArrival(
+      new BoundingSphere(Cartesian3.fromDegrees(center.longitude, center.latitude, ground), radius),
+    );
+  }
+
+  /** Where the catalog summary says to arrive: above its centre, at its size. */
+  private summaryArrival(summary: SiteSummary): ArrivalPose {
+    const { longitude, latitude, height } = summary.centroid;
+    const radius = Math.max(Math.sqrt(summary.areaM2 / Math.PI), MIN_SITE_RADIUS_M);
+    const ground = this.groundGuess(longitude, latitude, height);
+    return this.camera.sphereArrival(
+      new BoundingSphere(Cartesian3.fromDegrees(longitude, latitude, ground), radius),
+    );
+  }
+
+  /**
+   * The ground height to aim at: the catalog's when it has one, else the globe's terrain as far
+   * as it has loaded (a CPU lookup), else the ellipsoid. Only the first leg aims this way; the
+   * record or the model corrects it on the way.
+   */
+  private groundGuess(longitude: number, latitude: number, height?: number | null): number {
+    if (height !== undefined && height !== null && Number.isFinite(height)) return height;
+    return this.scene.globe.getHeight(Cartographic.fromDegrees(longitude, latitude)) ?? 0;
+  }
+
+  /** The first leg of a fly-to: Cesium's usual quadratic in-out, at the usual pace. */
+  private startFlight(serial: number, siteId: string, pose: ArrivalPose): void {
+    const destination = Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height);
+    const lengthM = Cartesian3.distance(this.viewer.camera.positionWC, destination);
+    this.fly(serial, siteId, pose, this.camera.durationFor(destination), quadraticInOut, lengthM);
+  }
+
+  private fly(
+    serial: number,
+    siteId: string,
+    pose: ArrivalPose,
+    durationS: number,
+    easing: Easing,
+    lengthM: number,
+  ): void {
+    const flight: SiteFlight = {
+      serial,
+      siteId,
+      pose,
+      startedAt: performance.now(),
+      durationS,
+      easing,
+      lengthM,
+      state: "flying",
+      landed: null,
+    };
+    // Before `camera.flyTo`: it cancels the leg this replaces, synchronously, and that leg's
+    // onCancel must find itself already superseded.
+    this.flight = flight;
+    this.flightTarget = siteId;
+    // A scan drawn by a dedicated renderer (Spark, PlayCanvas) streams through an overlay that
+    // Cesium's own destination preloading never reaches; fetch what it will show from where
+    // this leg ends, during the flight. A re-pointed leg replaces the prefetch; the prefetch
+    // ends itself on arrival or after 15 s (scanView/ScanRendererHost.ts).
+    this.cancelPrefetch?.();
+    this.cancelPrefetch = prefetchScanDestination({
+      position: Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height),
+      heading: CesiumMath.toRadians(pose.heading),
+      pitch: CesiumMath.toRadians(pose.pitch),
+    });
+    const settle = () => {
+      if (this.flightTarget === siteId) this.flightTarget = null;
       this.checkProximity(true);
     };
-    if (bookmark) {
-      this.camera.flyToBookmark(bookmark, { onComplete });
-      return;
-    }
-    const sphere = await this.boundingSphere(site);
-    if (sphere) {
-      this.camera.flyToBoundingSphere(sphere, { onComplete });
-      return;
-    }
-    const centroid = summary?.centroid ?? site.centroid;
-    this.camera.flyTo(centroid.longitude, centroid.latitude, (centroid.height ?? 0) + 400, {
-      pitch: -35,
-      onComplete,
+    this.camera.flyTo(pose.longitude, pose.latitude, pose.height, {
+      heading: pose.heading,
+      pitch: pose.pitch,
+      durationS,
+      easing,
+      onComplete: () => {
+        if (this.flight !== flight) return;
+        this.cancelPrefetch = null;
+        const camera = this.viewer.camera;
+        flight.state = "landed";
+        flight.landed = {
+          at: performance.now(),
+          position: Cartesian3.clone(camera.positionWC),
+          heading: camera.heading,
+        };
+        settle();
+      },
+      onCancel: () => {
+        // Replaced by our own re-pointing: the new leg carries on.
+        if (this.flight !== flight) return;
+        // Somebody else took the camera (another fly-to, a search result): let it go, and stop
+        // fetching for a destination nobody is going to.
+        flight.state = "cancelled";
+        this.cancelPrefetch?.();
+        this.cancelPrefetch = null;
+        settle();
+      },
     });
+    flight.cameraFlights = this.camera.flights;
+  }
+
+  /**
+   * Points the current fly-to at a better pose: mid-flight at the camera's current speed, or
+   * after landing if nobody has moved the camera since. Nothing happens when the pose is
+   * effectively where the flight is already going, when another fly-to has superseded this
+   * one, or when somebody has taken the camera.
+   */
+  private steer(serial: number, pose: ArrivalPose): void {
+    const flight = this.flight;
+    if (flight?.serial !== serial || flight.state === "cancelled") return;
+    const camera = this.viewer.camera;
+    const destination = Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height);
+    const previous = Cartesian3.fromDegrees(
+      flight.pose.longitude,
+      flight.pose.latitude,
+      flight.pose.height,
+    );
+    const remainingM = Cartesian3.distance(camera.positionWC, destination);
+    // A few per cent of the distance still to fly, and 5 cm beside a hand-sized object.
+    const tolerance = Math.max(0.05, 0.03 * Cartesian3.distance(camera.positionWC, previous));
+    if (samePose(flight.pose, pose, Cartesian3.distance(previous, destination), tolerance)) return;
+    if (flight.state === "flying") {
+      // The leg's time can be up before Cesium has called it complete (a hidden tab draws no
+      // frames; slow frames finish late), and then there is no speed to carry on with: the
+      // camera is at the old pose, or still on its way and about to jump there, at rest. A
+      // fresh leg from rest, then. Dropping the better pose here landed the camera at the
+      // summary's centroid, and the settle window never saw it.
+      const next = retarget(
+        {
+          elapsedS: (performance.now() - flight.startedAt) / 1000,
+          durationS: flight.durationS,
+          easing: flight.easing,
+          lengthM: flight.lengthM,
+        },
+        remainingM,
+        RETARGET_MIN_S,
+      ) ?? { durationS: this.camera.durationFor(destination), easing: quadraticInOut };
+      log.info("flight re-pointed", { site: flight.siteId, durationS: next.durationS });
+      this.fly(serial, flight.siteId, pose, next.durationS, next.easing, remainingM);
+      return;
+    }
+    const landed = flight.landed;
+    if (!landed || performance.now() - landed.at > SETTLE_WINDOW_MS) return;
+    // Another flight has the camera, though it may not have moved it yet.
+    if (flight.cameraFlights !== this.camera.flights) return;
+    const untouched =
+      Cartesian3.distance(landed.position, camera.positionWC) < 0.01 &&
+      Math.abs(landed.heading - camera.heading) < 1e-4;
+    if (!untouched) return;
+    log.info("settling on a better pose", { site: flight.siteId });
+    this.fly(
+      serial,
+      flight.siteId,
+      pose,
+      this.camera.durationFor(destination),
+      quadraticInOut,
+      remainingM,
+    );
+  }
+
+  /**
+   * Tries a failed site load again (the HUD's Retry, through state/sites.ts): the model when
+   * the site is loaded, otherwise its record -- flying there again if a fly-to had asked for
+   * it, so the camera ends at the bookmark it never got.
+   */
+  async retry(siteId: string): Promise<void> {
+    const load = this.loads.get(siteId);
+    if (load?.phase !== "error") return;
+    this.detailFailedAt.delete(siteId);
+    const entry = this.loaded.get(siteId);
+    if (entry) {
+      this.startLoad(siteId, "model", load.flight);
+      await this.showRepresentation(entry, entry.representation);
+      return;
+    }
+    if (load.flight) await this.flyTo(siteId);
+    else await this.activate(siteId, { primary: false });
+  }
+
+  /** The site's record, from the cache, a fetch already in flight, or a new one with a deadline. */
+  private detailFor(siteId: string): Promise<Site | null> {
+    const known = this.details.get(siteId);
+    if (known) return Promise.resolve(known);
+    const pending = this.pendingDetails.get(siteId);
+    if (pending) return pending;
+    const controller = new AbortController();
+    const request = withTimeout(this.detailResolver(siteId, controller.signal), DETAIL_TIMEOUT_MS, {
+      what: "The catalog",
+      controller,
+    })
+      .then((site) => {
+        if (site) this.details.set(siteId, site);
+        return site;
+      })
+      .finally(() => this.pendingDetails.delete(siteId));
+    this.pendingDetails.set(siteId, request);
+    return request;
+  }
+
+  /** Starts (or restarts, for a retry) a site's load record at `phase`. */
+  private startLoad(siteId: string, phase: "details" | "model", flight: boolean): void {
+    this.loads.delete(siteId);
+    this.reportLoad(siteId, {
+      phase,
+      progress: LOAD_PROGRESS[phase],
+      error: null,
+      retryable: false,
+      attempt: 1,
+      flight,
+      startedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Updates a site's load record and tells the HUD, which gets the whole record. Progress
+   * never goes backwards, and a change of under a per cent is not worth an event.
+   */
+  private reportLoad(siteId: string, patch: Partial<SiteLoad>): void {
+    const current = this.loads.get(siteId);
+    const next: SiteLoad = {
+      phase: "details",
+      progress: 0,
+      error: null,
+      retryable: false,
+      attempt: 1,
+      flight: false,
+      startedAt: Date.now(),
+      ...current,
+      ...patch,
+    };
+    if (current) next.progress = Math.max(current.progress, next.progress);
+    if (next.phase === "ready") next.progress = 1;
+    if (
+      current?.phase === next.phase &&
+      current.error === next.error &&
+      current.attempt === next.attempt &&
+      current.flight === next.flight &&
+      next.progress - current.progress < 0.01
+    )
+      return;
+    this.loads.set(siteId, next);
+    this.events.emit("site-load", { siteId, load: next });
+  }
+
+  private failLoad(siteId: string, message: string, retryable: boolean): void {
+    this.reportLoad(siteId, { phase: "error", error: message, retryable });
+  }
+
+  /**
+   * Follows the shown model's first view into the site's load record until it is in:
+   * tiles still to come against the most there ever were, then `ready` on Cesium's
+   * `initialTilesLoaded`. A scan another renderer draws is never streamed here, so for that
+   * one the tileset itself is the end of the load.
+   */
+  private watchFirstTiles(
+    siteId: string,
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    asset: SiteAsset,
+  ): void {
+    const load = this.loads.get(siteId);
+    if (!load || load.phase === "ready" || load.phase === "error") return;
+    if (!this.cesiumDraws(asset) || tileset.tilesLoaded) {
+      this.reportLoad(siteId, { phase: "ready" });
+      return;
+    }
+    this.reportLoad(siteId, { phase: "streaming", progress: LOAD_PROGRESS.streaming });
+    let peak = 0;
+    const span = 1 - LOAD_PROGRESS.streaming;
+    // Only while this asset is the one shown: Splat / Mesh / Points can change mid-stream, and
+    // the record then belongs to the representation shown now (`restartLoad`).
+    const shown = (): boolean => {
+      const entry = this.loaded.get(siteId);
+      return entry !== undefined && this.pickAsset(entry, entry.representation)?.id === asset.id;
+    };
+    const offProgress = tileset.loadProgress.addEventListener(
+      (pending: number, processing: number) => {
+        if (!shown()) return;
+        const left = pending + processing;
+        peak = Math.max(peak, left);
+        if (peak > 0) {
+          this.reportLoad(siteId, { progress: LOAD_PROGRESS.streaming + span * (1 - left / peak) });
+        }
+      },
+    );
+    // `initialTilesLoaded` is raised once in a tileset's life; a model shown again later (a
+    // representation switched back to) finishes on `allTilesLoaded`, raised on every drain.
+    const done = (): void => {
+      offProgress();
+      offReady();
+      offAll();
+      if (shown() && this.loads.get(siteId)?.phase === "streaming")
+        this.reportLoad(siteId, { phase: "ready" });
+    };
+    const offReady = tileset.initialTilesLoaded.addEventListener(done);
+    const offAll = tileset.allTilesLoaded.addEventListener(done);
+    handle.unsubscribe.push(offProgress, offReady, offAll);
   }
 
   /** Bounding sphere of the active representation (loaded tileset) or the footprint. */
@@ -436,6 +966,7 @@ export class SiteManager {
     this.active.representation = representation;
     this.active.temporalAssetId = null;
     this.events.emit("representation", { siteId: this.active.site.id, representation });
+    this.restartLoad(this.active);
     await this.showRepresentation(this.active, representation);
   }
 
@@ -443,6 +974,9 @@ export class SiteManager {
     if (!this.active) return;
     const asset = this.active.site.assets.find((a) => a.id === assetId);
     if (!asset) return;
+    // Chosen on purpose (a version, the load pill's Retry): an ion asset found missing lately
+    // is asked for again rather than refused from memory (ion.ts).
+    if (asset.source.type === "cesium-ion") forgetIonAssetMissing(asset.source.assetId);
     this.active.temporalAssetId = assetId;
     if (asset.representation !== this.active.representation) {
       this.active.representation = asset.representation;
@@ -451,7 +985,24 @@ export class SiteManager {
         representation: asset.representation,
       });
     }
+    this.restartLoad(this.active);
     await this.showRepresentation(this.active, asset.representation);
+  }
+
+  /**
+   * Another model is about to be shown at a loaded site (Splat / Mesh / Points, a version, the
+   * asset's Retry): the site's load record is about the model shown, so one that ended in an
+   * error, or is still following the previous model, starts over at `model`. A model already
+   * loaded is `ready` at once (`watchFirstTiles`). It used to keep the error: after the mesh
+   * failed, switching back to a splat that was fine still said "Couldn't load the 3D model",
+   * since `watchFirstTiles` leaves an errored record alone. A record that reached `ready`
+   * stays: from there the asset's own state speaks (features/sites/siteLoad.ts).
+   */
+  private restartLoad(active: ActiveSite): void {
+    const siteId = active.site.id;
+    const load = this.loads.get(siteId);
+    if (!load || load.phase === "ready") return;
+    this.startLoad(siteId, "model", load.flight);
   }
 
   /** Every asset handle of every loaded site. */
@@ -508,6 +1059,9 @@ export class SiteManager {
     if (!asset) {
       this.clipping.setFootprint(active.site.id, null);
       this.events.emit("tilesets", this.activeTilesetLabels());
+      // Nothing to load for this representation: the site's load is as done as it gets.
+      if (this.loads.get(active.site.id)?.phase === "model")
+        this.reportLoad(active.site.id, { phase: "ready" });
       return;
     }
     const tileset = await this.ensureTileset(active, asset);
@@ -520,6 +1074,8 @@ export class SiteManager {
     tileset.show = active.engaged && this.cesiumDraws(asset);
     if (active.engaged) this.applyClip(active, asset, tileset);
     else this.clipping.setFootprint(active.site.id, null);
+    const handle = active.handles.get(asset.id);
+    if (handle) this.watchFirstTiles(active.site.id, handle, tileset, asset);
     this.events.emit("tilesets", this.activeTilesetLabels());
     this.scene.requestRender();
   }
@@ -579,11 +1135,19 @@ export class SiteManager {
       "site.asset.load",
       () =>
         withRetry(
-          () => createSiteTileset(asset, { maximumScreenSpaceError: this.screenSpaceError }),
+          () =>
+            createSiteTileset(
+              asset,
+              { maximumScreenSpaceError: this.screenSpaceError },
+              { stallMs: TILESET_STALL_MS, what: asset.name },
+            ),
           {
             permanent: (error) => isIonAuthError(error) || isIonNotFound(error),
-            onRetry: (error, attempt) =>
-              log.info("asset retrying", { asset: asset.id, attempt, error: describeError(error) }),
+            onRetry: (error, attempt) => {
+              log.info("asset retrying", { asset: asset.id, attempt, error: describeError(error) });
+              if (this.showsAsset(active, asset))
+                this.reportLoad(active.site.id, { attempt: attempt + 1 });
+            },
           },
         ),
       {
@@ -620,6 +1184,12 @@ export class SiteManager {
             id: asset.id,
             patch: { loadState: "error", error: message },
           });
+          // Quiet, but not silent where the operator is looking: when it is the site's shown
+          // model (the San Francisco site's own mesh), the load record ends in an error, so the
+          // pill says "Couldn't load the 3D model · Retry" instead of loading forever.
+          if (this.showsAsset(active, asset)) {
+            this.failLoad(active.site.id, `${asset.name} did not load: ${message}`, false);
+          }
           return null;
         }
         const message = isIonAuthError(error)
@@ -629,12 +1199,23 @@ export class SiteManager {
             : describeError(error);
         log.warn("asset failed", { asset: asset.id, error: message });
         this.events.emit("asset", { id: asset.id, patch: { loadState: "error", error: message } });
-        this.events.emit("toast", {
-          tone: "error",
-          title: `${asset.name} failed to load`,
-          body: message,
-          id: `asset-${asset.id}`,
-        });
+        const shown = this.showsAsset(active, asset);
+        if (shown) {
+          const permanent = isIonAuthError(error) || isIonNotFound(error);
+          this.failLoad(active.site.id, `${asset.name} did not load: ${message}`, !permanent);
+        }
+        // The active site's model is said once, where the operator is looking: the load pill
+        // beside Splat / Mesh / Points reads the record above ("Couldn't load the 3D model ·
+        // Retry", `SiteLoadStatus`). A toast as well would say it twice, and with the asset's
+        // file name rather than the site's. Any other failure has no pill to speak for it.
+        if (!shown || this.primaryId !== active.site.id) {
+          this.events.emit("toast", {
+            tone: "error",
+            title: `${asset.name} failed to load`,
+            body: message,
+            id: `asset-${asset.id}`,
+          });
+        }
         if (isIonAuthError(error)) this.events.emit("token", "invalid");
         return null;
       })
@@ -642,6 +1223,14 @@ export class SiteManager {
         if (handle) handle.loading = null;
       });
     return handle.loading;
+  }
+
+  /** Whether `asset` is the one a loaded site shows, so its load is the site's load. */
+  private showsAsset(active: ActiveSite, asset: SiteAsset): boolean {
+    return (
+      this.loaded.get(active.site.id) === active &&
+      this.pickAsset(active, active.representation)?.id === asset.id
+    );
   }
 
   private attachTileset(handle: AssetHandle, tileset: Cesium3DTileset, asset: SiteAsset): void {
@@ -692,19 +1281,27 @@ export class SiteManager {
         attachTelemetry(tileset, this.scene, asset.id),
       );
     }
+    // Loading progress reaches the store at most four times a second (throttleProgress): Cesium
+    // reports it up to once a rendered frame, and every asset patch re-renders whatever reads
+    // the assets (the representation switcher reads them all). The end of loading goes
+    // through at once, and the quality policy hears every report, unthrottled.
+    const reportProgress = throttleProgress((pending, processing) => {
+      const counted = (handle.splats?.total ?? 0) * SPLAT_BYTES_ESTIMATE;
+      this.events.emit("asset", {
+        id: asset.id,
+        patch: {
+          progress: { pending, processing },
+          memoryMb: Math.round(Math.max(tileset.totalMemoryUsageInBytes, counted) / 1048576),
+          screenSpaceError: tileset.maximumScreenSpaceError,
+        },
+      });
+    });
     handle.unsubscribe.push(
       tileset.loadProgress.addEventListener((pending: number, processing: number) => {
         this.performance.reportLoading("sites", pending, processing);
-        const counted = (handle.splats?.total ?? 0) * SPLAT_BYTES_ESTIMATE;
-        this.events.emit("asset", {
-          id: asset.id,
-          patch: {
-            progress: { pending, processing },
-            memoryMb: Math.round(Math.max(tileset.totalMemoryUsageInBytes, counted) / 1048576),
-            screenSpaceError: tileset.maximumScreenSpaceError,
-          },
-        });
+        reportProgress(pending, processing);
       }),
+      () => reportProgress.cancel(),
       tileset.initialTilesLoaded.addEventListener(() => this.camera.refreshPose()),
       tileset.allTilesLoaded.addEventListener(() => this.camera.refreshPose()),
       tileset.tileFailed.addEventListener((detail: { message?: string; url?: string }) => {
@@ -959,6 +1556,21 @@ export class SiteManager {
       }
     }
 
+    // The pill follows a fly-to's destination until the camera has left it, once the flight is
+    // over (landed or taken over): further out than a site hands its model back to the world,
+    // or higher than sites load at all. Landing at a site whose record failed keeps it, with
+    // its error and Retry; a small site registered inside it (a rock on a campus) does not
+    // take the pill away, as "the nearest site" would.
+    const flown = this.flightSiteId;
+    if (flown !== null && this.flightTarget !== flown) {
+      const there = ranked.find((r) => r.summary.id === flown);
+      const stays =
+        there !== undefined &&
+        there.distance < there.radius * DISENGAGE_DISTANCE_RADII &&
+        pose.altitude < ACTIVATE_DISTANCE_M;
+      if (!stays) this.setFlightSite(null);
+    }
+
     for (const entry of this.loaded.values())
       this.setEngaged(entry, this.shouldEngage(entry, entry.engaged));
 
@@ -1100,6 +1712,8 @@ export class SiteManager {
 
   destroy(): void {
     for (const off of this.unsubscribe) off();
+    this.cancelPrefetch?.();
+    this.cancelPrefetch = null;
     this.deactivate();
   }
 }

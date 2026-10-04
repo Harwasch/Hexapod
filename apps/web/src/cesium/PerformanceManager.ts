@@ -1,10 +1,11 @@
-import type { PostProcessStage, Scene, Viewer } from "cesium";
+import type { CesiumWidget, PostProcessStage, Scene } from "cesium";
 
 import { isHandheld } from "@/lib/detail";
 import type { Emitter } from "@/lib/emitter";
 import { QUALITY_SSE, type QualityPreset } from "@/state/settings";
 
 import { createColorGradeStage } from "./colorGrade";
+import { constrainedDevice, sharedTileCacheUsage } from "./providers/tiles";
 
 import type { SceneEvents } from "./types";
 
@@ -265,6 +266,36 @@ const GROUPS: TilesetGroup[] = ["sites", "world"];
 /** No tileset is ever asked for finer than this many device pixels of error. */
 export const MIN_DEVICE_PX = 2;
 
+/**
+ * On a phone or tablet, or with Save-Data on, the world is never asked for finer than this
+ * many pixels of error (CesiumJS's own, CSS pixels), at rest or moving. Idle refinement takes
+ * the world to the preset minimum, 2 px, which on a phone is the Google world's finest tiles
+ * for everything in view: hundreds of megabytes, the largest cost of a still frame on a
+ * device with a fraction of a desktop's memory and bandwidth, for detail a small screen
+ * barely shows. Collected sites are not held: they are what the visit is for.
+ */
+export const CONSTRAINED_WORLD_MIN_SSE_PX = 6;
+
+/**
+ * The bounds a group's error walks within: the preset's (with the ladder's penalty), and for
+ * the world on a constrained device (`constrainedDevice`) never under
+ * `CONSTRAINED_WORLD_MIN_SSE_PX` once divided by the pixel ratio, as the world's sink divides
+ * it (`devicePixelError`).
+ */
+export function groupBounds(
+  bounds: { base: number; min: number; max: number },
+  group: TilesetGroup,
+  device: { constrained: boolean; pixelRatio: number },
+): { base: number; min: number; max: number } {
+  if (group !== "world" || !device.constrained) return bounds;
+  const floor = CONSTRAINED_WORLD_MIN_SSE_PX * Math.max(1, device.pixelRatio);
+  return {
+    base: Math.max(bounds.base, floor),
+    min: Math.max(bounds.min, floor),
+    max: Math.max(bounds.max, floor),
+  };
+}
+
 /** Cesium measures screen-space error in CSS pixels; hand it device pixels, quantised. */
 export function devicePixelError(sse: number, pixelRatio: number): number {
   return Math.max(MIN_DEVICE_PX, Math.round((sse / pixelRatio) * 4) / 4);
@@ -357,12 +388,17 @@ export class PerformanceManager {
   private readonly motionFrameMs: number[] = [];
   /** Timestamp of the last frame that carried evidence (motion or animation), for its interval. */
   private lastEvidenceFrameAt: number | null = null;
+  /** A phone or tablet, or Save-Data: the world is held coarser (`groupBounds`). */
+  private readonly constrained = constrainedDevice();
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
   ) {
     this.scene = viewer.scene;
+    // The tile cache every mesh and world tileset shares (providers/tiles.ts): each tileset
+    // has a cache of its own, and only the sum says what the device holds.
+    for (const group of GROUPS) this.addMemorySource(group, sharedTileCacheUsage);
     const info = readGpuInfo(viewer.canvas);
     this.gpu = info.renderer;
     this.webgl2 = info.webgl2;
@@ -466,7 +502,8 @@ export class PerformanceManager {
     this.groups[group].memorySources.push(source);
   }
 
-  /** A group's most loaded tileset's share of its budget; each tileset has its own cache. */
+  /** A group's most loaded tileset's share of its budget; each tileset has its own cache, and
+   *  the tilesets together the device's total (`sharedTileCacheUsage`, a source of each). */
   private memoryRatio(group: TilesetGroup): number {
     let ratio = 0;
     for (const source of this.groups[group].memorySources) {
@@ -508,17 +545,21 @@ export class PerformanceManager {
 
   configure(inputs: QualityInputs): void {
     this.inputs = inputs;
-    const bounds = QUALITY_SSE[inputs.preset];
     this.applyGrade();
+    // Still and moving frames share one resolution. Performance renders at the browser's
+    // recommended (CSS pixel) resolution; the others use native device pixels until the
+    // ladder proves the machine cannot keep up. Set first: a constrained device's world
+    // floor is in pixels of it (`groupBounds`).
+    this.viewer.useBrowserRecommendedResolution = inputs.preset === "performance";
     for (const group of GROUPS) {
-      this.groups[group].sse = inputs.manualScreenSpaceError ?? bounds.base;
+      const bounds = this.boundsOf(group, QUALITY_SSE[inputs.preset]);
+      this.groups[group].sse = Math.max(
+        inputs.manualScreenSpaceError ?? bounds.base,
+        this.floorOf(group),
+      );
       this.applySse(group);
     }
     this.scene.globe.maximumScreenSpaceError = inputs.preset === "performance" ? 3 : 2;
-    // Still and moving frames share one resolution. Performance renders at the browser's
-    // recommended (CSS pixel) resolution; the others use native device pixels until the
-    // ladder proves the machine cannot keep up.
-    this.viewer.useBrowserRecommendedResolution = inputs.preset === "performance";
     this.baseScale = this.currentBaseScale();
     this.ladder = buildLadder(inputs.preset);
     this.level = 0;
@@ -527,6 +568,23 @@ export class PerformanceManager {
     this.recoveryMs = INITIAL_RECOVERY_MS;
     this.applyLevel();
     this.evaluate("configured");
+  }
+
+  /** A group's bounds on this device (`groupBounds`). */
+  private boundsOf(
+    group: TilesetGroup,
+    bounds: { base: number; min: number; max: number },
+  ): { base: number; min: number; max: number } {
+    return groupBounds(bounds, group, {
+      constrained: this.constrained,
+      pixelRatio: this.pixelRatio,
+    });
+  }
+
+  /** The finest error a group is ever given on this device, manual settings included: the
+   *  constrained world's floor, or none. */
+  private floorOf(group: TilesetGroup): number {
+    return this.boundsOf(group, { base: 0, min: 0, max: 0 }).min;
   }
 
   private currentBaseScale(): number {
@@ -847,10 +905,11 @@ export class PerformanceManager {
       const state = this.groups[group];
       pending += state.pending;
       processing += state.processing;
-      let target = this.inputs.manualScreenSpaceError ?? preset.base;
+      // A constrained device's world is held coarser (`groupBounds`), manual settings too.
+      let target = Math.max(this.inputs.manualScreenSpaceError ?? preset.base, this.floorOf(group));
       if (adaptive) {
         const decision = decideScreenSpaceError({
-          bounds,
+          bounds: this.boundsOf(group, bounds),
           current: state.sse,
           moving,
           loading: state.pending > 0 || state.processing > 0,

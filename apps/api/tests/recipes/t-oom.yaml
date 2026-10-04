@@ -1,0 +1,9 @@
+# A stage that runs out of GPU memory above `fits` gaussians (`t_oom`): the worker
+# retries it once, at 0.7x the cap its log names. A test sets `fits` to 0 in jobs.params
+# to make every attempt run out.
+name: t-oom
+version: 1
+description: A stage that runs out of GPU memory above a cap.
+inputs: []
+stages:
+  - { id: train, impl: t_oom, params: { fits: 750000 } }

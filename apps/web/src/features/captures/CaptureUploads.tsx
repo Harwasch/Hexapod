@@ -1,0 +1,154 @@
+import { Boxes, RotateCcw, Smartphone } from "lucide-react";
+
+import { EmptyState, GlassBadge, GlassButton, Spinner } from "@twin/ui";
+
+import { latestJobByCapture, useCaptures, useJobs, useProcessCapture } from "@/api/queries";
+import { useScene } from "@/cesium/SceneContext";
+import { useUploads } from "@/state/uploads";
+import { useUi } from "@/state/ui";
+
+import { CaptureCard } from "./CaptureCard";
+import { DropZone } from "./DropZone";
+import { PhoneHandoff } from "./PhoneHandoff";
+import { WriteTokenField } from "./WriteTokenField";
+import { useCaptureUploads } from "./useCaptureUploads";
+
+/**
+ * Captures: add one (drop files here, or send them from a phone), then watch it upload and
+ * process. The first tab of the Add panel (`AddPanel`).
+ *
+ * It reads top to bottom as the steps do: a way in, then the list. The phone is the second
+ * way in, not an extra: its QR code opens in the same place as the button, so there is never
+ * more than one "add" affordance on screen.
+ *
+ * In a panel rather than a sheet, because an upload runs for minutes and the camera has to
+ * stay usable the whole time.
+ */
+export function CaptureUploads({ open }: { open: boolean }) {
+  const tokenPrompt = useUi((s) => s.writeTokenPrompt);
+  const scene = useScene();
+  const captures = useCaptures(open);
+  const jobs = useJobs(open);
+  const items = useUploads((s) => s.items);
+  const uploads = useCaptureUploads();
+  const process = useProcessCapture();
+  // The capture "New capture from phone" made, whose QR code is showing at the top: in the
+  // uploads store, so closing Add (or switching its tab) mid-handoff loses neither.
+  const phone = useUploads((s) => s.phone);
+  const setPhone = useUploads((s) => s.setPhone);
+  const setPhoneHandoff = useUploads((s) => s.setPhoneHandoff);
+  const phoneCapture = phone?.captureId ?? null;
+
+  // `CatalogResult.data` is undefined until the first response lands, exactly as it is
+  // for sites; the panel renders its empty state rather than throwing.
+  const byCapture = latestJobByCapture(jobs.data ?? []);
+  const list = captures.data ?? [];
+
+  return (
+    <div className="glass-stack" data-testid="captures-panel">
+      {captures.builtin && (
+        <GlassBadge tone="warning" data-testid="captures-offline">
+          Offline — uploads unavailable
+        </GlassBadge>
+      )}
+      {tokenPrompt && <WriteTokenField onSaved={() => void uploads.retryLastDrop()} />}
+
+      <section className="capture-add" aria-label="Add a capture">
+        <DropZone
+          onFiles={(files) => void uploads.start(files)}
+          disabled={captures.builtin}
+          busy={uploads.busy}
+        />
+        {phone ? (
+          <PhoneHandoff
+            key={phone.captureId}
+            captureId={phone.captureId}
+            autoOpen
+            kept={phone.handoff}
+            onMinted={(handoff) => setPhoneHandoff(phone.captureId, handoff)}
+            onClose={() => setPhone(null)}
+          />
+        ) : (
+          <GlassButton
+            block
+            disabled={captures.builtin || uploads.busy}
+            leadingIcon={<Smartphone size={15} aria-hidden="true" />}
+            data-testid="capture-from-phone"
+            onClick={() => {
+              // Into the store, so the capture is shown even if the panel closed meanwhile.
+              void uploads.startFromPhone().then((id) => {
+                if (id) setPhone(id);
+              });
+            }}
+          >
+            New capture from phone
+          </GlassButton>
+        )}
+        {uploads.error && (
+          <div className="capture-add__error">
+            <p className="card__error" data-testid="capture-error">
+              {uploads.error}
+            </p>
+            {uploads.canRetryDrop && !tokenPrompt && (
+              <GlassButton
+                size="sm"
+                leadingIcon={<RotateCcw size={13} aria-hidden="true" />}
+                onClick={() => void uploads.retryLastDrop()}
+              >
+                Try again
+              </GlassButton>
+            )}
+          </div>
+        )}
+      </section>
+
+      {captures.isLoading && (
+        <div className="glass-row" style={{ justifyContent: "center", padding: "1rem" }}>
+          <Spinner label="Loading captures" />
+        </div>
+      )}
+      {!captures.isLoading && list.length === 0 && !captures.builtin && (
+        <EmptyState
+          icon={<Boxes size={24} />}
+          title="No captures yet"
+          body="Your uploads and their progress appear here."
+        />
+      )}
+      {list.length > 0 && (
+        <section className="capture-list" aria-label="Captures">
+          <h3 className="panel__eyebrow">Recent</h3>
+          <ul className="glass-list">
+            {list.map((capture) => (
+              <CaptureCard
+                key={capture.id}
+                capture={capture}
+                job={byCapture[capture.id]}
+                uploads={items}
+                processing={process.isPending && process.variables?.captureId === capture.id}
+                handoffShown={capture.id === phoneCapture}
+                onProcess={(recipe) => process.mutate({ captureId: capture.id, recipe })}
+                onRetryUpload={(id) => void uploads.retry(id)}
+                onCancelUpload={uploads.cancel}
+                onFlyTo={(siteId) => void scene?.sites.flyTo(siteId)}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
+/** "Clear finished", for the panel's header while there is anything finished to clear. */
+export function ClearFinishedUploads() {
+  const settled = useUploads((s) =>
+    Object.values(s.items).some((item) => item.phase === "complete" || item.phase === "cancelled"),
+  );
+  const clearSettled = useUploads((s) => s.clearSettled);
+  if (!settled) return null;
+  return (
+    <GlassButton size="sm" variant="ghost" onClick={clearSettled}>
+      Clear finished
+    </GlassButton>
+  );
+}

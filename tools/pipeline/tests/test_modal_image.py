@@ -147,3 +147,29 @@ def test_gpu_functions_reserve_cpu_and_size_their_thread_pools_to_it() -> None:
     assert "**THREAD_ENV" in source
     for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
         assert f'"{variable}": "{int(2 * cores)}"' in source
+
+
+def test_the_reservation_that_is_priced_is_the_one_that_is_deployed() -> None:
+    """`costUsd` adds the GPU functions' CPU and memory reservation to the GPU's rate
+    (`modal_adapter.reservation_rate`); a reservation changed in `app.py` and not there
+    would be a cost that no longer matches what Modal bills."""
+    from modal_adapter import GPU_RESERVATION
+
+    values = _constants("GPU_CPU_CORES", "GPU_MEMORY_MIB")
+    deployed = (float(str(values["GPU_CPU_CORES"])), int(str(values["GPU_MEMORY_MIB"])))
+    assert deployed == GPU_RESERVATION
+
+
+def test_colmap_is_capped_to_the_cpu_box_s_reservation() -> None:
+    """COLMAP's -1 is every core the container can see -- the host's, dozens of them, each
+    a SIFT thread holding a frame's scale space in 8 GiB. The CPU image says how many the
+    `cpu4` reservation has, and the pose stage reads it (`sfm.default_threads`)."""
+    from modal_adapter import CPU_TIERS
+
+    threads = str(_constants("COLMAP_THREADS")["COLMAP_THREADS"])
+    assert int(threads) == int(2 * CPU_TIERS["cpu4"][0])
+    assert f'"{sfm.THREADS_ENV}": COLMAP_THREADS' in APP.read_text(encoding="utf-8")
+    assert sfm.default_threads({sfm.THREADS_ENV: threads}) == 8
+    assert sfm.default_threads({}) is None
+    assert sfm.default_threads({sfm.THREADS_ENV: "lots"}) is None
+    assert sfm.default_threads({sfm.THREADS_ENV: "0"}) is None

@@ -98,16 +98,35 @@ class ObjectStorage(Protocol):
         """
         ...
 
-    def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject: ...
+    def put_object(
+        self, key: str, data: bytes, content_type: str, *, cache_control: str | None = None
+    ) -> StoredObject:
+        """Write a small object whole. `cache_control`, where given, is stored on it as its
+        `Cache-Control`, as for `upload_file`: a published generation's `tileset.json`,
+        written last by the sidecar attach, says how long a browser may keep it."""
+        ...
 
-    def upload_file(self, key: str, source: Path, content_type: str) -> StoredObject:
+    def upload_file(
+        self, key: str, source: Path, content_type: str, *, cache_control: str | None = None
+    ) -> StoredObject:
         """Stream a file to an object, never holding it in memory: `put_object`'s mirror
         of `download_file`. A trained splat is ~248 B a gaussian with its SH rest -- 2 GB
         at the 8M the L4's budget allows -- which `put_object(read_bytes())` would load
-        whole into a 2 GB worker."""
+        whole into a 2 GB worker.
+
+        `cache_control` is stored on the object as its `Cache-Control`, which a copy
+        carries with it: what a browser is told when it fetches the published copy."""
         ...
 
     def get_object(self, key: str) -> bytes: ...
+
+    def get_object_tail(self, key: str, max_bytes: int) -> tuple[bytes, int]:
+        """The last `max_bytes` of an object, and the object's whole size, in one ranged GET.
+
+        For reading the end of something unbounded -- a step log -- without holding all of
+        it: `get_object` on a run's log is the whole log in memory, per request.
+        """
+        ...
 
     def download_file(self, key: str, target: Path) -> int:
         """Stream an object to a file and return its size, never holding it in memory.
@@ -130,13 +149,27 @@ class ObjectStorage(Protocol):
 
     def delete_object(self, key: str) -> None: ...
 
-    def copy_object(self, source_bucket: str, source_key: str, key: str) -> StoredObject:
-        """Copy an object into this storage from another bucket, server side.
+    def copy_object(
+        self,
+        source_bucket: str,
+        source_key: str,
+        key: str,
+        *,
+        content_type: str | None = None,
+        cache_control: str | None = None,
+    ) -> str | None:
+        """Copy an object into this storage from another bucket (or this one), server
+        side, and return the copy's ETag where the store reports one.
 
         The bytes never come back to this process, which is the entire point: a packaged
         tileset is hundreds of megabytes and `get_object` returns them all at once. Both
         buckets are reached with the same credentials and the same endpoint, which is
         what makes one `CopyObject` legal across them.
+
+        With neither keyword the copy keeps the source's metadata (content type and
+        Cache-Control included); with either, the copy has exactly what is given. One
+        request: a store that answered is a store that has the object, so nothing reads
+        it back.
         """
         ...
 

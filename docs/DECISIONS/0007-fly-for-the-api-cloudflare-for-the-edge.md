@@ -119,3 +119,33 @@ defending.
 
 Nothing has been deployed to either provider: no `fly deploy`, no `wrangler pages deploy`,
 no bucket created, no account that exists.
+
+## Addendum (2026-10-02): the worker sleeps when idle, and is woken on enqueue
+
+The worker no longer runs all month. Polling every two seconds forever kept Neon's compute
+awake around the clock — it scales to zero only after five minutes with no queries — and a
+machine running for a queue that is empty most of the day. So:
+
+- **it exits when idle**, with status 0, once nothing has run or been claimed for
+  `WORKER_IDLE_EXIT_S` (900 s), having polled less and less often on the way (2 s for the
+  first minute, then up to 30 s). Only ever between jobs: a slot holding a job is busy, so
+  the lease, the heartbeat and SIGTERM work exactly as above. The group's restart policy is
+  `on-failure`, so the machine stays stopped.
+- **the API starts it** when it queues a job, through Fly's Machines API
+  (`app/services/worker_wake.py`), after the commit and off the request path. A worker
+  exiting at the moment a job lands is caught twice: it asks the queue once more before it
+  goes, and the API looks again a little later at a machine it found still up.
+- the `app` group **suspends** rather than stops.
+
+This does not reverse the decision; it is the shape the decision said Cloudflare could not
+host, kept. What the Context objected to was a platform deciding the worker was idle from
+outside — by request traffic — while it was supervising a two-hour `train`. Here the worker
+decides, from the one thing that knows (no slot holds a job), and it is woken by the event
+that makes it needed rather than by a cron. That is also the version of a wake-up that does
+not couple the worker to Fly: the worker only exits 0, and what starts it is a single
+module in the API. Another host needs another twenty lines there, not a different worker.
+
+The same change gave the worker a second, **CPU-only slot** (`WORKER_CPU_ONLY_SLOTS=1`): it
+claims only recipes with no `gpu:` stage, so a one-minute `splat-ingest` does not wait
+behind a two-hour training run, while two training runs — two GPUs, two videos on a 20 GB
+volume — still never share the machine.

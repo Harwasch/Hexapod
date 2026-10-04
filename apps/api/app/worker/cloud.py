@@ -31,12 +31,14 @@ process whose job is to hold a lease. The child still has no database session.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
 
 from app.storage import ObjectStorage
+from app.storage.parallel import TRANSFER_WORKERS as PARALLEL_WORKERS
+from app.storage.parallel import each
 from app.worker.pipeline_bridge import (
     PROVIDERS,
     CloudRunner,
@@ -101,11 +103,14 @@ def check_dispatchable(providers: Sequence[str]) -> None:
 class ObjectStoreTransfer:
     """The pipeline's `Transfer`, over the bucket.
 
-    Uploads are whole objects read into memory, exactly as `app.worker.outputs` does (a
-    stage's inputs are frames of a megabyte or two each); downloads stream to disk,
-    because what comes back from a GPU stage is one file of hundreds of megabytes. Keys
-    are opaque strings chosen by the pipeline, so nothing here knows what a stage or a
-    checkpoint is.
+    Uploads and downloads both stream between disk and the bucket (`upload_file`,
+    `download_file`), because what crosses in either direction can be one file of
+    hundreds of megabytes -- a trained splat coming back from a GPU stage, or going out
+    to `optimise_lod` -- and a directory's members move eight at a time. Keys are opaque
+    strings chosen by the pipeline, so nothing here knows what a stage or a checkpoint
+    is. (What the provider leaves under `.../transfer/out` is also where
+    `outputs.upload_artifact` copies a dispatched stage's artifacts from, inside the
+    bucket, rather than uploading the bytes this downloaded straight back.)
     """
 
     storage: ObjectStorage
@@ -175,18 +180,15 @@ class ObjectStoreTransfer:
 
 #: How many objects of one directory move at once. A frames artifact is ~100 objects of
 #: 0.2-2 MB, and one request at a time spends most of its time on each request's round
-#: trip rather than on bytes; eight keeps within botocore's default pool of ten
-#: connections and, for uploads (each member read into memory), 8 x 2 MB of the
-#: worker's RAM.
-TRANSFER_WORKERS = 8
+#: trip rather than on bytes. The number, and why it is eight, is `app.storage.parallel`'s,
+#: shared with the artifact uploads and the publish copies.
+TRANSFER_WORKERS = PARALLEL_WORKERS
 
 
 def _parallel[T](work: Callable[[T], int], items: Sequence[T]) -> list[int]:
-    """`work` over `items`, `TRANSFER_WORKERS` at a time; the first failure is raised."""
-    if len(items) <= 1:
-        return [work(item) for item in items]
-    with ThreadPoolExecutor(max_workers=TRANSFER_WORKERS) as pool:
-        return list(pool.map(work, items))
+    """`work` over `items`, `TRANSFER_WORKERS` at a time; the first failure is raised,
+    and what had not started by then is not started."""
+    return each(work, items, workers=TRANSFER_WORKERS)
 
 
 def adapter_for(
@@ -242,6 +244,9 @@ def build_runners(
     poll_interval_s: float = 5.0,
     checkpoint_every_s: float = 60.0,
     transfer_dir: Path | None = None,
+    shield: Callable[[], AbstractContextManager[object]] = nullcontext,
+    cost_cap_usd: float | None = None,
+    deadline_factor: float = 2.0,
 ) -> RunnerSet:
     """CPU stages here, GPU stages on the first provider that keeps them.
 
@@ -249,6 +254,11 @@ def build_runners(
     back to, which `Placement.of` refuses to let be interruptible. A deployment that
     names only a cheap interruptible host has no fallback, and `Placement` says so rather
     than quietly retrying it forever.
+
+    `shield` is the recipe process's way of holding a stop signal back while a call is
+    submitted and written down (`app.worker.child.Interrupts`); `cost_cap_usd` and
+    `deadline_factor` are the job's dollar ceiling and the overdue-trainer guard, both
+    `CloudRunner`'s to enforce because it is what sees a call's running cost and log.
     """
     if not providers:
         return RunnerSet.local()
@@ -270,5 +280,8 @@ def build_runners(
             transfer,
             poll_interval_s=poll_interval_s,
             checkpoint_every_s=checkpoint_every_s,
+            shield=shield,
+            cost_cap_usd=cost_cap_usd,
+            deadline_factor=deadline_factor,
         )
     )

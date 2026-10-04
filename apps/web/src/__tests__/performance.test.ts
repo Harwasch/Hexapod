@@ -1,4 +1,4 @@
-import type { Viewer } from "cesium";
+import type { CesiumWidget } from "cesium";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -254,7 +254,7 @@ function createFakeViewer() {
   const events = new Emitter<SceneEvents>();
   const snapshots: Partial<PerformanceSnapshot>[] = [];
   events.on("performance", (snapshot) => snapshots.push(snapshot));
-  const manager = new PerformanceManager(viewer as unknown as Viewer, events);
+  const manager = new PerformanceManager(viewer as unknown as CesiumWidget, events);
   manager.configure({ preset: "ultra", manualScreenSpaceError: null, adaptive: true });
   return { manager, scene, camera, snapshots };
 }

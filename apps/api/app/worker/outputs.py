@@ -15,15 +15,25 @@ A6 already puts in the StepResult, so a run's whole footprint is one prefix.
 
 from __future__ import annotations
 
+import json
+import logging
 import mimetypes
+import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.models.enums import ArtifactKind
+from app.services.published import IMMUTABLE_CACHE as IMMUTABLE_CACHE
+from app.services.published import is_published
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
-from app.worker.pipeline_bridge import ArtifactRef
+from app.storage.parallel import each
+from app.worker.pipeline_bridge import ArtifactRef, Workdir
+from app.worker.pipeline_bridge import checkpoint_key as stage_checkpoint_key
+
+log = logging.getLogger("app.worker")
 
 #: Pipeline artifact name -> the kind A2's `artifacts.kind` records.
 #:
@@ -69,15 +79,46 @@ def artifact_key(job_id: uuid.UUID, stage_id: str, name: str) -> str:
     return f"{stage_prefix(job_id, stage_id)}/{name}"
 
 
-def checkpoint_key(job_id: uuid.UUID, stage_id: str) -> str:
-    """Where a dispatched stage's checkpoint lives, stated once on this side too.
+def transfer_outputs_key(job_id: uuid.UUID, stage_id: str, attempt: int = 1) -> str:
+    """Where a call submitted by attempt `attempt` of a dispatched stage puts its `out/`.
 
-    It is the same string `BaseRunner` puts in `StageContext.checkpoint_key`, built from
-    the same two facts (the run id is the workdir's directory name, which is the job id).
-    The supervisor needs it for a step that did *not* finish -- a preempted attempt has
-    a checkpoint and no StepResult to read it out of.
+    The pipeline's `StageKeys.outputs`, stated once on this side as `checkpoint_key` below
+    is: `runs/<job>/<stage>/transfer/out`, under `transfer/` so it cannot collide with
+    the per-artifact keys uploaded here, with the attempt's suffix after the first
+    (`runners.per_attempt`: `out-a2`, ...) so an attempt nobody stopped cannot land its
+    outputs where the next one's are read. `tests/test_worker_outputs.py` holds the two
+    to the same string. Which of them a finished step's outputs came from is not
+    derived from this: the step records it (`_dispatched_outputs`).
     """
-    return f"{stage_prefix(job_id, stage_id)}/checkpoint"
+    name = "out" if attempt == 1 else f"out-a{attempt}"
+    return f"{stage_prefix(job_id, stage_id)}/transfer/{name}"
+
+
+def checkpoint_key(job_id: uuid.UUID, stage_id: str, attempt: int = 1) -> str:
+    """Where attempt `attempt` of a dispatched stage synced its checkpoint.
+
+    It is the string `BaseRunner` puts in `StageContext.checkpoint_key` -- the pipeline's
+    own `runners.checkpoint_key`, one key per attempt so a call nobody stopped cannot
+    write over the next attempt's -- built from the same facts (the run id is the
+    workdir's directory name, which is the job id). The supervisor needs it for a step
+    that did *not* finish -- a preempted attempt has a checkpoint and no StepResult to
+    read it out of.
+    """
+    return stage_checkpoint_key(str(job_id), stage_id, attempt)
+
+
+class UploadStopped(Exception):  # noqa: N818 - a request, as `StopRequested` is
+    """The worker was asked to stop while a stage's artifacts were going up.
+
+    Raised between two objects, never in the middle of one, so whatever is in the bucket
+    is whole; the stage's row is left unfinished, and the next worker redoes the upload
+    from the stage's `step.json` (`JobSupervisor._settle_finished`). Every key is the
+    same on the second go, so nothing the first left behind is in the way.
+    """
+
+
+#: Asked between two objects of an upload: True once the worker is stopping.
+Stopping = Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -123,34 +164,120 @@ def upload_log(
     return key
 
 
+#: `Cache-Control` for an object that is written once: a published generation's tiles,
+#: thumbnail and coverage cloud. A browser that has one never asks again. Defined beside
+#: the generation layout (`app/services/published.py`), because the API's sidecar attach
+#: writes generations too.
+#: For everything else: five minutes, then served stale for up to a week while it is
+#: revalidated. Tileset JSON is here because the backfill workflows rewrote it in place
+#: (collision-backfill.yml added `extras.collision` to a published `tileset.json`) until
+#: sidecars went through the API's attach, which cuts a generation of its own and writes
+#: even its JSON immutable (`app/services/attach.py`); and a run's own keys in the private
+#: bucket are here because a Refine or a retry rewrites them.
+SHORT_CACHE = "public, max-age=300, stale-while-revalidate=604800"
+#: JSON by its extension, in any case: the proxy decides on the decoded key and reads its
+#: extension case-blind, as it does for the Content-Type it labels the object with.
+_JSON_KEY = re.compile(r"\.json$", re.IGNORECASE)
+
+
+def cache_control_for(key: str) -> str:
+    """The `Cache-Control` an object under `key` is written with.
+
+    The same rule, word for word, as `immutable()` in `functions/r2/[[path]].js`, the
+    Pages Function that serves the public bucket on the web app's origin: a key inside a
+    published generation (`runs/<job>/p<generation>/...`, `app/services/published.py`)
+    that is not JSON is immutable, and anything else gets the short lifetime. Set on the
+    object itself, a browser reading the bucket's own public URL is told the same as one
+    going through the proxy: the run's own keys are uploaded with the short lifetime, and
+    `publish.Publisher` writes each published copy with the lifetime of the key it is
+    copied *to*. If one of the two rules changes, the other must.
+
+    "Immutable" is a promise that a key is never rewritten with different bytes, and a
+    run's own keys cannot make it: a Refine re-runs the *same* job from `train`, and
+    `package` writes the same tile names again with new geometry. It used to be made for
+    every non-JSON key under `runs/` all the same, and a Refine left browsers and the edge
+    with the preview's tiles under the new `tileset.json`. A published generation is
+    written once -- every publish copies into one of its own -- so there it is true.
+    """
+    immutable = is_published(key) and not _JSON_KEY.search(key)
+    return IMMUTABLE_CACHE if immutable else SHORT_CACHE
+
+
+def member_content_type(key: str) -> str:
+    """The Content-Type a directory artifact's member is uploaded with, from its name.
+
+    A published copy states its metadata rather than keeping the source's (it has a
+    lifetime of its own), and a listing carries no content types; this is the same answer
+    the upload gave, so the copy is labelled as the original was.
+    """
+    return _content_type(Path(key), "application/octet-stream")
+
+
+#: The runner a stage dispatched to a provider records in its `step.json`
+#: (`tools/pipeline/cloud.py`, `CloudRunner.name`).
+DISPATCHED_RUNNER = "cloud"
+#: The metric in which it records the key its outputs came home from.
+OUTPUTS_KEY = "outputsKey"
+#: One `CopyObject`'s ceiling on S3 and on R2. Bigger needs `UploadPartCopy`; an object
+#: over it is uploaded instead (a trained splat is ~2 GB at the L4's 8M gaussians).
+MAX_COPY_BYTES = 5 * 1024**3
+
+
 def upload_artifact(
-    storage: ObjectStorage, workdir_root: Path, job_id: uuid.UUID, ref: ArtifactRef
+    storage: ObjectStorage,
+    workdir_root: Path,
+    job_id: uuid.UUID,
+    ref: ArtifactRef,
+    *,
+    stopping: Stopping | None = None,
 ) -> UploadedArtifact | None:
     """Upload one artifact and describe the row it becomes.
 
-    A directory artifact is uploaded member by member under one prefix, and still becomes
-    **one** row — the artifact is the tileset, not each of its tiles. `storage_key` is
-    that prefix, `bytes` and `checksum` are the pipeline's own figures for the whole
-    directory, so the row and `artifacts.json` agree without recomputing anything.
+    A directory artifact is uploaded member by member under one prefix, eight at a time
+    (`app.storage.parallel`: normalize's frames and package's tiles are hundreds of small
+    objects whose cost is round trips), and still becomes **one** row — the artifact is
+    the tileset, not each of its tiles. `storage_key` is that prefix, `bytes` and
+    `checksum` are the pipeline's own figures for the whole directory, so the row and
+    `artifacts.json` agree without recomputing anything. Every object is written with the
+    `Cache-Control` a browser should get for it (`cache_control_for`).
+
+    A stage that ran on a provider is not uploaded at all when its bytes are already in
+    the bucket: see `_copy_from_transfer`.
+
+    `stopping` is asked before the artifact and before each member, and `UploadStopped`
+    raised once it says yes: a tileset is hundreds of objects and minutes of uploads, and
+    a deploy's SIGTERM that waited for the last of them was a SIGKILL at fly.toml's 30 s
+    `kill_timeout` instead.
     """
+    _check(stopping, ref)
     source = workdir_root / ref.path
     key = artifact_key(job_id, ref.stage_id, ref.name)
     try:
         if ref.kind == "dir":
             if not source.is_dir():
                 return None
-            for member in sorted(p for p in source.rglob("*") if p.is_file()):
-                relative = member.relative_to(source).as_posix()
-                storage.upload_file(
-                    f"{key}/{relative}",
-                    member,
-                    _content_type(member, "application/octet-stream"),
-                )
+            if not _copy_from_transfer(storage, workdir_root, job_id, ref, source, key, stopping):
+
+                def one(member: Path) -> object:
+                    _check(stopping, ref)
+                    member_key = f"{key}/{member.relative_to(source).as_posix()}"
+                    return storage.upload_file(
+                        member_key,
+                        member,
+                        _content_type(member, "application/octet-stream"),
+                        cache_control=cache_control_for(member_key),
+                    )
+
+                each(one, _members(source))
+            _prune(storage, key, {m.relative_to(source).as_posix() for m in _members(source)})
         else:
             if not source.is_file():
                 return None
-            # Streamed from disk: a trained splat can be larger than the worker's memory.
-            storage.upload_file(key, source, ref.content_type)
+            if not _copy_from_transfer(storage, workdir_root, job_id, ref, source, key, stopping):
+                # Streamed from disk: a trained splat can be larger than the worker's memory.
+                storage.upload_file(
+                    key, source, ref.content_type, cache_control=cache_control_for(key)
+                )
     except StorageUnavailableError:
         return None
     return UploadedArtifact(
@@ -160,3 +287,156 @@ def upload_artifact(
         checksum=ref.checksum,
         content_type=ref.content_type,
     )
+
+
+def _members(directory: Path) -> list[Path]:
+    return sorted(path for path in directory.rglob("*") if path.is_file())
+
+
+def _prune(storage: ObjectStorage, key: str, members: set[str]) -> None:
+    """Delete what is under a directory artifact's prefix and not in this upload.
+
+    A Refine re-runs the same job, and its `package` uploads into the same
+    `runs/<job>/<stage>/splat/` as the first: every member it writes is overwritten, and
+    one the first wrote and it did not -- a `collision.bin` the first packer wrote, tiles of
+    a coarser plan -- was left beside the new ones. The publish copies the whole prefix,
+    and the carry plan reads a kind as the run's own by its files there
+    (`carry.plan_carry`), so a stale grid passed for the new run's and replaced the live
+    one. After the upload the prefix holds exactly the directory, as the row (`bytes`,
+    `checksum`: the pipeline's figures for the directory) says it does.
+    """
+    stale = sorted(set(_sizes_under(storage, f"{key}/")) - members)
+    if stale:
+        log.info("worker: %s: removing %d objects an earlier attempt left", key, len(stale))
+        each(lambda rel: storage.delete_object(f"{key}/{rel}"), stale)
+
+
+def _check(stopping: Stopping | None, ref: ArtifactRef) -> None:
+    if stopping is not None and stopping():
+        raise UploadStopped(f"stopped while uploading {ref.stage_id}'s {ref.name}")
+
+
+def _copy_from_transfer(
+    storage: ObjectStorage,
+    workdir_root: Path,
+    job_id: uuid.UUID,
+    ref: ArtifactRef,
+    source: Path,
+    key: str,
+    stopping: Stopping | None = None,
+) -> bool:
+    """Copy a dispatched stage's artifact into place inside the bucket, if it can be.
+
+    A stage that ran on Modal handed its `out/` back through the bucket: the provider put
+    it under one of `transfer_outputs_key`'s keys, and the recipe process downloaded it
+    into the workdir. Uploading those bytes again from the worker -- a trained splat is up to 2 GB,
+    from a shared-CPU machine -- moves them a third time to put them where they already
+    are. So the artifact is copied server side from the provider's copy instead.
+
+    **The download is not skipped**, and cannot be from here: the stages after `train`
+    that run on this machine (`place`, `package`, `thumbnail`, ...) read `canonical.ply`
+    from the workdir, the runner checksums `out/` for `artifacts.json`, and "retry from
+    this stage" reads the workdir. Only the upload goes.
+
+    Done only when it is safe to say the bucket's copy *is* the workdir's: the stage's
+    `step.json` says it was dispatched and which key its outputs came home from, and the
+    provider's objects there match the workdir's files name for name and byte count for
+    byte count. Anything else -- a stage that ran here, a step that does not say, a
+    transfer through a shared directory rather than the bucket, an object too big for one
+    `CopyObject`, any error from the copy -- returns False and the caller uploads, as it
+    always did. Only "there is no bucket" (and a stop) propagates.
+    """
+    outputs_key = _dispatched_outputs(workdir_root, job_id, ref.stage_id)
+    if outputs_key is None:
+        return False
+    remote = f"{outputs_key}/{ref.name}"
+    try:
+        if ref.kind == "dir":
+            local = {
+                member.relative_to(source).as_posix(): member.stat().st_size
+                for member in _members(source)
+            }
+            if _sizes_under(storage, f"{remote}/") != local or any(
+                size > MAX_COPY_BYTES for size in local.values()
+            ):
+                return False
+
+            def one(relative: str) -> object:
+                _check(stopping, ref)
+                member_key = f"{key}/{relative}"
+                return storage.copy_object(
+                    storage.bucket,
+                    f"{remote}/{relative}",
+                    member_key,
+                    content_type=_content_type(Path(relative), "application/octet-stream"),
+                    cache_control=cache_control_for(member_key),
+                )
+
+            each(one, sorted(local))
+        else:
+            size = source.stat().st_size
+            there = storage.head_object(remote)
+            if there is None or there.size != size or size > MAX_COPY_BYTES:
+                return False
+            storage.copy_object(
+                storage.bucket,
+                remote,
+                key,
+                content_type=ref.content_type,
+                cache_control=cache_control_for(key),
+            )
+    except (StorageUnavailableError, UploadStopped):
+        raise
+    except Exception:
+        log.warning(
+            "worker: could not copy %s within the bucket from %s; uploading it instead",
+            key,
+            remote,
+            exc_info=True,
+        )
+        return False
+    log.info("worker: %s copied within the bucket from the provider's %s", key, remote)
+    return True
+
+
+def _dispatched_outputs(workdir_root: Path, job_id: uuid.UUID, stage_id: str) -> str | None:
+    """The key a dispatched stage's outputs came home from, or None to upload instead.
+
+    Read from its `step.json` -- written before the stage is reported finished -- where
+    `CloudRunner` records the key of the call whose outputs it fetched (`outputsKey`).
+    That is the call's key, not the attempt's: a call re-attached to across a dead worker
+    wrote under the attempt that submitted it. Until the 2026-10 review this was guessed
+    from the step's attempt number, which named the wrong key for such a call -- and after
+    a person's Retry reset the attempts to 1, `out-a2` and the rest could hold an earlier
+    run's outputs, whose file of the same name and size would have been copied as this
+    run's. So there is no guess: a step that does not say (written before it did), says
+    a stage ran here, or names anything but one of this stage's own transfer keys
+    (`transfer_outputs_key`) is uploaded from the workdir.
+    """
+    try:
+        step = json.loads(Workdir(workdir_root).step_path(stage_id).read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(step, dict) or step.get("runner") != DISPATCHED_RUNNER:
+        return None
+    metrics = step.get("metrics")
+    recorded = metrics.get(OUTPUTS_KEY) if isinstance(metrics, dict) else None
+    if not isinstance(recorded, str):
+        return None
+    first = transfer_outputs_key(job_id, stage_id)
+    if recorded != first and not re.fullmatch(re.escape(first) + r"-a[1-9][0-9]*", recorded):
+        return None
+    return recorded
+
+
+def _sizes_under(storage: ObjectStorage, prefix: str) -> dict[str, int]:
+    """Every object under `prefix`, by its key relative to it, with its size. Paged to
+    the end: a tileset or a frames directory can be more than one page."""
+    sizes: dict[str, int] = {}
+    token: str | None = None
+    while True:
+        page = storage.list_objects(prefix, continuation_token=token)
+        sizes.update({item.key[len(prefix) :]: item.size for item in page.objects})
+        token = page.next_continuation_token
+        if token is None:
+            return sizes
