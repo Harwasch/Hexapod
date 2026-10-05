@@ -43,6 +43,7 @@ interface SkinHarness {
   pokeAdvance(seconds: number, fps?: number): Promise<void>;
   pokeStatus(): { holding: boolean; active: number; grabbed: { instance: number } | null };
   screenPoint(instance: number, local: [number, number, number]): { x: number; y: number } | null;
+  aimPoint(instance: number): { x: number; y: number } | null;
 }
 
 const SCAN = process.env.SKINS_SCAN_DIR;
@@ -173,6 +174,19 @@ for (const variant of VARIANTS) {
       await page.screenshot({ path: SHOTS ? join(SHOTS, file) : test.info().outputPath(file) });
     };
     await open(page, DIR, variant);
+    // The skin's files load beside the tiles: wait for the part before asking for it.
+    await page.waitForFunction(
+      () => {
+        try {
+          const harness = (window as unknown as { __skin: { skins(): unknown[] } }).__skin;
+          return harness.skins().length > 0;
+        } catch {
+          return false;
+        }
+      },
+      undefined,
+      { timeout: 600_000, polling: 1000 },
+    );
     const call = caller(page);
     const skin = (await call("skins")).find((s) => s.instance === OBJECT);
     expect(skin, `object ${String(OBJECT)} has a skin in ${variant}`).toBeDefined();
@@ -193,14 +207,16 @@ for (const variant of VARIANTS) {
     await call("windOff");
 
     await call("pokeOn", 0);
-    const at = await call("screenPoint", OBJECT, [0, 0, 1.3 * scale]);
+    const at = await call("aimPoint", OBJECT);
     let pulled = rest;
     let grabbed = false;
     if (at) {
       await page.mouse.move(at.x, at.y);
       await page.mouse.down();
       grabbed = (await call("pokeStatus")).holding;
-      for (let k = 1; k <= 6; k += 1) await page.mouse.move(at.x + (PULL * k) / 6, at.y);
+      // A miss would be the camera's drag: let go where it was pressed.
+      if (grabbed)
+        for (let k = 1; k <= 6; k += 1) await page.mouse.move(at.x + (PULL * k) / 6, at.y);
       await call("pokeAdvance", 1.2);
       pulled = await call("frame");
       await shot("poke-0");

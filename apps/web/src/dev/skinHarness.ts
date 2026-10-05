@@ -171,6 +171,11 @@ export interface SkinHarness {
   };
   /** What the poke lays over a skinned instance's handles now, or null. */
   pokeOverlay(instance: number): number[] | null;
+  /**
+   * Where to press to poke skin `instance`: its first learned handle's support centre (where
+   * its slowest mode acts; for a rigid skin, its middle), on the page (CSS px), or null.
+   */
+  aimPoint(instance: number): { x: number; y: number } | null;
   /** Where a point of skin `instance`'s rest frame is on the page (CSS px), or null. */
   screenPoint(instance: number, local: [number, number, number]): { x: number; y: number } | null;
   /** The camera's position (Earth-fixed metres) and heading (degrees). */
@@ -316,6 +321,29 @@ export async function startSkinHarness(options: {
       y1: Math.min(height, Math.ceil(rect ? rect.y + rect.height : height)),
     };
   }
+
+  /** Where a point of skin `instance`'s rest frame is on the page (CSS px), or null. */
+  const screenPointOf = (
+    instance: number,
+    local: [number, number, number],
+  ): { x: number; y: number } | null => {
+    const skin = part().doc.byInstance.get(instance);
+    const root = tileset.root as { computedTransform?: Matrix4 };
+    if (!skin || !root.computedTransform) return null;
+    const point = Matrix4.multiplyByPoint(
+      root.computedTransform,
+      new Cartesian3(
+        skin.origin[0] + local[0],
+        skin.origin[1] + local[1],
+        skin.origin[2] + local[2],
+      ),
+      new Cartesian3(),
+    );
+    const at = SceneTransforms.worldToWindowCoordinates(scene, point, new Cartesian2());
+    if (!at) return null;
+    const rect = scene.canvas.getBoundingClientRect();
+    return { x: rect.left + at.x, y: rect.top + at.y };
+  };
 
   const handlesFor = (instance: number, motions: HandleMotion[]): Float64Array => {
     const skin = part().doc.byInstance.get(instance);
@@ -746,23 +774,14 @@ export async function startSkinHarness(options: {
       const over = skinningOf(ASSET)?.instanceOverlay(instance);
       return over ? Array.from(over) : null;
     },
-    screenPoint(instance, local) {
+    aimPoint(instance) {
       const skin = part().doc.byInstance.get(instance);
-      const root = tileset.root as { computedTransform?: Matrix4 };
-      if (!skin || !root.computedTransform) return null;
-      const point = Matrix4.multiplyByPoint(
-        root.computedTransform,
-        new Cartesian3(
-          skin.origin[0] + local[0],
-          skin.origin[1] + local[1],
-          skin.origin[2] + local[2],
-        ),
-        new Cartesian3(),
-      );
-      const at = SceneTransforms.worldToWindowCoordinates(scene, point, new Cartesian2());
-      if (!at) return null;
-      const rect = scene.canvas.getBoundingClientRect();
-      return { x: rect.left + at.x, y: rect.top + at.y };
+      if (!skin) return null;
+      const centre = skin.support[0]?.centre ?? [0, 0, 0.5 * skin.scale];
+      return screenPointOf(instance, [centre[0], centre[1], centre[2]]);
+    },
+    screenPoint(instance, local) {
+      return screenPointOf(instance, local);
     },
     cameraPose() {
       const p = scene.camera.positionWC;

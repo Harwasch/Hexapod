@@ -141,6 +141,61 @@ describe("skin.json and skin.bin", () => {
     expect(skinGlsl(1 / 127)).not.toContain("u_skinWeights2");
   });
 
+  it("reads a file of wide rows (32 handles: two texels a splat), every field peaking at ±1", () => {
+    const raw: unknown = JSON.parse(readFileSync(resolve(YARD, "skin-wide/skin.json"), "utf8"));
+    const bytes = Uint8Array.from(readFileSync(resolve(YARD, "skin-wide/skin.bin")));
+    const doc = parseSkin(raw, bytes.buffer);
+    if (!doc) throw new Error("the wide fixture is not a skin");
+    expect(doc.issues).toEqual([]);
+    expect(doc.rowWords).toBe(8);
+    expect(doc.skins.map((s) => s.handles)).toEqual([32, 32, 9, 8]);
+    expect(doc.skins[0]?.stiffnessClass).toBe("tree");
+    expect(doc.skins[0]?.traits?.properties?.vegetation).toBeGreaterThan(0.9);
+    const peaks = new Map(doc.skins.map((s) => [s.id, new Array<number>(s.handles - 1).fill(0)]));
+    for (const [checksum] of doc.tiles) {
+      const decoded = tileSkin(doc, checksum);
+      if (!decoded) throw new Error("unlisted");
+      expect(decoded.words2?.length).toBe(decoded.words.length);
+      for (let i = 0; i < decoded.skins.length; i += 1) {
+        const peak = peaks.get(decoded.skins[i] ?? 0);
+        if (!peak) continue;
+        for (let k = 0; k < peak.length; k += 1)
+          peak[k] = Math.max(
+            peak[k] ?? 0,
+            Math.abs(rowWeight(decoded.words, i, k, doc.scale, decoded.words2)),
+          );
+      }
+    }
+    // Weights 17..31 come from the second texel, and are as real as the first sixteen.
+    for (const peak of peaks.values()) for (const p of peak) expect(p).toBeGreaterThan(0.5);
+  });
+
+  it("gives a skin of one handle (a rigid object) no rows", () => {
+    const key = checksumPositions(new Float32Array(18).map((_, i) => i * 0.25));
+    const raw = {
+      format: "hexapod.skin",
+      version: 1,
+      weights: { dtype: "int8", rowBytes: 16, scale: 1 / 127, file: "skin.bin" },
+      skins: [
+        { id: 1, instance: 5, handles: 1, origin: [0, 0, 0], eigenvalues: [], support: [] },
+        { id: 2, instance: 6, handles: 2, origin: [0, 0, 0], eigenvalues: [1], support: [] },
+      ],
+      tiles: { [key]: { skins: [1, 3, 2, 2, 0, 1], row: 0 } },
+    };
+    const blob = new Uint8Array(32);
+    blob[0] = 127; // splat 4's weight 1
+    blob[16] = 64; // splat 5's
+    const doc = parseSkin(raw, blob.buffer);
+    expect(doc?.tiles.has(key)).toBe(true);
+    const decoded = doc ? tileSkin(doc, key) : undefined;
+    expect(Array.from(decoded?.skins ?? [])).toEqual([1, 1, 1, 2, 2, 0]);
+    expect(rowWeight(decoded?.words ?? [], 0, 0, 1)).toBe(0);
+    expect(rowWeight(decoded?.words ?? [], 3, 0, 1)).toBe(127);
+    expect(rowWeight(decoded?.words ?? [], 4, 0, 1)).toBe(64);
+    // Three rows would be needed if the rigid skin took any: two fit, the tile is kept.
+    expect(doc?.issues).toEqual([]);
+  });
+
   it("refuses what is not a skin and drops tiles whose rows are missing", () => {
     const { raw, blob } = fixture();
     expect(parseSkin({ ...(raw as object), format: "hexapod.instances" }, blob)).toBeNull();
@@ -358,6 +413,32 @@ describe("the skin part", () => {
     z[3] = 0.02;
     skinning.setInstanceHandles(10, z);
     expect(skinning.motionVersion).toBe(rested + 1);
+  });
+
+  it("lays an overlay (a poke) over the driver's handles: what is drawn is their sum", () => {
+    const skinId = doc.byInstance.get(10)?.id ?? 0;
+    const wind = new Float64Array(12);
+    wind[3] = 0.01;
+    const poke = new Float64Array(12);
+    poke[3] = 0.05;
+    poke[11] = 0.02;
+    skinning.setInstanceHandles(10, wind);
+    skinning.setInstanceOverlay(10, poke);
+    const drawn = skinning.drivenSkins.get(skinId);
+    expect(drawn?.[3]).toBeCloseTo(0.06, 12);
+    expect(drawn?.[11]).toBeCloseTo(0.02, 12);
+    // The driver's handles read back alone; the overlay alone.
+    expect(skinning.instanceHandles(10)?.[3]).toBe(0.01);
+    expect(skinning.instanceOverlay(10)?.[3]).toBe(0.05);
+    // Calm hands the driver's null: the poke still acts.
+    skinning.setInstanceHandles(10, null);
+    expect(skinning.drivenSkins.get(skinId)?.[3]).toBe(0.05);
+    expect(skinning.active).toBe(true);
+    // And the overlay gone, the skin is at rest.
+    skinning.setInstanceOverlay(10, null);
+    expect(skinning.drivenSkins.has(skinId)).toBe(false);
+    expect(skinning.active).toBe(false);
+    expect(skinning.setInstanceOverlay(9999, poke)).toBe(false);
   });
 });
 
