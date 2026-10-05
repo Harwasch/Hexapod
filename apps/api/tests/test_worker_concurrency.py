@@ -9,6 +9,7 @@ stop hands every job back.
 
 from __future__ import annotations
 
+import gc
 import threading
 import time
 import uuid
@@ -282,6 +283,24 @@ def test_two_slots_with_slow_uploads_run_two_jobs_once_each(
     _ran_once_and_finished(db, jobs[0], claims, {"one", "two", "three"})
     _ran_once_and_finished(db, jobs[1], claims, {"one", "two"})
     assert {slot for slot, _ in claims} == {"worker-a/0", "worker-a/1"}
+
+
+#: Made when this module is imported, long before any test in it starts: a stand-in for
+#: the millions of objects the suite's earlier tests have left on the heap by the time it
+#: gets here, every one of which a full collection walked with the worker frozen.
+_MADE_BEFORE_THE_TEST = ["left on the heap by an earlier test"]
+
+
+def test_a_collection_while_the_worker_runs_walks_only_what_the_test_made(
+    sessions: sessionmaker[Session],
+) -> None:
+    """The test above failed in CI on 2026-10-05 -- `job claimed 2 times, by
+    ['worker-a/0', 'worker-a/1']` -- and only in the whole suite: a full collection over
+    the heap the earlier tests had built stopped the process for seconds, the lease
+    keeper's thread with it, and the idle slot took the lapsed lease the moment the
+    process resumed (`conftest.frozen_heap`). Collections still happen while a worker
+    runs in a test; they must not reach back past the test's start."""
+    assert not any(tracked is _MADE_BEFORE_THE_TEST for tracked in gc.get_objects())
 
 
 def test_an_idle_slot_does_not_reclaim_a_job_whose_capture_is_downloading(
