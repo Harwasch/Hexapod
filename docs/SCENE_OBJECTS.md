@@ -256,6 +256,13 @@ the representation switcher:
   "water"); a typed property filter (`vegetation > 0.5`, `behaviour:movable`) still works but
   has no buttons;
 - one "Reset" whenever anything is hidden or highlighted, with what is hidden in words.
+- every change of what is hidden (an eye, Hide all, Show only, Reset, and the selection card's
+  Hide and Show only) is one step of the app's undo (`Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`;
+  `state/history.ts`, docs/MISSION_CONTROL.md "Undo and redo"): undo puts back the scan's
+  hidden set exactly, a category partly hidden included, and says what it took back
+  ("Undid: Hide Pumpkin 3"). The highlight and the search's words are not undone: they are a
+  selection, not a change to the scan. The steps are the site's: they are dropped when another
+  site becomes active, and a step of a scan whose table was loaded again no longer applies.
 - selecting in the scene (a click, the cycle keys or the brush; the HUD's selection card,
   `ObjectCard.tsx`) opens that object's category and marks it; clicking an object in the panel
   selects it in the scene, so the card offers its actions, and flies to it as the card's Fly to
@@ -865,6 +872,10 @@ splats, bounds }`.
     top-level instance. Every renderer reads ids by checksum from that document
     (`paintedDocOf`, `SplatInstances.setDoc`), so it hides and highlights like any instance.
   - While the set exists, its splats no longer carry their segmented id.
+  - Making one and deleting one are steps of the app's undo (`state/sceneSelect.ts`): undo
+    puts the scan's painted objects back as they were, stored again, so a deleted one returns
+    at its place and the later ones keep their ids; a selection of a painted object is cleared
+    when they change under it.
 
 The controller is `cesium/sceneSelect/SceneSelectController.ts`, and its state is in
 `state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts` and
