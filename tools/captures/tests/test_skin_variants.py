@@ -278,3 +278,112 @@ def test_registering_replaces_by_name_and_keeps_every_other_system():
     assert merged["skins"][0]["label"] == "new"
     # Nothing there before: just mine.
     assert skin_variants.merged_variants({}, mine) == {"skins": mine["skins"]}
+
+
+# ------------------------------------------------------------------------------- publish
+
+
+class _Body:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    def read(self) -> bytes:
+        return self.data
+
+
+class _Bucket:
+    """A stand-in for boto3's S3 client: objects by (bucket, key)."""
+
+    def __init__(self, objects: dict) -> None:
+        self.objects = objects
+
+    def upload_file(self, path, bucket, key, ExtraArgs=None):
+        self.objects[(bucket, key)] = (Path(path).read_bytes(), ExtraArgs["ContentType"])
+
+    def get_object(self, Bucket, Key):
+        return {"Body": _Body(self.objects[(Bucket, Key)][0])}
+
+    def put_object(self, Bucket, Key, Body, ContentType):
+        self.objects[(Bucket, Key)] = (Body, ContentType)
+
+
+def lay_out(tmp_path: Path, name: str, plan: dict) -> Path:
+    out = tmp_path / "out" / name
+    for variant in ("freeform", "tetfem-stiff"):
+        folder = out / "variants" / "skins" / variant
+        folder.mkdir(parents=True)
+        (folder / "skin.json").write_text("{}", encoding="utf-8")
+        (folder / "skin.bin").write_bytes(b"\0" * 16)
+    entries = [
+        {"name": v, "label": v, "about": "", "skin": f"variants/skins/{v}/skin.json"}
+        for v in ("freeform", "tetfem-stiff")
+    ]
+    (out.parent / f"{name}.publish.json").write_text(
+        json.dumps({**plan, "scan": name, "variants": {"skins": entries}}), encoding="utf-8"
+    )
+    return out
+
+
+def test_a_site_gets_its_files_and_only_its_variants_declared(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    url = f"{skin_variants.PUBLIC_BASE}/sites/minnetonka-tree/splat/tileset.json"
+    out = lay_out(tmp_path, "minnetonka-tree", {"kind": "site", "url": url})
+    key = "sites/minnetonka-tree/splat/tileset.json"
+    tileset = {
+        "asset": {"version": "1.1"},
+        "root": {"extras": {"gaussians": 5, "variants": {"objects": [{"name": "x"}]}}},
+    }
+    objects = {("public", key): (json.dumps(tileset).encode(), "application/json")}
+    bucket = _Bucket(objects)
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(client=lambda *a, **k: bucket))
+    for name in (
+        "OBJECT_STORAGE_ENDPOINT_URL",
+        "OBJECT_STORAGE_ACCESS_KEY",
+        "OBJECT_STORAGE_SECRET_KEY",
+    ):
+        monkeypatch.setenv(name, "x")
+    monkeypatch.setenv("OBJECT_STORAGE_PUBLIC_BUCKET", "public")
+    skin_variants.publish(out)
+    keys = {k for _, k in objects}
+    assert "sites/minnetonka-tree/splat/variants/skins/tetfem-stiff/skin.bin" in keys
+    written = json.loads(objects[("public", key)][0])
+    assert written["asset"] == tileset["asset"]
+    assert written["root"]["extras"]["gaussians"] == 5
+    variants = written["root"]["extras"]["variants"]
+    assert variants["objects"] == [{"name": "x"}]
+    assert [e["name"] for e in variants["skins"]] == ["freeform", "tetfem-stiff"]
+
+
+def test_a_run_scan_attaches_with_the_variants_merged_at_publish_time(tmp_path, monkeypatch):
+    import attach_sidecars
+
+    asset = "29ad7e37-9ad1-42a8-a61d-a39e08ac6710"
+    built_on = "https://pub.example/runs/8e1c/package/splat/tileset.json"
+    out = lay_out(tmp_path, "spool", {"kind": "attach", "url": built_on, "assetId": asset})
+    now = "https://pub.example/runs/8e1c/package/splat/g2/tileset.json"
+    current = {"root": {"extras": {"variants": {"skins": [{"name": "other", "skin": "o.json"}]}}}}
+    monkeypatch.setattr(attach_sidecars, "resolve_asset", lambda a: {"assetId": a, "url": now})
+    monkeypatch.setattr(skin_variants, "_get", lambda u: json.dumps(current).encode())
+    sent: dict = {}
+
+    def attach(directory):
+        sent["dir"] = directory
+        return {}
+
+    monkeypatch.setattr(attach_sidecars, "attach", attach)
+    skin_variants.publish(out)
+    manifest = json.loads((out / "attach.json").read_text(encoding="utf-8"))
+    assert sent["dir"] == out
+    assert manifest["assetId"] == asset and manifest["basedOn"] == built_on
+    assert [e["name"] for e in manifest["extras"]["variants"]["skins"]] == [
+        "other",
+        "freeform",
+        "tetfem-stiff",
+    ]
+    assert manifest["files"] == sorted(
+        f"variants/skins/{v}/skin.{x}"
+        for v in ("freeform", "tetfem-stiff")
+        for x in ("bin", "json")
+    )

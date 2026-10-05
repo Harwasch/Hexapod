@@ -388,9 +388,22 @@ def build_variants(
             print(f"{name}: {len(built.skins)} skins, {len(built.blob):,} B, {seconds:.1f} s")
     if flat:
         return entries, report
-    (root / "variants.json").write_text(
-        json.dumps({"skins": entries}, indent=1) + "\n", encoding="utf-8"
-    )
+    # A run of some variants keeps what an earlier run built of the others (by name).
+    listed = root / "variants.json"
+    if listed.exists():
+        now = {e["name"] for e in entries}
+        earlier = json.loads(listed.read_text(encoding="utf-8")).get("skins", [])
+        kept = [e for e in earlier if e["name"] not in now and (root / e["skin"]).exists()]
+        order = [v.name for v in VARIANTS]
+        entries = sorted(kept + entries, key=lambda e: order.index(e["name"]))
+        old_report = root / "skins_report.json"
+        if old_report.exists():
+            previous = json.loads(old_report.read_text(encoding="utf-8"))
+            report = {
+                **{e["name"]: previous[e["name"]] for e in kept if e["name"] in previous},
+                **report,
+            }
+    listed.write_text(json.dumps({"skins": entries}, indent=1) + "\n", encoding="utf-8")
     (root / "skins_report.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     return entries, report
 
