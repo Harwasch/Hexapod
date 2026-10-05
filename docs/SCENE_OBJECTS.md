@@ -260,7 +260,7 @@ kept. Today's `extras.instances` stays the default.
 ground schema of §3b, and the shared ground pass is its ground.
 
 - **The field.** The splat's geometry is frozen; every gaussian gets a 32-d unit feature,
-  rasterized by gsplat like a colour. A *scale gate* (SAGA) reads it at a physical size:
+  rasterized by gsplat like a colour. A _scale gate_ (SAGA) reads it at a physical size:
   `normalize(sigmoid(MLP(log s)) * F(p))`. It is trained contrastively (GARField's
   containment rule) from SAM 2.1 hiera-large's automatic masks on the capture's own photos
   (COLMAP poses moved into the tileset's frame by `placement.json`; renders when a scan has
@@ -272,7 +272,7 @@ ground schema of §3b, and the shared ground pass is its ground.
 - **The tree** (numpy: it reruns on a CPU from the saved `field.npz`). The ground pass; the
   connected parts above the ground, each split by the field read at its own size; near pieces
   the field calls one thing at the size of the two together joined (the spool's top and drum,
-  which no photo connected under the top); low pieces that are *ground-like* -- the field at
+  which no photo connected under the top); low pieces that are _ground-like_ -- the field at
   the largest scale it knows, where SAM masks the ground whole, agreeing with the mean of the
   ground the pass saw -- are ground cover (hay tufts); regions of the ground layer that are
   not ground-like are things lying there and join the object they touch (the pumpkins'
