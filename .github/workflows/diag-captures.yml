@@ -1,16 +1,16 @@
-# Temporary: find where the captures suite's intermittent SIGSEGV happens (native stack).
+# Temporary: does a single-threaded OpenBLAS stop the captures suite's SIGSEGV on Zen 4?
 name: Diag captures crash
 on:
   push:
     branches: [diag-captures-crash]
 jobs:
   captures:
-    name: Captures under gdb (${{ matrix.n }})
+    name: Captures, one BLAS thread (${{ matrix.n }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        n: [1, 2, 3, 4, 5, 6]
+        n: [1, 2, 3, 4, 5, 6, 7, 8]
     defaults:
       run:
         working-directory: tools/captures
@@ -19,13 +19,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: sudo apt-get install -y -qq gdb > /dev/null
-      - run: lscpu | grep -E "Model name|^CPU\(s\)|Flags" | cut -c1-200; nproc; free -m
+      - run: lscpu | grep "Model name"
       - run: uv sync --frozen
-      - name: Suite under gdb, twice
-        run: |
-          for i in 1 2; do
-            gdb -q -batch -ex "set pagination off" -ex "handle SIGINT SIGTERM nostop noprint pass" \
-              -ex run -ex "info threads" -ex bt -ex "thread apply all bt 12" \
-              --args .venv/bin/python -m pytest -q -p no:cacheprovider 2>&1 | tail -250
-          done
+      - run: uv run pytest -q
+      - run: uv run pytest -q
+      - name: Committed fixture is up to date
+        run: git diff --exit-code -- ../../data/tiles/synthetic-tree
