@@ -56,7 +56,7 @@ export const HOTKEYS = {
   cycleObject: {
     combo: "",
     keys: ["[", "]"],
-    label: "Previous / next candidate (Tab from the card or the map)",
+    label: "Finer part / larger part, then nearby (Tab from the card or the map)",
     group: "Objects",
     scene: true,
   },

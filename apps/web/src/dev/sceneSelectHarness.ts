@@ -65,7 +65,7 @@ export interface SceneSelectHarness {
     index: number;
     selected: number | null;
     mode: string;
-    paint: { best: number | null; iou: number; painted: number } | null;
+    paint: { best: number | null; iou: number; painted: number; live?: boolean } | null;
     hidden: number[];
     highlighted: number[];
     custom: number;

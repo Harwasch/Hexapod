@@ -1,12 +1,13 @@
 /**
  * Selecting the synthetic yard's objects in the scene (cesium/sceneSelect, docs/SCENE_OBJECTS.md
  * "Selecting in the scene"), with the real mouse and keyboard, under PlayCanvas (the app's
- * default renderer) and Spark and CesiumJS: a click on a tree's crown selects the tree (or a
- * part of it) and gives the map the keyboard, `]` and Tab cycle to its parent or child (Tab
- * only from the map or the card: from the page's body it moves focus), the brush painted over
- * a shrub selects that shrub, and Hide in the selection card hides it (its pixels change to the
- * lawn behind it). The card is the HUD's (features/sites/ObjectCard.tsx), mounted by the
- * harness where the app's right dock puts it.
+ * default renderer) and Spark and CesiumJS: a click on a tree's crown selects the whole tree
+ * and gives the map the keyboard, `[` and Shift+Tab cycle to the part hit and `]` and Tab back
+ * (Tab only from the map or the card: from the page's body it moves focus), a second click
+ * there selects that part and a double-click only the tree, the brush painted over a shrub
+ * lights it up before the stroke ends and selects it when it does, and Hide in the selection
+ * card hides it (its pixels change to the lawn behind it). The card is the HUD's
+ * (features/sites/ObjectCard.tsx), mounted by the harness where the app's right dock puts it.
  *
  * `data/tiles/synthetic-yard/instances/` is the yard segmented against its own ground truth;
  * the route links it from the root's extras, as e2e/instances.spec.ts does. Screenshots go to
@@ -30,7 +31,7 @@ interface State {
   index: number;
   selected: number | null;
   mode: string;
-  paint: { best: number | null; iou: number; painted: number } | null;
+  paint: { best: number | null; iou: number; painted: number; live?: boolean } | null;
   hidden: number[];
   highlighted: number[];
   custom: number;
@@ -147,7 +148,7 @@ function shot(name: string): string {
 }
 
 for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
-  test(`under ${renderer}, a click selects a tree, ] cycles, the brush selects a shrub and Hide hides it`, async ({
+  test(`under ${renderer}, a click selects a tree and again its part, [ cycles, the brush selects a shrub and Hide hides it`, async ({
     page,
   }) => {
     test.setTimeout(900_000);
@@ -177,33 +178,53 @@ for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
     await expect(card).toHaveAttribute("data-kind", "object");
     const picked = await call("state");
     await page.screenshot({ path: shot(`${renderer}-1-click-tree.png`) });
-    expect(topOf(picked.selected)).toBe(TREE);
+    // The whole tree first: the top of the chain the click hit, which holds the crown.
+    expect(picked.selected).toBe(TREE);
+    expect(picked.index).toBe(picked.chain - 1);
+    expect(picked.chain, "the click hit a part of the tree").toBeGreaterThan(1);
     expect(picked.highlighted).toContain(picked.selected);
     await expect(card.getByTestId("object-label")).not.toBeEmpty();
-    await expect(card.getByTestId("object-candidates")).toHaveText(/ of /);
+    await expect(card.getByTestId("object-candidates")).toHaveText(/^1 of /);
     // The hit gave the map the keyboard.
     expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("CANVAS");
 
-    // ---- Cycle: to the parent (or round to a child) ---------------------------------------
-    await page.keyboard.press("]");
+    // ---- Cycle: `[` one level finer, `]` back up ------------------------------------------
+    await page.keyboard.press("[");
     const cycled = await call("state");
     await page.screenshot({ path: shot(`${renderer}-2-cycled.png`) });
     const before = picked.selected ?? -1;
     const after = cycled.selected ?? -1;
-    expect(after).not.toBe(before);
-    if (picked.index < picked.chain - 1) expect(after).toBe(parentOf.get(before));
-    await page.keyboard.press("[");
+    expect(parentOf.get(after)).toBe(before);
+    await page.keyboard.press("]");
     expect((await call("state")).selected).toBe(before);
-    // Tab cycles from the map, as `]` does, and Shift+Tab comes back.
-    await page.keyboard.press("Tab");
-    expect((await call("state")).selected).toBe(after);
+    // Shift+Tab cycles from the map, as `[` does, and Tab comes back.
     await page.keyboard.press("Shift+Tab");
+    expect((await call("state")).selected).toBe(after);
+    await page.keyboard.press("Tab");
     expect((await call("state")).selected).toBe(before);
     // From the page's body Tab moves focus, and leaves the selection alone.
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press("Tab");
     expect((await call("state")).selected).toBe(before);
     expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+
+    // ---- Click again: one level finer --------------------------------------------------------
+    // Well after the first click: a click soon after it is the same click (a double-click).
+    await page.waitForTimeout(500);
+    await page.mouse.click(crown?.x ?? 0, crown?.y ?? 0);
+    const drilled = await call("state");
+    await page.screenshot({ path: shot(`${renderer}-3-click-again.png`) });
+    expect(drilled.selected).not.toBe(before);
+    expect(parentOf.get(drilled.selected ?? -1)).toBe(before);
+    expect(drilled.highlighted).toContain(drilled.selected);
+    await page.keyboard.press("Escape");
+    expect((await call("state")).selected).toBeNull();
+    await expect(card).toBeHidden();
+
+    // ---- A double-click is one click: the whole tree, not a part of it ---------------------
+    await page.waitForTimeout(500);
+    await page.mouse.dblclick(crown?.x ?? 0, crown?.y ?? 0);
+    expect((await call("state")).selected).toBe(TREE);
     await page.keyboard.press("Escape");
     expect((await call("state")).selected).toBeNull();
     await expect(card).toBeHidden();
@@ -228,26 +249,39 @@ for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
       await page.mouse.move(r % 2 ? x1 : x0, y, { steps: 4 });
       await page.mouse.move(r % 2 ? x0 : x1, y, { steps: 8 });
     }
+    // Before the stroke ends its best match so far is lit, and said on the card, but nothing
+    // is selected yet. (The match is brought up to date at most every 100 ms.)
+    await page.waitForTimeout(300);
+    await call("frames", 2);
+    const live = await call("state");
+    await page.screenshot({ path: shot(`${renderer}-4-painting-shrub.png`) });
+    expect(live.paint?.live).toBe(true);
+    expect(topOf(live.paint?.best ?? null)).toBe(SHRUB);
+    expect(live.highlighted).toContain(live.paint?.best);
+    expect(live.selected).toBeNull();
+    await expect(card.getByTestId("object-paint-hint")).toContainText("Best match");
     await page.mouse.up();
     const painted = await call("state");
-    await page.screenshot({ path: shot(`${renderer}-3-painted-shrub.png`) });
+    await page.screenshot({ path: shot(`${renderer}-5-painted-shrub.png`) });
+    expect(painted.paint?.live).toBeFalsy();
     expect(painted.paint?.painted ?? 0).toBeGreaterThan(0);
     expect(topOf(painted.selected)).toBe(SHRUB);
     expect(painted.paint?.iou ?? 0).toBeGreaterThan(0.3);
+    expect(painted.highlighted).toContain(painted.selected);
 
     // ---- Hide it from the card ------------------------------------------------------------
     await card.getByRole("button", { name: "Hide" }).click();
     await call("frames", 30);
     const hidden = await call("state");
     const change = await call("changed", rect);
-    await page.screenshot({ path: shot(`${renderer}-4-hidden-shrub.png`) });
+    await page.screenshot({ path: shot(`${renderer}-6-hidden-shrub.png`) });
     expect(hidden.hidden).toContain(painted.selected);
     // The shrub is gone from where it was drawn: the lawn behind it shows instead.
     expect(change).toBeGreaterThan(0.05);
 
     test.info().annotations.push({
       type: "measures",
-      description: JSON.stringify({ picked, cycled, painted, change, rect }),
+      description: JSON.stringify({ picked, cycled, drilled, live, painted, change, rect }),
     });
     expect(errors.filter((e) => /shader|compile|link|webgl/i.test(e))).toEqual([]);
   });
