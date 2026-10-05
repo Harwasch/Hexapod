@@ -54,6 +54,12 @@ export interface Instance {
   views: number;
   /** Its broad scene category (`lib/categories.ts`), when the file says; newer runs do. */
   category?: string;
+  /**
+   * What it is called, when the file says (a concept-first run names its objects by the
+   * concept it found them as: "cable spool"; its ground by cover class: "Grass"). Else the
+   * viewer names it from its tags and category.
+   */
+  name?: string;
 }
 
 export interface EmbeddingRef {
@@ -140,6 +146,7 @@ function instanceOf(raw: unknown): Instance | null {
     behaviour: BEHAVIOURS.has(r.behaviour as Behaviour) ? (r.behaviour as Behaviour) : "static",
     views: Math.max(0, Math.round(finite(r.views))),
     ...(typeof r.category === "string" && r.category !== "" ? { category: r.category } : {}),
+    ...(typeof r.name === "string" && r.name.trim() !== "" ? { name: r.name.trim() } : {}),
   };
 }
 
@@ -377,9 +384,12 @@ export function matchLabel(terms: readonly string[], label: string): number {
   return (sum / terms.length) * 0.95;
 }
 
-/** The label a search result goes by: its top tag (the panel names objects by category). */
+/**
+ * The label a search result goes by: its name when the file gives one, else its top tag (the
+ * panel names objects by category).
+ */
 export function instanceLabel(instance: Instance): string {
-  return instance.tags[0]?.label ?? "untagged";
+  return instance.name ?? instance.tags[0]?.label ?? "untagged";
 }
 
 /** A splat count, short: 940, 12.3k, 1.2M. */

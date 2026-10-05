@@ -93,7 +93,7 @@ export function tagCategory(
 
 /** What `assignCategories` reads of an instance (and the file's own `category`, if any). */
 export type CategorisedInstance = Pick<Instance, "id" | "parent" | "tags" | "splats"> &
-  Partial<Pick<Instance, "bounds" | "centroid">> & {
+  Partial<Pick<Instance, "bounds" | "centroid" | "name">> & {
     category?: string | null;
   };
 
@@ -271,12 +271,16 @@ export interface CategoryIndex {
   objects: ReadonlyMap<number, SceneObject>;
 }
 
-/** The label an object goes by: its best tag whose label is in its own category. */
+/**
+ * The label an object goes by: the name the file gives it, else its best tag whose label is
+ * in its own category.
+ */
 function objectName(
-  instance: Pick<Instance, "tags">,
+  instance: Pick<Instance, "tags"> & { name?: string },
   category: string,
   labels: ReadonlyMap<string, string>,
 ): string | null {
+  if (instance.name) return instance.name;
   for (const tag of instance.tags) {
     if (categoryOfLabel(tag.label, labels) === category) return tag.label;
   }

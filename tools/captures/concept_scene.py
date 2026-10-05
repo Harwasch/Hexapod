@@ -14,12 +14,13 @@ each named thing in every view, so objects are born with their names.
    order a video tracker can follow), so a tracker that keeps ids along a path (SAM 3's)
    tells this module which masks are one object (`ConceptMask.track`). Stuff: a per-pixel
    class over the ground (`StuffMap`).
-3. **Ground** (`ground_layer`). Which splats lie on the ground, from geometry. Today
-   `scene_plants`' slope filter behind a small adapter (`GROUND_PASS`); the shared ground
-   pass (`ground_pass.py`, bake-off candidate A's branch) replaces it in one line. Cells
-   never straddle the ground (`ground_cells`), and a ground cell that the views keep
-   seeing inside a thing's mask (`PROMOTE_SHARE`) is the thing's, not the ground's: the
-   spool's lower flange.
+3. **Ground** (`ground_layer`). Which splats lie on the ground, from geometry: the shared
+   ground pass of the bake-off (`ground_pass.py`), behind a small adapter (`GROUND_PASS`;
+   `scene_plants`' slope filter is the other choice). Its "unknown" splats (in the ground
+   layer where no ground was seen: under an object's footprint, under a canopy) are ground
+   unless the masks say otherwise. Cells never straddle the ground (`ground_cells`), and a
+   ground cell that the views keep seeing inside a thing's mask (`PROMOTE_SHARE`, less for
+   the unknown) is the thing's, not the ground's: the spool's lower flange.
 4. **Lift** (`lift_concepts`), by `segment_scene`'s own voting: thing masks vote for the
    cells they cover and co-occurrence over co-visibility joins cells into objects
    (`segment_scene._grow`); each object is named by the concept most of its votes carry,
@@ -80,9 +81,11 @@ MAX_STUFF = 6
 PATH_STEP = 0.75
 PATH_TURN_DEG = 50.0
 #: A ground cell is the thing's when it was inside a thing's mask in at least this share of
-#: its visible weight, in at least `PROMOTE_VIEWS` views (`lift_concepts`).
+#: its visible weight, in at least `PROMOTE_VIEWS` views (`lift_concepts`); a cell the
+#: ground pass was unsure of (`Ground.unsure`), in this share and one view.
 PROMOTE_SHARE = 0.6
 PROMOTE_VIEWS = 2
+PROMOTE_SHARE_UNSURE = 0.35
 #: A ground cell takes a stuff class with at least this much class weight (pixels x score).
 STUFF_MIN_WEIGHT = 1.0
 #: Ground cells without a class take the nearest classified ground cell's within this many
@@ -93,9 +96,9 @@ GROUND_FILL_M = 1.0
 GROUND_SMOOTH_ROUNDS = 2
 #: Two objects of one concept are one when a track holds at least this share of each.
 TRACK_SHARE = 0.5
-#: Which ground pass `ground_layer` runs: "slope" (`scene_plants`' Vosselman filter, here
-#: now) or "shared" (`ground_pass.py`, from bake-off candidate A's branch once merged).
-GROUND_PASS = "slope"
+#: Which ground pass `ground_layer` runs: "shared" (`ground_pass.py`, the bake-off's one
+#: ground pass, from candidate A's branch) or "slope" (`scene_plants`' Vosselman filter).
+GROUND_PASS = "shared"
 #: Splats the slope filter is fitted on at most (seeded); every splat is then measured.
 GROUND_SAMPLE = 1_000_000
 #: Gaussians larger than this, or fainter than `GROUND_OPACITY`, are left out of the fit:
@@ -273,6 +276,31 @@ class Ground:
     hag: np.ndarray  # (n,) float32, metres
     source: str
     info: dict = field(default_factory=dict)
+    #: (n,) bool, within `flag`: on the layer's height, but where no ground was seen.
+    unsure: np.ndarray | None = None
+
+
+def shared_ground(splats: Splats) -> Ground:
+    """`ground_pass.ground_pass` (SMRF on a robust lowest surface; the bake-off's shared
+    pass): its GROUND and BELOW (floaters under the terrain) are ground; its UNKNOWN (in the
+    layer where no ground was seen) is ground the masks may claim back (`Ground.unsure`)."""
+    import ground_pass as gp
+
+    g = gp.ground_pass(splats.positions, splats.opacities, splats.scales)
+    flag = g.label != gp.ABOVE
+    return Ground(
+        flag,
+        g.hag,
+        "ground_pass (SMRF)",
+        {
+            "layerM": round(float(g.layer_m), 4),
+            "belowM": round(float(g.below_m), 4),
+            "cellM": round(float(g.terrain.cell), 4),
+            "share": round(float(flag.mean()), 4),
+            "labels": g.stats.get("shares", {}),
+        },
+        g.label == gp.UNKNOWN,
+    )
 
 
 def slope_ground(
@@ -310,23 +338,22 @@ def slope_ground(
 
 
 def ground_layer(splats: Splats) -> Ground:
-    """The ground pass `GROUND_PASS` names. The one line to change when the shared pass
-    lands is the constant."""
-    if GROUND_PASS == "shared":
-        import ground_pass  # bake-off candidate A's module (bakeoff-seg-ground-first)
-
-        return ground_pass.concept_ground(splats)  # type: ignore[attr-defined]
-    return slope_ground(splats)
+    """The ground pass `GROUND_PASS` names: swapping passes is that one constant."""
+    return shared_ground(splats) if GROUND_PASS == "shared" else slope_ground(splats)
 
 
 def ground_cells(
-    positions: np.ndarray, flag: np.ndarray, **kwargs: float
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
-    """`segment_scene.supervoxels`, with no cell holding both ground and other splats: each
-    voxel is split by the flag. Returns the cells, centroids, counts, edge, and per cell
-    whether it is ground."""
+    positions: np.ndarray, ground: Ground, **kwargs: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray, np.ndarray]:
+    """`segment_scene.supervoxels`, with no cell holding both ground and other splats (as
+    `ground_pass.split_cells` cuts them), nor the ground pass's sure and unsure ground: each
+    voxel is split three ways. Returns the cells, centroids, counts, edge, and per cell
+    whether it is ground, and whether that ground is unsure."""
     cell, _, _, edge = ss.supervoxels(positions, **kwargs)  # type: ignore[arg-type]
-    key = cell.astype(np.int64) * 2 + np.asarray(flag, np.int64)
+    state = np.asarray(ground.flag, np.int64)
+    if ground.unsure is not None:
+        state = np.where(np.asarray(ground.unsure, bool) & ground.flag, 2, state)
+    key = cell.astype(np.int64) * 3 + state
     unique, inverse = np.unique(key, return_inverse=True)
     cell = inverse.astype(np.int32).reshape(-1)
     counts = np.bincount(cell, minlength=unique.size)
@@ -335,7 +362,8 @@ def ground_cells(
         np.stack([np.bincount(cell, pos[:, k], unique.size) for k in range(3)], axis=1)
         / counts[:, None]
     )
-    return cell, centroids, counts, float(edge), (unique % 2).astype(bool)
+    kind = unique % 3
+    return cell, centroids, counts, float(edge), kind > 0, kind == 2
 
 
 # ---------------------------------------------------------------------------- the views
@@ -620,6 +648,7 @@ def lift_concepts(
     edge: float,
     ground_cell: np.ndarray,
     *,
+    unsure_cell: np.ndarray | None = None,
     cell_reach: np.ndarray | None = None,
 ) -> ConceptLift:
     """Objects from the concept votes (module docstring, steps 3-5).
@@ -627,7 +656,9 @@ def lift_concepts(
     Level 0 holds the named objects (thing masks, `segment_scene._grow`; joined along
     tracks), then the leftovers (class-free level-0 masks over what is neither ground nor
     named), then one instance per cover class over the ground. The class-free levels refine
-    every object off the ground into parts below it (`segment_scene._hierarchy`)."""
+    every object off the ground into parts below it (`segment_scene._hierarchy`).
+    `unsure_cell`: ground cells the ground pass was unsure of, which the thing masks claim
+    on less evidence (`PROMOTE_SHARE_UNSURE`)."""
     n_cells = len(centroids)
     a, b = ss._cell_graph(centroids, edge)
     stats: dict[str, object] = {"cells": n_cells, "edges": int(a.size)}
@@ -635,10 +666,11 @@ def lift_concepts(
     for v in votes.free:
         np.maximum.at(seen_w, v.cells, v.weight)
     seen = seen_w >= ss.MIN_VISIBLE_PX
-    promoted = (
-        ground_cell
-        & (votes.thing_in >= PROMOTE_SHARE * np.maximum(votes.seen, 1e-9))
-        & (votes.thing_views >= PROMOTE_VIEWS)
+    unsure = np.zeros(n_cells, bool) if unsure_cell is None else unsure_cell & ground_cell
+    share = votes.thing_in / np.maximum(votes.seen, 1e-9)
+    promoted = ground_cell & (
+        ((share >= PROMOTE_SHARE) & (votes.thing_views >= PROMOTE_VIEWS))
+        | (unsure & (share >= PROMOTE_SHARE_UNSURE) & (votes.thing_views >= 1))
     )
     ground = ground_cell & ~promoted
     stats.update(
@@ -796,7 +828,7 @@ def segment_concepts(
     timings["groundS"] = time.perf_counter() - mark
     say(f"ground: {ground.source}, {ground.info.get('share')} of the splats")
     mark = time.perf_counter()
-    cell, centroids, counts, edge, ground_cell = ground_cells(splats.positions, ground.flag)
+    cell, centroids, counts, edge, ground_cell, unsure_cell = ground_cells(splats.positions, ground)
     n_cells = len(centroids)
     largest = np.asarray(splats.scales).max(axis=1)
     if max_scale_m is None:
@@ -889,7 +921,9 @@ def segment_concepts(
             mark = time.perf_counter()
     timings.update(clock)
     mark = time.perf_counter()
-    lift = lift_concepts(votes, centroids, counts, edge, ground_cell, cell_reach=reach)
+    lift = lift_concepts(
+        votes, centroids, counts, edge, ground_cell, unsure_cell=unsure_cell, cell_reach=reach
+    )
     timings["liftS"] = time.perf_counter() - mark
     lift.stats["views"] = len(views)
     lift.stats["paths"] = len(paths)
@@ -1253,7 +1287,7 @@ def main() -> None:
     if args.truth:
         truth = json.loads(args.truth.read_text(encoding="utf-8"))
         ground = ground_layer(splats)
-        _, centroids, _, edge, _ = ground_cells(splats.positions, ground.flag)
+        _, centroids, _, edge, _, _ = ground_cells(splats.positions, ground)
         cameras = ss.plan_views(
             splats.positions, args.views, observers=ss.observer_points(splats), edge=edge,
             solid=centroids, max_views=args.max_views,

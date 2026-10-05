@@ -400,6 +400,48 @@ def post(url: str, body: Mapping[str, Any], token: str) -> tuple[int, Any]:
         raise AttachError(f"POST {url}: {error.reason}") from error
 
 
+#: The systems a scan's bake-off candidates are listed under, in `extras.variants`.
+VARIANT_SYSTEMS = ("objects", "fill", "skins")
+VARIANT_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+#: The public bucket answers Python's own user agent with 403 (Cloudflare's bot rules).
+TILESET_USER_AGENT = "curl/8.5.0 (hexapod-attach-sidecars)"
+
+
+def merge_variants(current: Any, mine: Mapping[str, Any]) -> dict[str, Any]:
+    """`extras.variants` (`current`, what the tileset declares now) with `mine`'s entries in:
+    within a system, an entry replaces the one of its `name` where it was, or is appended;
+    every other entry, and every other system, stays. The API replaces an extras key whole,
+    so a publisher sends the merge of its own entries into what is live (`attach`)."""
+    out: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+    for system, entries in mine.items():
+        if system not in VARIANT_SYSTEMS or not isinstance(entries, list):
+            raise AttachError(f"variants.{system}: not one of {VARIANT_SYSTEMS} with a list")
+        kept = [e for e in out.get(system) or [] if isinstance(e, dict)]
+        for entry in entries:
+            name = entry.get("name") if isinstance(entry, dict) else None
+            if not isinstance(name, str) or not VARIANT_NAME.fullmatch(name):
+                raise AttachError(f"variants.{system}: {entry!r} has no plain name")
+            at = next((k for k, e in enumerate(kept) if e.get("name") == name), None)
+            if at is None:
+                kept.append(dict(entry))
+            else:
+                kept[at] = dict(entry)
+        out[system] = kept
+    return out
+
+
+def live_extras(url: str) -> dict[str, Any]:
+    """The root extras of the tileset at `url` (what is declared now)."""
+    request = urllib.request.Request(url, headers={"User-Agent": TILESET_USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            document = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, ValueError) as error:
+        raise AttachError(f"GET {url}: {error}") from error
+    extras = (document.get("root") or {}).get("extras") if isinstance(document, dict) else None
+    return dict(extras) if isinstance(extras, dict) else {}
+
+
 def attach(
     directory: Path,
     *,
@@ -408,8 +450,13 @@ def attach(
     bucket: str | None = None,
     write_token: str | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    extras_of: Callable[[str], dict[str, Any]] = live_extras,
 ) -> dict[str, Any]:
-    """Stage `directory`'s files and attach them as its `attach.json` says; the response."""
+    """Stage `directory`'s files and attach them as its `attach.json` says; the response.
+
+    A manifest's `extras.variants` holds only its own entries; they are merged into what the
+    asset's current tileset declares (`merge_variants`, read with `extras_of` just before
+    the request), so a candidate never drops another's."""
     manifest = read_manifest(directory)
     token = write_token or os.environ.get("API_WRITE_TOKEN", "")
     if not token:
@@ -421,11 +468,15 @@ def attach(
     prefix = f"{STAGING_ROOT}/{asset_id}/{staging_token()}/"
     stage(s3, bucket, prefix, directory, manifest["files"])
 
+    extras = dict(manifest.get("extras", {}))
+    if isinstance(extras.get("variants"), dict):
+        current = resolve_asset(asset_id, api=api)["url"]
+        extras["variants"] = merge_variants(extras_of(current).get("variants"), extras["variants"])
     body: dict[str, Any] = {
         "stagingPrefix": prefix,
         "basedOn": manifest["basedOn"],
         "files": manifest["files"],
-        "extras": manifest.get("extras", {}),
+        "extras": extras,
     }
     if "rigUrl" in manifest:
         body["rigUrl"] = manifest["rigUrl"]

@@ -328,6 +328,61 @@ def test_attach_stages_the_files_then_posts_the_request(
     assert "fedcba9876543210" in summary.read_text()
 
 
+def test_variants_merge_by_name_and_keep_every_other_entry() -> None:
+    current = {
+        "objects": [
+            {"name": "ground-first", "label": "A", "instances": "variants/objects/a/i.json"},
+            {"name": "concept-first", "label": "old", "instances": "old.json"},
+        ],
+        "fill": [{"name": "vace-14b", "label": "VACE"}],
+    }
+    mine = {"objects": [{"name": "concept-first", "label": "C", "instances": "c.json"}]}
+    merged = attach.merge_variants(current, mine)
+    assert merged["fill"] == current["fill"]
+    assert [e["name"] for e in merged["objects"]] == ["ground-first", "concept-first"]
+    assert merged["objects"][1]["label"] == "C"
+    # Nothing declared yet: the entry alone; a new name is appended.
+    assert attach.merge_variants(None, mine) == mine
+    more = attach.merge_variants(merged, {"objects": [{"name": "feature-fields"}]})
+    assert [e["name"] for e in more["objects"]][-1] == "feature-fields"
+    with pytest.raises(attach.AttachError):
+        attach.merge_variants({}, {"nope": []})
+    with pytest.raises(attach.AttachError):
+        attach.merge_variants({}, {"objects": [{"name": "Not Plain"}]})
+
+
+def test_attach_merges_its_variant_into_what_the_asset_declares_now(
+    api: StubApi, tmp_path: Path
+) -> None:
+    out = tmp_path / "pumpkin"
+    (out / "variants/objects/concept-first").mkdir(parents=True)
+    (out / "variants/objects/concept-first/instances.json").write_text('{"tiles": {}}')
+    mine = {"name": "concept-first", "label": "C", "about": "x",
+            "instances": "variants/objects/concept-first/instances.json"}  # fmt: skip
+    attach.write_manifest(
+        out, asset_id=ASSET, based_on=CURRENT, extras={"variants": {"objects": [mine]}}
+    )
+    api.on("GET", f"/api/v1/assets/{ASSET}", (200, an_asset()))
+    api.on("POST", f"/api/v1/assets/{ASSET}/sidecars", (200, attachment()))
+    live = {"objects": [{"name": "ground-first", "label": "A"}], "skins": [{"name": "s"}]}
+    read: list[str] = []
+
+    def extras_of(url: str) -> dict[str, Any]:
+        read.append(url)
+        return {"instances": {"uri": "instances.json"}, "variants": live}
+
+    attach.attach(out, api=api.url, s3=StubS3(), bucket="b", write_token="t", extras_of=extras_of)
+    assert read == [CURRENT]
+    body = api.requests[-1]["body"]
+    assert body["files"] == ["variants/objects/concept-first/instances.json"]
+    assert body["extras"] == {
+        "variants": {
+            "objects": [{"name": "ground-first", "label": "A"}, mine],
+            "skins": [{"name": "s"}],
+        }
+    }
+
+
 def test_attach_sends_the_rig_url_when_the_manifest_sets_one(api: StubApi, tmp_path: Path) -> None:
     out = tmp_path / "rig"
     out.mkdir()
