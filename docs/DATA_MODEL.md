@@ -91,6 +91,49 @@ next scale is set about the origin those tiles are placed at. Unscaled assets st
 key, so code from before this can still read every asset nobody resized; reset scaled ones
 before rolling back past it.
 
+**Viewer.** `SiteManager` draws the asset at `renderConfig.scale` about its tileset's root
+transform origin (the translation of the root's declared transform; a root that places nothing
+on the globe is resized about its own centre instead): the model matrix is
+`T(lift) · R · S(scale) · R⁻¹`, which for a uniform scale is `[scale·I | (1 − scale)·origin +
+lift]` (`apps/web/src/cesium/placement.ts` `scaledModelMatrix`, `cesium/tilesetScale.ts`). At
+scale 1 that is exactly the translation the clamp always set. The clamp then rests the scaled
+model: on the catalog's `groundSamples` exactly as sent -- they already describe the scaled
+model, and are never rescaled by the saved scale a second time -- or, without them, on the root
+box's lowest point scaled about the origin (`h_origin + scale · (h − h_origin)`). Nothing else
+the catalog places is rescaled: the boundary clips and outlines, the footprint clips.
+
+Everything drawn in the tileset's own frame follows the root's computed transform, which now
+carries the scale: the splats (CesiumJS re-bakes them; its slow path handles a non-rigid
+transform), instance spheres, split objects, view cones, telemetry. What crosses between that
+frame and the globe by hand was written for a rigid transform and now uses its true inverse
+(`inverseScaledTransformation`) and converts lengths by the scale (`uniformScale`): the
+collider's rays, distances, search radii and clearance (`SplatCollider`, so walking, zooming to a
+surface and measuring on a scan are in metres as drawn), the dedicated renderers' camera
+(`scanView/pose.ts`: near and far planes, unit direction and up) and their tile culling and
+prefetch (`ScanRendererHost`), CesiumJS's pick radii (`cesiumPickSource`: the engine bakes a
+splat's scales by the bake's scale; the picker works un-baked) and scene selection's comparison
+of hits across scans and its nearest-label radius (`SceneSelectController`).
+
+`SiteManager.previewScale(siteId, scale)` draws another scale without saving it, `null` puts the
+catalog's back: the scan rests at once on what its last clamp sampled, the ground samples and the
+clip footprint moved by the preview's ratio to the saved scale (as the API will move them), and
+is clamped afresh once the scale has held for a quarter of a second. A fresh site record whose
+asset was resized (`watchSiteRecords` → `updateRecord`) drops any preview and re-places the scan
+at the catalog's new scale on its new ground, with the new boundary.
+
+**Set real size** (`apps/web/src/features/inspector/RealSize.tsx`) is on the site card for the
+asset the API can resize (`lib/realSize.ts` `scalableAsset`, the API's own rule; nothing else is
+offered the tool). Measure on the scan: two points where the view meets the scan's solids
+(`cesium/ScaleMeasure.ts`; a click or a tap, or "Mark the centre of the view" from the keyboard),
+the length between them as drawn now, and the true length typed in (`1.8`, `180 cm`, `6 ft`)
+make the scale `measuredAtScale × trueLengthM ÷ measuredLengthM`, sent as `measured-length`
+evidence with exactly those numbers. Or the factor typed in (`direct`), or Reset to registered
+(`{reset: true}`). Every change is previewed; Save sends it, a 401 asks for the write token and
+sends it again, Escape or Cancel puts the scan back. The saved asset goes straight into the
+site's record, so the scene and the card's Placement row ("scaled by hand from a measured
+length", "scale set by hand", the estimate's "scale estimated from camera height (±N%)") follow
+at once, and the record is refetched for the boundary and centroid the API moved.
+
 **Backfill.** `tools/captures/estimate_scale.py` runs the pipeline's own camera-height
 estimate (`tools/pipeline/scale_estimate.py`, levelled by `sfm.camera_up` as
 `exif_gps` levels a video) on the pose model a past run left — `runs/<job id>/pose/poses/`

@@ -92,6 +92,103 @@ export function measuredClamp(
   return { liftM, cells: differences.length, spreadM };
 }
 
+/** A point or a vector in Earth-fixed metres, as plain numbers (what a `Cartesian3` holds). */
+export type Vec3 = readonly [number, number, number];
+
+/**
+ * The model matrix that draws a tileset at `scale` times its registered size about `origin`,
+ * then raises it by `lift`: column-major, as CesiumJS's `Matrix4`.
+ *
+ * It is `T(lift) · R · S(scale) · R⁻¹`, R being the root transform whose translation is
+ * `origin` -- the placed coordinate, about which `PUT /assets/{id}/scale` also resizes the
+ * site's boundary, the footprint and the ground samples (docs/DATA_MODEL.md "Runtime scale").
+ * A uniform scale commutes with R's rotation, so whatever R's axes are that is
+ * `[scale·I | (1 − scale)·origin + lift]`: the origin stays where it is, lift aside, and every
+ * other point moves `scale` times as far from it. At scale 1 it is exactly the translation the
+ * clamp has always set, so an asset nobody resized does not move by a bit.
+ */
+export function scaledModelMatrix(origin: Vec3, scale: number, lift: Vec3 = [0, 0, 0]): number[] {
+  const keep = 1 - scale;
+  const matrix = [scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, 1];
+  for (let axis = 0; axis < 3; axis++) {
+    matrix[12 + axis] = keep * (origin[axis] ?? 0) + (lift[axis] ?? 0);
+  }
+  return matrix;
+}
+
+/**
+ * How much a transform scales lengths: the length of its first column, which for the uniform
+ * scale a model matrix may carry (`scaledModelMatrix`) is the scale, and 1 for a rigid one.
+ * Lengths and radii in a tileset's own frame are this many times as long on the globe.
+ */
+export function uniformScale(matrix: ArrayLike<number>): number {
+  const length = Math.hypot(matrix[0] ?? 0, matrix[1] ?? 0, matrix[2] ?? 0);
+  return Number.isFinite(length) && length > 0 ? length : 1;
+}
+
+/**
+ * Where a height ends up once the model is drawn at `scale` about an origin `originHeight`
+ * high: a point `h − originHeight` above the origin is `scale` times as far above it. This is
+ * the bounding-box clamp's lowest point under a runtime scale, worked out rather than read back
+ * from a resized box, and the same linear rule the API moves the ground samples by.
+ */
+export function scaledHeight(originHeight: number, height: number, scale: number): number {
+  return originHeight + (height - originHeight) * scale;
+}
+
+/**
+ * The catalog's ground samples moved `factor` times as far from `origin`, across and in height,
+ * as `PUT /assets/{id}/scale` moves them (apps/api placement.py `rescale_ground_samples`).
+ *
+ * Only a *preview*'s factor ever comes here: the scale being tried over the scale saved. The
+ * samples the catalog sends already describe the saved scale -- every globe position the API
+ * returns does -- so a factor of 1 hands them back untouched, and the saved scale itself is
+ * never applied to them a second time.
+ */
+export function rescaleGround(
+  samples: readonly MeasuredGround[],
+  origin: MeasuredGround,
+  factor: number,
+): readonly MeasuredGround[] {
+  if (factor === 1) return samples;
+  return samples.map((sample) => ({
+    lon: origin.lon + (sample.lon - origin.lon) * factor,
+    lat: origin.lat + (sample.lat - origin.lat) * factor,
+    height: origin.height + (sample.height - origin.height) * factor,
+  }));
+}
+
+/** A footprint's rings, as GeoJSON nests them: a polygon's, or each of a multipolygon's. */
+type Rings = number[][][];
+interface FootprintLike {
+  readonly type: "Polygon" | "MultiPolygon";
+  readonly coordinates: Rings | Rings[];
+}
+
+/**
+ * A footprint resized `factor` times about `origin` (degrees), linearly in longitude and
+ * latitude as the API resizes the boundary and the footprint (shapely's `affinity.scale`). For
+ * a preview only, like `rescaleGround`: what the catalog sends already fits the saved scale.
+ */
+export function rescaleFootprint<F extends FootprintLike>(
+  footprint: F,
+  origin: { readonly lon: number; readonly lat: number },
+  factor: number,
+): F {
+  if (factor === 1) return footprint;
+  const ring = (points: number[][]): number[][] =>
+    points.map(([lon = 0, lat = 0, ...rest]) => [
+      origin.lon + (lon - origin.lon) * factor,
+      origin.lat + (lat - origin.lat) * factor,
+      ...rest,
+    ]);
+  const coordinates =
+    footprint.type === "Polygon"
+      ? (footprint.coordinates as Rings).map(ring)
+      : (footprint.coordinates as Rings[]).map((polygon) => polygon.map(ring));
+  return { ...footprint, coordinates };
+}
+
 /** Median of a non-empty list. The mean of the middle two when the count is even. */
 export function median(values: readonly number[]): number {
   const sorted = [...values].sort((a, b) => a - b);

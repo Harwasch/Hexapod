@@ -16,6 +16,12 @@
  * swapped in adds its own, so the grid is fine where the view is fine and merged where it is
  * coarse. The work is one tile a frame, and never while the camera moves
  * (camera first: the splat motion gate's `holding`).
+ *
+ * A packaged grid stays in the root's frame, and the root's computed transform carries the
+ * scan's runtime scale (`renderConfig.scale`, tilesetScale.ts): one unit of the grid is then
+ * `scale` metres on the globe. Points cross by the transform and its true inverse; distances
+ * and radii are multiplied or divided by the scale at the edge, so every answer here is in
+ * metres as drawn. A run-time grid is built from the baked splats, already in metres.
  */
 
 import {
@@ -31,8 +37,10 @@ import { PrecomputedSolids, collisionMetaOf, loadCollision, type Solids } from "
 import { createLogger } from "@/lib/log";
 import { SplatOccupancy, type Vec3 } from "@/lib/occupancy";
 
+import { uniformScale } from "./placement";
 import type { SplatPrimitive, SplatTile } from "./splatInternals";
 import { snapshotTiles } from "./splatTiles";
+import { inverseScaledTransformation } from "./tilesetScale";
 
 const log = createLogger("splat-collider");
 
@@ -47,6 +55,8 @@ interface Tracked {
   /** Local east/north/up to world, and back. */
   toWorld: Matrix4;
   toLocal: Matrix4;
+  /** Metres on the globe a unit of the grid's frame is: the runtime scale, or 1. */
+  scale: number;
   /** World bounding sphere of the tileset, for a quick "nowhere near" test. */
   bounds: BoundingSphere;
   /** Run-time fallback only (a scan packaged before collision files). */
@@ -57,6 +67,8 @@ interface Tracked {
     queue: { key: unknown; start: number; count: number }[];
     positions: Float32Array | undefined;
     colors: Uint8Array | undefined;
+    /** The tileset's model matrix the grid was built under: a new one re-bakes every splat. */
+    model: Matrix4;
   };
 }
 
@@ -64,6 +76,7 @@ interface SplatTilesetShape {
   gaussianSplatPrimitive?: SplatPrimitive;
   boundingSphere: BoundingSphere;
   show: boolean;
+  modelMatrix?: Matrix4;
   root?: SplatTile & { extras?: unknown; computedTransform?: Matrix4 };
   resource?: { url: string };
 }
@@ -129,7 +142,8 @@ export class SplatCollider {
     let best: number | null = null;
     for (const entry of this.near(world, radius)) {
       const local = toVec(Matrix4.multiplyByPoint(entry.toLocal, world, scratchA));
-      const d = entry.solids.distance(local, radius);
+      const found = entry.solids.distance(local, radius / entry.scale);
+      const d = found === null ? null : found * entry.scale;
       if (d !== null && (best === null || d < best)) best = d;
     }
     return best;
@@ -139,7 +153,7 @@ export class SplatCollider {
   clearance(world: Cartesian3): number {
     let clearance = 0;
     for (const entry of this.near(world, 0)) {
-      clearance = Math.max(clearance, entry.solids.clearance);
+      clearance = Math.max(clearance, entry.solids.clearance * entry.scale);
     }
     return clearance;
   }
@@ -151,7 +165,13 @@ export class SplatCollider {
       if ((!tileset.show && tileset !== this.solidWhileHidden) || entry.solids.empty) continue;
       const origin = Matrix4.multiplyByPoint(entry.toLocal, ray.origin, scratchA);
       const direction = Matrix4.multiplyByPointAsVector(entry.toLocal, ray.direction, scratchB);
-      const t = entry.solids.raycast(toVec(origin), toVec(direction), maxDistance);
+      // The grid answers in its own units along the ray; a unit is `scale` metres as drawn.
+      const units = entry.solids.raycast(
+        toVec(origin),
+        toVec(direction),
+        maxDistance / entry.scale,
+      );
+      const t = units === null ? null : units * entry.scale;
       if (t === null || (best && t >= best.distance)) continue;
       const point = Cartesian3.add(
         ray.origin,
@@ -257,7 +277,8 @@ export class SplatCollider {
       const transform = tileset.root?.computedTransform;
       if (transform && !Matrix4.equalsEpsilon(entry.toWorld, transform, 1e-9)) {
         Matrix4.clone(transform, entry.toWorld);
-        Matrix4.inverseTransformation(transform, entry.toLocal);
+        inverseScaledTransformation(transform, entry.toLocal);
+        entry.scale = uniformScale(transform);
         BoundingSphere.clone(tileset.boundingSphere, entry.bounds);
       }
       return true;
@@ -278,7 +299,8 @@ export class SplatCollider {
         this.tracked.set(tileset, {
           solids: new PrecomputedSolids(grid),
           toWorld,
-          toLocal: Matrix4.inverseTransformation(toWorld, new Matrix4()),
+          toLocal: inverseScaledTransformation(toWorld, new Matrix4()),
+          scale: uniformScale(toWorld),
           bounds: BoundingSphere.clone(tileset.boundingSphere),
         });
         this.scene.requestRender();
@@ -306,15 +328,30 @@ export class SplatCollider {
     }
     let entry = this.tracked.get(tileset);
     const toWorld = Matrix4.fromArray(Array.from(root));
-    if (!entry?.runtime || !Matrix4.equalsEpsilon(entry.toWorld, toWorld, 1e-9)) {
-      // A new tileset, or one moved (a placement edit re-bakes every position): start over.
+    const model = tileset.modelMatrix ?? Matrix4.IDENTITY;
+    if (
+      !entry?.runtime ||
+      !Matrix4.equalsEpsilon(entry.toWorld, toWorld, 1e-9) ||
+      !Matrix4.equals(entry.runtime.model, model)
+    ) {
+      // A new tileset, or one moved or resized (a placement edit, a runtime scale: either
+      // re-bakes every position, even where the frame they are baked in stays): start over.
       const grid = new SplatOccupancy();
       entry = {
         solids: grid,
         toWorld,
         toLocal: Matrix4.inverseTransformation(toWorld, new Matrix4()),
+        // The baked frame is east/north/up metres at the tileset's centre, scale included.
+        scale: 1,
         bounds: BoundingSphere.clone(tileset.boundingSphere),
-        runtime: { grid, generation: -1, queue: [], positions: undefined, colors: undefined },
+        runtime: {
+          grid,
+          generation: -1,
+          queue: [],
+          positions: undefined,
+          colors: undefined,
+          model: Matrix4.clone(model),
+        },
       };
       this.tracked.set(tileset, entry);
     }

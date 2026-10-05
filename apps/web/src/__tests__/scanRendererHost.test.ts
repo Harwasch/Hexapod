@@ -562,3 +562,56 @@ describe("the scan's objects moving under the overlay", () => {
     r.host.destroy();
   });
 });
+
+describe("a dedicated renderer's scan at a runtime scale", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    served = TILESET;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(served), { status: 200 }))),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+
+  it("draws from where the camera is in the scaled frame, and again when the scale changes", async () => {
+    const r = await rig();
+    // The scan resized about its origin, as `renderConfig.scale` draws it: half size.
+    const computedTransform = Matrix4.fromUniformScale(0.5);
+    const tileset = {
+      resource: { url: "https://scan.test/tileset.json" },
+      root: { computedTransform, extras: { nativeLod: false } },
+      isDestroyed: () => false,
+    } as unknown as Cesium3DTileset;
+    r.host.setTarget({ key: "scaled", tileset });
+    await settle(r);
+    const pose = r.renders.at(-1);
+    // The camera (-20, -60, 10) on the globe is twice as far out among half-size splats; it
+    // clips at 0.1 m and 10 km on the globe, which is 0.2 and 20 km of the scan's frame.
+    expect(pose?.eye[0]).toBeCloseTo(-40, 9);
+    expect(pose?.eye[1]).toBeCloseTo(-120, 9);
+    expect(pose?.eye[2]).toBeCloseTo(20, 9);
+    expect(pose?.near).toBeCloseTo(0.2, 9);
+    expect(Math.hypot(...(pose?.direction ?? [0, 0, 0]))).toBeCloseTo(1, 12);
+    // A preview of another scale is a new transform, drawn though the camera has not moved.
+    const before = r.renders.length;
+    Matrix4.fromUniformScale(0.25, computedTransform);
+    r.globe();
+    await r.run(100);
+    expect(r.renders.length).toBeGreaterThan(before);
+    expect(r.renders.at(-1)?.eye[0]).toBeCloseTo(-80, 9);
+    r.host.destroy();
+  });
+});

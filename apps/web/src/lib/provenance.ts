@@ -124,6 +124,11 @@ export function geometryProvenance(
  * an estimate, with its ±% whenever the catalog carries one — "estimated" with no figure would
  * read as nearly measured — and it is not the "unresolved" warning, which would no longer be
  * true.
+ *
+ * `manual` is a scale somebody set by hand (`PUT /assets/{id}/scale`, the Set real size tool),
+ * and the asset's `renderConfig.scaleEvidence` says how: from a length measured on the scan and
+ * its true length ("scaled by hand from a measured length"), or a factor typed in ("scale set
+ * by hand"). The first is a measurement, of one length; the second is somebody's word.
  */
 export interface PlacementProvenance {
   /** One line: how it was placed, how well, and where its scale came from. */
@@ -157,12 +162,21 @@ const SCALE_LABEL: Record<NonNullable<Provenance["scaleSource"]>, string> = {
   unresolved: "scale unresolved",
 };
 
-/** The scale part of the summary: its label, and an estimate's ±% when the catalog has one. */
-function scaleLabel(provenance: Provenance | null | undefined): string {
+/** A hand-set scale found from a measured length, rather than typed in. */
+const MEASURED_BY_HAND_LABEL = "scaled by hand from a measured length";
+
+/**
+ * The scale part of the summary: its label, an estimate's ±% when the catalog has one, and for
+ * a scale set by hand, whether a length was measured for it (`scaleEvidence.method`).
+ */
+function scaleLabel(asset: SiteAsset | undefined): string {
+  const provenance = asset?.provenance;
   const scale = provenance?.scaleSource ?? "unresolved";
   const pct = provenance?.scaleUncertaintyPct;
   if (scale === "camera-height-estimate" && typeof pct === "number" && Number.isFinite(pct))
     return `${SCALE_LABEL[scale]} (±${Math.round(pct)}%)`;
+  if (scale === "manual" && asset?.renderConfig.scaleEvidence?.method === "measured-length")
+    return MEASURED_BY_HAND_LABEL;
   return SCALE_LABEL[scale];
 }
 
@@ -182,7 +196,8 @@ export function placementProvenance(
   assetId: string | null | undefined,
   units: UnitSystem,
 ): PlacementProvenance | null {
-  const provenance = placedAsset(site, assetId)?.provenance;
+  const asset = placedAsset(site, assetId);
+  const provenance = asset?.provenance;
   const method = provenance?.georefMethod;
   if (!method) return null;
   const uncertainty = provenance?.uncertaintyM;
@@ -193,7 +208,7 @@ export function placementProvenance(
     typeof uncertainty === "number" && Number.isFinite(uncertainty)
       ? `±${formatLength(uncertainty, units)}`
       : "uncertainty not recorded",
-    scaleLabel(provenance),
+    scaleLabel(asset),
   ];
   return {
     summary: parts.join(" · "),

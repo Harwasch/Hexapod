@@ -15,6 +15,7 @@ import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 
 import { FloatingPanel } from "../shell/FloatingPanel";
+import { RealSize } from "./RealSize";
 
 const KIND_LABEL = {
   ground: "Location",
@@ -216,6 +217,9 @@ export function InspectorPanel() {
               </dl>
             </section>
           )}
+          {/* The site's scan at its real size, when it is one the API can resize. Named by
+              the site, like the section above, so it never reads as about the clicked point. */}
+          {site && <RealSize site={site} />}
           {attribution && attribution.length > 0 && (
             <section aria-label="Attribution">
               <p className="glass-eyebrow">Attribution</p>

@@ -1601,6 +1601,49 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   align-self: stretch;
 }
 
+/* Set real size (features/inspector/RealSize.tsx): the site card's scale tool. */
+.real-size {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.real-size > .glass-row {
+  align-self: stretch;
+}
+
+.real-size__form,
+.real-size__step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  align-self: stretch;
+}
+
+.real-size__form .glass-field {
+  align-self: stretch;
+}
+
+.real-size__note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.real-size__actions {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* A finger, not a pointer: buttons big enough to tap beside the scan being tapped on. */
+@media (pointer: coarse) {
+  .real-size .glass-button {
+    min-height: 44px;
+  }
+}
+
 .category {
   display: flex;
   align-items: center;
