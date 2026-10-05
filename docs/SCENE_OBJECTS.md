@@ -840,7 +840,10 @@ the tiles the renderer draws now:
   (`features/mission/SelectionCard`) shows an object as it shows a machine or a zone, in the
   right dock (a bottom sheet on a phone): the name (top tag, else the category, never an id)
   and the category, "◀ 1 of 3 ▶", **Hide**, **Show only**, **Fly to**, the brush and **Clear**
-  (its close button). One selection at a time: picking an object clears a machine or zone, and
+  (its close button). A combination is named by its members and what holds them, "Top flange +
+  drum + Bottom flange (of Spool)" (`combinationLabel`; with more than three members, a name
+  said twice or too long a name, "4 parts of Spool" or "4 objects"), says its overlap with the
+  painted area, and offers **Save as object**. One selection at a time: picking an object clears a machine or zone, and
   the reverse (`state/oneSelection.ts`). The selection is the objects store's highlight: the
   controller writes it through `useInstances.highlight`, expanded to descendants. **Fly to**
   goes through the app's camera controller (`CameraController.flyToObject`): the pace and
@@ -853,17 +856,61 @@ the tiles the renderer draws now:
   cell is under a stroke. Shift adds to the painted area, Alt takes away, and a plain stroke
   starts again. A touch screen has none of those keys: there the card offers **New / Add /
   Remove** for what a stroke does, and a brush size in place of Alt+wheel. The match is the
-  instance, at any level, with the best intersection over union. The IoU is weighted by
-  opacity and counts only visible splats, so an object's hidden back does not count against
-  it. While the stroke is painted, its best match so far is highlighted (at most every
-  100 ms) and the card says its overlap, so you can stop once the right object lights up; it
-  is selected when the stroke ends. Matching every visible splat at every move would be too
-  slow (the camp has 22.6 M), so the view is indexed once when it is projected
+  combination of instances, at whatever levels fit, whose union has the best intersection over
+  union with the painted area (see **Combinations** below): one instance, or several. The IoU
+  is weighted by opacity and counts only visible splats, so an object's hidden back does not
+  count against it. While the stroke is painted, its best match so far is highlighted (at most
+  every 100 ms) and the card says its overlap, so you can stop once the right objects light
+  up; it is selected when the stroke ends. Matching every visible splat at every move would be
+  too slow (the camp has 22.6 M), so the view is indexed once when it is projected
   (`paintIndex`): per 3 px cell, the visible splats' leaf ids and weights, and per instance its
-  visible weight rolled up its chain. A match (`bestByIoUIndexed`) then walks only the painted
-  cells and the instances they hold, and gives the same answer as matching every splat.
-- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the card offers
-  **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  visible weight rolled up its chain and its parent. A match then walks only the painted cells
+  and the instances they hold (`paintSumsIndexed`), and gives the same sums, so the same
+  answer, as matching every splat (`paintSums`).
+- **Combinations** (`bestSet`). Painting is for selecting the right combination or level of
+  the hierarchy: painted over a spool's bottom flange and its top flange and drum, it selects
+  both, not one then the other. The members are instances from disjoint subtrees (none holds
+  another), so the union's painted and visible weights are the members' sums and a set's IoU
+  is `Σinter / (painted + Σvisible − Σinter)`, from the per-instance sums a match gathers
+  anyway.
+  - The best set is found exactly, not greedily. A greedy search starts from the best single
+    instance and can never trade a parent for its children (the spool, which also holds ground
+    nobody painted, against the two flanges that were). Dinkelbach's method from the best
+    single instance's IoU λ reads the antichain maximising `Σ (inter − λ·(visible − inter))`
+    off the hierarchy bottom-up (an instance, or the best of its children, whichever is more),
+    takes its IoU as the next λ, and stops when that no longer rises: three or four passes
+    over the instances met.
+  - Then the answer is made simple at little cost. Members that add little go, the least
+    first, while the set's IoU stays within 2% of the best's (`PAINT_SET_GAIN`): a sliver of a
+    neighbour under the brush's edge is not a part. Then members that share an ancestor become
+    that ancestor, the deepest first, while the IoU stays within 3% (`PAINT_PARENT_SLACK`): the
+    whole spool when it is as good as its parts, its parts when the spool also holds unpainted
+    ground. One instance stays one instance. Both are shares of the IoU, not differences: in a
+    loosely painted area (IoU 0.1) a member that is half of it adds only 0.01, and stays.
+  - The members are listed largest on screen first (ascending ids among equals), the same for
+    the same sums, so the same painted area gives the same set however its splats were
+    gathered.
+  - While a stroke is painted, the match shown is kept until another's IoU is better by more
+    than 3% (`PAINT_STEADY`, `steadySet`), so two near-equal answers do not take turns at every
+    preview; the stroke's end goes by the same rule, so what is lit is what is selected.
+  - Cost, on a camp-sized synthetic view (2.16 M visible splats, 48,000 instances, 1440 × 900
+    px): an 18 px stroke across a third of the screen meets 1,003 instances, and the best set
+    takes 1.3–2.4 ms against 0.9–1.1 ms for the best single instance; the largest brush (120 px)
+    scrubbed over half the screen meets 25,488, and takes about 13 ms against 8 ms.
+  - A combination is selected as one (`state/sceneSelect.ts` `selectSet`): its first member is
+    candidate 0 and stands for the combination, and what its members are parts of together
+    (`commonChain`) are the coarser candidates, so `]` goes up to the spool and `[` back.
+    `selectedIds` is what is selected, whichever it is, and the highlight, **Hide**, **Show
+    only** and **Fly to** (the sphere around the members') act on all of it. A click is
+    unchanged: the whole object first, again for its parts; a click from a combination starts
+    at the whole object.
+- **Painted objects** (`lib/customSets.ts`). When the best set's IoU is below 0.5, the card
+  offers **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  - **Save as object** keeps a combination the same way (`setFromInstances`): as every splat
+    its members carry in every tile of the scan, at every level of detail, not only those drawn
+    or painted. It is kept as splats, not as the members' ids: the format draws a set by its
+    splats, and splats stay the same object if the scan is segmented again, where ids would
+    name others.
   - It is stored per scan in this browser (`localStorage`,
     `hexapod.customObjects.<asset>`) as `{ key, name, tiles: { checksum: [start, length, …] },
 splats, bounds }`.
@@ -887,7 +934,10 @@ card where the app's dock puts it) under PlayCanvas, Spark and CesiumJS. The e2e
 - `]` goes to the parent and `[` comes back; Tab and Shift+Tab do the same from the map, and
   from the page's body Tab moves focus instead;
 - painting over shrub 10 selects that shrub;
-- **Hide** in the card removes it from the frame.
+- **Hide** in the card removes it from the frame;
+- one stroke across two walls of the shed (8) selects both walls together, not the shed (whose
+  roof was not painted) and not one wall; the card names the combination, **Show only** leaves
+  both walls (the roof goes from the frame) and **Hide** hides both.
 
 In the app, `e2e/app.spec.ts` ("a scan object in the selection card") checks the keys and the
 card around a selection: `B` and `V` once each, one Escape one step, Tab on the body, an object

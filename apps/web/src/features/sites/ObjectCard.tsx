@@ -7,6 +7,7 @@ import {
   Focus,
   Minus,
   Plus,
+  Save,
   Trash2,
   X,
 } from "lucide-react";
@@ -21,9 +22,17 @@ import {
 } from "@/cesium/sceneSelect/SceneSelectController";
 import { categoryById } from "@/lib/categories";
 import { TOUCH_MEDIA, useMediaQuery } from "@/lib/media";
-import { chipText, levelText, PAINT_MIN_IOU, selectionLabel } from "@/lib/sceneSelect";
+import type { Instance } from "@/lib/instances";
+import {
+  chipText,
+  combinationLabel,
+  commonChain,
+  levelText,
+  PAINT_MIN_IOU,
+  selectionLabel,
+} from "@/lib/sceneSelect";
 import { useInstances } from "@/state/instances";
-import { useSceneSelect, type StrokeMode } from "@/state/sceneSelect";
+import { chosenCombination, useSceneSelect, type StrokeMode } from "@/state/sceneSelect";
 
 const STROKE_MODES: readonly { value: StrokeMode; label: string }[] = [
   { value: "replace", label: "New" },
@@ -39,15 +48,22 @@ const BRUSH_STEP = 1.25;
  * painted, then once it ends).
  */
 function paintHint(
-  paint: { best: number | null; iou: number; painted: number } | null,
+  paint: { ids: readonly number[]; iou: number; painted: number } | null,
   touch: boolean,
 ): string {
   if (paint === null)
     return touch
       ? "Paint over an object with a finger. New starts again; Add and Remove change the painted area."
       : "Paint over an object. Shift adds, Alt removes; Alt+wheel sizes the brush.";
-  if (paint.best === null) return `${String(paint.painted)} splats painted; no object under them.`;
-  return `Best match: ${(paint.iou * 100).toFixed(0)}% overlap · ${String(paint.painted)} splats.`;
+  if (paint.ids.length === 0)
+    return `${String(paint.painted)} splats painted; no object under them.`;
+  const parts = paint.ids.length > 1 ? `${String(paint.ids.length)} parts, ` : "";
+  return `Best match: ${parts}${overlap(paint.iou)} · ${String(paint.painted)} splats.`;
+}
+
+/** "87% overlap": a match's intersection over union with the painted area. */
+function overlap(iou: number): string {
+  return `${(iou * 100).toFixed(0)}% overlap`;
 }
 
 /**
@@ -58,6 +74,9 @@ function paintHint(
  * Tab while the map or this card has focus), Hide, Show only, Fly to, the brush,
  * and for a painted object Delete. While painting it says how the brush works and what the
  * painted area matched, and offers to keep the area as an object when nothing matched it well.
+ * A combination the brush selected is named by its members and what holds them ("Top flange +
+ * drum + Bottom flange (of Spool)", or "4 parts of Spool"), says its overlap, acts as one on
+ * Hide, Show only and Fly to, and can be kept as an object of its own (Save as object).
  *
  * It is the HUD's one selection card (`features/mission/SelectionCard`) when the selection is
  * an object, so a machine, a zone and an object never show two cards. On a touch screen
@@ -77,24 +96,33 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
   const setBrush = useSceneSelect((s) => s.setBrush);
   // Re-read the document when the scan's painted objects change.
   useSceneSelect((s) => (assetId ? s.custom[assetId] : undefined));
+  const combination = useSceneSelect(chosenCombination);
   const touch = useMediaQuery(TOUCH_MEDIA);
   const id = candidates[index];
   // The broad category the objects panel files the selection under (lib/categories.ts).
-  const category = useInstances((s) =>
-    assetId && id !== undefined ? s.assets[assetId]?.index.categoryOf.get(id) : undefined,
+  const categories = useInstances((s) =>
+    assetId ? s.assets[assetId]?.index.categoryOf : undefined,
   );
+  const category = id !== undefined ? categories?.get(id) : undefined;
   const listed = useInstances((s) => (assetId ? s.assets[assetId]?.instances : undefined));
   // The scan's document as drawn (painted objects included), else the store's table.
-  const instance =
-    assetId && id !== undefined
-      ? (paintedDocOf(assetId)?.byId.get(id) ?? listed?.find((entry) => entry.id === id))
-      : undefined;
+  const doc = assetId ? paintedDocOf(assetId) : undefined;
+  const instanceOf = (of: number): Instance | undefined =>
+    doc?.byId.get(of) ?? listed?.find((entry) => entry.id === of);
+  const nameOf = (of: number): string => selectionLabel(instanceOf(of), of, categories?.get(of));
 
   const painting = mode === "paint";
-  const label = id !== undefined ? selectionLabel(instance, id, category) : "Paint to select";
-  const categoryName = category ? categoryById(category).name : null;
+  // A combination: its members' names, and what holds them all.
+  const whole = combination && doc ? commonChain(doc, combination.ids)[0] : undefined;
+  const label = combination
+    ? combinationLabel(combination.ids.map(nameOf), whole === undefined ? null : nameOf(whole))
+    : id !== undefined
+      ? selectionLabel(instanceOf(id), id, category)
+      : "Paint to select";
+  const categoryName = category && !combination ? categoryById(category).name : null;
   const painted = !painting && id !== undefined && controller.selectionIsPainted();
   const meta = [
+    combination ? `${overlap(combination.iou)} with the painted area` : null,
     categoryName && categoryName !== label ? categoryName : null,
     painted ? "Painted in this browser" : null,
   ].filter((part): part is string => part !== null);
@@ -115,7 +143,7 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
       role="region"
       aria-label={
         id !== undefined
-          ? `Selected object: ${chipText(label, index, chain, candidates.length)}`
+          ? `${combination ? "Selected objects" : "Selected object"}: ${chipText(label, index, chain, candidates.length)}`
           : "Paint to select"
       }
       data-testid="selection-card"
@@ -130,6 +158,7 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
           className="mc-card__title"
           data-testid="object-label"
           data-id={id}
+          data-ids={combination?.ids.join(" ")}
           role="status"
           aria-live="polite"
         >
@@ -240,6 +269,16 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
         {painted && (
           <button type="button" className="mc-btn" onClick={() => controller.deletePainted()}>
             <Trash2 size={13} aria-hidden="true" /> Delete painted object
+          </button>
+        )}
+        {combination && (
+          <button
+            type="button"
+            className="mc-btn"
+            data-testid="object-save-combination"
+            onClick={() => controller.saveCombination(label)}
+          >
+            <Save size={13} aria-hidden="true" /> Save as object
           </button>
         )}
       </div>

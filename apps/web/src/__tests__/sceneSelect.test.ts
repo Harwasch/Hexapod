@@ -8,6 +8,7 @@ import {
   parseCustomSets,
   rangesLength,
   serializeCustomSets,
+  setFromInstances,
   withCustomSets,
   type CustomSet,
 } from "@/lib/customSets";
@@ -15,17 +16,31 @@ import { parseInstances, tileInstanceIds, withDescendants } from "@/lib/instance
 import {
   bestByIoU,
   bestByIoUIndexed,
+  bestSet,
+  bestSetByIoU,
+  bestSetByIoUIndexed,
   buildCandidates,
   chainOf,
   chipText,
+  combinationLabel,
+  commonChain,
   cycleIndex,
   drillIndex,
   hiddenForShowOnly,
   levelText,
+  PAINT_PARENT_SLACK,
+  PAINT_SET_GAIN,
   paintedCount,
   paintIndex,
+  paintSums,
+  paintSumsIndexed,
   selectionLabel,
+  setIoU,
   splatShares,
+  steadySet,
+  type PaintSample,
+  type PaintSetMatch,
+  type PaintSums,
 } from "@/lib/sceneSelect";
 import {
   BrushMask,
@@ -35,6 +50,7 @@ import {
   type ScreenSplats,
 } from "@/lib/splatPaint";
 import { buildTileIndex, castRay, hitWeights, labelsNear, type PickTile } from "@/lib/splatPick";
+import { selectedId, selectedIds, useSceneSelect } from "@/state/sceneSelect";
 
 const CHECKSUM = "fnv1a32:6:0000abcd";
 
@@ -352,9 +368,446 @@ describe("painting", () => {
         expect(bestByIoUIndexed(index, mask), label).toEqual(
           bestByIoU(parsed, { ids, weights, painted }),
         );
+        // And the best set: the same sums, the same members in the same order.
+        expect(bestSetByIoUIndexed(index, mask), label).toEqual(
+          bestSetByIoU(parsed, { ids, weights, painted }),
+        );
         expect(paintedCount(index, mask), label).toBe(painted.reduce((a, b) => a + b, 0));
       }
     }
+  });
+});
+
+describe("painting a combination", () => {
+  /**
+   * A cable spool (1): its bottom flange (2), top flange and drum (3), planks (4); and the
+   * ground beside it (9). `own` splats of the spool itself are ground fused into it.
+   */
+  function spool() {
+    const parsed = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [
+        { id: 1, parent: null, level: 0, splats: 8, bounds: box, tags: tag("spool") },
+        { id: 2, parent: 1, level: 1, splats: 10, bounds: box, tags: tag("bottom flange") },
+        { id: 3, parent: 1, level: 1, splats: 12, bounds: box, tags: tag("top flange + drum") },
+        { id: 4, parent: 1, level: 1, splats: 3, bounds: box, tags: tag("planks") },
+        { id: 9, parent: null, level: 0, splats: 100, bounds: box, tags: tag("ground") },
+      ],
+      tiles: {},
+    });
+    if (!parsed) throw new Error("fixture did not parse");
+    return parsed;
+  }
+  const box = { min: [0, 0, 0], max: [1, 1, 1] };
+  function tag(label: string) {
+    return [{ label, score: 0.9 }];
+  }
+
+  /** Visible splats of weight 1: per leaf id, how many are on screen and how many painted. */
+  function sample(
+    rows: readonly (readonly [number, number, number])[],
+  ): PaintSample & { ids: number[]; weights: number[]; painted: number[] } {
+    const ids: number[] = [];
+    const painted: number[] = [];
+    for (const [id, visible, brushed] of rows) {
+      for (let k = 0; k < visible; k++) {
+        ids.push(id);
+        painted.push(k < brushed ? 1 : 0);
+      }
+    }
+    return { ids, weights: ids.map(() => 1), painted };
+  }
+
+  it("selects the spool when its parts together are no better than it", () => {
+    const d = spool();
+    // Both flanges and the drum painted; the planks are behind, and the spool's own splat
+    // (half a splat's weight of ground) costs it little.
+    const s = sample([
+      [2, 10, 10],
+      [3, 12, 12],
+      [9, 100, 0],
+    ]);
+    s.ids.push(1);
+    s.weights.push(0.5);
+    s.painted.push(0);
+    const set = bestSetByIoU(d, s);
+    expect(set?.ids).toEqual([1]);
+    expect(set?.iou).toBeCloseTo(22 / 22.5);
+    // Exactly, the parts are the best set; within `PAINT_PARENT_SLACK` the spool is chosen.
+    expect(bestSet(paintSums(d, s), { gain: 0, slack: 0 })?.ids).toEqual([3, 2]);
+    expect(1 - 22 / 22.5).toBeLessThan(PAINT_PARENT_SLACK);
+  });
+
+  it("selects both flanges and the drum when the spool carries ground nobody painted", () => {
+    const d = spool();
+    const s = sample([
+      [1, 8, 0],
+      [2, 10, 10],
+      [3, 12, 12],
+      [4, 3, 0],
+      [9, 100, 0],
+    ]);
+    // One instance at a time, the spool is the best (and the flanges toggle under it): a
+    // greedy search from there can never trade it for its parts.
+    expect(bestByIoU(d, s)).toEqual({ id: 1, iou: 22 / 33 });
+    // The combination is: the larger part first.
+    expect(bestSetByIoU(d, s)).toEqual({ ids: [3, 2], iou: 1 });
+    expect(commonChain(d, [3, 2])).toEqual([1]);
+  });
+
+  it("follows a stroke across the spool: one flange, then both, never toggling", () => {
+    const d = spool();
+    const stroke = [
+      // The bottom flange first, then the drum and top flange as the brush moves up.
+      [8, 0],
+      [10, 3],
+      [10, 7],
+      [10, 12],
+    ] as const;
+    const shown: number[][] = [];
+    let previous: readonly number[] | null = null;
+    for (const [bottom, top] of stroke) {
+      const sums = paintSums(
+        d,
+        sample([
+          [1, 8, 0],
+          [2, 10, bottom],
+          [3, 12, top],
+          [4, 3, 0],
+          [9, 100, 0],
+        ]),
+      );
+      const match = steadySet(sums, previous);
+      previous = match?.ids ?? null;
+      shown.push([...(match?.ids ?? [])]);
+    }
+    expect(shown[0]).toEqual([2]);
+    expect(shown.at(-1)).toEqual([3, 2]);
+    // Once both flanges are lit, they stay lit; the top flange alone is never shown.
+    expect(shown.some((ids) => ids.length === 1 && ids[0] === 3)).toBe(false);
+  });
+
+  it("drops a sliver of a neighbour that adds little, and keeps what is half of the area", () => {
+    const d = spool();
+    // The spool painted whole, and one splat of the hundred-splat ground under the brush's edge.
+    const s = sample([
+      [1, 8, 8],
+      [2, 10, 10],
+      [3, 12, 12],
+      [4, 3, 3],
+      [9, 100, 1],
+    ]);
+    expect(bestSetByIoU(d, s)?.ids).toEqual([1]);
+    // A tenth of each flange's area brushed: loose, but the two flanges are still what was
+    // painted (1/10 together against 1/11 for one) -- a share of the IoU decides, not a margin.
+    const loose = sample([
+      [1, 8, 0],
+      [2, 10, 1],
+      [3, 10, 1],
+      [4, 3, 0],
+      [9, 100, 0],
+    ]);
+    expect(bestSetByIoU(d, loose)).toEqual({ ids: [2, 3], iou: 0.1 });
+    // A small object painted whole beside it is part of what was painted.
+    const rock = sample([
+      [1, 8, 8],
+      [2, 10, 10],
+      [3, 12, 12],
+      [4, 3, 3],
+      [9, 100, 0],
+      [7, 6, 6],
+    ]);
+    const withRock = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [
+        ...d.instances.map((i) => ({ ...i, centroid: undefined })),
+        { id: 7, parent: null, level: 0, splats: 6, bounds: box, tags: tag("rock") },
+      ],
+      tiles: {},
+    });
+    if (!withRock) throw new Error("fixture did not parse");
+    expect(bestSetByIoU(withRock, rock)).toEqual({ ids: [1, 7], iou: 1 });
+  });
+
+  it("holds the shown match between near-equal answers, and moves on when one is better", () => {
+    // A shrub (1) whose crown is 2 and whose stem is its own splat; a bed (3) beside it.
+    const parsed = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [
+        { id: 1, parent: null, level: 0, splats: 1, bounds: box },
+        { id: 2, parent: 1, level: 1, splats: 40, bounds: box },
+        { id: 3, parent: null, level: 0, splats: 20, bounds: box },
+      ],
+      tiles: {},
+    });
+    if (!parsed) throw new Error("fixture did not parse");
+    const sums = (stem: number, crown: number) =>
+      paintSums(
+        parsed,
+        sample([
+          [1, 1, stem],
+          [2, 40, crown],
+          [3, 20, 0],
+        ]),
+      );
+    // The stem painted too: the shrub (41/41) over its crown (40/41).
+    expect(steadySet(sums(1, 40), null)?.ids).toEqual([1]);
+    // Then not: the crown (40/40) is the best, but the shrub (40/41) is as good as makes no
+    // difference, and stays lit.
+    expect(bestSet(sums(0, 40))?.ids).toEqual([2]);
+    expect(steadySet(sums(0, 40), [1])).toEqual({ ids: [1], iou: 40 / 41 });
+    expect(steadySet(sums(0, 40), [1], 0)?.ids).toEqual([2]);
+    // Shown nothing yet, or something far worse (the bed): the best.
+    expect(steadySet(sums(0, 40), null)?.ids).toEqual([2]);
+    expect(setIoU(sums(0, 40), [3])).toBe(0);
+    expect(steadySet(sums(0, 40), [3])).toEqual({ ids: [2], iou: 1 });
+  });
+
+  /** Every antichain of the instances met, the best IoU of all: what `bestSet` must find. */
+  function bruteForce(sums: PaintSums): number {
+    const n = sums.ids.length;
+    const above = (k: number): Set<number> => {
+      const out = new Set<number>();
+      for (let up = sums.parent[k] ?? -1; up >= 0; up = sums.parent[up] ?? -1) out.add(up);
+      return out;
+    };
+    const ancestors = Array.from({ length: n }, (_, k) => above(k));
+    let best = 0;
+    for (let mask = 1; mask < 1 << n; mask++) {
+      const members: number[] = [];
+      for (let k = 0; k < n; k++) if (mask & (1 << k)) members.push(k);
+      if (members.some((k) => members.some((m) => ancestors[k]?.has(m)))) continue;
+      let i = 0;
+      let v = 0;
+      for (const k of members) {
+        i += sums.inter[k] ?? 0;
+        v += sums.visible[k] ?? 0;
+      }
+      const union = sums.painted + v - i;
+      best = Math.max(best, union > 0 ? i / union : 0);
+    }
+    return best;
+  }
+
+  it("finds the best set exactly, disjoint, the same however the splats are listed", () => {
+    let seed = 0xc0ffee;
+    const random = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = (n: number): number => Math.floor(random() * n);
+    let combinations = 0;
+    for (let round = 0; round < 150; round++) {
+      const count = 3 + pick(10);
+      const parsed = parseInstances({
+        format: "hexapod.instances",
+        version: 1,
+        instances: Array.from({ length: count }, (_, k) => ({
+          id: k + 1,
+          parent: k > 0 && random() < 0.75 ? 1 + pick(k) : null,
+          level: 0,
+          splats: 1,
+          bounds: box,
+        })),
+        tiles: {},
+      });
+      if (!parsed) throw new Error("fixture did not parse");
+      const n = 20 + pick(200);
+      const ids = Array.from({ length: n }, () => 1 + pick(count));
+      // Opacities are float32: their sums are exact in doubles, however ordered.
+      const weights = ids.map(() => Math.fround(0.05 + 0.95 * random()));
+      const share = random();
+      const painted = ids.map(() => (random() < share ? 1 : 0));
+      const s = { ids, weights, painted };
+      const sums = paintSums(parsed, s);
+      const label = `round ${String(round)}`;
+      if (sums.ids.length > 14) continue;
+      const exact = bestSet(sums, { gain: 0, slack: 0 });
+      const simple = bestSetByIoU(parsed, s);
+      if (sums.ids.length === 0) {
+        expect(simple, label).toBeNull();
+        continue;
+      }
+      const optimum = bruteForce(sums);
+      expect(exact?.iou ?? 0, label).toBeCloseTo(optimum, 9);
+      // Simpler at a small cost, never worse than one instance by more than that.
+      const single = bestByIoU(parsed, s)?.iou ?? 0;
+      const cost = (1 - PAINT_SET_GAIN) * (1 - PAINT_PARENT_SLACK);
+      expect(simple?.iou ?? 0, label).toBeGreaterThanOrEqual(optimum * cost - 1e-9);
+      expect(simple?.iou ?? 0, label).toBeGreaterThanOrEqual(single * cost - 1e-9);
+      for (const set of [exact, simple]) {
+        const members = set?.ids ?? [];
+        expect(new Set(members).size, label).toBe(members.length);
+        // No member holds another.
+        for (const id of members)
+          for (const up of chainOf(parsed, id).slice(1)) expect(members, label).not.toContain(up);
+        expect(set?.iou ?? 0, label).toBeCloseTo(setIoU(sums, members), 12);
+      }
+      if ((simple?.ids.length ?? 0) > 1) combinations++;
+      // The same splats in another order: the same set.
+      const order = [...ids.keys()].sort(() => random() - 0.5);
+      const shuffled = {
+        ids: order.map((k) => ids[k] ?? 0),
+        weights: order.map((k) => weights[k] ?? 0),
+        painted: order.map((k) => painted[k] ?? 0),
+      };
+      expect(bestSetByIoU(parsed, shuffled), label).toEqual(simple);
+    }
+    // The rounds hold combinations, not only single instances.
+    expect(combinations).toBeGreaterThan(10);
+  });
+
+  it("names a combination by its members and what holds them", () => {
+    expect(combinationLabel(["Top flange + drum", "Bottom flange"], "Spool")).toBe(
+      "Top flange + drum + Bottom flange (of Spool)",
+    );
+    expect(combinationLabel(["Crown", "Trunk"], null)).toBe("Crown + Trunk");
+    expect(combinationLabel(["Plank", "Plank", "Flange"], "Spool")).toBe("3 parts of Spool");
+    expect(combinationLabel(["A", "B", "C", "D"], null)).toBe("4 objects");
+    expect(
+      combinationLabel(["A rather long name", "And another long name", "And a third"], "X"),
+    ).toBe("3 parts of X");
+    const d = spool();
+    expect(commonChain(d, [2, 3])).toEqual([1]);
+    expect(commonChain(d, [2, 9])).toEqual([]);
+  });
+
+  it("is selected as one: its members, then what holds them as the coarser candidate", () => {
+    const store = useSceneSelect.getState();
+    store.selectSet("scan", { ids: [3, 2], iou: 0.9 }, [1], null);
+    let state = useSceneSelect.getState();
+    expect(state.candidates).toEqual([3, 1]);
+    expect(state.chain).toBe(2);
+    expect(selectedIds(state)).toEqual([3, 2]);
+    expect(selectedId(state)).toBe(3);
+    // Up to the spool and back to the combination.
+    state.cycle(1);
+    expect(selectedIds(useSceneSelect.getState())).toEqual([1]);
+    useSceneSelect.getState().cycle(-1);
+    expect(selectedIds(useSceneSelect.getState())).toEqual([3, 2]);
+    // A click's selection is one instance again.
+    useSceneSelect.getState().select("scan", [2, 1], 2, 1, null);
+    state = useSceneSelect.getState();
+    expect(state.combination).toBeNull();
+    expect(selectedIds(state)).toEqual([1]);
+    useSceneSelect.getState().clear();
+    expect(selectedIds(useSceneSelect.getState())).toEqual([]);
+  });
+
+  it("matches a camp-sized view within a preview's budget", () => {
+    // 1440 × 900 CSS px in 3 px cells; 4,000 objects of 5 parts, three of them in 2 pieces
+    // (48,000 instances); 2.2 M visible splats, each object's in its own block of cells.
+    const cols = 480;
+    const rows = 300;
+    const blocksX = 80;
+    const blocksY = 50;
+    const blockW = cols / blocksX;
+    const blockH = rows / blocksY;
+    let seed = 0xca4b;
+    const random = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const instances: { id: number; parent: number | null; level: number }[] = [];
+    const leavesOf: number[][] = [];
+    let next = 1;
+    for (let o = 0; o < blocksX * blocksY; o++) {
+      const root = next++;
+      instances.push({ id: root, parent: null, level: 0 });
+      const leaves = [root];
+      for (let p = 0; p < 5; p++) {
+        const part = next++;
+        instances.push({ id: part, parent: root, level: 1 });
+        if (p % 2 === 0) {
+          for (let q = 0; q < 2; q++) {
+            const piece = next++;
+            instances.push({ id: piece, parent: part, level: 2 });
+            leaves.push(piece);
+          }
+        } else leaves.push(part);
+      }
+      leavesOf.push(leaves);
+    }
+    const parsed = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: instances.map((i) => ({ ...i, splats: 1, bounds: box })),
+      tiles: {},
+    });
+    if (!parsed) throw new Error("fixture did not parse");
+    const perCell = 15;
+    const count = cols * rows * perCell;
+    const cell = new Int32Array(count);
+    const opacity = new Float32Array(count);
+    const ids = new Uint32Array(count);
+    for (let c = 0, k = 0; c < cols * rows; c++) {
+      const x = c % cols;
+      const y = Math.floor(c / cols);
+      const leaves = leavesOf[Math.floor(y / blockH) * blocksX + Math.floor(x / blockW)] ?? [];
+      // A part a cell, mostly: its splats in a run, as a tile's are.
+      const main = leaves[Math.floor(((x % blockW) * blockH + (y % blockH)) / 4) % leaves.length];
+      for (let s = 0; s < perCell; s++, k++) {
+        cell[k] = c;
+        opacity[k] = 0.05 + 0.95 * random();
+        ids[k] = random() < 0.8 ? (main ?? 0) : (leaves[Math.floor(random() * leaves.length)] ?? 0);
+      }
+    }
+    const visible = new Uint8Array(count).fill(1);
+    const built = performance.now();
+    const index = paintIndex(parsed, { cols, rows, cell, opacity, count }, visible, ids);
+    const indexMs = performance.now() - built;
+    const strokes: { name: string; mask: BrushMask }[] = [];
+    // A stroke of the default brush (18 px) across a third of the screen.
+    const typical = new BrushMask(cols, rows, 3);
+    typical.line(300, 420, 780, 470, 18, 1);
+    strokes.push({ name: "18 px stroke", mask: typical });
+    // The largest brush (120 px) scrubbed across half the screen.
+    const large = new BrushMask(cols, rows, 3);
+    for (let y = 200; y <= 700; y += 120) large.line(100, y, 820, y, 120, 1);
+    strokes.push({ name: "120 px scrub", mask: large });
+    const rowsOut: string[] = [];
+    const median = (list: number[]): number =>
+      [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)] ?? 0;
+    for (const { name, mask } of strokes) {
+      const single: number[] = [];
+      const set: number[] = [];
+      let match: PaintSetMatch | null = null;
+      let met = 0;
+      // As a stroke's previews run, many times over: the first few warm up.
+      for (let run = 0; run < 25; run++) {
+        let t = performance.now();
+        bestByIoUIndexed(index, mask);
+        const one = performance.now() - t;
+        t = performance.now();
+        const sums = paintSumsIndexed(index, mask);
+        match = steadySet(sums, match?.ids ?? null);
+        const many = performance.now() - t;
+        met = sums.ids.length;
+        if (run < 5) continue;
+        single.push(one);
+        set.push(many);
+      }
+      const cells = mask.data.reduce((a, b) => a + b, 0);
+      rowsOut.push(
+        `${name}: ${String(cells)} cells, ${String(met)} instances met, one instance ` +
+          `${median(single).toFixed(2)} ms, best set ${median(set).toFixed(2)} ms ` +
+          `(${String(match?.ids.length ?? 0)} members, IoU ${(match?.iou ?? 0).toFixed(3)})`,
+      );
+      // Well within the preview's 100 ms, on a shared machine; the report says what it took.
+      expect(median(set)).toBeLessThan(60);
+      expect(match).not.toBeNull();
+    }
+    console.info(
+      `camp-sized paint match: ${String(count)} visible splats, ${String(parsed.instances.length)} ` +
+        `instances, index ${indexMs.toFixed(0)} ms\n  ${rowsOut.join("\n  ")}`,
+    );
   });
 });
 
@@ -386,6 +839,25 @@ describe("painted objects", () => {
     bad.sets.push({ ...set, key: "b", tiles: { [CHECKSUM]: [3, 1, 2, 1] } });
     bad.sets.push({ ...set, key: "c", bounds: { min: [0, 0], max: [1, 1, 1] } });
     expect(parseCustomSets(JSON.stringify(bad)).map((s) => s.key)).toEqual(["a"]);
+  });
+
+  it("keeps a combination as the splats its instances carry in every tile", () => {
+    const d = doc();
+    // The trunk (4) and the shrub (2): splats 2, 3 and 4, 5 of the tile, one range.
+    const kept = setFromInstances(d, [4, 2], "Trunk + Shrub", "k", 7);
+    expect(kept).toEqual({
+      key: "k",
+      name: "Trunk + Shrub",
+      tiles: { [CHECKSUM]: [2, 4] },
+      splats: 4,
+      bounds: { min: [0.8, 0, 0], max: [6, 1.2, 3] },
+      created: 7,
+    });
+    // The tree with what is below it; and nothing for an instance without splats.
+    expect(setFromInstances(d, [1], "Tree", "t", 0)?.tiles).toEqual({ [CHECKSUM]: [0, 4] });
+    expect(setFromInstances(d, [99], "None", "n", 0)).toBeNull();
+    // Kept and read back as any painted object.
+    if (kept) expect(parseCustomSets(serializeCustomSets([kept]))).toEqual([kept]);
   });
 
   it("draws a set as an instance of its own past the file's ids", () => {
