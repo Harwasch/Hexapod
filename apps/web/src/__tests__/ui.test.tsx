@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MotionConfig } from "motion/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
@@ -192,6 +193,27 @@ describe("Developer readouts + Onboarding", () => {
     await waitFor(() => expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument());
     expect(useSettings.getState().onboardingDismissed).toBe(true);
     vi.restoreAllMocks();
+  });
+
+  it("onboarding goes the moment it is dismissed under reduced motion, not a frame later", () => {
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    useViewer.getState().setStatus("ready");
+    // As App.tsx sets it when the app's own switch is on.
+    render(
+      wrap(
+        <MotionConfig reducedMotion="always">
+          <OnboardingCard />
+        </MotionConfig>,
+      ),
+    );
+    // No entrance either: it is there at once.
+    expect(screen.getByTestId("onboarding")).toBeInTheDocument();
+    // Gone in the click's own render (fireEvent is synchronous, and wrapped in act). An exit
+    // animation waits for frames, and a globe flying off on a slow GPU draws one every few
+    // seconds.
+    fireEvent.click(screen.getByTestId("onboarding-explore"));
+    expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
+    expect(useSettings.getState().onboardingDismissed).toBe(true);
   });
 });
 
