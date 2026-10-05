@@ -280,8 +280,8 @@ ground schema of §3b, and the shared ground pass is its ground.
 - **The ground's cover**: what the objects leave is the ground, classified as candidate A's
   stuff pass does on its 5 cm cells (`ground_cover`: `segment_ground_first.cover_votes` on
   64-pixel tiles of the views, smoothing, rare classes, regions; without A's SAM-mask pooling,
-  as the field keeps no masks), low things described as ground cover joining it.
-  `ground_records` is the one place the schema is written.
+  as the field keeps no masks), low things described as ground cover, or not described at
+  all, joining it (A's stuff rule). `ground_records` is the one place the schema is written.
 - **Extra fields**: things carry `kind: "thing"`, `scaleM` (half the bounds' diagonal, as A)
   and `fieldScale` (the size the field was read at); the root `variant`, `ground` and
   `method` (the field's and the tree's settings and counts).

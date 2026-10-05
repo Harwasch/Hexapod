@@ -69,7 +69,7 @@ SAM masks the ground whole) agreeing with the mean of the ground the pass saw
    on tiles of the views, smoothing, rare classes, connected regions; A's SAM-mask pooling is
    not used, the field kept no masks), and written in the bake-off's ground schema
    (`ground_records`, docs/SCENE_OBJECTS.md §3b), where low things described as ground
-   cover join it, as A's stuff pass has them.
+   cover, or not described at all, join it, as A's stuff pass has them.
 
 Then everything `segment_scene` does after its lift: views planned and rendered with per
 pixel the dominant instance (`segment_scene.RenderPool`), `segment_scene.describe` (crops,
@@ -1705,9 +1705,10 @@ def ground_records(
     objects as described (`kind: "thing"`), then per cover class present a top-level
     instance (`kind: "ground"`, category `ground`, `cover`, `name`, `nameSource:
     "ground-cover"`) whose children are its connected regions when it has more than one. A
-    low top-level object described as ground cover (candidate A's `STUFF_CATEGORIES`, its
-    95th percentile under `STUFF_LAYERS` ground layers) joins the ground region nearest to
-    each of its splats. The one place the ground's representation is written."""
+    low top-level object described as ground cover, or not described at all (candidate A's
+    stuff rule: `STUFF_CATEGORIES`, its 90th percentile at most `STUFF_LAYERS` ground layers
+    and `STUFF_MIN_M` above the ground), joins the ground region nearest to each of its
+    splats. The one place the ground's representation is written."""
     import segment_ground_first as sgf
 
     k = tree.parent.size
@@ -1717,18 +1718,23 @@ def ground_records(
         region_of[ground_rows] = cover.region[cover.cell]
     region_class = np.zeros(int(cover.region.max()) + 1 if cover.region.size else 0, np.int64)
     region_class[cover.region] = cover.klass
-    # Low things described as ground cover are ground: their splats take the nearest region.
+    # Low things described as ground cover, or not at all, are ground (A's stuff rule): their
+    # splats take the nearest region.
     up = np.arange(k + 1)
     for i in range(1, k + 1):
         if tree.parent[i - 1]:
             up[i] = up[tree.parent[i - 1]]
     top = up[tree.leaf]
     demoted = []
+    stuff_max = max(sgf.STUFF_LAYERS * layer, sgf.STUFF_MIN_M)
     for i in range(1, k + 1):
-        if tree.parent[i - 1] or instances[i - 1].category not in sgf.STUFF_CATEGORIES:
+        if tree.parent[i - 1]:
+            continue
+        described = bool(instances[i - 1].tags)
+        if described and instances[i - 1].category not in sgf.STUFF_CATEGORIES:
             continue
         mine = np.flatnonzero(top == i)
-        if mine.size and np.percentile(height[mine], 90) <= sgf.STUFF_LAYERS * layer:
+        if mine.size and np.percentile(height[mine], 90) <= stuff_max:
             demoted.append(i)
     if demoted and ground_rows.size:
         rows = np.flatnonzero(np.isin(top, demoted))
