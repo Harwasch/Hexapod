@@ -245,11 +245,9 @@ def test_tree_on_the_yard_finds_its_objects_and_parts_above_the_ground():
     assert np.isin(top[np.isin(klass, (3, 4))], objects_ids).mean() < 0.02
     # Parts: some object has children, and every child's splats are inside its parent.
     assert (tree.level > 0).any()
-    # Ground regions exist and hold the ground classes.
-    regions = [j for j, kind in enumerate(tree.kind) if kind == "ground-region"]
-    assert regions
-    in_regions = np.isin(tree.leaf, np.asarray(regions) + 1)
-    assert np.isin(klass[in_regions], (3, 4)).mean() > 0.9  # grass/low, ground
+    # The ground left over is the ground classes.
+    assert tree.ground.any()
+    assert np.isin(klass[tree.ground], (3, 4)).mean() > 0.9  # grass/low, ground
 
 
 def test_a_flange_the_height_filter_calls_ground_goes_to_its_object():
@@ -294,51 +292,58 @@ def test_low_pieces_that_read_as_the_ground_are_ground_cover():
     ground = ff.ground_layer(splats)
     tree = ff.build_tree(splats, oracle_field(truth, truth), ground)
     assert tree.stats["groundLikePieces"] >= 1
-    objects = [j + 1 for j, kind in enumerate(tree.kind) if kind == "object"]
-    regions = [j + 1 for j, kind in enumerate(tree.kind) if kind == "ground-region"]
     n_lawn, n_tuft = len(lawn), len(tuft)
-    assert np.isin(tree.leaf[n_lawn : n_lawn + n_tuft], regions).mean() > 0.9
-    assert np.isin(tree.leaf[n_lawn + n_tuft :], objects).mean() > 0.9
+    assert tree.ground[n_lawn : n_lawn + n_tuft].mean() > 0.9
+    assert (tree.leaf[n_lawn + n_tuft :] > 0).mean() > 0.9
 
 
 def test_ground_records_write_the_shared_ground_schema():
     """Things first; then one top-level instance per cover class (kind ground, category
     ground, its `cover` and `name`), with its connected regions as children when it has more
-    than one."""
+    than one; a low thing described as ground cover joins the ground."""
     import segment_ground_first as sgf
 
     rng = np.random.default_rng(2)
-    things = rng.uniform([0, 0, 0.3], [0.5, 0.5, 1.0], (500, 3))
+    box = rng.uniform([0, 0, 0.3], [0.5, 0.5, 1.0], (500, 3))
+    tuft = rng.uniform([2.0, 0.2, 0.0], [2.1, 0.3, 0.02], (60, 3))
     xy = np.stack(np.meshgrid(np.arange(0, 3, 0.05), np.arange(0, 1, 0.05)), -1).reshape(-1, 2)
     floor = np.c_[xy, np.zeros(len(xy))]
-    pos = np.concatenate([things, floor])
-    # Patches 2, 3, 4 along x; 2 and 4 grass (apart), 3 dirt; node 1 is a thing.
-    patch = 2 + np.minimum((floor[:, 0] // 1.0).astype(int), 2)
-    leaf = np.r_[np.ones(len(things), int), patch]
+    pos = np.concatenate([box, tuft, floor])
+    n_box, n_tuft = len(box), len(tuft)
+    leaf = np.r_[np.ones(n_box, int), np.full(n_tuft, 2), np.zeros(len(floor), int)]
+    ground = np.r_[np.zeros(n_box + n_tuft, bool), np.ones(len(floor), bool)]
     tree = ff.Tree(
-        leaf, np.zeros(4, np.int64), np.zeros(4, np.int64), np.ones(4),
-        ["object", "ground-region", "ground-region", "ground-region"],
+        leaf, np.zeros(2, np.int64), np.zeros(2, np.int64), np.ones(2), ["object", "object"],
+        ground=ground,
     )  # fmt: skip
-    graph = ff.knn_graph(pos, np.ones(len(pos), bool))
+    # Ground cells along x: grass, dirt, grass -- two grass regions, apart.
+    third = np.minimum((floor[:, 0] // 1.0).astype(int), 2)
     classes, _ = sgf.cover_classes()
     names = [c.id for c in classes]
-    probability = np.zeros((5, len(classes)))
-    probability[2, names.index("grass")] = 0.9
-    probability[3, names.index("dirt")] = 0.7
-    probability[4, names.index("grass")] = 0.8
-    cover = ff.Cover(classes, probability, np.r_[0, 0, 1, 1, 1.0], np.ones((len(classes), 8)))
-    dim = 8
-    thing = segment_scene.Instance(
-        id=1, parent=None, level=0, splats=500, bounds_min=np.zeros(3), bounds_max=np.ones(3),
-        centroid=np.zeros(3), views=3, embedding=np.zeros(dim),
-        tags=[{"label": "box", "score": 0.5}],
-        properties={name: 0.1 for name in segment_scene.PROPERTY_PROMPTS}, behaviour="static",
+    klass = np.array([names.index("grass"), names.index("dirt"), names.index("grass")])
+    cover = ff.GroundCover(
+        classes, third, klass, np.array([0.9, 0.7, 0.8]), np.array([0, 1, 2]),
+        np.ones((len(classes), 8)),
     )  # fmt: skip
-    regions = [segment_scene.Instance(**{**thing.__dict__, "id": k}) for k in (2, 3, 4)]
-    out = ff.ground_records(tree, [thing, *regions], pos, graph, cover, dim)
+    dim = 8
+
+    def instance(i: int, category: str) -> segment_scene.Instance:
+        return segment_scene.Instance(
+            id=i, parent=None, level=0, splats=10, bounds_min=np.zeros(3),
+            bounds_max=np.ones(3), centroid=np.zeros(3), views=3, embedding=np.zeros(dim),
+            tags=[{"label": "x", "score": 0.5}],
+            properties={name: 0.1 for name in segment_scene.PROPERTY_PROMPTS},
+            behaviour="static", category=category,
+        )  # fmt: skip
+
+    height = pos[:, 2]
+    out = ff.ground_records(
+        tree, [instance(1, "furniture"), instance(2, "grass")], pos, cover, dim, 0.05, height
+    )
     by_id = {i.id: i for i in out.instances}
     assert [i.id for i in out.instances] == list(range(1, len(out.instances) + 1))
     assert out.extra[1]["kind"] == "thing" and by_id[1].parent is None
+    assert sum(1 for e in out.extra.values() if e["kind"] == "thing") == 1  # the tuft is ground
     tops = [i for i in out.instances if i.parent is None and out.extra[i.id]["kind"] == "ground"]
     assert sorted(out.extra[i.id]["cover"] for i in tops) == ["dirt", "grass"]
     for i in tops:
@@ -346,11 +351,11 @@ def test_ground_records_write_the_shared_ground_schema():
     grass = next(i for i in tops if out.extra[i.id]["cover"] == "grass")
     dirt = next(i for i in tops if out.extra[i.id]["cover"] == "dirt")
     children = [i for i in out.instances if i.parent == grass.id]
-    assert len(children) == 2 and grass.splats == 0  # two grass regions, apart
+    assert len(children) == 2 and grass.splats == 0
     assert all(out.extra[c.id]["cover"] == "grass" for c in children)
     assert not [i for i in out.instances if i.parent == dirt.id] and dirt.splats > 0
     assert set(np.unique(out.leaf)) <= set(by_id)
-    assert (out.leaf[len(things) :] != 1).all()
+    assert (out.leaf[n_box : n_box + n_tuft] != 2).all()  # the tuft's splats are ground's
 
 
 def test_granularities_follow_the_tree():

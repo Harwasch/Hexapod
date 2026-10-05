@@ -18,7 +18,7 @@ the same `instances.json` the viewer reads (§4 there), so the owner can switch 
   sigmoid of a small MLP of the scale -- and a feature-norm consistency term. The gate and the
   consistency term are theirs.
 * LangSplatV2 (NeurIPS 2025): a language feature as sparse codes. Not built (budget); cover
-  classes are SigLIP 2 labels voted per ground patch instead (`cover_vote`).
+  classes are SigLIP 2 labels voted per ground cell instead (`ground_cover`).
 * gsplat 1.5.3 (Apache-2.0) rasterizes the N-D features; SAM 2.1 hiera-large (Apache-2.0)
   gives the masks; SigLIP 2 base (Apache-2.0) describes the instances, as today.
 
@@ -64,10 +64,12 @@ SAM masks the ground whole) agreeing with the mean of the ground the pass saw
    hay, which any height filter calls ground -- and joins the object it touches, or is one.
 6. *Parts*: each object split again at `CHILD_SCALE` of its own diameter (and at that squared
    when the first scale does not split it), up to `MAX_DEPTH` levels.
-7. *The ground's cover*: the ground's regions cut into plan patches (`cover_patches`), each
-   labelled by candidate A's SigLIP 2 cover classifier voted over tiles of the views
-   (`cover_vote`, the shared `data/ground_cover.json`), and written in the bake-off's ground
-   schema (`ground_records`, docs/SCENE_OBJECTS.md §3b).
+7. *The ground's cover*: what is left is the ground, classified by candidate A's stuff pass
+   on its 5 cm cells (`ground_cover`: the shared `data/ground_cover.json` vocabulary, SigLIP 2
+   on tiles of the views, smoothing, rare classes, connected regions; A's SAM-mask pooling is
+   not used, the field kept no masks), and written in the bake-off's ground schema
+   (`ground_records`, docs/SCENE_OBJECTS.md §3b), where low things described as ground
+   cover join it, as A's stuff pass has them.
 
 Then everything `segment_scene` does after its lift: views planned and rendered with per
 pixel the dominant instance (`segment_scene.RenderPool`), `segment_scene.describe` (crops,
@@ -169,10 +171,9 @@ ADJACENT_SHARE = 0.25
 #: 99.5th percentile, stay out of the graph and take a neighbour's instance at the end.
 FLOATER_SCALE = 10.0
 FLOATER_QUANTILE = 0.995
-#: The ground is split by the field at this quantile of the masks' scales, then cut by a plan
-#: grid of `COVER_PATCHES` cells across: the patches the cover classes are voted on.
+#: The ground layer is split by the field at this quantile of the masks' scales (regions
+#: that are not ground-like are things lying on the ground).
 COVER_SCALE_QUANTILE = 0.5
-COVER_PATCHES = 8
 
 #: Views shown in the training sheet (image, the splat from its camera, its masks).
 SHEET_VIEWS = 6
@@ -1183,8 +1184,9 @@ def ground_reference(
 
 @dataclass
 class Tree:
-    """Per gaussian its deepest node (1-based; 0 none); per node its parent (0 none), depth,
-    scale (the robust diameter it was split at) and kind ("object" | "ground-region")."""
+    """Per gaussian its deepest object (1-based; 0 none); per object its parent (0 none),
+    depth, scale (the robust diameter it was split at) and kind ("object"); and which
+    gaussians are the ground (no object; `ground_cover` classifies them)."""
 
     leaf: np.ndarray
     parent: np.ndarray
@@ -1192,6 +1194,7 @@ class Tree:
     scale: np.ndarray
     kind: list[str]
     stats: dict[str, Any] = field(default_factory=dict)
+    ground: np.ndarray | None = None
 
 
 def _diameters(positions: np.ndarray, label: np.ndarray, k: int, seed: int = 0) -> np.ndarray:
@@ -1227,30 +1230,6 @@ def _p95(values: np.ndarray, label: np.ndarray, k: int) -> np.ndarray:
             for j in range(k)
         ]
     )
-
-
-def cover_patches(
-    region: np.ndarray, positions: np.ndarray, patches: int = COVER_PATCHES
-) -> np.ndarray:
-    """The ground regions cut by a plan grid of `patches` cells across the ground's robust
-    extent: what a cover class is voted on (the field rarely tells lawn from dirt -- SAM
-    masks the ground whole -- so the grid gives the vote somewhere to change)."""
-    has = region >= 0
-    if not has.any():
-        return region
-    xy = positions[has, :2]
-    lo, hi = np.percentile(xy, 2, axis=0), np.percentile(xy, 98, axis=0)
-    side = max(float(np.max(hi - lo)) / patches, 1e-6)
-    ij = np.floor((xy - lo) / side).astype(np.int64)
-    key = (
-        (region[has] * (4 * patches + 8) + np.clip(ij[:, 0], -2, 2 * patches + 2) + 2)
-        * (4 * patches + 8)
-        + np.clip(ij[:, 1], -2, 2 * patches + 2)
-        + 2
-    )
-    out = np.full(region.shape, -1, np.int64)
-    out[has] = key
-    return _relabel(out)
 
 
 def build_tree(
@@ -1438,34 +1417,13 @@ def build_tree(
     leaf = current
     stats["objects"] = kt
 
-    # 7. The rest of the ground, in patches for the cover vote.
-    ground_rows = rows & (leaf == 0)
-    regions = np.where(ground_rows & (regions == -2), -1, regions)
-    regions = np.where(ground_rows, regions, -1)
-    patches = cover_patches(np.where(ground_rows & (regions < 0), kr, regions), pos)
-    patches = np.where(ground_rows, patches, -1)
-    kp = int(patches.max()) + 1 if (patches >= 0).any() else 0
-    # Specks of ground too small to vote on join the nearest patch.
-    size = np.bincount(patches[patches >= 0], minlength=kp)
-    small = (patches >= 0) & (size[np.maximum(patches, 0)] < MIN_OBJECT_SPLATS)
-    if small.any() and (patches >= 0).sum() > small.sum():
-        big = np.flatnonzero((patches >= 0) & ~small)
-        _, nearest = cKDTree(pos[big]).query(pos[small], k=1, workers=-1)
-        patches[small] = patches[big[nearest]]
-        patches = _relabel(patches)
-        kp = int(patches.max()) + 1
-    patch_d = _diameters(pos, patches, kp)
-    base = len(nodes)
-    for r in range(kp):
-        nodes.append((0, 0, float(patch_d[r]), "ground-region"))
-    leaf = np.where(patches >= 0, base + 1 + patches, leaf)
-    stats["groundPatches"] = kp
+    # 7. The rest is the ground (its cover is voted in `ground_cover`).
     stats["groundRegions"] = kr
     parent = np.array([nd[0] for nd in nodes], np.int64)
     level = np.array([nd[1] for nd in nodes], np.int64)
     scale = np.array([nd[2] for nd in nodes], np.float64)
     kind = [nd[3] for nd in nodes]
-    return Tree(leaf, parent, level, scale, kind, stats)
+    return Tree(leaf, parent, level, scale, kind, stats, ground=rows & (leaf == 0))
 
 
 def fill_rest(leaf: np.ndarray, positions: np.ndarray, reach: np.ndarray) -> np.ndarray:
@@ -1506,7 +1464,7 @@ def renumber(tree: Tree) -> tuple[Tree, np.ndarray]:
         level[new[j + 1] - 1] = tree.level[j]
         scale[new[j + 1] - 1] = tree.scale[j]
         kind[new[j + 1] - 1] = tree.kind[j]
-    return Tree(new[tree.leaf], parent, level, scale, kind, tree.stats), new
+    return Tree(new[tree.leaf], parent, level, scale, kind, tree.stats, tree.ground), new
 
 
 # ------------------------------------------------------------------ views to train on
@@ -1655,31 +1613,72 @@ def describe_views(
 
 
 @dataclass
-class Cover:
-    """The ground-cover vote on the tree's ground patches (`ground_cover.json`'s classes)."""
+class GroundCover:
+    """The ground's cover classes (`data/ground_cover.json`), per ground cell: its class,
+    confidence and connected region of that class, and each class's crops' embedding."""
 
     classes: list[Any]
-    #: (nodes + 1, classes): per node its mean class probability (0 where not voted).
-    probability: np.ndarray
-    #: (nodes + 1,): the pixels' weight voted to it.
-    weight: np.ndarray
-    #: (classes, dim): each class's crops' embeddings, weighted by its probability.
-    embedding: np.ndarray
+    cell: np.ndarray  # per ground gaussian (tree.ground order), its cell
+    klass: np.ndarray  # per cell
+    confidence: np.ndarray  # per cell
+    region: np.ndarray  # per cell
+    embedding: np.ndarray  # (classes, dim)
 
 
-def cover_vote(tree: Tree, views: Sequence[segment_scene.View], embedder: Any) -> Cover:
-    """SigLIP 2 labels voted per ground patch: candidate A's classifier (`segment_ground_first
-    .cover_votes`, the shared `data/ground_cover.json` vocabulary with its contrast prompts)
-    on 64-pixel tiles of each view's ground pixels, each tile's class probabilities voted to
-    the patch that owns its pixels."""
+def ground_labels(tree: Tree, positions: np.ndarray) -> tuple[np.ndarray, Any]:
+    """Labels to render the views with: each object's id, and past them one per ground cell
+    (`segment_scene.supervoxels` over the ground: 5 cm and up). Returns the labels and the
+    cells (cell per ground gaussian, centroids, counts, edge)."""
+    labels = tree.leaf.astype(np.int64).copy()
+    ground = np.flatnonzero(tree.ground) if tree.ground is not None else np.zeros(0, int)
+    if ground.size == 0:
+        return labels, (np.zeros(0, np.int64), np.zeros((0, 3)), np.zeros(0), 1.0)
+    cells = segment_scene.supervoxels(positions[ground])
+    labels[ground] = tree.parent.size + 1 + cells[0]
+    return labels, cells
+
+
+def ground_cover(
+    tree: Tree, views: Sequence[segment_scene.View], cells: Any, embedder: Any
+) -> GroundCover:
+    """Candidate A's stuff pass on the ground the field left (segment_ground_first: the same
+    classifier, smoothing, rare classes and regions), without its SAM masks: SigLIP 2 on
+    64-pixel tiles of each view's ground pixels (`cover_votes`), each tile's class
+    probabilities voted to the ground cells under it; cells nobody saw take their nearest
+    seen cell's; each cell the mean of its neighbours' (`COVER_NEIGHBOURS`, `COVER_ROUNDS`);
+    classes under `COVER_MIN_CLASS_SHARE` of the ground take their cells' next best; regions
+    are the connected cells of a class, the small ones taking their neighbours' class."""
     import segment_ground_first as sgf
 
+    cell, centroids, counts, edge = cells
     classes, contrast = sgf.cover_classes()
-    ground = np.zeros(tree.parent.size + 1, bool)
-    ground[1:] = np.array([k == "ground-region" for k in tree.kind], bool)
-    sums, weight, embedding = sgf.cover_votes(views, ground, embedder, classes, contrast)
-    probability = sums / np.maximum(weight, 1e-12)[:, None]
-    return Cover(classes, probability, weight, embedding)
+    k = len(classes)
+    base = tree.parent.size + 1
+    n_cells = len(centroids)
+    is_ground = np.zeros(base + n_cells, bool)
+    is_ground[base:] = True
+    sums, weight, embedding = sgf.cover_votes(views, is_ground, embedder, classes, contrast)
+    probability = np.full((n_cells, k), 1.0 / k)
+    voted = weight[base:] > 0
+    probability[voted] = sums[base:][voted] / weight[base:][voted, None]
+    if voted.any() and (~voted).any():
+        _, near = cKDTree(centroids[voted]).query(centroids[~voted], k=1, workers=-1)
+        probability[~voted] = probability[np.flatnonzero(voted)[near]]
+    smooth = sgf._smooth(probability, centroids, sgf.COVER_NEIGHBOURS, sgf.COVER_ROUNDS)
+    klass = smooth.argmax(axis=1)
+    confidence = smooth[np.arange(n_cells), klass]
+    splats = counts.astype(np.float64)
+    total = float(splats.sum())
+    share = np.bincount(klass, splats, k) / max(total, 1.0)
+    rare = share < sgf.COVER_MIN_CLASS_SHARE
+    if rare.any() and (~rare).any():
+        second = np.where(rare[None, :], -1.0, smooth).argmax(axis=1)
+        klass = np.where(rare[klass], second, klass)
+    a, b = segment_scene._cell_graph(centroids, edge)
+    least = max(sgf.COVER_MIN_REGION, sgf.COVER_MIN_REGION_SHARE * total)
+    klass, region = sgf._regions(klass, splats, a, b, least)
+    region = sgf._fold_small(region, klass, splats, centroids, least)
+    return GroundCover(classes, cell, klass, confidence, _relabel(region), embedding)
 
 
 @dataclass
@@ -1697,53 +1696,54 @@ def ground_records(
     tree: Tree,
     instances: Sequence[segment_scene.Instance],
     positions: np.ndarray,
-    graph: Graph,
-    cover: Cover,
+    cover: GroundCover,
     dim: int,
+    layer: float,
+    height: np.ndarray,
 ) -> Described:
     """The final instances, in the bake-off's shared schema (docs/SCENE_OBJECTS.md §3b): the
     objects as described (`kind: "thing"`), then per cover class present a top-level
     instance (`kind: "ground"`, category `ground`, `cover`, `name`, `nameSource:
-    "ground-cover"`) whose children are its connected regions -- the patches of that class
-    joined where they touch -- when it has more than one. The one place the ground's
-    representation is written."""
+    "ground-cover"`) whose children are its connected regions when it has more than one. A
+    low top-level object described as ground cover (candidate A's `STUFF_CATEGORIES`, its
+    95th percentile under `STUFF_LAYERS` ground layers) joins the ground region nearest to
+    each of its splats. The one place the ground's representation is written."""
     import segment_ground_first as sgf
 
     k = tree.parent.size
-    patch_ids = np.flatnonzero(np.array([kind == "ground-region" for kind in tree.kind])) + 1
-    things = [j + 1 for j in range(k) if tree.kind[j] == "object"]
-    # Each patch's class; a patch nobody voted on takes its nearest voted patch's.
-    klass = np.full(k + 1, -1, np.int64)
-    confidence = np.zeros(k + 1)
-    voted = cover.weight > 0
-    for j in patch_ids:
-        if voted[j]:
-            klass[j] = int(cover.probability[j].argmax())
-            confidence[j] = float(cover.probability[j].max())
-    centroid = np.zeros((k + 1, 3))
-    counts = np.bincount(tree.leaf, minlength=k + 1)
-    for axis in range(3):
-        centroid[:, axis] = np.bincount(tree.leaf, positions[:, axis], k + 1)
-    centroid /= np.maximum(counts, 1)[:, None]
-    have = [j for j in patch_ids if klass[j] >= 0]
-    if have:
-        missing = [j for j in patch_ids if klass[j] < 0]
-        if missing:
-            _, nearest = cKDTree(centroid[have]).query(centroid[missing], k=1)
-            klass[missing] = klass[np.asarray(have)[nearest]]
-    elif patch_ids.size:
-        klass[patch_ids] = 0
-    # Regions: patches of one class joined where the graph's edges cross between them.
-    is_patch = np.zeros(k + 1, bool)
-    is_patch[patch_ids] = True
-    la, lb = tree.leaf[graph.a], tree.leaf[graph.b]
-    cross = is_patch[la] & is_patch[lb] & (la != lb) & (klass[la] == klass[lb])
-    region = _components(k + 1, la[cross], lb[cross])
+    ground_rows = np.flatnonzero(tree.ground) if tree.ground is not None else np.zeros(0, int)
+    region_of = np.full(len(positions), -1, np.int64)  # per gaussian, its ground region
+    if ground_rows.size:
+        region_of[ground_rows] = cover.region[cover.cell]
+    region_class = np.zeros(int(cover.region.max()) + 1 if cover.region.size else 0, np.int64)
+    region_class[cover.region] = cover.klass
+    # Low things described as ground cover are ground: their splats take the nearest region.
+    up = np.arange(k + 1)
+    for i in range(1, k + 1):
+        if tree.parent[i - 1]:
+            up[i] = up[tree.parent[i - 1]]
+    top = up[tree.leaf]
+    demoted = []
+    for i in range(1, k + 1):
+        if tree.parent[i - 1] or instances[i - 1].category not in sgf.STUFF_CATEGORIES:
+            continue
+        mine = np.flatnonzero(top == i)
+        if mine.size and np.percentile(height[mine], 90) <= sgf.STUFF_LAYERS * layer:
+            demoted.append(i)
+    if demoted and ground_rows.size:
+        rows = np.flatnonzero(np.isin(top, demoted))
+        _, near = cKDTree(positions[ground_rows]).query(positions[rows], k=1, workers=-1)
+        region_of[rows] = region_of[ground_rows[near]]
+    gone = np.zeros(k + 1, bool)
+    gone[demoted] = True
+    gone = gone[up]
     # Things keep their tree order and get ids 1..; then classes and their regions.
     new = np.zeros(k + 1, np.int64)
     out: list[segment_scene.Instance] = []
     extra: dict[int, dict[str, Any]] = {}
-    for old in things:
+    for old in range(1, k + 1):
+        if gone[old]:
+            continue
         i = instances[old - 1]
         new[old] = len(out) + 1
         parent = int(new[i.parent]) if i.parent else 0
@@ -1758,18 +1758,24 @@ def ground_records(
             "kind": "thing", "scaleM": round(extent / 2, 3),
             "fieldScale": round(float(tree.scale[old - 1]), 4),
         }  # fmt: skip
-    leaf = new[tree.leaf]
+    leaf = np.where(region_of >= 0, 0, new[tree.leaf])
     report = []
-    for c in sorted({int(klass[j]) for j in patch_ids}, key=lambda c: cover.classes[c].id):
-        members = [j for j in patch_ids if klass[j] == c]
+    confidence = np.zeros(region_class.size)
+    np.add.at(confidence, cover.region, cover.confidence)
+    confidence /= np.maximum(np.bincount(cover.region, minlength=region_class.size), 1)
+    for c in sorted(set(region_class.tolist()), key=lambda c: cover.classes[c].id):
         spec = cover.classes[c]
-        groups = sorted({int(region[j]) for j in members})
-        points = positions[np.isin(tree.leaf, members)]
-        score = round(float(np.mean([confidence[j] for j in members])), 4)
+        groups = np.flatnonzero(region_class == c)
+        rows = np.flatnonzero(np.isin(region_of, groups))
+        if rows.size == 0:
+            continue
+        points = positions[rows]
+        score = round(float(confidence[groups].mean()), 4)
         tags = [{"label": spec.name.lower(), "score": score}]
         emb = segment_scene._normalise(cover.embedding[c][None])[0]
         class_id = len(out) + 1
-        own = 0 if len(groups) > 1 else int(points.shape[0])
+        live = [g for g in groups if (region_of == g).any()]
+        own = 0 if len(live) > 1 else int(rows.size)
         out.append(sgf._instance(class_id, None, 0, own, points, dim, tags, spec.vegetation, emb))
         fields = {
             "kind": "ground", "name": spec.name, "nameSource": "ground-cover", "cover": spec.id,
@@ -1777,28 +1783,27 @@ def ground_records(
         extra[class_id] = {
             **fields, "scaleM": round(float(np.linalg.norm(np.ptp(points, axis=0))) / 2, 3),
         }  # fmt: skip
-        if len(groups) == 1:
-            leaf[np.isin(tree.leaf, members)] = class_id
+        if len(live) <= 1:
+            leaf[rows] = class_id
         else:
-            for g in groups:
-                patches = [j for j in members if region[j] == g]
-                rows = np.isin(tree.leaf, patches)
-                rpoints = positions[rows]
-                rscore = round(float(np.mean([confidence[j] for j in patches])), 4)
+            for g in live:
+                grows = np.flatnonzero(region_of == g)
+                rpoints = positions[grows]
                 region_id = len(out) + 1
+                rtags = [{"label": spec.name.lower(), "score": round(float(confidence[g]), 4)}]
                 out.append(
                     sgf._instance(
-                        region_id, class_id, 1, int(rows.sum()), rpoints, dim,
-                        [{"label": spec.name.lower(), "score": rscore}], spec.vegetation, emb,
+                        region_id, class_id, 1, int(grows.size), rpoints, dim, rtags,
+                        spec.vegetation, emb,
                     )
                 )  # fmt: skip
                 extra[region_id] = {
                     **fields,
                     "scaleM": round(float(np.linalg.norm(np.ptp(rpoints, axis=0))) / 2, 3),
                 }
-                leaf[rows] = region_id
+                leaf[grows] = region_id
         report.append(
-            {"class": spec.id, "splats": int(points.shape[0]), "regions": max(len(groups), 1),
+            {"class": spec.id, "splats": int(rows.size), "regions": max(len(live), 1),
              "meanConfidence": score}
         )  # fmt: skip
     return Described(out, leaf, extra, sorted(report, key=lambda r: -r["splats"]))
@@ -2013,9 +2018,14 @@ def finish_main(args: argparse.Namespace) -> dict[str, Any]:
     skip = floaters(splats) | ground.below
     graph = knn_graph(positions, ~skip)
     tree = build_tree(splats, trained, ground, graph=graph, skip=skip)
+    # Floaters and specks: the nearest thing's, or the ground, within their reach.
     reach = np.maximum(2.0 * np.asarray(splats.scales).max(axis=1), 4.0 * point_spacing(positions))
-    tree.leaf = fill_rest(tree.leaf, positions, reach)
+    marked = np.where(tree.ground, tree.parent.size + 1, tree.leaf)
+    marked = fill_rest(marked, positions, reach)
+    tree.ground = marked == tree.parent.size + 1
+    tree.leaf = np.where(tree.ground, 0, marked)
     tree, _ = renumber(tree)
+    labels, cells = ground_labels(tree, positions)
     timings["treeS"] = round(time.time() - mark, 1)
     _say(f"tree: {tree.parent.size} nodes, {json.dumps(tree.stats)}")
     # The views fork their render processes before any model starts its threads.
@@ -2023,7 +2033,7 @@ def finish_main(args: argparse.Namespace) -> dict[str, Any]:
     workers = segment_scene.default_workers(
         args.cpus, None if args.memory_gb is None else args.memory_gb * float(1 << 30)
     )
-    views = describe_views(splats, tree.leaf, skip, count=args.views, workers=workers)
+    views = describe_views(splats, labels, skip, count=args.views, workers=workers)
     timings["viewsS"] = round(time.time() - mark, 1)
     mark = time.time()
     embedder = segment_scene.load_embedder(args.embedder)
@@ -2034,16 +2044,19 @@ def finish_main(args: argparse.Namespace) -> dict[str, Any]:
             for line in args.vocabulary.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-    # The things are described; the ground's patches are not (the cover vote reads them), so
+    # The things are described; the ground's cells are not (the cover vote reads them), so
     # their pixels are nobody's here.
-    cell_id = np.arange(tree.parent.size + 1)
-    cell_id[1:][np.array([kind == "ground-region" for kind in tree.kind], bool)] = 0
+    cell_id = np.zeros(int(labels.max()) + 1 if labels.size else 1, np.int64)
+    cell_id[: tree.parent.size + 1] = np.arange(tree.parent.size + 1)
     lifted = segment_scene.Lifted(cell_id, tree.parent, tree.level)
-    instances = segment_scene.describe(lifted, splats, tree.leaf, views, embedder, vocabulary)
+    instances = segment_scene.describe(lifted, splats, labels, views, embedder, vocabulary)
     timings["describeS"] = round(time.time() - mark, 1)
     mark = time.time()
-    cover = cover_vote(tree, views, embedder)
-    described = ground_records(tree, instances, positions, graph, cover, int(embedder.dim))
+    cover = ground_cover(tree, views, cells, embedder)
+    layer = float(ground.info.get("layerM") or 0.0)
+    described = ground_records(
+        tree, instances, positions, cover, int(embedder.dim), layer, ground.height
+    )
     timings["coverS"] = round(time.time() - mark, 1)
     mark = time.time()
     tiles = segment_scene.tile_binding_by_position(tiles_dir, positions, described.leaf)

@@ -277,10 +277,11 @@ ground schema of §3b, and the shared ground pass is its ground.
   ground the pass saw -- are ground cover (hay tufts); regions of the ground layer that are
   not ground-like are things lying there and join the object they touch (the pumpkins'
   bases in a 30 cm hay layer); then parts at half each object's size.
-- **The ground's cover**: the ground cut into plan patches (8 across), each voted by
-  candidate A's SigLIP 2 classifier on 64-pixel tiles of the views
-  (`segment_ground_first.cover_votes`, `data/ground_cover.json`), patches of a class joined
-  where they touch into its regions. `ground_records` is the one place the schema is written.
+- **The ground's cover**: what the objects leave is the ground, classified as candidate A's
+  stuff pass does on its 5 cm cells (`ground_cover`: `segment_ground_first.cover_votes` on
+  64-pixel tiles of the views, smoothing, rare classes, regions; without A's SAM-mask pooling,
+  as the field keeps no masks), low things described as ground cover joining it.
+  `ground_records` is the one place the schema is written.
 - **Extra fields**: things carry `kind: "thing"`, `scaleM` (half the bounds' diagonal, as A)
   and `fieldScale` (the size the field was read at); the root `variant`, `ground` and
   `method` (the field's and the tree's settings and counts).
