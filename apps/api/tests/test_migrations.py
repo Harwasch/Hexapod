@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from alembic.config import Config
-from sqlalchemy import Engine, inspect, select
+from sqlalchemy import Engine, inspect, select, text
 from sqlalchemy.orm import Session
 
 from alembic import command
-from app.models import Capture, Job, JobStep
-from app.models.enums import CaptureKind, RunStatus
+from app.models import Asset, Capture, Job, JobStep
+from app.models.enums import AssetProvider, CaptureKind, Representation, RunStatus, ScaleSource
 
 
 def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
@@ -183,3 +183,66 @@ def test_0008_keeps_the_run_a_worker_holds_not_the_oldest_in_progress_row(
         "first-in-line": RunStatus.NOT_STARTED,
         "second-in-line": RunStatus.CANCELLED,
     }
+
+
+def test_0010_folds_an_estimated_scale_into_unresolved_on_the_way_down(
+    alembic_config: Config, engine: Engine, db: Session
+) -> None:
+    """`camera-height-estimate` is a value 0009's enum cannot hold, and a value 0009's
+    `Provenance` refuses to read. Down, a capture and its asset's provenance go back to
+    what they were registered as before the estimate existed; up, the value is back."""
+    with Session(engine) as session:
+        capture = Capture(
+            slug="estimated",
+            name="Estimated",
+            kind=CaptureKind.VIDEO,
+            scale_source=ScaleSource.CAMERA_HEIGHT_ESTIMATE,
+        )
+        asset = Asset(
+            name="Estimated splat",
+            representation=Representation.GAUSSIAN_SPLAT,
+            provider=AssetProvider.TILES_3D_URL,
+            source={"type": "3d-tiles-url", "url": "https://cdn.example.com/t/tileset.json"},
+            render_config={
+                "provenance": {
+                    "georefMethod": "exif-gps",
+                    "scaleSource": "camera-height-estimate",
+                    "uncertaintyM": 10.0,
+                    "scaleUncertaintyPct": 22.4,
+                }
+            },
+            attribution=[],
+            default_visible=True,
+        )
+        session.add_all([capture, asset])
+        session.commit()
+        capture_id, asset_id = capture.id, asset.id
+
+    command.downgrade(alembic_config, "0009")
+    try:
+        with engine.connect() as connection:
+            source = connection.execute(
+                text("SELECT scale_source::text FROM captures WHERE id = :id"), {"id": capture_id}
+            ).scalar_one()
+            provenance = connection.execute(
+                text("SELECT render_config -> 'provenance' FROM assets WHERE id = :id"),
+                {"id": asset_id},
+            ).scalar_one()
+            labels = connection.execute(
+                text("SELECT unnest(enum_range(NULL::scale_source))::text")
+            ).scalars()
+            assert source == "unresolved"
+            assert provenance == {
+                "georefMethod": "exif-gps",
+                "scaleSource": "unresolved",
+                "uncertaintyM": 10.0,
+            }
+            assert list(labels) == ["arkit", "exif-gps", "manual", "unresolved"]
+    finally:
+        command.upgrade(alembic_config, "head")
+
+    with engine.connect() as connection:
+        labels = connection.execute(
+            text("SELECT unnest(enum_range(NULL::scale_source))::text")
+        ).scalars()
+        assert list(labels) == [source.value for source in ScaleSource]

@@ -38,6 +38,8 @@ from typing import Any
 DEFAULT_API = "https://twin-api.fly.dev"
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 #: Scale sources that give metres (apps/api app/models/enums.py ``ScaleSource``).
+#: ``camera-height-estimate`` is deliberately absent: it is a ±20%-or-worse guess from how
+#: high a phone is usually held, and the scene step's thresholds would classify by it.
 METRIC_SCALE_SOURCES = ("arkit", "exif-gps", "manual")
 #: Cloudflare (the public bucket's r2.dev host) answers 403 to Python's default
 #: ``Python-urllib/3.x`` agent, so every request names this tool instead.

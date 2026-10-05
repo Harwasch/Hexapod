@@ -273,6 +273,76 @@ describe("placementProvenance", () => {
     expect(located?.measured).toBe(false);
   });
 
+  it("says an estimated scale is an estimate, with how rough it is", () => {
+    // A phone video sized by how high a handheld phone is: roughly the right size, nothing
+    // measured. Neither "unresolved" (no longer true) nor a metric claim (never true).
+    const estimated = placementProvenance(
+      placed({
+        georefMethod: "exif-gps",
+        scaleSource: "camera-height-estimate",
+        uncertaintyM: 10,
+        scaleUncertaintyPct: 22.4,
+      }),
+      "asset-1",
+      "metric",
+    );
+    expect(estimated?.summary).toContain("scale estimated from camera height (±22%)");
+    expect(estimated?.summary).toContain("Located by EXIF GPS");
+    expect(estimated?.summary).not.toContain("metric");
+    expect(estimated?.scaleEstimated).toBe(true);
+    expect(estimated?.scaleUnresolved).toBe(false);
+    expect(estimated?.measured).toBe(false);
+  });
+
+  it("still calls it an estimate when no figure was recorded", () => {
+    const bare = placementProvenance(
+      placed({ georefMethod: "exif-gps", scaleSource: "camera-height-estimate", uncertaintyM: 10 }),
+      "asset-1",
+      "metric",
+    );
+    expect(bare?.summary).toContain("scale estimated from camera height");
+    expect(bare?.summary).not.toContain("%");
+    expect(bare?.scaleEstimated).toBe(true);
+  });
+
+  it("says a scale set by hand was measured, when a length was measured for it", () => {
+    // `PUT /assets/{id}/scale` with a measured length: the Set real size tool's Measure.
+    const scaled = (method: "measured-length" | "direct") =>
+      placementProvenance(
+        site([
+          asset({
+            provenance: { georefMethod: "exif-gps", scaleSource: "manual", uncertaintyM: 10 },
+            renderConfig: {
+              ...asset().renderConfig,
+              scale: 0.25,
+              scaleEvidence:
+                method === "measured-length"
+                  ? { method, measuredLengthM: 4, trueLengthM: 1, measuredAtScale: 1 }
+                  : { method },
+            },
+          }),
+        ]),
+        "asset-1",
+        "metric",
+      );
+    const measured = scaled("measured-length");
+    expect(measured?.summary).toContain("scaled by hand from a measured length");
+    expect(measured?.summary).toContain("Located by EXIF GPS");
+    expect(measured?.scaleUnresolved).toBe(false);
+    expect(measured?.scaleEstimated).toBe(false);
+    // A factor typed in is somebody's word: "set by hand", and nothing about a measurement.
+    const typed = scaled("direct");
+    expect(typed?.summary).toContain("scale set by hand");
+    expect(typed?.summary).not.toContain("measured length");
+    // A hand-set scale with no evidence recorded says the same.
+    const bare = placementProvenance(
+      placed({ georefMethod: "exif-gps", scaleSource: "manual", uncertaintyM: 10 }),
+      "asset-1",
+      "metric",
+    );
+    expect(bare?.summary).toContain("scale set by hand");
+  });
+
   it("says nothing at all about an asset that predates the pipeline", () => {
     // Every legacy capture and every seeded reference layer is this case. A row reading
     // "unknown" would look like a finding; no row is the truth.

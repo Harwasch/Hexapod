@@ -50,6 +50,10 @@ class Provenance(CamelModel):
     #: `manual_placement` defaults it to ten metres precisely so that the inspector
     #: cannot read a dropped pin as a survey.
     uncertainty_m: float | None = Field(default=None, ge=0)
+    #: How far off the scale may be, in percent either side, when it is an estimate
+    #: (`camera-height-estimate`): the handheld-height prior's ±20% and the spread of
+    #: the cameras' heights. None for a measured scale, an unresolved one, or no record.
+    scale_uncertainty_pct: float | None = Field(default=None, ge=0)
 
 
 class TemporalExtent(CamelModel):

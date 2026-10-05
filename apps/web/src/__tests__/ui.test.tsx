@@ -426,6 +426,19 @@ describe("InspectorPanel: how the capture was placed", () => {
     expect(screen.queryByText("Scale unresolved")).not.toBeInTheDocument();
     vi.restoreAllMocks();
   });
+
+  it("calls an estimated scale an estimate, softly, rather than unresolved", async () => {
+    const estimated = await placementRow({
+      georefMethod: "exif-gps",
+      scaleSource: "camera-height-estimate",
+      uncertaintyM: 10,
+      scaleUncertaintyPct: 22.4,
+    });
+    expect(estimated).toContain("scale estimated from camera height (±22%)");
+    expect(screen.getAllByText("Scale estimated").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Scale unresolved")).not.toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
 });
 
 describe("InspectorPanel: observed and simulated", () => {

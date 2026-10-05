@@ -5,6 +5,12 @@
  * its splats' largest axis (`content.scales`) and opacity (the snapshot's colours). Built once
  * per tile content and bake; empty while the tileset is hidden (another renderer draws it), or
  * drawn only because it is seen from afar (`setSeenFromAfar`).
+ *
+ * `content.scales` are baked like the positions: the engine multiplies each splat's scales by
+ * the bake's own scale -- a runtime scale (`renderConfig.scale`) on the model matrix, or any a
+ * tile's transforms carry. Un-baked positions are in the scan's frame, so the radii are taken
+ * back to it too (`localRadii`), or a scan drawn at half size would be picked with splats twice
+ * as big as it draws them.
  */
 
 import { checksumPositions } from "@twin/world";
@@ -12,6 +18,7 @@ import type { Cesium3DTileset, Matrix4 } from "cesium";
 
 import type { PickTile } from "@/lib/splatPick";
 
+import { uniformScale } from "../placement";
 import { invertAffine, unbakePositions } from "../splatFrames";
 import { splatTilesetOf } from "../splatInternals";
 import { sameMatrix, snapshotTiles } from "../splatTiles";
@@ -49,6 +56,24 @@ export function largestAxes(scales: ArrayLike<number> | undefined, count: number
     );
   }
   return out;
+}
+
+/**
+ * Each splat's largest axis in the scan's frame, from scales baked by `bake`: divided by the
+ * bake's uniform scale, which is 1 for a rigid one (the radii then are `largestAxes`' own).
+ */
+export function localRadii(
+  scales: ArrayLike<number> | undefined,
+  count: number,
+  bake: ArrayLike<number>,
+): Float32Array {
+  const radii = largestAxes(scales, count);
+  const scale = uniformScale(bake);
+  if (Math.abs(scale - 1) < 1e-9) return radii;
+  // A splat with no scale read keeps its default, which is in the scan's frame already.
+  const read = Math.min(count, Math.floor((scales?.length ?? 0) / 3));
+  for (let i = 0; i < read; i++) radii[i] = (radii[i] ?? 0) / scale;
+  return radii;
 }
 
 export function cesiumPickSource(tileset: Cesium3DTileset): PickSource {
@@ -90,7 +115,7 @@ export function cesiumPickSource(tileset: Cesium3DTileset): PickSource {
           checksum: checksumPositions(local),
           count: tile.count,
           positions: local,
-          radii: largestAxes(scales, tile.count),
+          radii: localRadii(scales, tile.count, tile.bake),
           opacity,
         };
         cache.set(tile.content, { bake: Array.from(tile.bake), tile: pick });

@@ -62,7 +62,9 @@ import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
+import { uniformScale } from "../placement";
 import { DEDICATED_PRIORITY, registerPickSource } from "../sceneSelect/pickSources";
+import { inverseScaledTransformation } from "../tilesetScale";
 import { FrameMeter, type FrameReading } from "./frameMeter";
 import { Handover } from "./handover";
 import { OverlayFrames, OverlayInputs, type FrameOutcome } from "./overlayFrames";
@@ -949,7 +951,8 @@ export class ScanRendererHost {
             Cartesian3.fromArray(bounds.center, 0, scratchCentre),
             scratchSphere.center,
           );
-          scratchSphere.radius = bounds.radius;
+          // A tile's radius is in the scan's frame: `scale` metres a unit under a runtime scale.
+          scratchSphere.radius = bounds.radius * uniformScale(toWorld);
           return culling.computeVisibility(scratchSphere) !== Intersect.OUTSIDE;
         },
       };
@@ -959,7 +962,7 @@ export class ScanRendererHost {
       const tileset = target.tileset;
       if (tileset.isDestroyed()) return { again: false, by: null };
       Matrix4.clone(tileset.root.computedTransform, toWorld);
-      Matrix4.inverseTransformation(toWorld, toLocal);
+      inverseScaledTransformation(toWorld, toLocal);
       const camera = viewer.camera;
       const moved =
         !Cartesian3.equalsEpsilon(camera.positionWC, lastEye, 0, 1e-3) ||
@@ -1123,7 +1126,7 @@ export class ScanRendererHost {
         const tileset = target.tileset;
         if (tileset.isDestroyed()) return;
         Matrix4.clone(tileset.root.computedTransform, toWorld);
-        Matrix4.inverseTransformation(toWorld, toLocal);
+        inverseScaledTransformation(toWorld, toLocal);
         const eye = Matrix4.multiplyByPoint(toLocal, destination.position, new Cartesian3());
         streamer.prefetchView(
           viewFrom(
@@ -1205,7 +1208,7 @@ export class ScanRendererHost {
     const frame = (): FrameOutcome => {
       const tileset = target.tileset;
       if (tileset.isDestroyed()) return { again: false, by: null };
-      Matrix4.inverseTransformation(tileset.root.computedTransform, toLocal);
+      inverseScaledTransformation(tileset.root.computedTransform, toLocal);
       const camera = viewer.camera;
       const now = performance.now();
       const motion =

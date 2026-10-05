@@ -223,6 +223,7 @@ export function SceneBridge() {
 
   useEffect(() => {
     scene?.measurement.setUnits(units);
+    scene?.scaleMeasure.setUnits(units);
   }, [scene, units]);
 
   // Wind → scene. Reduced motion wins outright: it forces the scene calm while leaving the

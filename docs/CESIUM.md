@@ -78,6 +78,19 @@ Google world and 400 ms beside the AGI drone mesh). The camera floor over meshes
 below the surface plus the zoom floor. Wheel zoom already stops at the surface under the
 cursor. Terrain collision stays on for the globe (cheap, CPU heightmap).
 
+## Placing a site's model: clamp and runtime scale
+
+`SiteManager.placeTileset` puts every tileset where its catalog record says, through one
+model matrix: drawn at `renderConfig.scale` about the root transform's origin (the placed
+coordinate), then raised by the clamp (`clampToGround`: the capture's own `groundSamples` on
+the ground sampled under them, or the root box's lowest corner on the ground under the centre)
+or by `heightOffsetM`. Every globe position the catalog gives already fits the scaled model,
+so the samples, the boundary and the footprint are used as sent; only the tiles and what is
+drawn in their frame are scaled, and code that crosses that frame by hand converts lengths by
+the scale. `previewScale` tries another scale live (the Set real size tool on the site card),
+and a fresh record with a new saved scale re-places the scan. See docs/DATA_MODEL.md, "Runtime
+scale".
+
 ## Representations and LOD
 
 `SiteManager` creates one `Cesium3DTileset` per asset on demand, keeps inactive
@@ -367,7 +380,10 @@ resolves `Cesium3DTileFeature`, entities and tilesets to catalog objects, highli
 with the accent colour, samples terrain with `sampleTerrainMostDetailed`, and marks the
 point with a small entity. Measurements are entities with `CallbackProperty` geometry;
 distances use `EllipsoidGeodesic` (ground) and `Cartesian3.distance` (3D), areas use
-spherical excess on lon/lat.
+spherical excess on lon/lat. A length on a splat scan (the Set real size tool,
+`cesium/ScaleMeasure.ts`) is measured between points where the view meets the scan's solids
+(`SplatCollider`), kept in the scan's frame so the markers stay on it while a preview resizes
+it.
 
 ## Photorealistic world
 

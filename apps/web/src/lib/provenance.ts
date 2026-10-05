@@ -118,6 +118,17 @@ export function geometryProvenance(
  * "unresolved"` is printed, loudly, because it is the one that matters most and reads like an
  * absence: a reconstruction from images alone has no metric scale, so a length measured off it
  * — or a modal frequency derived from it — is meaningless rather than merely imprecise.
+ *
+ * `camera-height-estimate` is neither: the pipeline sized the capture by how high a handheld
+ * phone is, so it is roughly the right size and nothing about it was measured. It is said as
+ * an estimate, with its ±% whenever the catalog carries one — "estimated" with no figure would
+ * read as nearly measured — and it is not the "unresolved" warning, which would no longer be
+ * true.
+ *
+ * `manual` is a scale somebody set by hand (`PUT /assets/{id}/scale`, the Set real size tool),
+ * and the asset's `renderConfig.scaleEvidence` says how: from a length measured on the scan and
+ * its true length ("scaled by hand from a measured length"), or a factor typed in ("scale set
+ * by hand"). The first is a measurement, of one length; the second is somebody's word.
  */
 export interface PlacementProvenance {
   /** One line: how it was placed, how well, and where its scale came from. */
@@ -126,6 +137,8 @@ export interface PlacementProvenance {
   readonly measured: boolean;
   /** True when the reconstruction's metric scale was never resolved. */
   readonly scaleUnresolved: boolean;
+  /** True when the scale is an estimate (from the camera's height), not a measurement. */
+  readonly scaleEstimated: boolean;
 }
 
 const GEOREF_LABEL: Record<NonNullable<Provenance["georefMethod"]>, string> = {
@@ -145,8 +158,27 @@ const SCALE_LABEL: Record<NonNullable<Provenance["scaleSource"]>, string> = {
   arkit: "metric scale from ARKit",
   "exif-gps": "metric scale from EXIF GPS",
   manual: "scale set by hand",
+  "camera-height-estimate": "scale estimated from camera height",
   unresolved: "scale unresolved",
 };
+
+/** A hand-set scale found from a measured length, rather than typed in. */
+const MEASURED_BY_HAND_LABEL = "scaled by hand from a measured length";
+
+/**
+ * The scale part of the summary: its label, an estimate's ±% when the catalog has one, and for
+ * a scale set by hand, whether a length was measured for it (`scaleEvidence.method`).
+ */
+function scaleLabel(asset: SiteAsset | undefined): string {
+  const provenance = asset?.provenance;
+  const scale = provenance?.scaleSource ?? "unresolved";
+  const pct = provenance?.scaleUncertaintyPct;
+  if (scale === "camera-height-estimate" && typeof pct === "number" && Number.isFinite(pct))
+    return `${SCALE_LABEL[scale]} (±${Math.round(pct)}%)`;
+  if (scale === "manual" && asset?.renderConfig.scaleEvidence?.method === "measured-length")
+    return MEASURED_BY_HAND_LABEL;
+  return SCALE_LABEL[scale];
+}
 
 /** The first asset of a site that records how it was placed, or undefined. */
 function placedAsset(
@@ -164,7 +196,8 @@ export function placementProvenance(
   assetId: string | null | undefined,
   units: UnitSystem,
 ): PlacementProvenance | null {
-  const provenance = placedAsset(site, assetId)?.provenance;
+  const asset = placedAsset(site, assetId);
+  const provenance = asset?.provenance;
   const method = provenance?.georefMethod;
   if (!method) return null;
   const uncertainty = provenance?.uncertaintyM;
@@ -175,11 +208,12 @@ export function placementProvenance(
     typeof uncertainty === "number" && Number.isFinite(uncertainty)
       ? `±${formatLength(uncertainty, units)}`
       : "uncertainty not recorded",
-    SCALE_LABEL[scale],
+    scaleLabel(asset),
   ];
   return {
     summary: parts.join(" · "),
     measured: aligned || method === "arkit",
     scaleUnresolved: scale === "unresolved",
+    scaleEstimated: scale === "camera-height-estimate",
   };
 }

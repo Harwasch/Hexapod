@@ -22,6 +22,7 @@ import {
   deviceSplatCeiling,
   isHandheld,
 } from "@/lib/detail";
+import { assetScale, scalableAsset } from "@/lib/realSize";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
@@ -70,6 +71,19 @@ import { attachInstances } from "./splatInstances";
 import { attachSkin } from "./splatSkin";
 import { attachTelemetry } from "./telemetry";
 import { attachViewCones } from "./splatViewCones";
+import {
+  footprintAtScale,
+  groundAtScale,
+  liftAt,
+  placedMatrix,
+  placementFrame,
+  samePlacement,
+  scaledBottom,
+  scaledCenter,
+  syncRootTransform,
+  type PlacementFrame,
+  type SampledGround,
+} from "./tilesetScale";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("sites");
@@ -152,6 +166,25 @@ interface AssetHandle {
   coverageWatched?: boolean;
   /** A splat tileset's loaded gaussians (splatCount.ts): Cesium's byte count misses them. */
   splats?: SplatCount;
+  /** How the tileset is placed: its runtime scale and the lift it rests at (`placeTileset`). */
+  placement?: TilesetPlacement;
+}
+
+/** A tileset's placement: the frame it was registered in, the scale drawn, the lift. */
+interface TilesetPlacement {
+  readonly frame: PlacementFrame;
+  /** `renderConfig.scale` as the catalog has it. */
+  saved: number;
+  /** The scale drawn: `saved`, or a preview (`previewScale`). */
+  scale: number;
+  /** Metres raised along the vertical: the clamp's, or `heightOffsetM`. */
+  liftM: number;
+  /** What the last clamp sampled, to rest another scale on at once. */
+  sampled?: SampledGround;
+  /** Each clamp's number; one that a later clamp overtook applies nothing. */
+  serial: number;
+  /** The clamp a preview schedules once its scale stops changing. */
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -403,6 +436,7 @@ export class SiteManager {
    * scene builds (the selection card's title) call it, so a rename shows at once.
    */
   updateRecord(site: Site): void {
+    this.applyScaleRecord(site);
     this.details.set(site.id, site);
     const entry = this.loaded.get(site.id);
     if (entry) {
@@ -1436,16 +1470,7 @@ export class SiteManager {
   private attachTileset(handle: AssetHandle, tileset: Cesium3DTileset, asset: SiteAsset): void {
     handle.tileset = tileset;
     this.applyScreenSpaceError(this.screenSpaceError, this.pixelRatio);
-    if (asset.renderConfig.clampToGround) handle.placed = this.clampToGround(tileset, asset);
-    const offset = asset.renderConfig.heightOffsetM ?? 0;
-    if (offset !== 0 && !asset.renderConfig.clampToGround) {
-      const center = Cartographic.fromCartesian(tileset.boundingSphere.center);
-      const surface = Cartesian3.fromRadians(center.longitude, center.latitude, 0);
-      const lifted = Cartesian3.fromRadians(center.longitude, center.latitude, offset);
-      tileset.modelMatrix = Matrix4.fromTranslation(
-        Cartesian3.subtract(lifted, surface, new Cartesian3()),
-      );
-    }
+    this.placeTileset(handle, tileset);
     const radius = tileset.boundingSphere.radius;
     this.events.emit("asset", {
       id: asset.id,
@@ -1534,6 +1559,179 @@ export class SiteManager {
   }
 
   /**
+   * Places a tileset as its catalog record says: drawn at its runtime scale about its root
+   * transform's origin (`renderConfig.scale`; tilesetScale.ts), then rested on the ground
+   * (`clampToGround`) or raised by `heightOffsetM`. An asset with none of the three keeps the
+   * identity model matrix it was loaded with.
+   */
+  private placeTileset(handle: AssetHandle, tileset: Cesium3DTileset): void {
+    const asset = handle.asset;
+    const scale = assetScale(asset);
+    const placement: TilesetPlacement = {
+      frame: placementFrame(tileset, lowestHeight(tileset)),
+      saved: scale,
+      scale,
+      liftM: asset.renderConfig.clampToGround ? 0 : (asset.renderConfig.heightOffsetM ?? 0),
+      serial: 0,
+      timer: null,
+    };
+    handle.placement = placement;
+    handle.unsubscribe.push(() => {
+      if (placement.timer !== null) clearTimeout(placement.timer);
+    });
+    this.applyPlacement(tileset, placement);
+    if (asset.renderConfig.clampToGround)
+      handle.placed = this.clampToGround(handle, tileset, asset);
+  }
+
+  /** Sets the model matrix a placement asks for, when it is not the one already set. */
+  private applyPlacement(tileset: Cesium3DTileset, placement: TilesetPlacement): void {
+    const matrix = placedMatrix(placement.frame, placement.scale, placement.liftM);
+    if (Matrix4.equals(tileset.modelMatrix ?? Matrix4.IDENTITY, matrix)) return;
+    tileset.modelMatrix = matrix;
+    syncRootTransform(tileset);
+    this.scene.requestRender();
+  }
+
+  /**
+   * Draws a site's resizable scan -- the splat its pipeline run registered (`scalableAsset`) --
+   * at `scale` times its registered size without saving anything: the Set real size tool's live
+   * preview. `null` puts it back at the catalog's scale. The scan rests on the ground at once,
+   * on what its last clamp sampled (`liftAt`), and is clamped afresh where it now stands once
+   * the scale has held for `RECLAMP_MS`; the clip under it is resized with it. False when the
+   * site has no such scan in the scene.
+   */
+  previewScale(siteId: string, scale: number | null): boolean {
+    const found = this.scalableHandle(siteId);
+    if (!found) return false;
+    const { entry, handle, tileset, placement } = found;
+    const next = scale ?? placement.saved;
+    if (!(next > 0) || !Number.isFinite(next)) return false;
+    if (next === placement.scale) return true;
+    placement.scale = next;
+    this.relift(entry, handle, tileset, RECLAMP_MS);
+    return true;
+  }
+
+  /**
+   * The scale a site's resizable scan is drawn at now -- a preview's, else the catalog's -- or
+   * null when it is not in the scene.
+   */
+  shownScale(siteId: string): number | null {
+    return this.scalableHandle(siteId)?.placement.scale ?? null;
+  }
+
+  /** The tileset of a site's resizable scan, when it is in the scene: what is measured on. */
+  scalableTileset(siteId: string): Cesium3DTileset | null {
+    return this.scalableHandle(siteId)?.tileset ?? null;
+  }
+
+  private scalableHandle(siteId: string): {
+    entry: ActiveSite;
+    handle: AssetHandle;
+    tileset: Cesium3DTileset;
+    placement: TilesetPlacement;
+  } | null {
+    const entry = this.loaded.get(siteId);
+    const asset = entry ? scalableAsset(entry.site) : null;
+    const handle = asset ? entry?.handles.get(asset.id) : undefined;
+    const tileset = handle?.tileset;
+    const placement = handle?.placement;
+    if (!entry || !handle || !tileset || !placement || tileset.isDestroyed()) return null;
+    return { entry, handle, tileset, placement };
+  }
+
+  /**
+   * Rests a tileset whose scale changed: at once on the ground its last clamp sampled, then
+   * clamped afresh where it now stands after `delayMs`, unless the scale changes again first.
+   * The clip under it follows while it is the site's shown model.
+   */
+  private relift(
+    entry: ActiveSite,
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    delayMs: number,
+  ): void {
+    const placement = handle.placement;
+    if (!placement) return;
+    const asset = handle.asset;
+    const offset = asset.renderConfig.heightOffsetM ?? 0;
+    // A clamp still sampling was for the scale before.
+    placement.serial += 1;
+    if (placement.timer !== null) clearTimeout(placement.timer);
+    placement.timer = null;
+    if (asset.renderConfig.clampToGround) {
+      const rested = liftAt(placement.frame, placement.sampled, placement.scale, offset);
+      if (rested) placement.liftM = rested.liftM;
+      const clamp = () => {
+        placement.timer = null;
+        if (!tileset.isDestroyed())
+          handle.placed = this.clampToGround(handle, tileset, handle.asset);
+      };
+      if (delayMs > 0) placement.timer = setTimeout(clamp, delayMs);
+      else clamp();
+    } else {
+      placement.liftM = offset;
+    }
+    this.applyPlacement(tileset, placement);
+    if (entry.engaged && this.pickAsset(entry, entry.representation)?.id === asset.id)
+      this.applyClip(entry, asset, tileset);
+  }
+
+  /**
+   * A fresh record of a loaded site whose scan was resized (`PUT /assets/{id}/scale`: the Set
+   * real size tool's Save, or anybody's): the scan is drawn at the catalog's new scale, any
+   * preview dropped, resting on the ground the catalog moved with it. The site's boundary and
+   * centroid -- what the clip and the engagement read -- are taken from any record that moved
+   * them, since a resize moves them too and its record may come after the asset's (the save
+   * puts the asset in at once, the refetch brings the boundary). A record that changes neither
+   * (a bookmark saved) changes nothing here.
+   */
+  private applyScaleRecord(site: Site): void {
+    const entry = this.loaded.get(site.id);
+    if (!entry) return;
+    const moved = [...entry.handles.values()].filter((handle) => {
+      const next = site.assets.find((asset) => asset.id === handle.asset.id);
+      return next !== undefined && !samePlacement(handle.asset, next);
+    });
+    const outlined =
+      JSON.stringify([site.boundary, site.centroid]) !==
+      JSON.stringify([entry.site.boundary, entry.site.centroid]);
+    if (moved.length === 0 && !outlined) return;
+    entry.site = {
+      ...entry.site,
+      boundary: site.boundary,
+      centroid: site.centroid,
+      assets: entry.site.assets.map((asset) => site.assets.find((a) => a.id === asset.id) ?? asset),
+    };
+    entry.radius = Math.max(boundingRadiusM(site.boundary), MIN_SITE_RADIUS_M);
+    for (const handle of moved) {
+      handle.asset = site.assets.find((asset) => asset.id === handle.asset.id) ?? handle.asset;
+      const { tileset, placement } = handle;
+      if (!tileset || !placement || tileset.isDestroyed()) continue;
+      placement.saved = assetScale(handle.asset);
+      placement.scale = placement.saved;
+      this.relift(entry, handle, tileset, 0);
+    }
+    const shown = this.handleFor(entry);
+    if (outlined && entry.engaged && shown?.tileset)
+      this.applyClip(entry, shown.asset, shown.tileset);
+    this.scene.requestRender();
+  }
+
+  /**
+   * The footprint the catalog draws an asset in: its own, else its site's boundary. Both fit
+   * the saved scale already; under a preview they are resized with the scan, about the same
+   * origin, as saving it will resize them.
+   */
+  private authoredFootprint(active: ActiveSite, asset: SiteAsset): Footprint | null {
+    const authored = (asset.footprint ?? active.site.boundary) as Footprint | null;
+    const placement = active.handles.get(asset.id)?.placement;
+    if (!authored || !placement || placement.scale === placement.saved) return authored;
+    return footprintAtScale(placement.frame, authored, placement.scale / placement.saved);
+  }
+
+  /**
    * Clips the coarse world under the model. With `clipFootprint: "tileset"` the clip follows
    * the tiles' real coverage; that is only known once the first branching sub-tileset has
    * loaded, so until then the root box is used and the clip is re-derived on tile loads.
@@ -1558,11 +1756,30 @@ export class SiteManager {
    * `heightOffsetM` is still added in both branches. On the measured branch it is no longer
    * *needed* — nothing about the clamp requires correcting any more — but it is an authored
    * value, and an asset somebody deliberately nudged should stay nudged.
+   *
+   * Under a runtime scale (`renderConfig.scale`, tilesetScale.ts) the model is drawn about its
+   * root's origin first and lifted after. The measured cells are sampled exactly where the
+   * catalog says: `PUT /assets/{id}/scale` already moved them with the scale, so only a preview
+   * moves them, by its ratio to the saved scale. The bounding box's lowest point is the
+   * registered one scaled about the origin (`scaledBottom`).
    */
-  private async clampToGround(tileset: Cesium3DTileset, asset: SiteAsset): Promise<void> {
-    const sphere = tileset.boundingSphere;
-    const center = Cartographic.fromCartesian(sphere.center);
-    const measured = asset.renderConfig.groundSamples ?? [];
+  private async clampToGround(
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    asset: SiteAsset,
+  ): Promise<void> {
+    const placement = handle.placement;
+    if (!placement) return;
+    const serial = ++placement.serial;
+    const { frame, scale } = placement;
+    const center = Cartographic.fromCartesian(scaledCenter(frame, scale));
+    // The catalog's cells already describe the scale it saved; only a preview moves them, by
+    // its ratio to that scale. Rescaling them by the saved scale again would be a second one.
+    const measured = groundAtScale(
+      frame,
+      asset.renderConfig.groundSamples ?? [],
+      scale / placement.saved,
+    );
     // The centre first, then one point per measured cell, so index 0 is always the centre and
     // the bounding-box fallback is available even when every cell's sample fails.
     const wanted: MeasuredGround[] = [
@@ -1584,10 +1801,12 @@ export class SiteManager {
     const drawn = this.scene.sampleHeightSupported
       ? await this.scene.sampleHeightMostDetailed(cartographics(), [tileset]).catch(() => undefined)
       : undefined;
-    if (tileset.isDestroyed()) return;
+    // A later clamp (another scale tried meanwhile) has the model now.
+    if (tileset.isDestroyed() || placement.serial !== serial) return;
     const ground = wanted.map((_, i) =>
       groundAt(terrain?.[i]?.height, drawn?.[i]?.height, DRAWN_GROUND_TOLERANCE_M),
     );
+    placement.sampled = { scale, samples: measured, ground: ground.slice(1), under: ground[0] };
     const offset = asset.renderConfig.heightOffsetM ?? 0;
     const clamp = measured.length > 0 ? measuredClamp(measured, ground.slice(1)) : null;
     let lift: number;
@@ -1599,25 +1818,25 @@ export class SiteManager {
         of: measured.length,
         lift,
         spread: Math.round(clamp.spreadM * 100) / 100,
+        scale,
       });
     } else {
       const under = ground[0];
       if (under === undefined) return;
       // Lowest point of the root bounding box when there is one (a sphere would float a flat
-      // object by the difference between its radius and its half height).
-      const bottom = lowestHeight(tileset) ?? center.height - sphere.radius;
+      // object by the difference between its radius and its half height), as drawn at `scale`.
+      const bottom = scaledBottom(frame, scale);
       lift = under + offset - bottom;
       log.info("clamped model to ground", {
         asset: asset.id,
         ground: Math.round(under),
         lift,
         measuredCells: measured.length,
+        scale,
       });
     }
-    const from = Cartesian3.fromRadians(center.longitude, center.latitude, center.height);
-    const to = Cartesian3.fromRadians(center.longitude, center.latitude, center.height + lift);
-    tileset.modelMatrix = Matrix4.fromTranslation(Cartesian3.subtract(to, from, new Cartesian3()));
-    this.scene.requestRender();
+    placement.liftM = lift;
+    this.applyPlacement(tileset, placement);
   }
 
   private applyClip(active: ActiveSite, asset: SiteAsset, tileset: Cesium3DTileset): void {
@@ -1631,13 +1850,13 @@ export class SiteManager {
       // is cut, so buildings from OSM or Google do not poke through the model. The authored
       // footprint comes first: a splat's root box spans every outlier splat (the demo's is
       // 1.7 × 2.8 km around a campus) and would blank the photorealistic world for blocks.
-      const footprint = asset.footprint ?? active.site.boundary ?? footprintFromTileset(tileset);
+      const footprint = this.authoredFootprint(active, asset) ?? footprintFromTileset(tileset);
       this.clipping.setFootprint(active.site.id, footprint, { globe: false, world: true });
       return;
     }
     let footprint: Footprint | null = null;
     let provisional = false;
-    const authored = asset.footprint ?? active.site.boundary;
+    const authored = this.authoredFootprint(active, asset);
     if (asset.renderConfig.clipsWorld) {
       if (asset.renderConfig.clipFootprint === "tileset") {
         const coverage = tighter(coverageFromTileset(tileset), authored);
@@ -2017,8 +2236,8 @@ function bboxArea(footprint: Footprint): number {
 
 /** Ellipsoid height of the lowest corner of a tileset's root oriented bounding box. */
 function lowestHeight(tileset: Cesium3DTileset): number | undefined {
-  const inner = (tileset.root as unknown as { boundingVolume?: TileVolume }).boundingVolume
-    ?.boundingVolume;
+  const inner = (tileset.root as unknown as { boundingVolume?: TileVolume } | undefined)
+    ?.boundingVolume?.boundingVolume;
   const halfAxes = inner?.halfAxes;
   if (!inner?.center || !halfAxes) return undefined;
   let lowest = Number.POSITIVE_INFINITY;
@@ -2149,6 +2368,8 @@ const COVERAGE_REFRESH_MS = 1000;
 const COVERAGE_SLACK = 1.15;
 /** A drawn surface further than this from the terrain is something else (a roof, a tree), not ground. */
 const DRAWN_GROUND_TOLERANCE_M = 60;
+/** A previewed scale is clamped afresh once it has held this long (ms): not on every keystroke. */
+const RECLAMP_MS = 250;
 
 /** Cheap identity for a coverage footprint: polygon count plus the first coordinate of each. */
 function coverageKey(footprint: Footprint | null): string {

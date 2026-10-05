@@ -25,6 +25,9 @@ export type AssetSource = SiteAsset["source"];
 export type CesiumIonSource = Schemas["CesiumIonSource"];
 export type TilesUrlSource = Schemas["TilesUrlSource"];
 export type RenderConfig = Schemas["RenderConfig"];
+export type ScaleEvidence = Schemas["ScaleEvidence"];
+export type ScaleEvidenceInput = Schemas["ScaleEvidenceInput"];
+export type AssetScaleUpdate = Schemas["AssetScaleUpdate"];
 export type ResolutionMetadata = Schemas["ResolutionMetadata"];
 
 export type Representation = Schemas["Representation"];
