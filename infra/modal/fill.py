@@ -426,6 +426,8 @@ GENERATORS = {
 }
 #: A generator's container stays this long after its last call (`scaledown_window`).
 VIDEO_IDLE_S = 60
+#: One clip (or a container start) at most this long: a hung call costs this, not an hour.
+VIDEO_CALL_S = 20 * 60
 #: The gen/holdout job's own container (gsplat renders, depth, lift, carve, distil), minutes.
 GEN_JOB_MIN = {"spool": 30, "pumpkin": 35, "camp": 50}
 
@@ -438,11 +440,26 @@ def _video_module():  # noqa: ANN202 - video_fill_models, imported where it was 
     return video_fill_models
 
 
-def _video_load(key: str) -> tuple[object, object, float]:
+def _video_load(key: str) -> tuple[object, object, float, str]:
+    """The model loaded, or why not. A load that raised would end the container and Modal
+    would start another for the same call, and another (a 4 h loop once, runbook section 9);
+    instead every call to a container that could not load fails at once with the reason."""
+    import traceback
+
     started = time.time()
-    vfm = _video_module()
-    pipe = vfm.load(key)
-    return vfm, pipe, time.time() - started
+    try:
+        vfm = _video_module()
+        pipe = vfm.load(key)
+    except Exception:  # noqa: BLE001 - every call reports it
+        return None, None, time.time() - started, traceback.format_exc()[-4000:]
+    return vfm, pipe, time.time() - started, ""
+
+
+def _video_fill(owner: object, key: str, request: dict) -> dict:
+    if owner.error:  # type: ignore[attr-defined]
+        raise RuntimeError(f"{key} did not load:\n{owner.error}")  # type: ignore[attr-defined]
+    out = owner.vfm.fill_clip(key, owner.pipe, request)  # type: ignore[attr-defined]
+    return {**out, "loadSeconds": round(owner.load_seconds, 1), "gpu": VIDEO_GPU}  # type: ignore[attr-defined]
 
 
 @app.cls(
@@ -451,7 +468,7 @@ def _video_load(key: str) -> tuple[object, object, float]:
     volumes={"/weights": WEIGHTS},
     secrets=[HF_SECRET],
     memory=65536,
-    timeout=3600,
+    timeout=VIDEO_CALL_S,
     scaledown_window=VIDEO_IDLE_S,
     max_containers=2,
 )
@@ -460,12 +477,11 @@ class FillVace:
 
     @modal.enter()
     def load(self) -> None:
-        self.vfm, self.pipe, self.load_seconds = _video_load("vace")
+        self.vfm, self.pipe, self.load_seconds, self.error = _video_load("vace")
 
     @modal.method()
     def fill_clip(self, request: dict) -> dict:
-        out = self.vfm.fill_clip("vace", self.pipe, request)
-        return {**out, "loadSeconds": round(self.load_seconds, 1), "gpu": VIDEO_GPU}
+        return _video_fill(self, "vace", request)
 
 
 @app.cls(
@@ -474,7 +490,7 @@ class FillVace:
     volumes={"/weights": WEIGHTS},
     secrets=[HF_SECRET],
     memory=65536,
-    timeout=3600,
+    timeout=VIDEO_CALL_S,
     scaledown_window=VIDEO_IDLE_S,
     max_containers=2,
 )
@@ -483,12 +499,11 @@ class FillWan22:
 
     @modal.enter()
     def load(self) -> None:
-        self.vfm, self.pipe, self.load_seconds = _video_load("wan22")
+        self.vfm, self.pipe, self.load_seconds, self.error = _video_load("wan22")
 
     @modal.method()
     def fill_clip(self, request: dict) -> dict:
-        out = self.vfm.fill_clip("wan22", self.pipe, request)
-        return {**out, "loadSeconds": round(self.load_seconds, 1), "gpu": VIDEO_GPU}
+        return _video_fill(self, "wan22", request)
 
 
 @app.cls(
@@ -497,7 +512,7 @@ class FillWan22:
     volumes={"/weights": WEIGHTS},
     secrets=[HF_SECRET],
     memory=98304,
-    timeout=3600,
+    timeout=VIDEO_CALL_S,
     scaledown_window=VIDEO_IDLE_S,
     max_containers=2,
 )
@@ -506,12 +521,11 @@ class FillCosmos:
 
     @modal.enter()
     def load(self) -> None:
-        self.vfm, self.pipe, self.load_seconds = _video_load("cosmos")
+        self.vfm, self.pipe, self.load_seconds, self.error = _video_load("cosmos")
 
     @modal.method()
     def fill_clip(self, request: dict) -> dict:
-        out = self.vfm.fill_clip("cosmos", self.pipe, request)
-        return {**out, "loadSeconds": round(self.load_seconds, 1), "gpu": VIDEO_GPU}
+        return _video_fill(self, "cosmos", request)
 
 
 VIDEO_CLASSES = {"FillVace": FillVace, "FillWan22": FillWan22, "FillCosmos": FillCosmos}
@@ -928,7 +942,7 @@ GEN_SCANS: dict[str, dict] = {
 #: `holdout:<scan>`: the share of the cameras that see the region from highest, held out.
 HOLDOUT_SHARE = 0.15
 #: How long a job waits for one clip (queued behind the others on its generator).
-GEN_CALL_TIMEOUT_S = 90 * 60
+GEN_CALL_TIMEOUT_S = 50 * 60
 
 
 def _spawn_video(cls: str, method: str, request: dict) -> object:
@@ -938,7 +952,13 @@ def _spawn_video(cls: str, method: str, request: dict) -> object:
 
 
 def _wait_video(call: object) -> dict:
-    return call.get(timeout=GEN_CALL_TIMEOUT_S)  # type: ignore[attr-defined]
+    """The clip; one not back within `GEN_CALL_TIMEOUT_S` is cancelled (and its container
+    stopped), since nobody will collect it."""
+    try:
+        return call.get(timeout=GEN_CALL_TIMEOUT_S)  # type: ignore[attr-defined]
+    except TimeoutError:
+        call.cancel(terminate_containers=True)  # type: ignore[attr-defined]
+        raise
 
 
 def _private_client():  # noqa: ANN202 - boto3's client

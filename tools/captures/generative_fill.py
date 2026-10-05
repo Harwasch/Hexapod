@@ -868,7 +868,8 @@ class ClipRequest:
 
 @dataclass
 class ClipResult:
-    frames: np.ndarray  # (n, h, w, 3) uint8 as the model drew them
+    #: (n, h, w, 3) uint8 as the model drew them; None when the call failed (`info["error"]`).
+    frames: np.ndarray | None
     info: dict[str, object] = field(default_factory=dict)
 
 
@@ -963,9 +964,15 @@ class RemoteClipFiller:
             handles.append(self.submit(VIDEO_CLASSES[self.key], "fill_clip", body))
 
         def collect() -> list[ClipResult]:
+            # Every call is waited on, so none is left running unseen; a failed one is
+            # reported and its clip skipped.
             out = []
             for h in handles:
-                response = self.wait(h)
+                try:
+                    response = self.wait(h)
+                except Exception as error:  # noqa: BLE001 - recorded, the others go on
+                    out.append(ClipResult(None, {"error": repr(error)[:1500]}))
+                    continue
                 frames, _ = vfm.unpack_clip(response["clip"])
                 info = {k: v for k, v in response.items() if k != "clip"}
                 out.append(ClipResult(frames, info))
@@ -1750,11 +1757,17 @@ def run_bakeoff(
             log(f"{f.name}: round 1 failed: {error!r}")
             report["candidates"][f.name] = {"failed": repr(error)[:2000]}
             continue
+        infos = [res.info for res in results]
+        requests, results = _succeeded(requests, results)
+        if not results:
+            log(f"{f.name}: every round-1 clip failed")
+            report["candidates"][f.name] = {"failed": "every clip failed", "calls": infos}
+            continue
         fills = [
             prepare_fill(r.clip, res, depth_model) for r, res in zip(requests, results, strict=True)
         ]
         lifted = _lift_round(fills, requests, region)
-        state[f.name] = {"fills": fills, "infos": [res.info for res in results], "lifted": [lifted]}
+        state[f.name] = {"fills": fills, "infos": infos, "lifted": [lifted]}
         log(f"{f.name}: round 1 lifted {len(lifted.splats)}")
     if options.rounds >= 2:
         pending = {}
@@ -1794,12 +1807,13 @@ def run_bakeoff(
                 log(f"{name}: round 2 failed: {error!r}")
                 state[name]["round2Failed"] = repr(error)[:2000]
                 continue
+            state[name]["infos"] += [res.info for res in results]
+            requests, results = _succeeded(requests, results)
             fills = [
                 prepare_fill(r.clip, res, depth_model)
                 for r, res in zip(requests, results, strict=True)
             ]
             state[name]["fills"] += fills
-            state[name]["infos"] += [res.info for res in results]
             state[name]["lifted"].append(_lift_round(fills, requests, region))
     finish = Finish(
         scene,
@@ -1821,6 +1835,17 @@ def run_bakeoff(
     _renders(scene, fillers, out, renderer, report)
     write_json(out / "report.json", report)
     return report
+
+
+def _succeeded(
+    requests: Sequence[ClipRequest], results: Sequence[ClipResult]
+) -> tuple[list[ClipRequest], list[ClipResult]]:
+    """The requests whose call came back with frames (a failed call is logged and skipped)."""
+    kept = [(r, res) for r, res in zip(requests, results, strict=True) if res.frames is not None]
+    for r, res in zip(requests, results, strict=True):
+        if res.frames is None:
+            _log(f"clip {r.label} failed: {res.info.get('error')}")
+    return [r for r, _ in kept], [res for _, res in kept]
 
 
 def _lift_round(
