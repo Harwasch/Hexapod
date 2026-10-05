@@ -120,7 +120,9 @@ interface Frame {
 test("a fly-to from orbit to a placed scan is one smooth glide, above ground, onto a lit frame", async ({
   page,
 }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(420_000);
+  // Software GL draws a smaller view faster, and every frame of the flight is drawn.
+  await page.setViewportSize({ width: 960, height: 600 });
   await mockApi(page);
   // The catalog this test needs, over the mock's: registered after it, so asked first.
   await page.route("**/api/v1/sites", (route) =>
@@ -180,7 +182,7 @@ test("a fly-to from orbit to a placed scan is one smooth glide, above ground, on
   await page.waitForFunction(
     `window.__twin.sites.flight?.state === "landed" && !window.__twin.camera.gliding && window.__twin.sites.activeSite?.id === "${SITE_ID}"`,
     undefined,
-    { timeout: 180_000 },
+    { timeout: 300_000 },
   );
 
   const { frames, flights } = await page.evaluate<{ frames: Frame[]; flights: number }>(`({
