@@ -27,7 +27,10 @@
 #   object: a lawn, a wall) do not make it singular;
 # - kernel evaluations are chunked over query points to bound memory;
 # - (2026-10-05) an optional penalty that pins chosen points (`init(..., pinned=...)`), for
-#   eigenmodes of a rooted object whose base stays still.
+#   eigenmodes of a rooted object whose base stays still;
+# - (2026-10-05) node radii bridged across gaps (`bridged_radii`): a shape in pieces (a crown
+#   cut from its trunk by segmentation) otherwise gives each piece a free rigid motion, an
+#   eigenvalue of ~0 that a simulation drives without bound.
 """FreeForm / Simplicits skinning weights from the Reproducing Kernel Particle Method.
 
 Vendored from NVIDIA Kaolin (master, 2026; Apache-2.0) because the pip release (0.18) does not
@@ -46,16 +49,25 @@ import logging
 
 import numpy as np
 from scipy.linalg import eigh
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components, minimum_spanning_tree
 from scipy.spatial import cKDTree
+from scipy.spatial.distance import cdist
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["RKPM", "SimplicitsRKPM", "farthest_point_sampling", "to_lame"]
+__all__ = ["RKPM", "SimplicitsRKPM", "bridged_radii", "farthest_point_sampling", "to_lame"]
 
 #: Query points per kernel evaluation block.
 CHUNK = 2048
 #: Relative ridge on the moment matrix M(x) (a Hexapod addition; Kaolin has none).
 MOMENT_RIDGE = 1e-9
+#: Hexapod: two nodes' kernels overlap when the nodes are closer than this many radii (the
+#: larger radius of the two); at that distance a Gaussian kernel is exp(-2.25) ~ 0.1.
+BRIDGE_REACH = 1.5
+#: Hexapod: a node at either end of a bridge across a gap gets at least this share of the
+#: bridge's length as its radius (so the bridge is 1.33 radii: inside BRIDGE_REACH).
+BRIDGE_SHARE = 0.75
 
 
 def to_lame(yms: np.ndarray, prs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -63,6 +75,40 @@ def to_lame(yms: np.ndarray, prs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     mus = yms / (2 * (1 + prs))
     lams = yms * prs / ((1 + prs) * (1 - 2 * prs))
     return mus, lams
+
+
+def bridged_radii(
+    nodes: np.ndarray,
+    radius: np.ndarray,
+    reach: float = BRIDGE_REACH,
+    share: float = BRIDGE_SHARE,
+) -> tuple[np.ndarray, int]:
+    """Node radii that leave no group of nodes uncoupled from the rest, and how many groups
+    there were (a Hexapod addition).
+
+    Nodes closer than `reach` times the larger radius overlap; when that leaves more than one
+    group, the gaps of the nodes' minimum spanning tree that join two groups are bridged:
+    both their nodes' radii grow to at least `share` of the gap. A shape in one piece is left
+    exactly as it was.
+    """
+    radius = np.asarray(radius, np.float64)
+    if len(nodes) < 2:
+        return radius, 1
+    d = cdist(nodes, nodes)
+    near = d < reach * np.maximum(radius[:, None], radius[None, :])
+    groups, label = connected_components(csr_matrix(near), directed=False)
+    if groups <= 1:
+        return radius, groups
+    # Coincident nodes would be no edge at all to the sparse spanning tree: keep them joined.
+    weights = np.maximum(d, 1e-12)
+    np.fill_diagonal(weights, 0.0)
+    tree = minimum_spanning_tree(csr_matrix(weights)).tocoo()
+    out = radius.copy()
+    for i, j, gap in zip(tree.row, tree.col, tree.data, strict=True):
+        if label[i] != label[j]:
+            out[i] = max(out[i], share * gap)
+            out[j] = max(out[j], share * gap)
+    return out, groups
 
 
 def farthest_point_sampling(pts: np.ndarray, k: int, seed: int = 0) -> np.ndarray:
@@ -201,6 +247,8 @@ class SimplicitsRKPM:
         self.rkpm: RKPM | None = None
         self.evecs = np.zeros((num_nodes, self.num_handles))
         self.evals = np.zeros(self.num_handles)
+        #: Hexapod: how many groups of nodes `init` found (and bridged when more than one).
+        self.node_groups = 1
 
     def _offset_scale(self, pts: np.ndarray) -> np.ndarray:
         return (np.asarray(pts, np.float64) - self.bb_min) / (self.bb_max - self.bb_min)
@@ -249,6 +297,10 @@ class SimplicitsRKPM:
         else:
             raise TypeError("Unknown radius_min")
         node_radius = np.maximum(node_radius, 1e-9)
+        # Hexapod: a shape in pieces is bridged, so no piece keeps a free rigid motion.
+        node_radius, self.node_groups = bridged_radii(nodes, node_radius)
+        if self.node_groups > 1:
+            logger.info("bridged %d groups of nodes", self.node_groups)
         self.rkpm = RKPM(nodes, node_radius)
 
         if self.num_points is None or self.num_points >= n:

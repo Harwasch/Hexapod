@@ -1120,6 +1120,18 @@ mesh closed back to the occupancy (dilate, fill, erode) left twigs a voxel thin 
 their base), so the volume FEM holds its base as `pinned` does: the two held methods differ
 only in surface against volume.
 
+**Objects in pieces.** Segmentation leaves some objects in pieces: a crown cut from its trunk,
+a shrub's far twigs (camp 16, 56, 91, 148, 276). An RKPM kernel reaches about a node spacing,
+so each piece kept a rigid motion of its own, an eigenvalue of ~0 that the wind and the poke
+drive without bound (lowest wind modes 0.001 to 0.11 Hz in the first publish).
+`kaolin_rkpm.bridged_radii` (ours, on the vendored code) finds the groups of nodes whose
+kernels do not overlap (nodes 1.5 radii apart or more) and, at each gap of the nodes' minimum
+spanning tree between two groups, grows both nodes' radii to ¾ of the gap: the pieces are
+coupled, softly, and a shape in one piece keeps its radii exactly (the yard's committed skins
+are unchanged). Camp's lowest wind modes after, `freeform`: 16 1.73 Hz, 56 2.14, 91 1.42, 148
+0.52, 276 0.61. Both RKPM candidates use it; the tet FEM keeps its mesh's largest piece and
+needs none of it.
+
 ### Handle policies
 
 - **Size** (today's, `skin_scene.handle_count`): `m = clamp(round(8 + 2·log2(d / 2 m)), 8, 16)`.
