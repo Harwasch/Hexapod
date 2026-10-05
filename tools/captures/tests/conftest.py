@@ -32,7 +32,6 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("OPENBLAS_CORETYPE", "Haswell")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 CAPTURES = Path(__file__).resolve().parents[1]
 #: Forks of this process (`os.fork`, which multiprocessing's fork context calls).

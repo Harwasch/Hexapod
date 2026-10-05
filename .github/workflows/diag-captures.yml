@@ -1,11 +1,11 @@
-# Temporary: on the same runner, threaded OpenBLAS (expected to crash on Zen 4/5) vs one thread.
+# Temporary: which OpenBLAS kernel pin is safe on every runner CPU, and keeps the fixtures?
 name: Diag captures crash
 on:
   push:
     branches: [diag-captures-crash]
 jobs:
   captures:
-    name: Captures, threaded vs one thread (${{ matrix.n }})
+    name: Kernel pins (${{ matrix.n }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -21,13 +21,24 @@ jobs:
           enable-cache: true
       - run: lscpu | grep "Model name"
       - run: uv sync --frozen
-      - name: Control, four OpenBLAS threads
+      - name: Probe each pin
         run: |
           set +e
-          OPENBLAS_NUM_THREADS=4 uv run pytest -q -x > control.txt 2>&1
-          echo "CONTROL EXIT $? on $(lscpu | grep 'Model name' | sed 's/.*: *//')"
-          tail -3 control.txt
-      - name: Fix, one OpenBLAS thread (the conftest's default)
+          cpu=$(lscpu | grep 'Model name' | sed 's/.*: *//')
+          for core in Haswell Zen SkylakeX Sandybridge native; do
+            for threads in 1 4; do
+              if [ "$core" = native ]; then unset OPENBLAS_CORETYPE; else export OPENBLAS_CORETYPE=$core; fi
+              OPENBLAS_VERBOSE=2 OPENBLAS_NUM_THREADS=$threads uv run python blas_probe.py > probe.txt 2>&1
+              probe=$?
+              OPENBLAS_NUM_THREADS=$threads uv run pytest -q -p no:cacheprovider tests/test_skin_scene.py > skin.txt 2>&1
+              skin=$?
+              echo "PIN core=$core threads=$threads probe=$probe skin=$skin selected=$(grep -m1 -i 'core:' probe.txt | tr -d '\n') cpu=$cpu"
+            done
+          done
+          unset OPENBLAS_CORETYPE
+      - name: Full suite pinned to Zen
         run: |
-          uv run pytest -q
-          echo "FIX PASSED on $(lscpu | grep 'Model name' | sed 's/.*: *//')"
+          OPENBLAS_CORETYPE=Zen uv run pytest -q -p no:cacheprovider
+          echo "ZEN SUITE PASSED on $(lscpu | grep 'Model name' | sed 's/.*: *//')"
+      - name: Committed fixture is up to date
+        run: git diff --exit-code -- ../../data/tiles/synthetic-tree
