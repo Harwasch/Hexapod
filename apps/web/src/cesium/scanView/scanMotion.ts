@@ -42,6 +42,7 @@ import { withDescendants, type InstancesDoc } from "@/lib/instances";
 import { splitObjectsOf } from "@/lib/sceneObjects";
 import { HANDLE_FLOATS, rigidHandle, skinRefOf, type SkinDoc } from "@/lib/skin";
 import { telemetryRefOf } from "@/lib/telemetry";
+import { variantsOf } from "@/lib/variants";
 import { useInstances } from "@/state/instances";
 
 import { instancesDocOf } from "../splatInstances";
@@ -626,9 +627,16 @@ export function movedCenters(
 
 // ---- The link ----------------------------------------------------------------------------
 
-/** Whether a scan's root declares anything that moves its objects (skin, telemetry). */
+/**
+ * Whether a scan's root declares anything that moves its objects (a skin, a skins variant to
+ * pick, telemetry).
+ */
 export function declaresMotion(extras: unknown): boolean {
-  return skinRefOf(extras) !== null || telemetryRefOf(extras) !== null;
+  return (
+    skinRefOf(extras) !== null ||
+    telemetryRefOf(extras) !== null ||
+    variantsOf(extras).skins.length > 0
+  );
 }
 
 /** Whether a scan's root declares split objects. */

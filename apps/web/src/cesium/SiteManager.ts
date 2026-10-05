@@ -61,6 +61,7 @@ import { setSeenFromAfar } from "./sceneSelect/cesiumPickSource";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import { splatTilesetOf } from "./splatInternals";
 import { attachInferredLayers } from "./inferredLayers";
+import { attachVariants } from "./scanVariants";
 import { attachSplitObjects } from "./splitObjects";
 import { attachInstances } from "./splatInstances";
 import { attachSkin } from "./splatSkin";
@@ -1503,8 +1504,17 @@ export class SiteManager {
         tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
         // What the capture never saw, faded from the views it never had (lib/viewCones.ts).
         attachViewCones(tileset),
-        // What an image model filled in where it never looked, beside it (lib/inferred.ts).
-        attachInferredLayers(tileset, this.scene, asset.id),
+        // What an image model filled in where it never looked, beside it (lib/inferred.ts):
+        // drawn by CesiumJS while the scan is drawn by any renderer.
+        attachInferredLayers(
+          tileset,
+          this.scene,
+          asset.id,
+          undefined,
+          () => tileset.show || this.scanTarget()?.tileset === tileset,
+        ),
+        // Other methods' objects, fills and skins for the same scan (lib/variants.ts).
+        attachVariants(tileset, asset.id),
         attachInstances(tileset, this.scene, asset.id),
         // Movable objects split into tilesets of their own, placed by their poses (C4).
         attachSplitObjects(tileset, this.scene, asset.id),

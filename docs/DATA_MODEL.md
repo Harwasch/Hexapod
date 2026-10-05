@@ -48,6 +48,12 @@ A derived, renderable delivery asset with provenance.
 | default_visible                   | bool                               | the representation shown first                                                                                                                                                                                                                                                                                                                                                                |
 | sidecar_flags                     | jsonb                              | sidecars a republish could not carry into the new generation, one `{kind, action, reason, jobId, flaggedAt}` per kind ("Objects need re-segmenting"); cleared when the kind is attached again (0009, docs/SCENE_OBJECTS.md §8)                                                                                                                                                                |
 
+What a splat scan carries beside its tiles is declared on its tileset's root, not in these
+columns: `extras.instances`, `extras.skin`, `extras.inferredLayers`, `extras.viewCones`,
+`extras.collision`, `extras.nativeLod`, and `extras.variants` -- other methods' objects, fills
+and skins for the same scan, for the owner's bake-offs (docs/SCENE_OBJECTS.md §4, "Root
+extras" and "Variants"; the table of kinds in §8).
+
 ## Runtime scale
 
 A phone video registered before the pipeline estimated scales (`scaleSource: unresolved`)

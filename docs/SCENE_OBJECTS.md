@@ -220,6 +220,8 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
 
 The measured tileset's `root.extras.instances = { "uri": "instances.json", "count": n }`, so
 the viewer finds it without probing (the same pattern as `viewCones` and `inferredLayers`).
+Other methods' objects, fills and skins for the same scan are declared beside them in
+`extras.variants` ("Variants", below).
 
 **In the viewer**, hide and highlight work under every splat renderer, from the same per-tile
 binding: CesiumJS's own primitive (`cesium/splatInstances.ts`: the visibility chain and the
@@ -942,6 +944,94 @@ card where the app's dock puts it) under PlayCanvas, Spark and CesiumJS. The e2e
 In the app, `e2e/app.spec.ts` ("a scan object in the selection card") checks the keys and the
 card around a selection: `B` and `V` once each, one Escape one step, Tab on the body, an object
 replacing a machine's card, and the touch screen's brush.
+
+### Variants: other methods for the same scan (bake-offs)
+
+A bake-off publishes other methods' objects, fills and skins for the **same measured splats**,
+for the owner to switch between in the live app and judge by eye. Labels stay visible: it is
+not blind. Each candidate's output goes beside the measured tiles under
+`variants/<system>/<name>/` (`<system>` is `objects`, `fill` or `skins`), in today's formats --
+an `instances.json` (above), a `skin.json` with its `skin.bin`, an inferred tileset whose root
+carries `extras.evidence` -- and the measured tileset's root declares them all in
+`extras.variants`:
+
+```json
+"variants": {
+  "objects": [{"name": "ground-first", "label": "A · Ground first", "about": "One plain sentence on what this method does.", "instances": "variants/objects/ground-first/instances.json"}],
+  "fill":    [{"name": "vace-14b", "label": "Wan2.1-VACE 14B", "about": "…", "inferredLayers": [{"uri": "variants/fill/vace-14b/tileset.json", "evidence": {"kind": "inferred", "filler": "wan2.1-vace-14b", "views": 0, "gaussians": 0, "meanConfidence": 0.0}}]}],
+  "skins":   [{"name": "freeform", "label": "FreeForm (eigenmodes)", "about": "…", "skin": "variants/skins/freeform/skin.json"}]
+}
+```
+
+- **Paths** are relative to the measured `tileset.json`, as `extras.instances`, `extras.skin`
+  and `extras.inferredLayers` are, and resolve the same way (a signed URL's query is kept).
+- **`name`** is unique within its system (a repeat keeps the first); **`label`** is what the
+  viewer shows (the name when absent); **`about`** is one plain sentence, shown under the pick.
+- **Today stays the default.** The scan's own `extras.instances`, `extras.skin` and
+  `extras.inferredLayers` are "Today": a viewer who never picks a variant sees exactly what it
+  saw before, and a system with no Today (no `extras.skin`, say) is "nothing" until a variant
+  is picked.
+- **Registering** adds or replaces the entry of the same `name` within its system, and never
+  removes another system's entries or other variants.
+- **Read defensively** (`apps/web/src/lib/variants.ts` `variantsOf`): an entry without a name,
+  without its system's file, or with an `inferredLayers` entry that does not read is skipped;
+  the rest of the list stands. An `inferredLayers: []` is a legitimate "no fill" method.
+- **Ids.** A skins variant names instance ids (`skins[].instance`), and the wind reads each
+  skin's object's properties from whichever objects are shown: a skins variant fitted on
+  Today's objects moves the same objects under an objects variant only where the two files
+  agree on those ids. Telemetry and `materials.json` name Today's ids likewise.
+- **The API** (`apps/api/app/services/sidecars.py` `KINDS`) does not know `variants` yet: an
+  attach carries it onto the same tiles as any unrecognised key, and a republish of new tiles
+  drops it and flags the asset ("Unrecognised sidecar extras.variants needs re-attaching").
+
+**In the viewer.** A scan that declares variants gets a **Methods** button beside the
+representation switcher (`features/sites/CompareMethods.tsx`): a panel with one row per system
+it offers -- Objects, Fill, Motion -- each with Today and the variants by label (a segmented
+control while they fit one line, a list beyond), and the pick's `about` beneath. A pick is
+kept per scan for the session (`state/variants.ts`, `sessionStorage`), and swaps what is drawn
+in place, with no reload and the camera where it is, under every renderer:
+
+- **Objects** (`cesium/splatInstances.ts` `attachInstances`): the variant's `instances.json`
+  is loaded and swapped in where the old one was drawn -- the same hooks, a new table -- the
+  scan's selection cleared (its ids were the old file's) and its painted objects
+  (`lib/customSets.ts`, keyed by splat) drawn over the new file. The objects panel lists the
+  new file's categories; PlayCanvas and Spark rebind their tiles' ids through the store
+  (`scanView/scanInstances.ts`).
+- **Fill** (`cesium/inferredLayers.ts`): the drawn layers are unloaded and the variant's
+  loaded. Inferred layers are CesiumJS's under every renderer (below).
+- **Motion** (`cesium/splatSkin.ts` `attachSkin`): the variant's skin replaces the skin part;
+  the wind makes a driver for the new part and keeps blowing (`LivingSurveyManager`), and the
+  overlay rebinds its tiles' skin weights (`scanView/scanMotion.ts`).
+
+A pick whose files do not load says so in its row ("Did not load: …") and draws nothing for
+that system rather than the previous pick. A scan with objects or skins variants counts as a
+scan with objects or motion: the WebGPU trial draws it with WebGL2, and the overlay streams its
+3D Tiles rather than a native package (`ScanRendererHost.declaresInstances`).
+
+**Inferred style.** How inferred layers are drawn is a viewer's setting
+(`inferredStyle`, kept on the device; hidden until chosen), beside the switcher as
+**Show · Highlight · Hide**, with the one-line legend "Inferred: generated where no camera
+saw. Not measured." while they are drawn. Highlight is the engine patch's colour hook on each
+layer's own splat primitive (never the measured scan's): pulled toward purple
+(`INFERRED_PURPLE`), hatched in 0.35 m bands across the layer, and a little see-through
+(`INFERRED_HIGHLIGHT`). Inferred layers are drawn by CesiumJS whichever renderer draws the
+measured splats: under PlayCanvas or Spark the scan's own tileset is hidden and drawn on the
+overlay, while its layers stay on the globe's canvas under it, so where both cover a pixel the
+measured splats are in front. Picking a fill while the style is Hide switches it to Show.
+
+**Fixture and checks.** The synthetic yard has two variants per system
+(`data/tiles/synthetic-yard/variants/`, written by `tools/captures/yard_variants.py`, declared
+in its `variants.json` with paths relative to `splat/tileset.json`): objects `whole` (the 24
+top-level objects, every part folded in, with categories) and `parts` (all 103, the trees' and
+the shed's parts in categories of their own); fills `hedge` (beyond the west edge) and `mound`
+(beyond the east edge); skins `tree` (the big tree only) and `small` (the snag and two
+shrubs). `e2e/variants.spec.ts` (`src/dev/variantsHarness.ts`, the app's panels mounted beside
+the scan) runs under PlayCanvas, Spark and CesiumJS and checks that picking an objects variant
+changes what the objects panel lists, picking a fill draws its layer and not the other's,
+Highlight turns the layer's pixels purple and changes no other pixel, Hide leaves the frame
+the scan's own, and a skins pick replaces the skin; and that the panel fits a 400 px phone and
+works from the keyboard. Unit tests: `__tests__/variants.test.ts` (the parser, the store, the
+swaps), `__tests__/inferred.test.ts`, `__tests__/compareMethods.test.tsx`.
 
 ## 5. Storage by behaviour
 
