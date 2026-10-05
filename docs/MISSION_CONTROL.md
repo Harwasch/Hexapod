@@ -90,6 +90,12 @@ labelled tools above the bar.
 - **Objects** beside the representation switcher (`features/sites/InstanceSearch`) opens the
   scan's objects panel as a popover over the regions (`data-hud-popover`, like the site
   switcher and the command box's results).
+- **Inferred** beside it, on a scan with inferred fill (`features/sites/InferredStyle`):
+  **Show · Highlight · Hide** for what an image model generated where no camera saw, with a
+  one-line legend under the strip while it is drawn ("Inferred: generated where no camera
+  saw. Not measured."). Highlight turns it purple and hatched and leaves the measured splats
+  as they are; the choice is kept on the device (`inferredStyle`), hidden until chosen.
+- **Methods**, on a scan that declares other methods' outputs: below.
 - **Plans** and **Fleet** open as a drawer at the right edge, full height (a bottom sheet on a
   phone): plans with detail + "Show on map", and machines with a treatment log. The map
   beside it stays live — it takes clicks, and a Fleet row flies to its machine and opens its
@@ -294,6 +300,32 @@ evaluation set: `uv run python -m app.scripts.eval_planner` runs it against the 
 (a test) and against Claude when a key is set. The dev panel's "Planning" row reports the
 session's time-to-approve, redrafts and unedited approvals. `docs/PLANNING.md` is the
 product record.
+
+## Comparing methods (bake-offs)
+
+A bake-off is judged by eye, in the app, on the same scan: object segmentation, inferred fill
+and motion skins each have candidate methods, published beside the scan's tiles and declared on
+its tileset (`extras.variants`, docs/SCENE_OBJECTS.md "Variants"). When the scan shown declares
+any, **Methods** appears in the strip beside Splat · Mesh · Points
+(`features/sites/CompareMethods`). It opens a panel with one row per system the scan offers:
+
+- **Objects**, **Fill**, **Motion**: **Today** (what the scan publishes now, the default) and
+  each method by its label -- labels are shown, it is not blind -- and under the row what the
+  picked method does, in a sentence.
+- A pick swaps in place: no reload, the camera where it is, under PlayCanvas, Spark or
+  CesiumJS. Objects reload the objects panel and clear the selection (painted objects stay);
+  Fill swaps the inferred layer (picking one while Inferred is on Hide shows it); Motion swaps
+  the skin the wind moves.
+- The pick is kept per scan for the session, so moving between scans and back keeps it; a new
+  session starts from Today.
+- A row says "Loading" while a pick's files arrive and "Did not load: …" if they do not, and
+  then draws nothing for that system rather than the method before.
+- It is a radio group per row (arrow keys move, Space or Enter picks; a list when the labels do
+  not fit one line) and fits a 400 px phone.
+
+Generated content is easy to tell apart while comparing fills: **Highlight** (beside the
+switcher) turns every inferred splat purple and hatched and changes no measured pixel, and
+**Hide** takes it away.
 
 ## Data flow
 
