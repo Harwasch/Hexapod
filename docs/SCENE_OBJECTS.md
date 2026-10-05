@@ -165,6 +165,42 @@ guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
 | pumpkin | 387,813        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
 | camp    | 22,577,243     | 6 cores (9), 22 GiB (44) | 45 min | 0.94     |
 
+### Concept first (bake-off candidate C)
+
+`tools/captures/concept_scene.py` (models in `concept_models.py`; on a GPU
+`infra/modal/segment_concepts.py`, run by `segment-concepts.yml`) turns steps 2-4 round:
+it asks first what is in the scene and then looks for each named thing, so objects are born
+with names (research notes §1.5).
+
+1. **Vocabulary.** Qwen3-VL-4B Instruct (Apache-2.0) reads 12 overview renders and lists at
+   most 12 *things* ("cable spool", "pumpkin") and 6 kinds of *stuff* (ground cover:
+   "grass", "gravel"), each with one of the categories of step 7.
+2. **Ground** from geometry: the bake-off's shared pass (`ground_pass.py`). Cells are split
+   at the ground. A ground cell that the views keep seeing inside a thing's mask is the
+   thing's (60% of its visible weight, two views; 35% and one view where the pass found no
+   ground near it): the spool's bottom flange, the bottom of a pumpkin.
+3. **Concepts in every view.** SAM 3 (the method; gated) finds every instance of each thing,
+   tracked along camera paths; its semantic head gives the ground's cover per pixel.
+   Until its weights are granted, a **stand-in** does: Grounding DINO boxes each thing, SAM
+   2.1 cuts its mask, and SigLIP 2 classifies each class-free mask over the ground against
+   the stuff names. A stand-in's `instances.json` says so (`concepts.standIn`) and is
+   published, if at all, under its own variant name, never as C.
+4. **Lift** by this section's own voting: thing masks join cells into objects (named by the
+   concept most of their votes carry; one track spanning two objects makes them one). The
+   ground's cells take the cover class most views gave them. **Leftovers**: what is neither
+   ground nor named is lifted from SAM 2's class-free masks as above, so nothing goes
+   unsegmented for want of a name; the same masks give every object its parts.
+5. **Panel.** Every cover class is one top-level instance in the category Ground & soil,
+   named by its class ("Grass", "Gravel"), so the objects panel lists Ground with its cover
+   classes as objects, each with its eye, with no new UI. A named object is named by its
+   concept ("pumpkin 1", "pumpkin 2"), its parts are in its category, and its first tag is
+   the concept, so search and the selection card find it by name.
+
+On the synthetic yard with oracle masks (`tests/test_concept_scene.py`) every tree, shrub,
+snag and the house is a named object (IoU >= 0.8), the house's slab (ground to geometry) is
+the house's, the lawn and path are Grass and Path (> 90% of their splats), and with "shrub"
+left out of the vocabulary the shrubs still become (unnamed) objects.
+
 ## 4. Data contract (v1)
 
 Written beside the measured tiles; read by the viewer, the skinning step and the engine.
@@ -215,6 +251,11 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
   coverage rounds; now 12% of the rim and 1.7% of the camp.)
 - `instances.emb`: `float16`, `count × dim`, row `k` is instance id `k + 1`, L2-normalised; an
   instance that was not described (no `tags`) has a zero row.
+- Optional per instance (a concept-first run writes them; readers that do not know them
+  ignore them): `name` (what the viewer calls the object, before its tags), `nameSource`
+  (`concept` | `ground` | `tags`), `kind` (`thing` | `ground`), `concept` (the concept it
+  was found as, on an object and its parts). At the root: `concepts` (`{vocabularyModel,
+  segmenter, standIn, things, stuff}`) and `ground` (the ground pass, its layer, its classes).
 
 ### Root extras
 

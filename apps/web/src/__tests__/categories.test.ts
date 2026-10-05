@@ -201,7 +201,7 @@ describe("objects and groups", () => {
       ],
       tiles: {},
     });
-    expect(doc.instances.map((i) => i.name)).toEqual(["cable spool", undefined]);
+    expect(doc?.instances.map((i) => i.name)).toEqual(["cable spool", undefined]);
   });
 
   it("finds categories by name, plural or not", () => {

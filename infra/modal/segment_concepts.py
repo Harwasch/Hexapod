@@ -150,8 +150,11 @@ TIMEOUT_S = 40 * 60
 PREPARE_TIMEOUT_S = 20 * 60
 PREPARE_PER_HOUR = 2 * CORE_PER_HOUR + 8 * GIB_PER_HOUR
 
-#: The views of a run: `segment_scene`'s 24 whole-scan views and local views up to this.
-VIEWS = 24
+#: The views of a run: whole-scan views (rings and observers; spool and pumpkin, ~6 m
+#: across, are within one view's footprint, so they get no local views) and at most
+#: `MAX_VIEWS` with local ones. 64 rather than `segment_scene`'s 24: there are no coverage
+#: rounds here, and a view costs ~3 s of the L4 (SAM 2's grid most of it).
+VIEWS = 64
 MAX_VIEWS = 160
 MAX_SCALE_M = 0.5
 
