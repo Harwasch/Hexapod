@@ -277,6 +277,8 @@ export class CesiumSceneManager {
       // A photographic scan close up is shown in its own colours (PerformanceManager
       // setGradeSuppressed): within a few hundred metres of a splat site that is on screen.
       this.events.on("camera", (pose) => {
+        // From orbit the earth is the whole globe rather than the photorealistic world.
+        this.layers.setCameraAltitude(pose.altitude);
         const splat = this.sites.activeRepresentation === "gaussian-splat";
         this.performance.setGradeSuppressed(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M);
         this.selection.setHoverEnabled(!(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M));
@@ -321,6 +323,7 @@ export class CesiumSceneManager {
 
     const home = options.home ?? { longitude: -110, latitude: 35, height: 18_000_000 };
     this.camera.setView(home.longitude, home.latitude, home.height);
+    this.layers.setCameraAltitude(home.height);
 
     this.unsubscribe.push(
       scene.renderError.addEventListener((_scene: Scene, error: unknown) => {

@@ -43,6 +43,7 @@ import { MapCorner } from "./MapCorner";
 import { PhoneTabBar } from "./PhoneTabBar";
 import { stepBack } from "./stepBack";
 import { ToolRail } from "./ToolRail";
+import { useUndoHotkeys } from "./undoHotkeys";
 
 const SettingsSheet = lazy(() =>
   import("../settings/SettingsSheet").then((m) => ({ default: m.SettingsSheet })),
@@ -98,6 +99,8 @@ function GlobalHotkeys() {
   useHotkey(HOTKEYS.escape.combo, (event) => {
     if (stepBack(scene)) event.preventDefault();
   });
+  // Ctrl+Z / Ctrl+Shift+Z: what was hidden, painted, switched or removed (`state/history.ts`).
+  useUndoHotkeys();
   return null;
 }
 

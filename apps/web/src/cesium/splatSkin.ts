@@ -44,18 +44,19 @@ import { checksumPositions } from "@twin/world";
 import type { Cesium3DTileset, Scene } from "cesium";
 
 import { createLogger } from "@/lib/log";
-import { skinVariantFor, useSkinVariant } from "@/state/skinVariant";
 import { loadMaterials, materialsRefOf, type MaterialTable } from "@/lib/skinMaterials";
 import {
   HANDLE_FLOATS,
   MAX_SKIN_HANDLES,
   loadSkin,
   rowWeight,
-  skinRefOf,
   tileSkin,
   type SkinDoc,
   type SkinEntry,
+  type SkinRef,
 } from "@/lib/skin";
+import { skinRefFor, variantsOf } from "@/lib/variants";
+import { onPickChange, pickedVariant, useVariants, type VariantStatus } from "@/state/variants";
 
 import { cesiumPickSource } from "./sceneSelect/cesiumPickSource";
 import { CESIUM_PRIORITY, pickSourceOf, registerPickSource } from "./sceneSelect/pickSources";
@@ -932,12 +933,18 @@ function skinsChanged(): void {
 export type LoadSkin = typeof loadSkin;
 
 /**
- * Lets `tileset`'s objects move by their skins, when its root declares `extras.skin` or a
- * bake-off candidate in `extras.variants.skins` is chosen for it (`state/skinVariant.ts`): the
- * files are fetched and the part joins the splat primitive's motion chain, synced each frame;
- * choosing another candidate swaps the part. Returns the disposer. A tileset without a skin,
- * or an engine without the hook, costs nothing. Drivers find the part with
+ * Lets `tileset`'s objects move by their skins, when its root declares `extras.skin` or offers
+ * skins variants (`extras.variants.skins`, lib/variants.ts): the files are fetched and the part
+ * joins the splat primitive's motion chain, synced each frame. Returns the disposer. A tileset
+ * without a skin, or an engine without the hook, costs nothing. Drivers find the part with
  * `skinningOf(assetId)`.
+ *
+ * Which skin is the pick's (`state/variants.ts`): Today's `extras.skin`, or a variant's
+ * `skin.json` and `skin.bin`. Picking another loads it and replaces the part; the drivers
+ * follow the attached parts (`onSkinsChanged`: the wind makes a driver for the new one, and
+ * keeps blowing), and a dedicated renderer rebinds its tiles to the new document
+ * (scanMotion.ts). The scan's fitted materials (`extras.materials`) are keyed by instance,
+ * not by skin, and go with whichever skin is drawn.
  */
 export function attachSkin(
   tileset: Cesium3DTileset,
@@ -948,44 +955,13 @@ export function attachSkin(
 ): () => void {
   const extras = (tileset.root as { extras?: unknown } | undefined)?.extras;
   const url = (tileset as unknown as { resource?: { url?: string } }).resource?.url;
-  if (!url || !factory) return () => undefined;
-  const refNow = (): { uri: string; count: number; variant: string | null } | null => {
-    const variant = skinVariantFor(assetId, extras);
-    if (variant) return { uri: variant.skin, count: 0, variant: variant.name };
-    const own = skinRefOf(extras);
-    return own ? { ...own, variant: null } : null;
+  const variants = variantsOf(extras);
+  const offersVariants = variants.skins.length > 0;
+  const current = (): { ref: SkinRef | null; variant: string | null } => {
+    const picked = offersVariants ? pickedVariant(assetId, "skins", variants) : null;
+    return { ref: skinRefFor(extras, picked), variant: picked?.name ?? null };
   };
-  let current = refNow();
-  let detach: () => void = current
-    ? attachSkinFile(tileset, scene, assetId, url, current, factory, load, current.variant)
-    : () => undefined;
-  // Another candidate chosen: the part drawn now goes, the chosen one loads.
-  const offChoice = useSkinVariant.subscribe(() => {
-    const next = refNow();
-    if (next?.uri === current?.uri) return;
-    detach();
-    current = next;
-    detach = next
-      ? attachSkinFile(tileset, scene, assetId, url, next, factory, load, next.variant)
-      : () => undefined;
-    scene.requestRender();
-  });
-  return () => {
-    offChoice();
-    detach();
-  };
-}
-
-function attachSkinFile(
-  tileset: Cesium3DTileset,
-  scene: Pick<Scene, "preUpdate" | "requestRender">,
-  assetId: string,
-  url: string,
-  ref: { uri: string; count: number },
-  factory: MotionTextureFactory,
-  load: LoadSkin,
-  variant: string | null,
-): () => void {
+  if (!url || !factory || (current().ref === null && !offersVariants)) return () => undefined;
   let part: SplatSkinning | undefined;
   let disposed = false;
   const offUpdate = scene.preUpdate.addEventListener(() => {
@@ -995,52 +971,98 @@ function attachSkinFile(
   const offPick = pickSourceOf(assetId)
     ? () => undefined
     : registerPickSource(assetId, cesiumPickSource(tileset), CESIUM_PRIORITY);
-  load(url, ref)
-    .then((doc) => {
-      if (disposed) return;
-      const attached = new SplatSkinning(doc, factory, splatTilesetOf(tileset));
-      attached.variant = variant;
-      part = attached;
-      ATTACHED.set(assetId, attached);
-      skinsChanged();
-      const materials = materialsRefOf((tileset.root as { extras?: unknown } | undefined)?.extras);
-      if (materials) {
-        loadMaterials(url, materials)
-          .then((table) => {
-            if (disposed) return;
-            attached.materials = table;
-            log.info("skin materials attached", { asset: assetId, records: table.size });
-          })
-          .catch((error: unknown) => {
-            log.warn("skin materials did not load; objects sway on their priors", {
-              message: error instanceof Error ? error.message : String(error),
-            });
-          });
-      }
-      scene.requestRender();
-      log.info("skin attached", {
-        asset: assetId,
-        uri: ref.uri,
-        skins: doc.skins.length,
-        tiles: doc.tiles.size,
-        rows: doc.rows,
+  const report = (status: VariantStatus | null): void => {
+    if (offersVariants) useVariants.getState().setStatus(assetId, "skins", status);
+  };
+  // The fitted materials, loaded once: what a driver reads over its priors, whichever skin.
+  let materials: MaterialTable | undefined;
+  const materialsRef = materialsRefOf(extras);
+  if (materialsRef) {
+    loadMaterials(url, materialsRef)
+      .then((table) => {
+        if (disposed) return;
+        materials = table;
+        if (part) part.materials = table;
+        log.info("skin materials attached", { asset: assetId, records: table.size });
+      })
+      .catch((error: unknown) => {
+        log.warn("skin materials did not load; objects sway on their priors", {
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
-      if (doc.issues.length > 0) log.warn("skin.json had problems", { first: doc.issues[0] });
-    })
-    .catch((error: unknown) => {
-      log.warn("skin did not load; objects stay still", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
-  return () => {
-    disposed = true;
-    offUpdate();
-    offPick();
-    part?.destroy();
-    if (part !== undefined && ATTACHED.get(assetId) === part) {
+  }
+  /** Takes the part off the primitive and out of the drivers' reach. */
+  const detach = (): void => {
+    const was = part;
+    part = undefined;
+    if (was === undefined) return;
+    was.destroy();
+    if (ATTACHED.get(assetId) === was) {
       ATTACHED.delete(assetId);
       skinsChanged();
     }
-    part = undefined;
+  };
+  /** The skin drawn now (its uri, "" for none), and which load is the latest. */
+  let shown: string | null = null;
+  let serial = 0;
+  const follow = (): void => {
+    const { ref, variant } = current();
+    const key = ref?.uri ?? "";
+    if (key === shown) return;
+    const swapping = shown !== null;
+    shown = key;
+    const mine = ++serial;
+    if (ref === null) {
+      detach();
+      scene.requestRender();
+      report({ state: "ready" });
+      return;
+    }
+    report({ state: "loading" });
+    load(url, ref)
+      .then((doc) => {
+        if (disposed || mine !== serial) return;
+        // Replaced, not edited: the drivers key on the part (skinWind.ts, scanMotion.ts).
+        const before = part;
+        part = undefined;
+        before?.destroy();
+        const attached = new SplatSkinning(doc, factory, splatTilesetOf(tileset));
+        if (materials) attached.materials = materials;
+        attached.variant = variant;
+        part = attached;
+        ATTACHED.set(assetId, attached);
+        skinsChanged();
+        scene.requestRender();
+        report({ state: "ready" });
+        log.info("skin attached", {
+          asset: assetId,
+          variant,
+          skins: doc.skins.length,
+          tiles: doc.tiles.size,
+          rows: doc.rows,
+        });
+        if (doc.issues.length > 0) log.warn("skin.json had problems", { first: doc.issues[0] });
+      })
+      .catch((error: unknown) => {
+        if (disposed || mine !== serial) return;
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn("skin did not load; objects stay still", { variant, message });
+        // A pick that did not load is not drawn as if it had: nothing moves, and the panel says why.
+        if (swapping) {
+          detach();
+          scene.requestRender();
+        }
+        report({ state: "error", message });
+      });
+  };
+  const offVariant = offersVariants ? onPickChange(assetId, "skins", follow) : () => undefined;
+  follow();
+  return () => {
+    disposed = true;
+    offVariant();
+    offUpdate();
+    offPick();
+    detach();
+    report(null);
   };
 }

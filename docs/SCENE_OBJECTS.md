@@ -220,6 +220,8 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
 
 The measured tileset's `root.extras.instances = { "uri": "instances.json", "count": n }`, so
 the viewer finds it without probing (the same pattern as `viewCones` and `inferredLayers`).
+Other methods' objects, fills and skins for the same scan are declared beside them in
+`extras.variants` ("Variants", below).
 
 **In the viewer**, hide and highlight work under every splat renderer, from the same per-tile
 binding: CesiumJS's own primitive (`cesium/splatInstances.ts`: the visibility chain and the
@@ -256,6 +258,13 @@ the representation switcher:
   "water"); a typed property filter (`vegetation > 0.5`, `behaviour:movable`) still works but
   has no buttons;
 - one "Reset" whenever anything is hidden or highlighted, with what is hidden in words.
+- every change of what is hidden (an eye, Hide all, Show only, Reset, and the selection card's
+  Hide and Show only) is one step of the app's undo (`Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`;
+  `state/history.ts`, docs/MISSION_CONTROL.md "Undo and redo"): undo puts back the scan's
+  hidden set exactly, a category partly hidden included, and says what it took back
+  ("Undid: Hide Pumpkin 3"). The highlight and the search's words are not undone: they are a
+  selection, not a change to the scan. The steps are the site's: they are dropped when another
+  site becomes active, and a step of a scan whose table was loaded again no longer applies.
 - selecting in the scene (a click, the cycle keys or the brush; the HUD's selection card,
   `ObjectCard.tsx`) opens that object's category and marks it; clicking an object in the panel
   selects it in the scene, so the card offers its actions, and flies to it as the card's Fly to
@@ -844,7 +853,10 @@ the tiles the renderer draws now:
   (`features/mission/SelectionCard`) shows an object as it shows a machine or a zone, in the
   right dock (a bottom sheet on a phone): the name (top tag, else the category, never an id)
   and the category, "◀ 1 of 3 ▶", **Hide**, **Show only**, **Fly to**, the brush and **Clear**
-  (its close button). One selection at a time: picking an object clears a machine or zone, and
+  (its close button). A combination is named by its members and what holds them, "Top flange +
+  drum + Bottom flange (of Spool)" (`combinationLabel`; with more than three members, a name
+  said twice or too long a name, "4 parts of Spool" or "4 objects"), says its overlap with the
+  painted area, and offers **Save as object**. One selection at a time: picking an object clears a machine or zone, and
   the reverse (`state/oneSelection.ts`). The selection is the objects store's highlight: the
   controller writes it through `useInstances.highlight`, expanded to descendants. **Fly to**
   goes through the app's camera controller (`CameraController.flyToObject`): the pace and
@@ -857,17 +869,61 @@ the tiles the renderer draws now:
   cell is under a stroke. Shift adds to the painted area, Alt takes away, and a plain stroke
   starts again. A touch screen has none of those keys: there the card offers **New / Add /
   Remove** for what a stroke does, and a brush size in place of Alt+wheel. The match is the
-  instance, at any level, with the best intersection over union. The IoU is weighted by
-  opacity and counts only visible splats, so an object's hidden back does not count against
-  it. While the stroke is painted, its best match so far is highlighted (at most every
-  100 ms) and the card says its overlap, so you can stop once the right object lights up; it
-  is selected when the stroke ends. Matching every visible splat at every move would be too
-  slow (the camp has 22.6 M), so the view is indexed once when it is projected
+  combination of instances, at whatever levels fit, whose union has the best intersection over
+  union with the painted area (see **Combinations** below): one instance, or several. The IoU
+  is weighted by opacity and counts only visible splats, so an object's hidden back does not
+  count against it. While the stroke is painted, its best match so far is highlighted (at most
+  every 100 ms) and the card says its overlap, so you can stop once the right objects light
+  up; it is selected when the stroke ends. Matching every visible splat at every move would be
+  too slow (the camp has 22.6 M), so the view is indexed once when it is projected
   (`paintIndex`): per 3 px cell, the visible splats' leaf ids and weights, and per instance its
-  visible weight rolled up its chain. A match (`bestByIoUIndexed`) then walks only the painted
-  cells and the instances they hold, and gives the same answer as matching every splat.
-- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the card offers
-  **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  visible weight rolled up its chain and its parent. A match then walks only the painted cells
+  and the instances they hold (`paintSumsIndexed`), and gives the same sums, so the same
+  answer, as matching every splat (`paintSums`).
+- **Combinations** (`bestSet`). Painting is for selecting the right combination or level of
+  the hierarchy: painted over a spool's bottom flange and its top flange and drum, it selects
+  both, not one then the other. The members are instances from disjoint subtrees (none holds
+  another), so the union's painted and visible weights are the members' sums and a set's IoU
+  is `Σinter / (painted + Σvisible − Σinter)`, from the per-instance sums a match gathers
+  anyway.
+  - The best set is found exactly, not greedily. A greedy search starts from the best single
+    instance and can never trade a parent for its children (the spool, which also holds ground
+    nobody painted, against the two flanges that were). Dinkelbach's method from the best
+    single instance's IoU λ reads the antichain maximising `Σ (inter − λ·(visible − inter))`
+    off the hierarchy bottom-up (an instance, or the best of its children, whichever is more),
+    takes its IoU as the next λ, and stops when that no longer rises: three or four passes
+    over the instances met.
+  - Then the answer is made simple at little cost. Members that add little go, the least
+    first, while the set's IoU stays within 2% of the best's (`PAINT_SET_GAIN`): a sliver of a
+    neighbour under the brush's edge is not a part. Then members that share an ancestor become
+    that ancestor, the deepest first, while the IoU stays within 3% (`PAINT_PARENT_SLACK`): the
+    whole spool when it is as good as its parts, its parts when the spool also holds unpainted
+    ground. One instance stays one instance. Both are shares of the IoU, not differences: in a
+    loosely painted area (IoU 0.1) a member that is half of it adds only 0.01, and stays.
+  - The members are listed largest on screen first (ascending ids among equals), the same for
+    the same sums, so the same painted area gives the same set however its splats were
+    gathered.
+  - While a stroke is painted, the match shown is kept until another's IoU is better by more
+    than 3% (`PAINT_STEADY`, `steadySet`), so two near-equal answers do not take turns at every
+    preview; the stroke's end goes by the same rule, so what is lit is what is selected.
+  - Cost, on a camp-sized synthetic view (2.16 M visible splats, 48,000 instances, 1440 × 900
+    px): an 18 px stroke across a third of the screen meets 1,003 instances, and the best set
+    takes 1.3–2.4 ms against 0.9–1.1 ms for the best single instance; the largest brush (120 px)
+    scrubbed over half the screen meets 25,488, and takes about 13 ms against 8 ms.
+  - A combination is selected as one (`state/sceneSelect.ts` `selectSet`): its first member is
+    candidate 0 and stands for the combination, and what its members are parts of together
+    (`commonChain`) are the coarser candidates, so `]` goes up to the spool and `[` back.
+    `selectedIds` is what is selected, whichever it is, and the highlight, **Hide**, **Show
+    only** and **Fly to** (the sphere around the members') act on all of it. A click is
+    unchanged: the whole object first, again for its parts; a click from a combination starts
+    at the whole object.
+- **Painted objects** (`lib/customSets.ts`). When the best set's IoU is below 0.5, the card
+  offers **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  - **Save as object** keeps a combination the same way (`setFromInstances`): as every splat
+    its members carry in every tile of the scan, at every level of detail, not only those drawn
+    or painted. It is kept as splats, not as the members' ids: the format draws a set by its
+    splats, and splats stay the same object if the scan is segmented again, where ids would
+    name others.
   - It is stored per scan in this browser (`localStorage`,
     `hexapod.customObjects.<asset>`) as `{ key, name, tiles: { checksum: [start, length, …] },
 splats, bounds }`.
@@ -876,6 +932,10 @@ splats, bounds }`.
     top-level instance. Every renderer reads ids by checksum from that document
     (`paintedDocOf`, `SplatInstances.setDoc`), so it hides and highlights like any instance.
   - While the set exists, its splats no longer carry their segmented id.
+  - Making one and deleting one are steps of the app's undo (`state/sceneSelect.ts`): undo
+    puts the scan's painted objects back as they were, stored again, so a deleted one returns
+    at its place and the later ones keep their ids; a selection of a painted object is cleared
+    when they change under it.
 
 The controller is `cesium/sceneSelect/SceneSelectController.ts`, and its state is in
 `state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts` and
@@ -887,11 +947,102 @@ card where the app's dock puts it) under PlayCanvas, Spark and CesiumJS. The e2e
 - `]` goes to the parent and `[` comes back; Tab and Shift+Tab do the same from the map, and
   from the page's body Tab moves focus instead;
 - painting over shrub 10 selects that shrub;
-- **Hide** in the card removes it from the frame.
+- **Hide** in the card removes it from the frame;
+- one stroke across two walls of the shed (8) selects both walls together, not the shed (whose
+  roof was not painted) and not one wall; the card names the combination, **Show only** leaves
+  both walls (the roof goes from the frame) and **Hide** hides both.
 
 In the app, `e2e/app.spec.ts` ("a scan object in the selection card") checks the keys and the
 card around a selection: `B` and `V` once each, one Escape one step, Tab on the body, an object
 replacing a machine's card, and the touch screen's brush.
+
+### Variants: other methods for the same scan (bake-offs)
+
+A bake-off publishes other methods' objects, fills and skins for the **same measured splats**,
+for the owner to switch between in the live app and judge by eye. Labels stay visible: it is
+not blind. Each candidate's output goes beside the measured tiles under
+`variants/<system>/<name>/` (`<system>` is `objects`, `fill` or `skins`), in today's formats --
+an `instances.json` (above), a `skin.json` with its `skin.bin`, an inferred tileset whose root
+carries `extras.evidence` -- and the measured tileset's root declares them all in
+`extras.variants`:
+
+```json
+"variants": {
+  "objects": [{"name": "ground-first", "label": "A · Ground first", "about": "One plain sentence on what this method does.", "instances": "variants/objects/ground-first/instances.json"}],
+  "fill":    [{"name": "vace-14b", "label": "Wan2.1-VACE 14B", "about": "…", "inferredLayers": [{"uri": "variants/fill/vace-14b/tileset.json", "evidence": {"kind": "inferred", "filler": "wan2.1-vace-14b", "views": 0, "gaussians": 0, "meanConfidence": 0.0}}]}],
+  "skins":   [{"name": "freeform", "label": "FreeForm (eigenmodes)", "about": "…", "skin": "variants/skins/freeform/skin.json"}]
+}
+```
+
+- **Paths** are relative to the measured `tileset.json`, as `extras.instances`, `extras.skin`
+  and `extras.inferredLayers` are, and resolve the same way (a signed URL's query is kept).
+- **`name`** is unique within its system (a repeat keeps the first); **`label`** is what the
+  viewer shows (the name when absent); **`about`** is one plain sentence, shown under the pick.
+- **Today stays the default.** The scan's own `extras.instances`, `extras.skin` and
+  `extras.inferredLayers` are "Today": a viewer who never picks a variant sees exactly what it
+  saw before, and a system with no Today (no `extras.skin`, say) is "nothing" until a variant
+  is picked.
+- **Registering** adds or replaces the entry of the same `name` within its system, and never
+  removes another system's entries or other variants.
+- **Read defensively** (`apps/web/src/lib/variants.ts` `variantsOf`): an entry without a name,
+  without its system's file, or with an `inferredLayers` entry that does not read is skipped;
+  the rest of the list stands. An `inferredLayers: []` is a legitimate "no fill" method.
+- **Ids.** A skins variant names instance ids (`skins[].instance`), and the wind reads each
+  skin's object's properties from whichever objects are shown: a skins variant fitted on
+  Today's objects moves the same objects under an objects variant only where the two files
+  agree on those ids. Telemetry and `materials.json` name Today's ids likewise.
+- **The API** (`apps/api/app/services/sidecars.py` `KINDS`) does not know `variants` yet: an
+  attach carries it onto the same tiles as any unrecognised key, and a republish of new tiles
+  drops it and flags the asset ("Unrecognised sidecar extras.variants needs re-attaching").
+
+**In the viewer.** A scan that declares variants gets a **Methods** button beside the
+representation switcher (`features/sites/CompareMethods.tsx`): a panel with one row per system
+it offers -- Objects, Fill, Motion -- each with Today and the variants by label (a segmented
+control while they fit one line, a list beyond), and the pick's `about` beneath. A pick is
+kept per scan for the session (`state/variants.ts`, `sessionStorage`), and swaps what is drawn
+in place, with no reload and the camera where it is, under every renderer:
+
+- **Objects** (`cesium/splatInstances.ts` `attachInstances`): the variant's `instances.json`
+  is loaded and swapped in where the old one was drawn -- the same hooks, a new table -- the
+  scan's selection cleared (its ids were the old file's) and its painted objects
+  (`lib/customSets.ts`, keyed by splat) drawn over the new file. The objects panel lists the
+  new file's categories; PlayCanvas and Spark rebind their tiles' ids through the store
+  (`scanView/scanInstances.ts`).
+- **Fill** (`cesium/inferredLayers.ts`): the drawn layers are unloaded and the variant's
+  loaded. Inferred layers are CesiumJS's under every renderer (below).
+- **Motion** (`cesium/splatSkin.ts` `attachSkin`): the variant's skin replaces the skin part;
+  the wind makes a driver for the new part and keeps blowing (`LivingSurveyManager`), and the
+  overlay rebinds its tiles' skin weights (`scanView/scanMotion.ts`).
+
+A pick whose files do not load says so in its row ("Did not load: …") and draws nothing for
+that system rather than the previous pick. A scan with objects or skins variants counts as a
+scan with objects or motion: the WebGPU trial draws it with WebGL2, and the overlay streams its
+3D Tiles rather than a native package (`ScanRendererHost.declaresInstances`).
+
+**Inferred style.** How inferred layers are drawn is a viewer's setting
+(`inferredStyle`, kept on the device; hidden until chosen), beside the switcher as
+**Show · Highlight · Hide**, with the one-line legend "Inferred: generated where no camera
+saw. Not measured." while they are drawn. Highlight is the engine patch's colour hook on each
+layer's own splat primitive (never the measured scan's): pulled toward purple
+(`INFERRED_PURPLE`), hatched in 0.35 m bands across the layer, and a little see-through
+(`INFERRED_HIGHLIGHT`). Inferred layers are drawn by CesiumJS whichever renderer draws the
+measured splats: under PlayCanvas or Spark the scan's own tileset is hidden and drawn on the
+overlay, while its layers stay on the globe's canvas under it, so where both cover a pixel the
+measured splats are in front. Picking a fill while the style is Hide switches it to Show.
+
+**Fixture and checks.** The synthetic yard has two variants per system
+(`data/tiles/synthetic-yard/variants/`, written by `tools/captures/yard_variants.py`, declared
+in its `variants.json` with paths relative to `splat/tileset.json`): objects `whole` (the 24
+top-level objects, every part folded in, with categories) and `parts` (all 103, the trees' and
+the shed's parts in categories of their own); fills `hedge` (beyond the west edge) and `mound`
+(beyond the east edge); skins `tree` (the big tree only) and `small` (the snag and two
+shrubs). `e2e/variants.spec.ts` (`src/dev/variantsHarness.ts`, the app's panels mounted beside
+the scan) runs under PlayCanvas, Spark and CesiumJS and checks that picking an objects variant
+changes what the objects panel lists, picking a fill draws its layer and not the other's,
+Highlight turns the layer's pixels purple and changes no other pixel, Hide leaves the frame
+the scan's own, and a skins pick replaces the skin; and that the panel fits a 400 px phone and
+works from the keyboard. Unit tests: `__tests__/variants.test.ts` (the parser, the store, the
+swaps), `__tests__/inferred.test.ts`, `__tests__/compareMethods.test.tsx`.
 
 ## 5. Storage by behaviour
 

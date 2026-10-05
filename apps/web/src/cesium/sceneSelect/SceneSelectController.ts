@@ -18,17 +18,21 @@
  *   released where it began.
  * - **Brush** (`B`, or the card's Brush): strokes on screen collect the front-most splats under
  *   them -- Shift (or the card's Add) adds to the painted area, Alt (or Remove) takes away, a
- *   plain stroke starts again -- and the instance (any level) with the best intersection over
- *   union is selected. While a stroke is painted its best match so far is highlighted, so
- *   painting can stop once the right object lights up. Below `PAINT_MIN_IOU` the painted
- *   splats can be kept as an object of their own (lib/customSets.ts), drawn through the same
- *   hide and highlight pipeline.
+ *   plain stroke starts again -- and the combination of instances (at whatever levels fit)
+ *   whose union has the best intersection over union with it is selected: one instance, or
+ *   several (both flanges of a spool) when together they match better (lib/sceneSelect.ts
+ *   `bestSet`). While a stroke is painted its best match so far is highlighted, held steady
+ *   between near-equal answers (`steadySet`), so painting can stop once the right objects
+ *   light up. Below `PAINT_MIN_IOU` the painted splats can be kept as an object of their own,
+ *   and a combination can be kept as one too (lib/customSets.ts), drawn through the same hide
+ *   and highlight pipeline.
  *
- * The chosen candidate is the objects store's highlight (`state/instances.ts`); the HUD's
- * selection card (features/sites/ObjectCard.tsx) shows it and offers Hide, Show only, Fly to,
- * the brush and Clear. In the app `B` and Escape are the app's keys (`ownKeys: false`): the
- * hotkey registry binds the brush, and Escape steps back through GlobalHotkeys' chain, so one
- * press does one thing.
+ * What is selected (`selectedIds`: the chosen candidate, or the combination) is the objects
+ * store's highlight (`state/instances.ts`); the HUD's selection card
+ * (features/sites/ObjectCard.tsx) shows it and offers Hide, Show only, Fly to, the brush and
+ * Clear. In the app `B` and Escape are the app's keys (`ownKeys: false`): the hotkey registry
+ * binds the brush, and Escape steps back through GlobalHotkeys' chain, so one press does one
+ * thing.
  */
 
 import {
@@ -48,21 +52,26 @@ import {
   encodeRanges,
   isCustomId,
   rangesLength,
+  setFromInstances,
   type CustomSet,
 } from "@/lib/customSets";
 import { tileInstanceIds, withDescendants, type InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import {
-  bestByIoUIndexed,
   buildCandidates,
   chainOf,
+  commonChain,
   drillIndex,
   hiddenForShowOnly,
   PAINT_MIN_IOU,
   paintedCount,
   paintIndex,
+  paintSumsIndexed,
+  sameMembers,
   splatShares,
+  steadySet,
   type PaintIndex,
+  type PaintSetMatch,
 } from "@/lib/sceneSelect";
 import {
   BrushMask,
@@ -73,7 +82,7 @@ import {
 } from "@/lib/splatPaint";
 import { castRay, hitWeights, labelsNear, type PickTile } from "@/lib/splatPick";
 import { useInstances } from "@/state/instances";
-import { selectedId, useSceneSelect } from "@/state/sceneSelect";
+import { chosenCombination, selectedId, selectedIds, useSceneSelect } from "@/state/sceneSelect";
 
 import { uniformScale } from "../placement";
 import { paintedDocOf } from "../scanView/scanInstances";
@@ -220,16 +229,16 @@ export class SceneSelectController {
   #overlayImage: ImageData | null = null;
   /** Removes the wheel listener while one is attached (`#syncWheel`). */
   #wheelOff: (() => void) | null = null;
-  /** The highlight this controller set: cleared when the selection is. */
-  #lit: { assetId: string; id: number } | null = null;
+  /** The highlight this controller set (what is selected): cleared when the selection is. */
+  #lit: { assetId: string; ids: readonly number[] } | null = null;
   #cameraInputs: boolean | null = null;
   /** The last click taken, and what it answered (`click`: a repeat is the same click). */
   #lastClick: { x: number; y: number; at: number; hit: boolean } | null = null;
   /** The pending frame that brings a stroke's match up to date, and when it last ran. */
   #previewFrame: number | null = null;
   #previewAt = -Infinity;
-  /** What the stroke's match lit (id null: nothing), until the stroke ends. */
-  #previewed: { assetId: string; id: number | null } | null = null;
+  /** What the stroke's match lit (no ids: nothing), until the stroke ends. */
+  #previewed: { assetId: string; ids: readonly number[] } | null = null;
   /** What bringing the match up to date cost this stroke. */
   #previewCost = { runs: 0, maxMs: 0 };
 
@@ -449,8 +458,10 @@ export class SceneSelectController {
     }
     const { assetId, doc } = best;
     const state = useSceneSelect.getState();
-    // Drilling goes on only within the scan selected now; on another, the whole object again.
-    const current = state.assetId === assetId ? selectedId(state) : null;
+    // Drilling goes on only within the scan selected now; on another, or from a combination
+    // the brush chose (not a level of any chain), the whole object again.
+    const current =
+      state.assetId === assetId && !chosenCombination(state) ? selectedId(state) : null;
     const shares = splatShares(doc);
     const index = drillIndex(candidates, current, (id) => shares.get(id) ?? 0);
     state.select(assetId, candidates.ids, candidates.chain, index, anchor ?? { x, y });
@@ -460,14 +471,18 @@ export class SceneSelectController {
 
   // ---- Actions ---------------------------------------------------------------------------
 
-  /** The selected instance and its scan, or null. */
-  selection(): { assetId: string; id: number; doc: InstancesDoc } | null {
+  /**
+   * What is selected and its scan, or null: `ids` the instances (a combination's members, else
+   * the one chosen), `id` the first of them.
+   */
+  selection(): { assetId: string; id: number; ids: readonly number[]; doc: InstancesDoc } | null {
     const state = useSceneSelect.getState();
-    const id = selectedId(state);
+    const ids = selectedIds(state);
+    const id = ids[0];
     const assetId = state.assetId;
     const doc = assetId ? paintedDocOf(assetId) : undefined;
-    if (id === null || !assetId || !doc) return null;
-    return { assetId, id, doc };
+    if (id === undefined || !assetId || !doc) return null;
+    return { assetId, id, ids, doc };
   }
 
   cycle(step: number): void {
@@ -478,11 +493,11 @@ export class SceneSelectController {
     useSceneSelect.getState().clear();
   }
 
-  /** Hides the selection (with what it contains) and clears it. */
+  /** Hides the selection (every member of a combination, with what it contains) and clears it. */
   hide(): void {
     const s = this.selection();
     if (!s) return;
-    useInstances.getState().setHidden(s.assetId, [...withDescendants(s.doc, [s.id])], true);
+    useInstances.getState().setHidden(s.assetId, [...withDescendants(s.doc, s.ids)], true);
     this.clear();
     // What is visible changed: the brush starts again on what is left.
     this.#paintView = null;
@@ -490,13 +505,13 @@ export class SceneSelectController {
     this.#drawOverlay();
   }
 
-  /** Hides everything but the selection. */
+  /** Hides everything but the selection (every member of a combination). */
   showOnly(): void {
     const s = this.selection();
     if (!s) return;
     const store = useInstances.getState();
     store.showAll(s.assetId);
-    store.setHidden(s.assetId, hiddenForShowOnly(s.doc, withDescendants(s.doc, [s.id])), true);
+    store.setHidden(s.assetId, hiddenForShowOnly(s.doc, withDescendants(s.doc, s.ids)), true);
   }
 
   /** Shows everything of the selection's scan again. */
@@ -513,7 +528,11 @@ export class SceneSelectController {
   flyTo(): void {
     const s = this.selection();
     if (!s) return;
-    const sphere = instanceSphere(s.assetId, s.id);
+    // A combination: the sphere around its members'.
+    const spheres = s.ids
+      .map((id) => instanceSphere(s.assetId, id))
+      .filter((each): each is BoundingSphere => each !== undefined);
+    const sphere = spheres.length > 1 ? BoundingSphere.fromBoundingSpheres(spheres) : spheres[0];
     if (!sphere) return;
     if (this.#fly) {
       this.#fly(BoundingSphere.clone(sphere));
@@ -526,18 +545,18 @@ export class SceneSelectController {
     });
   }
 
-  /** Whether the selection is an object painted in this browser. */
+  /** Whether the selection is one object painted in this browser. */
   selectionIsPainted(): boolean {
     const s = this.selection();
     const base = s ? instancesDocOf(s.assetId) : undefined;
-    return s !== null && base !== undefined && isCustomId(base, s.id);
+    return s?.ids.length === 1 && base !== undefined && isCustomId(base, s.id);
   }
 
   /** Forgets the selected painted object. */
   deletePainted(): void {
     const s = this.selection();
     const base = s ? instancesDocOf(s.assetId) : undefined;
-    if (!s || !base || !isCustomId(base, s.id)) return;
+    if (s?.ids.length !== 1 || !base || !isCustomId(base, s.id)) return;
     const store = useSceneSelect.getState();
     const set = store.customOf(s.assetId)[s.id - base.maxId - 1];
     this.clear();
@@ -642,12 +661,53 @@ export class SceneSelectController {
     store.addCustom(painted.assetId, set);
     const id = customId(base, existing.length);
     store.select(painted.assetId, [id], 1, 0, null);
-    store.setPaint(null);
-    this.#painted = null;
-    this.#paintView?.mask.clear();
-    this.#drawOverlay();
+    this.#afterNewObject();
     log.info("painted object made", { asset: painted.assetId, id, splats });
     return id;
+  }
+
+  /**
+   * Keeps the selected combination as an object of its own (lib/customSets.ts
+   * `setFromInstances`: its members' splats in every tile of the scan) and selects it.
+   */
+  saveCombination(name?: string): number | null {
+    const state = useSceneSelect.getState();
+    const combination = chosenCombination(state);
+    const assetId = state.assetId;
+    const doc = assetId ? paintedDocOf(assetId) : undefined;
+    const base = assetId ? instancesDocOf(assetId) : undefined;
+    if (!combination || !assetId || !doc || !base) return null;
+    const existing = state.customOf(assetId);
+    const set = setFromInstances(
+      doc,
+      combination.ids,
+      name ?? `Painted area ${String(existing.length + 1)}`,
+      `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      Date.now(),
+    );
+    if (!set) return null;
+    state.addCustom(assetId, set);
+    const id = customId(base, existing.length);
+    state.select(assetId, [id], 1, 0, null);
+    this.#afterNewObject();
+    log.info("combination kept", {
+      asset: assetId,
+      id,
+      members: combination.ids,
+      splats: set.splats,
+    });
+    return id;
+  }
+
+  /**
+   * After a painted object is made: the brush's match and area are done with, and the view's
+   * index is stale (the object's splats carry its id now), so the next stroke projects anew.
+   */
+  #afterNewObject(): void {
+    useSceneSelect.getState().setPaint(null);
+    this.#painted = null;
+    this.#paintView = null;
+    this.#drawOverlay();
   }
 
   // ---- Internals -------------------------------------------------------------------------
@@ -752,17 +812,17 @@ export class SceneSelectController {
     previous: ReturnType<typeof useSceneSelect.getState>,
   ): void {
     this.#syncWheel(state);
-    const id = selectedId(state);
-    if (id !== selectedId(previous) || state.assetId !== previous.assetId) {
+    const ids = selectedIds(state);
+    if (!sameMembers(ids, selectedIds(previous)) || state.assetId !== previous.assetId) {
       const lit = this.#lit;
-      if (lit && (lit.assetId !== state.assetId || id === null)) {
+      if (lit && (lit.assetId !== state.assetId || ids.length === 0)) {
         useInstances.getState().highlight(lit.assetId, []);
         this.#lit = null;
       }
       const doc = state.assetId ? paintedDocOf(state.assetId) : undefined;
-      if (id !== null && state.assetId && doc) {
-        useInstances.getState().highlight(state.assetId, [...withDescendants(doc, [id])]);
-        this.#lit = { assetId: state.assetId, id };
+      if (ids.length > 0 && state.assetId && doc) {
+        useInstances.getState().highlight(state.assetId, [...withDescendants(doc, ids)]);
+        this.#lit = { assetId: state.assetId, ids };
       }
       this.#viewer.scene.requestRender();
     }
@@ -893,6 +953,18 @@ export class SceneSelectController {
   }
 
   /**
+   * The stroke's best match now (lib/sceneSelect.ts `bestSet`), held on what the preview shows
+   * while that is still about as good (`steadySet`).
+   */
+  #match(view: PaintView): PaintSetMatch | null {
+    const shown = this.#previewed;
+    return steadySet(
+      paintSumsIndexed(view.index, view.mask),
+      shown?.assetId === view.assetId ? shown.ids : null,
+    );
+  }
+
+  /**
    * Highlights the stroke's best match so far, through the objects store as the selection is
    * (only the instances' state table changes, which every renderer applies cheaply), and says
    * it on the card (`PaintResult.live`). Nothing is selected until the stroke ends.
@@ -901,24 +973,26 @@ export class SceneSelectController {
     const view = this.#paintView;
     if (!this.#stroke || !view) return;
     const started = performance.now();
-    const best = bestByIoUIndexed(view.index, view.mask);
-    const id = best?.id ?? null;
+    const best = this.#match(view);
+    const ids = best?.ids ?? [];
     const shown = this.#previewed;
-    if (shown?.assetId !== view.assetId || shown.id !== id) {
+    if (shown?.assetId !== view.assetId || !sameMembers(shown.ids, ids)) {
       // The store lights what is below it too: its table has the same hierarchy, and a
-      // painted object has nothing below it, so the match's id alone is the selection's
+      // painted object has nothing below it, so the match's ids alone are the selection's
       // highlight without walking the hierarchy twice.
-      useInstances.getState().highlight(view.assetId, id === null ? [] : [id]);
-      this.#previewed = { assetId: view.assetId, id };
+      useInstances.getState().highlight(view.assetId, ids);
+      this.#previewed = { assetId: view.assetId, ids };
       this.#viewer.scene.requestRender();
     }
     const painted = paintedCount(view.index, view.mask);
-    useSceneSelect.getState().setPaint({ best: id, iou: best?.iou ?? 0, painted, live: true });
+    useSceneSelect
+      .getState()
+      .setPaint({ ids, best: ids[0] ?? null, iou: best?.iou ?? 0, painted, live: true });
     this.#previewAt = performance.now();
     const ms = this.#previewAt - started;
     this.#previewCost.runs++;
     this.#previewCost.maxMs = Math.max(this.#previewCost.maxMs, ms);
-    log.debug("paint preview", { ms, best: id, iou: best?.iou, splats: painted });
+    log.debug("paint preview", { ms, ids: ids.slice(0, 8), iou: best?.iou, splats: painted });
   }
 
   /**
@@ -933,12 +1007,12 @@ export class SceneSelectController {
     this.#previewed = null;
     if (!shown) return;
     const state = useSceneSelect.getState();
-    const id = state.assetId === shown.assetId ? selectedId(state) : null;
-    if (id === shown.id) return;
+    const ids = state.assetId === shown.assetId ? selectedIds(state) : [];
+    if (sameMembers(ids, shown.ids)) return;
     const doc = paintedDocOf(shown.assetId);
     useInstances
       .getState()
-      .highlight(shown.assetId, id !== null && doc ? [...withDescendants(doc, [id])] : []);
+      .highlight(shown.assetId, ids.length > 0 && doc ? [...withDescendants(doc, ids)] : []);
     this.#viewer.scene.requestRender();
   }
 
@@ -955,23 +1029,30 @@ export class SceneSelectController {
     const painted = paintedSplats(view.screen, view.visible, view.mask);
     let count = 0;
     for (let k = 0; k < view.screen.count; k++) if (painted[k]) count++;
-    const best = bestByIoUIndexed(view.index, view.mask);
+    // What was lit as the stroke ended, if it is still about as good: what you see is selected.
+    const best = this.#match(view);
+    const ids = best?.ids ?? [];
+    const first = ids[0];
     const store = useSceneSelect.getState();
-    store.setPaint({ best: best?.id ?? null, iou: best?.iou ?? 0, painted: count });
+    store.setPaint({ ids, best: first ?? null, iou: best?.iou ?? 0, painted: count });
     this.#painted =
       count > 0 ? { assetId: view.assetId, tiles: view.tiles, screen: view.screen, painted } : null;
-    if (best) {
-      const chain = chainOf(view.doc, best.id);
+    if (best && first !== undefined && ids.length > 1) {
+      store.selectSet(view.assetId, best, commonChain(view.doc, ids), null);
+      this.#focusScene();
+    } else if (first !== undefined) {
+      const chain = chainOf(view.doc, first);
       store.select(view.assetId, chain, chain.length, 0, null);
       this.#focusScene();
     } else {
       store.clear();
-      store.setPaint({ best: null, iou: 0, painted: count });
+      store.setPaint({ ids: [], best: null, iou: 0, painted: count });
     }
     this.#endPreview();
     log.info("painted", {
       asset: view.assetId,
-      best: best?.id,
+      ids: ids.slice(0, 8),
+      members: ids.length,
       iou: best?.iou,
       splats: count,
       preview: this.#previewCost,

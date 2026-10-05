@@ -3,6 +3,8 @@ import { persist } from "zustand/middleware";
 
 import type { UnitSystem } from "@twin/geo";
 
+import type { InferredStyle } from "@/lib/inferred";
+
 export type ThemeMode = "auto" | "light" | "dark";
 export type QualityPreset = "performance" | "balanced" | "ultra";
 export type WorldMode = "open" | "photorealistic";
@@ -105,6 +107,12 @@ export interface SettingsState {
    */
   splatRenderer: SplatRenderer;
   /**
+   * How a scan's inferred layers are drawn (lib/inferred.ts): Show, Highlight (purple and
+   * hatched, the measured splats untouched) or Hide. Hidden until a person chooses: what an
+   * image model guessed is not shown as if it were the scan.
+   */
+  inferredStyle: InferredStyle;
+  /**
    * The API's shared write token (`API_WRITE_TOKEN`), entered once in the UI.
    *
    * It lives here, beside the other preferences, and deliberately not in a `VITE_`
@@ -139,6 +147,7 @@ const defaults = {
   exploreSpeed: 4,
   livingGpuMotion: true,
   splatRenderer: DEFAULT_SPLAT_RENDERER,
+  inferredStyle: "hide" as InferredStyle,
   writeToken: "",
 };
 

@@ -3,9 +3,21 @@ import { describe, expect, it } from "vitest";
 import { Event, Matrix4 } from "cesium";
 import type { Cesium3DTileset, Scene } from "cesium";
 
-import { attachInferredLayers } from "@/cesium/inferredLayers";
-import { describeEvidence, evidenceOf, inferredLayersOf, resolveLayerUrl } from "@/lib/inferred";
+import {
+  attachInferredLayers,
+  evaluateInferredColor,
+  InferredHighlight,
+} from "@/cesium/inferredLayers";
+import {
+  describeEvidence,
+  evidenceOf,
+  INFERRED_HIGHLIGHT,
+  inferredLayersOf,
+  resolveLayerUrl,
+} from "@/lib/inferred";
 import { useInferred } from "@/state/inferred";
+import { useSettings } from "@/state/settings";
+import { useVariants } from "@/state/variants";
 
 const EVIDENCE = {
   kind: "inferred",
@@ -89,22 +101,218 @@ describe("inferred layers", () => {
     expect(urls).toEqual(["https://tiles.example/site/splat/inferred/tileset.json"]);
     expect(added).toEqual([child]);
     expect(useInferred.getState().layers["asset-1"]?.[0]?.views).toBe(6);
-    // Off until a person opts in.
+    // Hidden until a person chooses.
     preUpdate.raiseEvent();
     expect(child.show).toBe(false);
-    useInferred.getState().setShow(true);
+    useSettings.getState().set({ inferredStyle: "show" });
     preUpdate.raiseEvent();
     expect(child.show).toBe(true);
     expect(Matrix4.equals(child.modelMatrix, parent.modelMatrix)).toBe(true);
-    useInferred.getState().setShow(false);
+    useSettings.getState().set({ inferredStyle: "hide" });
     preUpdate.raiseEvent();
     expect(child.show).toBe(false);
-    useInferred.getState().setShow(true);
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(true);
     (parent as { show: boolean }).show = false;
     preUpdate.raiseEvent();
     expect(child.show).toBe(false);
     dispose();
     expect(useInferred.getState().layers["asset-1"]).toBeUndefined();
-    useInferred.getState().setShow(false);
+    useSettings.getState().set({ inferredStyle: "hide" });
+  });
+
+  it("is drawn while another renderer draws the scan, CesiumJS's copy hidden", async () => {
+    const { parent, child, scene, preUpdate } = fixture();
+    (parent as { show: boolean }).show = false;
+    let elsewhere = true;
+    const dispose = attachInferredLayers(
+      parent,
+      scene,
+      "asset-2",
+      () => Promise.resolve(child),
+      () => elsewhere,
+    );
+    await settle();
+    useSettings.getState().set({ inferredStyle: "show" });
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(true);
+    elsewhere = false;
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(false);
+    dispose();
+    useSettings.getState().set({ inferredStyle: "hide" });
+  });
+
+  it("highlights through its own primitive's colour hook, switched by a uniform", async () => {
+    const { parent, child, scene, preUpdate, primitive } = fixture();
+    const dispose = attachInferredLayers(parent, scene, "asset-3", () => Promise.resolve(child));
+    await settle();
+    useSettings.getState().set({ inferredStyle: "show" });
+    preUpdate.raiseEvent();
+    const hook = primitive.vertexColor as InferredHighlight | undefined;
+    expect(hook).toBeInstanceOf(InferredHighlight);
+    expect(hook?.on).toBe(false);
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    preUpdate.raiseEvent();
+    expect(hook?.on).toBe(true);
+    // The uniform carries it: no new shader for a switch.
+    const lines: string[] = [];
+    const uniforms: Record<string, () => unknown> = {};
+    hook?.addToShader(
+      { addUniform: () => undefined, addVertexLines: (l) => void lines.push(String(l)) },
+      uniforms,
+    );
+    expect(lines.join("\n")).toContain("splatVertexColor");
+    expect((uniforms.u_inferredPattern?.() as { w: number }).w).toBe(1);
+    useSettings.getState().set({ inferredStyle: "show" });
+    preUpdate.raiseEvent();
+    expect((uniforms.u_inferredPattern?.() as { w: number }).w).toBe(0);
+    dispose();
+    expect(primitive.vertexColor).toBeUndefined();
+    useSettings.getState().set({ inferredStyle: "hide" });
+  });
+
+  it("turns an inferred splat purple and hatched, and leaves it as painted otherwise", () => {
+    const grey = [0.5, 0.5, 0.5, 1] as const;
+    expect(evaluateInferredColor(grey, [0, 0, 0], false)).toEqual([0.5, 0.5, 0.5, 1]);
+    const lit = evaluateInferredColor(grey, [0, 0, 0], true);
+    // Bluer and redder than green: purple.
+    expect(lit[2]).toBeGreaterThan(lit[1] + 0.2);
+    expect(lit[0]).toBeGreaterThan(lit[1]);
+    expect(lit[3]).toBeLessThan(1);
+    // Half a band further along, darker.
+    const step = INFERRED_HIGHLIGHT.stripeM / 2 / 0.57735027 / 3;
+    const dark = evaluateInferredColor(grey, [step + 0.01, step + 0.01, step + 0.01], true);
+    expect(dark[2]).toBeLessThan(lit[2]);
+  });
+
+  it("swaps to a fill variant's layers, and back to Today's", async () => {
+    const { scene, preUpdate } = fixture();
+    const parent = {
+      root: {
+        extras: {
+          inferredLayers: [{ uri: "inferred/tileset.json", evidence: EVIDENCE }],
+          variants: {
+            fill: [
+              {
+                name: "vace",
+                label: "VACE",
+                about: "Video inpainting.",
+                inferredLayers: [
+                  { uri: "variants/fill/vace/a.json", evidence: EVIDENCE },
+                  { uri: "variants/fill/vace/b.json", evidence: EVIDENCE },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      resource: { url: "https://tiles.example/site/splat/tileset.json" },
+      show: true,
+      modelMatrix: Matrix4.clone(Matrix4.IDENTITY),
+      maximumScreenSpaceError: 16,
+    } as unknown as Cesium3DTileset;
+    const loaded: string[] = [];
+    const removed: unknown[] = [];
+    (scene.primitives as unknown as { remove: (p: unknown) => boolean }).remove = (p) => {
+      removed.push(p);
+      return true;
+    };
+    const dispose = attachInferredLayers(parent, scene, "asset-4", (url) => {
+      loaded.push(url.replace("https://tiles.example/site/splat/", ""));
+      return Promise.resolve(layer(url));
+    });
+    await settle();
+    expect(loaded).toEqual(["inferred/tileset.json"]);
+    expect(useVariants.getState().status["asset-4"]?.fill).toEqual({ state: "ready" });
+    useVariants.getState().pick("asset-4", "fill", "vace");
+    await settle();
+    expect(loaded.slice(1)).toEqual(["variants/fill/vace/a.json", "variants/fill/vace/b.json"]);
+    expect(removed).toHaveLength(1);
+    expect(useInferred.getState().layers["asset-4"]).toHaveLength(2);
+    preUpdate.raiseEvent();
+    useVariants.getState().pick("asset-4", "fill", null);
+    await settle();
+    expect(loaded.at(-1)).toBe("inferred/tileset.json");
+    expect(removed).toHaveLength(3);
+    expect(useInferred.getState().layers["asset-4"]).toHaveLength(1);
+    dispose();
+    expect(useVariants.getState().status["asset-4"]).toBeUndefined();
+  });
+
+  it("says when a variant's layer did not load", async () => {
+    const { scene } = fixture();
+    const parent = {
+      root: {
+        extras: {
+          variants: {
+            fill: [
+              {
+                name: "broken",
+                inferredLayers: [{ uri: "variants/fill/broken/tileset.json", evidence: EVIDENCE }],
+              },
+            ],
+          },
+        },
+      },
+      resource: { url: "https://tiles.example/site/splat/tileset.json" },
+      show: true,
+      modelMatrix: Matrix4.clone(Matrix4.IDENTITY),
+    } as unknown as Cesium3DTileset;
+    const dispose = attachInferredLayers(parent, scene, "asset-5", () =>
+      Promise.reject(new Error("layer answered 404")),
+    );
+    await settle();
+    // Today has none: nothing to load.
+    expect(useVariants.getState().status["asset-5"]?.fill).toEqual({ state: "ready" });
+    useVariants.getState().pick("asset-5", "fill", "broken");
+    await settle();
+    expect(useVariants.getState().status["asset-5"]?.fill).toMatchObject({
+      state: "error",
+      message: expect.stringContaining("404") as unknown,
+    });
+    useVariants.getState().pick("asset-5", "fill", null);
+    dispose();
   });
 });
+
+/** Lets the loads' promises settle. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 0));
+}
+
+/** A loaded layer: its own root, a patched splat primitive with the colour hook's slot. */
+function layer(url = "x") {
+  const primitive = Object.defineProperty({}, "vertexColor", {
+    value: undefined,
+    writable: true,
+    enumerable: true,
+  }) as { vertexColor?: unknown };
+  return {
+    url,
+    root: { extras: { evidence: { ...EVIDENCE, views: 6 } } },
+    show: false,
+    modelMatrix: Matrix4.clone(Matrix4.IDENTITY),
+    gaussianSplatPrimitive: primitive,
+    destroy: () => undefined,
+  } as unknown as Cesium3DTileset & { gaussianSplatPrimitive: { vertexColor?: unknown } };
+}
+
+function fixture() {
+  const parent = {
+    root: { extras: { inferredLayers: [{ uri: "inferred/tileset.json", evidence: EVIDENCE }] } },
+    resource: { url: "https://tiles.example/site/splat/tileset.json" },
+    show: true,
+    modelMatrix: Matrix4.fromTranslation({ x: 1, y: 2, z: 3 } as never),
+    maximumScreenSpaceError: 16,
+  } as unknown as Cesium3DTileset;
+  const child = layer();
+  const preUpdate = new Event();
+  const scene = {
+    primitives: { add: () => undefined, remove: () => true },
+    preUpdate,
+    requestRender: () => undefined,
+  } as unknown as Scene;
+  return { parent, child, scene, preUpdate, primitive: child.gaussianSplatPrimitive };
+}

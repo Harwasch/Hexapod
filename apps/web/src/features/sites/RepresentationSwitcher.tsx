@@ -2,15 +2,17 @@ import { Loader2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
 import type { Representation } from "@twin/contracts";
-import { GlassPanel, GlassSegmentedControl, GlassSwitch } from "@twin/ui";
+import { GlassPanel, GlassSegmentedControl } from "@twin/ui";
 
 import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
-import { describeEvidence } from "@/lib/inferred";
 import { useInferred } from "@/state/inferred";
+import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
+import { CompareMethods } from "./CompareMethods";
+import { InferredLegend, InferredStyleControl } from "./InferredStyle";
 import { InstanceSearch } from "./InstanceSearch";
 import { siteDisplayName } from "./siteNames";
 
@@ -22,6 +24,10 @@ const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
  * never the record of the tileset it came from. Switching keeps the camera. Which engine
  * draws a splat is a comparison for developers, so that choice lives in Settings › Advanced,
  * not here.
+ *
+ * Beside a splat, what the scan has: its inferred fill as Show · Highlight · Hide (with a
+ * one-line legend while it is drawn), "Methods" when it offers other methods' objects, fill or
+ * motion (lib/variants.ts), and its objects.
  */
 export function RepresentationSwitcher() {
   const scene = useScene();
@@ -34,8 +40,7 @@ export function RepresentationSwitcher() {
   const assets = useSites((s) => s.assets);
   const site = useSite(activeSiteId).data;
   const inferred = useInferred((s) => s.layers);
-  const showInferred = useInferred((s) => s.show);
-  const setShowInferred = useInferred((s) => s.setShow);
+  const inferredStyle = useSettings((s) => s.inferredStyle);
   const shownAsset = site?.assets.find((a) => a.representation === representation);
   const evidence = shownAsset ? (inferred[shownAsset.id] ?? []) : [];
   const available = ORDER.filter((rep) => site?.assets.some((a) => a.representation === rep));
@@ -88,23 +93,18 @@ export function RepresentationSwitcher() {
               <span className="sr-only">Only one representation is available for this site.</span>
             )}
             {representation === "gaussian-splat" && evidence.length > 0 && (
-              <span
-                className="rep-switch__inferred"
-                data-testid="inferred-toggle"
-                title={evidence.map(describeEvidence).join("\n")}
-              >
-                <span id="inferred-label">Inferred fill</span>
-                <GlassSwitch
-                  aria-labelledby="inferred-label"
-                  checked={showInferred}
-                  onCheckedChange={setShowInferred}
-                />
-              </span>
+              <InferredStyleControl evidence={evidence} />
+            )}
+            {representation === "gaussian-splat" && shownAsset && (
+              <CompareMethods assetId={shownAsset.id} />
             )}
             {representation === "gaussian-splat" && shownAsset && (
               <InstanceSearch assetId={shownAsset.id} />
             )}
           </GlassPanel>
+          {representation === "gaussian-splat" &&
+            evidence.length > 0 &&
+            inferredStyle !== "hide" && <InferredLegend style={inferredStyle} />}
         </motion.div>
       )}
     </AnimatePresence>

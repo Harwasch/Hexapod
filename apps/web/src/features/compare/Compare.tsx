@@ -5,6 +5,7 @@ import { EmptyState, GlassField, GlassPanel, GlassSelect, GlassSwitch, useFieldI
 
 import { useLayers as useLayerCatalog } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
+import { recordAction } from "@/state/history";
 import { useLayers } from "@/state/layers";
 import { useUi } from "@/state/ui";
 
@@ -78,7 +79,13 @@ export function CompareControls() {
         <GlassSwitch
           checked={active}
           disabled={!left || !right}
-          onCheckedChange={setActive}
+          onCheckedChange={(on) =>
+            recordAction(
+              `Turn swipe comparison ${on ? "on" : "off"}`,
+              () => setActive(on),
+              () => setActive(!on),
+            )
+          }
           aria-labelledby="compare-toggle-label"
         />
       </div>

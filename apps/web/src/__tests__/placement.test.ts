@@ -115,6 +115,10 @@ describe("ground under a point", () => {
     expect(groundAt(100, undefined, 60)).toBe(100);
     expect(groundAt(undefined, undefined, 60)).toBeUndefined();
     expect(groundAt(Number.NaN, undefined, 60)).toBeUndefined();
+    // Placeholders and chords of coarse tiles, kilometres under the sea, are not ground.
+    expect(groundAt(-31_017, undefined, 60)).toBeUndefined();
+    expect(groundAt(undefined, -3_640, 60)).toBeUndefined();
+    expect(groundAt(12, -3_640, 60)).toBe(12);
   });
 });
 
