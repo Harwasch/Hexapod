@@ -118,6 +118,26 @@ export interface paths {
         patch: operations["update_asset_api_v1_assets__asset_id__patch"];
         trace?: never;
     };
+    "/api/v1/assets/{asset_id}/scale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set an asset's real-world size, or reset it
+         * @description Sets `renderConfig.scale`, the factor the viewer draws a pipeline-placed splat at relative to the model as registered, and `renderConfig.scaleEvidence`, how it was found: `{scale, evidence?}`, or `{reset: true}` for 1 as registered. The scale is absolute, never relative to the one before (0.8 then 0.5 is 0.5). The site's boundary and centroid, the asset's footprint and its `groundSamples` are resized about the tiles' placed origin with it, so every position the catalog gives already fits the scaled model. The provenance's `scaleSource` becomes `manual` (`measured-length`, `direct`, or no evidence) or `camera-height-estimate` with its `scaleUncertaintyPct`; a reset restores the one the asset was registered with. A re-run that registers new tiles resets it. 422 for a scale outside 0.01-100, evidence missing what its method needs, or a measured length that says another scale. See docs/DATA_MODEL.md.
+         */
+        put: operations["set_asset_scale_api_v1_assets__asset_id__scale_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assets/{asset_id}/sidecars": {
         parameters: {
             query?: never;
@@ -1100,6 +1120,24 @@ export interface components {
             validFrom: string | null;
             /** Validto */
             validTo: string | null;
+        };
+        /**
+         * AssetScaleUpdate
+         * @description `PUT /assets/{id}/scale`: a runtime scale and how it was found, or `reset: true`.
+         *
+         *     `scale` is absolute -- relative to the model as registered, never to the scale before
+         *     it. With no `evidence` it is taken as typed in (`direct`). A reset goes back to 1, drops
+         *     the evidence and restores the provenance the asset was registered with.
+         */
+        AssetScaleUpdate: {
+            evidence?: components["schemas"]["ScaleEvidenceInput"] | null;
+            /**
+             * Reset
+             * @default false
+             */
+            reset?: boolean;
+            /** Scale */
+            scale?: number | null;
         };
         /** AssetUpdate */
         AssetUpdate: {
@@ -3052,6 +3090,13 @@ export interface components {
             /** Rigurl */
             rigUrl?: string | null;
             /**
+             * Scale
+             * @description Uniform scale the viewer applies to the tileset about its root transform's origin (the placed coordinate), relative to the model as registered. Set with `PUT /assets/{id}/scale`, which moves the site's boundary and centroid, the asset's footprint and its `groundSamples` with it: every position the catalog gives on the globe already describes the scaled model, and only what is drawn in the tileset's own frame (its tiles and sidecars) is the viewer's to scale. A PATCH of the render config leaves it, and `scaleEvidence`, as they are.
+             * @default 1
+             */
+            scale?: number;
+            scaleEvidence?: components["schemas"]["ScaleEvidence"] | null;
+            /**
              * Screenspaceerrorscale
              * @default 1
              */
@@ -3103,6 +3148,79 @@ export interface components {
          * @enum {string}
          */
         RunStatus: "not-started" | "in-progress" | "complete" | "error" | "cancelled";
+        /**
+         * ScaleEvidence
+         * @description `ScaleEvidenceInput` as stored, with what the server adds to it.
+         *
+         *     `registeredScaleSource` and `registeredScaleUncertaintyPct` are the asset's provenance
+         *     as its tileset was registered, before any runtime scale: what a reset puts back. They
+         *     are carried from one scale to the next, so resetting after any number of changes
+         *     returns to the registration -- `unresolved` for a phone video registered before the
+         *     pipeline estimated scales -- not to the change before.
+         */
+        ScaleEvidence: {
+            /** Cameraheightm */
+            cameraHeightM?: number | null;
+            /** Cameraheightunits */
+            cameraHeightUnits?: number | null;
+            /** Cameras */
+            cameras?: number | null;
+            /** Measuredatscale */
+            measuredAtScale?: number | null;
+            /** Measuredlengthm */
+            measuredLengthM?: number | null;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "camera-height-estimate" | "measured-length" | "direct";
+            /** Metresperunit */
+            metresPerUnit?: number | null;
+            /** Note */
+            note?: string | null;
+            registeredScaleSource?: components["schemas"]["ScaleSource"] | null;
+            /** Registeredscaleuncertaintypct */
+            registeredScaleUncertaintyPct?: number | null;
+            /** Setat */
+            setAt?: string | null;
+            /** Truelengthm */
+            trueLengthM?: number | null;
+            /** Uncertaintypct */
+            uncertaintyPct?: number | null;
+        };
+        /**
+         * ScaleEvidenceInput
+         * @description How a runtime scale was arrived at, with the numbers it was arrived at from.
+         *
+         *     Which numbers depends on `method`; the ones a method needs are required for it, and the
+         *     rest may be left out. Lengths are in metres *as drawn*: a length measured on the model
+         *     while it was shown at `measuredAtScale` (1, the model as registered, when omitted).
+         */
+        ScaleEvidenceInput: {
+            /** Cameraheightm */
+            cameraHeightM?: number | null;
+            /** Cameraheightunits */
+            cameraHeightUnits?: number | null;
+            /** Cameras */
+            cameras?: number | null;
+            /** Measuredatscale */
+            measuredAtScale?: number | null;
+            /** Measuredlengthm */
+            measuredLengthM?: number | null;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "camera-height-estimate" | "measured-length" | "direct";
+            /** Metresperunit */
+            metresPerUnit?: number | null;
+            /** Note */
+            note?: string | null;
+            /** Truelengthm */
+            trueLengthM?: number | null;
+            /** Uncertaintypct */
+            uncertaintyPct?: number | null;
+        };
         /**
          * ScaleSource
          * @description Where metric scale came from.
@@ -3547,6 +3665,7 @@ export type SchemaAssetBase = components['schemas']['AssetBase'];
 export type SchemaAssetCreate = components['schemas']['AssetCreate'];
 export type SchemaAssetProvider = components['schemas']['AssetProvider'];
 export type SchemaAssetRead = components['schemas']['AssetRead'];
+export type SchemaAssetScaleUpdate = components['schemas']['AssetScaleUpdate'];
 export type SchemaAssetUpdate = components['schemas']['AssetUpdate'];
 export type SchemaAttribution = components['schemas']['Attribution'];
 export type SchemaBodyUploadThumbnailApiV1SitesSiteIdThumbnailPost = components['schemas']['Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post'];
@@ -3646,6 +3765,8 @@ export type SchemaRenderMetadata = components['schemas']['RenderMetadata'];
 export type SchemaRepresentation = components['schemas']['Representation'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
 export type SchemaRunStatus = components['schemas']['RunStatus'];
+export type SchemaScaleEvidence = components['schemas']['ScaleEvidence'];
+export type SchemaScaleEvidenceInput = components['schemas']['ScaleEvidenceInput'];
 export type SchemaScaleSource = components['schemas']['ScaleSource'];
 export type SchemaSidecarAttach = components['schemas']['SidecarAttach'];
 export type SchemaSidecarAttachment = components['schemas']['SidecarAttachment'];
@@ -4188,6 +4309,68 @@ export interface operations {
                 };
             };
             /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_asset_scale_api_v1_assets__asset_id__scale_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetScaleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such asset */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `not_scalable`: not the splat a pipeline run registered (a seeded or hand-made asset, a mesh, a Cesium ion asset), so nothing records the origin its tiles are placed at */
             409: {
                 headers: {
                     [name: string]: unknown;

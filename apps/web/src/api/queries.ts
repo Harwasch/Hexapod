@@ -8,6 +8,7 @@ import {
 
 import type {
   AssetCreate,
+  AssetScaleUpdate,
   CameraBookmarkCreate,
   Capture,
   CaptureCreate,
@@ -30,6 +31,7 @@ import type {
   PlanRecordStatus,
   PlannerStatus,
   Site,
+  SiteAsset,
   SiteCreate,
   SiteSummary,
 } from "@twin/contracts";
@@ -310,6 +312,40 @@ export function useDeleteLayer() {
     mutationFn: (layerId: string) =>
       unwrap(api.DELETE("/api/v1/layers/{layer_id}", { params: { path: { layer_id: layerId } } })),
     onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.layers }),
+  });
+}
+
+/**
+ * Sets a scan's real-world size (`PUT /assets/{id}/scale`: the Set real size tool), or puts it
+ * back as registered with `RESET_SCALE_BODY` (lib/realSize.ts). The answer is the asset, and
+ * every globe position of its site moved with it -- boundary, centroid, footprint, ground
+ * samples (docs/DATA_MODEL.md "Runtime scale") -- so:
+ *
+ * - the asset goes straight into its site's record, which `watchSiteRecords` hands the scene
+ *   at once: it draws the scan at the saved scale (the preview gives way to it, with no flash
+ *   of the old size between) and the inspector says how the scale was set;
+ * - the site's record is fetched afresh for its boundary and centroid, and the catalog list
+ *   for the summary's centroid and area.
+ */
+export function useSetAssetScale() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ assetId, body }: { siteId: string; assetId: string; body: AssetScaleUpdate }) =>
+      unwrap<SiteAsset>(
+        api.PUT("/api/v1/assets/{asset_id}/scale", {
+          params: { path: { asset_id: assetId } },
+          body,
+        }),
+      ),
+    onSuccess: (asset, { siteId }) => {
+      client.setQueryData<Site | null>(queryKeys.site(siteId), (site) =>
+        site
+          ? { ...site, assets: site.assets.map((entry) => (entry.id === asset.id ? asset : entry)) }
+          : site,
+      );
+      void client.invalidateQueries({ queryKey: queryKeys.site(siteId), exact: true });
+      void client.invalidateQueries({ queryKey: queryKeys.sites, exact: true });
+    },
   });
 }
 

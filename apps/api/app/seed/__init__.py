@@ -17,7 +17,7 @@ from app.seed.data import DEMO_SITE, LAYERS
 from app.services import geometry
 from app.services import layers as layer_service
 from app.services import sites as site_service
-from app.services.assets import build_asset
+from app.services.assets import build_asset, render_config_document
 
 logger = logging.getLogger("twin.seed")
 
@@ -177,7 +177,9 @@ def _refresh(db: Session, existing: Site, wanted: SiteCreate) -> None:
         ) != _rings(payload.footprint):
             asset.footprint = geometry.footprint_to_wkb(payload.footprint)
             changed.append(f"footprint of {payload.name}")
-        wanted_render = payload.render_config.model_dump(mode="json", by_alias=True)
+        # Stored as `build_asset` stores it, or every seed would see a change in keys it
+        # leaves out (an unscaled asset's `scale`).
+        wanted_render = render_config_document(payload.render_config)
         if asset.render_config != wanted_render:
             asset.render_config = wanted_render
             changed.append(f"render config of {payload.name}")

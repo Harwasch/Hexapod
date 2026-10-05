@@ -43,7 +43,7 @@ from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureQuality
 from app.schemas.common import Provenance
 from app.schemas.geojson import Polygon
 from app.schemas.site import SiteCreate
-from app.services import sidecars
+from app.services import placement, sidecars
 from app.services import sites as site_service
 from app.services.slugs import slugify
 from app.storage import ObjectStorage
@@ -53,27 +53,10 @@ from app.worker.publish import Publisher, PublishError
 
 log = logging.getLogger("app.worker")
 
-#: Half-width of the fallback footprint, in metres, around the placed coordinate.
-#:
-#: A capture's real extent is a measurement, and A8's `manifest` stage supplies it:
-#: `registration.json` now carries the packaged splat's own local bounding box, and the
-#: boundary below is that box on the globe. This square is what a run with no manifest
-#: still gets -- a recipe without the stage, or a run under the stub -- and it stays 60 m
-#: rather than being invented smaller to look precise.
-PLACEHOLDER_HALF_EXTENT_M = 30.0
-
-#: No side of a site's boundary is allowed to be thinner than this, in metres.
-#:
-#: A capture with no extent along an axis (one gaussian, a flat wall scanned face-on) would
-#: otherwise produce a degenerate polygon that PostGIS accepts and nothing can be clicked on.
-MIN_HALF_EXTENT_M = 0.5
-
 #: How many ground cells travel with the asset. Same number as `splat_ground`'s own
 #: `max_cells` and as `RenderConfig.ground_samples`' cap: a catalog response carries a
 #: measurement of the ground, not a point cloud.
 MAX_GROUND_SAMPLES = 64
-
-_METRES_PER_DEGREE = 111_320.0
 
 
 @dataclass(frozen=True)
@@ -300,45 +283,11 @@ def _scale_uncertainty_pct(georef: dict[str, Any]) -> float | None:
     return pct if pct is not None and pct >= 0 else None
 
 
-def _rectangle(
-    lat: float, lon: float, east: tuple[float, float], north: tuple[float, float]
-) -> Polygon:
-    """A boundary in degrees from metre offsets east and north of the placed coordinate."""
-    scale = max(math.cos(math.radians(lat)), 1e-6)
-    west_deg, east_deg = (v / (_METRES_PER_DEGREE * scale) for v in east)
-    south_deg, north_deg = (v / _METRES_PER_DEGREE for v in north)
-    ring = [
-        [lon + west_deg, lat + south_deg],
-        [lon + east_deg, lat + south_deg],
-        [lon + east_deg, lat + north_deg],
-        [lon + west_deg, lat + north_deg],
-        [lon + west_deg, lat + south_deg],
-    ]
-    return Polygon(type="Polygon", coordinates=[ring])
-
-
 def _boundary(registration: Registration) -> Polygon:
-    """The site's footprint: the capture's measured extent, or the placeholder square.
-
-    A7 drew a 60 m square around the placed coordinate and said in a comment that it was
-    waiting for A8's measured extent. This is that extent -- the packaged splat's own
-    bounding box, which is the thing the console will draw a site outline around, offset
-    from the placed origin exactly as the gaussians are.
-    """
-    lat, lon = registration.lat, registration.lon
-    box = registration.bbox_local_m
-    if box is None:
-        half = PLACEHOLDER_HALF_EXTENT_M
-        return _rectangle(lat, lon, (-half, half), (-half, half))
-    (min_e, min_n, _), (max_e, max_n, _) = box
-    return _rectangle(lat, lon, _widen(min_e, max_e), _widen(min_n, max_n))
-
-
-def _widen(low: float, high: float) -> tuple[float, float]:
-    if high - low >= 2 * MIN_HALF_EXTENT_M:
-        return (low, high)
-    middle = (low + high) / 2
-    return (middle - MIN_HALF_EXTENT_M, middle + MIN_HALF_EXTENT_M)
+    """The site's footprint: the capture's measured extent about its placed coordinate, or
+    the placeholder square (`placement.boundary`, which `set_scale` resizes about the same
+    origin)."""
+    return placement.boundary(registration.lat, registration.lon, registration.bbox_local_m)
 
 
 def _tileset_prefix(job_id: uuid.UUID, stage_id: str) -> str:
@@ -731,13 +680,20 @@ def _repoint_splat(
     What the publish could not carry is flagged on the asset, one entry per sidecar kind
     (`assets.sidecar_flags`: "Objects need re-segmenting"), and what it carried or the run
     made itself clears that kind's flag.
+
+    A runtime scale (`renderConfig.scale`, `PUT /assets/{id}/scale`) goes back to 1, its
+    evidence with it, and the site's boundary and the asset's footprint are resized back
+    about the origin it was set about: it was a correction to the tiles it was set on, and
+    the new tiles carry the run's own scale, in the provenance that replaces the old. The
+    site's `registration` becomes this run's, so the next scale is set about the origin
+    these tiles are placed at.
     """
     if splat is None:
         splat = next(
             (a for a in site.assets if a.representation == Representation.GAUSSIAN_SPLAT), None
         )
     carry = carry or CarryPlan(based_on=None)
-    placement = _render_config_document(registration)
+    placed = _render_config_document(registration)
     if splat is None:
         db.add(
             Asset(
@@ -747,11 +703,14 @@ def _repoint_splat(
                 provider=AssetProvider.TILES_3D_URL,
                 source={"type": "3d-tiles-url", "url": url},
                 default_visible=True,
-                render_config={"clampToGround": True, **placement},
+                render_config={"clampToGround": True, **placed},
             )
         )
     else:
-        render = {**dict(splat.render_config), **placement}
+        _undo_runtime_scale(site, splat)
+        render = {**dict(splat.render_config), **placed}
+        render.pop("scale", None)
+        render.pop("scaleEvidence", None)
         now = datetime.now(tz=UTC)
         flags = [
             sidecars.flag(gone.kind, action=gone.action, reason=gone.reason, job_id=job_id, at=now)
@@ -778,4 +737,21 @@ def _repoint_splat(
             log.warning("register: asset %s: %s (%s)", splat.id, entry["action"], entry["reason"])
     metadata = dict(site.metadata_ or {})
     metadata["jobId"] = str(job_id)
+    if isinstance(registration.document.get("georef"), dict):
+        metadata["registration"] = registration.document
     site.metadata_ = metadata
+
+
+def _undo_runtime_scale(site: Site, splat: Asset) -> None:
+    """Resize the site's boundary and the asset's footprint back to the registered model.
+
+    About the origin the scale was set about -- the site's registration *before* this run
+    replaces it -- by the inverse of the scale. Its ground samples need nothing: the run's
+    own replace them.
+    """
+    scale = _optional_number((splat.render_config or {}).get("scale"))
+    origin = placement.registered_origin(site.metadata_)
+    if scale is None or scale <= 0 or scale == 1.0 or origin is None:
+        return
+    placement.rescale_site(site, origin, 1.0 / scale)
+    placement.rescale_footprint(splat, origin, 1.0 / scale)

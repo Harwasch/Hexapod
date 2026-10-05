@@ -68,8 +68,10 @@ import { castRay, hitWeights, labelsNear, type PickTile } from "@/lib/splatPick"
 import { useInstances } from "@/state/instances";
 import { selectedId, useSceneSelect } from "@/state/sceneSelect";
 
+import { uniformScale } from "../placement";
 import { paintedDocOf } from "../scanView/scanInstances";
 import { instanceSphere, instancesDocOf } from "../splatInstances";
+import { inverseScaledTransformation } from "../tilesetScale";
 import { pickAssets, pickSourceOf } from "./pickSources";
 
 const log = createLogger("scene-select");
@@ -323,7 +325,9 @@ export class SceneSelectController {
       if (!source || !doc || !toWorld) continue;
       const tiles = source.tiles();
       if (tiles.length === 0) continue;
-      const toLocal = Matrix4.inverseTransformation(toWorld, new Matrix4());
+      // The ray in the scan's frame, where a unit is `scale` metres under a runtime scale.
+      const toLocal = inverseScaledTransformation(toWorld, new Matrix4());
+      const scale = uniformScale(toWorld);
       const origin = Matrix4.multiplyByPoint(toLocal, ray.origin, new Cartesian3());
       const direction = Matrix4.multiplyByPointAsVector(toLocal, ray.direction, new Cartesian3());
       const ids = tiles.map((tile) => this.#ids.of(doc, tile));
@@ -358,7 +362,7 @@ export class SceneSelectController {
         // Widening: far off, a coarse tile's labelled splats can be metres apart.
         let found = false;
         for (const pixels of NEAR_LABEL_PIXELS) {
-          const radius = Math.max(NEAR_LABEL_MIN_M, front.t * pixelAngle * pixels);
+          const radius = Math.max(NEAR_LABEL_MIN_M / scale, front.t * pixelAngle * pixels);
           const near = labelsNear(
             tiles,
             point,
@@ -392,7 +396,9 @@ export class SceneSelectController {
           if (behind.length > 0) weights = hitWeights(behind, (hit) => idOf(hit.tile, hit.index));
         }
       }
-      if (!best || front.t < best.t) best = { assetId, doc, t: front.t, weights };
+      // Scans are compared by how far along the ray they are on the globe.
+      const t = front.t * scale;
+      if (!best || t < best.t) best = { assetId, doc, t, weights };
     }
     if (!best) {
       this.clear();

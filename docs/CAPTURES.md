@@ -657,6 +657,12 @@ uv run python scene_plants.py work/canonical.ply --tiles work/tiles --out work/l
 # 3. Read work/living/scene.json: the classes, the plants, Otsu's effectiveness.
 ```
 
+A phone video registered before the pipeline estimated scales is still `unresolved` here
+after somebody sets its size on the globe: `PUT /api/v1/assets/{id}/scale` (and its backfill,
+`tools/captures/estimate_scale.py`, which runs the pipeline's camera-height estimate on the
+run's pose model) resizes the asset where it is drawn, not `canonical.ply`, so its metres are
+still not this step's. See docs/DATA_MODEL.md, "Runtime scale".
+
 Without the published tiles, `scene_plants.py canonical.ply --out work/splat --lat … --lon …`
 re-packs them with the `package` stage's own parameters (100,000 a tile, opacity 0.02); the
 packer is deterministic, so the checksums are those of the published tiles.

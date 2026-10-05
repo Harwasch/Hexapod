@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, HttpUrl, model_validator
 
-from app.models.enums import AssetProvider, Representation
+from app.models.enums import AssetProvider, Representation, ScaleSource
 from app.schemas.base import CamelModel
 from app.schemas.common import Attribution, LicenseMetadata, Provenance
 from app.schemas.geojson import Footprint
@@ -65,6 +65,88 @@ class GroundSample(CamelModel):
 
 ClipFootprint = Literal["catalog", "tileset"]
 
+#: The bounds of `RenderConfig.scale`: a hundredth to a hundred times the model as it was
+#: registered. COLMAP's normalised phone models are off by two to eight; anything past
+#: these is a typo or a wrong unit, not a capture.
+MIN_SCALE = 0.01
+MAX_SCALE = 100.0
+
+#: How far a measured length's own arithmetic may disagree with the scale sent beside it,
+#: relative. Loose enough for a client that rounds what it shows, tight enough that
+#: evidence for one number cannot be filed under another.
+MEASURED_SCALE_TOLERANCE = 1e-3
+
+#: How an asset's runtime scale was arrived at (`ScaleEvidence.method`):
+#:
+#: * `camera-height-estimate` -- a handheld phone is about 1.5 m above the ground, and the
+#:   reconstruction says how many of its units that is (tools/pipeline/scale_estimate.py,
+#:   backfilled by tools/captures/estimate_scale.py). Recorded as that scale source, with
+#:   its ±%.
+#: * `measured-length` -- somebody measured a length on the model and said how long it
+#:   really is. `manual`.
+#: * `direct` -- somebody typed the factor. `manual`.
+ScaleMethod = Literal["camera-height-estimate", "measured-length", "direct"]
+
+
+class ScaleEvidenceInput(CamelModel):
+    """How a runtime scale was arrived at, with the numbers it was arrived at from.
+
+    Which numbers depends on `method`; the ones a method needs are required for it, and the
+    rest may be left out. Lengths are in metres *as drawn*: a length measured on the model
+    while it was shown at `measuredAtScale` (1, the model as registered, when omitted).
+    """
+
+    method: ScaleMethod
+    #: `measured-length`: the length as measured on the model, in metres as drawn at
+    #: `measured_at_scale`, and the same length in the world.
+    measured_length_m: float | None = Field(default=None, gt=0)
+    true_length_m: float | None = Field(default=None, gt=0)
+    measured_at_scale: float | None = Field(default=None, ge=MIN_SCALE, le=MAX_SCALE)
+    #: `camera-height-estimate`: the handheld height assumed, in metres; the median camera
+    #: height over the reconstruction's own ground, in its units; metres per unit (their
+    #: ratio); how many cameras the median is of; and the estimate's ±%, which becomes the
+    #: provenance's `scaleUncertaintyPct`.
+    camera_height_m: float | None = Field(default=None, gt=0)
+    camera_height_units: float | None = Field(default=None, gt=0)
+    metres_per_unit: float | None = Field(default=None, gt=0)
+    cameras: int | None = Field(default=None, ge=0)
+    uncertainty_pct: float | None = Field(default=None, ge=0)
+    note: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def _numbers_for_the_method(self) -> ScaleEvidenceInput:
+        if self.method == "measured-length" and (
+            self.measured_length_m is None or self.true_length_m is None
+        ):
+            raise ValueError("a measured-length scale needs measuredLengthM and trueLengthM")
+        if self.method == "camera-height-estimate" and self.uncertainty_pct is None:
+            # An estimate without its figure would read as nearly measured.
+            raise ValueError("a camera-height-estimate scale needs its uncertaintyPct")
+        return self
+
+    def implied_scale(self) -> float | None:
+        """The scale a measured length says, or None when the evidence is not one."""
+        if self.measured_length_m is None or self.true_length_m is None:
+            return None
+        at = self.measured_at_scale if self.measured_at_scale is not None else 1.0
+        return at * self.true_length_m / self.measured_length_m
+
+
+class ScaleEvidence(ScaleEvidenceInput):
+    """`ScaleEvidenceInput` as stored, with what the server adds to it.
+
+    `registeredScaleSource` and `registeredScaleUncertaintyPct` are the asset's provenance
+    as its tileset was registered, before any runtime scale: what a reset puts back. They
+    are carried from one scale to the next, so resetting after any number of changes
+    returns to the registration -- `unresolved` for a phone video registered before the
+    pipeline estimated scales -- not to the change before.
+    """
+
+    #: When the scale was set (server time).
+    set_at: datetime | None = None
+    registered_scale_source: ScaleSource | None = None
+    registered_scale_uncertainty_pct: float | None = Field(default=None, ge=0)
+
 
 class RenderConfig(CamelModel):
     maximum_screen_space_error: float | None = Field(default=None, gt=0, le=512)
@@ -116,6 +198,26 @@ class RenderConfig(CamelModel):
     # for every new capture. Relative on purpose -- the rig travels with the tiles, so the
     # same value is correct whether they are served from the dev static mount or a bucket.
     rig_url: str | None = Field(default=None, max_length=500)
+    # A size correction the viewer applies to the tileset at runtime, relative to the model
+    # as registered: a phone video reconstructed at an unresolved scale is drawn at one
+    # COLMAP unit to the metre, two to eight times too big, and its files cannot be resized
+    # in place. Absolute, not cumulative: 0.8 and then 0.5 is 0.5.
+    scale: float = Field(
+        default=1.0,
+        ge=MIN_SCALE,
+        le=MAX_SCALE,
+        description=(
+            "Uniform scale the viewer applies to the tileset about its root transform's "
+            "origin (the placed coordinate), relative to the model as registered. Set with "
+            "`PUT /assets/{id}/scale`, which moves the site's boundary and centroid, the "
+            "asset's footprint and its `groundSamples` with it: every position the catalog "
+            "gives on the globe already describes the scaled model, and only what is drawn "
+            "in the tileset's own frame (its tiles and sidecars) is the viewer's to scale. "
+            "A PATCH of the render config leaves it, and `scaleEvidence`, as they are."
+        ),
+    )
+    # How `scale` was arrived at; None when it never was (1, as registered).
+    scale_evidence: ScaleEvidence | None = None
 
 
 class SidecarFlag(CamelModel):
@@ -181,6 +283,38 @@ class AssetUpdate(CamelModel):
     render_config: RenderConfig | None = None
     default_visible: bool | None = None
     footprint: Footprint | None = None
+
+
+class AssetScaleUpdate(CamelModel):
+    """`PUT /assets/{id}/scale`: a runtime scale and how it was found, or `reset: true`.
+
+    `scale` is absolute -- relative to the model as registered, never to the scale before
+    it. With no `evidence` it is taken as typed in (`direct`). A reset goes back to 1, drops
+    the evidence and restores the provenance the asset was registered with.
+    """
+
+    scale: float | None = Field(default=None, ge=MIN_SCALE, le=MAX_SCALE)
+    evidence: ScaleEvidenceInput | None = None
+    reset: bool = False
+
+    @model_validator(mode="after")
+    def _a_scale_or_a_reset(self) -> AssetScaleUpdate:
+        if self.reset:
+            if self.scale is not None or self.evidence is not None:
+                raise ValueError("a reset takes no scale and no evidence")
+            return self
+        if self.scale is None:
+            raise ValueError("give a scale, or reset: true")
+        implied = self.evidence.implied_scale() if self.evidence is not None else None
+        if (
+            implied is not None
+            and abs(implied - self.scale) > MEASURED_SCALE_TOLERANCE * self.scale
+        ):
+            raise ValueError(
+                f"the measured length says a scale of {implied:.6g}, not {self.scale:.6g} "
+                "(measuredAtScale x trueLengthM / measuredLengthM)"
+            )
+        return self
 
 
 class AssetRead(CamelModel):
