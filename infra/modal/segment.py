@@ -142,7 +142,8 @@ VARIANT_SCRIPTS: dict[str, tuple[str, ...]] = {
     ),
     # Candidate C with Grounding DINO + SAM 2 standing in for SAM 3 (gated): never C itself.
     # SAM 3's own variant, "concept-first", needs transformers 5 (and so a newer torch and
-    # gsplat build than this image has) and access to facebook/sam3.
+    # gsplat build than this image has) and access to facebook/sam3. Run it with
+    # `views=64` (no coverage rounds): spool or pumpkin ~15-20 min, ~$0.35 each (est.).
     "concept-first-standin": (
         "concept_scene.py",
         "--vlm", "concept_models:QwenVocabulary",
