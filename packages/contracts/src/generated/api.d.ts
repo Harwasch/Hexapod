@@ -2914,6 +2914,8 @@ export interface components {
             /** Publishedat */
             publishedAt?: string | null;
             scaleSource?: components["schemas"]["ScaleSource"] | null;
+            /** Scaleuncertaintypct */
+            scaleUncertaintyPct?: number | null;
             /** Sourceorganization */
             sourceOrganization?: string | null;
             /** Sourceurl */
@@ -3108,9 +3110,14 @@ export interface components {
          *     ``unresolved`` is a first-class answer, not a missing value: COLMAP alone recovers
          *     geometry up to scale, and a measurement taken off an unresolved reconstruction is
          *     meaningless rather than merely imprecise.
+         *
+         *     ``camera-height-estimate`` is between a measurement and that: none was made, but a
+         *     handheld phone is about 1.5 m above the ground and the reconstruction says how many of
+         *     its units that is (tools/pipeline/scale_estimate.py). Roughly the right size, at ±20%
+         *     or worse -- the provenance carries the figure -- and never counted as metric.
          * @enum {string}
          */
-        ScaleSource: "arkit" | "exif-gps" | "manual" | "unresolved";
+        ScaleSource: "arkit" | "exif-gps" | "manual" | "camera-height-estimate" | "unresolved";
         /**
          * SidecarAttach
          * @description Attach the files staged under `stagingPrefix` to an asset's tileset.

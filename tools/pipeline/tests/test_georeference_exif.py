@@ -39,12 +39,16 @@ from typing import Any
 
 import gps_frames
 import numpy as np
+import PIL.Image
 import pytest
 
 import exif
 import gaussians
+import scale_estimate
 import sfm
+import synthetic_scene
 import tree_frames
+import video
 from conftest import FIXTURE_PLY, make_recipe
 from executor import execute
 from runners import LocalRunner, RunnerSet
@@ -178,6 +182,7 @@ def _georeference_only(
     *,
     source_meta: dict[str, object] | None,
     params: dict[str, object] | None = None,
+    poses: Path | None = None,
 ) -> Path:
     workdir = Workdir.create(root)
     target = workdir.input_path("frames")
@@ -188,6 +193,12 @@ def _georeference_only(
     if source_meta is not None:
         workdir.input_path("source_meta.json").write_text(json.dumps(source_meta), "utf-8")
         inputs.append("source_meta.json")
+    if poses is not None:
+        seeded = workdir.input_path("poses")
+        seeded.mkdir(parents=True, exist_ok=True)
+        for path in sorted(poses.iterdir()):
+            (seeded / path.name).write_bytes(path.read_bytes())
+        inputs.append("poses")
     execute(
         make_recipe(
             [{"id": "georeference", "impl": "exif_gps", "params": params or {}}], inputs=inputs
@@ -208,10 +219,11 @@ def test_a_video_location_places_the_capture_and_claims_nothing_else(tmp_path: P
     frames = tmp_path / "frames"
     tree_frames.render_orbit(FIXTURE_PLY, frames, count=3)
 
+    # Exactly what `ffmpeg_frames` writes: the reader is held to the writer's keys, which
+    # it once was not (it read `alt`, `video` writes `altitudeM`: every height came out 0).
+    location = video.Location(lat=37.8, lon=-122.4, altitude_m=12.5, source="iso6709")
     path = _georeference_only(
-        tmp_path / "run",
-        frames,
-        source_meta={"location": {"lat": 37.8, "lon": -122.4, "alt": 12.5, "source": "iso6709"}},
+        tmp_path / "run", frames, source_meta={"location": location.to_dict()}
     )
     georef = json.loads(path.read_text())
 
@@ -292,6 +304,154 @@ def test_fixes_without_a_pose_model_locate_but_do_not_align(tmp_path: Path) -> N
     # The median of a symmetric orbit is its centre, to well inside a metre.
     assert georef["lat"] == pytest.approx(ORIGIN[0], abs=1e-5)
     assert georef["lon"] == pytest.approx(ORIGIN[1], abs=1e-5)
+
+
+# --- the located branch with a pose model: the camera-height scale -------------------
+
+#: The synthetic phone orbit's own truth: metres per unit of the model it is written as,
+#: and how high the phone was held.
+MODEL_METRES_PER_UNIT = 0.4
+HELD_AT_M = 1.5
+
+
+def _phone_orbit(root: Path, *, floor: bool = True) -> tuple[Path, Path, np.ndarray]:
+    """A video's worth of frames (no EXIF) and the pose model COLMAP would make of it.
+
+    Thirty-six cameras round a table-top subject (0.7-1.0 m up) at `HELD_AT_M`, over a
+    floor out to 4 m -- or, `floor=False`, a reconstruction of the subject alone -- written
+    the way COLMAP leaves a model: y down rather than z up, and in units that are not
+    metres (`MODEL_METRES_PER_UNIT`). Returns the frames, the model and its sparse points
+    (model units), so a test can also place those points as if they were a splat.
+    """
+    frames = root / "frames"
+    frames.mkdir(parents=True)
+    for index in range(3):
+        PIL.Image.new("RGB", (32, 24), (40 * index, 90, 160)).save(frames / f"f{index}.jpg")
+    rng = np.random.default_rng(3)
+    cameras = synthetic_scene.ring(
+        36, radius=2.0, height=HELD_AT_M, target=np.array([0.0, 0.0, 0.6])
+    )
+    radius, angle = 4.0 * np.sqrt(rng.random(20_000)), 2 * np.pi * rng.random(20_000)
+    ground = np.stack([radius * np.cos(angle), radius * np.sin(angle), np.zeros(20_000)], 1)
+    subject = np.stack(
+        [rng.normal(0, 0.2, 8_000), rng.normal(0, 0.2, 8_000), rng.uniform(0.7, 1.0, 8_000)], 1
+    )
+    world = np.concatenate([ground, subject]) if floor else subject
+    # z up -> y down (COLMAP's first camera, held level), then into model units.
+    to_model = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+    rig = [
+        (rotation @ to_model.T, to_model @ centre / MODEL_METRES_PER_UNIT)
+        for rotation, centre in cameras
+    ]
+    points = world @ to_model.T / MODEL_METRES_PER_UNIT
+    poses = synthetic_scene.write_model(root / "poses", rig, width=32, height=24, focal=30.0)
+    count = points.shape[0]
+    sfm.write_points3d(
+        poses / "points3D.bin",
+        sfm.Points3D(
+            ids=np.arange(1, count + 1, dtype=np.uint64),
+            xyz=points,
+            rgb=np.full((count, 3), 128, dtype=np.uint8),
+            error=np.full(count, 0.5),
+            track=np.zeros((0, 2), dtype=np.uint32),
+            track_offsets=np.zeros(count + 1, dtype=np.int64),
+        ),
+    )
+    return frames, poses, points
+
+
+def test_a_located_video_is_sized_by_how_high_the_phone_was_held(tmp_path: Path) -> None:
+    """No per-frame GPS, so no similarity -- but the model shows the ground under the
+    cameras, and a handheld phone is about 1.5 m above it. The scale is estimated,
+    recorded as an estimate with its evidence and ±%, and `place` applies it: the floor,
+    four metres in radius in the world, comes out about eight metres across."""
+    frames, poses, points = _phone_orbit(tmp_path / "orbit")
+
+    georef = json.loads(
+        _georeference_only(
+            tmp_path / "run",
+            frames,
+            source_meta={"location": {"lat": 37.8, "lon": -122.4, "altitudeM": 12.5}},
+            poses=poses,
+        ).read_text()
+    )
+
+    assert georef["georefMethod"] == "exif-gps"
+    assert georef["scaleSource"] == "camera-height-estimate"
+    assert georef["alignment"] is None
+    assert georef["uncertaintyM"] == UNALIGNED_UNCERTAINTY_M
+    assert georef["height"] == 12.5
+    frame = georef["frame"]
+    assert frame["source"] == "camera-up"
+    assert frame["scaleSource"] == "camera-height-estimate"
+    assert frame["scale"] == pytest.approx(MODEL_METRES_PER_UNIT, rel=0.03)
+    evidence = frame["scaleEstimate"]
+    assert evidence["method"] == "camera-height"
+    assert evidence["priorM"] == 1.5
+    assert evidence["cameras"] == 36
+    assert evidence["cameraHeightUnits"] == pytest.approx(
+        HELD_AT_M / MODEL_METRES_PER_UNIT, rel=0.03
+    )
+    assert 19.0 < evidence["uncertaintyPct"] < 25.0
+    assert "estimated" in georef["note"] and "unresolved" not in georef["note"]
+
+    workdir = Workdir.create(tmp_path / "place")
+    trained = workdir.input_path("trained.ply")
+    trained.parent.mkdir(parents=True, exist_ok=True)
+    gaussians.write_ply(trained, _points_as_gaussians(points))
+    workdir.input_path("georef.json").write_text(json.dumps(georef))
+    execute(
+        make_recipe(
+            [{"id": "place", "impl": "place_splat"}], inputs=["trained.ply", "georef.json"]
+        ),
+        workdir,
+        RunnerSet(cpu=LocalRunner()),
+    )
+    placed = gaussians.read_splat(workdir.artifact_path("place", "canonical.ply"))
+    across = np.percentile(placed.xyz[:, 0], 99.5) - np.percentile(placed.xyz[:, 0], 0.5)
+    assert across == pytest.approx(8.0, rel=0.05)
+
+
+def test_an_explicit_scale_wins_over_the_estimate(tmp_path: Path) -> None:
+    """Somebody said how big it is: that is used, recorded as `manual`, and no estimate
+    is made beside it to be mistaken for the reason."""
+    frames, poses, _ = _phone_orbit(tmp_path / "orbit")
+
+    georef = json.loads(
+        _georeference_only(
+            tmp_path / "run",
+            frames,
+            source_meta={"location": {"lat": 37.8, "lon": -122.4}},
+            params={"scale": 0.25},
+            poses=poses,
+        ).read_text()
+    )
+
+    assert georef["scaleSource"] == "manual"
+    assert georef["frame"]["scale"] == 0.25
+    assert georef["frame"]["scaleEstimate"] is None
+    assert "given" in georef["note"]
+
+
+def test_a_capture_that_shows_no_ground_keeps_its_scale_unresolved(tmp_path: Path) -> None:
+    """All subject and no floor: the table top is not under the cameras and is not the
+    ground, so there is nothing to be 1.5 m above and no estimate -- today's unresolved
+    scale of one unit to the metre, said as such."""
+    frames, poses, _ = _phone_orbit(tmp_path / "orbit", floor=False)
+
+    georef = json.loads(
+        _georeference_only(
+            tmp_path / "run",
+            frames,
+            source_meta={"location": {"lat": 37.8, "lon": -122.4}},
+            poses=poses,
+        ).read_text()
+    )
+
+    assert georef["scaleSource"] == "unresolved"
+    assert georef["frame"]["scale"] == 1.0
+    assert georef["frame"]["scaleEstimate"] is None
+    assert "unresolved scale" in georef["note"]
 
 
 # --- the measured integration test ---------------------------------------------------
@@ -473,6 +633,41 @@ def _points_as_gaussians(points: np.ndarray) -> dict[str, np.ndarray]:
     columns.update({"rot_0": np.ones(count), "rot_1": np.zeros(count)})
     columns.update({"rot_2": np.zeros(count), "rot_3": np.zeros(count)})
     return {name: np.ascontiguousarray(v, dtype=np.float32) for name, v in columns.items()}
+
+
+@requires_colmap
+def test_the_camera_height_is_measured_off_a_real_reconstructions_own_points(
+    orbit: tuple[Path, Path, tree_frames.Truth],
+) -> None:
+    """The one thing the camera-height estimate measures, measured on COLMAP's own work.
+
+    The synthetic scenes above put the points where the test wants them; this is a real
+    reconstruction -- SIFT's sparse points over the rendered tree and its textured ground,
+    levelled by camera-up exactly as `exif_gps` levels a video -- and the orbit was rendered
+    3.6 m above that ground. The similarity to the known poses says how many metres a unit
+    is, so the height comes out checkable in metres. (The prior's 1.5 m is wrong for this
+    orbit, which is the point of reporting it: that is the guess, this is the measurement.)
+
+    Measured 2026-10-05: 3.620 m from 40 of 40 cameras, spread 0.4%.
+    """
+    _, poses, truth = orbit
+    model = sfm.read_model(poses)
+    up = sfm.camera_up(model)
+    assert up is not None
+    level = sfm.rotation_onto_z(up.up)
+
+    found = scale_estimate.estimate_metres_per_unit(
+        model.centres() @ level.T, sfm.read_points(poses) @ level.T
+    )
+
+    known = truth.by_name()
+    fit = sfm.umeyama(
+        np.stack([image.centre for image in model.images]),
+        np.stack([known[image.name].centre for image in model.images]),
+    )
+    assert found is not None
+    assert found.n_cameras == FRAMES
+    assert found.camera_height_units * fit.scale == pytest.approx(3.6, rel=0.05)
 
 
 @requires_colmap

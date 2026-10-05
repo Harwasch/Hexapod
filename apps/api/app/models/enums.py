@@ -134,11 +134,17 @@ class ScaleSource(StrEnum):
     ``unresolved`` is a first-class answer, not a missing value: COLMAP alone recovers
     geometry up to scale, and a measurement taken off an unresolved reconstruction is
     meaningless rather than merely imprecise.
+
+    ``camera-height-estimate`` is between a measurement and that: none was made, but a
+    handheld phone is about 1.5 m above the ground and the reconstruction says how many of
+    its units that is (tools/pipeline/scale_estimate.py). Roughly the right size, at ±20%
+    or worse -- the provenance carries the figure -- and never counted as metric.
     """
 
     ARKIT = "arkit"
     EXIF_GPS = "exif-gps"
     MANUAL = "manual"
+    CAMERA_HEIGHT_ESTIMATE = "camera-height-estimate"
     UNRESOLVED = "unresolved"
 
 

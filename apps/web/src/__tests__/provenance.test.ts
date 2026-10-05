@@ -273,6 +273,38 @@ describe("placementProvenance", () => {
     expect(located?.measured).toBe(false);
   });
 
+  it("says an estimated scale is an estimate, with how rough it is", () => {
+    // A phone video sized by how high a handheld phone is: roughly the right size, nothing
+    // measured. Neither "unresolved" (no longer true) nor a metric claim (never true).
+    const estimated = placementProvenance(
+      placed({
+        georefMethod: "exif-gps",
+        scaleSource: "camera-height-estimate",
+        uncertaintyM: 10,
+        scaleUncertaintyPct: 22.4,
+      }),
+      "asset-1",
+      "metric",
+    );
+    expect(estimated?.summary).toContain("scale estimated from camera height (±22%)");
+    expect(estimated?.summary).toContain("Located by EXIF GPS");
+    expect(estimated?.summary).not.toContain("metric");
+    expect(estimated?.scaleEstimated).toBe(true);
+    expect(estimated?.scaleUnresolved).toBe(false);
+    expect(estimated?.measured).toBe(false);
+  });
+
+  it("still calls it an estimate when no figure was recorded", () => {
+    const bare = placementProvenance(
+      placed({ georefMethod: "exif-gps", scaleSource: "camera-height-estimate", uncertaintyM: 10 }),
+      "asset-1",
+      "metric",
+    );
+    expect(bare?.summary).toContain("scale estimated from camera height");
+    expect(bare?.summary).not.toContain("%");
+    expect(bare?.scaleEstimated).toBe(true);
+  });
+
   it("says nothing at all about an asset that predates the pipeline", () => {
     // Every legacy capture and every seeded reference layer is this case. A row reading
     // "unknown" would look like a finding; no row is the truth.

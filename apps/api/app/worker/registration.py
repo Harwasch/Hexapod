@@ -90,6 +90,10 @@ class Registration:
     scale_source: ScaleSource
     uncertainty_m: float
     document: dict[str, Any]
+    #: How far off an estimated scale may be, in percent either side: the ±% of the
+    #: evidence `exif_gps` writes beside a `camera-height-estimate` (`frame.scaleEstimate`).
+    #: None for every other scale source.
+    scale_uncertainty_pct: float | None = None
     #: The packaged splat's own bounding box in the capture's east/north/up frame, in
     #: metres, when a `manifest` stage measured one. None is not an error: it is a recipe
     #: with no manifest stage, or a run under the stub runner.
@@ -121,6 +125,7 @@ class Registration:
             scale_source=_scale_source(georef.get("scaleSource")),
             uncertainty_m=float(georef.get("uncertaintyM", 0.0)),
             document=document if isinstance(document, dict) else {},
+            scale_uncertainty_pct=_scale_uncertainty_pct(georef),
             bbox_local_m=_bbox(document.get("bboxLocalM")),
             thumbnail=str(thumbnail) if thumbnail else None,
             ground_samples=_ground_samples(document.get("ground")),
@@ -271,12 +276,28 @@ def _scale_source(value: object) -> ScaleSource:
 
     `manual_placement` defaults `scale_source` to `"source"`, which is not a
     :class:`ScaleSource`. An unknown scale source is exactly what `unresolved` means, and
-    A2's docstring says so: it is a first-class answer, not a missing value.
+    A2's docstring says so: it is a first-class answer, not a missing value. A known one
+    passes through as itself -- `camera-height-estimate` included, which is an estimate
+    rather than nothing, and must not be folded into `unresolved` on the way in.
     """
     try:
         return ScaleSource(str(value))
     except ValueError:
         return ScaleSource.UNRESOLVED
+
+
+def _scale_uncertainty_pct(georef: dict[str, Any]) -> float | None:
+    """The ±% of a `camera-height-estimate` scale, out of `frame.scaleEstimate`; else None.
+
+    Only for that source: a measured scale has no such figure, and an unresolved one has
+    no scale for it to describe. Read defensively, as everything from `registration.json`.
+    """
+    if _scale_source(georef.get("scaleSource")) is not ScaleSource.CAMERA_HEIGHT_ESTIMATE:
+        return None
+    frame = georef.get("frame")
+    evidence = frame.get("scaleEstimate") if isinstance(frame, dict) else None
+    pct = _optional_number(evidence.get("uncertaintyPct")) if isinstance(evidence, dict) else None
+    return pct if pct is not None and pct >= 0 else None
 
 
 def _rectangle(
@@ -644,12 +665,14 @@ def _provenance(registration: Registration) -> Provenance:
     The same three values the capture row already carries (`app/models/capture.py`), put
     where the inspector can reach them: the inspector is looking at a site's asset, not at
     the capture that produced it, and a capture placed by hand at plus or minus ten metres
-    must not read like one aligned to EXIF GPS.
+    must not read like one aligned to EXIF GPS. Plus, for an estimated scale, its ±%:
+    "estimated" without a figure would read as nearly measured.
     """
     return Provenance(
         georef_method=registration.georef_method,
         scale_source=registration.scale_source,
         uncertainty_m=max(registration.uncertainty_m, 0.0),
+        scale_uncertainty_pct=registration.scale_uncertainty_pct,
     )
 
 

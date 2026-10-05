@@ -126,6 +126,7 @@ export function InspectorPanel() {
               <GlassBadge tone="warning">Simulated motion</GlassBadge>
             )}
             {shown?.scaleUnresolved && <GlassBadge tone="warning">Scale unresolved</GlassBadge>}
+            {shown?.scaleEstimated && <GlassBadge>Scale estimated</GlassBadge>}
           </div>
           <dl className="dl">
             <dt>Position</dt>

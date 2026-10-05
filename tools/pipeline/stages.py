@@ -51,6 +51,7 @@ import live
 import lod_parents
 import quality
 import resolution
+import scale_estimate
 import sfm
 import splat_io
 import splat_stream
@@ -2301,8 +2302,13 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
     * **located** -- fixes but no poses, or one location and no per-frame fixes (an iPhone
       video, whose coordinate `ffmpeg_frames` already scraped into `source_meta.json`).
       The capture is placed at that coordinate and nothing else is claimed: no rotation,
-      no scale, and an uncertainty no better than a hand placement, because a coordinate
-      with no orientation is not a better answer than a person dropping a pin.
+      no measured scale, and an uncertainty no better than a hand placement, because a
+      coordinate with no orientation is not a better answer than a person dropping a
+      pin. With a pose model the size is *estimated* instead -- a handheld phone is about
+      1.5 m above the ground, and the reconstruction says how many of its units that is
+      (`scale_estimate`) -- and recorded as `camera-height-estimate`, with its evidence
+      and a ±% that does not pretend to be a measurement. A `scale` parameter overrides
+      it (`manual`); a capture that shows too little ground keeps `unresolved`.
 
     Three things it deliberately does not do:
 
@@ -2357,27 +2363,30 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
         located, method = placed, "manual"
     lat, lon, height = located
     why = "fewer than three EXIF fixes" if model_dir else "no pose model to align against"
-    frame = _frame_from_poses(ctx, model_dir)
+    frame = _frame_from_poses(ctx, model_dir, estimate_scale=True)
     source = (
         "the capture's own coordinate (placed by hand)"
         if method == "manual"
         else "EXIF GPS / the video's location"
     )
+    scale_source = str(frame["scaleSource"])
     document: dict[str, object] = {
         "lat": lat,
         "lon": lon,
         "height": height,
         "georefMethod": method,
-        # Not `exif-gps`: a coordinate with no rotation and no similarity says where the
-        # capture is and nothing about how big it is.
-        "scaleSource": "unresolved",
+        # Never `exif-gps`: a coordinate with no rotation and no similarity says where the
+        # capture is and nothing about how big it is. The size comes from the frame --
+        # the run's own `scale` (`manual`), an estimate from the camera's height above the
+        # ground (`camera-height-estimate`, evidence in `frame.scaleEstimate`), or neither.
+        "scaleSource": scale_source,
         "uncertaintyM": float(ctx.param("uncertainty_m", UNALIGNED_UNCERTAINTY_M))
         if method == "manual"
         else UNALIGNED_UNCERTAINTY_M,
         "note": (
             f"located from {source} but not aligned ({why}): levelled by how the camera "
-            f"was held, facing an arbitrary heading unless one was given, at an unresolved "
-            f"scale -- no better than a hand placement"
+            f"was held, facing an arbitrary heading unless one was given, "
+            f"{_scale_phrase(frame)} -- no better than a hand placement"
         ),
         "fixes": {"frames": len(fixes), "aligned": 0, "heightDatum": _HEIGHT_DATUM},
         "alignment": None,
@@ -2385,11 +2394,46 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
     }
     _write_json(ctx.output(GEOREF.name), document)
     ctx.log(f"located at {lat}, {lon}, {height} m from {source}; not aligned ({why})")
-    ctx.log(f"frame: {frame['source']}, heading {frame['headingDeg']} deg, scale {frame['scale']}")
-    return StageOutcome(
-        metrics={"fixes": len(fixes), "aligned": 0, "lat": lat, "lon": lon, "method": method},
-        summary=f"located at {lat:.6f}, {lon:.6f} ({method}, not aligned)",
+    ctx.log(
+        f"frame: {frame['source']}, heading {frame['headingDeg']} deg, scale "
+        f"{frame['scale']:.6g} ({scale_source})"
     )
+    metrics: dict[str, MetricValue] = {
+        "fixes": len(fixes),
+        "aligned": 0,
+        "lat": lat,
+        "lon": lon,
+        "method": method,
+        "scaleSource": scale_source,
+    }
+    if scale_source != "unresolved":
+        metrics["scale"] = round(float(_number(frame["scale"])), 6)
+    return StageOutcome(
+        metrics=metrics,
+        summary=f"located at {lat:.6f}, {lon:.6f} ({method}, not aligned, scale {scale_source})",
+    )
+
+
+def _scale_phrase(frame: dict[str, object]) -> str:
+    """How big the located capture was made, for its note, in the words of its evidence."""
+    scale = float(_number(frame.get("scale")))
+    evidence = frame.get("scaleEstimate")
+    if frame.get("scaleSource") == "camera-height-estimate" and isinstance(evidence, dict):
+        pct, prior = _number(evidence.get("uncertaintyPct")), _number(evidence.get("priorM"))
+        return (
+            f"at an estimated {scale:.4g} m per model unit (±{pct:g}%: a handheld phone "
+            f"taken as {prior:g} m above the ground, the median of "
+            f"{evidence.get('cameras')} cameras)"
+        )
+    if frame.get("scaleSource") == "manual":
+        return f"at the {scale:g} m per model unit the run was given"
+    return "at an unresolved scale"
+
+
+def _scale_evidence(georef: dict[str, object]) -> object:
+    """`frame.scaleEstimate` of a georef.json, or None when its frame has none."""
+    frame = georef.get("frame")
+    return frame.get("scaleEstimate") if isinstance(frame, dict) else None
 
 
 @stage_impl(
@@ -2470,7 +2514,8 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     extent = _extent(low, high)
     ctx.log(
         f"placed {placed.count} gaussians from {source} by {frame.get('source')}: scale "
-        f"{scale:g}, recentred by {', '.join(f'{v:.3f}' for v in moved)} m; extent "
+        f"{scale:g} ({georef.get('scaleSource')}), recentred by "
+        f"{', '.join(f'{v:.3f}' for v in moved)} m; extent "
         f"{extent['east']:.2f} x {extent['north']:.2f} x {extent['up']:.2f} m"
     )
     metrics: dict[str, MetricValue] = {
@@ -2533,29 +2578,57 @@ def _placed_coordinate(ctx: StageContext) -> tuple[float, float, float] | None:
     return lat, lon, _optional_float(ctx.param("height")) or 0.0
 
 
-def _frame_from_poses(ctx: StageContext, model_dir: Path | None) -> dict[str, object]:
+def _frame_from_poses(
+    ctx: StageContext, model_dir: Path | None, *, estimate_scale: bool = False
+) -> dict[str, object]:
     """How `place` turns a reconstruction with no GPS similarity into east/north/up.
 
     Levelled by the camera-up estimate `pose` recorded (`sfm.camera_up`), turned to
     `heading_deg` (the capture's `headingDeg`, else 0 -- which is to say arbitrary, and
-    the note says so), scaled by `scale` metres per model unit (else 1, unresolved), and
-    recentred on the splat's own footprint by `place`, because nothing here knows where
-    in the model the placed coordinate is.
+    the note says so), scaled by metres per model unit, and recentred on the splat's own
+    footprint by `place`, because nothing here knows where in the model the placed
+    coordinate is.
+
+    The scale, and `scaleSource` beside it, is the first of:
+
+    * **`scale`**, when the run gives one: somebody said so, so `manual`.
+    * **the camera height** (`scale_estimate`), when `estimate_scale` and the model was
+      levelled: a handheld phone is about 1.5 m up, and the reconstruction says how many
+      of its units that is. `camera-height-estimate`, with its evidence and uncertainty
+      in `scaleEstimate`; never mistaken for a measurement downstream.
+    * **1**, `unresolved` -- what every capture with neither got before the estimate.
+
+    Only `exif_gps` asks for the estimate. `place` calls this too when `georef.json` has
+    no frame, but that document is already written and is what the manifest reports, so
+    an estimate made there would scale the splat behind a record saying it was not.
     """
     heading = float(ctx.param("heading_deg", 0.0) or 0.0)
-    scale = float(ctx.param("scale", 1.0) or 1.0)
+    given = _optional_float(ctx.param("scale"))
+    # A zero or negative scale is no scale (the old `or 1.0`), not a request for one.
+    given = given if given is not None and math.isfinite(given) and given > 0 else None
+    scale = 1.0 if given is None else given
+    scale_source = "unresolved" if given is None else "manual"
+    evidence: dict[str, object] | None = None
     rotation = np.eye(3)
     up: dict[str, object] | None = None
     source = "none"
     if model_dir is not None:
-        estimate = sfm.camera_up(sfm.read_model(model_dir))
+        model = sfm.read_model(model_dir)
+        estimate = sfm.camera_up(model)
         if estimate is not None:
             rotation = gaussians.heading_rotation(heading) @ sfm.rotation_onto_z(estimate.up)
             up = estimate.to_dict()
             source = "camera-up"
+            if estimate_scale and given is None:
+                found = _camera_height_scale(model_dir, model, rotation)
+                if found is not None:
+                    scale, scale_source = found.scale, "camera-height-estimate"
+                    evidence = found.to_dict()
     return {
         "source": source,
         "scale": scale,
+        "scaleSource": scale_source,
+        "scaleEstimate": evidence,
         "rotation": [[float(v) for v in row] for row in rotation],
         "translationM": None,
         "recentre": True,
@@ -2563,6 +2636,23 @@ def _frame_from_poses(ctx: StageContext, model_dir: Path | None) -> dict[str, ob
         "headingSource": "capture" if ctx.param("heading_deg") is not None else "none",
         "up": up,
     }
+
+
+def _camera_height_scale(
+    model_dir: Path, model: sfm.Model, rotation: npt.ArrayLike
+) -> scale_estimate.ScaleEstimate | None:
+    """`scale_estimate` over the pose model, levelled by the frame's own rotation.
+
+    The ground is COLMAP's sparse points rather than the trained splat: they are in the
+    `poses` this stage already reads, triangulated from features that matched across
+    frames (a floater under the floor is a splat's, not theirs), and a few hundred
+    thousand at most -- where `trained.ply` is not an input here and can be millions of
+    gaussians. The heading turn is in `rotation` too; it is about +z and moves no height.
+    """
+    turn = np.asarray(rotation, dtype=np.float64)
+    return scale_estimate.estimate_metres_per_unit(
+        model.centres() @ turn.T, sfm.read_points(model_dir) @ turn.T
+    )
 
 
 def _exif_gps_aligned(
@@ -2712,7 +2802,10 @@ def _sole_location(
     lat, lon = _optional_float(location.get("lat")), _optional_float(location.get("lon"))
     if lat is None or lon is None:
         return None
-    return lat, lon, _optional_float(location.get("alt")) or 0.0
+    # `altitudeM` is what `video.Location.to_dict` writes; `alt` was read here before, so
+    # every video's height came out 0. Still accepted, for a hand-written source_meta.json.
+    altitude = location.get("altitudeM", location.get("alt"))
+    return lat, lon, _optional_float(altitude) or 0.0
 
 
 def _count_files(directory: Path) -> int:
@@ -2963,6 +3056,9 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
             "height": _number(georef.get("height")),
             "georefMethod": georef.get("georefMethod"),
             "scaleSource": georef.get("scaleSource"),
+            # The evidence behind a `camera-height-estimate` scale, its ±% among it; null
+            # for every other source.
+            "scaleEstimate": _scale_evidence(georef),
             "uncertaintyM": _number(georef.get("uncertaintyM")),
             "note": georef.get("note"),
         },
