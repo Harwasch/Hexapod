@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +26,7 @@ import splat_tiles
 import synthetic_yard
 from synthetic_tree import write_ply
 
+CAPTURES = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMMITTED = REPO_ROOT / "data" / "tiles" / "synthetic-yard" / "splat"
 SYNTHETIC_TREE = REPO_ROOT / "data" / "tiles" / "synthetic-tree" / "source"
@@ -30,8 +34,20 @@ SYNTHETIC_TREE = REPO_ROOT / "data" / "tiles" / "synthetic-tree" / "source"
 
 @pytest.fixture(scope="module")
 def yard(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Written in a new interpreter on the kernel the committed yard was written with: this
+    one runs Sandybridge's, which writes other bytes (tests/conftest.py)."""
     out = tmp_path_factory.mktemp("yard")
-    synthetic_yard.generate(out)
+    code = f"import pathlib, synthetic_yard; synthetic_yard.generate(pathlib.Path({str(out)!r}))"
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=CAPTURES,
+        env=dict(os.environ, OPENBLAS_CORETYPE=synthetic_yard.FIXTURE_CORETYPE),
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
     return out
 
 
