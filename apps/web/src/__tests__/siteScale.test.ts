@@ -183,7 +183,10 @@ function harness(record: Site) {
       heading: 0,
       changed: listener,
       moveEnd: listener,
+      // What the far view projects a scan's size with (SiteManager.farFor).
+      frustum: { fovy: CesiumMath.PI_OVER_THREE },
     },
+    canvas: { clientHeight: 800 },
     // No availability: the terrain sample fails, and the drawn ground is the ground.
     terrainProvider: {},
     scene: {

@@ -151,7 +151,10 @@ function harness() {
       heading: 0,
       changed: listener,
       moveEnd: listener,
+      // What the far view projects a scan's size with (SiteManager.farFor).
+      frustum: { fovy: CesiumMath.PI_OVER_THREE },
     },
+    canvas: { clientHeight: 800 },
     scene: {
       globe: { getHeight: () => undefined },
       primitives: { add: vi.fn(), remove: vi.fn() },
