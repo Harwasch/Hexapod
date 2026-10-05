@@ -1,0 +1,79 @@
+name: Objects from feature fields (bake-off B, Modal GPU)
+
+# Segmentation bake-off candidate B (docs/SCENE_OBJECTS.md, "Bake-off"): objects, their parts
+# and the ground's cover classes from a scale-conditioned feature field trained on the splat
+# (tools/captures/feature_fields.py; infra/modal/feature_fields.py runs it on an L4 for the
+# scans with photos, spool and pumpkin). It uploads, per scan, instances.json and
+# instances.emb (the `segmentation` artifact, one folder per scan as segment.yml's, so
+# publish-instances.yml can publish it as the `feature-fields` variant), the overview sheet,
+# both halves' summaries, the trained field and what the call cost. Nothing is published.
+#
+# Only on a push to an `ffield-*` branch that touches its code, or by workflow_dispatch once
+# this file is on the default branch. Each run costs money (about $0.30 a scan, at most $0.84
+# a scan: the Modal function's timeout), so it is never triggered by anything else.
+
+on:
+  push:
+    branches: ["ffield-*"]
+    paths:
+      - infra/modal/feature_fields.py
+      - tools/captures/feature_fields.py
+      - .github/workflows/segment-feature-fields.yml
+  workflow_dispatch:
+    inputs:
+      names:
+        description: Scans (comma-separated, from infra/modal/feature_fields.py SCANS)
+        type: string
+        default: spool,pumpkin
+
+concurrency:
+  group: feature-fields
+  cancel-in-progress: false
+
+jobs:
+  field:
+    name: Feature fields on a Modal GPU
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the Modal token is there
+        run: |
+          test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
+            || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
+      # The input is read as data, validated here, never interpolated into a shell line.
+      - name: modal run infra/modal/feature_fields.py
+        env:
+          NAMES: ${{ inputs.names || 'spool,pumpkin' }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          names = os.environ["NAMES"]
+          if not re.fullmatch(r"[a-z0-9-]+(,[a-z0-9-]+)*", names):
+              raise SystemExit(f"names={names!r} is not a comma-separated list of [a-z0-9-] names")
+          PY
+          uv run --with modal==1.5.5 modal run infra/modal/feature_fields.py \
+            --names "$NAMES" --out segment-out 2>&1 | tee modal.log
+          grep -h '"cost"' segment-out/*/run.json || true
+      - name: Summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          print("## Feature fields\n")
+          for run in sorted(pathlib.Path("segment-out").glob("*/run.json")):
+              s = json.loads(run.read_text())
+              cost = s.get("cost", {})
+              print(f"- **{s.get('name')}**: ok {s.get('ok')}, {s.get('totalS')} s, "
+                    f"~${cost.get('dollars')} ({cost.get('basis')})")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: segmentation
+          path: segment-out
+          if-no-files-found: warn

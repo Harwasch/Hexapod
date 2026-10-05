@@ -128,9 +128,9 @@ def _get(url: str, timeout: float) -> bytes:
     import urllib.error
     import urllib.request
 
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read()
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"GET {url}: HTTP {error.code} {error.reason}") from None
@@ -199,7 +199,7 @@ def _fetch_capture(job: str, out: Path) -> dict[str, int]:
 
 def _run(argv: list[str], log: list[str]) -> int:
     started = time.time()
-    done = subprocess.run(argv, cwd=CAPTURES, capture_output=True, text=True)  # noqa: S603
+    done = subprocess.run(argv, cwd=CAPTURES, capture_output=True, text=True, check=False)
     log.append(f"$ {' '.join(argv[1:])}  ({time.time() - started:.0f} s, exit {done.returncode})")
     log.append(done.stdout[-30000:])
     log.append(done.stderr[-30000:])
@@ -240,7 +240,8 @@ def field_scan(name: str, url: str, job: str, steps: int = STEPS) -> dict:
         ok = _run(
             [python, "feature_fields.py", "train", str(tiles / "tileset.json"),
              "--out", str(root / "field.npz"), "--steps", str(steps),
-             "--max-frames", str(MAX_FRAMES), "--summary", str(root / "train.json"), *photos],
+             "--max-frames", str(MAX_FRAMES), "--summary", str(root / "train.json"),
+             "--sheet", str(root / "train-sheet.jpg"), *photos],
             log,
         ) == 0  # fmt: skip
         WEIGHTS.commit()
@@ -259,7 +260,7 @@ def field_scan(name: str, url: str, job: str, steps: int = STEPS) -> dict:
             for file in ("instances.json", "instances.emb", "overview.png", "summary.json"):
                 if (out / file).exists():
                     files[file] = (out / file).read_bytes()
-        for file in ("field.npz", "train.json"):
+        for file in ("field.npz", "train.json", "train-sheet.jpg"):
             if (root / file).exists():
                 files[file] = (root / file).read_bytes()
     elapsed = time.time() - started

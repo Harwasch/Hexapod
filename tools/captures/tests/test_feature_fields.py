@@ -447,12 +447,14 @@ def test_train_then_finish_on_a_small_tileset(tmp_path: Path):
         "train", str(tileset), "--out", str(tmp_path / "field.npz"), "--steps", "4",
         "--pixels", "64", "--masks", "feature_fields:ColourMasks", "--render-views", "3",
         "--render-side", "48", "--train-side", "32", "--summary", str(tmp_path / "train.json"),
+        "--sheet", str(tmp_path / "sheet.jpg"),
     ]) == 0  # fmt: skip
     trained = ff.Field.load(tmp_path / "field.npz")
     from splat_render import load_tileset
 
     assert trained.features.shape[0] == len(load_tileset(tileset))
     assert json.loads((tmp_path / "train.json").read_text())["views"] == "rendered"
+    assert (tmp_path / "sheet.jpg").stat().st_size > 0
     assert ff.main([
         "finish", str(tileset), "--field", str(tmp_path / "field.npz"),
         "--out", str(tmp_path / "out"), "--views", "2", "--cpus", "3",

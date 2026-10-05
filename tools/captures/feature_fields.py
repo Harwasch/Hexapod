@@ -154,6 +154,9 @@ MIN_CHILD_SHARE = 0.03
 #: left, and lies within `LOOSE_LAYERS` ground layers of the terrain, is ground cover.
 CRUMB_COSINE = 0.3
 LOOSE_LAYERS = 4.0
+#: A low top-level piece whose mean feature agrees this much with the seen ground beside it
+#: (read at the larger of its size and `COVER_SCALE_QUANTILE`) is ground cover, not an object.
+GROUNDLIKE_COSINE = 0.6
 #: Floaters: gaussians larger than this many times the median largest axis, or past the
 #: 99.5th percentile, stay out of the graph and take a neighbour's instance at the end.
 FLOATER_SCALE = 10.0
@@ -170,6 +173,8 @@ CONTACT_ROUNDS = 20
 #: ... against the seen ground at least this many steps from any object.
 REFERENCE_REACHES = 3.0
 
+#: Views shown in the training sheet (image, the splat from its camera, its masks).
+SHEET_VIEWS = 6
 #: Views for describing (as segment_scene's whole-scan views).
 DESCRIBE_VIEWS = 32
 
@@ -328,7 +333,8 @@ def colmap_views(
     for image in images:
         camera = cameras[image.camera_id]
         K, dist = intrinsics(camera.model, camera.params)
-        bgr = cv2.imread(str(frames / image.name), cv2.IMREAD_COLOR)
+        # As stored, no EXIF turn: COLMAP posed the stored pixels (training.build_dataset).
+        bgr = cv2.imread(str(frames / image.name), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
         if bgr is None:
             continue
         h, w = bgr.shape[:2]
@@ -1161,6 +1167,52 @@ def claim_contact(
     return labels
 
 
+def groundlike(
+    top: np.ndarray,
+    k: int,
+    positions: np.ndarray,
+    features: np.ndarray,
+    gate: dict[str, np.ndarray],
+    seen_ground: np.ndarray,
+    piece_scale: np.ndarray,
+    height: np.ndarray,
+    layer: float,
+    reach: float,
+) -> np.ndarray:
+    """Per top-level piece (`top`: per gaussian 0..k-1, -1 none), whether it is ground
+    cover: low (its 95th percentile height under `LOOSE_LAYERS` ground layers) and, read at
+    `piece_scale` (per piece), alike to the seen ground within `REFERENCE_REACHES` steps of
+    it by at least `GROUNDLIKE_COSINE`."""
+    out = np.zeros(k, bool)
+    rows = np.flatnonzero(top >= 0)
+    ground_rows = np.flatnonzero(seen_ground)
+    if k == 0 or rows.size == 0 or ground_rows.size == 0:
+        return out
+    piece = top[rows]
+    order = np.argsort(piece, kind="stable")
+    bounds = np.searchsorted(piece[order], np.arange(k + 1))
+    p95 = np.array(
+        [np.percentile(height[rows[order[bounds[j] : bounds[j + 1]]]], 95) for j in range(k)]
+    )
+    low = p95 <= LOOSE_LAYERS * layer
+    distance, nearest = cKDTree(positions[ground_rows]).query(
+        positions[rows], k=1, distance_upper_bound=REFERENCE_REACHES * reach, workers=-1
+    )
+    near = np.isfinite(distance) & low[piece]
+    if not near.any():
+        return out
+    gates = gate_values(gate, piece_scale)
+    own = np.zeros((k, features.shape[1]))
+    np.add.at(own, piece, gated(features[rows], gates[piece]))
+    beside = np.zeros((k, features.shape[1]))
+    np.add.at(beside, piece[near], gated(features[ground_rows[nearest[near]]], gates[piece[near]]))
+    own /= np.maximum(np.linalg.norm(own, axis=1, keepdims=True), 1e-12)
+    norm = np.linalg.norm(beside, axis=1, keepdims=True)
+    beside /= np.maximum(norm, 1e-12)
+    agree = (own * beside).sum(axis=1)
+    return low & (norm[:, 0] > 0) & (agree >= GROUNDLIKE_COSINE)
+
+
 # ---------------------------------------------------------------------------- the tree
 
 
@@ -1299,6 +1351,20 @@ def build_tree(
         )  # fmt: skip
         stats["contactClaimed"] = int(((claimed > 0) & (top < 0)).sum())
         top = claimed - 1
+        # Low pieces the field reads as the ground beside them are ground cover: hay tufts
+        # above the ground layer are hay, a pumpkin in the hay is not.
+        cover_scale = (
+            float(np.quantile(field_.scales, COVER_SCALE_QUANTILE)) if field_.scales.size else lo
+        )
+        like = groundlike(
+            top, kt, pos, features, field_.gate, ground.seen_ground & ~skip,
+            clamp(np.maximum(top_diam, cover_scale)), ground.height, layer, reach,
+        )  # fmt: skip
+        stats["groundLikePieces"] = int(like.sum())
+        if like.any():
+            top = _relabel(np.where((top >= 0) & ~like[np.maximum(top, 0)], top, -1))
+            kt = int(top.max()) + 1 if (top >= 0).any() else 0
+            top_diam = _diameters(pos, top, kt)
         for j in range(kt):
             nodes.append((0, 0, float(top_diam[j]), "object"))
         # 3. Parts, depth by depth.
@@ -1365,6 +1431,17 @@ def build_tree(
             gcomp, np.full(kg, clamp(cover)), features, field_.gate, graph,
             min_splats=max(MIN_OBJECT_SPLATS, int(MIN_COVER_SHARE * ground_rows.sum())),
         )  # fmt: skip
+        regions = regions.copy()
+        # Ground in bits too small to be a region (specks the graph left apart) joins the
+        # region nearest to it.
+        floor = max(MIN_OBJECT_SPLATS, int(MIN_COVER_SHARE * ground_rows.sum()))
+        size = np.bincount(regions[regions >= 0])
+        small = (regions >= 0) & (size[np.maximum(regions, 0)] < floor)
+        if small.any() and (regions >= 0).sum() > small.sum():
+            big = np.flatnonzero((regions >= 0) & ~small)
+            _, nearest = cKDTree(pos[big]).query(pos[small], k=1, workers=-1)
+            regions[small] = regions[big[nearest]]
+            regions = _relabel(regions)
         kr = int(regions.max()) + 1 if (regions >= 0).any() else 0
         region_d = _diameters(pos, regions, kr)
         base = len(nodes)
@@ -1501,21 +1578,34 @@ def supervision_of(
     device: str,
     progress: Callable[[str], None] | None = None,
     side: int = TRAIN_SIDE,
+    sheet: list[list[np.ndarray]] | None = None,
 ) -> list[Supervision]:
     """Every view's masks, measured in 3D on the splat's depth from the same camera, at
-    `side` (the feature maps' long side)."""
+    `side` (the feature maps' long side). `sheet`: filled, for `SHEET_VIEWS` of the views,
+    with the image, the splat drawn from its camera, and its masks (largest first, coloured
+    by scale), for a person to check the poses and the masks."""
     import torch
 
     out = []
+    shown = set(range(0, len(views), max(1, len(views) // SHEET_VIEWS))[:SHEET_VIEWS])
     for k, view in enumerate(views):
         masks = source.masks(view.image)
         viewmat, K = view_tensors(view, view.width, view.height, device)
         with torch.no_grad():
-            _, alpha, depth = rasterize(
+            rgb, alpha, depth = rasterize(
                 scene, scene.colours, viewmat, K, view.width, view.height, depth=True
             )
         sup = supervise(view, masks, depth.cpu().numpy(), alpha.cpu().numpy(), side=side, seed=k)
         out.append(sup)
+        if sheet is not None and k in shown:
+            drawn = np.round(rgb.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+            painted = np.zeros_like(view.image)
+            order = sorted(masks, key=lambda m: -int(m.mask.sum()))
+            for j, mask in enumerate(order):
+                painted[mask.mask] = (segment_scene._colours(np.array([j + 1]))[0] * 255).astype(
+                    np.uint8
+                )
+            sheet.append([view.image, drawn, painted])
         if progress:
             progress(f"view {k + 1}/{len(views)}: {len(masks)} masks, {sup.count} with a scale")
     return out
@@ -1780,6 +1870,27 @@ def overview(
     sheet.save(out)
 
 
+def save_sheet(path: Path, rows: Sequence[Sequence[np.ndarray]], width: int = 360) -> None:
+    """Rows of images, each scaled to `width` (aspect kept), as one JPEG."""
+    from PIL import Image
+
+    scaled = [
+        [Image.fromarray(np.ascontiguousarray(im, np.uint8)).resize(
+            (width, max(1, round(im.shape[0] * width / im.shape[1])))
+        ) for im in row]
+        for row in rows
+    ]  # fmt: skip
+    heights = [max(im.height for im in row) for row in scaled]
+    sheet = Image.new("RGB", (width * max(len(r) for r in scaled), sum(heights)))
+    y = 0
+    for row, h in zip(scaled, heights, strict=True):
+        for j, im in enumerate(row):
+            sheet.paste(im, (j * width, y))
+        y += h
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(path, quality=85)
+
+
 # ------------------------------------------------------------------------------ the CLI
 
 
@@ -1824,9 +1935,13 @@ def train_main(args: argparse.Namespace) -> dict[str, Any]:
     summary["viewCount"] = len(views)
     mark = time.time()
     source = mask_source(args.masks)
+    sheet: list[list[np.ndarray]] = []
     supervision = supervision_of(
-        views, source, scene, rasterize, device, progress=_say, side=args.train_side
-    )
+        views, source, scene, rasterize, device, progress=_say, side=args.train_side,
+        sheet=sheet if args.sheet else None,
+    )  # fmt: skip
+    if args.sheet and sheet:
+        save_sheet(args.sheet, sheet)
     summary["masksS"] = round(time.time() - mark, 1)
     del source
     if device == "cuda":
@@ -2002,6 +2117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     train.add_argument("--pixels", type=int, default=PIXELS)
     train.add_argument("--seed", type=int, default=0)
     train.add_argument("--summary", type=Path, default=None)
+    train.add_argument("--sheet", type=Path, default=None, help="photos, renders, masks (JPEG)")
     finish = sub.add_parser("finish", help="the tree, descriptions and instances.json")
     finish.add_argument("tileset", type=Path, help="the scan's tileset.json")
     finish.add_argument("--field", type=Path, required=True)
