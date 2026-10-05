@@ -10,12 +10,14 @@
  * offered. A click chooses the whole object first, the top of the chain, and each click again
  * on it one level finer (`drillIndex`): a cable spool, then one of its planks.
  *
- * A painted area is matched against every instance, at every level, by intersection over union
- * in splats weighted by opacity, counting only what is visible from the camera (an instance's
- * hidden back does not count against it): the best match is selected, and below
- * `PAINT_MIN_IOU` the painted splats themselves can become an object of their own
- * (`customSets.ts`). While a stroke is painted the match is kept up to date from an index of
- * the view (`paintIndex`), which walks only the painted cells.
+ * A painted area is matched by intersection over union in splats weighted by opacity, counting
+ * only what is visible from the camera (an instance's hidden back does not count against it),
+ * against combinations of instances at whatever levels fit (`bestSet`): the set of instances
+ * from disjoint subtrees whose union best matches the painted area -- both flanges of a spool,
+ * or the spool itself when that is as good. Below `PAINT_MIN_IOU` the painted splats
+ * themselves can become an object of their own (`customSets.ts`). While a stroke is painted
+ * the match is kept up to date from an index of the view (`paintIndex`), which walks only the
+ * painted cells, and held steady between near-equal answers (`steadySet`).
  */
 
 import { categoryById } from "./categories";
@@ -33,6 +35,23 @@ export const NEAR_DEPTH = 0.25;
 export const WHOLE_SCENE_SHARE = 0.5;
 /** Below this, a painted area is offered as an object of its own. */
 export const PAINT_MIN_IOU = 0.5;
+/**
+ * A painted area's best set drops members that add little, the least first, while its IoU
+ * stays within this share of the best's: a sliver of a neighbour under the brush's edge is not
+ * a part. A share, not a difference, so a member that is half of a loosely painted set stays.
+ */
+export const PAINT_SET_GAIN = 0.02;
+/**
+ * Then members that share an ancestor become that ancestor, the deepest first, while the IoU
+ * stays within this share of what it was: the whole spool rather than its three parts when the
+ * spool is as good, its parts when the spool also holds ground nobody painted.
+ */
+export const PAINT_PARENT_SLACK = 0.03;
+/**
+ * While a stroke is painted, the match shown is kept until another's IoU is better by more
+ * than this share, so two near-equal answers do not take turns at every preview (`steadySet`).
+ */
+export const PAINT_STEADY = 0.03;
 
 /** The instance, its parent, … up to the top level; cycles and unknown ids end the chain. */
 export function chainOf(doc: Pick<InstancesDoc, "byId">, id: number): number[] {
@@ -198,10 +217,66 @@ export interface PaintMatch {
 }
 
 /**
- * The instance (any level) whose visible splats best match the painted ones, by intersection
- * over union in weight; null when nothing painted carries an instance.
+ * What a painted area met, per instance at every level: the sums every match is made from,
+ * the same whether gathered over every visible splat (`paintSums`) or through the view's index
+ * (`paintSumsIndexed`). Weights are opacities summed in doubles, exact however grouped.
  */
-export function bestByIoU(doc: Pick<InstancesDoc, "byId">, sample: PaintSample): PaintMatch | null {
+export interface PaintSums {
+  /** Weight of the painted splats (visible and under the brush), with an instance or not. */
+  painted: number;
+  /** The instances the painted splats carry, at every level (each with its chain), ascending. */
+  ids: Uint32Array;
+  /** Per entry of `ids`: its painted weight and its visible weight, with everything below it. */
+  inter: Float64Array;
+  visible: Float64Array;
+  /** Per entry, its parent's entry, or -1 at the top of its chain. */
+  parent: Int32Array;
+  /** The visible weight of any instance, painted or not (0 off screen). */
+  visibleOf: (id: number) => number;
+}
+
+/** `id`'s entry in `ids` (ascending), or -1. */
+function entryIn(ids: Uint32Array, id: number): number {
+  let lo = 0;
+  let hi = ids.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const at = ids[mid] ?? 0;
+    if (at === id) return mid;
+    if (at < id) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
+}
+
+/** The sums of the instances `ids` (ascending) met, from per-id lookups. */
+function sumsOf(
+  ids: Uint32Array,
+  interOf: (id: number) => number,
+  visibleOf: (id: number) => number,
+  parentOf: (id: number) => number,
+  painted: number,
+): PaintSums {
+  const n = ids.length;
+  const inter = new Float64Array(n);
+  const visible = new Float64Array(n);
+  const parent = new Int32Array(n);
+  for (let k = 0; k < n; k++) {
+    const id = ids[k] ?? 0;
+    inter[k] = interOf(id);
+    visible[k] = visibleOf(id);
+    const up = parentOf(id);
+    parent[k] = up > 0 ? entryIn(ids, up) : -1;
+  }
+  return { painted, ids, inter, visible, parent, visibleOf };
+}
+
+/**
+ * The sums of a painted area over every visible splat (`sample`). The hierarchy is the one the
+ * chains on screen give, leaf by leaf in id order: each instance's parent is the next on the
+ * first chain that holds it (`paintIndex` reads it so too).
+ */
+export function paintSums(doc: Pick<InstancesDoc, "byId">, sample: PaintSample): PaintSums {
   const chains = new Map<number, number[]>();
   const chain = (id: number): number[] => {
     let c = chains.get(id);
@@ -227,40 +302,347 @@ export function bestByIoU(doc: Pick<InstancesDoc, "byId">, sample: PaintSample):
       if (isPainted) inter.set(up, (inter.get(up) ?? 0) + w);
     }
   }
-  const ids = [...inter.keys()].sort((x, y) => x - y);
-  return bestOf(
-    ids,
+  const parents = new Map<number, number>();
+  for (const leaf of [...chains.keys()].sort((a, b) => a - b)) {
+    const c = chains.get(leaf) ?? [];
+    for (let k = 0; k < c.length; k++) {
+      const id = c[k] ?? 0;
+      if (!parents.has(id)) parents.set(id, c[k + 1] ?? 0);
+    }
+  }
+  return sumsOf(
+    Uint32Array.from(inter.keys()).sort(),
     (id) => inter.get(id) ?? 0,
     (id) => visible.get(id) ?? 0,
+    (id) => parents.get(id) ?? 0,
     painted,
   );
 }
 
 /**
- * The best of the instances a painted area met (`ids`, ascending), by intersection over union
- * of their painted weight (`interOf`) and visible weight (`visibleOf`) with `painted`. In id
+ * The single instance (any level) whose visible splats best match the painted ones, by
+ * intersection over union in weight; null when nothing painted carries an instance. In id
  * order, so the same sums give the same choice however they were gathered; of two as good, the
  * smaller id.
  */
-function bestOf(
-  ids: Iterable<number>,
-  interOf: (id: number) => number,
-  visibleOf: (id: number) => number,
-  painted: number,
-): PaintMatch | null {
+export function bestSingle(sums: PaintSums): PaintMatch | null {
   let best: PaintMatch | null = null;
-  for (const id of ids) {
-    const i = interOf(id);
-    const union = painted + visibleOf(id) - i;
+  for (let k = 0; k < sums.ids.length; k++) {
+    const i = sums.inter[k] ?? 0;
+    const union = sums.painted + (sums.visible[k] ?? 0) - i;
     const iou = union > 0 ? i / union : 0;
-    if (!best || iou > best.iou + 1e-9) best = { id, iou };
+    if (!best || iou > best.iou + 1e-9) best = { id: sums.ids[k] ?? 0, iou };
   }
   return best;
 }
 
+/** `bestSingle` of the painted splats of `sample`. */
+export function bestByIoU(doc: Pick<InstancesDoc, "byId">, sample: PaintSample): PaintMatch | null {
+  return bestSingle(paintSums(doc, sample));
+}
+
+/** A painted area's best combination of instances (`bestSet`). */
+export interface PaintSetMatch {
+  /**
+   * The members, from disjoint subtrees (none holds another), the largest on screen first
+   * (ascending ids among equals): one id when a single instance is the best match.
+   */
+  ids: number[];
+  iou: number;
+}
+
+/** Rounds of the search (`bestSet`) at most; it settles in a handful. */
+const SET_ROUNDS = 64;
+
+/** The entries of `parent` by depth, deepest first (ascending within a depth): children first. */
+function byDepth(parent: Int32Array): Int32Array {
+  const n = parent.length;
+  const depth = new Int32Array(n).fill(-1);
+  let deepest = 0;
+  const path: number[] = [];
+  for (let k = 0; k < n; k++) {
+    path.length = 0;
+    let at = k;
+    while (at >= 0 && depth[at] === -1 && path.length <= n) {
+      path.push(at);
+      at = parent[at] ?? -1;
+    }
+    let d = at >= 0 ? (depth[at] ?? 0) : -1;
+    for (let q = path.length - 1; q >= 0; q--) depth[path[q] ?? 0] = ++d;
+    if (d > deepest) deepest = d;
+  }
+  const starts = new Int32Array(deepest + 2);
+  for (let k = 0; k < n; k++) {
+    const slot = deepest - (depth[k] ?? 0) + 1;
+    starts[slot] = (starts[slot] ?? 0) + 1;
+  }
+  for (let d = 1; d < starts.length; d++) starts[d] = (starts[d] ?? 0) + (starts[d - 1] ?? 0);
+  const order = new Int32Array(n);
+  for (let k = 0; k < n; k++) {
+    const slot = deepest - (depth[k] ?? 0);
+    const at = starts[slot] ?? 0;
+    order[at] = k;
+    starts[slot] = at + 1;
+  }
+  return order;
+}
+
+/**
+ * The combination of instances whose union best matches the painted area, by intersection over
+ * union: a set from disjoint subtrees, at whatever levels fit. With disjoint members the union's
+ * painted and visible weights are the members' sums, so a set's IoU is
+ * `Σinter / (painted + Σvisible − Σinter)`.
+ *
+ * Found exactly, not greedily: a greedy search that takes the best single instance first can
+ * never trade a parent for its children (a spool that also holds ground nobody painted, against
+ * the two flanges that were). The best ratio is found by Dinkelbach's method from the best
+ * single instance's IoU λ: the antichain maximising `Σ (inter − λ·(visible − inter))` is read
+ * off the hierarchy bottom-up (an instance, or the best of its children, whichever is more),
+ * and its IoU is the next λ, until it stops rising -- a few passes over the instances met.
+ *
+ * Then the answer is made as simple as it can be at little cost: members that add little are
+ * dropped (`gain`), and members that share an ancestor become that ancestor when it is about
+ * as good (`slack`), each a share of the IoU; both 0 give the best set itself. Deterministic: the same sums give the
+ * same set.
+ */
+export function bestSet(
+  sums: PaintSums,
+  { gain = PAINT_SET_GAIN, slack = PAINT_PARENT_SLACK }: { gain?: number; slack?: number } = {},
+): PaintSetMatch | null {
+  const { inter, visible, parent, painted } = sums;
+  const n = sums.ids.length;
+  if (n === 0) return null;
+  const iouOf = (i: number, v: number): number => {
+    const union = painted + v - i;
+    return union > 0 ? i / union : 0;
+  };
+  const order = byDepth(parent);
+  // From the best single instance (`bestSingle`'s).
+  let members: number[] = [];
+  let best = -1;
+  for (let k = 0; k < n; k++) {
+    const j = iouOf(inter[k] ?? 0, visible[k] ?? 0);
+    if (j > best + 1e-9) {
+      best = j;
+      members = [k];
+    }
+  }
+  const value = new Float64Array(n);
+  const below = new Float64Array(n);
+  const whole = new Uint8Array(n);
+  const open = new Uint8Array(n);
+  for (let round = 0; round < SET_ROUNDS; round++) {
+    const lambda = best;
+    below.fill(0);
+    for (let o = 0; o < n; o++) {
+      const k = order[o] ?? 0;
+      const i = inter[k] ?? 0;
+      const own = i - lambda * ((visible[k] ?? 0) - i);
+      const parts = below[k] ?? 0;
+      // As good as its parts: the instance itself, one member instead of several.
+      const self = own >= parts - 1e-12 * (Math.abs(own) + Math.abs(parts));
+      whole[k] = self ? 1 : 0;
+      const v = self ? own : parts;
+      value[k] = v;
+      const up = parent[k] ?? -1;
+      if (up >= 0 && v > 0) below[up] = (below[up] ?? 0) + v;
+    }
+    // Read from the top: an instance taken whole, or its children's best.
+    const next: number[] = [];
+    let i = 0;
+    let v = 0;
+    for (let o = n - 1; o >= 0; o--) {
+      const k = order[o] ?? 0;
+      const up = parent[k] ?? -1;
+      const reached = (up < 0 || (open[up] === 1 && whole[up] === 0)) && (value[k] ?? 0) > 0;
+      open[k] = reached ? 1 : 0;
+      if (reached && whole[k] === 1) {
+        next.push(k);
+        i += inter[k] ?? 0;
+        v += visible[k] ?? 0;
+      }
+    }
+    const j = iouOf(i, v);
+    if (!(j > best + 1e-12)) break;
+    best = j;
+    members = next.sort((a, b) => a - b);
+  }
+  let i = 0;
+  let v = 0;
+  for (const k of members) {
+    i += inter[k] ?? 0;
+    v += visible[k] ?? 0;
+  }
+  // Members that add little go, the least first (as each adds to the best set), while the set
+  // stays within `gain` of the best.
+  if (members.length > 1) {
+    const without = new Float64Array(n);
+    for (const k of members) without[k] = iouOf(i - (inter[k] ?? 0), v - (visible[k] ?? 0));
+    const least = members
+      .filter((k) => (without[k] ?? 0) >= best * (1 - gain))
+      .sort((a, b) => (without[b] ?? 0) - (without[a] ?? 0) || a - b);
+    const gone = new Set<number>();
+    for (const k of least) {
+      if (gone.size === members.length - 1) break;
+      const i2 = i - (inter[k] ?? 0);
+      const v2 = v - (visible[k] ?? 0);
+      if (iouOf(i2, v2) < best * (1 - gain)) break;
+      gone.add(k);
+      i = i2;
+      v = v2;
+    }
+    if (gone.size > 0) members = members.filter((k) => !gone.has(k));
+  }
+  // Members that share an ancestor become it, the deepest first in one pass, while the set
+  // stays within `slack` of what it was. Per ancestor, the members it holds and their sums.
+  const floor = iouOf(i, v) * (1 - slack);
+  const held = new Int32Array(n);
+  const heldInter = new Float64Array(n);
+  const heldVisible = new Float64Array(n);
+  for (const m of members) {
+    for (let up = parent[m] ?? -1; up >= 0; up = parent[up] ?? -1) {
+      held[up] = (held[up] ?? 0) + 1;
+      heldInter[up] = (heldInter[up] ?? 0) + (inter[m] ?? 0);
+      heldVisible[up] = (heldVisible[up] ?? 0) + (visible[m] ?? 0);
+    }
+  }
+  const merged = new Uint8Array(n);
+  let merges = 0;
+  for (let o = 0; o < n && members.length > 1; o++) {
+    const up = order[o] ?? 0;
+    if ((held[up] ?? 0) < 2) continue;
+    const i2 = i - (heldInter[up] ?? 0) + (inter[up] ?? 0);
+    const v2 = v - (heldVisible[up] ?? 0) + (visible[up] ?? 0);
+    if (iouOf(i2, v2) < floor) continue;
+    merged[up] = 1;
+    merges++;
+    // What holds it now holds it in place of its members.
+    const count = 1 - (held[up] ?? 0);
+    const di = (inter[up] ?? 0) - (heldInter[up] ?? 0);
+    const dv = (visible[up] ?? 0) - (heldVisible[up] ?? 0);
+    for (let above = parent[up] ?? -1; above >= 0; above = parent[above] ?? -1) {
+      held[above] = (held[above] ?? 0) + count;
+      heldInter[above] = (heldInter[above] ?? 0) + di;
+      heldVisible[above] = (heldVisible[above] ?? 0) + dv;
+    }
+    i = i2;
+    v = v2;
+  }
+  if (merges > 0) {
+    // Each member, or the highest ancestor it was merged into.
+    const out = new Set<number>();
+    for (const m of members) {
+      let top = m;
+      for (let up = parent[m] ?? -1; up >= 0; up = parent[up] ?? -1) if (merged[up]) top = up;
+      out.add(top);
+    }
+    members = [...out].sort((a, b) => a - b);
+  }
+  i = 0;
+  v = 0;
+  for (const k of members) {
+    i += inter[k] ?? 0;
+    v += visible[k] ?? 0;
+  }
+  return {
+    ids: largestFirst(
+      sums,
+      members.map((k) => sums.ids[k] ?? 0),
+    ),
+    iou: iouOf(i, v),
+  };
+}
+
+/**
+ * Members in a combination's order: the largest on screen first, ascending ids among equals.
+ * The view does not change while a stroke is painted, so neither does the order.
+ */
+function largestFirst(sums: PaintSums, ids: readonly number[]): number[] {
+  return [...ids].sort((a, b) => sums.visibleOf(b) - sums.visibleOf(a) || a - b);
+}
+
+/** `bestSet` of the painted splats of `sample`. */
+export function bestSetByIoU(
+  doc: Pick<InstancesDoc, "byId">,
+  sample: PaintSample,
+): PaintSetMatch | null {
+  return bestSet(paintSums(doc, sample));
+}
+
+/** The IoU of the union of `ids` (disjoint instances, met or not) with the painted area. */
+export function setIoU(sums: PaintSums, ids: readonly number[]): number {
+  let i = 0;
+  let v = 0;
+  for (const id of ids) {
+    const k = entryIn(sums.ids, id);
+    if (k >= 0) i += sums.inter[k] ?? 0;
+    v += sums.visibleOf(id);
+  }
+  const union = sums.painted + v - i;
+  return union > 0 ? i / union : 0;
+}
+
+/**
+ * The match to show while a stroke goes on: `bestSet`, unless what was shown (`shown`, its
+ * members) is still within `slack` (a share) of it, which is then kept with its IoU now -- two
+ * near-equal answers do not take turns at every preview, and what is lit when the stroke ends
+ * is what it selects.
+ */
+export function steadySet(
+  sums: PaintSums,
+  shown: readonly number[] | null,
+  slack = PAINT_STEADY,
+): PaintSetMatch | null {
+  const next = bestSet(sums);
+  if (!next || !shown || shown.length === 0 || sameMembers(next.ids, shown)) return next;
+  const kept = setIoU(sums, shown);
+  return kept < next.iou * (1 - slack) ? next : { ids: largestFirst(sums, shown), iou: kept };
+}
+
+/** Whether two lists hold the same ids, in any order. */
+export function sameMembers(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((id) => set.has(id));
+}
+
+/**
+ * The instances above every one of `ids`, the lowest first: the chain of what they are parts
+ * of together ("of Spool"). Empty when they share none.
+ */
+export function commonChain(doc: Pick<InstancesDoc, "byId">, ids: readonly number[]): number[] {
+  let common: number[] | null = null;
+  for (const id of ids) {
+    const above = chainOf(doc, id).slice(1);
+    common = common === null ? above : common.filter((up) => above.includes(up));
+  }
+  return common ?? [];
+}
+
+/** At most this many members are named in a combination's name, and in this many characters. */
+const COMBINATION_NAMES = 3;
+const COMBINATION_CHARS = 48;
+
+/**
+ * What a combination is called (its members' `names`, in its order; `whole`, what they are
+ * parts of together, or null): "Top flange + drum + Bottom flange (of Spool)", or when that
+ * would be too long or says a name twice, "4 parts of Spool" or "4 objects".
+ */
+export function combinationLabel(names: readonly string[], whole: string | null): string {
+  const joined = names.join(" + ");
+  if (
+    names.length <= COMBINATION_NAMES &&
+    new Set(names).size === names.length &&
+    joined.length <= COMBINATION_CHARS
+  )
+    return whole ? `${joined} (of ${whole})` : joined;
+  const count = String(names.length);
+  return whole ? `${count} parts of ${whole}` : `${count} objects`;
+}
+
 /**
  * A view's visible splats by screen cell, to match a painted area while it is painted
- * (`bestByIoUIndexed`): `bestByIoU` over every splat on screen is too slow to run as a stroke
+ * (`paintSumsIndexed`): `paintSums` over every splat on screen is too slow to run as a stroke
  * moves (the camp has 22.6 M). Built once per view; a match then costs the painted cells and
  * the instances they hold.
  */
@@ -277,6 +659,11 @@ export interface PaintIndex {
   cellSplats: Uint32Array;
   /** Per instance id (any level), the weight of its visible splats with everything below it. */
   visible: Float64Array;
+  /**
+   * Per instance id on a chain on screen, its parent there: the next on the first chain (in
+   * leaf id order) that holds it, 0 at the top (`paintSums` reads the hierarchy so too).
+   */
+  parents: Uint32Array;
   /** Per leaf id on screen that the file lists, its chain (`chainOf`). */
   chains: ReadonlyMap<number, readonly number[]>;
 }
@@ -351,16 +738,24 @@ export function paintIndex(
     cellWeights[c] = total;
   }
   start[cells] = e;
-  // Rolled up each leaf's chain.
+  // Rolled up each leaf's chain, and each instance's parent on the first chain that holds it.
   const chains = new Map<number, number[]>();
   const rolled = new Float64Array(span);
+  const parents = new Uint32Array(span);
+  const placed = new Uint8Array(span);
   for (let leaf = 1; leaf < span; leaf++) {
     const w = leaves[leaf] ?? 0;
     if (w === 0) continue;
     const chain = chainOf(doc, leaf);
     if (chain.length === 0) continue;
     chains.set(leaf, chain);
-    for (const up of chain) rolled[up] = (rolled[up] ?? 0) + w;
+    for (let k = 0; k < chain.length; k++) {
+      const up = chain[k] ?? 0;
+      rolled[up] = (rolled[up] ?? 0) + w;
+      if (placed[up]) continue;
+      placed[up] = 1;
+      parents[up] = chain[k + 1] ?? 0;
+    }
   }
   return {
     cols: screen.cols,
@@ -371,19 +766,17 @@ export function paintIndex(
     cellWeights,
     cellSplats,
     visible: rolled,
+    parents,
     chains,
   };
 }
 
 /**
- * `bestByIoU` of the splats under `mask` (the view's brush) through the view's index: the same
- * match, walking only the painted cells and the instances they hold.
+ * `paintSums` of the splats under `mask` (the view's brush) through the view's index: the same
+ * sums, walking only the painted cells and the instances they hold.
  */
-export function bestByIoUIndexed(
-  index: PaintIndex,
-  mask: Pick<BrushMask, "data">,
-): PaintMatch | null {
-  const { start, ids, weights, cellWeights, visible } = index;
+export function paintSumsIndexed(index: PaintIndex, mask: Pick<BrushMask, "data">): PaintSums {
+  const { start, ids, weights, cellWeights, visible, parents } = index;
   const span = visible.length;
   // Per leaf id, its painted weight; ids are dense, so arrays beat maps here by far.
   const leaves = new Float64Array(span);
@@ -412,12 +805,29 @@ export function bestByIoUIndexed(
       inter[up] = before + w;
     }
   }
-  return bestOf(
+  return sumsOf(
     Uint32Array.from(met).sort(),
     (id) => inter[id] ?? 0,
-    (id) => visible[id] ?? 0,
+    (id) => (id > 0 && id < span ? (visible[id] ?? 0) : 0),
+    (id) => parents[id] ?? 0,
     painted,
   );
+}
+
+/** `bestByIoU` of the splats under `mask`, through the view's index. */
+export function bestByIoUIndexed(
+  index: PaintIndex,
+  mask: Pick<BrushMask, "data">,
+): PaintMatch | null {
+  return bestSingle(paintSumsIndexed(index, mask));
+}
+
+/** `bestSetByIoU` of the splats under `mask`, through the view's index. */
+export function bestSetByIoUIndexed(
+  index: PaintIndex,
+  mask: Pick<BrushMask, "data">,
+): PaintSetMatch | null {
+  return bestSet(paintSumsIndexed(index, mask));
 }
 
 /** How many visible splats are under `mask`, through the view's index. */
