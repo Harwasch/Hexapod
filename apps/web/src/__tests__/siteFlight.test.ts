@@ -5,17 +5,31 @@
  * ever when either stalled. These pin the new contract: the first leg leaves at once for the
  * best pose known, the record re-points it at the authored bookmark without restarting from
  * rest, a stall becomes a retryable error in the site's load record, and Retry finishes the
- * job. CesiumJS's camera is faked; the poses and the easing are what is checked.
+ * job. Without a bookmark, the terrain under the site and then the model's own placement
+ * correct the aim, on the way, on landing, or up to 20 s after it -- never once somebody has
+ * the camera. CesiumJS's camera and terrain are faked; the poses and the easing are checked.
  */
-import { type BoundingSphere, Cartesian3, Cartographic, Math as CesiumMath } from "cesium";
+import {
+  BoundingSphere,
+  Cartesian3,
+  Cartographic,
+  Math as CesiumMath,
+  Event,
+  Matrix4,
+  Transforms,
+} from "cesium";
+import type * as Cesium from "cesium";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Site, SiteSummary } from "@twin/contracts";
+import type { Site, SiteAsset, SiteSummary } from "@twin/contracts";
+import { boundingRadiusM } from "@twin/geo";
 
 import type { CameraController, FlyOptions } from "@/cesium/CameraController";
 import type { ClippingManager } from "@/cesium/ClippingManager";
 import { easingSlope } from "@/cesium/flightRetarget";
 import type { PerformanceManager } from "@/cesium/PerformanceManager";
+import type { MeasuredGround } from "@/cesium/placement";
+import type * as Tiles from "@/cesium/providers/tiles";
 import { SiteManager } from "@/cesium/SiteManager";
 import type { SceneEvents } from "@/cesium/types";
 import { Emitter } from "@/lib/emitter";
@@ -30,6 +44,35 @@ vi.mock("@/cesium/scanView/ScanRendererHost", () => ({
       prefetch.cancelled += 1;
     };
   },
+}));
+
+/**
+ * The terrain at full detail (`sampleTerrainMostDetailed`), as each test sets it: none at all
+ * unless one does, as with no terrain layer. `pending` holds the answer back until resolved;
+ * `point` holds back only a single point's, the fly-to's own aim (the clamp asks for more).
+ */
+const terrain = vi.hoisted(() => ({
+  height: undefined as number | undefined,
+  pending: null as Promise<number> | null,
+  point: null as Promise<number> | null,
+}));
+vi.mock("cesium", async (importOriginal) => ({
+  ...(await importOriginal<typeof Cesium>()),
+  sampleTerrainMostDetailed: async (_provider: unknown, positions: Cesium.Cartographic[]) => {
+    const held = (positions.length === 1 ? terrain.point : null) ?? terrain.pending;
+    const height = held ? await held : terrain.height;
+    if (height === undefined) throw new Error("no terrain here");
+    for (const position of positions) position.height = height;
+    return positions;
+  },
+}));
+
+/** The models a site's assets load as: a placed scan, below (`placedScan`). */
+const tilesets = vi.hoisted(() => ({ next: null as (() => unknown) | null }));
+vi.mock("@/cesium/providers/tiles", async (importOriginal) => ({
+  ...(await importOriginal<typeof Tiles>()),
+  createSiteTileset: () =>
+    tilesets.next ? Promise.resolve(tilesets.next()) : Promise.reject(new Error("no model")),
 }));
 
 const SITE_ID = "11111111-1111-4111-8111-111111111111";
@@ -55,8 +98,8 @@ const BOOKMARK = {
   pitch: -25,
 };
 
-function site(bookmarks = [BOOKMARK]): Site {
-  const d = 0.001;
+/** The site's record: its footprint a square `d` degrees either side of the centre. */
+function site(bookmarks = [BOOKMARK], d = 0.001): Site {
   return {
     id: SITE_ID,
     slug: "yard",
@@ -90,6 +133,8 @@ interface Flight {
 function harness() {
   const events = new Emitter<SceneEvents>();
   const flights: Flight[] = [];
+  /** Every sphere a pose was asked for, in order: what the flight framed. */
+  const spheres: BoundingSphere[] = [];
   const loads: SiteLoad[] = [];
   const toasts: string[] = [];
   /** What the load pill follows (`site-flight`), in order. */
@@ -118,11 +163,14 @@ function harness() {
   const at = { longitude: -110, latitude: 35, altitude: 18_000_000 };
   const camera = {
     pose: () => ({ ...at, height: at.altitude, metersPerPixel: 10_000 }),
+    /** Every flight started, as CameraController counts them; a test adds another's. */
+    flights: 0,
     isMoving: false,
     refreshPose: vi.fn(),
     setObjectScale: vi.fn(),
     durationFor: () => 4,
     sphereArrival: (sphere: BoundingSphere) => {
+      spheres.push(sphere);
       const center = Cartographic.fromCartesian(sphere.center);
       return {
         longitude: CesiumMath.toDegrees(center.longitude),
@@ -133,6 +181,7 @@ function harness() {
       };
     },
     flyTo: vi.fn((longitude: number, latitude: number, height: number, options: FlyOptions) => {
+      camera.flights += 1;
       flights.push({ longitude, latitude, height, options });
     }),
   };
@@ -152,7 +201,18 @@ function harness() {
     { setFootprint: vi.fn() } as unknown as ClippingManager,
     performance as unknown as PerformanceManager,
   );
-  return { manager, flights, loads, toasts, events, flightSites, at };
+  return { manager, flights, spheres, loads, toasts, events, flightSites, at, viewer, camera };
+}
+
+/** Cesium completing a leg: the camera is where the leg was going, and it says so. */
+function land(viewer: ReturnType<typeof harness>["viewer"], flight: Flight | undefined): void {
+  if (!flight) throw new Error("no such flight");
+  viewer.camera.positionWC = Cartesian3.fromDegrees(
+    flight.longitude,
+    flight.latitude,
+    flight.height,
+  );
+  flight.options.onComplete?.();
 }
 
 /** A promise the test settles by hand, as a slow or stalled API would. */
@@ -384,6 +444,278 @@ describe("SiteManager.flyTo", () => {
     // Somebody else takes the camera: nothing is fetched for a destination nobody reaches.
     flights[1]?.options.onCancel?.();
     expect(prefetch.cancelled).toBe(2);
+  });
+});
+
+/** A site the pipeline registered: no catalog height (a phone has none), no bookmark. */
+const PLACED_ID = "22222222-2222-4222-8222-222222222222";
+const placedSummary = {
+  id: PLACED_ID,
+  slug: "camp",
+  name: "Camp",
+  centroid: { longitude: LON, latitude: LAT, height: null },
+  areaM2: 22_000,
+} as unknown as SiteSummary;
+
+/** Degrees for metres east and north of the site's placed point. */
+const east = (m: number) => m / (111_320 * Math.cos((LAT * Math.PI) / 180));
+const north = (m: number) => m / 111_320;
+
+/** The capture's densest ground cells: a disc 20 m in radius around its origin, at z 0.1 m. */
+const CELLS: MeasuredGround[] = Array.from({ length: 64 }, (_, i) => {
+  const r = 20 * Math.sqrt((i + 0.5) / 64);
+  const a = i * 2.399963;
+  return { lon: LON + east(r * Math.cos(a)), lat: LAT + north(r * Math.sin(a)), height: 0.1 };
+});
+
+const SCAN = {
+  id: "44444444-4444-4444-8444-444444444444",
+  siteId: PLACED_ID,
+  name: "Camp splat",
+  representation: "gaussian-splat",
+  source: { type: "3d-tiles-url", url: "https://example.invalid/runs/1/splat/tileset.json" },
+  renderConfig: {
+    clampToGround: true,
+    groundSamples: CELLS,
+    clipsWorld: true,
+    clipFootprint: "catalog",
+    heightOffsetM: 0,
+  },
+  defaultVisible: true,
+} as unknown as SiteAsset;
+
+/** Its record: the footprint is the manifest's box, 75 m either way with the floaters in it. */
+function placedSite(assets: SiteAsset[] = []): Site {
+  const [x, y] = [east(75), north(75)];
+  return {
+    ...site([], 0),
+    id: PLACED_ID,
+    slug: "camp",
+    name: "Camp",
+    centroid: { longitude: LON, latitude: LAT, height: null },
+    boundary: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [LON - x, LAT - y],
+          [LON + x, LAT - y],
+          [LON + x, LAT + y],
+          [LON - x, LAT + y],
+          [LON - x, LAT - y],
+        ],
+      ],
+    },
+    assets,
+  } as unknown as Site;
+}
+
+/**
+ * A pipeline scan's tileset, as far as SiteManager reads one. Its root transform is the
+ * capture's east-north-up frame at the placed point, on the ellipsoid (a phone has no usable
+ * height), and floaters have stretched its bounds to 128 m around a point 6 m west and 21 m
+ * up: the Camp scan's. Like Cesium's, the bounds follow the model matrix the clamp sets.
+ */
+function placedScan() {
+  const frame = Transforms.eastNorthUpToFixedFrame(Cartesian3.fromDegrees(LON, LAT, 0));
+  const floaters = new Cartesian3(-6, 1.1, 20.9);
+  let modelMatrix = Matrix4.clone(Matrix4.IDENTITY);
+  const computed = () => Matrix4.multiply(modelMatrix, frame, new Matrix4());
+  return {
+    show: false,
+    preloadWhenHidden: true,
+    maximumScreenSpaceError: 16,
+    tilesLoaded: true,
+    totalMemoryUsageInBytes: 0,
+    get modelMatrix() {
+      return modelMatrix;
+    },
+    set modelMatrix(matrix: Matrix4) {
+      modelMatrix = matrix;
+    },
+    root: {
+      get computedTransform() {
+        return computed();
+      },
+    },
+    get boundingSphere() {
+      return new BoundingSphere(
+        Matrix4.multiplyByPoint(computed(), floaters, new Cartesian3()),
+        128,
+      );
+    },
+    loadProgress: new Event(),
+    initialTilesLoaded: new Event(),
+    allTilesLoaded: new Event(),
+    tileFailed: new Event(),
+    tileLoad: new Event(),
+    tileUnload: new Event(),
+    isDestroyed: () => false,
+    destroy: vi.fn(),
+  };
+}
+
+describe("SiteManager.flyTo without a bookmark", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    terrain.height = undefined;
+    terrain.pending = null;
+    terrain.point = null;
+    tilesets.next = null;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("re-points the flight on the way for the record's footprint", async () => {
+    const { manager, flights, viewer } = harness();
+    // Three kilometres out: the footprint is more than a few per cent of the way left.
+    viewer.camera.positionWC = Cartesian3.fromDegrees(LON, LAT - 0.03, 1_500);
+    const record = deferred<Site | null>();
+    manager.setCatalog([summary], () => record.promise);
+    const done = manager.flyTo(SITE_ID);
+    await vi.advanceTimersByTimeAsync(1_000);
+    record.resolve(site([], 0.004));
+    await done;
+    expect(flights).toHaveLength(2);
+    const radius = boundingRadiusM(site([], 0.004).boundary);
+    expect(flights[1]?.longitude).toBeCloseTo(LON, 6);
+    expect(flights[1]?.height).toBeCloseTo(100 + radius * 2.3, 3);
+    // Leaving at the speed the camera already had.
+    const easing = flights[1]?.options.easing;
+    expect(easing && easingSlope(easing, 0)).toBeGreaterThan(0.1);
+    // It lands where it was going: nothing was kept for later.
+    land(viewer, flights[1]);
+    expect(flights).toHaveLength(2);
+  });
+
+  it("flies on landing to a correction too small to re-point for on the way", async () => {
+    const { manager, flights, viewer } = harness();
+    const record = deferred<Site | null>();
+    manager.setCatalog([summary], () => record.promise);
+    const done = manager.flyTo(SITE_ID);
+    await vi.advanceTimersByTimeAsync(1_000);
+    record.resolve(site([]));
+    await done;
+    // Tens of metres, against a leg from 18,000 km up: not worth a new leg on the way.
+    expect(flights).toHaveLength(1);
+    land(viewer, flights[0]);
+    expect(flights).toHaveLength(2);
+    const radius = Math.max(boundingRadiusM(site([]).boundary), 20);
+    expect(flights[1]?.height).toBeCloseTo(100 + radius * 2.3, 3);
+    expect(Math.abs((flights[1]?.height ?? 0) - (flights[0]?.height ?? 0))).toBeGreaterThan(10);
+    // From rest: the camera had stopped.
+    const easing = flights[1]?.options.easing;
+    expect(easing && easingSlope(easing, 0)).toBeCloseTo(0, 2);
+    land(viewer, flights[1]);
+    expect(flights).toHaveLength(2);
+  });
+
+  it("aims at the terrain under a site the catalog has no height for, up to 20 s after landing", async () => {
+    const { manager, flights, viewer } = harness();
+    const late = deferred<number>();
+    terrain.pending = late.promise;
+    manager.setCatalog([placedSummary], () => Promise.resolve(placedSite()));
+    await manager.flyTo(PLACED_ID);
+    // The globe had no terrain loaded there: the first leg aims at the ellipsoid.
+    expect(flights).toHaveLength(1);
+    land(viewer, flights[0]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    late.resolve(1_500);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(flights).toHaveLength(2);
+    expect((flights[1]?.height ?? 0) - (flights[0]?.height ?? 0)).toBeCloseTo(1_500, 3);
+    expect(flights[1]?.longitude).toBeCloseTo(flights[0]?.longitude ?? 0, 9);
+  });
+
+  it("lets the camera be once 20 s have passed since it landed", async () => {
+    const { manager, flights, viewer } = harness();
+    const late = deferred<number>();
+    terrain.pending = late.promise;
+    manager.setCatalog([placedSummary], () => Promise.resolve(placedSite()));
+    await manager.flyTo(PLACED_ID);
+    land(viewer, flights[0]);
+    await vi.advanceTimersByTimeAsync(21_000);
+    late.resolve(1_500);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(flights).toHaveLength(1);
+  });
+
+  it("never moves a camera somebody has moved since it landed, or another flight has", async () => {
+    const touched = async (take: (h: ReturnType<typeof harness>) => void) => {
+      const h = harness();
+      const late = deferred<number>();
+      terrain.pending = late.promise;
+      h.manager.setCatalog([placedSummary], () => Promise.resolve(placedSite()));
+      await h.manager.flyTo(PLACED_ID);
+      land(h.viewer, h.flights[0]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      take(h);
+      late.resolve(1_500);
+      await vi.advanceTimersByTimeAsync(1);
+      return h.flights.length;
+    };
+    // A drag of a few metres.
+    const dragged = await touched(({ viewer, flights }) => {
+      const at = flights[0];
+      viewer.camera.positionWC = Cartesian3.fromDegrees(
+        (at?.longitude ?? 0) + east(3),
+        at?.latitude ?? 0,
+        at?.height ?? 0,
+      );
+    });
+    expect(dragged).toBe(1);
+    // A turn on the spot.
+    const turned = await touched(({ viewer }) => {
+      viewer.camera.heading += 0.2;
+    });
+    expect(turned).toBe(1);
+    // Another flight (an object flown to), before it has moved the camera at all.
+    const taken = await touched(({ camera }) => {
+      camera.flights += 1;
+    });
+    expect(taken).toBe(1);
+  });
+
+  it("frames a placed scan at its placement origin, at the size of its ground, not its floaters", async () => {
+    const { manager, flights, spheres, viewer } = harness();
+    terrain.height = 1_500;
+    tilesets.next = placedScan;
+    manager.setCatalog([placedSummary], () => Promise.resolve(placedSite([SCAN])));
+    await manager.flyTo(PLACED_ID);
+    await vi.advanceTimersByTimeAsync(1);
+    // The terrain and the model both came while the camera was still thousands of kilometres
+    // out, too close to the first leg's aim to re-point for: kept, and flown on landing.
+    expect(flights).toHaveLength(1);
+    land(viewer, flights[0]);
+    expect(flights).toHaveLength(2);
+    const framed = spheres.at(-1);
+    if (!framed) throw new Error("nothing framed");
+    const centre = Cartographic.fromCartesian(framed.center);
+    // The origin, lifted by the clamp onto the terrain: its cells' z of 0.1 m rest at 1,500 m.
+    expect(CesiumMath.toDegrees(centre.longitude)).toBeCloseTo(LON, 7);
+    expect(CesiumMath.toDegrees(centre.latitude)).toBeCloseTo(LAT, 7);
+    expect(centre.height).toBeCloseTo(1_499.9, 2);
+    // Ninety per cent of a disc of cells 20 m in radius, not the floaters' 128 m.
+    expect(framed.radius).toBeGreaterThan(15);
+    expect(framed.radius).toBeLessThan(20);
+    expect(flights[1]?.height).toBeCloseTo(centre.height + framed.radius * 2.3, 3);
+    // Anything else asking for the model's bounds still gets all of them.
+    expect((await manager.boundingSphere(placedSite([SCAN])))?.radius).toBe(128);
+  });
+
+  it("keeps the model's framing when the terrain under the site answers after it", async () => {
+    const { manager, flights, viewer } = harness();
+    terrain.height = 1_500;
+    const late = deferred<number>();
+    terrain.point = late.promise;
+    tilesets.next = placedScan;
+    manager.setCatalog([placedSummary], () => Promise.resolve(placedSite([SCAN])));
+    await manager.flyTo(PLACED_ID);
+    land(viewer, flights[0]);
+    land(viewer, flights[1]);
+    expect(flights).toHaveLength(2);
+    // The model rests where the clamp measured; the footprint at the terrain is a worse aim.
+    late.resolve(1_400);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(flights).toHaveLength(2);
   });
 });
 

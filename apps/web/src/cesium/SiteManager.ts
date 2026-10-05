@@ -52,7 +52,13 @@ import {
   rememberIonAssetMissing,
 } from "./ion";
 import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
-import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
+import {
+  groundAt,
+  measuredClamp,
+  robustArrivalSphere,
+  type GeoPoint,
+  type MeasuredGround,
+} from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import { splatTilesetOf } from "./splatInternals";
@@ -123,10 +129,13 @@ const PROXIMITY_RETRY_MS = 30_000;
 /** A flight re-pointed on the way never lands sooner than this (s). */
 const RETARGET_MIN_S = 1.2;
 /**
- * After landing, a better destination (the authored bookmark, the model's real bounds) still
- * moves the camera for this long (ms), and only if nobody has touched the camera since.
+ * After landing, a better destination (the authored bookmark, the terrain under the site, the
+ * model's real bounds) still moves the camera for this long (ms), and only if nobody has
+ * touched the camera since. It was 8 s; a placed scan is not where it rests until the clamp
+ * has sampled the terrain at full detail and the drawn surface under it, which on a slow link
+ * can take longer, and a correction after the window left the camera at the guess beside it.
  */
-const SETTLE_WINDOW_MS = 8_000;
+const SETTLE_WINDOW_MS = 20_000;
 /** Where the load bar stands as each phase begins (state/sites.ts `SiteLoad`). */
 const LOAD_PROGRESS = { details: 0.05, model: 0.15, streaming: 0.3 } as const;
 
@@ -197,6 +206,14 @@ interface SiteFlight {
   /** Where and when it landed, to tell whether anybody has moved the camera since. */
   landed: { at: number; position: Cartesian3; heading: number } | null;
   /**
+   * The latest pose `steer` was handed on the way and did not re-point this leg for, because
+   * it was within a few per cent of the distance still to fly; flown to on landing. Small
+   * beside thousands of kilometres still to go is not small beside the view it lands on: the
+   * model's bounds arriving from orbit were dropped this way, and the camera came down at the
+   * catalog's guess, metres to hundreds of metres beside the scan.
+   */
+  best: ArrivalPose | null;
+  /**
    * The camera controller's flight count once this leg left (`CameraController.flights`): a
    * higher count later means another flight (an object flown to, a search result) has the
    * camera, even before it has moved it.
@@ -213,6 +230,11 @@ function settledNow<T>(promise: Promise<T>): Promise<T | undefined> {
     promise.catch(() => undefined),
     new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 0)),
   ]);
+}
+
+/** Whether the catalog knows a height: a phone scan or a downloaded object has none. */
+function knownHeight(height: number | null | undefined): height is number {
+  return height !== undefined && height !== null && Number.isFinite(height);
 }
 
 /** Splat tiles kept in memory, as a multiple of what the Detail budget draws: the view,
@@ -553,10 +575,12 @@ export class SiteManager {
    *    second visit, the built-in demo), else for the catalog summary's centre and size.
    * 2. The record and the model load meanwhile (`activate`), with deadlines on both, and the
    *    flight itself is what Cesium preloads destination tiles for (`preloadFlightDestinations`).
-   * 3. As better poses arrive -- the bookmark with the record, the model's real bounds once it
-   *    rests on the ground -- the flight is re-pointed without a jolt: the new leg leaves at
-   *    the speed the camera already has (flightRetarget.ts). After landing, a better pose still
-   *    moves a camera nobody has touched, for a few seconds; never one somebody has.
+   * 3. As better poses arrive -- the bookmark with the record, the terrain under a site the
+   *    catalog has no height for, the model's real bounds once it rests on the ground -- the
+   *    flight is re-pointed without a jolt: the new leg leaves at the speed the camera already
+   *    has (flightRetarget.ts). One too small to re-point for on the way is flown to on landing.
+   *    After landing, a better pose still moves a camera nobody has touched, for 20 s; never
+   *    one somebody has.
    *
    * Progress and failure go to the site's load record (`site-load`, state/sites.ts), where the
    * HUD shows them with Retry; a failed record leaves the camera at the summary's pose.
@@ -580,12 +604,32 @@ export class SiteManager {
       this.siteNotFound(siteId);
       return;
     }
-    const first = early
-      ? this.arrivalFor(early)
-      : summary
-        ? this.summaryArrival(summary)
-        : undefined;
+    // The pose to fly to until the model rests: the record's once it has come, else the
+    // summary's, aimed at the sampled terrain once that has answered.
+    let record: Site | undefined = early;
+    let ground: number | undefined;
+    let modelSteered = false;
+    const guess = (): ArrivalPose | undefined =>
+      record
+        ? this.arrivalFor(record, ground)
+        : summary
+          ? this.summaryArrival(summary, ground)
+          : undefined;
+    const first = guess();
     if (first) this.startFlight(serial, siteId, first);
+    // Without a catalog height the first leg aims at whatever terrain the globe has loaded
+    // under the site, which from orbit is its coarsest tiles' (or none: the ellipsoid, two
+    // kilometres under a Montana scan). The terrain there at full detail is asked for now and
+    // re-aims the flight when it answers, unless the model's own bounds already have.
+    const centroid = early?.centroid ?? summary?.centroid;
+    if (centroid && !knownHeight(centroid.height) && !(early && this.bookmarkOf(early))) {
+      void this.sampleGround(centroid.longitude, centroid.latitude).then((height) => {
+        if (height === undefined || modelSteered || serial !== this.flightSerial) return;
+        ground = height;
+        const pose = guess();
+        if (pose) this.steer(serial, pose);
+      });
+    }
 
     let site: Site | null;
     try {
@@ -602,7 +646,8 @@ export class SiteManager {
       return;
     }
     if (!early) {
-      const pose = this.arrivalFor(site);
+      record = site;
+      const pose = this.arrivalFor(site, ground);
       if (first) this.steer(serial, pose);
       else this.startFlight(serial, siteId, pose);
     }
@@ -612,9 +657,10 @@ export class SiteManager {
     if (this.bookmarkOf(site)) return;
     await activation;
     if (serial !== this.flightSerial) return;
-    const sphere = await this.boundingSphere(site);
-    if (sphere && serial === this.flightSerial)
-      this.steer(serial, this.camera.sphereArrival(sphere));
+    const sphere = await this.arrivalSphere(site);
+    if (!sphere || serial !== this.flightSerial) return;
+    modelSteered = true;
+    this.steer(serial, this.camera.sphereArrival(sphere));
   }
 
   private siteNotFound(siteId: string): void {
@@ -633,8 +679,11 @@ export class SiteManager {
     return site.cameraBookmarks.find((b) => b.isDefault) ?? site.cameraBookmarks[0];
   }
 
-  /** Where a site's record says to arrive: its bookmark, else above its footprint. */
-  private arrivalFor(site: Site): ArrivalPose {
+  /**
+   * Where a site's record says to arrive: its bookmark, else above its footprint. `sampled` is
+   * the terrain under the site at full detail, when it has been sampled (`sampleGround`).
+   */
+  private arrivalFor(site: Site, sampled?: number): ArrivalPose {
     const bookmark = this.bookmarkOf(site);
     if (bookmark) {
       return {
@@ -647,30 +696,57 @@ export class SiteManager {
     }
     const center = centerOf(site.boundary);
     const radius = Math.max(boundingRadiusM(site.boundary), 20);
-    const ground = this.groundGuess(center.longitude, center.latitude, site.centroid.height);
+    const ground = this.groundGuess(
+      center.longitude,
+      center.latitude,
+      site.centroid.height,
+      sampled,
+    );
     return this.camera.sphereArrival(
       new BoundingSphere(Cartesian3.fromDegrees(center.longitude, center.latitude, ground), radius),
     );
   }
 
   /** Where the catalog summary says to arrive: above its centre, at its size. */
-  private summaryArrival(summary: SiteSummary): ArrivalPose {
+  private summaryArrival(summary: SiteSummary, sampled?: number): ArrivalPose {
     const { longitude, latitude, height } = summary.centroid;
     const radius = Math.max(Math.sqrt(summary.areaM2 / Math.PI), MIN_SITE_RADIUS_M);
-    const ground = this.groundGuess(longitude, latitude, height);
+    const ground = this.groundGuess(longitude, latitude, height, sampled);
     return this.camera.sphereArrival(
       new BoundingSphere(Cartesian3.fromDegrees(longitude, latitude, ground), radius),
     );
   }
 
   /**
-   * The ground height to aim at: the catalog's when it has one, else the globe's terrain as far
-   * as it has loaded (a CPU lookup), else the ellipsoid. Only the first leg aims this way; the
-   * record or the model corrects it on the way.
+   * The ground height to aim at: the catalog's when it has one, else the terrain sampled at
+   * full detail when that has answered, else the globe's terrain as far as it has loaded (a CPU
+   * lookup: from orbit the coarsest tiles, or none), else the ellipsoid. The model's own bounds
+   * correct whichever it was, once it rests on the ground.
    */
-  private groundGuess(longitude: number, latitude: number, height?: number | null): number {
-    if (height !== undefined && height !== null && Number.isFinite(height)) return height;
+  private groundGuess(
+    longitude: number,
+    latitude: number,
+    height?: number | null,
+    sampled?: number,
+  ): number {
+    if (knownHeight(height)) return height;
+    if (sampled !== undefined) return sampled;
     return this.scene.globe.getHeight(Cartographic.fromDegrees(longitude, latitude)) ?? 0;
+  }
+
+  /**
+   * The terrain under a point at the most detailed level the terrain has there, or undefined
+   * when there is none to be had: the ellipsoid (no terrain layer), a tile that failed.
+   */
+  private async sampleGround(longitude: number, latitude: number): Promise<number | undefined> {
+    try {
+      const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
+        Cartographic.fromDegrees(longitude, latitude),
+      ]);
+      return sample && Number.isFinite(sample.height) ? sample.height : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** The first leg of a fly-to: Cesium's usual quadratic in-out, at the usual pace. */
@@ -698,6 +774,7 @@ export class SiteManager {
       lengthM,
       state: "flying",
       landed: null,
+      best: null,
     };
     // Before `camera.flyTo`: it cancels the leg this replaces, synchronously, and that leg's
     // onCancel must find itself already superseded.
@@ -732,7 +809,13 @@ export class SiteManager {
           position: Cartesian3.clone(camera.positionWC),
           heading: camera.heading,
         };
-        settle();
+        // A pose too small to re-point for on the way is flown to now, from rest. Nobody has
+        // touched the camera: it has only just landed.
+        const best = flight.best;
+        flight.best = null;
+        if (best) this.steer(serial, best);
+        // Only when no new leg has left: `settle` releases the site, which that leg still needs.
+        if (this.flight === flight) settle();
       },
       onCancel: () => {
         // Replaced by our own re-pointing: the new leg carries on.
@@ -750,9 +833,9 @@ export class SiteManager {
 
   /**
    * Points the current fly-to at a better pose: mid-flight at the camera's current speed, or
-   * after landing if nobody has moved the camera since. Nothing happens when the pose is
-   * effectively where the flight is already going, when another fly-to has superseded this
-   * one, or when somebody has taken the camera.
+   * after landing if nobody has moved the camera since. A pose effectively where the flight is
+   * already going is kept for its landing instead (`SiteFlight.best`). Nothing happens when
+   * another fly-to has superseded this one, or when somebody has taken the camera.
    */
   private steer(serial: number, pose: ArrivalPose): void {
     const flight = this.flight;
@@ -767,7 +850,12 @@ export class SiteManager {
     const remainingM = Cartesian3.distance(camera.positionWC, destination);
     // A few per cent of the distance still to fly, and 5 cm beside a hand-sized object.
     const tolerance = Math.max(0.05, 0.03 * Cartesian3.distance(camera.positionWC, previous));
-    if (samePose(flight.pose, pose, Cartesian3.distance(previous, destination), tolerance)) return;
+    if (samePose(flight.pose, pose, Cartesian3.distance(previous, destination), tolerance)) {
+      // Not worth a new leg now; on landing, where the tolerance is 5 cm, it may well be.
+      // Poses arrive best last (record, terrain, model), so the latest is the one kept.
+      if (flight.state === "flying") flight.best = pose;
+      return;
+    }
     if (flight.state === "flying") {
       // The leg's time can be up before Cesium has called it complete (a hidden tab draws no
       // frames; slow frames finish late), and then there is no speed to carry on with: the
@@ -948,19 +1036,62 @@ export class SiteManager {
 
   /** Bounding sphere of the active representation (loaded tileset) or the footprint. */
   async boundingSphere(site: Site): Promise<BoundingSphere | null> {
-    const entry = this.loaded.get(site.id);
-    const handle = entry ? this.handleFor(entry) : null;
-    const tileset = handle?.tileset ?? (handle?.loading ? await handle.loading : null);
-    if (tileset && handle) {
-      // A clamped model moves once the terrain height is known; fly to where it will be.
-      await handle.placed;
-      return tileset.boundingSphere;
-    }
+    const model = await this.restingModel(site);
+    if (model) return model.tileset.boundingSphere;
     const center = centerOf(site.boundary);
     const radius = Math.max(boundingRadiusM(site.boundary), 20);
     return new BoundingSphere(
       Cartesian3.fromDegrees(center.longitude, center.latitude, site.centroid.height ?? 0),
       radius,
+    );
+  }
+
+  /** The shown model of a site, once it has loaded and rests where it is placed; else null. */
+  private async restingModel(
+    site: Site,
+  ): Promise<{ asset: SiteAsset; tileset: Cesium3DTileset } | null> {
+    const entry = this.loaded.get(site.id);
+    const handle = entry ? this.handleFor(entry) : null;
+    const tileset = handle?.tileset ?? (handle?.loading ? await handle.loading : null);
+    if (!tileset || !handle) return null;
+    // A clamped model moves once the terrain height is known; fly to where it will be.
+    await handle.placed;
+    return tileset.isDestroyed() ? null : { asset: handle.asset, tileset };
+  }
+
+  /**
+   * What a fly-to frames at a site's model, once it rests on the ground; null while there is no
+   * model to frame. Not the footprint then, as `boundingSphere` falls back to: the record's
+   * pose has framed that already, and at the catalog's height, which a placed scan does not
+   * have, the footprint's sphere sits on the ellipsoid, under the ground.
+   *
+   * A placed scan (a capture the pipeline packed and the viewer clamps) is framed on its
+   * placement origin at the size of its own ground, which floaters do not move
+   * (`robustArrivalSphere`). Anything else is framed on its bounding sphere, as before.
+   */
+  private async arrivalSphere(site: Site): Promise<BoundingSphere | null> {
+    const model = await this.restingModel(site);
+    if (!model) return null;
+    const { asset, tileset } = model;
+    // Read first: the getter is what brings the root's computed transform up to date with the
+    // model matrix the clamp set.
+    const bounds = tileset.boundingSphere;
+    if (asset.representation !== "gaussian-splat" || !asset.renderConfig.clampToGround)
+      return bounds;
+    const origin = geoPoint(
+      Matrix4.getTranslation(tileset.root.computedTransform, new Cartesian3()),
+    );
+    const centre = geoPoint(bounds.center);
+    if (!origin || !centre) return bounds;
+    const framed = robustArrivalSphere(
+      origin,
+      { ...centre, radiusM: bounds.radius },
+      asset.renderConfig.groundSamples ?? [],
+      boundingRadiusM(site.boundary),
+    );
+    return new BoundingSphere(
+      Cartesian3.fromDegrees(framed.lon, framed.lat, framed.height),
+      framed.radiusM,
     );
   }
 
@@ -1973,4 +2104,15 @@ function rectanglePolygon(west: number, south: number, east: number, north: numb
 
 export function degrees(radians: number): number {
   return CesiumMath.toDegrees(radians);
+}
+
+/** A position in degrees and ellipsoid metres; null at the earth's centre, which has none. */
+function geoPoint(position: Cartesian3): GeoPoint | null {
+  const carto = Cartographic.fromCartesian(position) as Cartographic | undefined;
+  if (!carto) return null;
+  return {
+    lon: CesiumMath.toDegrees(carto.longitude),
+    lat: CesiumMath.toDegrees(carto.latitude),
+    height: carto.height,
+  };
 }
