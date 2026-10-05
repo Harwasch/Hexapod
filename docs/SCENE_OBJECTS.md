@@ -190,7 +190,9 @@ variant `feature-fields` (`variants/objects/feature-fields/`) beside today's.
   Its children are its cover classes (`kind: "ground-cover"`, `cover: "<class>"`, tagged with
   the class, category from `COVER_CLASSES`), each the ground regions the field splits the
   ground into (at the masks' median scale) whose SigLIP 2 description is nearest that class's
-  phrase; a class of several regions has them as its children.
+  phrase; a class of several regions has them as its children. All of this is written in one
+  place, `feature_fields.ground_records`, so it follows candidate A's representation of the
+  ground (the shared one) by changing that function alone.
 - **Extra fields** (the viewer ignores them): per instance `kind` (`object`, `ground`,
   `ground-cover`, `ground-region`) and `scale` (the robust diameter it was split at); at the
   top, `method` (the field's and the ground's settings).
