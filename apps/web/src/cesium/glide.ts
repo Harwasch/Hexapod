@@ -21,6 +21,9 @@
  *   correction moves where the flight is going over a fraction of a second, with no jump in
  *   the camera's position or speed however late it comes, and one that comes after the clock
  *   has run out glides the camera on from where it is.
+ * - **The hand-over**: a glide that takes over from one still moving (another site picked on
+ *   the way) carries the camera's speed and turn into its first moments and lets them die
+ *   away, rather than stopping it dead.
  * - **The ground**: the path runs above the ground interpolated between its ends, and an end
  *   aimed at a guessed ground is re-aimed at the real one as the terrain under it loads. The
  *   ground the globe has loaded under the path itself is not a floor: on the way down it is a
@@ -30,7 +33,7 @@
  * Pure numbers apart from the geodesic, so the path, the spring and the driver are tested
  * directly, frame by frame (glide.test.ts).
  */
-import { Cartographic, EllipsoidGeodesic, Math as CesiumMath } from "cesium";
+import { Cartesian3, Cartographic, EllipsoidGeodesic, Math as CesiumMath } from "cesium";
 
 import type { ArrivalPose } from "./flightRetarget";
 import { plausibleGround as plausible } from "./placement";
@@ -63,6 +66,12 @@ const DESTINATION_OMEGA = 5;
 const SETTLED_M = 0.005;
 const SETTLED_SPEED = 0.01;
 const SETTLED_DEG = 0.01;
+/**
+ * How quickly the motion a glide takes over dies away (rad/s): the carried offset is
+ * `v t e^(-ωt)`, past its peak at 0.4 s and spent within two, and windowed to nothing by the
+ * landing. Faster, and the turn from the old heading to the new one is itself a kick.
+ */
+const CARRY_OMEGA = 2.5;
 /** A re-aimed end is kept at least this far above the ground it is re-aimed at (m). */
 const REAIM_CLEARANCE_M = 2;
 /**
@@ -268,6 +277,32 @@ export interface GlideScene {
   ground(longitude: number, latitude: number): number | undefined;
 }
 
+/**
+ * The motion of a camera a glide takes over from: Earth-fixed velocity (m/s) and turn rates
+ * (degrees per second).
+ */
+export interface GlideCarry {
+  readonly velocity: { readonly x: number; readonly y: number; readonly z: number };
+  readonly heading: number;
+  readonly pitch: number;
+}
+
+/** How a glide is started, beyond where from and where to. */
+export interface GlideSetup {
+  /** Seconds; by default the path's own length decides (`glideDuration`). */
+  readonly durationS?: number;
+  /**
+   * The ground last known under the camera, for when the globe has nothing worth believing
+   * there now (its tiles outside a site's outline are not loaded in the photorealistic
+   * world); without either, the end's ground is the best guess. Taken as 0, a short hop
+   * between two scans in the mountains believed itself two kilometres up and arced hundreds
+   * of metres to get there.
+   */
+  readonly startGround?: number;
+  /** The motion of the flight this one replaces, carried over (`GlideCarry`). */
+  readonly carry?: GlideCarry;
+}
+
 /** A destination as the spring carries it: the components that move, unwrapped. */
 interface Destination {
   longitude: number;
@@ -299,26 +334,21 @@ export class Glide {
   private lastStep: number;
   private finished = false;
 
-  /**
-   * `startGround` is the ground last known under the camera, for when the globe has nothing
-   * worth believing there now (its tiles outside a site's outline are not loaded in the
-   * photorealistic world); without either, the end's ground is the best guess. Taken as 0, a
-   * short hop between two scans in the mountains believed itself two kilometres up and arced
-   * hundreds of metres to get there.
-   */
+  private readonly carry: GlideCarry | undefined;
+
   constructor(
     start: { longitude: number; latitude: number; height: number; heading: number; pitch: number },
     end: GlidePose,
     private readonly scene: GlideScene,
     now: number,
-    durationS?: number,
-    startGround?: number,
+    options: GlideSetup = {},
   ) {
     this.target = this.destinationOf(end);
     this.targetGround = end.ground;
+    this.carry = options.carry;
     const ground =
       plausible(scene.ground(start.longitude, start.latitude)) ??
-      plausible(startGround) ??
+      plausible(options.startGround) ??
       this.target.ground;
     this.start = { ...start, ground: Math.min(ground, start.height - MIN_ALTITUDE_M) };
     this.destination = { ...this.target };
@@ -326,7 +356,8 @@ export class Glide {
     this.startedAt = now;
     this.lastStep = now;
     this.durationS =
-      durationS ?? glideDuration(glideGeometry(this.start, this.endOf(this.destination)).path);
+      options.durationS ??
+      glideDuration(glideGeometry(this.start, this.endOf(this.destination)).path);
   }
 
   /** Whether the flight has arrived (its last `step` returned the destination itself). */
@@ -369,8 +400,32 @@ export class Glide {
       return poseOf(this.endOf(this.target));
     }
     const geometry = glideGeometry(this.start, end);
-    const pose = glidePose(this.start, end, easeInOut(t), geometry);
-    return pose;
+    const s = easeInOut(t);
+    return this.carried(glidePose(this.start, end, s, geometry), (now - this.startedAt) / 1000, s);
+  }
+
+  /**
+   * The pose with the motion this glide took over added: `v τ e^(-ωτ)`, which leaves at that
+   * velocity and dies away, windowed by what is left of the flight so the landing is exact.
+   */
+  private carried(pose: ArrivalPose, elapsedS: number, progress: number): ArrivalPose {
+    const carry = this.carry;
+    if (!carry || elapsedS <= 0) return pose;
+    const k = elapsedS * Math.exp(-CARRY_OMEGA * elapsedS) * (1 - progress);
+    if (k <= 1e-9) return pose;
+    const { x, y, z } = carry.velocity;
+    const at = Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height);
+    const moved = Cartographic.fromCartesian(
+      new Cartesian3(at.x + x * k, at.y + y * k, at.z + z * k),
+    ) as Cartographic | undefined;
+    if (!moved) return pose;
+    return {
+      longitude: CesiumMath.toDegrees(moved.longitude),
+      latitude: CesiumMath.toDegrees(moved.latitude),
+      height: moved.height,
+      heading: normalizeHeading(pose.heading + carry.heading * k),
+      pitch: Math.max(-90, Math.min(90, pose.pitch + carry.pitch * k)),
+    };
   }
 
   /**

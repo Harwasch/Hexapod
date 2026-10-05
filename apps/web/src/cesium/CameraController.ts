@@ -27,7 +27,7 @@ import { isTyping } from "@/lib/hotkeys";
 import { throttle } from "@/lib/throttle";
 
 import type { ArrivalPose } from "./flightRetarget";
-import { Glide, type GlidePose } from "./glide";
+import { Glide, type GlideCarry, type GlidePose } from "./glide";
 import { plausibleGround } from "./placement";
 import type { ScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatCollider } from "./SplatCollider";
@@ -67,6 +67,8 @@ export interface GlideHandle {
 interface ActiveGlide {
   glide: Glide;
   options: GlideOptions;
+  /** The last two poses it gave the camera, Earth-fixed, with their times (`motion`). */
+  trail: { at: number; position: Cartesian3; heading: number; pitch: number }[];
   /** Stands in for a Cesium flight on the camera (`_currentFlight`), so a `camera.flyTo` from
    *  anywhere, or `cancelFlight`, ends this glide first, as it would a flight of its own. */
   sentinel: { cancelTween: () => void };
@@ -1065,6 +1067,8 @@ export class CameraController {
    */
   glide(pose: GlidePose, options: GlideOptions = {}): GlideHandle {
     this.flightCount += 1;
+    // A glide that replaces one under way takes its motion over rather than stopping dead.
+    const carry = this.motion();
     this.endGlide("cancel");
     const camera = this.viewer.camera;
     camera.cancelFlight();
@@ -1084,8 +1088,7 @@ export class CameraController {
           globe.getHeight(Cartographic.fromDegrees(longitude, latitude, 0, scratchCarto)),
       },
       this.glideClock(),
-      options.durationS,
-      this.lastSurfaceHeight,
+      { durationS: options.durationS, startGround: this.lastSurfaceHeight, carry },
     );
     const handle = {
       active: true,
@@ -1103,7 +1106,7 @@ export class CameraController {
         if (this.current?.sentinel === sentinel) this.endGlide("cancel");
       },
     };
-    this.current = { glide, options, sentinel, handle };
+    this.current = { glide, options, sentinel, handle, trail: [] };
     (camera as unknown as { _currentFlight?: unknown })._currentFlight = sentinel;
     this.preloadDestination(glide.aim);
     this.scene.requestRender();
@@ -1154,17 +1157,41 @@ export class CameraController {
   private readonly stepGlide = (): void => {
     const current = this.current;
     if (!current) return;
-    const pose = current.glide.step(this.glideClock());
+    const at = this.glideClock();
+    const pose = current.glide.step(at);
+    const position = Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height);
     this.viewer.camera.setView({
-      destination: Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height),
+      destination: position,
       orientation: {
         heading: CesiumMath.toRadians(pose.heading),
         pitch: CesiumMath.toRadians(pose.pitch),
         roll: 0,
       },
     });
+    current.trail = [
+      ...current.trail.slice(-1),
+      { at, position, heading: pose.heading, pitch: pose.pitch },
+    ];
     if (current.glide.done) this.endGlide("complete");
   };
+
+  /** How the glide under way is moving now, from its last two frames; none without one. */
+  private motion(): GlideCarry | undefined {
+    const [a, b] = this.current?.trail ?? [];
+    if (!a || !b) return undefined;
+    const dt = (b.at - a.at) / 1000;
+    if (!(dt > 0)) return undefined;
+    const turn = ((((b.heading - a.heading + 180) % 360) + 360) % 360) - 180;
+    return {
+      velocity: {
+        x: (b.position.x - a.position.x) / dt,
+        y: (b.position.y - a.position.y) / dt,
+        z: (b.position.z - a.position.z) / dt,
+      },
+      heading: turn / dt,
+      pitch: (b.pitch - a.pitch) / dt,
+    };
+  }
 
   /** A press or a wheel on the map: the person takes the camera. */
   private readonly interruptGlide = (): void => {

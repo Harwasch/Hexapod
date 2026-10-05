@@ -209,6 +209,56 @@ describe("a glide", () => {
     expect(worstKick([...frames, ...restarted])).toBeGreaterThan(SMOOTH * 3);
   });
 
+  it("takes over a flight still moving -- another site picked on the way -- without a kick", () => {
+    // On the way down to Camp, Pumpkin is picked instead: a new glide from where the camera
+    // is, carrying the motion it has.
+    const first = new Glide(ORBIT, CAMP, flat, 0);
+    const before = fly(first, () => undefined, Math.round(first.durationS * 60 * 0.6));
+    const [a, b] = before.slice(-2);
+    if (!a || !b) throw new Error("no frames");
+    const dt = (b.t - a.t) / 1000;
+    const carry = {
+      velocity: {
+        x: (b.position.x - a.position.x) / dt,
+        y: (b.position.y - a.position.y) / dt,
+        z: (b.position.z - a.position.z) / dt,
+      },
+      heading: (b.pose.heading - a.pose.heading) / dt,
+      pitch: (b.pose.pitch - a.pose.pitch) / dt,
+    };
+    const pumpkin: GlidePose = { ...CAMP, longitude: -122.6998, latitude: 38.0637 };
+    const second = new Glide(b.pose, pumpkin, flat, b.t, { carry });
+    const after: Frame[] = [];
+    for (let i = 1; i <= 60 * 30; i++) {
+      const t = b.t + i * FRAME_MS;
+      const pose = second.step(t);
+      after.push({
+        t,
+        pose,
+        position: Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height),
+      });
+      if (second.done) break;
+    }
+    expect(after.at(-1)?.pose.longitude).toBeCloseTo(pumpkin.longitude, 9);
+    expect(after.at(-1)?.pose.height).toBeCloseTo(pumpkin.height, 6);
+    expect(worstKick([...before, ...after])).toBeLessThan(SMOOTH);
+    // Taken over from rest instead, the hand-over is the kick it used to be.
+    const still = new Glide(b.pose, pumpkin, flat, b.t);
+    const stopped = [
+      b,
+      ...[1, 2, 3].map((i) => {
+        const t = b.t + i * FRAME_MS;
+        const pose = still.step(t);
+        return {
+          t,
+          pose,
+          position: Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height),
+        };
+      }),
+    ];
+    expect(worstKick([a, ...stopped])).toBeGreaterThan(SMOOTH * 3);
+  });
+
   it("glides on from where it is to a correction that comes after it has run out of time", () => {
     const glide = new Glide(ORBIT, CAMP, flat, 0);
     const end = Math.ceil(glide.durationS * 60);
