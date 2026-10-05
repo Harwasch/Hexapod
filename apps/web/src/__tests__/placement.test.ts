@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { groundAt, measuredClamp, median, type MeasuredGround } from "@/cesium/placement";
+import {
+  groundAt,
+  measuredClamp,
+  median,
+  robustArrivalSphere,
+  type ArrivalSphere,
+  type GeoPoint,
+  type MeasuredGround,
+} from "@/cesium/placement";
 
 /**
  * A capture on a slope, which is the case the bounding-box clamp gets wrong.
@@ -117,5 +125,92 @@ describe("median", () => {
 
   it("takes the middle of an odd count", () => {
     expect(median([9, 1, 5])).toBe(5);
+  });
+});
+
+/**
+ * A placed scan as the pipeline packs one: the origin at the middle of its footprint, on its
+ * own ground (here 1,500 m up, a Montana field), with 64 dense ground cells around it some
+ * 20 m out, and a tileset whose bounding sphere the floaters have dragged 40 m east and 25 m
+ * up and blown up to 130 m -- the shape of the Camp scan's.
+ */
+const ORIGIN: GeoPoint = { lon: -111.1346, lat: 44.7965, height: 1500 };
+const M_PER_DEG = 111_320;
+const east = (m: number) => m / (M_PER_DEG * Math.cos((ORIGIN.lat * Math.PI) / 180));
+const north = (m: number) => m / M_PER_DEG;
+
+function cells(reachM: number, count = 64): MeasuredGround[] {
+  const out: MeasuredGround[] = [];
+  for (let i = 0; i < count; i += 1) {
+    // A disc filled evenly: radius grows with the square root of the index.
+    const r = reachM * Math.sqrt((i + 0.5) / count);
+    const a = i * 2.399963; // the golden angle, so the cells do not line up
+    out.push({
+      lon: ORIGIN.lon + east(r * Math.cos(a)),
+      lat: ORIGIN.lat + north(r * Math.sin(a)),
+      height: 0.1,
+    });
+  }
+  return out;
+}
+
+const floaterBounds: ArrivalSphere = {
+  lon: ORIGIN.lon + east(40),
+  lat: ORIGIN.lat,
+  height: ORIGIN.height + 25,
+  radiusM: 130,
+};
+
+/** Horizontal metres between two points, for checking where a sphere was put. */
+function apartM(a: GeoPoint, b: GeoPoint): number {
+  return Math.hypot((a.lon - b.lon) / east(1), (a.lat - b.lat) / north(1));
+}
+
+describe("robust arrival sphere", () => {
+  it("frames the placement origin, wherever the floaters put the bounding sphere", () => {
+    const framed = robustArrivalSphere(ORIGIN, floaterBounds, cells(20), 105);
+    expect(apartM(framed, ORIGIN)).toBeLessThan(MM);
+    expect(framed.height).toBeCloseTo(ORIGIN.height, 9);
+    // The same scan with its floaters elsewhere: the same sphere.
+    const other = { ...floaterBounds, lon: ORIGIN.lon - east(60), height: ORIGIN.height + 5 };
+    expect(robustArrivalSphere(ORIGIN, other, cells(20), 105)).toEqual(framed);
+  });
+
+  it("sizes it by the scan's own ground, not by its floaters or its footprint", () => {
+    const framed = robustArrivalSphere(ORIGIN, floaterBounds, cells(20), 105);
+    // Ninety per cent of a disc of cells 20 m in radius is within about 19 m of its middle.
+    expect(framed.radiusM).toBeGreaterThan(15);
+    expect(framed.radiusM).toBeLessThan(20);
+    // A few dense patches of background 80 m out are the tenth that does not count.
+    const patches = [
+      ...cells(20, 60),
+      ...cells(0, 4).map((c) => ({ ...c, lon: c.lon + east(80) })),
+    ];
+    const withPatches = robustArrivalSphere(ORIGIN, floaterBounds, patches, 105);
+    expect(withPatches.radiusM).toBeLessThan(21);
+  });
+
+  it("falls back to the smaller of the footprint and the bounds with too few cells to spread", () => {
+    const one = cells(0, 1);
+    expect(robustArrivalSphere(ORIGIN, floaterBounds, one, 35).radiusM).toBe(35);
+    const tight = { ...floaterBounds, lon: ORIGIN.lon, height: ORIGIN.height + 1, radiusM: 6.3 };
+    expect(robustArrivalSphere(ORIGIN, tight, one, 35).radiusM).toBe(6.3);
+    expect(robustArrivalSphere(ORIGIN, tight, [], undefined).radiusM).toBe(6.3);
+  });
+
+  it("never frames more than the tiles hold, nor less than a metre", () => {
+    const tight = { ...floaterBounds, lon: ORIGIN.lon, height: ORIGIN.height + 1, radiusM: 7.6 };
+    // Ground cells 40 m out around tiles that reach 8 m disagree with them.
+    expect(robustArrivalSphere(ORIGIN, tight, cells(40), 2).radiusM).toBe(7.6);
+    expect(robustArrivalSphere(ORIGIN, floaterBounds, cells(0, 8), 105).radiusM).toBe(1);
+  });
+
+  it("keeps the bounding sphere when the origin is not in the scan", () => {
+    // A capture never recentred: its frame starts where the phone app did, 200 m away.
+    const astray = { ...ORIGIN, lon: ORIGIN.lon + east(200) };
+    expect(robustArrivalSphere(astray, floaterBounds, cells(20), 105)).toBe(floaterBounds);
+    expect(robustArrivalSphere({ ...ORIGIN, height: Number.NaN }, floaterBounds, [], 5)).toBe(
+      floaterBounds,
+    );
   });
 });
