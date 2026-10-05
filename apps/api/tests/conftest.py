@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import os
 from collections.abc import Generator, Iterator
 
@@ -65,8 +66,43 @@ WORKER_BUCKET = "twin-worker-test"
 
 
 @pytest.fixture
-def sessions(engine: Engine) -> sessionmaker[Session]:
-    """A session factory, for the worker: it opens its own sessions per job."""
+def frozen_heap() -> Iterator[None]:
+    """Keep the garbage collector off everything the suite made before this test.
+
+    The worker's tests run real leases at test speed: `FAST_LEASE_S` is 1.5 s, renewed
+    every 0.2 s from `claim.LeaseKeeper`'s thread, while a second slot polls the queue
+    every 0.05 s and takes any lease that has lapsed. A full collection stops every
+    thread in the process for as long as it takes to walk the heap, and by the time
+    `uv run pytest` reaches `test_worker*.py` the earlier tests have left some 3.6 M
+    objects in it: a collection there took 3.4 s, measured, and CPython ran one every
+    minute or two (it grows along the suite -- 0.2 s at `test_bookmarks`, 1.5 s at
+    `test_sidecar_attach`). The database's clock does not stop with the process, so the
+    lease lapsed with its keeper frozen; when the process resumed, the idle slot's poll
+    and the keeper's renewal raced for the row, and the slot won about half the time:
+    `job claimed 2 times, by ['worker-a/0', 'worker-a/1']`, in CI on 2026-10-05, now and
+    then, and never when the module runs alone, where the heap is small.
+
+    That is not the worker's to survive. Its lease is 30 s and its heap a fraction of
+    this one, and a process frozen for longer than its lease is meant to lose its jobs
+    (`claim.LeaseKeeper`). So for the length of the test the heap from before it is moved
+    out of the collector's sight (`gc.freeze`: a list splice, not a walk) and then given
+    back. Collections during the test still run and still free what the test makes, and
+    walk only that: none took over 50 ms in a full run. No lease, timing or assertion
+    changes.
+    """
+    gc.freeze()
+    try:
+        yield
+    finally:
+        gc.unfreeze()
+
+
+@pytest.fixture
+def sessions(engine: Engine, frozen_heap: None) -> sessionmaker[Session]:
+    """A session factory, for the worker: it opens its own sessions per job.
+
+    Every test that runs the worker in this process asks for it, so each of them runs
+    with the earlier tests' heap frozen (`frozen_heap`)."""
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
