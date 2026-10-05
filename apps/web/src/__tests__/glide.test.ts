@@ -12,6 +12,7 @@
 import { Cartesian3 } from "cesium";
 import { describe, expect, it } from "vitest";
 
+import { surfacedHeight } from "@/cesium/CameraController";
 import type { ArrivalPose } from "@/cesium/flightRetarget";
 import {
   Glide,
@@ -248,22 +249,43 @@ describe("a glide", () => {
     expect(worstKick(frames, () => 2_000)).toBeLessThan(SMOOTH);
   });
 
-  it("never ends inside the earth, even pointed there by a measured ground", () => {
-    // A model clamped onto a coarse tile's chord, 3.6 km under the ground: the e2e flight's,
-    // offline, before the clamp learned to ignore such samples.
-    const buried: GlidePose = {
-      ...CAMP,
-      height: -3_624,
-      ground: { height: -3_640, measured: true },
+  it("trusts a measured end over the coarse terrain the globe loads on the way down", () => {
+    // Spool, measured at 2,001 m; the globe's tiles under it on the way down said 2,968 m.
+    const spool: GlidePose = {
+      longitude: -111.1346,
+      latitude: 44.7965,
+      height: 2_069,
+      heading: 100,
+      pitch: -45,
+      ground: { height: 2_001, measured: true },
     };
-    const frames = fly(new Glide(ORBIT, buried, flat, 0));
-    expect(Math.min(...frames.map((f) => f.pose.height))).toBeGreaterThan(0);
-    // At the same height above the ground as it was framed above its own.
-    expect(frames.at(-1)?.pose.height).toBeCloseTo(16, 6);
-    expect(worstKick(frames)).toBeLessThan(SMOOTH);
-    // A few metres under the terrain is a scan's own ground, and is left alone.
-    const scan: GlidePose = { ...CAMP, height: 12, ground: { height: -8, measured: true } };
-    expect(fly(new Glide(ORBIT, scan, flat, 0)).at(-1)?.pose.height).toBeCloseTo(12, 6);
+    const coarse: GlideScene = { ground: () => 2_968 };
+    expect(fly(new Glide(ORBIT, spool, coarse, 0)).at(-1)?.pose.height).toBeCloseTo(2_069, 6);
+  });
+
+  it("hops between two poses in the mountains without arcing, where the globe knows no ground", () => {
+    // A settle after landing at Spool, 2,000 m up: the globe had no tile worth believing under
+    // the camera, the start's ground was taken as sea level, and the hop of 40 m arced 400 m.
+    const unknown: GlideScene = { ground: () => undefined };
+    const start = {
+      longitude: -111.13556,
+      latitude: 44.79663,
+      height: 2_084,
+      heading: 100,
+      pitch: -45,
+    };
+    const end: GlidePose = {
+      longitude: -111.13506,
+      latitude: 44.79663,
+      height: 2_094,
+      heading: 100,
+      pitch: -45,
+      ground: { height: 2_002, measured: true },
+    };
+    const frames = fly(new Glide(start, end, unknown, 0));
+    expect(Math.max(...frames.map((f) => f.pose.height))).toBeLessThan(2_110);
+    expect(frames.at(-1)?.pose.height).toBeCloseTo(2_094, 6);
+    expect(worstKick(frames, () => 2_002)).toBeLessThan(SMOOTH);
   });
 
   it("ignores the globe's placeholder heights, thirty kilometres under the sea", () => {
@@ -288,5 +310,18 @@ describe("a glide", () => {
       Cartesian3.fromDegrees(b.longitude, b.latitude, b.height),
     );
     expect(gap).toBeLessThan(1);
+  });
+});
+
+describe("a camera that landed underground", () => {
+  it("is brought up over the terrain sampled at full detail, and only when it is underground", () => {
+    // Production's first leg to Camp: 30 km under the Oregon coast.
+    expect(surfacedHeight(-30_817, -10)).toBe(20);
+    // A scan's own ground a few metres under the terrain model is not underground.
+    expect(surfacedHeight(1_995, 2_001)).toBeNull();
+    expect(surfacedHeight(2_069, 2_001)).toBeNull();
+    // No terrain worth believing: nothing to go by.
+    expect(surfacedHeight(-30_817, -31_017)).toBeNull();
+    expect(surfacedHeight(-30_817, undefined)).toBeNull();
   });
 });

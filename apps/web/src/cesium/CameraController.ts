@@ -12,6 +12,7 @@ import {
   HeadingPitchRange,
   Math as CesiumMath,
   Rectangle,
+  sampleTerrainMostDetailed,
   type Scene,
   type CesiumWidget,
 } from "cesium";
@@ -27,6 +28,7 @@ import { throttle } from "@/lib/throttle";
 
 import type { ArrivalPose } from "./flightRetarget";
 import { Glide, type GlidePose } from "./glide";
+import { plausibleGround } from "./placement";
 import type { ScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatCollider } from "./SplatCollider";
 import type { SceneEvents } from "./types";
@@ -105,6 +107,25 @@ const ROLL_TOLERANCE_RAD = 0.0005;
 const MAX_FLOOR_LIFT_M = 40;
 /** How long the floor check's lift takes (s). */
 const FLOOR_LIFT_S = 0.6;
+/**
+ * A camera this far under the terrain at full detail (m) once a flight has landed is
+ * underground: black, or the inside of the earth. Less is a scan's own ground or the
+ * photorealistic world's, a few metres off the terrain model, which the floor check handles.
+ */
+const UNDERGROUND_M = 25;
+/** A camera found underground is brought up to this far over the terrain (m), in this long (s). */
+const SURFACED_M = 30;
+const SURFACE_S = 1.2;
+
+/**
+ * Where a camera that landed at `height` over terrain sampled at `terrain` is brought up to,
+ * or null when it is not underground (or the terrain is no answer worth believing).
+ */
+export function surfacedHeight(height: number, terrain: number | undefined): number | null {
+  const ground = plausibleGround(terrain);
+  if (ground === undefined || height >= ground - UNDERGROUND_M) return null;
+  return ground + SURFACED_M;
+}
 /** Wheel events closer than this belong to one gesture. */
 const WHEEL_GESTURE_MS = 250;
 /** A cursor that moved less than this (Manhattan pixels) is still over the same point. */
@@ -1064,6 +1085,7 @@ export class CameraController {
       },
       this.glideClock(),
       options.durationS,
+      this.lastSurfaceHeight,
     );
     const handle = {
       active: true,
@@ -1157,8 +1179,51 @@ export class CameraController {
     current.handle.active = false;
     const camera = this.viewer.camera as unknown as { _currentFlight?: unknown };
     if (camera._currentFlight === current.sentinel) camera._currentFlight = undefined;
-    if (how === "complete") current.options.onComplete?.();
-    else current.options.onCancel?.();
+    if (how === "complete") {
+      current.options.onComplete?.();
+      void this.surfaceIfUnderground();
+    } else current.options.onCancel?.();
+  }
+
+  /**
+   * The last guard against a black arrival: once a glide has landed, the terrain under the
+   * camera is sampled at full detail, and a camera that ended up underground -- whatever aimed
+   * it there -- glides up to stand over it, if nothing has taken the camera meanwhile. The
+   * terrain the globe has loaded is not asked: on landing it can still be a coarse tile,
+   * hundreds of metres off in the mountains.
+   */
+  private async surfaceIfUnderground(): Promise<void> {
+    const provider = this.viewer.terrainProvider as { availability?: unknown };
+    if (!provider.availability) return;
+    const camera = this.viewer.camera;
+    const at = Cartographic.clone(camera.positionCartographic);
+    const position = Cartesian3.clone(camera.positionWC);
+    const { heading, pitch } = camera;
+    let terrain: number | undefined;
+    try {
+      const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
+        Cartographic.clone(at),
+      ]);
+      terrain = sample?.height;
+    } catch {
+      return;
+    }
+    const height = surfacedHeight(at.height, terrain);
+    if (height === null || this.current) return;
+    const untouched =
+      Cartesian3.distance(position, camera.positionWC) < 0.01 && camera.heading === heading;
+    if (!untouched) return;
+    this.glide(
+      {
+        longitude: CesiumMath.toDegrees(at.longitude),
+        latitude: CesiumMath.toDegrees(at.latitude),
+        height,
+        heading: CesiumMath.toDegrees(heading),
+        pitch: CesiumMath.toDegrees(pitch),
+        ground: { height: height - SURFACED_M, measured: true },
+      },
+      { durationS: SURFACE_S },
+    );
   }
 
   /**

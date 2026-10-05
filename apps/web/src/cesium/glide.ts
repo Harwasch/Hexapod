@@ -21,9 +21,11 @@
  *   correction moves where the flight is going over a fraction of a second, with no jump in
  *   the camera's position or speed however late it comes, and one that comes after the clock
  *   has run out glides the camera on from where it is.
- * - **The floor**: a flight never takes the camera below the ground it can see under it (the
- *   terrain the globe has loaded), and an end aimed at a guessed ground is re-aimed at the real
- *   one as the terrain under it loads.
+ * - **The ground**: the path runs above the ground interpolated between its ends, and an end
+ *   aimed at a guessed ground is re-aimed at the real one as the terrain under it loads. The
+ *   ground the globe has loaded under the path itself is not a floor: on the way down it is a
+ *   coarse tile, hundreds of metres off in the mountains, and the zoom-out arc clears any
+ *   ridge between two ends by a margin of the distance between them.
  *
  * Pure numbers apart from the geodesic, so the path, the spring and the driver are tested
  * directly, frame by frame (glide.test.ts).
@@ -61,28 +63,13 @@ const DESTINATION_OMEGA = 5;
 const SETTLED_M = 0.005;
 const SETTLED_SPEED = 0.01;
 const SETTLED_DEG = 0.01;
-/** Clearance kept above the ground under the camera on the way (m). */
-const FLOOR_CLEARANCE_M = 2;
-/**
- * The floor fades out over the last stretch before the destination (m from it): the end is
- * framed on the ground it was given, which may be a model or a mesh above or below the terrain
- * the globe reports, and the floor must not bend the final approach away from it.
- */
-const FLOOR_FADE_NEAR_M = 100;
-const FLOOR_FADE_FAR_M = 300;
-/** How quickly the floor's lift follows the ground as its tiles refine (rad/s). */
-const FLOOR_OMEGA = 10;
+/** A re-aimed end is kept at least this far above the ground it is re-aimed at (m). */
+const REAIM_CLEARANCE_M = 2;
 /**
  * An end aimed at a guessed ground is re-aimed once the terrain under it differs by more than
  * this (m): terrain tiles refine in steps of metres, and each step need not be chased.
  */
 const REAIM_THRESHOLD_M = 1;
-/**
- * An end this far under the terrain the globe reports (m) is underground, whatever it was
- * framed on. Less is a framing nuance -- a scan's own ground, or the photorealistic world's,
- * a few metres off the terrain model -- that the resting camera's floor check deals with.
- */
-const BURIED_M = 50;
 
 /** The ground an arrival pose was framed above, and whether it was measured or guessed. */
 export interface PoseGround {
@@ -296,8 +283,8 @@ const KEYS = ["longitude", "latitude", "height", "heading", "pitch", "ground"] a
 /**
  * One flight, stepped frame by frame: `step(now)` is the camera's pose for that moment. The
  * destination is carried by a critically damped spring towards the latest `retarget`, the
- * clock by `easeInOut` over the duration the first path asked for, and the floor keeps the
- * camera above the ground the globe reports under it on the way.
+ * clock by `easeInOut` over the duration the first path asked for, and a guessed end follows
+ * the terrain the globe loads under it (`reaim`).
  */
 export class Glide {
   private readonly start: GlideEnd;
@@ -310,21 +297,30 @@ export class Glide {
   private readonly destination: Destination;
   private readonly velocity: Destination;
   private lastStep: number;
-  private lift = 0;
-  private liftVelocity = 0;
   private finished = false;
 
+  /**
+   * `startGround` is the ground last known under the camera, for when the globe has nothing
+   * worth believing there now (its tiles outside a site's outline are not loaded in the
+   * photorealistic world); without either, the end's ground is the best guess. Taken as 0, a
+   * short hop between two scans in the mountains believed itself two kilometres up and arced
+   * hundreds of metres to get there.
+   */
   constructor(
     start: { longitude: number; latitude: number; height: number; heading: number; pitch: number },
     end: GlidePose,
     private readonly scene: GlideScene,
     now: number,
     durationS?: number,
+    startGround?: number,
   ) {
-    const startGround = plausible(scene.ground(start.longitude, start.latitude)) ?? 0;
-    this.start = { ...start, ground: Math.min(startGround, start.height - MIN_ALTITUDE_M) };
     this.target = this.destinationOf(end);
     this.targetGround = end.ground;
+    const ground =
+      plausible(scene.ground(start.longitude, start.latitude)) ??
+      plausible(startGround) ??
+      this.target.ground;
+    this.start = { ...start, ground: Math.min(ground, start.height - MIN_ALTITUDE_M) };
     this.destination = { ...this.target };
     this.velocity = { longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, ground: 0 };
     this.startedAt = now;
@@ -374,47 +370,25 @@ export class Glide {
     }
     const geometry = glideGeometry(this.start, end);
     const pose = glidePose(this.start, end, easeInOut(t), geometry);
-    return { ...pose, height: pose.height + this.floorLift(pose, end, dt) };
+    return pose;
   }
 
   /**
    * A guessed end is re-aimed at the terrain under it once the globe has some worth believing
    * there, at the same height above it: an aim at the ellipsoid two kilometres under a
-   * mountain scan comes up to it as the mountain's tiles load during the descent. Any end,
-   * measured or not, that is buried -- more than BURIED_M under that terrain -- is brought up
-   * the same way: whatever put it there (a model clamped onto a sample that was not the
-   * ground, a bookmark saved underground), the flight does not end inside the earth.
+   * mountain scan comes up to it as the mountain's tiles load during the descent. A measured
+   * end is left alone: what the globe has loaded on the way down is a coarse tile, which in
+   * the mountains is hundreds of metres off the terrain sampled at full detail (Spool's said
+   * 2,968 m over ground at 2,001 m, and an end re-aimed at it landed a kilometre up).
    */
   private reaim(): void {
+    if (this.targetGround?.measured !== false) return;
     const terrain = plausible(
       this.scene.ground(normalizeLongitude(this.target.longitude), this.target.latitude),
     );
-    if (terrain === undefined) return;
-    const guessed = this.targetGround?.measured === false;
-    const buried = this.target.height < terrain - BURIED_M;
-    if (!buried && (!guessed || Math.abs(terrain - this.target.ground) < REAIM_THRESHOLD_M)) return;
-    const above = Math.max(this.target.height - this.target.ground, FLOOR_CLEARANCE_M);
+    if (terrain === undefined || Math.abs(terrain - this.target.ground) < REAIM_THRESHOLD_M) return;
+    const above = Math.max(this.target.height - this.target.ground, REAIM_CLEARANCE_M);
     this.target = { ...this.target, height: terrain + above, ground: terrain };
-  }
-
-  /**
-   * How far the camera is lifted above the path to stay above the ground under it: the
-   * shortfall below the floor, eased in and out by a spring as terrain tiles refine, faded out
-   * on the last stretch to the destination.
-   */
-  private floorLift(pose: ArrivalPose, end: GlideEnd, dt: number): number {
-    const ground = plausible(this.scene.ground(pose.longitude, pose.latitude));
-    const left = Math.hypot(
-      groundDistanceM(pose.longitude, pose.latitude, end.longitude, end.latitude),
-      pose.height - end.height,
-    );
-    const fade = smoothstep((left - FLOOR_FADE_NEAR_M) / (FLOOR_FADE_FAR_M - FLOOR_FADE_NEAR_M));
-    const wanted =
-      ground === undefined ? 0 : Math.max(0, ground + FLOOR_CLEARANCE_M - pose.height) * fade;
-    const next = criticallyDamped(this.lift, this.liftVelocity, wanted, FLOOR_OMEGA, dt);
-    this.lift = next.value;
-    this.liftVelocity = next.velocity;
-    return this.lift;
   }
 
   private settled(): boolean {
@@ -430,7 +404,7 @@ export class Glide {
         key === "longitude" || key === "latitude" ? SETTLED_SPEED / 111_000 : SETTLED_SPEED;
       if (Math.abs(this.velocity[key]) > speedTolerance) return false;
     }
-    return this.lift < SETTLED_M;
+    return true;
   }
 
   /** A pose as the spring carries it: longitude and heading unwrapped next to `near`. */
@@ -506,14 +480,4 @@ function normalizeHeading(degrees: number): number {
 
 function normalizeLongitude(degrees: number): number {
   return wrapDegrees(degrees);
-}
-
-/** Ground distance between two points on a sphere (m): enough for a fade. */
-function groundDistanceM(lon0: number, lat0: number, lon1: number, lat1: number): number {
-  const p0 = CesiumMath.toRadians(lat0);
-  const p1 = CesiumMath.toRadians(lat1);
-  const dp = p1 - p0;
-  const dl = CesiumMath.toRadians(wrapDegrees(lon1 - lon0));
-  const a = Math.sin(dp / 2) ** 2 + Math.cos(p0) * Math.cos(p1) * Math.sin(dl / 2) ** 2;
-  return 2 * 6_371_000 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
