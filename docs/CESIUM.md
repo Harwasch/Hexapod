@@ -316,8 +316,10 @@ passes `pitchAdjustHeight`, so the camera looks straight down at the top of the 
 back to the arrival tilt on the way down instead of interpolating the pitch linearly and
 spending the high part staring at the horizon. `flyToBoundingSphere` with that offset is the
 standard arrival; hand-sized objects arrive at a few times their radius.
-Double-click flies halfway to the clicked point (the widget installs no click handlers of its
-own; `Viewer`'s entity tracking used to be removed here).
+Double-click flies halfway to the clicked point and selects nothing; a left-click on empty
+ground does nothing, and right-click (Ctrl+click, a long press on touch) opens the map menu
+(`SelectionManager`, docs/MISSION_CONTROL.md). The widget installs no click handlers of its
+own; `Viewer`'s entity tracking used to be removed here.
 
 ### Flying to a site
 

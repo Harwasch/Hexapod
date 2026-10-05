@@ -56,8 +56,9 @@ export function InspectorPanel() {
   // representation actually being deformed.
   //
   // It falls back to the active site — the same fallback the panel already makes for `site` —
-  // for a reason particular to this feature: Gaussian splats are invisible to picking, so a
-  // click on a swaying tree lands on the terrain behind it and produces a `ground` selection
+  // for a reason particular to this feature: Gaussian splats are invisible to picking, so
+  // "What's here" on a swaying tree the scan's solids do not cover yet (SplatCollider; on them
+  // it is the site's card) lands on the terrain behind it and produces a `ground` selection
   // with no `siteId` at all. Without the fallback the one panel that can state the
   // Observed/Simulated split would be unreachable for exactly the sites that need it. The
   // section names the site it is talking about so it can never be read as describing the
@@ -74,9 +75,9 @@ export function InspectorPanel() {
   const placement = placementProvenance(site, livingSite?.assetId, units);
   // Shown only where it can be read as being about the site: a site selection, or the
   // section below, which names the site it is describing. A splat is invisible to picking,
-  // so a click on a capture lands on the terrain behind it as a `ground` selection with no
-  // site at all — and a Placement row between that point's own latitude and its own terrain
-  // height would read as describing the point.
+  // so "What's here" off the scan's solids lands on the terrain behind it as a `ground`
+  // selection with no site at all — and a Placement row between that point's own latitude and
+  // its own terrain height would read as describing the point.
   const shown = placement && (livingSite || selection?.kind === "site") ? placement : null;
   const attribution = selection?.attribution?.length
     ? selection.attribution

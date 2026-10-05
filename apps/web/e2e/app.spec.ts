@@ -8,6 +8,7 @@ import {
   selectObject,
   stageObjects,
   test,
+  walnutSite,
 } from "./fixtures";
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
@@ -17,6 +18,104 @@ function entityIds(app: Page): Promise<string[]> {
       window as unknown as { __twin?: { viewer: { entities: { values: { id: string }[] } } } }
     ).__twin;
     return (twin?.viewer.entities.values ?? []).map((entity) => entity.id).sort();
+  });
+}
+
+/**
+ * Waits for the camera to stop (a flight landed): the map menu closes when the camera moves, and
+ * a press during a flight is not on the place it will show.
+ */
+async function cameraAtRest(app: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        app.evaluate(() => {
+          const twin = (window as unknown as { __twin?: { camera: { isMoving: boolean } } }).__twin;
+          return twin ? !twin.camera.isMoving : false;
+        }),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  // The ground under a still camera keeps arriving for a moment.
+  await app.waitForTimeout(1000);
+}
+
+/** Somewhere with no site, close enough that the ground under the pointer is real. */
+async function overFarmland(app: Page): Promise<void> {
+  await app.evaluate(() => {
+    const twin = (
+      window as unknown as {
+        __twin?: {
+          camera: {
+            cancelFlight: () => void;
+            setView: (lon: number, lat: number, h: number, hd: number, p: number) => void;
+          };
+        };
+      }
+    ).__twin;
+    twin?.camera.cancelFlight();
+    twin?.camera.setView(-119.9, 36.6, 1500, 0, -60);
+  });
+  // The globe drawn across the view: until it is, the ground under a press is the bare
+  // ellipsoid, and heights sampled for an area's corners are nowhere near the ground.
+  await expect
+    .poll(
+      () =>
+        app.evaluate(() => {
+          interface Twin {
+            viewer: { canvas: HTMLCanvasElement };
+            scene: {
+              camera: { getPickRay: (p: { x: number; y: number }) => unknown };
+              globe: { pick: (ray: unknown, scene: unknown) => unknown };
+            };
+          }
+          const twin = (window as unknown as { __twin?: Twin }).__twin;
+          if (!twin) return false;
+          const { canvas } = twin.viewer;
+          const { scene } = twin;
+          return [0.2, 0.5, 0.8].every((fx) =>
+            [0.2, 0.5, 0.8].every((fy) => {
+              const ray = scene.camera.getPickRay({
+                x: canvas.clientWidth * fx,
+                y: canvas.clientHeight * fy,
+              });
+              return ray !== undefined && scene.globe.pick(ray, scene) !== undefined;
+            }),
+          );
+        }),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  await cameraAtRest(app);
+}
+
+/** Where the area editor's corner handles are on the screen, those the map itself shows. */
+function cornersOnScreen(app: Page): Promise<{ id: string; x: number; y: number }[]> {
+  return app.evaluate(() => {
+    interface Twin {
+      viewer: {
+        canvas: HTMLCanvasElement;
+        clock: { currentTime: unknown };
+        entities: { values: { id: string; position?: { getValue: (t: unknown) => unknown } }[] };
+      };
+      scene: { cartesianToCanvasCoordinates: (p: unknown) => { x: number; y: number } | undefined };
+    }
+    const twin = (window as unknown as { __twin?: Twin }).__twin;
+    if (!twin) return [];
+    const canvas = twin.viewer.canvas;
+    const rect = canvas.getBoundingClientRect();
+    const corners: { id: string; x: number; y: number }[] = [];
+    for (const entity of twin.viewer.entities.values) {
+      if (!entity.id.startsWith("area-edit:vertex:")) continue;
+      const position = entity.position?.getValue(twin.viewer.clock.currentTime);
+      const at = position ? twin.scene.cartesianToCanvasCoordinates(position) : undefined;
+      if (!at) continue;
+      const x = rect.left + at.x;
+      const y = rect.top + at.y;
+      // Not under a panel: the press must land on the map.
+      if (document.elementFromPoint(x, y) === canvas) corners.push({ id: entity.id, x, y });
+    }
+    return corners;
   });
 }
 
@@ -279,14 +378,74 @@ async function publishLiving(app: Page, animating: boolean): Promise<void> {
 }
 
 test.describe("interaction", () => {
-  test("clicking the world opens the inspector", async ({ app }) => {
+  test("right-clicking the world opens the map menu, and What's here the inspector", async ({
+    app,
+  }) => {
     await app.getByTestId("onboarding-explore").click();
-    await app.waitForTimeout(3500);
-    await app.mouse.click(720, 450);
+    await cameraAtRest(app);
+    await app.mouse.click(720, 450, { button: "right" });
+    const menu = app.getByRole("menu", { name: "Map" });
+    await expect(menu).toBeVisible({ timeout: 15_000 });
+    await expect(menu.getByRole("menuitem").first()).toBeFocused();
+    await menu.getByRole("menuitem", { name: "What's here" }).click();
+    await expect(app.getByTestId("map-menu")).toHaveCount(0);
     await expect(app.getByTestId("inspector")).toBeVisible({ timeout: 15_000 });
     await expect(app.getByTestId("inspector-position")).toContainText("°");
     await app.keyboard.press("Escape");
     await expect(app.getByTestId("inspector")).toHaveCount(0);
+  });
+
+  test("a left-click on empty ground does nothing, a right-drag still orbits, Escape closes the menu", async ({
+    app,
+  }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await cameraAtRest(app);
+    await app.mouse.click(720, 450);
+    // A pick is answered within a frame or two; give it many.
+    await app.waitForTimeout(1500);
+    await expect(app.getByTestId("inspector")).toHaveCount(0);
+    expect(await entityIds(app)).not.toContain("selection-marker");
+    await expect(app.getByTestId("map-menu")).toHaveCount(0);
+    // A right-drag is an orbit, not a click: the view turns and no menu opens.
+    const heading = () =>
+      app.evaluate(
+        () =>
+          (
+            window as unknown as { __twin?: { camera: { pose: () => { heading: number } } } }
+          ).__twin?.camera.pose().heading ?? 0,
+      );
+    const before = await heading();
+    await app.mouse.move(720, 450);
+    await app.mouse.down({ button: "right" });
+    await app.mouse.move(820, 450, { steps: 8 });
+    await app.mouse.up({ button: "right" });
+    await expect.poll(async () => Math.abs((await heading()) - before)).toBeGreaterThan(1);
+    await app.waitForTimeout(800);
+    await expect(app.getByTestId("map-menu")).toHaveCount(0);
+    await cameraAtRest(app);
+    await app.mouse.click(720, 450, { button: "right" });
+    await expect(app.getByRole("menu", { name: "Map" })).toBeVisible({ timeout: 15_000 });
+    await app.keyboard.press("Escape");
+    await expect(app.getByTestId("map-menu")).toHaveCount(0);
+    await expect(app.getByTestId("inspector")).toHaveCount(0);
+  });
+
+  test("Measure from here starts a distance at the point: one more click finishes it", async ({
+    app,
+  }) => {
+    // Software GL draws the globe under the view slowly (`overFarmland` waits for it).
+    test.setTimeout(150_000);
+    await app.getByTestId("onboarding-explore").click();
+    await overFarmland(app);
+    await app.mouse.click(600, 450, { button: "right" });
+    await app.getByRole("menuitem", { name: "Measure from here" }).click();
+    await expect(app.getByTestId("measure-active")).toContainText("Two clicks");
+    await app.mouse.click(820, 450);
+    const list = app.getByRole("list", { name: "Measurements" });
+    await expect(list.getByRole("listitem")).toHaveCount(1, { timeout: 15_000 });
+    await expect(list).toContainText("ground");
+    await app.keyboard.press("Escape");
+    await expect(app.getByTestId("measure-active")).toHaveCount(0);
   });
 
   test("measurement tool can be entered and exited", async ({ app }) => {
@@ -367,6 +526,7 @@ test.describe("interaction", () => {
     await expect(sheet).toBeVisible();
     await expect(sheet.getByRole("region", { name: "Camera" })).toContainText("Reset north");
     await expect(sheet).toContainText("Walk / explore mode");
+    await expect(sheet.getByRole("region", { name: "General" })).toContainText("Map menu");
     await app.keyboard.press("Escape");
     await expect(sheet).toHaveCount(0);
   });
@@ -459,6 +619,68 @@ test.describe("the HUD over the map", () => {
     );
     await switcher.getByTestId("saved-view-Overview").click();
     await expect(switcher).toHaveCount(0);
+  });
+
+  test("the site switcher renames a site, asking for the write token when the API wants one", async ({
+    page,
+  }) => {
+    const state = await mockApi(page, { otherSite: true, writeToken: "letmein" });
+    await page.addInitScript(() =>
+      window.localStorage.setItem(
+        "twin.settings.v1",
+        JSON.stringify({ state: { onboardingDismissed: true }, version: 1 }),
+      ),
+    );
+    await page.goto("/");
+    const badge = page.getByTestId("project-card").getByRole("button").first();
+    await badge.click();
+    const switcher = page.getByTestId("site-switcher");
+    // The demo is known by its project's name, which renaming its record would not change.
+    await expect(switcher.getByTestId("site-row-cesium-splat-demo")).toContainText(
+      "Blackrock Mesa",
+    );
+    await expect(switcher.getByTestId("site-rename-cesium-splat-demo")).toHaveCount(0);
+    // At the grove, the badge is its name.
+    await switcher.getByTestId("site-row-walnut-grove").click();
+    await expect(page.getByTestId("project-title")).toHaveText("Walnut grove", {
+      timeout: 30_000,
+    });
+
+    await badge.click();
+    const row = switcher.getByTestId("site-row-walnut-grove");
+    await row.hover();
+    await switcher.getByTestId("site-rename-walnut-grove").click();
+    const field = switcher.getByRole("textbox", { name: "New name for Walnut grove" });
+    await expect(field).toBeFocused();
+    // Escape puts the name back and leaves the switcher open.
+    await field.fill("Elsewhere");
+    await page.keyboard.press("Escape");
+    await expect(field).toHaveCount(0);
+    await expect(switcher).toBeVisible();
+    await expect(row).toContainText("Walnut grove");
+
+    await switcher.getByTestId("site-rename-walnut-grove").click();
+    await field.fill("  North grove ");
+    await page.keyboard.press("Enter");
+    // This server wants the write token: the switcher asks for it in place.
+    const token = switcher.getByTestId("write-token-form");
+    await expect(token).toContainText("A write token is needed to rename sites");
+    expect(state.unauthorized).toContain(`PATCH /api/v1/sites/${walnutSite.id}`);
+    await expect(row).toContainText("Walnut grove");
+    await token.getByTestId("write-token-input").fill("letmein");
+    await token.getByTestId("write-token-save").click();
+
+    await expect(row).toContainText("North grove");
+    await expect(token).toHaveCount(0);
+    // Everywhere else the site is named: the badge, and the command box.
+    await expect(page.getByTestId("project-title")).toHaveText("North grove");
+    await page.keyboard.press("Escape");
+    await expect(switcher).toHaveCount(0);
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type("north gro");
+    await expect(page.getByTestId(`command-row-site-${walnutSite.id}`)).toContainText(
+      "North grove",
+    );
   });
 
   for (const viewport of [
@@ -815,6 +1037,34 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-detail")).toContainText("A-01 Test Field");
   });
 
+  test("Plan here outlines the ground at the point; a right-click on a corner removes it", async ({
+    app,
+  }) => {
+    // Software GL draws the globe under the view slowly (`overFarmland` waits for it).
+    test.setTimeout(150_000);
+    await app.getByTestId("onboarding-explore").click({ force: true });
+    await overFarmland(app);
+    await app.mouse.click(720, 450, { button: "right" });
+    await app.getByRole("menuitem", { name: "Plan here" }).click();
+    // The spot first: the mapped field under it is the ground, and the card waits for the goal.
+    await expect(app.getByTestId("plan-ground")).toContainText("Test Field", { timeout: 20_000 });
+    await expect(app.getByTestId("plan-idle")).toBeVisible();
+    await expect.poll(() => entityIds(app)).toContain("area-edit:vertex:3");
+    // While its corners are being edited, the right button is the area's: it removes the corner
+    // under it, and no menu opens.
+    await expect.poll(async () => (await cornersOnScreen(app)).length).toBeGreaterThan(0);
+    const [corner] = await cornersOnScreen(app);
+    if (!corner) throw new Error("no corner on screen");
+    await app.mouse.click(corner.x, corner.y, { button: "right" });
+    await expect.poll(() => entityIds(app)).not.toContain("area-edit:vertex:3");
+    await app.waitForTimeout(500);
+    await expect(app.getByTestId("map-menu")).toHaveCount(0);
+    // Then the sentence: the card drafts it on the ground it already has.
+    await app.getByTestId("command-input").fill("3D scan this field into a splat");
+    await app.getByTestId("command-input").press("Enter");
+    await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+  });
+
   test("the agent answers on the status line and the layer favourites toggle overlays", async ({
     app,
   }) => {
@@ -958,24 +1208,24 @@ test.describe("a scan object in the selection card", () => {
     await stageObjects(app);
     await selectObject(app, [3, 2, 1]);
     const card = app.getByTestId("selection-card");
-    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    await expect(card.getByTestId("object-candidates")).toHaveText("3 of 3");
     // On the body Tab is the browser's: focus moves on, the candidates stay.
     await fromMap(app, "Tab");
     expect(await app.evaluate(() => document.activeElement !== document.body)).toBe(true);
     await app.keyboard.press("Tab");
     await app.keyboard.press("Tab");
     expect((await selectionState(app)).index).toBe(0);
-    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    await expect(card.getByTestId("object-candidates")).toHaveText("3 of 3");
     // With the card itself focused (a click on it), Tab and Shift+Tab cycle.
     await card.focus();
     await app.keyboard.press("Tab");
     await expect(card.getByTestId("object-candidates")).toHaveText("2 of 3");
     await app.keyboard.press("Shift+Tab");
-    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    await expect(card.getByTestId("object-candidates")).toHaveText("3 of 3");
     // A button in the card keeps Tab's meaning: it moves on to the next one.
     await card.getByRole("button", { name: "Next candidate" }).focus();
     await app.keyboard.press("Tab");
-    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    await expect(card.getByTestId("object-candidates")).toHaveText("3 of 3");
     // `]` cycles from anywhere but a field.
     await fromMap(app, "]");
     await expect(card.getByTestId("object-candidates")).toHaveText("2 of 3");

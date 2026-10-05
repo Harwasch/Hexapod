@@ -59,6 +59,25 @@ def test_update_site_recomputes_centroid(client: TestClient) -> None:
     assert body["updatedAt"] >= body["createdAt"]
 
 
+def test_rename_site(client: TestClient) -> None:
+    site = client.post("/api/v1/sites", json=site_payload()).json()
+    url = f"/api/v1/sites/{site['id']}"
+    for blank in ("", "   ", None):
+        refused = client.patch(url, json={"name": blank})
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["errors"][0]["msg"] == "Value error, name must not be blank"
+    assert client.patch(url, json={"name": "x" * 201}).status_code == 422
+
+    # The name alone: nothing else on the record moves, and the padding is not kept.
+    renamed = client.patch(url, json={"name": "  North orchard  "})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "North orchard"
+    assert renamed.json()["slug"] == site["slug"]
+    assert renamed.json()["metadata"] == site["metadata"]
+    assert client.get(url).json()["name"] == "North orchard"
+    assert [s["name"] for s in client.get("/api/v1/sites").json()] == ["North orchard"]
+
+
 def test_delete_site_cascades(client: TestClient) -> None:
     site = client.post("/api/v1/sites", json=site_payload()).json()
     assert client.get(f"/api/v1/sites/{site['id']}/assets").json()

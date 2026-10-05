@@ -270,6 +270,40 @@ a.mc-link {
   padding: 0.5rem 0.7rem;
 }
 
+.mc-project__site {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.mc-project__site .mc-project__row {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The rename pencil waits for the row to be pointed at or tabbed into; a touch screen has no
+   hover to reveal it with, so there it is always shown. */
+@media (hover: hover) {
+  .mc-project__rename {
+    opacity: 0;
+  }
+
+  .mc-project__site:hover .mc-project__rename,
+  .mc-project__site:focus-within .mc-project__rename {
+    opacity: 1;
+  }
+}
+
+.mc-project__rename-form {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.3rem 0.2rem;
+}
+
+.mc-project__token {
+  padding: 0 0.95rem 0.7rem;
+}
+
 .mc-project__save {
   display: flex;
   gap: 0.4rem;

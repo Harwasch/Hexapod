@@ -233,6 +233,35 @@ export function useCreateSite() {
   });
 }
 
+/**
+ * Renames a site. Only `name` is sent: the PATCH replaces whatever else it is given, and
+ * `metadata` in particular would replace the whole dict.
+ *
+ * The answer is the site's full record, put straight into its query: `watchSiteRecords` hands
+ * it to the scene, whose copy names the cards it builds, even for a site no component has a
+ * query open for. The catalog list (the switcher, the command box) takes the name at once,
+ * so the row does not show the old one while the list is fetched afresh.
+ */
+export function useRenameSite() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ siteId, name }: { siteId: string; name: string }) =>
+      unwrap<Site>(
+        api.PATCH("/api/v1/sites/{site_id}", {
+          params: { path: { site_id: siteId } },
+          body: { name },
+        }),
+      ),
+    onSuccess: (site) => {
+      client.setQueryData(queryKeys.site(site.id), site);
+      client.setQueryData<SiteSummary[]>(queryKeys.sites, (list) =>
+        list?.map((entry) => (entry.id === site.id ? { ...entry, name: site.name } : entry)),
+      );
+      void client.invalidateQueries({ queryKey: queryKeys.sites, exact: true });
+    },
+  });
+}
+
 export function useCreateLayer() {
   const client = useQueryClient();
   return useMutation({

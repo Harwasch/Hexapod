@@ -127,6 +127,50 @@ export const demoSummary = {
   updatedAt: demoSite.updatedAt,
 };
 
+/**
+ * A plain catalog site beside the demo (`MockOptions.otherSite`): no mission project names
+ * it, so the switcher can rename it. No assets, so a fly-to there has nothing to stream.
+ */
+export const walnutSite = {
+  ...demoSite,
+  id: "66666666-6666-4666-8666-666666666666",
+  slug: "walnut-grove",
+  name: "Walnut grove",
+  description: null,
+  boundary: {
+    type: "Polygon",
+    coordinates: [
+      [
+        [-119.905, 36.597],
+        [-119.895, 36.597],
+        [-119.895, 36.603],
+        [-119.905, 36.603],
+        [-119.905, 36.597],
+      ],
+    ],
+  },
+  centroid: { longitude: -119.9, latitude: 36.6, height: 90 },
+  areaM2: 595_000,
+  metadata: {},
+  attribution: [],
+  license: null,
+  assets: [],
+  cameraBookmarks: [],
+};
+
+const walnutSummary = {
+  ...demoSummary,
+  id: walnutSite.id,
+  slug: walnutSite.slug,
+  name: walnutSite.name,
+  description: null,
+  centroid: walnutSite.centroid,
+  areaM2: walnutSite.areaM2,
+  representations: [],
+  latestObservedAt: null,
+  quality: null,
+};
+
 const baseLayer = {
   description: null,
   temporalExtent: null,
@@ -247,6 +291,8 @@ export interface MockOptions {
   workerRuns?: boolean;
   /** The stage the simulated worker fails on, so the retry-from-stage path has a target. */
   workerFailsAt?: string;
+  /** List `walnutSite` beside the demo; off, the catalog is the demo alone. */
+  otherSite?: boolean;
 }
 
 /** What the capture mock saw, so a test can assert on the wire rather than on the DOM alone. */
@@ -374,6 +420,15 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
   // How many times the job list has been polled: the simulated worker advances one stage
   // per poll, the way `mockPlans` mutates across calls.
   let jobPolls = 0;
+  // The catalog's records, copied so a rename (PATCH) round-trips into the list and the
+  // record within one test and no further.
+  const sites = [demoSite, ...(options.otherSite ? [walnutSite] : [])].map((site) => ({
+    ...site,
+  }));
+  const summaryOf = (site: (typeof sites)[number]) => ({
+    ...(site.id === walnutSite.id ? walnutSummary : demoSummary),
+    name: site.name,
+  });
 
   /**
    * One window of presigned parts — never the whole upload.
@@ -685,7 +740,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
         objectStorage: "none",
         objectStorageAvailable: false,
       });
-    if (path === "/api/v1/sites" && request.method() === "GET") return json([demoSummary]);
+    if (path === "/api/v1/sites" && request.method() === "GET") return json(sites.map(summaryOf));
     if (path === "/api/v1/sites" && request.method() === "POST") {
       const body = request.postDataJSON() as { name: string; boundary: unknown };
       options.onCreateSite?.(body);
@@ -711,7 +766,25 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
         201,
       );
     }
-    if (path === `/api/v1/sites/${demoSite.id}`) return json(demoSite);
+    const siteRecord = sites.find((site) => path === `/api/v1/sites/${site.id}`);
+    if (siteRecord && request.method() === "PATCH") {
+      // As the API: the name alone changes, and blank is refused.
+      const body = request.postDataJSON() as { name?: string };
+      const name = body.name?.trim() ?? "";
+      if (!name) {
+        return json(
+          {
+            title: "Validation error",
+            status: 422,
+            errors: [{ loc: ["body", "name"], msg: "name must not be blank", type: "value_error" }],
+          },
+          422,
+        );
+      }
+      siteRecord.name = name;
+      return json(siteRecord);
+    }
+    if (siteRecord) return json(siteRecord);
     if (path === "/api/v1/layers" && request.method() === "GET") return json(layers);
     if (path === "/api/v1/layers" && request.method() === "POST") {
       const body = request.postDataJSON() as { name: string; source: { type: string } };
@@ -1010,7 +1083,10 @@ export async function stageObjects(page: Page): Promise<void> {
   );
 }
 
-/** Selects `candidates` of the staged scan, as a click on it would (the first chosen). */
+/**
+ * Selects `candidates` of the staged scan (leaf → top, as a click offers them): `index`, the
+ * leaf unless said.
+ */
 export async function selectObject(page: Page, candidates: number[], index = 0): Promise<void> {
   await inApp(
     page,

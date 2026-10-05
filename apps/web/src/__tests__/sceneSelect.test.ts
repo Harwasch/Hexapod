@@ -14,15 +14,26 @@ import {
 import { parseInstances, tileInstanceIds, withDescendants } from "@/lib/instances";
 import {
   bestByIoU,
+  bestByIoUIndexed,
   buildCandidates,
   chainOf,
   chipText,
   cycleIndex,
-  defaultIndex,
+  drillIndex,
   hiddenForShowOnly,
+  levelText,
+  paintedCount,
+  paintIndex,
   selectionLabel,
+  splatShares,
 } from "@/lib/sceneSelect";
-import { BrushMask, paintedSplats, projectTiles, visibleSplats } from "@/lib/splatPaint";
+import {
+  BrushMask,
+  paintedSplats,
+  projectTiles,
+  visibleSplats,
+  type ScreenSplats,
+} from "@/lib/splatPaint";
 import { buildTileIndex, castRay, hitWeights, labelsNear, type PickTile } from "@/lib/splatPick";
 
 const CHECKSUM = "fnv1a32:6:0000abcd";
@@ -99,13 +110,50 @@ describe("candidates", () => {
     });
   });
 
-  it("chooses the smallest of the chain that is big enough on screen", () => {
-    const candidates = { ids: [3, 1, 4], chain: 2 };
-    expect(defaultIndex(candidates, (id) => (id === 3 ? 60 : 200))).toBe(0);
-    expect(defaultIndex(candidates, (id) => (id === 3 ? 10 : 200))).toBe(1);
-    // Nothing big enough: the top of the chain.
-    expect(defaultIndex(candidates, () => 5)).toBe(1);
-    expect(defaultIndex({ ids: [], chain: 0 }, () => 100)).toBe(-1);
+  it("chooses the whole object first, then one level finer a click", () => {
+    // A spool (1) of planks (5) cut in pieces (9), and a pallet (7) beside it.
+    const candidates = { ids: [9, 5, 1, 7], chain: 3 };
+    // Nothing selected: the top of the chain.
+    expect(drillIndex(candidates, null)).toBe(2);
+    // Inside the chain: one level deeper toward the hit, and at the leaf it stays.
+    expect(drillIndex(candidates, 1)).toBe(1);
+    expect(drillIndex(candidates, 5)).toBe(0);
+    expect(drillIndex(candidates, 9)).toBe(0);
+    // Another object, or the one beside it: the whole object again.
+    expect(drillIndex(candidates, 42)).toBe(2);
+    expect(drillIndex(candidates, 7)).toBe(2);
+    expect(drillIndex({ ids: [], chain: 0 }, null)).toBe(-1);
+  });
+
+  it("starts below a top that is most of the scan", () => {
+    const candidates = { ids: [9, 5, 1], chain: 3 };
+    // The top is 80% of the scan: its child on the hit's chain instead.
+    const share = (id: number): number => (id === 1 ? 0.8 : 0.1);
+    expect(drillIndex(candidates, null, share)).toBe(1);
+    // Two levels that big: down past both; a lone level is all there is.
+    expect(drillIndex(candidates, null, (id) => (id === 9 ? 0.1 : 0.9))).toBe(0);
+    expect(drillIndex({ ids: [1], chain: 1 }, null, () => 1)).toBe(0);
+    // Drilling from the big top (cycled to) still goes one level deeper.
+    expect(drillIndex(candidates, 1, share)).toBe(1);
+  });
+
+  it("measures an instance's share of the scan with everything below it", () => {
+    const parsed = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [
+        { id: 1, parent: null, level: 0, splats: 10, bounds: { min: [0, 0, 0], max: [1, 1, 1] } },
+        { id: 2, parent: 1, level: 1, splats: 50, bounds: { min: [0, 0, 0], max: [1, 1, 1] } },
+        { id: 3, parent: null, level: 0, splats: 40, bounds: { min: [0, 0, 0], max: [1, 1, 1] } },
+      ],
+      tiles: {},
+    });
+    if (!parsed) throw new Error("fixture did not parse");
+    const shares = splatShares(parsed);
+    expect(shares.get(1)).toBeCloseTo(0.6);
+    expect(shares.get(2)).toBeCloseTo(0.5);
+    expect(shares.get(3)).toBeCloseTo(0.4);
+    expect(splatShares(parsed)).toBe(shares);
   });
 
   it("cycles both ways around the candidates", () => {
@@ -126,8 +174,20 @@ describe("candidates", () => {
     // Never an id: the category the objects panel files it under.
     expect(selectionLabel(d.byId.get(2), 2, "trees")).toBe("Trees");
     expect(selectionLabel(d.byId.get(2), 2)).toBe("Unnamed object");
-    expect(chipText("Tree", 1, 4)).toBe("Tree · 2 of 4");
-    expect(chipText("Tree", 0, 1)).toBe("Tree");
+    expect(chipText("Tree", 2, 3, 3)).toBe("Tree · 1 of 3");
+    expect(chipText("Tree", 0, 1, 1)).toBe("Tree");
+  });
+
+  it("counts a chain's levels from the whole object, then the instances nearby", () => {
+    // Leaf → top of the chain first in the list, so index 2 of a chain of 3 is the top.
+    expect(levelText(2, 3, 3)).toBe("1 of 3");
+    expect(levelText(0, 3, 3)).toBe("3 of 3");
+    expect(levelText(2, 3, 5)).toBe("1 of 3 · +2 nearby");
+    expect(levelText(3, 3, 5)).toBe("Nearby 1 of 2");
+    expect(levelText(4, 3, 5)).toBe("Nearby 2 of 2");
+    // A chain of one with others beside it, and a lone candidate.
+    expect(levelText(0, 1, 3)).toBe("+2 nearby");
+    expect(levelText(0, 1, 1)).toBe("");
   });
 
   it("hides everything but a selection and its ancestors for Show only", () => {
@@ -231,6 +291,70 @@ describe("painting", () => {
     const loose = bestByIoU(d, { ids, weights, painted: [1, 0, 0, 0, 1, 0] });
     expect(loose?.iou ?? 1).toBeLessThan(0.5);
     expect(bestByIoU(d, { ids: [0, 0], weights: [1, 1], painted: [1, 1] })).toBeNull();
+  });
+
+  it("matches through the view's index exactly as over every splat", () => {
+    // A small fixed-seed generator (mulberry32): the same cases every run.
+    let seed = 0x5eed;
+    const random = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = (n: number): number => Math.floor(random() * n);
+    for (let round = 0; round < 40; round++) {
+      // Up to four levels; a few ids the file does not list, and id 0.
+      const count = 5 + pick(40);
+      const box = { min: [0, 0, 0], max: [1, 1, 1] };
+      const parsed = parseInstances({
+        format: "hexapod.instances",
+        version: 1,
+        instances: Array.from({ length: count }, (_, k) => ({
+          id: k + 1,
+          parent: k > 2 && random() < 0.8 ? 1 + pick(k) : null,
+          level: 0,
+          splats: 1 + pick(50),
+          bounds: box,
+        })),
+        tiles: {},
+      });
+      if (!parsed) throw new Error("fixture did not parse");
+      const cols = 1 + pick(12);
+      const rows = 1 + pick(9);
+      const n = pick(900);
+      const screen: ScreenSplats = {
+        cols,
+        rows,
+        cellPx: 3,
+        tile: new Uint32Array(n),
+        index: new Uint32Array(n),
+        cell: Int32Array.from({ length: n }, () => pick(cols * rows)),
+        depth: new Float32Array(n),
+        opacity: Float32Array.from({ length: n }, () => 0.05 + 0.95 * random()),
+        count: n,
+        front: new Float32Array(cols * rows),
+      };
+      const visible = Uint8Array.from({ length: n }, () => (random() < 0.7 ? 1 : 0));
+      const ids = Uint32Array.from({ length: n }, () =>
+        random() < 0.1 ? 0 : random() < 0.05 ? count + 1 + pick(3) : 1 + pick(count),
+      );
+      const index = paintIndex(parsed, screen, visible, ids);
+      const weights = Float32Array.from({ length: n }, (_, k) =>
+        visible[k] ? (screen.opacity[k] ?? 0) : 0,
+      );
+      for (let stroke = 0; stroke < 5; stroke++) {
+        const mask = new BrushMask(cols, rows, 3);
+        const share = random();
+        for (let c = 0; c < mask.data.length; c++) mask.data[c] = random() < share ? 1 : 0;
+        const painted = paintedSplats(screen, visible, mask);
+        const label = `round ${String(round)}, stroke ${String(stroke)}`;
+        expect(bestByIoUIndexed(index, mask), label).toEqual(
+          bestByIoU(parsed, { ids, weights, painted }),
+        );
+        expect(paintedCount(index, mask), label).toBe(painted.reduce((a, b) => a + b, 0));
+      }
+    }
   });
 });
 

@@ -21,7 +21,7 @@ import {
 } from "@/cesium/sceneSelect/SceneSelectController";
 import { categoryById } from "@/lib/categories";
 import { TOUCH_MEDIA, useMediaQuery } from "@/lib/media";
-import { chipText, PAINT_MIN_IOU, selectionLabel } from "@/lib/sceneSelect";
+import { chipText, levelText, PAINT_MIN_IOU, selectionLabel } from "@/lib/sceneSelect";
 import { useInstances } from "@/state/instances";
 import { useSceneSelect, type StrokeMode } from "@/state/sceneSelect";
 
@@ -34,7 +34,10 @@ const STROKE_MODES: readonly { value: StrokeMode; label: string }[] = [
 /** Each tap of the touch screen's brush buttons sizes the brush by this factor. */
 const BRUSH_STEP = 1.25;
 
-/** What the brush says while it is out: how it works, then what the last stroke matched. */
+/**
+ * What the brush says while it is out: how it works, then what the stroke matches (as it is
+ * painted, then once it ends).
+ */
 function paintHint(
   paint: { best: number | null; iou: number; painted: number } | null,
   touch: boolean,
@@ -50,8 +53,9 @@ function paintHint(
 /**
  * The selection card for an object of a scan selected in the scene (cesium/sceneSelect): what
  * a click, the brush or the objects panel chose. Its name and category, the candidates the
- * click offered (◀ 2 of 4 ▶, cycled with the arrows, `[` `]`, Alt and the wheel, the wheel over
- * the arrows, or Tab while the map or this card has focus), Hide, Show only, Fly to, the brush,
+ * click offered (◀ 1 of 3 ▶, the hit's levels counted from the whole object, then the objects
+ * met nearby; cycled with the arrows, `[` `]`, Alt and the wheel, the wheel over the arrows, or
+ * Tab while the map or this card has focus), Hide, Show only, Fly to, the brush,
  * and for a painted object Delete. While painting it says how the brush works and what the
  * painted area matched, and offers to keep the area as an object when nothing matched it well.
  *
@@ -63,6 +67,7 @@ function paintHint(
 export function ObjectCard({ controller }: { controller: SceneSelectController }) {
   const assetId = useSceneSelect((s) => s.assetId);
   const candidates = useSceneSelect((s) => s.candidates);
+  const chain = useSceneSelect((s) => s.chain);
   const index = useSceneSelect((s) => s.index);
   const mode = useSceneSelect((s) => s.mode);
   const paint = useSceneSelect((s) => s.paint);
@@ -93,7 +98,9 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
     categoryName && categoryName !== label ? categoryName : null,
     painted ? "Painted in this browser" : null,
   ].filter((part): part is string => part !== null);
-  const offerPainted = painting && paint !== null && paint.painted > 0 && paint.iou < PAINT_MIN_IOU;
+  // Once the stroke ends: while it is painted the match is still changing.
+  const offerPainted =
+    painting && paint !== null && !paint.live && paint.painted > 0 && paint.iou < PAINT_MIN_IOU;
   const onWheel = (event: WheelEvent<HTMLDivElement>): void => {
     if (event.deltaY !== 0 && candidates.length > 1) controller.cycle(event.deltaY > 0 ? 1 : -1);
   };
@@ -108,7 +115,7 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
       role="region"
       aria-label={
         id !== undefined
-          ? `Selected object: ${chipText(label, index, candidates.length)}`
+          ? `Selected object: ${chipText(label, index, chain, candidates.length)}`
           : "Paint to select"
       }
       data-testid="selection-card"
@@ -146,20 +153,20 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
             className="mc-close"
             aria-label="Previous candidate"
             aria-keyshortcuts="[ Shift+Tab"
-            title={touch ? undefined : "Previous candidate ([ or Shift+Tab)"}
+            title={touch ? undefined : "Finer part ([ or Shift+Tab)"}
             onClick={() => controller.cycle(-1)}
           >
             <ChevronLeft size={14} aria-hidden="true" />
           </button>
           <span className="mc-cycle__count mc-mono" data-testid="object-candidates">
-            {index + 1} of {candidates.length}
+            {levelText(index, chain, candidates.length)}
           </span>
           <button
             type="button"
             className="mc-close"
             aria-label="Next candidate"
             aria-keyshortcuts="] Tab"
-            title={touch ? undefined : "Next candidate (] or Tab)"}
+            title={touch ? undefined : "Larger part, then nearby (] or Tab)"}
             onClick={() => controller.cycle(1)}
           >
             <ChevronRight size={14} aria-hidden="true" />

@@ -7,18 +7,22 @@
  *
  * - **Click**: the ray through the cursor is composited front to back over the splats it
  *   meets; the instance with most of the pixel, its chain up to the top level and the other
- *   instances met near the front are the candidates (lib/sceneSelect.ts), and the smallest of
- *   the chain that is big enough on screen is chosen. `[` / `]`, Alt and the wheel, or Tab /
- *   Shift+Tab while the map or the selection card has focus, cycle; Escape clears. A hit
- *   gives the keyboard to the map (the canvas), so Tab cycles straight away; from anywhere
- *   else Tab moves focus as it always does. In the app the click is the map's own
- *   (SelectionManager asks `click` first, so a hit on the scan takes the click from the
- *   Location and site cards); standalone it is a press released where it began.
+ *   instances met near the front are the candidates (lib/sceneSelect.ts). The whole object
+ *   (the top of the chain) is chosen first, and each click again on it goes one level finer
+ *   toward what was hit; a double-click is one click. `[` (finer) / `]` (coarser, then the
+ *   nearby instances), Alt and the wheel, or Tab / Shift+Tab while the map or the selection
+ *   card has focus, cycle; Escape clears. A hit gives the keyboard to the map (the canvas),
+ *   so Tab cycles straight away; from anywhere else Tab moves focus as it always does. In
+ *   the app the click is the map's own (SelectionManager asks `click` first, so a hit on the
+ *   scan takes the click from the Location and site cards); standalone it is a press
+ *   released where it began.
  * - **Brush** (`B`, or the card's Brush): strokes on screen collect the front-most splats under
  *   them -- Shift (or the card's Add) adds to the painted area, Alt (or Remove) takes away, a
  *   plain stroke starts again -- and the instance (any level) with the best intersection over
- *   union is selected. Below `PAINT_MIN_IOU` the painted splats can be kept as an object of
- *   their own (lib/customSets.ts), drawn through the same hide and highlight pipeline.
+ *   union is selected. While a stroke is painted its best match so far is highlighted, so
+ *   painting can stop once the right object lights up. Below `PAINT_MIN_IOU` the painted
+ *   splats can be kept as an object of their own (lib/customSets.ts), drawn through the same
+ *   hide and highlight pipeline.
  *
  * The chosen candidate is the objects store's highlight (`state/instances.ts`); the HUD's
  * selection card (features/sites/ObjectCard.tsx) shows it and offers Hide, Show only, Fly to,
@@ -34,7 +38,6 @@ import {
   HeadingPitchRange,
   Math as CesiumMath,
   Matrix4,
-  SceneTransforms,
   type Camera,
   type Scene,
 } from "cesium";
@@ -50,12 +53,16 @@ import {
 import { tileInstanceIds, withDescendants, type InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import {
-  bestByIoU,
+  bestByIoUIndexed,
   buildCandidates,
   chainOf,
-  defaultIndex,
+  drillIndex,
   hiddenForShowOnly,
   PAINT_MIN_IOU,
+  paintedCount,
+  paintIndex,
+  splatShares,
+  type PaintIndex,
 } from "@/lib/sceneSelect";
 import {
   BrushMask,
@@ -81,6 +88,13 @@ const log = createLogger("scene-select");
  */
 const CLICK_PX = 5;
 /**
+ * A click this soon (ms) and this near (CSS px) after the last one is the same click: a
+ * double-click is two clicks (and the map's double-click asks once more), and a click drills
+ * one level, not two.
+ */
+const REPEAT_CLICK_MS = 400;
+const REPEAT_CLICK_PX = 6;
+/**
  * A click whose labelled splats are less than this share of its unlabelled ones is labelled
  * from the splats drawn around it instead (`labelsNear`): within the first of
  * `NEAR_LABEL_PIXELS` pixels' width at its distance that finds any (never less than
@@ -92,6 +106,8 @@ const NEAR_LABEL_PIXELS = [6, 24, 64] as const;
 const NEAR_LABEL_MIN_M = 0.15;
 /** Screen cells the brush and the depth test work in (CSS px). */
 const CELL_PX = 3;
+/** While a stroke is painted, its match is brought up to date at most this often (ms). */
+const PREVIEW_MS = 100;
 
 /** What the controller needs of a CesiumJS viewer or widget. */
 export interface SelectViewer {
@@ -132,8 +148,8 @@ interface PaintView {
   tiles: readonly PickTile[];
   screen: ScreenSplats;
   visible: Uint8Array;
-  /** Per projected splat, its instance id in `doc`. */
-  ids: Uint32Array;
+  /** The visible splats by cell, with their instance ids in `doc`, for the match. */
+  index: PaintIndex;
   mask: BrushMask;
   /** The view it was projected from. */
   key: string;
@@ -205,6 +221,15 @@ export class SceneSelectController {
   /** The highlight this controller set: cleared when the selection is. */
   #lit: { assetId: string; id: number } | null = null;
   #cameraInputs: boolean | null = null;
+  /** The last click taken, and what it answered (`click`: a repeat is the same click). */
+  #lastClick: { x: number; y: number; at: number; hit: boolean } | null = null;
+  /** The pending frame that brings a stroke's match up to date, and when it last ran. */
+  #previewFrame: number | null = null;
+  #previewAt = -Infinity;
+  /** What the stroke's match lit (id null: nothing), until the stroke ends. */
+  #previewed: { assetId: string; id: number | null } | null = null;
+  /** What bringing the match up to date cost this stroke. */
+  #previewCost = { runs: 0, maxMs: 0 };
 
   constructor(viewer: SelectViewer, options: SceneSelectOptions = {}) {
     this.#viewer = viewer;
@@ -241,6 +266,7 @@ export class SceneSelectController {
 
   destroy(): void {
     for (const off of this.#off.splice(0)) off();
+    this.#endPreview();
     this.#wheelOff?.();
     this.#wheelOff = null;
     this.#setCameraInputs(true);
@@ -276,16 +302,28 @@ export class SceneSelectController {
   // ---- Picking ---------------------------------------------------------------------------
 
   /**
-   * A click at (`x`, `y`), CSS px from the canvas's top left: picks there unless painting or
-   * disabled. True when the click is taken: an object of a scan was selected, or the brush is
-   * out.
+   * A click at (`x`, `y`), CSS px from the canvas's top left, at time `at` (ms, as
+   * `performance.now()`): picks there unless painting or disabled. True when the click is
+   * taken: an object of a scan was selected, or the brush is out. A click repeated within
+   * `REPEAT_CLICK_MS` and `REPEAT_CLICK_PX` of the last is answered as that one was and picks
+   * nothing, so a double-click does not drill two levels.
    */
-  click(x: number, y: number): boolean {
+  click(x: number, y: number, at = performance.now()): boolean {
     if (!this.#enabled()) return false;
     // While painting, a dab of the brush is not a click on the map.
     if (useSceneSelect.getState().mode === "paint") return true;
+    const last = this.#lastClick;
+    if (
+      last &&
+      at - last.at < REPEAT_CLICK_MS &&
+      Math.hypot(x - last.x, y - last.y) <= REPEAT_CLICK_PX
+    ) {
+      last.at = at;
+      return last.hit;
+    }
     const rect = this.#viewer.canvas.getBoundingClientRect();
     const hit = this.pickAt(x, y, { x: x + rect.left, y: y + rect.top });
+    this.#lastClick = { x, y, at, hit };
     if (hit) this.#focusScene();
     return hit;
   }
@@ -404,39 +442,14 @@ export class SceneSelectController {
       return false;
     }
     const { assetId, doc } = best;
-    const index = defaultIndex(candidates, (id) => this.pixelsOf(assetId, doc, id));
-    useSceneSelect
-      .getState()
-      .select(assetId, candidates.ids, candidates.chain, index, anchor ?? { x, y });
+    const state = useSceneSelect.getState();
+    // Drilling goes on only within the scan selected now; on another, the whole object again.
+    const current = state.assetId === assetId ? selectedId(state) : null;
+    const shares = splatShares(doc);
+    const index = drillIndex(candidates, current, (id) => shares.get(id) ?? 0);
+    state.select(assetId, candidates.ids, candidates.chain, index, anchor ?? { x, y });
     log.info("picked", { asset: assetId, candidates: candidates.ids, index });
     return true;
-  }
-
-  /** How big instance `id` is on screen: its bounds' largest extent, CSS px. */
-  pixelsOf(assetId: string, doc: InstancesDoc, id: number): number {
-    const instance = doc.byId.get(id);
-    const toWorld = pickSourceOf(assetId)?.toWorld();
-    if (!instance || !toWorld) return 0;
-    const { min, max } = instance.bounds;
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    const scratch = new Cartesian3();
-    const screen = new Cartesian2();
-    for (const x of [min[0], max[0]])
-      for (const y of [min[1], max[1]])
-        for (const z of [min[2], max[2]]) {
-          const world = Matrix4.multiplyByPoint(toWorld, Cartesian3.fromElements(x, y, z), scratch);
-          const at = SceneTransforms.worldToWindowCoordinates(this.#viewer.scene, world, screen);
-          if (!at) continue;
-          x0 = Math.min(x0, at.x);
-          y0 = Math.min(y0, at.y);
-          x1 = Math.max(x1, at.x);
-          y1 = Math.max(y1, at.y);
-        }
-    if (!Number.isFinite(x0)) return 0;
-    return Math.max(x1 - x0, y1 - y0);
   }
 
   // ---- Actions ---------------------------------------------------------------------------
@@ -685,7 +698,8 @@ export class SceneSelectController {
     if (down?.id !== e.pointerId || e.button !== 0 || !this.#enabled()) return;
     const p = this.#local(e);
     if (Math.hypot(p.x - down.x, p.y - down.y) > CLICK_PX) return;
-    this.click(p.x, p.y);
+    // When the release happened, not when a slow frame let it be handled.
+    this.click(p.x, p.y, e.timeStamp);
   }
 
   #onKey(e: KeyboardEvent): void {
@@ -753,6 +767,7 @@ export class SceneSelectController {
         this.#paintView = null;
         this.#painted = null;
         this.#stroke = null;
+        this.#endPreview();
       }
       this.#drawOverlay();
     }
@@ -814,13 +829,14 @@ export class SceneSelectController {
       for (let k = 0; k < screen.count; k++) {
         perSplat[k] = ids[screen.tile[k] ?? 0]?.[screen.index[k] ?? 0] ?? 0;
       }
+      const visible = visibleSplats(screen);
       chosen = {
         assetId,
         doc,
         tiles,
         screen,
-        visible: visibleSplats(screen),
-        ids: perSplat,
+        visible,
+        index: paintIndex(doc, screen, visible, perSplat),
         mask: new BrushMask(screen.cols, screen.rows, CELL_PX),
         key,
       };
@@ -835,8 +851,10 @@ export class SceneSelectController {
     if (mode === "replace") view.mask.clear();
     const value = mode === "subtract" ? 0 : 1;
     this.#stroke = { x, y, value };
+    this.#previewCost = { runs: 0, maxMs: 0 };
     view.mask.stamp(x, y, useSceneSelect.getState().brush, value);
     this.#drawOverlay();
+    this.#schedulePreview();
   }
 
   #strokeTo(x: number, y: number): void {
@@ -847,20 +865,91 @@ export class SceneSelectController {
     stroke.x = x;
     stroke.y = y;
     this.#drawOverlay();
+    this.#schedulePreview();
+  }
+
+  /**
+   * Brings the stroke's match up to date on a coming frame, at most every `PREVIEW_MS`: moves
+   * come far more often than a frame, and the match is wanted while the stroke goes on.
+   */
+  #schedulePreview(): void {
+    if (this.#previewFrame !== null) return;
+    const run = (): void => {
+      this.#previewFrame = null;
+      if (!this.#stroke) return;
+      if (performance.now() - this.#previewAt < PREVIEW_MS) {
+        this.#previewFrame = requestAnimationFrame(run);
+        return;
+      }
+      this.#preview();
+    };
+    this.#previewFrame = requestAnimationFrame(run);
+  }
+
+  /**
+   * Highlights the stroke's best match so far, through the objects store as the selection is
+   * (only the instances' state table changes, which every renderer applies cheaply), and says
+   * it on the card (`PaintResult.live`). Nothing is selected until the stroke ends.
+   */
+  #preview(): void {
+    const view = this.#paintView;
+    if (!this.#stroke || !view) return;
+    const started = performance.now();
+    const best = bestByIoUIndexed(view.index, view.mask);
+    const id = best?.id ?? null;
+    const shown = this.#previewed;
+    if (shown?.assetId !== view.assetId || shown.id !== id) {
+      // The store lights what is below it too: its table has the same hierarchy, and a
+      // painted object has nothing below it, so the match's id alone is the selection's
+      // highlight without walking the hierarchy twice.
+      useInstances.getState().highlight(view.assetId, id === null ? [] : [id]);
+      this.#previewed = { assetId: view.assetId, id };
+      this.#viewer.scene.requestRender();
+    }
+    const painted = paintedCount(view.index, view.mask);
+    useSceneSelect.getState().setPaint({ best: id, iou: best?.iou ?? 0, painted, live: true });
+    this.#previewAt = performance.now();
+    const ms = this.#previewAt - started;
+    this.#previewCost.runs++;
+    this.#previewCost.maxMs = Math.max(this.#previewCost.maxMs, ms);
+    log.debug("paint preview", { ms, best: id, iou: best?.iou, splats: painted });
+  }
+
+  /**
+   * Stops bringing the match up to date, and gives the highlight back to the selection (or
+   * clears it) if the stroke's match had taken it.
+   */
+  #endPreview(): void {
+    if (this.#previewFrame !== null) cancelAnimationFrame(this.#previewFrame);
+    this.#previewFrame = null;
+    this.#previewAt = -Infinity;
+    const shown = this.#previewed;
+    this.#previewed = null;
+    if (!shown) return;
+    const state = useSceneSelect.getState();
+    const id = state.assetId === shown.assetId ? selectedId(state) : null;
+    if (id === shown.id) return;
+    const doc = paintedDocOf(shown.assetId);
+    useInstances
+      .getState()
+      .highlight(shown.assetId, id !== null && doc ? [...withDescendants(doc, [id])] : []);
+    this.#viewer.scene.requestRender();
   }
 
   #endStroke(evaluate: boolean): void {
     this.#stroke = null;
     const view = this.#paintView;
-    if (!evaluate || !view) return;
-    const painted = paintedSplats(view.screen, view.visible, view.mask);
-    const weights = new Float32Array(view.screen.count);
-    let count = 0;
-    for (let k = 0; k < view.screen.count; k++) {
-      weights[k] = view.visible[k] ? (view.screen.opacity[k] ?? 0) : 0;
-      if (painted[k]) count++;
+    if (!evaluate || !view) {
+      this.#endPreview();
+      // A match said while the stroke went on is not one any more.
+      const store = useSceneSelect.getState();
+      if (store.paint?.live) store.setPaint(null);
+      return;
     }
-    const best = bestByIoU(view.doc, { ids: view.ids, weights, painted });
+    const painted = paintedSplats(view.screen, view.visible, view.mask);
+    let count = 0;
+    for (let k = 0; k < view.screen.count; k++) if (painted[k]) count++;
+    const best = bestByIoUIndexed(view.index, view.mask);
     const store = useSceneSelect.getState();
     store.setPaint({ best: best?.id ?? null, iou: best?.iou ?? 0, painted: count });
     this.#painted =
@@ -873,13 +962,20 @@ export class SceneSelectController {
       store.clear();
       store.setPaint({ best: null, iou: 0, painted: count });
     }
-    log.info("painted", { asset: view.assetId, best: best?.id, iou: best?.iou, splats: count });
+    this.#endPreview();
+    log.info("painted", {
+      asset: view.assetId,
+      best: best?.id,
+      iou: best?.iou,
+      splats: count,
+      preview: this.#previewCost,
+    });
   }
 
   /** Whether the last painted area matched no object well (`PAINT_MIN_IOU`). */
   get paintedAreaOffered(): boolean {
     const paint = useSceneSelect.getState().paint;
-    return this.#painted !== null && paint !== null && paint.iou < PAINT_MIN_IOU;
+    return this.#painted !== null && paint !== null && !paint.live && paint.iou < PAINT_MIN_IOU;
   }
 
   /** Draws the painted cells over the scene while painting. */

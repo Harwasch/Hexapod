@@ -9,7 +9,8 @@ import { MOD_LABEL } from "@/lib/hotkeys";
  * (`cesium/ExploreController`) — are listed with `scene: true`: shown, never bound here, so
  * the sheet is the whole truth without a second place to keep in step. So are the keys a
  * selected scan object answers to (`cesium/sceneSelect/SceneSelectController`): the brush is
- * bound here, the cycling keys are the controller's own.
+ * bound here, the cycling keys are the controller's own. And so are the map's two mouse
+ * gestures (`cesium/SelectionManager`): the right-click menu and the double-click flight.
  */
 export type HotkeyGroup = "General" | "Views" | "Tools" | "Objects" | "Camera" | "Explore mode";
 
@@ -42,6 +43,13 @@ export const HOTKEYS = {
   agent: { combo: "a", label: "Agent activity", group: "General" },
   settings: { combo: ",", label: "Settings", group: "General" },
   escape: { combo: "escape", label: "Close, or step back", group: "General" },
+  mapMenu: {
+    combo: "",
+    keys: ["Right-click"],
+    label: "Map menu: what's here, measure, plan or fly (Ctrl+click; long press on touch)",
+    group: "General",
+    scene: true,
+  },
   devTools: { combo: "d", label: "Developer tools", group: "General", dev: true },
   mapView: { combo: "1", label: "Map view", group: "Views" },
   planView: { combo: "2", label: "Plan view", group: "Views" },
@@ -56,7 +64,7 @@ export const HOTKEYS = {
   cycleObject: {
     combo: "",
     keys: ["[", "]"],
-    label: "Previous / next candidate (Tab from the card or the map)",
+    label: "Finer part / larger part, then nearby (Tab from the card or the map)",
     group: "Objects",
     scene: true,
   },
@@ -78,6 +86,13 @@ export const HOTKEYS = {
   topDown: { combo: "t", label: "Top-down view", group: "Camera" },
   home: { combo: "h", label: "Earth view", group: "Camera" },
   explore: { combo: "g", label: "Walk / explore mode", group: "Camera" },
+  flyTowards: {
+    combo: "",
+    keys: ["Double-click"],
+    label: "Fly halfway to the point",
+    group: "Camera",
+    scene: true,
+  },
   pan: { combo: "", keys: ["←", "↑", "↓", "→"], label: "Pan", group: "Camera", scene: true },
   orbit: {
     combo: "",

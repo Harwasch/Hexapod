@@ -71,6 +71,7 @@ export function SceneBridge() {
         if (selection) useUi.getState().setInspectorOpen(true);
       }),
       scene.events.on("hover", (info) => useSelection.getState().setHoverInfo(info)),
+      scene.events.on("map-menu", (at) => useUi.getState().setMapMenu(at)),
       scene.events.on("measurement", (m) => useMeasurements.getState().upsert(m)),
       scene.events.on("measurement-mode", () => useUi.getState().setMeasureMode(null)),
       scene.events.on("toast", (toast) => useToasts.getState().push(toast)),
@@ -186,8 +187,14 @@ export function SceneBridge() {
     if (
       (project?.id ?? null) === (current?.id ?? null) &&
       (project?.siteId ?? null) === (current?.siteId ?? null)
-    )
+    ) {
+      // The same site, renamed (the switcher's rename): the badge and the site's pin are the
+      // project's name, so it takes the new one -- without the reset a new project gets.
+      if (project && current && project.name !== current.name) {
+        useMission.getState().refreshProject(project);
+      }
       return;
+    }
     useMission.getState().setProject(project);
   }, [scene, activeSiteId, siteCatalog.data, activeSite.data]);
 

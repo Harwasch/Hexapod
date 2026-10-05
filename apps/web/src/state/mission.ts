@@ -72,6 +72,11 @@ interface MissionState {
   /** Areas drawn in the console, per project id; the plans that cover them carry them too. */
   areas: Record<string, Zone[]>;
   setProject: (project: Project | null) => void;
+  /**
+   * The current project again with fresh details (its site renamed): composed as `setProject`
+   * composes it, but what is selected, the open plan and the composer stay as they are.
+   */
+  refreshProject: (project: Project) => void;
   setView: (view: MissionView) => void;
   select: (selection: MissionSelection) => void;
   setHoveredMachine: (id: string | null) => void;
@@ -142,6 +147,12 @@ export const useMission = create<MissionState>()(
           planId: null,
           composer: null,
         })),
+      refreshProject: (project) =>
+        set((s) =>
+          s.project?.id === project.id
+            ? { project: compose(project, s.approvedPlans, s.areas) }
+            : {},
+        ),
       setView: (view) => set({ view, projectsOpen: false }),
       select: (selection) => set({ selection }),
       setHoveredMachine: (hoveredMachineId) => set({ hoveredMachineId }),
