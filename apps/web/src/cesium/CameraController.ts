@@ -103,6 +103,8 @@ const FLOOR_CHECK_MIN_INTERVAL_MS = 1500;
 const ROLL_TOLERANCE_RAD = 0.0005;
 /** Largest correction the floor check applies; more than this is a mis-sample, not the ground. */
 const MAX_FLOOR_LIFT_M = 40;
+/** How long the floor check's lift takes (s). */
+const FLOOR_LIFT_S = 0.6;
 /** Wheel events closer than this belong to one gesture. */
 const WHEEL_GESTURE_MS = 250;
 /** A cursor that moved less than this (Manhattan pixels) is still over the same point. */
@@ -537,12 +539,19 @@ export class CameraController {
     // Only ever a small correction: a big difference means the sample hit something else
     // (a roof edge, a tree) rather than the ground the camera is over.
     if (lift > MAX_FLOOR_LIFT_M) return;
-    camera.flyTo({
-      destination: Cartesian3.fromRadians(carto.longitude, carto.latitude, floor),
-      orientation: { heading: camera.heading, pitch: camera.pitch, roll: camera.roll },
-      duration: 0.35,
-      easingFunction: EasingFunction.QUADRATIC_OUT,
-    });
+    // Eased in as well as out: the camera is at rest, and a lift that leaves at full speed
+    // (Cesium's quadratic-out, as it was) is a jolt straight after a fly-to has landed.
+    this.glide(
+      {
+        longitude: CesiumMath.toDegrees(carto.longitude),
+        latitude: CesiumMath.toDegrees(carto.latitude),
+        height: floor,
+        heading: CesiumMath.toDegrees(camera.heading),
+        pitch: CesiumMath.toDegrees(camera.pitch),
+        ground: { height: surface, measured: true },
+      },
+      { durationS: FLOOR_LIFT_S },
+    );
   }
 
   /** Whether a splat's solids lie straight below the camera, within a floor correction. */
