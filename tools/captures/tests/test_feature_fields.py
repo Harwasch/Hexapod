@@ -213,6 +213,8 @@ def test_tree_on_the_yard_finds_its_objects_and_parts_above_the_ground():
     objects, parts = segment_scene.truth_levels(
         {"class": klass, "instance": inst, "instances": instances}, rows, splats.colours
     )
+    # The ground is one thing at large scales (SAM masks it whole), lawn and path alike.
+    objects = np.where(np.isin(klass, (3, 4)), len(instances) + 3, objects)
     ground = ff.ground_layer(splats)
     field_ = oracle_field(objects, parts)
     tree = ff.build_tree(splats, field_, ground)
@@ -237,8 +239,8 @@ def test_tree_on_the_yard_finds_its_objects_and_parts_above_the_ground():
         assert purity > 0.9, (k, purity)
         found += 1
     assert found >= len(instances) - 1
-    # The claim took the objects' bases out of the ground layer and almost no ground with them.
-    assert tree.stats["contactClaimed"] > 0
+    # The objects' bases in the ground layer came back to them, and almost no ground with them.
+    assert tree.stats["groundRegionsClaimed"] > 0
     objects_ids = [j + 1 for j, kind in enumerate(tree.kind) if kind == "object"]
     assert np.isin(top[np.isin(klass, (3, 4))], objects_ids).mean() < 0.02
     # Parts: some object has children, and every child's splats are inside its parent.
@@ -250,7 +252,7 @@ def test_tree_on_the_yard_finds_its_objects_and_parts_above_the_ground():
     assert np.isin(klass[in_regions], (3, 4)).mean() > 0.9  # grass/low, ground
 
 
-def test_contact_claim_takes_a_flange_the_height_filter_calls_ground():
+def test_a_flange_the_height_filter_calls_ground_goes_to_its_object():
     rng = np.random.default_rng(3)
     xy = np.stack(np.meshgrid(np.arange(-2, 2, 0.02), np.arange(-2, 2, 0.02)), -1).reshape(-1, 2)
     ground_pts = np.c_[xy, rng.normal(0, 0.002, len(xy))]
@@ -299,42 +301,56 @@ def test_low_pieces_that_read_as_the_ground_are_ground_cover():
     assert np.isin(tree.leaf[n_lawn + n_tuft :], objects).mean() > 0.9
 
 
-def test_ground_records_put_cover_classes_under_one_ground():
-    pos, truth = _two_blobs(gap=0.0)
-    pos[:, 2] = 0.0
+def test_ground_records_write_the_shared_ground_schema():
+    """Things first; then one top-level instance per cover class (kind ground, category
+    ground, its `cover` and `name`), with its connected regions as children when it has more
+    than one."""
+    import segment_ground_first as sgf
+
+    rng = np.random.default_rng(2)
+    things = rng.uniform([0, 0, 0.3], [0.5, 0.5, 1.0], (500, 3))
+    xy = np.stack(np.meshgrid(np.arange(0, 3, 0.05), np.arange(0, 1, 0.05)), -1).reshape(-1, 2)
+    floor = np.c_[xy, np.zeros(len(xy))]
+    pos = np.concatenate([things, floor])
+    # Patches 2, 3, 4 along x; 2 and 4 grass (apart), 3 dirt; node 1 is a thing.
+    patch = 2 + np.minimum((floor[:, 0] // 1.0).astype(int), 2)
+    leaf = np.r_[np.ones(len(things), int), patch]
     tree = ff.Tree(
-        np.where(truth == 0, 1, 2), np.array([0, 0]), np.array([0, 0]), np.array([1.0, 1.0]),
-        ["ground-region", "ground-region"],
+        leaf, np.zeros(4, np.int64), np.zeros(4, np.int64), np.ones(4),
+        ["object", "ground-region", "ground-region", "ground-region"],
     )  # fmt: skip
-    embedder = segment_scene.FakeEmbedder()
-    text = embedder.embed_texts([ff.COVER_CLASSES[c][0] for c in ("gravel", "lawn")])
-    instances = [
-        segment_scene.Instance(
-            id=j + 1,
-            parent=None,
-            level=0,
-            splats=3000,
-            bounds_min=np.zeros(3),
-            bounds_max=np.ones(3),
-            centroid=np.zeros(3),
-            views=3,
-            embedding=text[j],
-            tags=[],
-            properties={name: 0.1 for name in segment_scene.PROPERTY_PROMPTS},
-            behaviour="static",
-        )
-        for j in range(2)
-    ]
-    out = ff.ground_records(tree, instances, pos, embedder)
+    graph = ff.knn_graph(pos, np.ones(len(pos), bool))
+    classes, _ = sgf.cover_classes()
+    names = [c.id for c in classes]
+    probability = np.zeros((5, len(classes)))
+    probability[2, names.index("grass")] = 0.9
+    probability[3, names.index("dirt")] = 0.7
+    probability[4, names.index("grass")] = 0.8
+    cover = ff.Cover(classes, probability, np.r_[0, 0, 1, 1, 1.0], np.ones((len(classes), 8)))
+    dim = 8
+    thing = segment_scene.Instance(
+        id=1, parent=None, level=0, splats=500, bounds_min=np.zeros(3), bounds_max=np.ones(3),
+        centroid=np.zeros(3), views=3, embedding=np.zeros(dim),
+        tags=[{"label": "box", "score": 0.5}],
+        properties={name: 0.1 for name in segment_scene.PROPERTY_PROMPTS}, behaviour="static",
+    )  # fmt: skip
+    regions = [segment_scene.Instance(**{**thing.__dict__, "id": k}) for k in (2, 3, 4)]
+    out = ff.ground_records(tree, [thing, *regions], pos, graph, cover, dim)
     by_id = {i.id: i for i in out.instances}
-    roots = [i for i in out.instances if i.parent is None]
-    assert len(roots) == 1 and roots[0].tags[0]["label"] == "ground"
-    classes = sorted(i.tags[0]["label"] for i in out.instances if i.parent == roots[0].id)
-    assert classes == ["gravel", "lawn"]
-    assert sorted(c["class"] for c in out.cover.values()) == ["gravel", "lawn"]
-    assert all(i.id == k + 1 for k, i in enumerate(out.instances))
+    assert [i.id for i in out.instances] == list(range(1, len(out.instances) + 1))
+    assert out.extra[1]["kind"] == "thing" and by_id[1].parent is None
+    tops = [i for i in out.instances if i.parent is None and out.extra[i.id]["kind"] == "ground"]
+    assert sorted(out.extra[i.id]["cover"] for i in tops) == ["dirt", "grass"]
+    for i in tops:
+        assert i.category == "ground" and out.extra[i.id]["nameSource"] == "ground-cover"
+    grass = next(i for i in tops if out.extra[i.id]["cover"] == "grass")
+    dirt = next(i for i in tops if out.extra[i.id]["cover"] == "dirt")
+    children = [i for i in out.instances if i.parent == grass.id]
+    assert len(children) == 2 and grass.splats == 0  # two grass regions, apart
+    assert all(out.extra[c.id]["cover"] == "grass" for c in children)
+    assert not [i for i in out.instances if i.parent == dirt.id] and dirt.splats > 0
     assert set(np.unique(out.leaf)) <= set(by_id)
-    assert by_id[roots[0].id].category == "ground"
+    assert (out.leaf[len(things) :] != 1).all()
 
 
 def test_granularities_follow_the_tree():
@@ -430,8 +446,9 @@ def test_finish_writes_instances_bound_to_every_tile(tmp_path: Path):
     assert [r["id"] for r in records] == list(range(1, len(records) + 1))
     assert all(r["parent"] is None or r["parent"] < r["id"] for r in records)
     ground = [r for r in records if r["kind"] == "ground"]
-    assert len(ground) == 1 and ground[0]["parent"] is None
-    assert any(r["parent"] == ground[0]["id"] and r["kind"] == "ground-cover" for r in records)
+    assert ground and all(r["category"] == "ground" and r.get("cover") for r in ground)
+    assert all(r["parent"] is None for r in ground if r["level"] == 0)
+    assert document["variant"]["name"] == "feature-fields" and document["variant"]["label"]
     emb = (out / "instances.emb").stat().st_size
     assert emb == len(records) * document["embedding"]["dim"] * 2
     from rig_tiles import tile_uris
@@ -486,4 +503,4 @@ def test_train_then_finish_on_a_small_tileset(tmp_path: Path):
 def test_cli_parses_both_commands(tmp_path: Path):
     with pytest.raises(SystemExit):
         ff.main(["train", str(tmp_path / "tileset.json"), "--out", "x", "--frames", "f"])
-    assert json.dumps(ff.COVER_CLASSES)  # the vocabulary is data
+    assert ff.VARIANT == "feature-fields" and ff.VARIANT_LABEL.startswith("B")

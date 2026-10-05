@@ -18,7 +18,7 @@ the same `instances.json` the viewer reads (§4 there), so the owner can switch 
   sigmoid of a small MLP of the scale -- and a feature-norm consistency term. The gate and the
   consistency term are theirs.
 * LangSplatV2 (NeurIPS 2025): a language feature as sparse codes. Not built (budget); cover
-  classes are SigLIP 2 labels voted per ground cluster instead (`cover_classes`).
+  classes are SigLIP 2 labels voted per ground patch instead (`cover_vote`).
 * gsplat 1.5.3 (Apache-2.0) rasterizes the N-D features; SAM 2.1 hiera-large (Apache-2.0)
   gives the masks; SigLIP 2 base (Apache-2.0) describes the instances, as today.
 
@@ -45,25 +45,29 @@ only where the gaussians along a ray agree.
 
 **The tree** (`build_tree`, numpy: it reruns on a CPU from the saved field). Ground first
 (`ground_layer`: the bake-off's shared `ground_pass`, SMRF on a robust lowest surface; its
-UNKNOWN layer -- no ground seen near, as under the spool -- counts as ground the field may
-claim back), then:
+UNKNOWN layer -- no ground seen near, as under the spool -- counts as ground, which step 5
+may take back). "Ground-like" is the field read at the largest scale it was trained on (where
+SAM masks the ground whole) agreeing with the mean of the ground the pass saw
+(`GROUNDLIKE_COSINE`). Then:
 
 1. A spatial graph: each gaussian's `NEIGHBOURS` nearest, not past `EDGE_QUANTILE` of the
    k-th distances; floaters (`floaters`, and the ground pass's BELOW) stay out of it.
 2. *Objects*: the connected parts of the graph above the ground, each split by the field at
    its own size (`partition` at `TOP_SCALE` x its robust diameter): edges whose gated cosine
    is at least `EDGE_COSINE` make fragments, adjacent fragments whose mean features agree to
-   `MERGE_COSINE` join, crumbs join a neighbour.
-3. *Parts*: each node split again at `CHILD_SCALE` of its own diameter (and at that squared
+   `MERGE_COSINE` join, crumbs join a neighbour they agree with.
+3. *Near pieces* the field, read at the size of the two together, calls one thing join
+   (`merge_adjacent`): the spool's top and its drum, which no photo connected underneath.
+4. *Ground cover*: low pieces that are ground-like (hay tufts above the ground layer).
+5. *Things on the ground*: the ground layer split by the field into regions; a region that is
+   not ground-like is a thing lying there -- the spool's bottom flange, a pumpkin's base in the
+   hay, which any height filter calls ground -- and joins the object it touches, or is one.
+6. *Parts*: each object split again at `CHILD_SCALE` of its own diameter (and at that squared
    when the first scale does not split it), up to `MAX_DEPTH` levels.
-4. *Contact*: a ground-layer gaussian beside an object whose feature is the object's rather
-   than the seen ground near it moves to the object (`claim_contact`) -- the spool's bottom
-   flange, which today's method fused with the ground and any height filter calls ground.
-5. *Ground cover*: the ground split at `COVER_SCALE_QUANTILE` of the masks' scales into
-   regions, each
-   described by SigLIP 2 like any instance and labelled with its best `COVER_CLASSES` phrase
-   (`cover_classes`); regions of one class are grouped under it, and the classes under one
-   `Ground` instance (`ground_records`).
+7. *The ground's cover*: the ground's regions cut into plan patches (`cover_patches`), each
+   labelled by candidate A's SigLIP 2 cover classifier voted over tiles of the views
+   (`cover_vote`, the shared `data/ground_cover.json`), and written in the bake-off's ground
+   schema (`ground_records`, docs/SCENE_OBJECTS.md §3b).
 
 Then everything `segment_scene` does after its lift: views planned and rendered with per
 pixel the dominant instance (`segment_scene.RenderPool`), `segment_scene.describe` (crops,
@@ -154,61 +158,33 @@ MIN_CHILD_SHARE = 0.03
 #: left, and lies within `LOOSE_LAYERS` ground layers of the terrain, is ground cover.
 CRUMB_COSINE = 0.3
 LOOSE_LAYERS = 4.0
-#: A low top-level piece whose mean feature agrees this much with the seen ground beside it
-#: (read at the larger of its size and `COVER_SCALE_QUANTILE`) is ground cover, not an object.
-GROUNDLIKE_COSINE = 0.6
+#: "Ground-like": the field read at the largest scale it knows (where the ground is one mask)
+#: agrees this much with the mean of the ground the pass saw. A low piece that is ground-like
+#: is ground cover; a region of the ground layer that is not is a thing lying on the ground.
+GROUNDLIKE_COSINE = 0.5
+#: Two pieces are near when their gap is at most this share of the smaller's diameter (or two
+#: graph steps): the spool's top over its drum, 5% of its width apart.
+ADJACENT_SHARE = 0.25
 #: Floaters: gaussians larger than this many times the median largest axis, or past the
 #: 99.5th percentile, stay out of the graph and take a neighbour's instance at the end.
 FLOATER_SCALE = 10.0
 FLOATER_QUANTILE = 0.995
-#: Ground cover: the ground is split at this quantile of the masks' scales; regions under
-#: `MIN_COVER_SHARE` of the ground join a neighbour.
+#: The ground is split by the field at this quantile of the masks' scales, then cut by a plan
+#: grid of `COVER_PATCHES` cells across: the patches the cover classes are voted on.
 COVER_SCALE_QUANTILE = 0.5
-MIN_COVER_SHARE = 0.01
-#: A ground-layer gaussian joins the object beside it when its gated cosine to the object's
-#: mean beats the ground around it by this much.
-CONTACT_MARGIN = 0.1
-#: ... at most this many graph steps out from the object (a claim cannot run far).
-CONTACT_ROUNDS = 20
-#: ... against the seen ground at least this many steps from any object.
-REFERENCE_REACHES = 3.0
+COVER_PATCHES = 8
 
 #: Views shown in the training sheet (image, the splat from its camera, its masks).
 SHEET_VIEWS = 6
 #: Views for describing (as segment_scene's whole-scan views).
 DESCRIBE_VIEWS = 32
-
-#: Ground-cover phrases (research brief §1.2.5's vocabulary), each with the scene category
-#: (scene_categories) a region of it is listed under.
-COVER_CLASSES: dict[str, tuple[str, str]] = {
-    "lawn": ("a photo of a mown lawn", "grass"),
-    "tall grass": ("a photo of tall grass in a meadow", "grass"),
-    "moss": ("a photo of moss on the ground", "grass"),
-    "dirt": ("a photo of bare soil and dirt", "ground"),
-    "mud": ("a photo of mud", "ground"),
-    "sand": ("a photo of sand", "ground"),
-    "gravel": ("a photo of gravel", "ground"),
-    "crushed stone": ("a photo of crushed stone", "ground"),
-    "bedrock": ("a photo of bare bedrock", "rock"),
-    "asphalt": ("a photo of asphalt", "paths"),
-    "concrete": ("a photo of concrete", "paths"),
-    "pavers": ("a photo of paving stones", "paths"),
-    "brick": ("a photo of a brick pavement", "paths"),
-    "wooden deck": ("a photo of a wooden deck", "paths"),
-    "mulch": ("a photo of bark mulch", "ground"),
-    "wood chips": ("a photo of wood chips", "ground"),
-    "leaf litter": ("a photo of fallen leaves on the ground", "grass"),
-    "forest floor": ("a photo of a pine needle forest floor", "ground"),
-    "hay": ("a photo of hay and straw", "produce"),
-    "crop rows": ("a photo of crop rows in a field", "produce"),
-    "ploughed field": ("a photo of a ploughed field", "ground"),
-    "snow": ("a photo of snow", "snow"),
-    "ice": ("a photo of ice", "snow"),
-    "water": ("a photo of water", "water"),
-    "puddle": ("a photo of a puddle", "water"),
-    "artificial turf": ("a photo of artificial turf", "grass"),
-}
-GROUND_LABEL = "ground"
+#: The variant this publishes as (`extras.variants.objects`).
+VARIANT_LABEL = "B · Feature fields"
+VARIANT_ABOUT = (
+    "A scale-conditioned feature per gaussian, trained from SAM 2.1 masks on the capture's "
+    "photos and read at each object's own size, groups whole objects and splits their parts; "
+    "the ground comes from the shared ground pass, its cover classes from SigLIP 2 votes."
+)
 
 
 # ---------------------------------------------------------------------- training views
@@ -1061,9 +1037,9 @@ def partition(
 class GroundLayer:
     """The shared ground pass, as the tree reads it: which gaussians may be ground (in the
     ground layer: `ground_pass.GROUND`, and `UNKNOWN` -- in the layer where no ground was seen
-    near, such as under the spool, which the field may still claim for an object), which are
-    the ground actually seen (what a claim is judged against), which are under the terrain
-    (`BELOW`: floaters), and each one's height above the terrain."""
+    near, such as under the spool), which are the ground actually seen (what "ground-like" is
+    measured against), which are under the terrain (`BELOW`: floaters), and each one's height
+    above the terrain."""
 
     is_ground: np.ndarray  # (n,) bool
     seen_ground: np.ndarray  # (n,) bool
@@ -1091,126 +1067,115 @@ def ground_layer(splats: Splats, params: Any = None) -> GroundLayer:
         {
             "layerM": round(float(found.layer_m), 4),
             "belowM": round(float(found.below_m), 4),
+            "cellM": round(float(found.terrain.cell), 4),
+            "seenShare": found.stats.get("terrain", {}).get("seenShare"),
             "stats": found.stats,
         },
     )
 
 
-def _object_means(
-    labels: np.ndarray, features: np.ndarray, gates: np.ndarray, k: int
-) -> np.ndarray:
-    """Per label 1..k-1 (row = label), the unit mean of its gaussians' features gated at its
-    own gate row (`gates`, per label)."""
-    rows = np.flatnonzero(labels > 0)
-    sums = np.zeros((k, features.shape[1]))
-    np.add.at(sums, labels[rows], gated(features[rows], gates[labels[rows]]))
-    return sums / np.maximum(np.linalg.norm(sums, axis=1, keepdims=True), 1e-12)
+def _samples(label: np.ndarray, k: int, most: int = 3000, seed: int = 0) -> list[np.ndarray]:
+    """Per label 0..k-1, the indices of up to `most` of its gaussians (seeded)."""
+    rng = np.random.default_rng(seed)
+    order = np.argsort(label, kind="stable")
+    bounds = np.searchsorted(label[order], np.arange(k + 1))
+    out = []
+    for j in range(k):
+        rows = order[bounds[j] : bounds[j + 1]]
+        out.append(rng.choice(rows, most, replace=False) if rows.size > most else rows)
+    return out
 
 
-def claim_contact(
-    labels: np.ndarray,
-    ground: GroundLayer,
-    features: np.ndarray,
-    gate: dict[str, np.ndarray],
-    object_scale: np.ndarray,
-    positions: np.ndarray,
-    reach: float,
-    *,
-    margin: float = CONTACT_MARGIN,
-    rounds: int = CONTACT_ROUNDS,
-    reference: int = 16,
-) -> np.ndarray:
-    """Ground-layer gaussians within `reach` of an object (`labels` > 0: per gaussian its
-    top object, 0 none; `object_scale` per label) whose feature, gated at the object's scale,
-    is nearer the object's mean than the mean of the `reference` nearest *seen* ground
-    gaussians clear of every object (`REFERENCE_REACHES` steps) by `margin`, join the
-    object. Repeated `rounds` times, a step of `reach`
-    each, so a flange's base is claimed from the object outwards and a claim cannot run far
-    into the ground."""
-    labels = labels.copy()
-    k = int(labels.max()) + 1
-    if k <= 1:
-        return labels
-    gates = gate_values(gate, object_scale)
-    pos = np.asarray(positions, np.float64)
-    for _ in range(rounds):
-        free = np.flatnonzero(ground.is_ground & (labels <= 0))
-        held = np.flatnonzero(labels > 0)
-        if free.size == 0 or held.size == 0:
-            break
-        distance, nearest = cKDTree(pos[held]).query(
-            pos[free], k=1, distance_upper_bound=REFERENCE_REACHES * reach, workers=-1
-        )
-        near = distance <= reach
-        if not near.any():
-            break
-        cand, obj = free[near], labels[held[nearest[near]]]
-        # The ground a candidate is weighed against: seen, and clear of every object (the
-        # object's own base in the ground layer is what is being decided).
-        clear = np.zeros(len(labels), bool)
-        clear[free[~np.isfinite(distance)]] = True
-        ref_rows = np.flatnonzero(ground.seen_ground & clear)
-        if ref_rows.size == 0:
-            break
-        mean = _object_means(labels, features, gates, k)
-        own = gated(features[cand], gates[obj])
-        _, near = cKDTree(pos[ref_rows]).query(pos[cand], k=min(reference, ref_rows.size))
-        near = ref_rows[np.asarray(near).reshape(cand.size, -1)]
-        local = gated(features[near], gates[obj][:, None, :]).sum(axis=1)
-        local /= np.maximum(np.linalg.norm(local, axis=1, keepdims=True), 1e-12)
-        to_object = (own * mean[obj]).sum(axis=1)
-        to_ground = (own * local).sum(axis=1)
-        win = to_object >= to_ground + margin
-        if not win.any():
-            break
-        labels[cand[win]] = obj[win]
-    return labels
+def _unit_mean(features: np.ndarray, rows: np.ndarray, gate_row: np.ndarray) -> np.ndarray:
+    v = gated(features[rows], gate_row).sum(axis=0) if rows.size else np.zeros(features.shape[1])
+    return v / max(float(np.linalg.norm(v)), 1e-12)
 
 
-def groundlike(
+def adjacent_pairs(
+    positions: np.ndarray, samples: Sequence[np.ndarray], diameters: np.ndarray, reach: float
+) -> list[tuple[int, int, float]]:
+    """Pairs `a < b` of pieces (each given by a sample of its gaussians) at most
+    max(2 `reach`, `ADJACENT_SHARE` x the smaller's diameter) apart, with their gap: boxes
+    first, then the samples' nearest points."""
+    k = len(samples)
+    if k < 2:
+        return []
+    lo = np.array([positions[s].min(axis=0) if s.size else np.full(3, np.inf) for s in samples])
+    hi = np.array([positions[s].max(axis=0) if s.size else np.full(3, -np.inf) for s in samples])
+    box_gap = np.linalg.norm(
+        np.maximum(0.0, np.maximum(lo[None] - hi[:, None], lo[:, None] - hi[None])), axis=2
+    )
+    limit = np.maximum(2.0 * reach, ADJACENT_SHARE * np.minimum.outer(diameters, diameters))
+    a_idx, b_idx = np.nonzero(np.triu(box_gap <= limit, k=1))
+    trees: dict[int, cKDTree] = {}
+    out = []
+    for a, b in zip(a_idx.tolist(), b_idx.tolist(), strict=True):
+        if samples[a].size == 0 or samples[b].size == 0:
+            continue
+        if a not in trees:
+            trees[a] = cKDTree(positions[samples[a]])
+        d, _ = trees[a].query(positions[samples[b]], k=1, distance_upper_bound=limit[a, b])
+        gap = float(d.min())
+        if gap <= limit[a, b]:
+            out.append((a, b, gap))
+    return out
+
+
+def merge_adjacent(
     top: np.ndarray,
-    k: int,
     positions: np.ndarray,
     features: np.ndarray,
     gate: dict[str, np.ndarray],
-    seen_ground: np.ndarray,
-    piece_scale: np.ndarray,
-    height: np.ndarray,
-    layer: float,
     reach: float,
+    clamp: Callable[[np.ndarray], np.ndarray],
+) -> tuple[np.ndarray, int]:
+    """Pieces that are near each other (`adjacent_pairs`) and that the field, read at the
+    size of the two together, calls one thing (`MERGE_COSINE`) become one: the parts of an
+    object that the graph left apart, such as the spool's top over its drum (its underside
+    is a shadow nobody photographed). In rounds, best pair first. Returns the pieces and
+    how many joins were made."""
+    joins = 0
+    for _ in range(MERGE_ROUNDS):
+        k = int(top.max()) + 1 if (top >= 0).any() else 0
+        if k < 2:
+            break
+        samples = _samples(top, k)
+        diameters = np.array([robust_diameter(positions[s]) for s in samples])
+        pairs = adjacent_pairs(positions, samples, diameters, reach)
+        scored = []
+        for a, b, _ in pairs:
+            both = np.concatenate([samples[a], samples[b]])
+            row = gate_values(
+                gate, clamp(np.array([TOP_SCALE * robust_diameter(positions[both])]))
+            )[0]
+            agree = float(
+                _unit_mean(features, samples[a], row) @ _unit_mean(features, samples[b], row)
+            )
+            if agree >= MERGE_COSINE:
+                scored.append((agree, a, b))
+        if not scored:
+            break
+        # One join per piece a round, best first: the merged piece is re-read next round.
+        taken: set[int] = set()
+        mapping = np.arange(k)
+        for _, a, b in sorted(scored, reverse=True):
+            if a in taken or b in taken:
+                continue
+            mapping[b] = a
+            taken.update((a, b))
+            joins += 1
+        top = _relabel(np.where(top >= 0, mapping[np.maximum(top, 0)], -1))
+    return top, joins
+
+
+def ground_reference(
+    features: np.ndarray, gate_row: np.ndarray, seen_ground: np.ndarray, most: int = 200_000
 ) -> np.ndarray:
-    """Per top-level piece (`top`: per gaussian 0..k-1, -1 none), whether it is ground
-    cover: low (its 95th percentile height under `LOOSE_LAYERS` ground layers) and, read at
-    `piece_scale` (per piece), alike to the seen ground within `REFERENCE_REACHES` steps of
-    it by at least `GROUNDLIKE_COSINE`."""
-    out = np.zeros(k, bool)
-    rows = np.flatnonzero(top >= 0)
-    ground_rows = np.flatnonzero(seen_ground)
-    if k == 0 or rows.size == 0 or ground_rows.size == 0:
-        return out
-    piece = top[rows]
-    order = np.argsort(piece, kind="stable")
-    bounds = np.searchsorted(piece[order], np.arange(k + 1))
-    p95 = np.array(
-        [np.percentile(height[rows[order[bounds[j] : bounds[j + 1]]]], 95) for j in range(k)]
-    )
-    low = p95 <= LOOSE_LAYERS * layer
-    distance, nearest = cKDTree(positions[ground_rows]).query(
-        positions[rows], k=1, distance_upper_bound=REFERENCE_REACHES * reach, workers=-1
-    )
-    near = np.isfinite(distance) & low[piece]
-    if not near.any():
-        return out
-    gates = gate_values(gate, piece_scale)
-    own = np.zeros((k, features.shape[1]))
-    np.add.at(own, piece, gated(features[rows], gates[piece]))
-    beside = np.zeros((k, features.shape[1]))
-    np.add.at(beside, piece[near], gated(features[ground_rows[nearest[near]]], gates[piece[near]]))
-    own /= np.maximum(np.linalg.norm(own, axis=1, keepdims=True), 1e-12)
-    norm = np.linalg.norm(beside, axis=1, keepdims=True)
-    beside /= np.maximum(norm, 1e-12)
-    agree = (own * beside).sum(axis=1)
-    return low & (norm[:, 0] > 0) & (agree >= GROUNDLIKE_COSINE)
+    """The ground's mean feature at one gate row: over the ground the pass saw (a sample)."""
+    rows = np.flatnonzero(seen_ground)
+    if rows.size > most:
+        rows = np.random.default_rng(0).choice(rows, most, replace=False)
+    return _unit_mean(features, rows, gate_row)
 
 
 # ---------------------------------------------------------------------------- the tree
@@ -1231,16 +1196,7 @@ class Tree:
 
 def _diameters(positions: np.ndarray, label: np.ndarray, k: int, seed: int = 0) -> np.ndarray:
     """Per label 0..k-1, the robust diameter of its gaussians (a sample of each)."""
-    rng = np.random.default_rng(seed)
-    order = np.argsort(label, kind="stable")
-    bounds = np.searchsorted(label[order], np.arange(k + 1))
-    out = np.zeros(k)
-    for j in range(k):
-        rows = order[bounds[j] : bounds[j + 1]]
-        if rows.size > 4000:
-            rows = rng.choice(rows, 4000, replace=False)
-        out[j] = robust_diameter(positions[rows])
-    return out
+    return np.array([robust_diameter(positions[s]) for s in _samples(label, k, 4000, seed)])
 
 
 def fill_unseen(features: np.ndarray, hits: np.ndarray, positions: np.ndarray) -> np.ndarray:
@@ -1260,6 +1216,43 @@ def fill_unseen(features: np.ndarray, hits: np.ndarray, positions: np.ndarray) -
     return out
 
 
+def _p95(values: np.ndarray, label: np.ndarray, k: int) -> np.ndarray:
+    order = np.argsort(label, kind="stable")
+    bounds = np.searchsorted(label[order], np.arange(k + 1))
+    return np.array(
+        [
+            np.percentile(values[order[bounds[j] : bounds[j + 1]]], 95)
+            if bounds[j + 1] > bounds[j]
+            else 0.0
+            for j in range(k)
+        ]
+    )
+
+
+def cover_patches(
+    region: np.ndarray, positions: np.ndarray, patches: int = COVER_PATCHES
+) -> np.ndarray:
+    """The ground regions cut by a plan grid of `patches` cells across the ground's robust
+    extent: what a cover class is voted on (the field rarely tells lawn from dirt -- SAM
+    masks the ground whole -- so the grid gives the vote somewhere to change)."""
+    has = region >= 0
+    if not has.any():
+        return region
+    xy = positions[has, :2]
+    lo, hi = np.percentile(xy, 2, axis=0), np.percentile(xy, 98, axis=0)
+    side = max(float(np.max(hi - lo)) / patches, 1e-6)
+    ij = np.floor((xy - lo) / side).astype(np.int64)
+    key = (
+        (region[has] * (4 * patches + 8) + np.clip(ij[:, 0], -2, 2 * patches + 2) + 2)
+        * (4 * patches + 8)
+        + np.clip(ij[:, 1], -2, 2 * patches + 2)
+        + 2
+    )
+    out = np.full(region.shape, -1, np.int64)
+    out[has] = key
+    return _relabel(out)
+
+
 def build_tree(
     splats: Splats,
     field_: Field,
@@ -1269,8 +1262,8 @@ def build_tree(
     skip: np.ndarray | None = None,
     max_depth: int = MAX_DEPTH,
 ) -> Tree:
-    """Objects (and their parts) above the ground and regions of the ground, from the field
-    (module docstring, "The tree"). Floaters (`skip`) and specks get no node here."""
+    """Objects (and their parts) and patches of the ground, from the field (module
+    docstring, "The tree"). Floaters (`skip`) and specks get no node here."""
     pos = np.asarray(splats.positions, np.float64)
     n = len(pos)
     skip = (floaters(splats) if skip is None else skip) | ground.below
@@ -1282,9 +1275,13 @@ def build_tree(
         return np.clip(s, lo, hi)
 
     stats: dict[str, Any] = {"edges": int(graph.a.size), "floaters": int(skip.sum())}
-    # A step of the contact claim: most of the graph's edges are shorter.
     lengths = np.linalg.norm(pos[graph.a] - pos[graph.b], axis=1)
     reach = float(np.quantile(lengths, EDGE_QUANTILE)) if lengths.size else 0.0
+    layer = float(ground.info.get("layerM", 0.0)) or float(np.quantile(lengths, 0.5))
+    low = ground.height <= LOOSE_LAYERS * layer
+    # What "ground" reads as at the largest scale the field knows: the ground the pass saw.
+    hi_row = gate_values(field_.gate, np.array([hi]))[0]
+    reference = ground_reference(features, hi_row, ground.seen_ground & ~skip)
 
     # 1. The connected parts above the ground.
     above = ~ground.is_ground & ~skip
@@ -1298,14 +1295,9 @@ def build_tree(
     comp = _relabel(comp)
     kc = int(comp.max()) + 1 if (comp >= 0).any() else 0
     stats["components"] = kc
-    # What no object takes (specks, crumbs the field does not join to an object) and lies
-    # low is ground cover: tufts and clods just above the ground layer.
-    layer = float(ground.info.get("layerM", 0.0)) or float(np.quantile(lengths, 0.5))
-    low = ground.height <= LOOSE_LAYERS * layer
 
-    # 2. Objects: each component split at its own size.
-    nodes: list[tuple[int, int, float, str]] = []  # (parent node id, depth, scale, kind)
-    leaf = np.zeros(n, np.int64)
+    # 2. Each split by the field read at its own size.
+    top = np.full(n, -1, np.int64)
     if kc:
         diam = _diameters(pos, comp, kc)
         top = partition(
@@ -1314,8 +1306,7 @@ def build_tree(
         )  # fmt: skip
         # Crumbs the field joins to nothing: low ones are ground cover (below); the rest
         # stay with their component -- its largest piece, or, where the field shattered
-        # the whole component, the component itself as one object (it is still a thing
-        # standing apart above the ground).
+        # the whole component, the component itself as one object.
         loose = (comp >= 0) & (top < 0)
         stats["looseCrumbs"] = int(loose.sum())
         high = loose & ~low
@@ -1333,122 +1324,143 @@ def build_tree(
             new_piece[fresh] = kt + np.arange(fresh.size)
             top[high] = np.where(target >= 0, target, new_piece[comp[high]])
             top = _relabel(top)
-            stats["shatteredComponents"] = int(fresh.size)
-        kt = int(top.max()) + 1 if (top >= 0).any() else 0
-        top_diam = _diameters(pos, top, kt)
-        # 4. Contact: ground beside an object, the object's by its feature.
-        claimed = claim_contact(
-            np.where(top >= 0, top + 1, 0),
-            GroundLayer(
-                ground.is_ground & ~skip, ground.seen_ground & ~skip, ground.below,
-                ground.height, ground.source,
-            ),
-            features,
-            field_.gate,
-            np.r_[lo, clamp(TOP_SCALE * top_diam)],
-            pos,
-            reach,
-        )  # fmt: skip
-        stats["contactClaimed"] = int(((claimed > 0) & (top < 0)).sum())
-        top = claimed - 1
-        # Low pieces the field reads as the ground beside them are ground cover: hay tufts
-        # above the ground layer are hay, a pumpkin in the hay is not.
-        cover_scale = (
-            float(np.quantile(field_.scales, COVER_SCALE_QUANTILE)) if field_.scales.size else lo
-        )
-        like = groundlike(
-            top, kt, pos, features, field_.gate, ground.seen_ground & ~skip,
-            clamp(np.maximum(top_diam, cover_scale)), ground.height, layer, reach,
-        )  # fmt: skip
+
+    # 3. Pieces the graph left apart that the field calls one thing.
+    top, stats["adjacentJoins"] = merge_adjacent(top, pos, features, field_.gate, reach, clamp)
+
+    # 4. Low pieces the field reads as the ground are ground cover (hay tufts, not pumpkins).
+    kt = int(top.max()) + 1 if (top >= 0).any() else 0
+    if kt:
+        p95 = _p95(ground.height, np.where(top >= 0, top, kt), kt + 1)[:kt]
+        agree = np.array([_unit_mean(features, s, hi_row) @ reference for s in _samples(top, kt)])
+        like = (p95 <= LOOSE_LAYERS * layer) & (agree >= GROUNDLIKE_COSINE)
         stats["groundLikePieces"] = int(like.sum())
-        if like.any():
-            top = _relabel(np.where((top >= 0) & ~like[np.maximum(top, 0)], top, -1))
-            kt = int(top.max()) + 1 if (top >= 0).any() else 0
-            top_diam = _diameters(pos, top, kt)
-        for j in range(kt):
-            nodes.append((0, 0, float(top_diam[j]), "object"))
-        # 3. Parts, depth by depth.
-        current = np.where(top >= 0, top + 1, 0)  # node id per gaussian at this depth
-        for depth in range(1, max_depth):
-            ids = np.unique(current[current > 0])
-            ids = ids[np.array([nodes[i - 1][1] == depth - 1 for i in ids], bool)]
-            if ids.size == 0:
-                break
-            index = np.full(len(nodes) + 1, -1, np.int64)
-            index[ids] = np.arange(ids.size)
-            node = np.where(current > 0, index[current], -1)
-            node_d = np.array([nodes[i - 1][2] for i in ids])
-            pieces = partition(
-                node, clamp(CHILD_SCALE * node_d), features, field_.gate, graph,
+        top = _relabel(np.where((top >= 0) & ~like[np.maximum(top, 0)], top, -1))
+
+    # 5. The ground, in regions the field draws; regions it does not read as ground are
+    # things lying on it -- the spool's bottom flange, a pumpkin's base in the hay -- and
+    # join the object they touch, or are objects of their own.
+    rows = (ground.is_ground | (above & low)) & ~skip & (top < 0)
+    keep_edge = rows[graph.a] & rows[graph.b]
+    gcomp = _relabel(np.where(rows, _components(n, graph.a[keep_edge], graph.b[keep_edge]), -1))
+    kg = int(gcomp.max()) + 1 if (gcomp >= 0).any() else 0
+    cover_scale = (
+        float(np.quantile(field_.scales, COVER_SCALE_QUANTILE)) if field_.scales.size else lo
+    )
+    regions = np.full(n, -1, np.int64)
+    if kg:
+        regions = partition(
+            gcomp, np.full(kg, clamp(cover_scale)), features, field_.gate, graph,
+            crumb_cosine=CRUMB_COSINE,
+        )  # fmt: skip
+        regions = np.where(rows & (regions < 0), -2, regions)  # crumbs: ground, unregioned
+    kr = int(regions.max()) + 1 if (regions >= 0).any() else 0
+    claimed = own = 0
+    if kr:
+        region_samples = _samples(np.where(regions >= 0, regions, kr), kr + 1)[:kr]
+        alike = np.array([_unit_mean(features, s, hi_row) @ reference for s in region_samples])
+        things = np.flatnonzero(alike < GROUNDLIKE_COSINE)
+        kt = int(top.max()) + 1 if (top >= 0).any() else 0
+        if things.size:
+            piece_samples = _samples(np.where(top >= 0, top, kt), kt + 1)[:kt]
+            pieces = piece_samples + [region_samples[r] for r in things]
+            diameters = np.array([robust_diameter(pos[s]) for s in pieces])
+            touch: dict[int, tuple[float, int]] = {}
+            for a, b, gap in adjacent_pairs(pos, pieces, diameters, reach):
+                if a < kt <= b:  # an object and a region
+                    r = int(things[b - kt])
+                    if r not in touch or gap < touch[r][0]:
+                        touch[r] = (gap, a)
+            for j, r in enumerate(things):
+                inside = regions == r
+                if r in touch:
+                    top[inside] = touch[r][1]
+                    claimed += int(inside.sum())
+                elif inside.sum() >= MIN_OBJECT_SPLATS:
+                    top[inside] = kt + j
+                    own += int(inside.sum())
+                else:
+                    continue
+                regions[inside] = -1
+            top = _relabel(top)
+    stats["groundRegionsClaimed"] = claimed
+    stats["groundRegionsOwnObjects"] = own
+
+    # 6. Objects, then their parts depth by depth.
+    nodes: list[tuple[int, int, float, str]] = []  # (parent node id, depth, scale, kind)
+    kt = int(top.max()) + 1 if (top >= 0).any() else 0
+    top_diam = _diameters(pos, top, kt)
+    for j in range(kt):
+        nodes.append((0, 0, float(top_diam[j]), "object"))
+    current = np.where(top >= 0, top + 1, 0)  # node id per gaussian at this depth
+    for depth in range(1, max_depth):
+        ids = np.unique(current[current > 0])
+        ids = ids[np.array([nodes[i - 1][1] == depth - 1 for i in ids], bool)]
+        if ids.size == 0:
+            break
+        index = np.full(len(nodes) + 1, -1, np.int64)
+        index[ids] = np.arange(ids.size)
+        node = np.where(current > 0, index[current], -1)
+        node_d = np.array([nodes[i - 1][2] for i in ids])
+        pieces = partition(
+            node, clamp(CHILD_SCALE * node_d), features, field_.gate, graph,
+            min_share=MIN_CHILD_SHARE,
+        )  # fmt: skip
+        # A node the first scale leaves whole is tried once more at a smaller one.
+        kp = int(pieces.max()) + 1 if (pieces >= 0).any() else 0
+        owner = np.zeros(kp, np.int64)
+        owner[pieces[pieces >= 0]] = node[pieces >= 0]
+        whole = np.bincount(owner, minlength=ids.size) <= 1
+        retry = np.where((node >= 0) & whole[np.maximum(node, 0)], node, -1)
+        if (retry >= 0).any():
+            again = partition(
+                retry, clamp(CHILD_SCALE**2 * node_d), features, field_.gate, graph,
                 min_share=MIN_CHILD_SHARE,
             )  # fmt: skip
-            # A node the first scale leaves whole is tried once more at a smaller one.
-            kp = int(pieces.max()) + 1 if (pieces >= 0).any() else 0
-            owner = np.zeros(kp, np.int64)
-            owner[pieces[pieces >= 0]] = node[pieces >= 0]
-            whole = np.bincount(owner, minlength=ids.size) <= 1
-            retry = np.where((node >= 0) & whole[np.maximum(node, 0)], node, -1)
-            if (retry >= 0).any():
-                again = partition(
-                    retry, clamp(CHILD_SCALE**2 * node_d), features, field_.gate, graph,
-                    min_share=MIN_CHILD_SHARE,
-                )  # fmt: skip
-                pieces = _relabel(np.where(retry >= 0, again + kp, pieces))
-            kp = int(pieces.max()) + 1 if (pieces >= 0).any() else 0
-            if kp == 0:
-                break
-            piece_node = np.zeros(kp, np.int64)
-            piece_node[pieces[pieces >= 0]] = node[pieces >= 0]
-            per_node = np.bincount(piece_node, minlength=ids.size)
-            piece_d = _diameters(pos, pieces, kp)
-            new_current = current.copy()
-            made = 0
-            for p in range(kp):
-                if per_node[piece_node[p]] < 2:
-                    continue  # a node split into one piece is not split
-                nodes.append((int(ids[piece_node[p]]), depth, float(piece_d[p]), "object"))
-                new_current[pieces == p] = len(nodes)
-                made += 1
-            stats[f"depth{depth}Nodes"] = made
-            if made == 0:
-                break
-            current = new_current
-        leaf = current
-    stats["objects"] = int(sum(1 for nd in nodes if nd[1] == 0))
+            pieces = _relabel(np.where(retry >= 0, again + kp, pieces))
+        kp = int(pieces.max()) + 1 if (pieces >= 0).any() else 0
+        if kp == 0:
+            break
+        piece_node = np.zeros(kp, np.int64)
+        piece_node[pieces[pieces >= 0]] = node[pieces >= 0]
+        per_node = np.bincount(piece_node, minlength=ids.size)
+        piece_d = _diameters(pos, pieces, kp)
+        new_current = current.copy()
+        made = 0
+        for p in np.flatnonzero(per_node[piece_node] >= 2):
+            nodes.append((int(ids[piece_node[p]]), depth, float(piece_d[p]), "object"))
+            new_current[pieces == p] = len(nodes)
+            made += 1
+        stats[f"depth{depth}Nodes"] = made
+        if made == 0:
+            break
+        current = new_current
+    leaf = current
+    stats["objects"] = kt
 
-    # 5. Ground regions.
-    ground_rows = (ground.is_ground | (above & low)) & ~skip & (leaf == 0)
-    keep_edge = ground_rows[graph.a] & ground_rows[graph.b]
-    gcomp = _components(n, graph.a[keep_edge], graph.b[keep_edge]).astype(np.int64)
-    gcomp[~ground_rows] = -1
-    gcomp = _relabel(gcomp)
-    kg = int(gcomp.max()) + 1 if (gcomp >= 0).any() else 0
-    if kg:
-        cover = (
-            float(np.quantile(field_.scales, COVER_SCALE_QUANTILE)) if field_.scales.size else lo
-        )
-        regions = partition(
-            gcomp, np.full(kg, clamp(cover)), features, field_.gate, graph,
-            min_splats=max(MIN_OBJECT_SPLATS, int(MIN_COVER_SHARE * ground_rows.sum())),
-        )  # fmt: skip
-        regions = regions.copy()
-        # Ground in bits too small to be a region (specks the graph left apart) joins the
-        # region nearest to it.
-        floor = max(MIN_OBJECT_SPLATS, int(MIN_COVER_SHARE * ground_rows.sum()))
-        size = np.bincount(regions[regions >= 0])
-        small = (regions >= 0) & (size[np.maximum(regions, 0)] < floor)
-        if small.any() and (regions >= 0).sum() > small.sum():
-            big = np.flatnonzero((regions >= 0) & ~small)
-            _, nearest = cKDTree(pos[big]).query(pos[small], k=1, workers=-1)
-            regions[small] = regions[big[nearest]]
-            regions = _relabel(regions)
-        kr = int(regions.max()) + 1 if (regions >= 0).any() else 0
-        region_d = _diameters(pos, regions, kr)
-        base = len(nodes)
-        for r in range(kr):
-            nodes.append((0, 0, float(region_d[r]), "ground-region"))
-        leaf = np.where(regions >= 0, base + 1 + regions, leaf)
-        stats["groundRegions"] = kr
+    # 7. The rest of the ground, in patches for the cover vote.
+    ground_rows = rows & (leaf == 0)
+    regions = np.where(ground_rows & (regions == -2), -1, regions)
+    regions = np.where(ground_rows, regions, -1)
+    patches = cover_patches(np.where(ground_rows & (regions < 0), kr, regions), pos)
+    patches = np.where(ground_rows, patches, -1)
+    kp = int(patches.max()) + 1 if (patches >= 0).any() else 0
+    # Specks of ground too small to vote on join the nearest patch.
+    size = np.bincount(patches[patches >= 0], minlength=kp)
+    small = (patches >= 0) & (size[np.maximum(patches, 0)] < MIN_OBJECT_SPLATS)
+    if small.any() and (patches >= 0).sum() > small.sum():
+        big = np.flatnonzero((patches >= 0) & ~small)
+        _, nearest = cKDTree(pos[big]).query(pos[small], k=1, workers=-1)
+        patches[small] = patches[big[nearest]]
+        patches = _relabel(patches)
+        kp = int(patches.max()) + 1
+    patch_d = _diameters(pos, patches, kp)
+    base = len(nodes)
+    for r in range(kp):
+        nodes.append((0, 0, float(patch_d[r]), "ground-region"))
+    leaf = np.where(patches >= 0, base + 1 + patches, leaf)
+    stats["groundPatches"] = kp
+    stats["groundRegions"] = kr
     parent = np.array([nd[0] for nd in nodes], np.int64)
     level = np.array([nd[1] for nd in nodes], np.int64)
     scale = np.array([nd[2] for nd in nodes], np.float64)
@@ -1614,17 +1626,6 @@ def supervision_of(
 # ------------------------------------------------------------------------ describing
 
 
-def cover_classes(embedder: Any, embedding: np.ndarray) -> tuple[list[str], np.ndarray]:
-    """Per row of `embedding` (unit, or zero where undescribed), the probability of each
-    `COVER_CLASSES` phrase: a softmax at `segment_scene.LOGIT_SCALE` over the phrases'
-    text embeddings. Returns the class names and (rows, classes)."""
-    names = list(COVER_CLASSES)
-    text = np.asarray(embedder.embed_texts([COVER_CLASSES[c][0] for c in names]), np.float64)
-    text /= np.maximum(np.linalg.norm(text, axis=1, keepdims=True), 1e-12)
-    logits = segment_scene.LOGIT_SCALE * np.asarray(embedding, np.float64) @ text.T
-    return names, segment_scene._softmax(logits)
-
-
 def describe_views(
     splats: Splats,
     leaf: np.ndarray,
@@ -1654,134 +1655,153 @@ def describe_views(
 
 
 @dataclass
+class Cover:
+    """The ground-cover vote on the tree's ground patches (`ground_cover.json`'s classes)."""
+
+    classes: list[Any]
+    #: (nodes + 1, classes): per node its mean class probability (0 where not voted).
+    probability: np.ndarray
+    #: (nodes + 1,): the pixels' weight voted to it.
+    weight: np.ndarray
+    #: (classes, dim): each class's crops' embeddings, weighted by its probability.
+    embedding: np.ndarray
+
+
+def cover_vote(tree: Tree, views: Sequence[segment_scene.View], embedder: Any) -> Cover:
+    """SigLIP 2 labels voted per ground patch: candidate A's classifier (`segment_ground_first
+    .cover_votes`, the shared `data/ground_cover.json` vocabulary with its contrast prompts)
+    on 64-pixel tiles of each view's ground pixels, each tile's class probabilities voted to
+    the patch that owns its pixels."""
+    import segment_ground_first as sgf
+
+    classes, contrast = sgf.cover_classes()
+    ground = np.zeros(tree.parent.size + 1, bool)
+    ground[1:] = np.array([k == "ground-region" for k in tree.kind], bool)
+    sums, weight, embedding = sgf.cover_votes(views, ground, embedder, classes, contrast)
+    probability = sums / np.maximum(weight, 1e-12)[:, None]
+    return Cover(classes, probability, weight, embedding)
+
+
+@dataclass
 class Described:
-    """The instances in their final numbering, per gaussian its leaf instance, and per
-    instance its kind, scale and (for a ground-cover class) what it covers."""
+    """The final instances (things, then the ground's classes and their regions), per
+    gaussian its leaf instance, each instance's extra fields, and the cover report."""
 
     instances: list[segment_scene.Instance]
     leaf: np.ndarray
-    kind: dict[int, str]
-    scale: dict[int, float]
-    cover: dict[int, dict[str, Any]]
+    extra: dict[int, dict[str, Any]]
+    cover: list[dict[str, Any]]
 
 
 def ground_records(
     tree: Tree,
     instances: Sequence[segment_scene.Instance],
     positions: np.ndarray,
-    embedder: Any,
+    graph: Graph,
+    cover: Cover,
+    dim: int,
 ) -> Described:
-    """The final instances: the objects as described, and the ground regions gathered under
-    one `Ground` instance by cover class (`cover_classes`): Ground, then a class, then (where
-    a class has more than one) its regions. Renumbered breadth first, largest first."""
+    """The final instances, in the bake-off's shared schema (docs/SCENE_OBJECTS.md §3b): the
+    objects as described (`kind: "thing"`), then per cover class present a top-level
+    instance (`kind: "ground"`, category `ground`, `cover`, `name`, `nameSource:
+    "ground-cover"`) whose children are its connected regions -- the patches of that class
+    joined where they touch -- when it has more than one. The one place the ground's
+    representation is written."""
+    import segment_ground_first as sgf
+
     k = tree.parent.size
-    regions = [j for j in range(k) if tree.kind[j] == "ground-region"]
-    dim = int(instances[0].embedding.size) if instances else 0
-    by_class: dict[str, list[int]] = {}
-    probability: dict[int, float] = {}
-    if regions:
-        emb = np.stack([instances[j].embedding for j in regions])
-        names, p = cover_classes(embedder, emb)
-        for row, j in enumerate(regions):
-            described = bool(np.any(emb[row]))
-            c = names[int(p[row].argmax())] if described else "unknown"
-            probability[j] = float(p[row].max()) if described else 0.0
-            by_class.setdefault(c, []).append(j)
-    # The grown tree: objects as they are; Ground, its classes, their regions.
-    parent = list(tree.parent)
-    level = list(tree.level)
-    scale = list(tree.scale)
-    kind = list(tree.kind)
-    #: Per added or relabelled node (old 1-based id): its label and its regions (old ids).
-    labelled: dict[int, tuple[str, list[int]]] = {}
-    if regions:
-        parent.append(0)
-        level.append(0)
-        scale.append(0.0)
-        kind.append("ground")
-        ground_node = len(parent)
-        labelled[ground_node] = (GROUND_LABEL, [])
-        for c, members in sorted(by_class.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-            if len(members) == 1:
-                j = members[0]
-                parent[j], level[j], kind[j] = ground_node, 1, "ground-cover"
-                labelled[j + 1] = (c, [j])
-                continue
-            parent.append(ground_node)
-            level.append(1)
-            scale.append(0.0)
-            kind.append("ground-cover")
-            labelled[len(parent)] = (c, members)
-            for j in members:
-                parent[j], level[j] = len(parent), 2
-    grown = Tree(
-        tree.leaf.copy(), np.asarray(parent, np.int64), np.asarray(level, np.int64),
-        np.asarray(scale, np.float64), kind, tree.stats,
-    )  # fmt: skip
-    final, new = renumber(grown)
-    count = final.parent.size
-    out: list[segment_scene.Instance | None] = [None] * count
-    for j, instance in enumerate(instances):
-        i = int(new[j + 1])
-        instance.id = i
-        instance.parent = int(final.parent[i - 1]) or None
-        instance.level = int(final.level[i - 1])
-        out[i - 1] = instance
-    own = np.bincount(final.leaf, minlength=count + 1)[1:]
-    below: dict[int, list[int]] = {}
-    for i in range(1, count + 1):
-        p = int(final.parent[i - 1])
-        while p:
-            below.setdefault(p, []).append(i)
-            p = int(final.parent[p - 1])
-    cover: dict[int, dict[str, Any]] = {}
-    # Deepest first, so a class is finished before Ground averages over it.
-    for old in sorted(labelled, key=lambda o: -int(final.level[new[o] - 1])):
-        label, members = labelled[old]
-        i = int(new[old])
-        subtree = np.asarray([i] + below.get(i, []), np.int64)
-        rows = np.flatnonzero(np.isin(final.leaf, subtree))
-        p = positions[rows] if rows.size else np.zeros((1, 3))
-        lo, hi, centroid = p.min(axis=0), p.max(axis=0), p.mean(axis=0)
-        instance = out[i - 1]
-        if instance is None:  # a node made here: Ground, or a class of several regions
-            parts = [out[d - 1] for d in below.get(i, []) if out[d - 1] is not None]
-            emb = sum((b.embedding for b in parts), np.zeros(dim))
-            norm = float(np.linalg.norm(emb))
-            props = {
-                name: round(float(np.mean([b.properties.get(name, 0.0) for b in parts])), 4)
-                if parts
-                else 0.0
-                for name in segment_scene.PROPERTY_PROMPTS
-            }
-            instance = segment_scene.Instance(
-                id=i, parent=int(final.parent[i - 1]) or None, level=int(final.level[i - 1]),
-                splats=int(own[i - 1]), bounds_min=lo, bounds_max=hi, centroid=centroid,
-                views=max((b.views for b in parts), default=0),
-                embedding=emb / norm if norm > 0 else np.zeros(dim), tags=[],
-                properties=props, behaviour="static",
-            )  # fmt: skip
-            out[i - 1] = instance
-        instance.bounds_min, instance.bounds_max, instance.centroid = lo, hi, centroid
-        instance.behaviour = "static"
-        if label == GROUND_LABEL:
-            instance.tags = [{"label": GROUND_LABEL, "score": 1.0}]
-            instance.category = "ground"
-            continue
-        category = COVER_CLASSES.get(label, ("", "ground"))[1]
-        score = round(float(np.mean([probability[j] for j in members])), 4)
-        instance.tags = [{"label": label, "score": score}]
-        instance.category = category
-        cover[i] = {"class": label, "regions": [int(new[j + 1]) for j in members], "score": score}
-        for j in members:
-            region = out[int(new[j + 1]) - 1]
-            if region is not None and region is not instance:
-                region.tags = [{"label": label, "score": round(probability[j], 4)}]
-                region.category = category
-    instances_out = [i for i in out if i is not None]
-    kinds = {i + 1: final.kind[i] for i in range(count)}
-    scales = {i + 1: round(float(final.scale[i]), 4) for i in range(count)}
-    return Described(instances_out, final.leaf, kinds, scales, cover)
+    patch_ids = np.flatnonzero(np.array([kind == "ground-region" for kind in tree.kind])) + 1
+    things = [j + 1 for j in range(k) if tree.kind[j] == "object"]
+    # Each patch's class; a patch nobody voted on takes its nearest voted patch's.
+    klass = np.full(k + 1, -1, np.int64)
+    confidence = np.zeros(k + 1)
+    voted = cover.weight > 0
+    for j in patch_ids:
+        if voted[j]:
+            klass[j] = int(cover.probability[j].argmax())
+            confidence[j] = float(cover.probability[j].max())
+    centroid = np.zeros((k + 1, 3))
+    counts = np.bincount(tree.leaf, minlength=k + 1)
+    for axis in range(3):
+        centroid[:, axis] = np.bincount(tree.leaf, positions[:, axis], k + 1)
+    centroid /= np.maximum(counts, 1)[:, None]
+    have = [j for j in patch_ids if klass[j] >= 0]
+    if have:
+        missing = [j for j in patch_ids if klass[j] < 0]
+        if missing:
+            _, nearest = cKDTree(centroid[have]).query(centroid[missing], k=1)
+            klass[missing] = klass[np.asarray(have)[nearest]]
+    elif patch_ids.size:
+        klass[patch_ids] = 0
+    # Regions: patches of one class joined where the graph's edges cross between them.
+    is_patch = np.zeros(k + 1, bool)
+    is_patch[patch_ids] = True
+    la, lb = tree.leaf[graph.a], tree.leaf[graph.b]
+    cross = is_patch[la] & is_patch[lb] & (la != lb) & (klass[la] == klass[lb])
+    region = _components(k + 1, la[cross], lb[cross])
+    # Things keep their tree order and get ids 1..; then classes and their regions.
+    new = np.zeros(k + 1, np.int64)
+    out: list[segment_scene.Instance] = []
+    extra: dict[int, dict[str, Any]] = {}
+    for old in things:
+        i = instances[old - 1]
+        new[old] = len(out) + 1
+        parent = int(new[i.parent]) if i.parent else 0
+        out.append(
+            segment_scene.Instance(
+                len(out) + 1, parent or None, i.level, i.splats, i.bounds_min, i.bounds_max,
+                i.centroid, i.views, i.embedding, i.tags, i.properties, i.behaviour, i.category,
+            )
+        )  # fmt: skip
+        extent = float(np.linalg.norm(np.asarray(i.bounds_max) - np.asarray(i.bounds_min)))
+        extra[len(out)] = {
+            "kind": "thing", "scaleM": round(extent / 2, 3),
+            "fieldScale": round(float(tree.scale[old - 1]), 4),
+        }  # fmt: skip
+    leaf = new[tree.leaf]
+    report = []
+    for c in sorted({int(klass[j]) for j in patch_ids}, key=lambda c: cover.classes[c].id):
+        members = [j for j in patch_ids if klass[j] == c]
+        spec = cover.classes[c]
+        groups = sorted({int(region[j]) for j in members})
+        points = positions[np.isin(tree.leaf, members)]
+        score = round(float(np.mean([confidence[j] for j in members])), 4)
+        tags = [{"label": spec.name.lower(), "score": score}]
+        emb = segment_scene._normalise(cover.embedding[c][None])[0]
+        class_id = len(out) + 1
+        own = 0 if len(groups) > 1 else int(points.shape[0])
+        out.append(sgf._instance(class_id, None, 0, own, points, dim, tags, spec.vegetation, emb))
+        fields = {
+            "kind": "ground", "name": spec.name, "nameSource": "ground-cover", "cover": spec.id,
+        }  # fmt: skip
+        extra[class_id] = {
+            **fields, "scaleM": round(float(np.linalg.norm(np.ptp(points, axis=0))) / 2, 3),
+        }  # fmt: skip
+        if len(groups) == 1:
+            leaf[np.isin(tree.leaf, members)] = class_id
+        else:
+            for g in groups:
+                patches = [j for j in members if region[j] == g]
+                rows = np.isin(tree.leaf, patches)
+                rpoints = positions[rows]
+                rscore = round(float(np.mean([confidence[j] for j in patches])), 4)
+                region_id = len(out) + 1
+                out.append(
+                    sgf._instance(
+                        region_id, class_id, 1, int(rows.sum()), rpoints, dim,
+                        [{"label": spec.name.lower(), "score": rscore}], spec.vegetation, emb,
+                    )
+                )  # fmt: skip
+                extra[region_id] = {
+                    **fields,
+                    "scaleM": round(float(np.linalg.norm(np.ptp(rpoints, axis=0))) / 2, 3),
+                }
+                leaf[rows] = region_id
+        report.append(
+            {"class": spec.id, "splats": int(points.shape[0]), "regions": max(len(groups), 1),
+             "meanConfidence": score}
+        )  # fmt: skip
+    return Described(out, leaf, extra, sorted(report, key=lambda r: -r["splats"]))
 
 
 # ------------------------------------------------------------------------ the overviews
@@ -2014,10 +2034,17 @@ def finish_main(args: argparse.Namespace) -> dict[str, Any]:
             for line in args.vocabulary.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-    lifted = segment_scene.Lifted(np.arange(tree.parent.size + 1), tree.parent, tree.level)
+    # The things are described; the ground's patches are not (the cover vote reads them), so
+    # their pixels are nobody's here.
+    cell_id = np.arange(tree.parent.size + 1)
+    cell_id[1:][np.array([kind == "ground-region" for kind in tree.kind], bool)] = 0
+    lifted = segment_scene.Lifted(cell_id, tree.parent, tree.level)
     instances = segment_scene.describe(lifted, splats, tree.leaf, views, embedder, vocabulary)
-    described = ground_records(tree, instances, positions, embedder)
     timings["describeS"] = round(time.time() - mark, 1)
+    mark = time.time()
+    cover = cover_vote(tree, views, embedder)
+    described = ground_records(tree, instances, positions, graph, cover, int(embedder.dim))
+    timings["coverS"] = round(time.time() - mark, 1)
     mark = time.time()
     tiles = segment_scene.tile_binding_by_position(tiles_dir, positions, described.leaf)
     tiles = rebind_instances.rebind(tiles_dir, tiles)
@@ -2027,23 +2054,19 @@ def finish_main(args: argparse.Namespace) -> dict[str, Any]:
     )  # fmt: skip
     document["tilesEncoding"] = rebind_instances.TILES_ENCODING
     for record in document["instances"]:
-        i = int(record["id"])
-        record["kind"] = described.kind.get(i, "object")
-        record["scale"] = described.scale.get(i, 0.0)
-        if i in described.cover:
-            record["cover"] = described.cover[i]["class"]
+        record.update(described.extra.get(int(record["id"]), {}))
+    document["ground"] = {
+        "method": "SMRF on a robust lowest surface (tools/captures/ground_pass.py)",
+        "layerM": ground.info.get("layerM"),
+        "cellM": ground.info.get("cellM"),
+        "seenShare": ground.info.get("seenShare"),
+        "cover": described.cover,
+    }
+    document["variant"] = {"name": VARIANT, "label": VARIANT_LABEL, "about": VARIANT_ABOUT}
     document["method"] = {
         "name": METHOD,
-        "about": (
-            "A scale-conditioned feature per gaussian, trained from SAM 2.1 masks on the "
-            "capture's photos, read at each object's own size; ground from the shared ground "
-            "pass, its cover classes by SigLIP 2."
-        ),
         "field": {k: v for k, v in trained.stats.items() if k not in ("history", "summary")},
-        "ground": {
-            "source": ground.source,
-            **{k: v for k, v in ground.info.items() if k != "stats"},
-        },
+        "tree": tree.stats,
     }
     args.out.mkdir(parents=True, exist_ok=True)
     segment_scene.write_instances(args.out, document, described.instances)
@@ -2054,9 +2077,10 @@ def finish_main(args: argparse.Namespace) -> dict[str, Any]:
         from splat_render import GsplatRenderer
 
         renderer = GsplatRenderer()
+    records = document["instances"]
     layers = granularities(
-        np.array([r["parent"] or 0 for r in document["instances"]], np.int64),
-        np.array([r["level"] for r in document["instances"]], np.int64),
+        np.array([r["parent"] or 0 for r in records], np.int64),
+        np.array([r["level"] for r in records], np.int64),
         described.leaf,
     )
     overview(
@@ -2064,33 +2088,35 @@ def finish_main(args: argparse.Namespace) -> dict[str, Any]:
         keep=~skip, renderer=renderer,
     )  # fmt: skip
     timings["overviewS"] = round(time.time() - mark, 1)
-    records = document["instances"]
     top = [r for r in records if r["parent"] is None]
+    total = np.bincount(layers["objects"], minlength=len(records) + 1)
 
     def name(r: dict) -> str:
-        return r["tags"][0]["label"] if r["tags"] else r.get("category", "")
+        return r.get("name") or (r["tags"][0]["label"] if r["tags"] else r.get("category", ""))
 
     summary = {
         "instances": len(records),
         "topLevel": len(top),
-        "objects": sum(1 for r in top if r["kind"] == "object"),
+        "things": sum(1 for r in top if r["kind"] == "thing"),
         "assignedShare": round(float((described.leaf > 0).mean()), 4),
-        "groundShare": round(float(ground.is_ground.mean()), 4),
+        "groundShare": round(
+            float(
+                np.isin(described.leaf, [r["id"] for r in records if r["kind"] == "ground"]).mean()
+            ),
+            4,
+        ),
         "tree": tree.stats,
-        "cover": {
-            name(r): r["splats"] + sum(c["splats"] for c in records if c["parent"] == r["id"])
-            for r in records
-            if r.get("kind") == "ground-cover"
-        },
-        "largestObjects": [
+        "cover": described.cover,
+        "largest": [
             {
                 "id": r["id"],
                 "name": name(r),
+                "kind": r["kind"],
                 "category": r.get("category"),
-                "splats": r["splats"],
+                "splats": int(total[r["id"]]),
                 "children": sum(1 for c in records if c["parent"] == r["id"]),
             }
-            for r in sorted(top, key=lambda r: -r["splats"])[:20]
+            for r in sorted(top, key=lambda r: -total[r["id"]])[:25]
         ],
         "timingsS": {**timings, "totalS": round(time.time() - started, 1)},
     }
