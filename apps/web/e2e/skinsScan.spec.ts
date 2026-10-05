@@ -13,7 +13,8 @@
  * Tiles the directory does not hold (a scan fetched for a few objects) are pruned from the
  * tileset served, with everything below them. `SKINS_RENDERER` (cesium, playcanvas, spark),
  * `SKINS_HEADING`, `SKINS_PITCH`, `SKINS_RANGE` (metres from the object's middle),
- * `SKINS_WIND` (strength, default 0.4) and `SKINS_PULL` (pixels, default 90) tune it. It
+ * `SKINS_WIND` (strength, default 0.4), `SKINS_PULL` (pixels, default 90) and `SKINS_SSE` (the
+ * tileset's maximum screen-space error, default 2; more draws fewer splats) tune it. It
  * asserts only what holds on any scan: the candidate loads, the wind and the poke move the
  * object's pixels, and calm with nothing held is the measured frame.
  */
@@ -55,6 +56,7 @@ const PITCH = Number(process.env.SKINS_PITCH ?? -15);
 const RANGE = Number(process.env.SKINS_RANGE ?? 0);
 const WIND = Number(process.env.SKINS_WIND ?? 0.4);
 const PULL = Number(process.env.SKINS_PULL ?? 90);
+const SSE = Number(process.env.SKINS_SSE ?? 2);
 
 function variantsOf(dir: string): string[] {
   const asked = process.env.SKINS_VARIANTS;
@@ -99,7 +101,7 @@ function html(renderer: string): string {
         container: document.getElementById("viewer"),
         url: "/scan-tiles/tileset.json",
         incremental: true,
-        maximumScreenSpaceError: 2,
+        maximumScreenSpaceError: ${String(SSE)},
         renderer: ${JSON.stringify(renderer)},
       });
     </script>

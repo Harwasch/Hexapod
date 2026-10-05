@@ -1215,8 +1215,8 @@ scan) or, for the Minnetonka tree, whose tileset is a site under `sites/` the at
 uploads them beside it in the public bucket and rewrites its `tileset.json` with only
 `extras.variants` changed. `extras.skin` is never touched: "Today" stays the default.
 
-**Choosing in the viewer.** `state/skinVariant.ts`: `useSkinVariant.getState().select(assetId,
-name | null)` swaps the skin a scan draws (`attachSkin` follows it: the part drawn now goes,
-the chosen one loads, the wind and the poke move it). The "Compare methods" switcher is meant
-to call it. Until it lands, the **temporary** URL parameter `?skinVariant=<name>` picks that
-candidate on every scan that declares it.
+**Choosing in the viewer.** The **Methods** panel's **Motion** row (§4, "Variants") lists
+Today and the four candidates by label; a pick swaps the skin in place (`attachSkin`), the
+wind and the poke move whichever is drawn, and on the Minnetonka tree the procedural rig
+stands down while a candidate is drawn. A scan republished with new tiles loses
+`extras.variants` (the API does not know it yet, §4): run the workflow again to put them back.
