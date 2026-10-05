@@ -763,9 +763,10 @@ is the fixed thing, not the number it produces.
   yardstick is printed beside it.** The developer panel does, and it is the only place that shows
   it. A figure in "splat radii" with no stated denominator reads as measured and is not.
 - **Splats are unpickable**, so the badge is ambient rather than attached to a selection, and the
-  Inspector's Observed/Simulated section falls back to the active site (a click on a swaying tree
-  produces a `ground` selection with no site at all). The section names the site it describes so it
-  cannot be read as describing the clicked point.
+  Inspector's Observed/Simulated section falls back to the active site ("What's here" on a swaying
+  tree the scan's solids do not cover produces a `ground` selection with no site at all; on them it
+  is the site's card). The section names the site it describes so it cannot be read as describing
+  the clicked point.
 - **The only tree that moves is synthetic.** `skeleton.py` has never been run on a real capture. Its
   scores are all against the synthetic tree, the one input where the answer is known: ARI 0.459
   against a ceiling of 0.799, purity 0.597 against 0.876, band agreement 0.601 against 0.989, mean

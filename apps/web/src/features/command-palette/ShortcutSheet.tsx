@@ -13,7 +13,7 @@ export function ShortcutSheet() {
       open={open}
       onOpenChange={setOpen}
       title="Keyboard shortcuts"
-      description="Keys work from the map, not while typing. The command box runs every action by name."
+      description="Keys work from the map, not while typing. The command box runs every action by name. A click on the map selects what is on it and does nothing on empty ground; right-click (or a long press) for the map's menu."
       side="center"
       className="shortcuts"
       testId="shortcut-sheet"

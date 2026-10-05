@@ -70,6 +70,23 @@ labelled tools above the bar.
   the credits' line, the status line and the tab bar. A touch screen has no Shift, Alt, wheel
   or Tab, so the brush offers New / Add / Remove and a brush size there instead, and the
   keyboard hints are left out.
+- **Clicks on the map** (`cesium/SelectionManager`). A left-click selects a thing on the map
+  — a zone, a mapped feature, a 3D tile's feature, an object of a scan (the scene's own
+  selection, asked first) — and on empty ground, the globe or a site's surface it does nothing
+  at all: no marker, no card, and what is open stays open. Asking about a place is the **map
+  menu**: right-click (Ctrl+click on a one-button Mac, a 550 ms long press on touch, our own
+  timer since iOS has no `contextmenu`) opens it at the point (`features/map/MapContextMenu`).
+  **What's here** opens the inspector for the point, as a left-click used to (on the active
+  site's splat scan, where the scan's solids answer, the site's card, so its Placement stays
+  reachable from its surface); **Measure from here** starts a distance with its first point
+  there (on a scan's surface too: measuring asks the scan's solids before the depth buffer,
+  which splats never write); **Plan here** opens the plan composer with the ground at the
+  point outlined, and drafts once the bar has a goal; **Fly here** flies halfway to it. It is a
+  `role="menu"` (arrows, Home, End; Escape or Tab closes it) and closes on a press elsewhere or
+  when the camera moves. It does not open while measuring, exploring, waiting for "the ground
+  you mean", painting with the brush or editing an area's corners, where a right-click removes
+  a corner. A right- or Ctrl+drag still orbits: Cesium only calls a press that moved less than
+  5 px a click. Double-click flies halfway to the point and selects nothing.
 - **Objects** beside the representation switcher (`features/sites/InstanceSearch`) opens the
   scan's objects panel as a popover over the regions (`data-hud-popover`, like the site
   switcher and the command box's results).
@@ -101,8 +118,8 @@ labelled tools above the bar.
   `[` `]` cycle a selected object's candidates, and Tab / Shift+Tab do too while the map or the
   object's card has focus (a click on an object gives the map the keyboard); from anywhere
   else, the page's body included, Tab moves focus as it always does. Escape steps back one
-  thing per press (`features/shell/stepBack.ts`): what floats over the HUD (the shortcut
-  sheet, More, the activity log, the write-token prompt), then the brush, measuring, the site
+  thing per press (`features/shell/stepBack.ts`): what floats over the HUD (the map menu, the
+  shortcut sheet, More, the activity log, the write-token prompt), then the brush, measuring, the site
   switcher, the selected object, a machine's feeds, the plan composer, the machine or zone,
   the Plan / Fleet drawer, the inspector and last the tool panel. A dialog, popover or tooltip
   that closes itself on Escape marks the key as handled, and the app's keys leave a handled
@@ -182,7 +199,9 @@ square labelled as the guess it is. The agent then drafts with defaults and the 
 numbers, what it assumed as chips (each clarification's default; tapping one shows the
 alternatives and redrafts), the schedule and steps, risks, and Approve. Plain words in the
 box while a draft is open are a change to it ("two drones", "finish by Friday"). The camera
-frames the ground at an angle when the draft lands.
+frames the ground at an angle when the draft lands. The map menu's **Plan here** starts from
+the other end: the composer opens with the ground at the point resolved the same way
+(`outlineAt` in `planFlow.ts`), and the sentence typed next is drafted on it.
 
 **Task families.** The rules planner reads the goal as a treatment (mow, clear, spray…), a
 survey (inspect, map, photograph) or a 3D scan (scan, photogrammetry, splat, mesh, lidar) and

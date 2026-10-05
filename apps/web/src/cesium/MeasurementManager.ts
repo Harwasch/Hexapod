@@ -25,6 +25,7 @@ import type { Emitter } from "@/lib/emitter";
 import type { Measurement, MeasurementPoint } from "@/state/measurements";
 import type { MeasureMode } from "@/state/ui";
 
+import type { SplatCollider } from "./SplatCollider";
 import type { SceneEvents } from "./types";
 
 const LINE = Color.fromCssColorString("#ffd60a");
@@ -51,6 +52,9 @@ export class MeasurementManager {
   private readonly finished = new Map<string, Entity[]>();
   private units: UnitSystem = "metric";
   private counter = 0;
+  private collider: SplatCollider | null = null;
+  /** The first point of the next measurement ("Measure from here"), until it starts. */
+  private seeded: Cartesian3 | null = null;
   private readonly onKey = (event: KeyboardEvent) => {
     if (event.key === "Escape" && this.mode) {
       event.preventDefault();
@@ -75,7 +79,24 @@ export class MeasurementManager {
     this.scene.requestRender();
   }
 
+  /** Splat solids, so a point on a scan is on the scan (SplatCollider). */
+  setCollider(collider: SplatCollider | null): void {
+    this.collider = collider;
+  }
+
+  /**
+   * The first point of a measurement, from the map menu's "Measure from here": placed at once
+   * while measuring, else by the `start` that follows (the menu asks the app for the tool
+   * next); a `stop` first drops it.
+   */
+  seed(point: MeasurementPoint): void {
+    const position = Cartesian3.fromDegrees(point.longitude, point.latitude, point.height);
+    if (this.mode) this.place(position);
+    else this.seeded = position;
+  }
+
   start(mode: MeasureMode): void {
+    const seeded = this.seeded;
     this.stop();
     this.mode = mode;
     this.viewer.canvas.style.cursor = "crosshair";
@@ -91,9 +112,11 @@ export class MeasurementManager {
     this.handler.setInputAction(() => this.finishArea(), ScreenSpaceEventType.RIGHT_CLICK);
     this.handler.setInputAction(() => this.finishArea(), ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
     window.addEventListener("keydown", this.onKey);
+    if (seeded) this.place(seeded);
   }
 
   stop(): void {
+    this.seeded = null;
     if (this.draft) this.discardDraft();
     this.handler?.destroy();
     this.handler = null;
@@ -119,18 +142,25 @@ export class MeasurementManager {
   }
 
   private pick(window: Cartesian2): Cartesian3 | null {
+    // A scan's solids first: splats write no depth, so the depth buffer under a scan is the
+    // ground beneath it, and a measurement "on" the scan would measure that instead.
+    const ray = this.viewer.camera.getPickRay(window);
+    const splat = ray ? this.collider?.raycast(ray) : undefined;
+    if (splat) return splat.point;
     let position: Cartesian3 | undefined;
     if (this.scene.pickPositionSupported) position = this.scene.pickPosition(window);
-    if (!position) {
-      const ray = this.viewer.camera.getPickRay(window);
-      position = ray ? this.scene.globe.pick(ray, this.scene) : undefined;
-    }
+    if (!position && ray) position = this.scene.globe.pick(ray, this.scene);
     return position ?? null;
   }
 
   private onClick(window: Cartesian2): void {
     const position = this.pick(window);
-    if (!position || !this.mode) return;
+    if (position) this.place(position);
+  }
+
+  /** One point of the measurement being made, wherever it came from. */
+  private place(position: Cartesian3): void {
+    if (!this.mode) return;
     if (this.mode === "point" || this.mode === "elevation") {
       const draft = this.newDraft(this.mode);
       draft.points.push(position);

@@ -71,6 +71,7 @@ export function SceneBridge() {
         if (selection) useUi.getState().setInspectorOpen(true);
       }),
       scene.events.on("hover", (info) => useSelection.getState().setHoverInfo(info)),
+      scene.events.on("map-menu", (at) => useUi.getState().setMapMenu(at)),
       scene.events.on("measurement", (m) => useMeasurements.getState().upsert(m)),
       scene.events.on("measurement-mode", () => useUi.getState().setMeasureMode(null)),
       scene.events.on("toast", (toast) => useToasts.getState().push(toast)),

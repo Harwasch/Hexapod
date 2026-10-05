@@ -2,7 +2,8 @@
  * Planning from the bar. One sentence of work ("3D scan this field", "mow the orchard by
  * Friday") becomes a plan on the map: the ground is found first (named zones, the mapped
  * feature the goal talks about, or the spot the operator clicks), then the agent drafts with
- * sensible defaults and the card shows the result to approve, drag or talk to.
+ * sensible defaults and the card shows the result to approve, drag or talk to. The map menu's
+ * "Plan here" starts from the other end: the spot first, the sentence after.
  */
 
 import { centerOf, destination, type LonLat } from "@twin/geo";
@@ -152,16 +153,38 @@ export async function waitForGround(goal: string, scene: CesiumSceneManager): Pr
     if (state.composer?.status === "awaiting-ground") state.updateComposer({ status: "idle" });
     return;
   }
+  await outlineAt(picked, goal, scene);
+}
+
+/** A point on the map: where it is, and where it sits in the view (0–1 across and down). */
+export interface GroundPoint {
+  longitude: number;
+  latitude: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * Outlines the ground at `point` (`missions/ground.ts`) into the open card's scope, then
+ * drafts `goal`; without a goal yet the card keeps the ground and waits for one in the bar.
+ */
+export async function outlineAt(
+  point: GroundPoint,
+  goal: string,
+  scene: CesiumSceneManager,
+): Promise<void> {
+  const state = useMission.getState();
+  if (!state.composer || !state.project) return;
   state.updateComposer({ status: "locating" });
   state.appendLog("agent", "Looking at the ground there…");
   const id = nextAreaId(state.project.zones);
   const configured = state.plannerConfigured;
   const found = await resolveGround(
-    { longitude: picked.longitude, latitude: picked.latitude },
+    { longitude: point.longitude, latitude: point.latitude },
     id,
     goal,
     {
-      point: { x: picked.x, y: picked.y },
+      point: { x: point.x, y: point.y },
       snapshot: () => scene.snapshot(),
       unproject: (x, y) => scene.groundAt(x, y),
       outline: outlineGround,
@@ -172,7 +195,37 @@ export async function waitForGround(goal: string, scene: CesiumSceneManager): Pr
   adopt(found.zone);
   useMission.getState().updateComposer({ ground: { source: found.source, note: found.note } });
   useMission.getState().appendLog("agent", found.note);
-  void startPlanDraft(goal, { zoneIds: [found.zone.id] });
+  if (goal.trim().length >= 3) void startPlanDraft(goal, { zoneIds: [found.zone.id] });
+  else useMission.getState().updateComposer({ status: "idle" });
+}
+
+/**
+ * "Plan here" (the map menu): the plan composer, with the ground at the point outlined as its
+ * ground; `point.x` and `point.y` are CSS px from the canvas's top left. An open card keeps its
+ * goal and trades its ground for this one; a new card has no goal yet, so the draft waits for
+ * the sentence in the bar (`planFromText` takes the card's ground).
+ */
+export function planHere(
+  point: { longitude: number; latitude: number; x: number; y: number },
+  scene: CesiumSceneManager,
+): void {
+  const state = useMission.getState();
+  if (!state.project) return;
+  // A click still awaited from "Click the ground" would outline a second place.
+  scene.areas.cancelPick();
+  if (state.composer) state.updateComposer({ zoneIds: [], ground: null, error: null });
+  else state.openComposer();
+  const canvas = scene.viewer.canvas;
+  void outlineAt(
+    {
+      longitude: point.longitude,
+      latitude: point.latitude,
+      x: point.x / Math.max(1, canvas.clientWidth),
+      y: point.y / Math.max(1, canvas.clientHeight),
+    },
+    useMission.getState().composer?.goal ?? "",
+    scene,
+  );
 }
 
 /** A rectangle of the ground in view, when the operator would rather not click. */

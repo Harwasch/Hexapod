@@ -20,6 +20,7 @@ import { InspectorPanel } from "../inspector/InspectorPanel";
 import { LayerAboutSheet } from "../layers/LayerAboutSheet";
 import { LayersPanel } from "../layers/LayersPanel";
 import { SimulatedBadge } from "../living/SimulatedBadge";
+import { MapContextMenu } from "../map/MapContextMenu";
 import { MeasurePanel } from "../measure/MeasurePanel";
 import { FeedsPanel } from "../mission/FeedsPanel";
 import { FleetPanel } from "../mission/FleetPanel";
@@ -129,7 +130,8 @@ function SettingsSheetLazy() {
  *
  * Things that float on purpose, over the regions, and close with Escape or a click away: the
  * command box's results, the site switcher, the agent's activity log, the scan's objects panel
- * (from the strip), and on a phone the More sheet (`data-hud-popover`).
+ * (from the strip), the map's menu (a right-click or long press on the map), and on a phone the
+ * More sheet (`data-hud-popover`).
  *
  * On narrow screens the docks and the drawer collapse into one bottom sheet; `data-sheet`
  * says which was touched last, and that one is shown (`state/layout.ts`).
@@ -214,6 +216,9 @@ export function AppShell() {
       <SettingsSheetLazy />
       <LayerAboutSheet />
       <ShortcutSheet />
+      <ErrorBoundary inline label="Map menu">
+        <MapContextMenu />
+      </ErrorBoundary>
     </>
   );
 }
