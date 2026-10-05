@@ -30,6 +30,11 @@
  * frame is drawn when the motion handed to the renderer changed (`ScanMotionLink.update`) or a
  * split object moved -- so at rest, with nothing moving, still nothing is drawn.
  *
+ * A scan seen from afar (SiteManager's far view: drawn small, not engaged) is the same session
+ * as the scan up close -- `ScanTarget.far` is not part of its key, so zooming out and back in
+ * never restarts the renderer (no reload, no flash) -- drawn with a quarter of the budget
+ * (`FAR_BUDGET_SHARE`) and nothing culled for size (quality.ts), and with no objects to select.
+ *
  * Under the WebGPU trial a scan with objects or motion is drawn with WebGL2 (PlayCanvas's
  * default renderer): the modifiers that hide, highlight and move them are GLSL only for now
  * (playcanvasBackend.ts, `WorkBufferModifier`), and the readouts say so
@@ -80,6 +85,11 @@ export interface ScanTarget {
   tileset: Cesium3DTileset;
   /** The scan's asset id: whose objects (state/instances.ts) the renderer draws hidden or lit. */
   assetId?: string;
+  /**
+   * Seen from afar (SiteManager's far view), not engaged: drawn small, with a quarter of the
+   * budget and nothing culled for size. Not part of `key`: the session carries on either way.
+   */
+  far?: boolean;
 }
 
 /** How often the tile cut is re-planned while the camera moves (ms), as the viewer page. */
@@ -98,6 +108,11 @@ const MAX_SHOWN_PER_UPDATE = 600_000;
 const PREFETCH_RADIUS_M = 30;
 /** Loaded tiles kept beyond what is drawn, so a look back needs no download. */
 const CACHE_FACTOR = 1.5;
+/**
+ * The share of its budget a scan seen from afar may draw (`ScanTarget.far`): it is a few dozen
+ * pixels across. Its cache keeps the full budget's, so zooming back in finds what was drawn.
+ */
+export const FAR_BUDGET_SHARE = 0.25;
 
 /** Where a scan's package keeps the renderer-native streamed level of detail, beside its
  *  tileset (PlayCanvas's streamed SOG, written by splat-transform). */
@@ -272,6 +287,8 @@ export interface ScanRendererStatus {
   objects: number;
   /** Whether the renderer shows what it was last asked for (`ScanBackend.settled`). */
   settled: boolean;
+  /** Whether it draws the scan as seen from afar (`ScanTarget.far`). */
+  far: boolean;
 }
 
 interface Session {
@@ -295,6 +312,7 @@ interface Session {
     | "motion"
     | "objects"
     | "settled"
+    | "far"
   >;
   meter(now: number): FrameReading | null;
   instances(): { tiles: number; matched: number } | null;
@@ -303,6 +321,9 @@ interface Session {
   settled(): boolean;
   /** Fetches what a camera at `pose` will draw (a flight's destination); null forgets it. */
   prefetch(pose: CameraPose | null): void;
+  /** Draws the scan as seen from afar, or up close again (`ScanTarget.far`). */
+  setFar(far: boolean): void;
+  far(): boolean;
 }
 
 /** A session as drawing makes it; `start` adds which start, API and notice it is. */
@@ -489,7 +510,15 @@ export class ScanRendererHost {
   }
 
   setTarget(target: ScanTarget | null): void {
-    if (target?.key === this.target?.key && target?.tileset === this.target?.tileset) return;
+    if (target?.key === this.target?.key && target?.tileset === this.target?.tileset) {
+      // The same scan from nearer or further: the session carries on, and only what it may
+      // draw changes (`Session.setFar`).
+      if (target && (target.far === true) !== (this.target?.far === true)) {
+        this.target = target;
+        this.session?.setFar(target.far === true);
+      }
+      return;
+    }
     this.target = target;
     this.sync();
   }
@@ -540,6 +569,7 @@ export class ScanRendererHost {
       motion: session?.motion() ?? null,
       objects: session?.objects() ?? 0,
       settled: session?.settled() ?? true,
+      far: session?.far() ?? false,
       error: inner.error ?? this.lastError,
     };
   }
@@ -579,6 +609,8 @@ export class ScanRendererHost {
           session.stop();
         } else {
           this.session = session;
+          // Zoomed in or out while it started: drawn as the target says now.
+          session.setFar(this.target?.far === true);
           // A flight under way when the scan came in: its destination still counts.
           const destination = this.destination;
           if (destination && performance.now() < destination.until) {
@@ -787,7 +819,17 @@ export class ScanRendererHost {
     const { viewer } = this;
     const url = new URL(target.tileset.resource.url, location.href).toString();
     if (backend.streamNative) {
-      const native = await this.runNative(kind, target, canvas, backend, url, wake, work, failed);
+      const native = await this.runNative(
+        kind,
+        target,
+        canvas,
+        backend,
+        url,
+        budget,
+        wake,
+        work,
+        failed,
+      );
       if (native) return native;
     }
     const response = await fetch(url);
@@ -798,7 +840,15 @@ export class ScanRendererHost {
     const adaptive = new AdaptiveSplatBudget(deviceSplatCeiling(), budget);
     const streamedFor = (drawn: number): number =>
       Math.min(drawn * backend.loadFactor, MAX_STREAMED);
-    const streamed = streamedFor(adaptive.budget);
+    /** Seen from afar (`ScanTarget.far`): a share of the budget, nothing culled for size. */
+    let far = target.far === true;
+    /** What the view may draw now: the adaptive budget, cut while the scan is seen from afar.
+     *  (A far view draws too little for its frame times to move the adaptive budget.) */
+    const drawBudget = (): number =>
+      far ? Math.round(adaptive.budget * FAR_BUDGET_SHARE) : adaptive.budget;
+    /** Tiles kept: the full budget's share whether near or far, so zooming in finds them. */
+    const cacheBudget = (): number => streamedFor(adaptive.budget) * CACHE_FACTOR;
+    if (far) backend.setBudget(drawBudget());
     const handover = new Handover<unknown>({
       add: (mesh) => backend.add(mesh),
       remove: (mesh) => backend.remove(mesh),
@@ -821,14 +871,20 @@ export class ScanRendererHost {
         },
       },
       {
-        budget: streamed,
-        cacheBudget: streamed * CACHE_FACTOR,
+        budget: streamedFor(drawBudget()),
+        cacheBudget: cacheBudget(),
         concurrency: FETCHES_AT_ONCE,
         maxShownPerUpdate: MAX_SHOWN_PER_UPDATE,
         prefetchRadiusM: PREFETCH_RADIUS_M,
       },
     );
     let arrived = true;
+    /** Hands the renderer and the streamer what may be drawn now (`drawBudget`). */
+    const applyBudget = (): void => {
+      backend.setBudget(drawBudget());
+      streamer.setBudget(streamedFor(drawBudget()), cacheBudget());
+      arrived = true;
+    };
     // A tile arrived or failed, a deferred swap is due, a failed tile may be tried again.
     streamer.onArrival = () => {
       arrived = true;
@@ -924,11 +980,14 @@ export class ScanRendererHost {
       const moving = now - lastMotionAt < MOTION_SETTLE_MS;
       work.moving = moving;
       const size = inputSize();
-      const pose = scanPose(viewer.camera, toLocal, {
-        width: size.width,
-        height: size.height,
-        pixelRatio: overlayPixelRatio(this.globeResolution(), { handheld, moving }),
-      });
+      const pose = {
+        ...scanPose(viewer.camera, toLocal, {
+          width: size.width,
+          height: size.height,
+          pixelRatio: overlayPixelRatio(this.globeResolution(), { handheld, moving }),
+        }),
+        farView: far,
+      };
       const drawn = Math.min(streamer.drawnGaussians, adaptive.budget);
       // Frames while tiles arrive are slowed by their uploads, not by what is drawn: only a
       // steady view's motion frames say what the GPU can sort and blend -- and only one that
@@ -936,10 +995,7 @@ export class ScanRendererHost {
       const steady = motion && streamer.loading === 0 && lastMotionFrameAt > 0;
       let budgetMoved = false;
       if (steady && adaptive.frame(now - lastMotionFrameAt, drawn)) {
-        backend.setBudget(adaptive.budget);
-        const next = streamedFor(adaptive.budget);
-        streamer.setBudget(next, next * CACHE_FACTOR);
-        arrived = true;
+        applyBudget();
         budgetMoved = true;
         log.info("splat budget", { kind, budget: adaptive.budget });
       }
@@ -1026,7 +1082,8 @@ export class ScanRendererHost {
             target.assetId,
             {
               renderer: backend.name,
-              tiles: () => backend.pickTiles?.() ?? [],
+              // Objects are selected in an engaged scan, not in one seen from afar.
+              tiles: () => (far ? [] : (backend.pickTiles?.() ?? [])),
               toWorld: () =>
                 target.tileset.isDestroyed() ? undefined : target.tileset.root.computedTransform,
             },
@@ -1038,6 +1095,13 @@ export class ScanRendererHost {
     return {
       kind,
       key: target.key,
+      setFar: (next) => {
+        if (next === far) return;
+        far = next;
+        applyBudget();
+        driver.wake("far");
+      },
+      far: () => far,
       stop: () => {
         unlinkPick();
         unlinkInstances();
@@ -1084,7 +1148,7 @@ export class ScanRendererHost {
         gaussians: streamer.drawnGaussians,
         frames,
         error,
-        budget: adaptive.budget,
+        budget: drawBudget(),
         loading: streamer.loading,
         cached: streamer.loadedGaussians,
         native: false,
@@ -1107,6 +1171,7 @@ export class ScanRendererHost {
     canvas: HTMLCanvasElement,
     backend: ScanBackend<unknown>,
     tilesetUrl: string,
+    budget: number,
     wake: { frame: (reason: string) => void },
     work: TileWork,
     failed: (error: unknown) => void,
@@ -1119,6 +1184,11 @@ export class ScanRendererHost {
     const lodUrl = await findNativeLod(tilesetUrl, extras);
     if (lodUrl === null) return null;
     const stream = await backend.streamNative(lodUrl);
+    // The renderer chooses its own level of detail within its budget: from afar, a share of it.
+    let far = target.far === true;
+    const applyBudget = (): void =>
+      backend.setBudget(far ? Math.round(budget * FAR_BUDGET_SHARE) : budget);
+    if (far) applyBudget();
     const { viewer } = this;
     const toLocal = new Matrix4();
     const handheld = isHandheld();
@@ -1154,9 +1224,10 @@ export class ScanRendererHost {
       const size = inputSize();
       const ratio = overlayPixelRatio(this.globeResolution(), { handheld, moving });
       const drawStart = performance.now();
-      backend.render(
-        scanPose(camera, toLocal, { width: size.width, height: size.height, pixelRatio: ratio }),
-      );
+      backend.render({
+        ...scanPose(camera, toLocal, { width: size.width, height: size.height, pixelRatio: ratio }),
+        farView: far,
+      });
       if (motion) meter.record(drawStart, performance.now() - drawStart);
       countOverlayDraw(canvas, ratio);
       inputs.commit(camera, size, tileset.root.computedTransform);
@@ -1206,6 +1277,13 @@ export class ScanRendererHost {
       meter: (now) => meter.reading(now),
       // The renderer chooses its own level of detail from its own camera.
       prefetch: () => undefined,
+      setFar: (next) => {
+        if (next === far) return;
+        far = next;
+        applyBudget();
+        driver.wake("far");
+      },
+      far: () => far,
       stop: () => {
         unlinkInstances();
         motionLink?.dispose();

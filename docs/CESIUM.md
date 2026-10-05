@@ -267,7 +267,8 @@ tileset hidden for its frame and solids. The overlay is held to the globe's rule
   than the globe renders at now (preset, ladder step, sharpened still frame), at most 2 (1.5
   on a phone), and while moving its own cut (60% of the preset's full ratio, at least 0.75)
   where that is lower. A 2× display on the performance preset used to blend every splat over
-  four times the globe's pixels. PlayCanvas's smallest kept splat stays half a CSS pixel.
+  four times the globe's pixels. PlayCanvas's smallest kept splat stays half a CSS pixel, and
+  none is culled for size in a scan seen from afar (a quarter of the budget instead).
 - **Tile work is budgeted.** Decoding happens in workers (PlayCanvas's Morton reorder too);
   what must run on the main thread (building a PlayCanvas resource, digesting a Spark tile)
   runs within 4 ms a frame while the camera moves, 12 ms at rest (`tileWork.ts`). A phone keeps
@@ -413,9 +414,31 @@ streaming mesh from crowding out the terrain under it.
 A site's model only takes over from the world once the camera is close enough for its
 detail to matter: below 2.5 footprint radii of altitude and within 3 radii horizontally
 (`SiteManager.shouldEngage`, handing back at 3.5 and 4.5 so the threshold does not flicker; a
-flight target is always engaged so the model is there on arrival). Further out the model
-stays loaded but hidden and no clip is applied, so from 20 km up the world is seamless
-instead of showing a 5 km patch of a differently lit capture with a hard edge. Clamped objects (the sample rock and plant) rest on the drawn surface
+flight target is always engaged so the model is there on arrival). Engagement is also what
+makes a model something to work with: its objects selected, the world held still around a
+scan the camera is in, its terrain floor dropped. Further out the model stays loaded but
+hidden and no clip is applied, so from 20 km up the world is seamless instead of showing a
+5 km patch of a differently lit capture with a hard edge.
+
+A splat scan is the exception, seen from afar (`cesium/farView.ts`): the primary site's scan
+stays drawn, small, while its bounding sphere -- the tileset's own, not the footprint radius,
+which engagement floors at 30 m -- is at least 10 CSS pixels across, until it is under 6
+(hysteresis), never from further than 25 km (drawn again within 22.5), and not while the
+ellipsoid's horizon hides its centre. Engagement hands a house-sized scan back about 100 m up,
+and the scan used to vanish there as one zoomed out. Drawn from afar, the world is clipped
+under it as up close, but nothing else follows: no object selection, no held world, no
+dropped floor. CesiumJS draws it by its own level of detail; a dedicated renderer keeps the
+same session from near to far (`far` is not part of `ScanTarget`'s key, so zooming out and
+back in reloads nothing and never flashes), draws a quarter of its budget there and keeps the
+full budget's tiles cached, and PlayCanvas culls no splat for size (`splatMinPixelSize`: from
+afar nearly every splat is under half a pixel, and that cull would thin the scan to little or
+nothing). Only the primary site's:
+a dedicated renderer draws one scan, and every renderer is held to the same rule. A scan
+packaged as one tile is drawn whole from afar until the pipeline writes a coarse root level
+for it. Measured in `e2e/scanFarView.spec.ts` (the 8 m synthetic tree, 960 × 600): drawn from
+400 m by every renderer, gone from 5 km.
+
+Clamped objects (the sample rock and plant) rest on the drawn surface
 (`scene.sampleHeightMostDetailed`, excluding themselves) when it is within 60 m of the
 terrain, so they sit on Google's ground rather than floating over or sinking into it.
 

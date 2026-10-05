@@ -9,13 +9,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RigidMotion } from "@twin/world";
 
 import {
+  FAR_BUDGET_SHARE,
   ScanRendererHost,
   prefetchScanDestination,
   type BackendModule,
 } from "@/cesium/scanView/ScanRendererHost";
 import type { ScanMotion } from "@/cesium/scanView/scanMotion";
 import type { BackendHooks, ScanBackend, ScanPose } from "@/cesium/scanView/types";
+import { pickSourceOf } from "@/cesium/sceneSelect/pickSources";
 import type * as Telemetry from "@/cesium/telemetry";
+import type { PickTile } from "@/lib/splatPick";
 import { useSceneObjects } from "@/state/sceneObjects";
 import { RETRY_FAILED_MS, TileStreamer } from "@/view/stream";
 
@@ -87,6 +90,8 @@ interface Rig {
   globe: () => void;
   /** `ms` of display frames (16 ms each), with the globe rendering in each when asked. */
   run: (ms: number, globe?: boolean) => Promise<void>;
+  /** Asks for the same scan, seen from afar or up close (SiteManager's far view). */
+  setFar: (far: boolean) => void;
 }
 
 /** The tileset the next rig's fetch answers with. */
@@ -103,6 +108,8 @@ async function rig(
     extras?: Record<string, unknown>;
     /** What the renderer can do beyond the basics (setMotion, place, frameDueBy). */
     backend?: Partial<ScanBackend<string>>;
+    /** The scan is seen from afar from the start. */
+    far?: boolean;
   } = {},
 ): Promise<Rig> {
   if (options.tileset) served = options.tileset;
@@ -173,11 +180,14 @@ async function rig(
     isDestroyed: () => false,
   } as unknown as Cesium3DTileset;
   host.setRenderer("playcanvas");
-  host.setTarget({
-    key: "scan",
-    tileset,
-    ...(options.assetId ? { assetId: options.assetId } : {}),
-  });
+  const setFar = (far: boolean): void =>
+    host.setTarget({
+      key: "scan",
+      tileset,
+      ...(options.assetId ? { assetId: options.assetId } : {}),
+      far,
+    });
+  setFar(options.far === true);
   const globe = (): void => {
     postRender.raiseEvent();
   };
@@ -206,6 +216,7 @@ async function rig(
     viewer,
     globe,
     run,
+    setFar,
   };
 }
 
@@ -432,6 +443,111 @@ describe("what wakes the splat overlay", () => {
     expect(r.budgets.at(-1)).toBeLessThan(3_000_000);
     // The frame that moved it asked for another: drawn without the globe.
     expect(r.renders.length).toBeGreaterThan(renders);
+    r.host.destroy();
+  });
+});
+
+describe("a scan seen from afar", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    served = TILESET;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(served), { status: 200 }))),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+
+  it("is the same session as up close: a quarter of the budget, nothing culled, no objects", async () => {
+    const tile = { checksum: "t", count: 0 } as unknown as PickTile;
+    const r = await rig({ assetId: "camp", backend: { pickTiles: () => [tile] } });
+    await settle(r);
+    const near = r.host.status();
+    expect(near).toMatchObject({ active: true, far: false });
+    expect(r.renders.at(-1)?.farView).toBe(false);
+    expect(pickSourceOf("camp")?.tiles()).toEqual([tile]);
+    const loads = r.loads.length;
+
+    // Zoomed out: the site disengages, its scan is still drawn, small.
+    r.setFar(true);
+    await r.run(400);
+    const far = r.host.status();
+    expect(far.far).toBe(true);
+    expect(far.budget).toBe(Math.round(near.budget * FAR_BUDGET_SHARE));
+    expect(r.budgets.at(-1)).toBe(far.budget);
+    // Drawn again at once, with nothing culled for size (quality.ts).
+    expect(r.renders.at(-1)?.farView).toBe(true);
+    // Not a scan to select objects in from there.
+    expect(pickSourceOf("camp")?.tiles()).toEqual([]);
+
+    // And back in.
+    r.setFar(false);
+    await r.run(400);
+    expect(r.host.status()).toMatchObject({ active: true, far: false, budget: near.budget });
+    expect(r.budgets.at(-1)).toBe(near.budget);
+    expect(r.renders.at(-1)?.farView).toBe(false);
+    expect(pickSourceOf("camp")?.tiles()).toEqual([tile]);
+
+    // One renderer the whole way: never stopped, never made again, nothing fetched again.
+    expect(r.created()).toBe(1);
+    expect(r.destroyed()).toBe(0);
+    expect(r.loads.length).toBe(loads);
+    expect(document.querySelectorAll("canvas[data-scan-renderer]")).toHaveLength(1);
+    r.host.destroy();
+  });
+
+  it("keeps the full budget's tiles while it draws a quarter of them", async () => {
+    // Two regions of 1M gaussians under a coarse root, near enough to want both: up close the
+    // 3M budget draws them, from afar a quarter of it cannot -- the root alone is drawn, and
+    // the regions stay loaded, so zooming back in fetches nothing.
+    const heavy = {
+      ...TILESET,
+      root: {
+        ...TILESET.root,
+        extras: { gaussians: 100_000 },
+        children: TILESET.root.children.map((child) => ({
+          ...child,
+          extras: { gaussians: 1_000_000 },
+          children: [],
+        })),
+      },
+    };
+    const r = await rig({ tileset: heavy });
+    await settle(r);
+    expect(r.host.status().tiles).toBe(2);
+    const loads = r.loads.length;
+    r.setFar(true);
+    // A move, so the cut is planned again under the new budget.
+    r.camera.positionWC = new Cartesian3(-20, -60.5, 10);
+    await r.run(1000, true);
+    expect(r.host.status()).toMatchObject({ far: true, tiles: 1 });
+    expect(r.host.status().cached).toBeGreaterThanOrEqual(2_000_000);
+    r.setFar(false);
+    await r.run(1000, true);
+    expect(r.host.status()).toMatchObject({ far: false, tiles: 2 });
+    expect(r.loads.length).toBe(loads);
+    expect(r.created()).toBe(1);
+    r.host.destroy();
+  });
+
+  it("a session that starts from afar draws from afar from its first frame", async () => {
+    const r = await rig({ far: true });
+    expect(r.budgets[0]).toBe(r.host.status().budget);
+    expect(r.renders.length).toBeGreaterThan(0);
+    expect(r.renders.every((pose) => pose.farView === true)).toBe(true);
+    expect(r.host.status().far).toBe(true);
     r.host.destroy();
   });
 });

@@ -3,7 +3,8 @@
  * committed snapshot (`snapshotTiles`, as the instance hooks read them), each un-baked to the
  * scan's frame (`unbakePositions`, so its checksum is the one `instances.json` lists), with
  * its splats' largest axis (`content.scales`) and opacity (the snapshot's colours). Built once
- * per tile content and bake; empty while the tileset is hidden (another renderer draws it).
+ * per tile content and bake; empty while the tileset is hidden (another renderer draws it), or
+ * drawn only because it is seen from afar (`setSeenFromAfar`).
  *
  * `content.scales` are baked like the positions: the engine multiplies each splat's scales by
  * the bake's own scale -- a runtime scale (`renderConfig.scale`) on the model matrix, or any a
@@ -22,6 +23,20 @@ import { invertAffine, unbakePositions } from "../splatFrames";
 import { splatTilesetOf } from "../splatInternals";
 import { sameMatrix, snapshotTiles } from "../splatTiles";
 import type { PickSource } from "./pickSources";
+
+/**
+ * Tilesets drawn only because they are seen from afar (SiteManager's far view, farView.ts): a
+ * scan a few dozen pixels across is something on the map, not something to select objects
+ * in. Its objects are picked once its site is engaged, as a dedicated renderer's are
+ * (scanView/ScanRendererHost.ts).
+ */
+const seenFromAfar = new WeakSet<object>();
+
+/** Marks `tileset` as drawn only from afar (`far`), or not. */
+export function setSeenFromAfar(tileset: object, far: boolean): void {
+  if (far) seenFromAfar.add(tileset);
+  else seenFromAfar.delete(tileset);
+}
 
 /** A splat with no scale read: a couple of centimetres. */
 const DEFAULT_RADIUS_M = 0.02;
@@ -71,7 +86,7 @@ export function cesiumPickSource(tileset: Cesium3DTileset): PickSource {
         ? undefined
         : (tileset.root as { computedTransform?: Matrix4 } | undefined)?.computedTransform,
     tiles: () => {
-      if (tileset.isDestroyed() || !tileset.show) return [];
+      if (tileset.isDestroyed() || !tileset.show || seenFromAfar.has(tileset)) return [];
       const like = splatTilesetOf(tileset);
       const primitive = like.gaussianSplatPrimitive;
       const positions = primitive?._positions;

@@ -30,7 +30,8 @@ _Judging performance_).
 
 ## What the readouts say
 
-With a splat scan engaged:
+With a splat scan drawn by a dedicated renderer (its site engaged, or the scan seen from afar,
+CESIUM.md):
 
 - **`PlayCanvas · WebGPU`**: the trial is drawing on WebGPU.
 - **`PlayCanvas · WebGL2 (WebGPU unavailable)`**, and a one-line notice with the reason: the
@@ -81,9 +82,10 @@ side. Use `?renderer=webgl` and `?renderer=webgpu` and reload between runs.
    Task Manager (GPU process and the tab); Safari: Web Inspector › Timelines › Memory. On iOS
    the test is whether the tab reloads by itself ("This webpage was reloaded…") after a few
    site switches or a long session where WebGL2 did not.
-5. **Load time.** From engaging a site to the scan sharp, by stopwatch, cold (first visit of
-   the session) and warm. WebGPU's first frames compile pipelines; the second site of a session
-   shows the warm cost.
+5. **Load time.** From the scan first drawn (seen from afar, or on engaging its site after a
+   fly-to) to the scan sharp up close, by stopwatch, cold (first visit of the session) and
+   warm. WebGPU's first frames compile pipelines; the second site of a session shows the warm
+   cost.
 6. **Phone thermals.** Five minutes of continuous orbit on each renderer: is `fps` sustained or
    does it sag as the phone warms; how warm does it get; battery used.
 7. **Correctness.** A scan with objects or motion is drawn with WebGL2 under the trial (see

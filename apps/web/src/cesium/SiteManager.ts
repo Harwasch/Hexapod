@@ -53,6 +53,7 @@ import {
   rememberIonAssetMissing,
 } from "./ion";
 import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
+import { farVisible } from "./farView";
 import {
   groundAt,
   measuredClamp,
@@ -61,6 +62,7 @@ import {
   type MeasuredGround,
 } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
+import { setSeenFromAfar } from "./sceneSelect/cesiumPickSource";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import { splatTilesetOf } from "./splatInternals";
 import { attachInferredLayers } from "./inferredLayers";
@@ -202,7 +204,7 @@ export interface LoadedSiteAsset {
    * Read, never probed — see `livingRigs.ts`.
    */
   readonly rigPath: string | null;
-  /** Whether the site is engaged, so the tileset is actually drawn. */
+  /** Whether the tileset is drawn: the site is engaged, or its scan is seen from afar. */
   readonly shown: boolean;
   readonly tileset: Cesium3DTileset;
 }
@@ -216,11 +218,24 @@ interface ActiveSite {
   radius: number;
   /**
    * Engaged: the camera is close enough that the model's detail matters, so the model is
-   * drawn and takes over from the world. Further out the model stays loaded but hidden and
-   * the world is left seamless: from 20 km up a 5 km patch of another capture, with a hard
-   * edge, is a blemish rather than information.
+   * drawn and takes over from the world, and is there to be worked with (its objects
+   * selected, walked on). Further out the model stays loaded but hidden and the world is left
+   * seamless: from 20 km up a 5 km patch of another capture, with a hard edge, is a blemish
+   * rather than information -- unless it is a scan seen from afar (`far`).
    */
   engaged: boolean;
+  /**
+   * Seen from afar (farView.ts): the primary site's splat scan, not engaged but big enough on
+   * screen to be something on the map, is drawn anyway -- small, at a low level of detail --
+   * rather than vanishing as the camera zooms out. Only drawn: engagement still decides
+   * everything else.
+   */
+  far: boolean;
+}
+
+/** Whether a site's model is drawn: engaged, or a scan seen from afar. */
+function drawn(entry: ActiveSite): boolean {
+  return entry.engaged || entry.far;
 }
 
 /** The flight `flyTo` is steering: where it is headed, and enough to re-point it smoothly. */
@@ -545,6 +560,8 @@ export class SiteManager {
       handles: new Map(),
       radius: Math.max(boundingRadiusM(site.boundary), MIN_SITE_RADIUS_M),
       engaged: false,
+      // Measured on the tileset, which is not loaded yet (`showRepresentation`).
+      far: false,
     };
     entry.engaged = this.shouldEngage(entry, false);
     this.loaded.set(siteId, entry);
@@ -563,7 +580,11 @@ export class SiteManager {
     if (this.primaryId === siteId) return;
     const entry = this.loaded.get(siteId);
     if (!entry) return;
+    const previous = this.active;
     this.primaryId = siteId;
+    // Only the primary site's scan is drawn from afar (`farFor`).
+    if (previous) this.setView(previous, previous.engaged, false);
+    this.setView(entry, entry.engaged, this.farFor(entry));
     this.performance.resetBenchmark();
     this.events.emit("site-active", siteId);
     this.events.emit("representation", { siteId, representation: entry.representation });
@@ -1239,8 +1260,11 @@ export class SiteManager {
       this.pickAsset(active, active.representation)?.id !== asset.id
     )
       return;
-    tileset.show = active.engaged && this.cesiumDraws(asset);
-    if (active.engaged) this.applyClip(active, asset, tileset);
+    // Now that the scan's own bounds are known, it can be seen from afar.
+    active.far = this.farFor(active);
+    tileset.show = drawn(active) && this.cesiumDraws(asset);
+    setSeenFromAfar(tileset, !active.engaged && active.far);
+    if (drawn(active)) this.applyClip(active, asset, tileset);
     else this.clipping.setFootprint(active.site.id, null);
     const handle = active.handles.get(asset.id);
     if (handle) this.watchFirstTiles(active.site.id, handle, tileset, asset);
@@ -1275,16 +1299,58 @@ export class SiteManager {
     return altitude < entry.radius * altitudeRadii && distance < entry.radius * distanceRadii;
   }
 
-  private setEngaged(entry: ActiveSite, engaged: boolean): void {
-    if (entry.engaged === engaged) return;
+  /**
+   * Whether the primary site's splat scan is drawn from afar (farView.ts), given whether it is
+   * now: measured on the tileset's own bounds, not on the footprint radius engagement uses.
+   * The primary site's only: a dedicated renderer draws one scan, the primary's
+   * (`scanTarget`), and CesiumJS is held to the same rule. False until the tileset is in.
+   */
+  private farFor(entry: ActiveSite): boolean {
+    if (entry.site.id !== this.primaryId || entry.representation !== "gaussian-splat") return false;
+    const tileset = this.handleFor(entry)?.tileset;
+    if (!tileset || tileset.isDestroyed()) return false;
+    const camera = this.viewer.camera;
+    const sphere = tileset.boundingSphere;
+    return farVisible(
+      {
+        camera: camera.positionWC,
+        center: sphere.center,
+        radiusM: sphere.radius,
+        fovy: (camera.frustum as { fovy?: number }).fovy ?? CesiumMath.PI_OVER_THREE,
+        heightPx: this.viewer.canvas.clientHeight,
+      },
+      entry.far,
+    );
+  }
+
+  /**
+   * Applies whether a site is engaged and whether its scan is seen from afar. Drawn is either
+   * (`drawn`): the tileset is shown (when CesiumJS draws it) and the world clipped under it;
+   * the scan a dedicated renderer draws follows through the `tilesets` event (`scanTarget`),
+   * near and far alike, as one session (ScanRendererHost.setTarget).
+   */
+  private setView(entry: ActiveSite, engaged: boolean, far: boolean): void {
+    if (entry.engaged === engaged && entry.far === far) return;
+    const wasDrawn = drawn(entry);
+    const engagedBefore = entry.engaged;
+    const farBefore = entry.far;
     entry.engaged = engaged;
+    entry.far = far;
     const handle = this.handleFor(entry);
     const tileset = handle?.tileset;
     if (!handle || !tileset) return;
-    tileset.show = engaged && this.cesiumDraws(handle.asset);
-    if (engaged) this.applyClip(entry, handle.asset, tileset);
-    else this.clipping.setFootprint(entry.site.id, null);
-    log.info(engaged ? "site engaged" : "site disengaged", { site: entry.site.slug });
+    if (drawn(entry) !== wasDrawn) {
+      tileset.show = drawn(entry) && this.cesiumDraws(handle.asset);
+      if (drawn(entry)) this.applyClip(entry, handle.asset, tileset);
+      else this.clipping.setFootprint(entry.site.id, null);
+    }
+    setSeenFromAfar(tileset, !engaged && far);
+    if (engaged !== engagedBefore)
+      log.info(engaged ? "site engaged" : "site disengaged", { site: entry.site.slug });
+    if (far !== farBefore)
+      log.info(far ? "scan seen from afar" : "scan no longer seen from afar", {
+        site: entry.site.slug,
+      });
     this.events.emit("tilesets", this.activeTilesetLabels());
     this.scene.requestRender();
   }
@@ -1925,7 +1991,7 @@ export class SiteManager {
     }
 
     for (const entry of this.loaded.values())
-      this.setEngaged(entry, this.shouldEngage(entry, entry.engaged));
+      this.setView(entry, this.shouldEngage(entry, entry.engaged), this.farFor(entry));
 
     const best = ranked.find((r) => this.loaded.has(r.summary.id));
     if (best && this.flightTarget === null && best.summary.id !== this.primaryId)
@@ -1971,9 +2037,11 @@ export class SiteManager {
     const cameraPosition = this.viewer.camera.positionWC;
     for (const { entry, handle } of this.handles()) {
       const tileset = handle.tileset;
-      // Drawn by CesiumJS (shown) or by a dedicated renderer (engaged, hidden here).
-      if (!tileset || !handle.splats || !(tileset.show || this.scanDrawnElsewhere(entry, handle)))
-        continue;
+      // Engaged only: holding the world still and dropping its floor are for a scan up close,
+      // not one drawn small from afar.
+      if (!tileset || !handle.splats || !entry.engaged) continue;
+      // Drawn by CesiumJS (shown) or by a dedicated renderer (hidden here).
+      if (!(tileset.show || this.scanDrawnElsewhere(entry, handle))) continue;
       const sphere = tileset.boundingSphere;
       if (Cartesian3.distance(cameraPosition, sphere.center) < sphere.radius) return true;
     }
@@ -2015,21 +2083,29 @@ export class SiteManager {
       if (!tileset || handle.asset.representation !== "gaussian-splat") continue;
       tileset.preloadWhenHidden = this.cesiumDraws(handle.asset);
       const current = this.pickAsset(entry, entry.representation)?.id === handle.asset.id;
-      tileset.show = current && entry.engaged && this.cesiumDraws(handle.asset);
+      tileset.show = current && drawn(entry) && this.cesiumDraws(handle.asset);
     }
     this.scene.requestRender();
   }
 
-  /** The engaged splat scan a dedicated renderer should draw, if any. */
-  scanTarget(): { key: string; tileset: Cesium3DTileset; assetId: string } | null {
+  /**
+   * The drawn splat scan a dedicated renderer should draw, if any: engaged, or seen from afar
+   * (`far`, which is not part of its key: moving between the two keeps the renderer's session).
+   */
+  scanTarget(): { key: string; tileset: Cesium3DTileset; assetId: string; far: boolean } | null {
     if (this.splatRenderer === "cesium") return null;
     const active = this.active;
-    if (!active?.engaged || active.representation !== "gaussian-splat") return null;
+    if (!active || !drawn(active) || active.representation !== "gaussian-splat") return null;
     const asset = this.pickAsset(active, active.representation);
     const handle = asset ? active.handles.get(asset.id) : undefined;
     if (!asset || this.cesiumDraws(asset) || !handle?.tileset || handle.tileset.isDestroyed())
       return null;
-    return { key: `${active.site.id}:${asset.id}`, tileset: handle.tileset, assetId: asset.id };
+    return {
+      key: `${active.site.id}:${asset.id}`,
+      tileset: handle.tileset,
+      assetId: asset.id,
+      far: !active.engaged,
+    };
   }
 
   /** Object scale while the camera is within reach of a hand-sized loaded model. */

@@ -58,10 +58,15 @@ export function overlayPixelRatio(
  * whatever the resolution. PlayCanvas measures `minPixelSize` in the pixels it renders, so the
  * one device pixel that suited a 2x canvas would drop every splat under a whole CSS pixel at
  * 1x -- fine detail (grass, wires) thinning out at the lower preset instead of only softening.
+ *
+ * A scan seen from afar (`farView`, SiteManager's far view) keeps every splat: the whole scan
+ * is a few dozen pixels across there and nearly every splat in it is under half of one, so the
+ * cull that only thins fine detail up close would thin it to little or nothing. A quarter of
+ * the budget (ScanRendererHost's `FAR_BUDGET_SHARE`) is what keeps it cheap instead.
  */
 export const MIN_SPLAT_CSS_PX = 0.5;
-export function splatMinPixelSize(pixelRatio: number): number {
-  return MIN_SPLAT_CSS_PX * pixelRatio;
+export function splatMinPixelSize(pixelRatio: number, farView = false): number {
+  return farView ? 0 : MIN_SPLAT_CSS_PX * pixelRatio;
 }
 
 /**
