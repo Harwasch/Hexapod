@@ -21,6 +21,14 @@ export function siteDisplayName(site: Named, missions: MissionProvider = provide
   return missions.projectForSite(site.id, site.slug)?.name ?? site.name;
 }
 
+/**
+ * Whether the site is shown by its project's name: renaming its record would then change
+ * nothing on screen, so the switcher offers no rename for it.
+ */
+export function namedByProject(site: Named, missions: MissionProvider = provider): boolean {
+  return missions.projectForSite(site.id, site.slug) !== null;
+}
+
 /** The display name of a catalog site, by id; null while the catalog has no such site. */
 export function useSiteName(siteId: string | null | undefined): string | null {
   const catalog = useSiteCatalog();

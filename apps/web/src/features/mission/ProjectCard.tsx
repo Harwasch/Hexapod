@@ -5,6 +5,7 @@ import {
   Database,
   Earth,
   Images,
+  Pencil,
   Plus,
   Save,
   Trash2,
@@ -12,19 +13,23 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import type { SiteSummary } from "@twin/contracts";
 import { formatArea } from "@twin/geo";
 import { GlassButton, GlassPanel } from "@twin/ui";
 
-import { useSites as useSiteCatalog } from "@/api/queries";
+import { isUnauthorized } from "@/api/client";
+import { useRenameSite, useSites as useSiteCatalog } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
+import { describeError } from "@/lib/log";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 
 import { useSavedViews, type SavedView } from "../bookmarks/savedViews";
-import { siteDisplayName, useSiteName } from "../sites/siteNames";
+import { WriteTokenField } from "../captures/WriteTokenField";
+import { namedByProject, siteDisplayName, useSiteName } from "../sites/siteNames";
 
 /**
  * Top left: the site you are on, and the switcher behind it.
@@ -157,8 +162,15 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
   const activeSiteId = useSites((s) => s.activeSiteId);
   const units = useSettings((s) => s.units);
   const openAdd = useUi((s) => s.openAdd);
+  const rename = useRenameSite();
+  const [editing, setEditing] = useState<string | null>(null);
+  /** The site whose pencil takes the focus back once its edit has closed. */
+  const refocus = useRef<string | null>(null);
   const list = useRef<HTMLUListElement>(null);
   const headingId = useId();
+  // The name being saved shows in its row until the catalog has it.
+  const saving = rename.isPending ? rename.variables : undefined;
+  const failed = rename.isError ? rename.variables : undefined;
 
   useEffect(() => {
     if (!focus) return;
@@ -166,6 +178,22 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
     const here = list.current?.querySelector<HTMLButtonElement>('[aria-current="true"]');
     (here ?? rows?.[0])?.focus();
   }, [focus]);
+
+  // Back to the pencil when the edit ended from the keyboard: the field is gone, and with the
+  // focus on the page's body the switcher's own Escape would no longer reach it.
+  useEffect(() => {
+    if (editing !== null || refocus.current === null) return;
+    list.current
+      ?.querySelector<HTMLButtonElement>(`[data-rename-site="${refocus.current}"]`)
+      ?.focus();
+    refocus.current = null;
+  }, [editing]);
+
+  const finishRename = (site: SiteSummary, name: string | null, keyboard: boolean) => {
+    if (keyboard) refocus.current = site.id;
+    setEditing(null);
+    if (name && name !== site.name) rename.mutate({ siteId: site.id, name });
+  };
 
   return (
     <section aria-labelledby={headingId}>
@@ -189,12 +217,26 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
       <ul className="mc-project__menu-list" ref={list}>
         {(sites.data ?? []).map((site) => {
           const here = site.id === activeSiteId;
+          if (editing === site.id) {
+            return (
+              <SiteRename
+                key={site.id}
+                site={site}
+                onDone={(name, keyboard) => finishRename(site, name, keyboard)}
+              />
+            );
+          }
+          const name = saving?.siteId === site.id ? saving.name : siteDisplayName(site);
+          // Not the demo, named by its project rather than its record, and not the built-in
+          // catalog the app falls back on offline: there is no record to rename.
+          const renamable = !sites.builtin && !namedByProject(site);
           return (
-            <li key={site.id}>
+            <li key={site.id} className="mc-project__site">
               <button
                 type="button"
                 className={`mc-project__row ${here ? "is-here" : ""}`}
                 aria-current={here ? "true" : undefined}
+                aria-busy={saving?.siteId === site.id || undefined}
                 onClick={() => {
                   onDone();
                   void scene?.sites.flyTo(site.id);
@@ -203,7 +245,7 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
               >
                 <span className={`mc-dot ${here ? "mc-dot--teal" : ""}`} aria-hidden="true" />
                 <span className="mc-project__row-text">
-                  <span className="mc-project__row-name">{siteDisplayName(site)}</span>
+                  <span className="mc-project__row-name">{name}</span>
                   <span className="mc-project__row-meta">
                     {formatArea(site.areaM2, units)} ·{" "}
                     {site.representations.map(representationLabel).join(", ")}
@@ -211,12 +253,109 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
                 </span>
                 {here && <span className="mc-project__row-count">Here</span>}
               </button>
+              {renamable && (
+                <GlassButton
+                  iconOnly
+                  size="sm"
+                  variant="ghost"
+                  className="mc-project__rename"
+                  aria-label={`Rename ${name}`}
+                  onClick={() => {
+                    rename.reset();
+                    setEditing(site.id);
+                  }}
+                  data-rename-site={site.id}
+                  data-testid={`site-rename-${site.slug}`}
+                >
+                  <Pencil size={13} aria-hidden="true" />
+                </GlassButton>
+              )}
             </li>
           );
         })}
         {sites.data?.length === 0 && <li className="mc-project__empty mc-muted">No sites yet.</li>}
       </ul>
+      {failed &&
+        (isUnauthorized(rename.error) ? (
+          <div className="mc-project__token">
+            <WriteTokenField
+              hint="A write token is needed to rename sites. It is stored in this browser, which suits a single-user setup."
+              onSaved={() => rename.mutate(failed)}
+            />
+          </div>
+        ) : (
+          <p className="mc-project__note" role="alert">
+            Could not rename to “{failed.name}”: {describeError(rename.error)}
+          </p>
+        ))}
     </section>
+  );
+}
+
+/**
+ * A site's name, being edited in its row: Enter or Save keeps it, Escape puts it back, and
+ * leaving the field keeps it if it changed. Escape stops here, so the switcher stays open.
+ */
+function SiteRename({
+  site,
+  onDone,
+}: {
+  site: SiteSummary;
+  /** The new name (trimmed; blank or null leaves it); `keyboard` when Enter or Escape ended it. */
+  onDone: (name: string | null, keyboard: boolean) => void;
+}) {
+  const [value, setValue] = useState(site.name);
+  const input = useRef<HTMLInputElement>(null);
+  // Enter, then the blur of the field going away, would otherwise end it twice.
+  const done = useRef(false);
+  const name = value.trim();
+  const finish = (next: string | null, keyboard: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(next, keyboard);
+  };
+
+  useEffect(() => {
+    input.current?.focus();
+    input.current?.select();
+  }, []);
+
+  return (
+    <li>
+      <form
+        className="mc-project__rename-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (name) finish(name, true);
+        }}
+      >
+        <input
+          ref={input}
+          className="mc-input mc-project__save-input"
+          aria-label={`New name for ${site.name}`}
+          value={value}
+          maxLength={200}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            finish(null, true);
+          }}
+          onBlur={() => finish(name, false)}
+        />
+        <GlassButton
+          type="submit"
+          size="sm"
+          variant="primary"
+          disabled={!name}
+          // Keeps the focus in the field, so pressing Save is not a blur that saves first.
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          Save
+        </GlassButton>
+      </form>
+    </li>
   );
 }
 

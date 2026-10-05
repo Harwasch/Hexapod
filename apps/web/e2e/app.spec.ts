@@ -8,6 +8,7 @@ import {
   selectObject,
   stageObjects,
   test,
+  walnutSite,
 } from "./fixtures";
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
@@ -459,6 +460,68 @@ test.describe("the HUD over the map", () => {
     );
     await switcher.getByTestId("saved-view-Overview").click();
     await expect(switcher).toHaveCount(0);
+  });
+
+  test("the site switcher renames a site, asking for the write token when the API wants one", async ({
+    page,
+  }) => {
+    const state = await mockApi(page, { otherSite: true, writeToken: "letmein" });
+    await page.addInitScript(() =>
+      window.localStorage.setItem(
+        "twin.settings.v1",
+        JSON.stringify({ state: { onboardingDismissed: true }, version: 1 }),
+      ),
+    );
+    await page.goto("/");
+    const badge = page.getByTestId("project-card").getByRole("button").first();
+    await badge.click();
+    const switcher = page.getByTestId("site-switcher");
+    // The demo is known by its project's name, which renaming its record would not change.
+    await expect(switcher.getByTestId("site-row-cesium-splat-demo")).toContainText(
+      "Blackrock Mesa",
+    );
+    await expect(switcher.getByTestId("site-rename-cesium-splat-demo")).toHaveCount(0);
+    // At the grove, the badge is its name.
+    await switcher.getByTestId("site-row-walnut-grove").click();
+    await expect(page.getByTestId("project-title")).toHaveText("Walnut grove", {
+      timeout: 30_000,
+    });
+
+    await badge.click();
+    const row = switcher.getByTestId("site-row-walnut-grove");
+    await row.hover();
+    await switcher.getByTestId("site-rename-walnut-grove").click();
+    const field = switcher.getByRole("textbox", { name: "New name for Walnut grove" });
+    await expect(field).toBeFocused();
+    // Escape puts the name back and leaves the switcher open.
+    await field.fill("Elsewhere");
+    await page.keyboard.press("Escape");
+    await expect(field).toHaveCount(0);
+    await expect(switcher).toBeVisible();
+    await expect(row).toContainText("Walnut grove");
+
+    await switcher.getByTestId("site-rename-walnut-grove").click();
+    await field.fill("  North grove ");
+    await page.keyboard.press("Enter");
+    // This server wants the write token: the switcher asks for it in place.
+    const token = switcher.getByTestId("write-token-form");
+    await expect(token).toContainText("A write token is needed to rename sites");
+    expect(state.unauthorized).toContain(`PATCH /api/v1/sites/${walnutSite.id}`);
+    await expect(row).toContainText("Walnut grove");
+    await token.getByTestId("write-token-input").fill("letmein");
+    await token.getByTestId("write-token-save").click();
+
+    await expect(row).toContainText("North grove");
+    await expect(token).toHaveCount(0);
+    // Everywhere else the site is named: the badge, and the command box.
+    await expect(page.getByTestId("project-title")).toHaveText("North grove");
+    await page.keyboard.press("Escape");
+    await expect(switcher).toHaveCount(0);
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type("north gro");
+    await expect(page.getByTestId(`command-row-site-${walnutSite.id}`)).toContainText(
+      "North grove",
+    );
   });
 
   for (const viewport of [

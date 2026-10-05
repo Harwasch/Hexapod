@@ -58,6 +58,19 @@ class SiteUpdate(CamelModel):
     attribution: list[Attribution] | None = None
     license: LicenseMetadata | None = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _name(cls, value: object) -> object:
+        """Refuse a blank or null name, which a rename from the app is one keystroke from.
+
+        The model strips whitespace, so "   " would fail `min_length` as "at least 1
+        character" -- true, but not what went wrong. A null passed every check and reached
+        the NOT NULL column as a 500.
+        """
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise ValueError("name must not be blank")
+        return value
+
 
 class SiteSummary(CamelModel):
     id: uuid.UUID

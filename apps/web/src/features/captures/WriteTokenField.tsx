@@ -14,7 +14,14 @@ import { useUi } from "@/state/ui";
  * with the other preferences rather than in a `VITE_` variable, which would publish it
  * in the bundle to everyone who loads the page.
  */
-export function WriteTokenField({ onSaved }: { onSaved: () => void }) {
+export function WriteTokenField({
+  onSaved,
+  hint = "This server needs a token to save uploads. It is stored in this browser, which suits a single-user setup.",
+}: {
+  onSaved: () => void;
+  /** What the token is needed for here: the field appears beside more than one kind of write. */
+  hint?: string;
+}) {
   const stored = useSettings((s) => s.writeToken);
   const setSettings = useSettings((s) => s.set);
   const setPrompt = useUi((s) => s.setWriteTokenPrompt);
@@ -32,11 +39,7 @@ export function WriteTokenField({ onSaved }: { onSaved: () => void }) {
 
   return (
     <form className="capture__token" onSubmit={submit} data-testid="write-token-form">
-      <GlassField
-        label="Write token"
-        htmlFor={id}
-        hint="This server needs a token to save uploads. It is stored in this browser, which suits a single-user setup."
-      >
+      <GlassField label="Write token" htmlFor={id} hint={hint}>
         <GlassInput
           id={id}
           type="password"
