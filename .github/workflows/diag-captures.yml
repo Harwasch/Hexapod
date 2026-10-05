@@ -24,7 +24,7 @@ jobs:
       - name: Control, four OpenBLAS threads
         run: |
           set +e
-          OPENBLAS_NUM_THREADS=4 uv run pytest -q -x tests/test_skeleton.py tests/test_skin_scene.py tests/test_segment_scene.py > control.txt 2>&1
+          OPENBLAS_NUM_THREADS=4 uv run pytest -q -x > control.txt 2>&1
           echo "CONTROL EXIT $? on $(lscpu | grep 'Model name' | sed 's/.*: *//')"
           tail -3 control.txt
       - name: Fix, one OpenBLAS thread (the conftest's default)
