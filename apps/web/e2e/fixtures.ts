@@ -1010,7 +1010,10 @@ export async function stageObjects(page: Page): Promise<void> {
   );
 }
 
-/** Selects `candidates` of the staged scan, as a click on it would (the first chosen). */
+/**
+ * Selects `candidates` of the staged scan (leaf → top, as a click offers them): `index`, the
+ * leaf unless said.
+ */
 export async function selectObject(page: Page, candidates: number[], index = 0): Promise<void> {
   await inApp(
     page,

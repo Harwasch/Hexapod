@@ -811,18 +811,28 @@ the tiles the renderer draws now:
   - the strongest leaf's chain, from the leaf up to the top level;
   - then the other instances hit near the front.
 
-  The first choice is the smallest instance in the chain that is at least 48 px across on
-  screen.
+  A click chooses the whole object first, and each click again on it one level finer, toward
+  the part hit (`drillIndex`): a cable spool, then a plank of it. With nothing selected, or a
+  selection the hit's chain does not hold (another object, or one met nearby), the click
+  chooses the top of the chain. A top-level instance with more than half the scan's splats
+  (with everything below it) is the scene, not an object, and is passed over for its child on
+  the chain. With the selection in the chain, the click chooses the level below it; at the leaf
+  it stays. Drilling goes on only within the scan already selected. A click within 400 ms and
+  6 px of the last is the same click, so a double-click selects one level, not two.
 
 - **Cycling**. `[` / `]`, Alt+wheel, the wheel over the card's arrows, or the arrows
-  themselves move between candidates. Tab / Shift+Tab do too, but only while the map (the
-  canvas) or the card itself has focus: a hit gives the map the keyboard, so Tab cycles right
-  after a click; from anywhere else, the page's body included, Tab moves focus as it always
-  does. Esc steps back: the brush away first, then the selection.
+  themselves move between candidates: `[` one level finer, `]` one level up, then on to the
+  instances met nearby (and both round). The card counts the chain's levels from the top
+  (`levelText`): "1 of 3" is the whole object, "3 of 3" its finest part, "+2 nearby" says
+  other instances were met, and "Nearby 1 of 2" is one of them. Tab / Shift+Tab cycle too,
+  but only while the map (the canvas) or the card itself has focus: a hit gives the map the
+  keyboard, so Tab cycles right after a click; from anywhere else, the page's body included,
+  Tab moves focus as it always does. Esc steps back: the brush away first, then the
+  selection.
 - **The card** (`features/sites/ObjectCard.tsx`). The HUD's one selection card
   (`features/mission/SelectionCard`) shows an object as it shows a machine or a zone, in the
   right dock (a bottom sheet on a phone): the name (top tag, else the category, never an id)
-  and the category, "◀ 2 of 4 ▶", **Hide**, **Show only**, **Fly to**, the brush and **Clear**
+  and the category, "◀ 1 of 3 ▶", **Hide**, **Show only**, **Fly to**, the brush and **Clear**
   (its close button). One selection at a time: picking an object clears a machine or zone, and
   the reverse (`state/oneSelection.ts`). The selection is the objects store's highlight: the
   controller writes it through `useInstances.highlight`, expanded to descendants. **Fly to**
@@ -838,7 +848,13 @@ the tiles the renderer draws now:
   Remove** for what a stroke does, and a brush size in place of Alt+wheel. The match is the
   instance, at any level, with the best intersection over union. The IoU is weighted by
   opacity and counts only visible splats, so an object's hidden back does not count against
-  it.
+  it. While the stroke is painted, its best match so far is highlighted (at most every
+  100 ms) and the card says its overlap, so you can stop once the right object lights up; it
+  is selected when the stroke ends. Matching every visible splat at every move would be too
+  slow (the camp has 22.6 M), so the view is indexed once when it is projected
+  (`paintIndex`): per 3 px cell, the visible splats' leaf ids and weights, and per instance its
+  visible weight rolled up its chain. A match (`bestByIoUIndexed`) then walks only the painted
+  cells and the instances they hold, and gives the same answer as matching every splat.
 - **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the card offers
   **Use painted area**. This keeps the exact splats as an object of the viewer's own:
   - It is stored per scan in this browser (`localStorage`,

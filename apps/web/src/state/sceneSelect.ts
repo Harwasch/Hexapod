@@ -11,6 +11,11 @@ export interface PaintResult {
   iou: number;
   /** Splats painted (visible and under the brush). */
   painted: number;
+  /**
+   * Set while the stroke is still being painted: the match so far, highlighted but not yet
+   * selected (the selection is made when the stroke ends).
+   */
+  live?: boolean;
 }
 
 /** What a plain stroke of the brush does: start again, add to the painted area, take away. */
@@ -20,8 +25,9 @@ export type StrokeMode = "replace" | "add" | "subtract";
  * Selecting a scan's objects in the scene (cesium/sceneSelect/): what a click offered, which
  * of it is chosen, where it was clicked, the brush, and per scan the objects painted in this
  * browser (lib/customSets.ts). The highlight itself is the objects store's
- * (`state/instances.ts`); the controller keeps it on the chosen candidate. The HUD's selection
- * card (features/sites/ObjectCard.tsx) shows all of it.
+ * (`state/instances.ts`); the controller keeps it on the chosen candidate, and while a stroke
+ * is painted on its match so far. The HUD's selection card (features/sites/ObjectCard.tsx)
+ * shows all of it.
  */
 interface SceneSelectState {
   /** The scan the candidates are of. */

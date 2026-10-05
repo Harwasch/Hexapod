@@ -958,24 +958,24 @@ test.describe("a scan object in the selection card", () => {
     await stageObjects(app);
     await selectObject(app, [3, 2, 1]);
     const card = app.getByTestId("selection-card");
-    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    await expect(card.getByTestId("object-candidates")).toHaveText("3 of 3");
     // On the body Tab is the browser's: focus moves on, the candidates stay.
     await fromMap(app, "Tab");
     expect(await app.evaluate(() => document.activeElement !== document.body)).toBe(true);
     await app.keyboard.press("Tab");
     await app.keyboard.press("Tab");
     expect((await selectionState(app)).index).toBe(0);
-    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    await expect(card.getByTestId("object-candidates")).toHaveText("3 of 3");
     // With the card itself focused (a click on it), Tab and Shift+Tab cycle.
     await card.focus();
     await app.keyboard.press("Tab");
     await expect(card.getByTestId("object-candidates")).toHaveText("2 of 3");
     await app.keyboard.press("Shift+Tab");
-    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    await expect(card.getByTestId("object-candidates")).toHaveText("3 of 3");
     // A button in the card keeps Tab's meaning: it moves on to the next one.
     await card.getByRole("button", { name: "Next candidate" }).focus();
     await app.keyboard.press("Tab");
-    await expect(card.getByTestId("object-candidates")).toHaveText("1 of 3");
+    await expect(card.getByTestId("object-candidates")).toHaveText("3 of 3");
     // `]` cycles from anywhere but a field.
     await fromMap(app, "]");
     await expect(card.getByTestId("object-candidates")).toHaveText("2 of 3");
