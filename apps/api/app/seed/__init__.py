@@ -81,7 +81,10 @@ def _withdraw(db: Session, wanted: list[SiteCreate]) -> None:
         if existing is None or not gone:
             continue
         for asset in gone:
-            db.delete(asset)
+            # Out of the site's list, which deletes the row (delete-orphan): a bare
+            # `db.delete` left the asset in `existing.assets` for as long as this session
+            # kept the site, and a read in the same session served it after it was gone.
+            existing.assets.remove(asset)
             removed.append(f"{code.slug}: {asset.name}")
         # The site's words, credits and licence described what it showed; take the code's.
         existing.description = code.description
