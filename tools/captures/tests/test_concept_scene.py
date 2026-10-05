@@ -72,7 +72,7 @@ def _run(
 @pytest.fixture(scope="module")
 def yard(tmp_path_factory: pytest.TempPathFactory) -> dict:
     out = _yard(tmp_path_factory.mktemp("yard"))
-    splats, rows, row_count = ss.load_source(out / "splat.ply", OPACITY_MIN)
+    splats, rows, _ = ss.load_source(out / "splat.ply", OPACITY_MIN)
     truth = json.loads((out / "labels.json").read_text(encoding="utf-8"))
     return {"splats": splats, "rows": rows, "truth": truth, "dir": out}
 

@@ -57,13 +57,12 @@ def _device(device: str | None) -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _release(*models: Any) -> None:
-    """Drop models and give their GPU memory back."""
+def _release() -> None:
+    """Give the GPU memory of models nothing refers to any more back."""
     import gc
 
     import torch
 
-    del models
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -187,8 +186,8 @@ class QwenVocabulary:
 
     def close(self) -> None:
         if self._loaded is not None:
-            loaded, self._loaded = self._loaded, None
-            _release(*loaded)
+            self._loaded = None  # the only reference to the model
+            _release()
 
 
 # ------------------------------------------------------------------------ helpers (pure)
