@@ -278,6 +278,27 @@ def test_contact_claim_takes_a_flange_the_height_filter_calls_ground():
     assert in_object[: len(ground_pts)][~flange].mean() < 0.01
 
 
+def test_low_pieces_that_read_as_the_ground_are_ground_cover():
+    """A tuft and a gourd, both just above the ground layer: the field says the tuft is the
+    lawn beside it and the gourd is not."""
+    rng = np.random.default_rng(5)
+    xy = np.stack(np.meshgrid(np.arange(-2, 2, 0.02), np.arange(-2, 2, 0.02)), -1).reshape(-1, 2)
+    lawn = np.c_[xy, rng.normal(0, 0.003, len(xy))]
+    tuft = rng.uniform([-1.2, -0.1, 0.06], [-0.9, 0.2, 0.14], (1500, 3))
+    gourd = rng.uniform([0.8, -0.15, 0.06], [1.1, 0.15, 0.3], (3000, 3))
+    pos = np.concatenate([lawn, tuft, gourd])
+    truth = np.r_[np.zeros(len(lawn), int), np.zeros(len(tuft), int), np.ones(len(gourd), int)]
+    splats = _splats(pos)
+    ground = ff.ground_layer(splats)
+    tree = ff.build_tree(splats, oracle_field(truth, truth), ground)
+    assert tree.stats["groundLikePieces"] >= 1
+    objects = [j + 1 for j, kind in enumerate(tree.kind) if kind == "object"]
+    regions = [j + 1 for j, kind in enumerate(tree.kind) if kind == "ground-region"]
+    n_lawn, n_tuft = len(lawn), len(tuft)
+    assert np.isin(tree.leaf[n_lawn : n_lawn + n_tuft], regions).mean() > 0.9
+    assert np.isin(tree.leaf[n_lawn + n_tuft :], objects).mean() > 0.9
+
+
 def test_ground_records_put_cover_classes_under_one_ground():
     pos, truth = _two_blobs(gap=0.0)
     pos[:, 2] = 0.0

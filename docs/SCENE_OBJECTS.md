@@ -165,6 +165,40 @@ guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
 | pumpkin | 387,813        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
 | camp    | 22,577,243     | 6 cores (9), 22 GiB (44) | 45 min | 0.94     |
 
+### Bake-off candidate B: feature fields
+
+`tools/captures/feature_fields.py` (its docstring is the method; research brief §1.4
+"per-scene feature fields"). It writes the same `instances.json`, so it is published as the
+variant `feature-fields` (`variants/objects/feature-fields/`) beside today's.
+
+- **The field.** The splat's geometry is frozen; every gaussian gets a 32-d unit feature,
+  rasterized by gsplat like a colour. A *scale gate* (SAGA) reads it at a physical size:
+  `normalize(sigmoid(MLP(log s)) * F(p))`. It is trained contrastively (GARField's
+  containment rule) from SAM 2.1 hiera-large's automatic masks on the capture's own photos
+  (COLMAP poses moved into the tileset's frame by `placement.json`; renders when a scan has
+  none or the photos do not match the splat), each mask's scale being the robust 3D diameter
+  of the splat's depth under it: at scale `s`, two pixels are alike exactly when a mask no
+  larger than `s` holds both. No Inria 3DGS code; GARField (MIT) and SAGA (Apache-2.0,
+  Inria-based) are reimplemented, LangSplatV2's language feature is not built.
+- **The tree** (numpy, so it reruns on a CPU from the saved `field.npz`). The bake-off's
+  shared ground pass (`ground_pass.py`) first; the connected parts above the ground, each
+  split by the field read at its own size (whole objects), then at half that (parts) and a
+  quarter (sub-parts); ground-layer splats beside an object that the field says belong to it
+  are claimed back (the spool's flange); low pieces the field reads as the ground beside them
+  (hay tufts) are ground cover.
+- **Ground** is one top-level instance, `kind: "ground"`, tagged `ground`, category `ground`.
+  Its children are its cover classes (`kind: "ground-cover"`, `cover: "<class>"`, tagged with
+  the class, category from `COVER_CLASSES`), each the ground regions the field splits the
+  ground into (at the masks' median scale) whose SigLIP 2 description is nearest that class's
+  phrase; a class of several regions has them as its children.
+- **Extra fields** (the viewer ignores them): per instance `kind` (`object`, `ground`,
+  `ground-cover`, `ground-region`) and `scale` (the robust diameter it was split at); at the
+  top, `method` (the field's and the ground's settings).
+- **Run** (`.github/workflows/segment-feature-fields.yml`, a push to an `ffield-*` branch;
+  `infra/modal/feature_fields.py`): an L4 with 4 cores and 16 GiB, one call per scan, for
+  the scans with photos (spool, pumpkin). Its artifact is named `segmentation`, one folder
+  per scan, as segment.yml's.
+
 ## 4. Data contract (v1)
 
 Written beside the measured tiles; read by the viewer, the skinning step and the engine.
