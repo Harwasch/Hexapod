@@ -41,7 +41,8 @@ each named thing in every view, so objects are born with their names.
 `name`, `nameSource` (`vlm` for a concept's name, `ground-cover`), `cover`, `scaleM`, and
 `concept`; at the root `variant`, `ground`, and `concepts` (the vocabulary and the models).
 
-Usage (`infra/modal/segment.py` runs it as the variant `concept-first-standin`):
+Usage (`infra/modal/segment.py` runs it as the variant `concept-first-standin`: a `seg-*` push
+whose head commit says `[segment|names=spool,pumpkin|variant=concept-first-standin|views=64]`):
     python concept_scene.py TILESET.json TILES_DIR --out OUT \\
         --vlm concept_models:QwenVocabulary --concepts concept_models:GroundedSam2Concepts \\
         --masks segment_models:Sam2LargeMasks --embedder segment_models:SiglipEmbedder \\
