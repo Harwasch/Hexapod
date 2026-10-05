@@ -1915,9 +1915,13 @@ def train_main(args: argparse.Namespace) -> dict[str, Any]:
     summary: dict[str, Any] = {"gaussians": len(splats), "trainedGaussians": int(kept.size)}
     views: list[TrainView] = []
     if args.frames is not None:
-        placement = json.loads(args.placement.read_text(encoding="utf-8"))
-        views = colmap_views(args.frames, args.poses, placement, limit=args.max_frames)
-        check = frame_check(scene, views, rasterize, device) if views else {"psnr": 0.0}
+        try:
+            placement = json.loads(args.placement.read_text(encoding="utf-8"))
+            views = colmap_views(args.frames, args.poses, placement, limit=args.max_frames)
+            check = frame_check(scene, views, rasterize, device) if views else {"psnr": 0.0}
+        except Exception as error:  # noqa: BLE001 - the photos are optional: renders instead
+            _say(f"photos unusable ({type(error).__name__}: {error}): rendered views")
+            views, check = [], {"psnr": 0.0, "error": f"{type(error).__name__}: {error}"}
         summary["frameCheck"] = check
         _say(f"photos: {len(views)}, check {check}")
         if check["psnr"] < MIN_FRAME_PSNR:

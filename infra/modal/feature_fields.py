@@ -165,6 +165,7 @@ def _fetch_tiles(url: str, out: Path) -> int:
 
 def _fetch_capture(job: str, out: Path) -> dict[str, int]:
     """The run's photos, COLMAP model and placement from the private bucket."""
+    import concurrent.futures
     import os
 
     import boto3
@@ -178,22 +179,28 @@ def _fetch_capture(job: str, out: Path) -> dict[str, int]:
     )
     bucket = os.environ["OBJECT_STORAGE_BUCKET"]
     counts: dict[str, int] = {}
+    wanted: list[tuple[str, Path]] = []
     for name, prefix in (
         ("frames", f"runs/{job}/normalize/frames/"),
         ("poses", f"runs/{job}/pose/poses/"),
     ):
-        target = out / name
-        target.mkdir(parents=True, exist_ok=True)
-        count = 0
-        for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
-            for item in page.get("Contents", []):
-                rel = item["Key"][len(prefix) :]
-                if not rel or "/" in rel:
-                    continue
-                client.download_file(bucket, item["Key"], str(target / rel))
-                count += 1
-        counts[name] = count
-    client.download_file(bucket, f"runs/{job}/place/placement.json", str(out / "placement.json"))
+        (out / name).mkdir(parents=True, exist_ok=True)
+        pages = client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix)
+        found = [
+            (item["Key"], out / name / item["Key"][len(prefix) :])
+            for page in pages
+            for item in page.get("Contents", [])
+            if item["Key"][len(prefix) :] and "/" not in item["Key"][len(prefix) :]
+        ]
+        counts[name] = len(found)
+        wanted += found
+    wanted.append((f"runs/{job}/place/placement.json", out / "placement.json"))
+
+    def get(entry: tuple[str, Path]) -> None:
+        client.download_file(bucket, entry[0], str(entry[1]))
+
+    with concurrent.futures.ThreadPoolExecutor(16) as pool:
+        list(pool.map(get, wanted))
     return counts
 
 

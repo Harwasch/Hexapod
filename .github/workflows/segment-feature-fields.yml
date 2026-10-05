@@ -57,6 +57,7 @@ jobs:
           if not re.fullmatch(r"[a-z0-9-]+(,[a-z0-9-]+)*", names):
               raise SystemExit(f"names={names!r} is not a comma-separated list of [a-z0-9-] names")
           PY
+          set -o pipefail
           uv run --with modal==1.5.5 modal run infra/modal/feature_fields.py \
             --names "$NAMES" --out segment-out 2>&1 | tee modal.log
           grep -h '"cost"' segment-out/*/run.json || true
