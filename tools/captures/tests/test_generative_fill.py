@@ -323,3 +323,40 @@ def test_held_out_cameras_are_the_highest() -> None:
     kept, held = gf.split_held_out(views, np.array([0.0, 0.0, 0.35]), 0.25)
     assert {v.name for v in held} == {"c6", "c7"}
     assert len(kept) == 6
+
+
+def test_the_region_around_and_under_an_object() -> None:
+    low, high = gf.shape_roi(np.array([0.0, 0.0, 1.0]), np.array([2.0, 1.0, 3.0]), 0.5, 0.4)
+    assert np.allclose(low, [-1.0, -0.5, 0.7]) and np.allclose(high, [3.0, 1.5, 1.8])
+    same = gf.shape_roi(np.zeros(3), np.ones(3))
+    assert np.allclose(same[0], 0) and np.allclose(same[1], 1)
+
+
+def test_the_roof_picked_is_the_one_least_seen_from_above() -> None:
+    splats, _ = table_scene()
+    scene = table()
+    instances = [
+        {
+            "id": 1,
+            "splats": 9000,
+            "tags": [{"label": "roof"}],
+            "bounds": {"min": [-0.45, -0.45, 0.6], "max": [0.45, 0.45, 0.75]},
+        },
+        {
+            "id": 2,
+            "splats": 9000,
+            "tags": [{"label": "roof"}, {"label": "wall"}],
+            "bounds": {"min": [-1.2, -1.2, -0.05], "max": [-0.5, -0.5, 0.05]},
+        },
+        {
+            "id": 3,
+            "splats": 9000,
+            "tags": [{"label": "grass"}],
+            "bounds": {"min": [-0.45, -0.45, 0.6], "max": [0.45, 0.45, 0.75]},
+        },
+    ]
+    low, _, picked = gf.pick_roi(instances, splats, scene.known, "roof")
+    assert picked["instance"] == 1  # the table's top, which no camera saw from above
+    assert np.allclose(low, [-0.45, -0.45, 0.6])
+    with pytest.raises(SystemExit):
+        gf.pick_roi(instances, splats, scene.known, "tent")

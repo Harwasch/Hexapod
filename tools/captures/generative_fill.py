@@ -797,18 +797,21 @@ def remap_photo(view: RealView, camera: Camera) -> tuple[np.ndarray, np.ndarray]
     pixels it covers."""
     import cv2
 
-    photo = view.photo()
+    src = view.camera
+    # Downscaled first to about the virtual camera's pixel size (remap only interpolates).
+    width = src.width
+    if camera.focal < 0.75 * src.focal:
+        width = max(16, round(src.width * camera.focal / src.focal))
+    photo = view.photo(width=width)
     if photo is None:
         return None
-    src = view.camera
+    src = scaled(src, photo.shape[1], photo.shape[0])
     v, u = np.mgrid[0 : camera.height, 0 : camera.width].astype(np.float32)
     x = (u + 0.5 - camera.width / 2) / camera.focal
     y = (v + 0.5 - camera.height / 2) / camera.focal
     map_x = (x * src.focal + src.width / 2 - 0.5).astype(np.float32)
     map_y = (y * src.focal + src.height / 2 - 0.5).astype(np.float32)
-    rgb = cv2.remap(
-        photo, map_x, map_y, cv2.INTER_AREA if src.focal > camera.focal else cv2.INTER_LINEAR
-    )
+    rgb = cv2.remap(photo, map_x, map_y, cv2.INTER_LINEAR)
     cover = (map_x >= 0) & (map_x <= src.width - 1) & (map_y >= 0) & (map_y <= src.height - 1)
     return rgb, cover
 

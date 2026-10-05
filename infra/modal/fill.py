@@ -537,7 +537,9 @@ def video_access(keys: list[str]) -> dict[str, str]:
     (Cosmos and its guardrail are gated)."""
     vfm = _video_module()
     token = vfm.find_token()
-    return {"token": "found" if token else "missing", **vfm.access(token, tuple(keys))}
+    repos = vfm.access(token, tuple(keys))
+    readable = [k for k in keys if all(repos.get(r) == "ok" for r in vfm.MODELS[k].repos)]
+    return {"token": "found" if token else "missing", "readable": readable, **repos}
 
 
 @app.function(
@@ -1349,10 +1351,8 @@ def _run_gen(
         access = video_access.remote(video)
         (out / "gen-access.json").write_text(json.dumps(access, indent=1), encoding="utf-8")
         sys.stdout.write(f"video models access: {json.dumps(access)}\n")
-        sys.path.insert(0, str(LOCAL_CAPTURES))
-        import video_fill_models as vfm
-
-        readable = [g for g in video if all(access.get(r) == "ok" for r in vfm.MODELS[g].repos)]
+        # (Decided in the container: this side has `modal` and nothing else.)
+        readable = [g for g in video if g in access.get("readable", [])]
         dropped = sorted(set(video) - set(readable))
         if dropped:
             sys.stdout.write(f"not run (the token cannot read them): {dropped}\n")
