@@ -255,6 +255,15 @@ describe("SiteManager.flyTo", () => {
     expect(flights.at(-1)?.longitude).toBe(moved.longitude);
   });
 
+  it("names a loaded site as it was renamed, for the cards the scene builds", async () => {
+    const { manager } = harness();
+    manager.setCatalog([summary], () => Promise.resolve(site()));
+    await manager.flyTo(SITE_ID);
+    expect(manager.activeSite?.name).toBe("Yard");
+    manager.updateRecord({ ...site(), name: "North yard" });
+    expect(manager.activeSite?.name).toBe("North yard");
+  });
+
   it("flies straight to the bookmark when the record is already known", async () => {
     const { manager, flights } = harness();
     manager.setCatalog([summary], () => Promise.resolve(site()));

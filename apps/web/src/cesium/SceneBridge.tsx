@@ -186,8 +186,14 @@ export function SceneBridge() {
     if (
       (project?.id ?? null) === (current?.id ?? null) &&
       (project?.siteId ?? null) === (current?.siteId ?? null)
-    )
+    ) {
+      // The same site, renamed (the switcher's rename): the badge and the site's pin are the
+      // project's name, so it takes the new one -- without the reset a new project gets.
+      if (project && current && project.name !== current.name) {
+        useMission.getState().refreshProject(project);
+      }
       return;
+    }
     useMission.getState().setProject(project);
   }, [scene, activeSiteId, siteCatalog.data, activeSite.data]);
 

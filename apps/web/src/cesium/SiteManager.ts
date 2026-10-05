@@ -361,13 +361,16 @@ export class SiteManager {
    * to leave for a deleted bookmark, or for the footprint of a site that now has one. Every
    * fly-to used to fetch the record afresh; the copy kept now has to be kept fresh instead.
    *
-   * A loaded site takes the new bookmarks only: its assets are in the scene as they were
-   * loaded, and swapping them is a reload, not an update.
+   * A loaded site takes the new bookmarks and name only: its assets are in the scene as they
+   * were loaded, and swapping them is a reload, not an update. The name is what the cards the
+   * scene builds (the selection card's title) call it, so a rename shows at once.
    */
   updateRecord(site: Site): void {
     this.details.set(site.id, site);
     const entry = this.loaded.get(site.id);
-    if (entry) entry.site = { ...entry.site, cameraBookmarks: site.cameraBookmarks };
+    if (entry) {
+      entry.site = { ...entry.site, name: site.name, cameraBookmarks: site.cameraBookmarks };
+    }
   }
 
   private get active(): ActiveSite | null {
