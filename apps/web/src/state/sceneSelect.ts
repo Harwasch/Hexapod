@@ -3,6 +3,8 @@ import { create } from "zustand";
 import { loadCustomSets, saveCustomSets, withCustomSets, type CustomSet } from "@/lib/customSets";
 import type { InstancesDoc } from "@/lib/instances";
 import { cycleIndex } from "@/lib/sceneSelect";
+import { record } from "@/state/history";
+import { useInstances } from "@/state/instances";
 
 /** What a painted area matched (lib/sceneSelect.ts `bestSet`). */
 export interface PaintResult {
@@ -104,7 +106,9 @@ interface SceneSelectState {
   setPaint: (paint: PaintResult | null) => void;
   /** The scan's painted objects, read from storage the first time. */
   customOf: (assetId: string) => CustomSet[];
+  /** Keeps a painted object; one undoable step (`state/history.ts`, `recordCustom`). */
   addCustom: (assetId: string, set: CustomSet) => void;
+  /** Forgets a painted object; one undoable step, which puts it back where it was. */
   removeCustom: (assetId: string, key: string) => void;
 }
 
@@ -112,6 +116,36 @@ const NONE: CustomSet[] = [];
 
 export const MIN_BRUSH = 4;
 export const MAX_BRUSH = 120;
+
+/** The scan's painted objects as `sets`, stored. */
+function putCustom(assetId: string, sets: CustomSet[]): void {
+  saveCustomSets(assetId, sets);
+  useSceneSelect.setState((s) => ({ custom: { ...s.custom, [assetId]: sets } }));
+}
+
+/**
+ * Records a change of the scan's painted objects from `before` to what they are now: undo
+ * and redo put the whole list back, so a painted object returns at its place and every later
+ * one keeps its id (ids follow the order, lib/customSets.ts `customId`). A selection of a
+ * painted object is cleared when they change under it, as Delete clears it.
+ */
+function recordCustom(assetId: string, label: string, before: CustomSet[]): void {
+  const after = useSceneSelect.getState().custom[assetId] ?? [];
+  const put = (sets: CustomSet[]): void => {
+    const state = useSceneSelect.getState();
+    const table = useInstances.getState().assets[assetId]?.instances ?? [];
+    const maxId = table.reduce((max, i) => Math.max(max, i.id), 0);
+    if (state.assetId === assetId && state.candidates.some((id) => id > maxId)) state.clear();
+    putCustom(assetId, sets);
+  };
+  record({
+    label,
+    scope: "site",
+    alive: () => useInstances.getState().assets[assetId] !== undefined,
+    undo: () => put(before),
+    redo: () => put(after),
+  });
+}
 
 export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
   assetId: null,
@@ -167,18 +201,21 @@ export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
     });
     return loaded.length ? loaded : NONE;
   },
-  addCustom: (assetId, entry) =>
-    set((s) => {
-      const next = [...(s.custom[assetId] ?? loadCustomSets(assetId)), entry];
-      saveCustomSets(assetId, next);
-      return { custom: { ...s.custom, [assetId]: next } };
-    }),
-  removeCustom: (assetId, key) =>
-    set((s) => {
-      const next = (s.custom[assetId] ?? loadCustomSets(assetId)).filter((c) => c.key !== key);
-      saveCustomSets(assetId, next);
-      return { custom: { ...s.custom, [assetId]: next } };
-    }),
+  addCustom: (assetId, entry) => {
+    const before = get().custom[assetId] ?? loadCustomSets(assetId);
+    putCustom(assetId, [...before, entry]);
+    recordCustom(assetId, `Create ${entry.name}`, before);
+  },
+  removeCustom: (assetId, key) => {
+    const before = get().custom[assetId] ?? loadCustomSets(assetId);
+    const gone = before.find((c) => c.key === key);
+    if (!gone) return;
+    putCustom(
+      assetId,
+      before.filter((c) => c !== gone),
+    );
+    recordCustom(assetId, `Delete ${gone.name}`, before);
+  },
 }));
 
 /** The chosen candidate's id, or null; a combination's first member while it is chosen. */

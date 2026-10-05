@@ -9,6 +9,8 @@ export interface Toast {
   body?: string;
   /** Sticky toasts stay until dismissed (setup problems). */
   sticky?: boolean;
+  /** One button beside the words ("Redo" after an undo); a click runs it and dismisses. */
+  action?: { label: string; run: () => void };
   createdAt: number;
 }
 

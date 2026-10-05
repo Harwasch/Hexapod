@@ -1,7 +1,10 @@
 import { useLayers as useLayerCatalog } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
+import { recordAction } from "@/state/history";
 import { useLayers } from "@/state/layers";
 import { useMission } from "@/state/mission";
+
+import { setLayerVisible } from "../layers/layerVisibility";
 
 export interface QuickLayer {
   id: "imagery" | "vegetation" | "zones" | "tracks";
@@ -14,15 +17,28 @@ export interface QuickLayer {
 /**
  * The four layers an operator flips most: the basemap imagery, vegetation (land cover), and
  * the mission's zones and tracks. The layer pills draw them and the command box lists them,
- * from this one definition.
+ * from this one definition. Each flip is one undoable step (`state/history.ts`).
  */
 export function useQuickLayers(): QuickLayer[] {
   const scene = useScene();
   const catalog = useLayerCatalog();
   const runtime = useLayers((s) => s.runtime);
   const mission = useMission((s) => s.layers);
-  const toggle = useMission((s) => s.toggleLayer);
   const project = useMission((s) => s.project);
+  const catalogLayers = catalog.data ?? [];
+  /** The mission's zones or tracks on or off, in the store and on the map. */
+  const setMissionLayer = (key: "zones" | "tracks", on: boolean): void => {
+    if (useMission.getState().layers[key] !== on) useMission.getState().toggleLayer(key);
+    scene?.mission.setLayer(key, on);
+  };
+  const flipMission = (key: "zones" | "tracks", label: string): void => {
+    const on = mission[key];
+    recordAction(
+      `${on ? "Hide" : "Show"} ${label}`,
+      () => setMissionLayer(key, !on),
+      () => setMissionLayer(key, on),
+    );
+  };
 
   const basemap =
     (catalog.data ?? []).find(
@@ -40,34 +56,28 @@ export function useQuickLayers(): QuickLayer[] {
       label: "Imagery",
       on: imageryOn,
       disabled: !basemap,
-      toggle: () => basemap && void scene?.layers.setVisible(basemap.id, !imageryOn),
+      toggle: () => basemap && setLayerVisible(scene, basemap, !imageryOn, catalogLayers),
     },
     {
       id: "vegetation",
       label: "Vegetation",
       on: vegetationOn,
       disabled: !vegetation,
-      toggle: () => vegetation && void scene?.layers.setVisible(vegetation.id, !vegetationOn),
+      toggle: () => vegetation && setLayerVisible(scene, vegetation, !vegetationOn, catalogLayers),
     },
     {
       id: "zones",
       label: "Zones",
       on: mission.zones,
       disabled: !project,
-      toggle: () => {
-        toggle("zones");
-        scene?.mission.setLayer("zones", !mission.zones);
-      },
+      toggle: () => flipMission("zones", "zones"),
     },
     {
       id: "tracks",
       label: "Tracks",
       on: mission.tracks,
       disabled: !project,
-      toggle: () => {
-        toggle("tracks");
-        scene?.mission.setLayer("tracks", !mission.tracks);
-      },
+      toggle: () => flipMission("tracks", "tracks"),
     },
   ];
 }

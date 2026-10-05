@@ -2118,6 +2118,11 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   overflow-wrap: anywhere;
 }
 
+.toast__action {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
 /* ---- Explore HUD --------------------------------------------------------- */
 .explore-hud {
   display: flex;
@@ -2594,8 +2599,15 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .shortcuts__row dd {
   display: inline-flex;
   flex: none;
+  align-items: center;
   gap: 3px;
   margin: 0;
+}
+
+.shortcuts__or {
+  padding: 0 0.2rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
 /* On a phone the message row keeps to the two newest toasts. */
