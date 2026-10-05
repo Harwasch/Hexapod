@@ -9,7 +9,8 @@ name: Objects from feature fields (bake-off B, Modal GPU)
 # both halves' summaries, the trained field and what the call cost. Nothing is published.
 #
 # Only on a push to an `ffield-*` branch that touches its code, or by workflow_dispatch once
-# this file is on the default branch. Each run costs money (about $0.30 a scan, at most $0.84
+# this file is on the default branch (a push of commits that already exist on another branch
+# changes no files and does not run it). Each run costs money (about $0.30 a scan, at most $0.84
 # a scan: the Modal function's timeout), so it is never triggered by anything else.
 
 on:
