@@ -454,8 +454,8 @@ function assemble(
   app.setCanvasResolution(pc.RESOLUTION_AUTO);
   app.scene.gsplat.splatBudget = budget;
   // Full-precision work buffer rather than the compact one (quantised transforms): the tiles
-  // are already the detail the view asked for. The smallest splat kept is set per resolution
-  // (`splatMinPixelSize`, in render).
+  // are already the detail the view asked for. The smallest splat kept is set per resolution,
+  // and to none from afar (`splatMinPixelSize`, in render).
   (app.scene.gsplat as unknown as { dataFormat: string }).dataFormat = "large";
   const camera = new pc.Entity("scan-camera");
   camera.addComponent("camera", { clearColor: new pc.Color(0, 0, 0, 0) });
@@ -968,7 +968,11 @@ function assemble(
         size = { width: pose.width, height: pose.height, pixelRatio: pose.pixelRatio };
         device.maxPixelRatio = pose.pixelRatio;
         app.resizeCanvas(pose.width, pose.height);
-        app.scene.gsplat.minPixelSize = splatMinPixelSize(pose.pixelRatio);
+      }
+      // Half a CSS pixel up close, nothing from afar (quality.ts): a uniform, set as it changes.
+      const minPixelSize = splatMinPixelSize(pose.pixelRatio, pose.farView === true);
+      if (app.scene.gsplat.minPixelSize !== minPixelSize) {
+        app.scene.gsplat.minPixelSize = minPixelSize;
       }
       const component = camera.camera;
       if (component) {

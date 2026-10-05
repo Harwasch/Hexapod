@@ -321,6 +321,9 @@ describe("the overlay's resolution follows the globe's", () => {
   it("keeps the smallest splat at half a CSS pixel, and a phone to one SH band", () => {
     expect(splatMinPixelSize(2)).toBe(1);
     expect(splatMinPixelSize(1)).toBe(0.5);
+    // From afar the whole scan is a few dozen pixels: nothing in it is culled for size.
+    expect(splatMinPixelSize(2, true)).toBe(0);
+    expect(splatMinPixelSize(1, false)).toBe(0.5);
     expect(maxShDegree(true)).toBe(1);
     expect(maxShDegree(false)).toBe(3);
   });

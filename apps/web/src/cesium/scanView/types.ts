@@ -27,6 +27,11 @@ export interface ScanPose {
   width: number;
   height: number;
   pixelRatio: number;
+  /**
+   * The scan is seen from afar (`ScanTarget.far`): drawn small, and nothing in it is culled
+   * for size (quality.ts, `splatMinPixelSize`). Absent: up close.
+   */
+  farView?: boolean;
 }
 
 /** What the host hands a back-end when it creates it. */
