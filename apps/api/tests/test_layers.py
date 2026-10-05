@@ -208,7 +208,11 @@ def test_seed_removes_what_was_withdrawn_from_an_older_database(
             ],
         }
     )
-    site_service.create_site(db, old_demo)
+    # Held, as a long-lived session holds what it loaded: the seed must leave the site's own
+    # list of assets right, not only the rows. Unheld, whether the session still had the
+    # site at the next read was up to the garbage collector, and so was this test.
+    held = site_service.create_site(db, old_demo)
+    assert len(held.assets) == 2
     site_service.create_site(db, DEMO_SITE.model_copy(update={"slug": "mygla", "name": "Mygla"}))
     sentinel = LayerCreate(
         slug="sentinel-2",
