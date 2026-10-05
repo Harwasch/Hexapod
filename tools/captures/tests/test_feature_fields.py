@@ -250,6 +250,37 @@ def test_tree_on_the_yard_finds_its_objects_and_parts_above_the_ground():
     assert np.isin(klass[tree.ground], (3, 4)).mean() > 0.9  # grass/low, ground
 
 
+def test_pieces_the_graph_left_apart_join_when_the_field_says_one_thing():
+    """A table top over its leg with a shadowed gap between them (no graph edge crosses it):
+    one object, with the two as parts; a box beside it with its own code stays apart."""
+    rng = np.random.default_rng(4)
+    xy = np.stack(np.meshgrid(np.arange(-3, 3, 0.03), np.arange(-2, 2, 0.03)), -1).reshape(-1, 2)
+    floor = np.c_[xy, rng.normal(0, 0.002, len(xy))]
+    leg = rng.uniform([-0.2, -0.2, 0.05], [0.2, 0.2, 0.7], (4000, 3))
+    top = rng.uniform([-0.8, -0.8, 0.85], [0.8, 0.8, 0.95], (6000, 3))
+    box = rng.uniform([1.8, -0.3, 0.05], [2.4, 0.3, 0.6], (3000, 3))
+    pos = np.concatenate([floor, leg, top, box])
+    n = len(floor)
+    objects = np.r_[np.zeros(n, int), np.ones(4000 + 6000, int), np.full(3000, 2)]
+    parts = np.r_[np.zeros(n, int), np.full(4000, 1), np.full(6000, 2), np.full(3000, 3)]
+    splats = _splats(pos, scale=0.015)
+    ground = ff.ground_layer(splats)
+    tree = ff.build_tree(splats, oracle_field(objects, parts), ground)
+    assert tree.stats["adjacentJoins"] >= 1
+    up = np.arange(tree.parent.size + 1)
+    for i in range(1, tree.parent.size + 1):
+        p = int(tree.parent[i - 1])
+        while p:
+            up[i] = p
+            p = int(tree.parent[p - 1])
+    held = up[tree.leaf[n : n + 10000]]
+    values, counts = np.unique(held[held > 0], return_counts=True)
+    assert values.size == 1 and counts[0] > 0.95 * held.size  # one object: leg and top
+    assert not np.isin(up[tree.leaf[n + 10000 :]], values).any()  # the box apart
+    children = [j + 1 for j in range(tree.parent.size) if tree.parent[j] == values[0]]
+    assert len(children) == 2
+
+
 def test_a_flange_the_height_filter_calls_ground_goes_to_its_object():
     rng = np.random.default_rng(3)
     xy = np.stack(np.meshgrid(np.arange(-2, 2, 0.02), np.arange(-2, 2, 0.02)), -1).reshape(-1, 2)
