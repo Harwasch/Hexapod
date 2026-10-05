@@ -16,17 +16,19 @@ name: Publish instances
 #   cuts a new generation and repoints the asset. Nothing here writes the public bucket or a
 #   tileset.json (docs/DEPLOYMENT.md, "Sidecars: one publisher").
 # * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
-#   that, push a commit whose message carries `[instances|run=<segment.yml run id>]`,
-#   adding `|scans=camp,spool` to choose scans and `|publish` to publish.
-# * **Bake-off variants** (`|variant=<name>`, or the `variant` input). The run is a candidate
-#   segmentation, not the scan's own: its files go under `variants/objects/<name>/` and its
-#   entry -- `{name, label, about, instances}`, from the artifact's `<scan>/variant.json`,
-#   whose `name` must be the one asked for (so a stand-in is never published as the
-#   candidate it stands in for) -- is registered in `extras.variants.objects`. The attach
-#   merges it by name into what the tileset declares at that moment
-#   (`attach_sidecars.merge_variants`): other candidates and other systems stay, and the
-#   scan's own `extras.instances` is untouched. The artifact may come from segment.yml or
-#   segment-concepts.yml (both upload `segmentation`, a folder per scan).
+#   that, push a commit (to `living-models` or a `bakeoff-*` branch) whose message carries
+#   `[instances|run=<segment.yml run id>]`, adding `|scans=camp,spool` to choose scans and
+#   `|publish` to publish.
+# * **A variant** (`variant=<name>`, the segmentation bake-off): the files go to
+#   `variants/objects/<name>/` instead, and the root's `extras.variants.objects` gets the
+#   entry `{name, label, about, instances}` (label and about from the run's instances.json
+#   `variant` block), every other entry and system kept. The API replaces an extras key
+#   whole, so `attach_sidecars.attach` re-reads the asset's current `extras.variants` right
+#   before its request and merges the entry into it (`with_variant`): a variant another
+#   run attached since the build is kept. Today's `extras.instances` is not touched: it
+#   stays the default a viewer shows. Any candidate's `segmentation` artifact can be
+#   published this way (B and C too); its instances.json may carry
+#   `variant: {name, label, about}`.
 #
 # Variables: TWIN_API_URL, SCAN_ASSET_IDS (JSON, {"camp": "<asset id>", ...}). For `publish`
 # only, secrets CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, API_WRITE_TOKEN
@@ -34,9 +36,7 @@ name: Publish instances
 
 on:
   push:
-    # Only a head commit with an `[instances|...]` token does anything (`plan`); the
-    # bake-off's segmentation branches publish their candidates this way.
-    branches: [living-models, "seg-*", "bakeoff-seg-*"]
+    branches: [living-models, "bakeoff-*"]
   workflow_dispatch:
     inputs:
       run:
@@ -52,7 +52,7 @@ on:
         type: boolean
         default: false
       variant:
-        description: "A bake-off candidate's name: publish under variants/objects/<name>/"
+        description: "Publish as this bake-off variant (variants/objects/<name>/), not today's"
         type: string
         default: ""
 
@@ -97,7 +97,7 @@ jobs:
                       raise SystemExit(f"unknown option {name!r} in the [instances] token")
                   options[name] = value if value else "true"
           valid = {"run": r"[0-9]+", "scans": r"[a-z0-9-]+(,[a-z0-9-]+)*", "publish": r"true|false",
-                   "variant": r"([a-z0-9][a-z0-9-]{0,63})?"}
+                   "variant": r"([a-z0-9][a-z0-9-]{0,47})?"}
           for name, pattern in valid.items():
               if not re.fullmatch(pattern, options[name]):
                   raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
@@ -182,31 +182,39 @@ jobs:
                   raise SystemExit(f"{name}: the binding does not match the tiles")
               out = temp / "out" / name
               variant = os.environ.get("VARIANT", "")
+              folder = attach_sidecars.variant_folder("objects", variant) if variant else ""
+              (out / folder).mkdir(parents=True)
+              for file in ("instances.json", "instances.emb"):
+                  shutil.copy(src / file, out / folder / file)
               if variant:
-                  # A bake-off candidate: its own folder, and its entry in extras.variants.
-                  meta_path = src / "variant.json"
-                  meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-                  if meta.get("name") != variant:
-                      raise SystemExit(f"{name}: the artifact is variant {meta.get('name')!r} "
-                                       f"(its variant.json), not {variant!r}")
-                  rel = f"variants/objects/{variant}"
-                  (out / rel).mkdir(parents=True)
-                  for file in ("instances.json", "instances.emb"):
-                      shutil.copy(src / file, out / rel / file)
-                  entry = {"name": variant, "label": str(meta["label"]), "about": str(meta["about"]),
-                           "instances": f"{rel}/instances.json"}
-                  extras = {"variants": {"objects": [entry]}}
+                  # Registered beside today's objects and the other variants, never over them.
+                  own = doc.get("variant") or {}
+                  if own.get("name") not in (None, variant):
+                      raise SystemExit(f"{name}: the run is variant {own.get('name')!r}, not {variant!r}")
+                  entry = {
+                      "name": variant,
+                      "label": str(own.get("label") or variant),
+                      "about": str(own.get("about") or ""),
+                      "instances": folder + "instances.json",
+                  }
+                  # For review: the merge as of now. The publish job merges again into the
+                  # asset's extras as they are when it attaches (attach_sidecars.attach).
+                  current = (published.get("root") or {}).get("extras") or {}
+                  extras = {"variants": attach_sidecars.with_variant(current.get("variants"), "objects", entry)}
+                  register = ("objects", entry)
               else:
-                  out.mkdir(parents=True)
-                  for file in ("instances.json", "instances.emb"):
-                      shutil.copy(src / file, out / file)
                   extras = {"instances": {"uri": "instances.json", "count": len(doc["instances"])}}
+                  register = None
               attach_sidecars.write_manifest(
-                  out, asset_id=asset["assetId"], based_on=url, extras=extras
+                  out,
+                  asset_id=asset["assetId"],
+                  based_on=url,
+                  extras=extras,
+                  variant=register,
               )
               top = sum(1 for r in doc["instances"] if r["level"] == 0)
-              where = f" as variant `{variant}`" if variant else ""
-              print(f"- **{name}**{where} (asset `{asset['assetId']}`): {len(uris)} tiles bound, "
+              where = f" as variant `{variant}` ({folder})" if variant else ""
+              print(f"- **{name}** (asset `{asset['assetId']}`){where}: {len(uris)} tiles bound, "
                     f"{len(doc['instances']):,} instances ({top:,} top-level); {url}")
           PY
       - uses: actions/upload-artifact@v4

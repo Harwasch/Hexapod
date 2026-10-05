@@ -173,35 +173,20 @@ describe("objects and groups", () => {
     for (const object of index.objects.values()) expect(object.name).not.toMatch(/Object/);
   });
 
-  it("names an object by the file's own name first, numbered when shared", () => {
-    // A concept-first file: the ground's cover classes as objects of Ground, named.
+  it("names an object by the name the file gives it: a ground class, a model's answer", () => {
     const named: CategorisedInstance[] = [
-      { ...inst(1, null, 100, [["lawn", 0.4]]), category: "ground", name: "Grass" },
-      { ...inst(2, null, 50), category: "ground", name: "Gravel" },
-      { ...inst(3, null, 40, [["oak", 0.4]]), category: "produce", name: "pumpkin" },
-      { ...inst(4, 3, 10), category: "produce" },
-      { ...inst(5, null, 30), category: "produce", name: "pumpkin" },
+      { ...inst(1, null, 300, [["grass", 0.8]]), category: "ground", name: "Grass" },
+      { ...inst(2, 1, 200, [["grass", 0.8]]), category: "ground", name: "Grass" },
+      { ...inst(3, null, 90, [["hay", 0.7]]), category: "ground", name: "Hay" },
+      { ...inst(4, null, 50, [["oak", 0.4]]), name: "Cable spool" },
     ];
     const index = indexCategories(named, LABELS);
-    expect(index.groups.map((g) => [g.category.id, g.objects.map((o) => o.name)])).toEqual([
-      ["ground", ["Grass", "Gravel"]],
-      ["produce", ["pumpkin 1", "pumpkin 2"]],
-    ]);
-    expect([...(index.objects.get(3)?.members ?? [])].sort()).toEqual([3, 4]);
-  });
-
-  it("keeps a file's name when it parses one", () => {
-    const box = { min: [0, 0, 0], max: [1, 1, 1] };
-    const doc = parseInstances({
-      format: "hexapod.instances",
-      version: 1,
-      instances: [
-        { id: 1, bounds: box, splats: 9, tags: [], name: " cable spool " },
-        { id: 2, bounds: box, splats: 9, tags: [], name: "" },
-      ],
-      tiles: {},
-    });
-    expect(doc?.instances.map((i) => i.name)).toEqual(["cable spool", undefined]);
+    // The ground's classes are objects of Ground & soil, whatever their tags' category.
+    expect(
+      index.groups.find((g) => g.category.id === "ground")?.objects.map((o) => o.name),
+    ).toEqual(["Grass", "Hay"]);
+    expect(index.objects.get(1)?.members).toEqual([1, 2]);
+    expect(index.objects.get(4)?.name).toBe("Cable spool");
   });
 
   it("finds categories by name, plural or not", () => {

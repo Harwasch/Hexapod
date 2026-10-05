@@ -165,41 +165,124 @@ guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
 | pumpkin | 387,813        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
 | camp    | 22,577,243     | 6 cores (9), 22 GiB (44) | 45 min | 0.94     |
 
-### Concept first (bake-off candidate C)
+## 3b. The ground pass, and bake-off candidate A "ground first"
 
-`tools/captures/concept_scene.py` (models in `concept_models.py`; on a GPU
-`infra/modal/segment_concepts.py`, run by `segment-concepts.yml`) turns steps 2-4 round:
-it asks first what is in the scene and then looks for each named thing, so objects are born
-with names (research notes §1.5).
+The segmentation bake-off (2026-10-05) runs three candidates on the same scans and publishes
+each as a variant the owner switches to in the app (`extras.variants.objects`, below). All
+three share the **ground pass** and the **ground schema** of this section.
 
-1. **Vocabulary.** Qwen3-VL-4B Instruct (Apache-2.0) reads 12 overview renders and lists at
-   most 12 *things* ("cable spool", "pumpkin") and 6 kinds of *stuff* (ground cover:
-   "grass", "gravel"), each with one of the categories of step 7.
-2. **Ground** from geometry: the bake-off's shared pass (`ground_pass.py`). Cells are split
-   at the ground. A ground cell that the views keep seeing inside a thing's mask is the
-   thing's (60% of its visible weight, two views; 35% and one view where the pass found no
-   ground near it): the spool's bottom flange, the bottom of a pumpkin.
-3. **Concepts in every view.** SAM 3 (the method; gated) finds every instance of each thing,
-   tracked along camera paths; its semantic head gives the ground's cover per pixel.
-   Until its weights are granted, a **stand-in** does: Grounding DINO boxes each thing, SAM
-   2.1 cuts its mask, and SigLIP 2 classifies each class-free mask over the ground against
-   the stuff names. A stand-in's `instances.json` says so (`concepts.standIn`) and is
-   published, if at all, under its own variant name, never as C.
-4. **Lift** by this section's own voting: thing masks join cells into objects (named by the
-   concept most of their votes carry; one track spanning two objects makes them one). The
-   ground's cells take the cover class most views gave them. **Leftovers**: what is neither
-   ground nor named is lifted from SAM 2's class-free masks as above, so nothing goes
-   unsegmented for want of a name; the same masks give every object its parts.
-5. **Panel.** Every cover class is one top-level instance in the category Ground & soil,
-   named by its class ("Grass", "Gravel"), so the objects panel lists Ground with its cover
-   classes as objects, each with its eye, with no new UI. A named object is named by its
-   concept ("pumpkin 1", "pumpkin 2"), its parts are in its category, and its first tag is
-   the concept, so search and the selection card find it by name.
+**Ground pass** (`tools/captures/ground_pass.py`, CPU, NumPy and SciPy; its API is at the
+top of the module and is stable): the terrain under any splat scan, every splat's height
+above it, and a label per splat -- `ground`, `above`, `below` (floaters under the
+surface) and `unknown` (in the ground layer where no ground was seen near it: under a
+canopy, under an object). The method is SMRF (Pingel et al. 2013: openings with growing
+windows; what rises above one by more than slope x radius is an object) on a robust lowest
+surface (transparent splats and blobs left out, a low quantile of each cell's lowest layer,
+cells deep under the low end of their neighbourhood dropped as floaters), and the terrain
+under objects interpolated harmonically, so it is flat under a pumpkin rather than raised.
+The repo's slope filter (`scene_plants.ground_model`) erodes a cone from each cell's lowest
+splat: one floater dents it for metres, and it bulges up under an object by slope x half
+its width. CSF needs PDAL or a compiled binding for nothing SMRF lacks here. The ground
+layer's thickness comes from the scan (what rests on the terrain: median + 3 sigma, within
+a floor from the splats' spacing and the ground's roughness, and 0.3 m). Measured: spool
+39% ground (layer 8 cm), pumpkin 80% (the hay bed, layer capped at 30 cm), ~0.5 s each; the
+camp (22.6 M splats) in ~100 s. What geometry cannot know: a board lying on the ground (the
+spool's bottom flange) is ground to any height filter.
+
+**Candidate A, ground first** (`tools/captures/segment_ground_first.py`, research §1.3):
+
+1. The ground pass; voxel cells cut at the ground surface (`ground_pass.split_cells`).
+2. `segment_scene.segment` with SAM 2.1 **large**, the ground's cells kept out of the object
+   graph, `_absorb` and the fills (`exclude`): an object can never absorb ground.
+3. A **refine pass** (the `refine` hook, while the render processes still run): each
+   top-level object (up to 32) seen from 10 views around its base (5 sides, 10° and 40°
+   up), SAM prompted with its box extended down to the terrain. A ground cell inside the box
+   that is in its mask in 60% of the views it is seen in is claimed by it (the flange); a
+   cell of it in its mask in at most 10% of 4+ views is let go; a smaller top-level object
+   70% inside its masks becomes a part of it (the spool's planks under the spool).
+4. A **stuff pass**: low objects (90th percentile under 2 ground layers) that describe as
+   grass, ground or paths are ground cover, not things. Every ground splat is classified
+   into the cover classes of `data/ground_cover.json` (grass, tall grass, moss, dirt, mud,
+   sand, gravel, rock, asphalt, concrete, paving, wooden deck, mulch, leaf litter, forest
+   floor, hay, crops, ploughed field, snow, ice, water, artificial turf, trail; with
+   contrast prompts that soak up things) by SigLIP 2 pooled inside each view's own SAM
+   masks (crops of the mask, the rest black; reconstructed from the per-cell votes, so no
+   mask is kept), smoothed among neighbouring ground cells, and cut into connected regions.
+5. **Naming**: Qwen3-VL 4B Instruct (Apache-2.0) shown each top-level thing (and the parts
+   of the six largest) in context and alone, answering JSON; its `name` is the object's.
+
+**The ground in `instances.json`** (every candidate writes it so): the Objects panel's top
+level is the scan's categories, so the top-level "Ground" is the category **Ground & soil**
+(`category: "ground"`), and its rows -- clickable, hideable, highlightable like any
+object -- are the cover classes:
+
+```jsonc
+// a cover class: top level, one per class present
+{ "id": 352, "parent": null, "level": 0, "kind": "ground", "category": "ground",
+  "cover": "grass",                         // data/ground_cover.json's class id
+  "name": "Grass", "nameSource": "ground-cover",
+  "tags": [{ "label": "grass", "score": 0.83 }],   // the class, its mean confidence
+  "behaviour": "static", "splats": 0, ... }       // 0: its splats carry its regions' ids
+// a region of it: connected ground of that class
+{ "id": 353, "parent": 352, "level": 1, "kind": "ground", "category": "ground",
+  "cover": "grass", "name": "Grass", ... }
+// a thing
+{ "id": 2, "parent": null, "kind": "thing", "name": "Cable spool", "nameSource": "vlm",
+  "wholeOrPart": "whole", "material": "wood", "movable": false, "scaleM": 1.31, ... }
+```
+
+There is no Ground root instance: one with `category: "ground"` would make the classes its
+parts, and the panel would list one "Ground" with nothing under it. A class with one region
+has no children (its splats carry its id). A click in the scene selects the class, a second
+click its region. Root `variant: {name, label, about}` and `ground: {method, layerM, cellM,
+seenShare, cover}` say what made the file. Still `hexapod.instances` v1: a reader that
+knows none of `kind`, `cover`, `name` reads it as before. The viewer honours `name` before
+any tag (`lib/categories.ts` object names, `lib/sceneSelect.ts` the selection card,
+`lib/instances.ts` search).
+
+**Running and publishing a variant.** segment.yml runs a candidate on a `seg-*` push whose
+head commit says `[segment|names=spool,pumpkin|variant=ground-first]`
+(`infra/modal/segment.py` `VARIANT_SCRIPTS`; each call stopped after 50 min, so its worst
+cost is known, ~$1 on the L4), and keeps `cache.tar` (every view's masks and image, the
+refine pass's box masks, the names) so a run can be re-assembled on a CPU. publish-instances
+publishes a run's artifact as a variant with `variant=<name>` (dispatch input, or
+`[instances|run=<id>|scans=spool,pumpkin|variant=ground-first|publish]` on a `bakeoff-*`
+push): the files go to `variants/objects/<name>/`, and `extras.variants.objects` gets
+`{name, label, about, instances}`. The API replaces an extras key whole, so
+`attach_sidecars.attach` re-reads the asset's current `extras.variants` just before its
+request and merges the entry in by name (`with_variant`), every other system and variant
+kept. Today's `extras.instances` stays the default.
+
+**Candidate C, concept first** (`tools/captures/concept_scene.py`, models in
+`concept_models.py`; research §1.5) turns steps 2-4 of §3 round: it asks first what is in
+the scene and then looks for each named thing, so objects are born with names.
+
+1. **Vocabulary.** Qwen3-VL 4B Instruct (Apache-2.0) reads 12 overview renders and lists at
+   most 12 *things* ("cable spool", "pumpkin"), each with one of the categories of §3 step
+   7, and which of `data/ground_cover.json`'s classes the ground shows.
+2. **Ground**: the shared pass; cells split at the ground (and at its `unknown` splats). A
+   ground cell that the views keep seeing inside a thing's mask is the thing's (60% of its
+   visible weight in two views; 35% in one where the pass saw no ground near it): the
+   spool's bottom flange, the bottom of a pumpkin in the hay.
+3. **Concepts in every view.** SAM 3 (the method; its weights are gated) finds every
+   instance of each thing, tracked along camera paths, and its semantic head gives the
+   ground's cover per pixel. Until access is granted a **stand-in** runs: Grounding DINO
+   boxes each thing, SAM 2.1 cuts its mask, and SigLIP 2 classifies each class-free mask
+   over the ground against the chosen cover classes' prompts. A stand-in run is its own
+   variant (`concept-first-standin`, `concepts.standIn` in the file), never published as C.
+4. **Lift** by §3's voting: thing masks join cells into objects, each named by the concept
+   most of its votes carry (`nameSource: "vlm"`); one track spanning two objects makes them
+   one. Ground cells take the cover class most views gave them, smoothed over the cell
+   graph and cut into connected regions (the §3b schema). **Leftovers**: what is neither
+   ground nor named is lifted from SAM 2's class-free masks, so nothing goes unsegmented
+   for want of a name; the same masks give every object its parts.
 
 On the synthetic yard with oracle masks (`tests/test_concept_scene.py`) every tree, shrub,
 snag and the house is a named object (IoU >= 0.8), the house's slab (ground to geometry) is
-the house's, the lawn and path are Grass and Path (> 90% of their splats), and with "shrub"
-left out of the vocabulary the shrubs still become (unnamed) objects.
+the house's, the lawn and path are Grass and Trail (> 90% of their splats), and with "shrub"
+left out of the vocabulary the shrubs still become (unnamed) objects. It runs as a
+segment.yml variant (`[segment|names=spool,pumpkin|variant=concept-first-standin|views=64]`).
+
 
 ## 4. Data contract (v1)
 
@@ -251,11 +334,12 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
   coverage rounds; now 12% of the rim and 1.7% of the camp.)
 - `instances.emb`: `float16`, `count × dim`, row `k` is instance id `k + 1`, L2-normalised; an
   instance that was not described (no `tags`) has a zero row.
-- Optional per instance (a concept-first run writes them; readers that do not know them
-  ignore them): `name` (what the viewer calls the object, before its tags), `nameSource`
-  (`concept` | `ground` | `tags`), `kind` (`thing` | `ground`), `concept` (the concept it
-  was found as, on an object and its parts). At the root: `concepts` (`{vocabularyModel,
-  segmenter, standIn, things, stuff}`) and `ground` (the ground pass, its layer, its classes).
+- Optional per instance (the bake-off's candidates write them, §3b; readers that do not
+  know them ignore them): `kind` (`thing` | `ground`), `name` (what the viewer calls it,
+  before its tags), `nameSource` (`vlm` | `ground-cover`), `cover` (a ground instance's
+  `data/ground_cover.json` class), `scaleM`; candidate C adds `concept` (the concept an
+  object and its parts were found as). At the root: `variant` and `ground` (§3b), and C's
+  `concepts` (`{vocabularyModel, segmenter, standIn, things, cover}`).
 
 ### Root extras
 

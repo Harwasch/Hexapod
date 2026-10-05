@@ -328,61 +328,6 @@ def test_attach_stages_the_files_then_posts_the_request(
     assert "fedcba9876543210" in summary.read_text()
 
 
-def test_variants_merge_by_name_and_keep_every_other_entry() -> None:
-    current = {
-        "objects": [
-            {"name": "ground-first", "label": "A", "instances": "variants/objects/a/i.json"},
-            {"name": "concept-first", "label": "old", "instances": "old.json"},
-        ],
-        "fill": [{"name": "vace-14b", "label": "VACE"}],
-    }
-    mine = {"objects": [{"name": "concept-first", "label": "C", "instances": "c.json"}]}
-    merged = attach.merge_variants(current, mine)
-    assert merged["fill"] == current["fill"]
-    assert [e["name"] for e in merged["objects"]] == ["ground-first", "concept-first"]
-    assert merged["objects"][1]["label"] == "C"
-    # Nothing declared yet: the entry alone; a new name is appended.
-    assert attach.merge_variants(None, mine) == mine
-    more = attach.merge_variants(merged, {"objects": [{"name": "feature-fields"}]})
-    assert [e["name"] for e in more["objects"]][-1] == "feature-fields"
-    with pytest.raises(attach.AttachError):
-        attach.merge_variants({}, {"nope": []})
-    with pytest.raises(attach.AttachError):
-        attach.merge_variants({}, {"objects": [{"name": "Not Plain"}]})
-
-
-def test_attach_merges_its_variant_into_what_the_asset_declares_now(
-    api: StubApi, tmp_path: Path
-) -> None:
-    out = tmp_path / "pumpkin"
-    (out / "variants/objects/concept-first").mkdir(parents=True)
-    (out / "variants/objects/concept-first/instances.json").write_text('{"tiles": {}}')
-    mine = {"name": "concept-first", "label": "C", "about": "x",
-            "instances": "variants/objects/concept-first/instances.json"}  # fmt: skip
-    attach.write_manifest(
-        out, asset_id=ASSET, based_on=CURRENT, extras={"variants": {"objects": [mine]}}
-    )
-    api.on("GET", f"/api/v1/assets/{ASSET}", (200, an_asset()))
-    api.on("POST", f"/api/v1/assets/{ASSET}/sidecars", (200, attachment()))
-    live = {"objects": [{"name": "ground-first", "label": "A"}], "skins": [{"name": "s"}]}
-    read: list[str] = []
-
-    def extras_of(url: str) -> dict[str, Any]:
-        read.append(url)
-        return {"instances": {"uri": "instances.json"}, "variants": live}
-
-    attach.attach(out, api=api.url, s3=StubS3(), bucket="b", write_token="t", extras_of=extras_of)
-    assert read == [CURRENT]
-    body = api.requests[-1]["body"]
-    assert body["files"] == ["variants/objects/concept-first/instances.json"]
-    assert body["extras"] == {
-        "variants": {
-            "objects": [{"name": "ground-first", "label": "A"}, mine],
-            "skins": [{"name": "s"}],
-        }
-    }
-
-
 def test_attach_sends_the_rig_url_when_the_manifest_sets_one(api: StubApi, tmp_path: Path) -> None:
     out = tmp_path / "rig"
     out.mkdir()
@@ -553,3 +498,65 @@ def test_the_command_line_writes_a_manifest_and_resolves(
     capsys.readouterr()
     assert attach.main(["--api", api.url, "resolve", "--asset", ASSET]) == 0
     assert json.loads(capsys.readouterr().out)["url"] == CURRENT
+
+
+def test_a_variant_is_registered_beside_the_others() -> None:
+    entry = {
+        "name": "ground-first",
+        "label": "A · Ground first",
+        "about": "Ground found first.",
+        "instances": "variants/objects/ground-first/instances.json",
+    }
+    current = {
+        "objects": [{"name": "concept-first", "instances": "variants/objects/concept-first/x"}],
+        "fill": [{"name": "vace-14b", "inferredLayers": []}],
+    }
+    merged = attach.with_variant(current, "objects", entry)
+    assert [e["name"] for e in merged["objects"]] == ["concept-first", "ground-first"]
+    assert merged["fill"] == current["fill"]
+    # Again, changed: replaced in place, nothing else touched.
+    again = attach.with_variant(merged, "objects", {**entry, "label": "A"})
+    assert [e["label"] for e in again["objects"] if e["name"] == "ground-first"] == ["A"]
+    assert len(again["objects"]) == 2
+    assert attach.with_variant(None, "skins", {"name": "freeform"}) == {
+        "skins": [{"name": "freeform"}]
+    }
+    assert attach.variant_folder("objects", "ground-first") == "variants/objects/ground-first/"
+    for bad in (("objects", "Ground First"), ("objects", "../x"), ("nope", "ground-first")):
+        with pytest.raises(attach.AttachError):
+            attach.variant_folder(*bad)
+    attach.check_name("variants/objects/ground-first/instances.json")
+    attach.check_name("variants/objects/ground-first/instances.emb")
+
+
+def test_a_variant_is_merged_into_the_extras_as_they_are_when_it_is_attached(
+    api: StubApi, tmp_path: Path
+) -> None:
+    out = tmp_path / "spool"
+    folder = out / "variants" / "objects" / "ground-first"
+    folder.mkdir(parents=True)
+    (folder / "instances.json").write_text('{"tiles": {}}')
+    (folder / "instances.emb").write_bytes(b"\0")
+    entry = {"name": "ground-first", "label": "A", "about": "x",
+             "instances": "variants/objects/ground-first/instances.json"}  # fmt: skip
+    built_from = {"objects": [{"name": "ground-first", "label": "old"}]}
+    attach.write_manifest(
+        out, asset_id=ASSET, based_on=CURRENT, variant=("objects", entry),
+        extras={"variants": attach.with_variant(built_from, "objects", entry)},
+    )  # fmt: skip
+    manifest = attach.read_manifest(out)
+    assert manifest["files"] == [
+        "variants/objects/ground-first/instances.emb",
+        "variants/objects/ground-first/instances.json",
+    ]
+    # Between the build and the attach, another run registered its fill and its objects.
+    now = {"objects": [{"name": "concept-first"}], "fill": [{"name": "vace-14b"}]}
+    tileset = f"/runs/{JOB}/p1/package/splat/tileset.json"
+    api.on("GET", f"/api/v1/assets/{ASSET}", (200, an_asset(url=api.url + tileset)))
+    api.on("GET", tileset, (200, {"root": {"extras": {"gaussians": 3, "variants": now}}}))
+    api.on("POST", f"/api/v1/assets/{ASSET}/sidecars", (200, attachment()))
+    attach.attach(out, api=api.url, s3=StubS3(), bucket="b", write_token="t")
+    (post,) = [r for r in api.requests if r["method"] == "POST"]
+    assert post["body"]["extras"] == {
+        "variants": {"objects": [{"name": "concept-first"}, entry], "fill": [{"name": "vace-14b"}]}
+    }

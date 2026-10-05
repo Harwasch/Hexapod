@@ -10,6 +10,12 @@ name: Segment scans (Modal GPU)
 # `living-models`: a merge there re-ran the whole ~48 min L4 job (about $2) with nothing
 # about segmentation changed (run 37102914967 was such a duplicate). The Modal token is the
 # repository's.
+#
+# A push chooses what it runs with a token in its head commit's message,
+# `[segment|names=spool,pumpkin|variant=ground-first|views=24]` (every part optional);
+# without one it runs the defaults below. `variant` runs a segmentation bake-off candidate
+# (infra/modal/segment.py `VARIANT_SCRIPTS`) instead of segment_scene, each scan's call
+# stopped after `VARIANT_TIMEOUT_S` so a run that hangs has a known worst cost.
 
 on:
   push:
@@ -18,6 +24,11 @@ on:
       - infra/modal/segment.py
       - tools/captures/segment_scene.py
       - tools/captures/segment_models.py
+      - tools/captures/segment_ground_first.py
+      - tools/captures/concept_scene.py
+      - tools/captures/concept_models.py
+      - tools/captures/ground_pass.py
+      - tools/captures/data/ground_cover.json
       - tools/captures/instances_report.py
       - .github/workflows/segment.yml
   workflow_dispatch:
@@ -30,6 +41,10 @@ on:
         description: Views per scan
         type: string
         default: "24"
+      variant:
+        description: A bake-off candidate to run instead (infra/modal/segment.py VARIANT_SCRIPTS)
+        type: string
+        default: ""
 
 concurrency:
   group: segment
@@ -50,24 +65,47 @@ jobs:
         run: |
           test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
             || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
-      # The dispatch inputs are read as data, validated here, never interpolated into a
-      # shell line (as publish-instances.yml's plan reads its own). The views' ceiling is
-      # segment_scene.MAX_VIEWS, the most a run keeps.
-      - name: modal run infra/modal/segment.py
+      # The dispatch inputs (or the push's token) are read as data, validated here, never
+      # interpolated into a shell line (as publish-instances.yml's plan reads its own). The
+      # views' ceiling is segment_scene.MAX_VIEWS, the most a run keeps.
+      - name: What to run
+        id: plan
         env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
           NAMES: ${{ inputs.names || 'spool,pumpkin,camp' }}
           VIEWS: ${{ inputs.views || '24' }}
+          VARIANT: ${{ inputs.variant || '' }}
         run: |
-          python3 - <<'PY'
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
-          names, views = os.environ["NAMES"], os.environ["VIEWS"]
+          options = {k: os.environ[k.upper()] for k in ("names", "views", "variant")}
+          if os.environ["EVENT"] == "push":
+              found = re.search(r"\[segment([^\]]*)\]", os.environ.get("MESSAGE", ""))
+              for part in (found.group(1) if found else "").split("|")[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options:
+                      raise SystemExit(f"unknown option {name!r} in the [segment] token")
+                  options[name] = value
+          names, views, variant = options["names"], options["views"], options["variant"]
           if not re.fullmatch(r"[a-z0-9-]+(,[a-z0-9-]+)*", names):
               raise SystemExit(f"names={names!r} is not a comma-separated list of [a-z0-9-] names")
           if not re.fullmatch(r"[0-9]{1,3}", views) or not 1 <= int(views) <= 480:
               raise SystemExit(f"views={views!r} is not a whole number from 1 to 480")
+          if not re.fullmatch(r"([a-z0-9-]+)?", variant):
+              raise SystemExit(f"variant={variant!r} is not a [a-z0-9-] name")
+          for name, value in options.items():
+              print(f"{name}={value}")
           PY
+          cat "$GITHUB_OUTPUT"
+      - name: modal run infra/modal/segment.py
+        env:
+          NAMES: ${{ steps.plan.outputs.names }}
+          VIEWS: ${{ steps.plan.outputs.views }}
+          VARIANT: ${{ steps.plan.outputs.variant }}
+        run: |
           uv run --with modal==1.5.5 modal run infra/modal/segment.py \
-            --names "$NAMES" --views "$VIEWS" --out segment-out
+            --names "$NAMES" --views "$VIEWS" --variant "$VARIANT" --out segment-out
       - uses: actions/upload-artifact@v4
         if: always()
         with:

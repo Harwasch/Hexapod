@@ -55,9 +55,9 @@ export interface Instance {
   /** Its broad scene category (`lib/categories.ts`), when the file says; newer runs do. */
   category?: string;
   /**
-   * What it is called, when the file says (a concept-first run names its objects by the
-   * concept it found them as: "cable spool"; its ground by cover class: "Grass"). Else the
-   * viewer names it from its tags and category.
+   * What it is called, when the file names it: a vision-language model's answer, or a ground
+   * cover class ("Grass", "Hay"). The panel, the selection card and search use it before
+   * any tag.
    */
   name?: string;
 }
@@ -384,10 +384,7 @@ export function matchLabel(terms: readonly string[], label: string): number {
   return (sum / terms.length) * 0.95;
 }
 
-/**
- * The label a search result goes by: its name when the file gives one, else its top tag (the
- * panel names objects by category).
- */
+/** The label a search result goes by: its name, else its top tag. */
 export function instanceLabel(instance: Instance): string {
   return instance.name ?? instance.tags[0]?.label ?? "untagged";
 }
@@ -434,6 +431,7 @@ export function searchInstances(
     let score = 0;
     let label = instanceLabel(instance);
     if (q.terms.length > 0) {
+      if (instance.name !== undefined) score = matchLabel(q.terms, instance.name);
       for (const tag of instance.tags) {
         const s = matchLabel(q.terms, tag.label) * Math.max(0, Math.min(1, tag.score));
         if (s > score) {

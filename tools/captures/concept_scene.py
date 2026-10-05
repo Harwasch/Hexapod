@@ -1,4 +1,5 @@
-"""Concept-first scene objects (bake-off candidate C; research notes §1.5, "Alternative B").
+"""Concept-first scene objects: bake-off candidate C (docs/SCENE_OBJECTS.md §3b; research
+notes §1.5, "Alternative B").
 
 `segment_scene.py` cuts every view into class-free masks and names what it lifted
 afterwards. This module turns that round: it first asks what is in the scene, then looks for
@@ -6,16 +7,17 @@ each named thing in every view, so objects are born with their names.
 
 1. **Vocabulary** (`Vocabulary`). A vision-language model (`concept_models.QwenVocabulary`,
    Qwen3-VL, Apache-2.0) looks at `OVERVIEW_VIEWS` overview renders and lists the scene's
-   *things* (countable objects: "cable spool", "pumpkin") and *stuff* (ground cover:
-   "grass", "gravel", "dirt"), each with one of the viewer's broad categories
-   (`data/categories.json`). At most `MAX_THINGS` and `MAX_STUFF`: the list is short.
+   *things* (countable objects: "cable spool", "pumpkin", with a few other words a detector
+   may know them by), each with one of the viewer's broad categories
+   (`data/categories.json`), and which of `data/ground_cover.json`'s classes the ground
+   shows (*stuff*). At most `MAX_THINGS` and `MAX_STUFF`: the list is short.
 2. **Concepts in every view** (`ConceptSource`). Things: every instance of each thing in
    every view, one mask each, along *camera paths* (`camera_paths`: the plan's views in an
    order a video tracker can follow), so a tracker that keeps ids along a path (SAM 3's)
    tells this module which masks are one object (`ConceptMask.track`). Stuff: a per-pixel
-   class over the ground (`StuffMap`).
-3. **Ground** (`ground_layer`). Which splats lie on the ground, from geometry: the shared
-   ground pass of the bake-off (`ground_pass.py`), behind a small adapter (`GROUND_PASS`;
+   cover class over the ground (`StuffMap`).
+3. **Ground** (`ground_layer`). Which splats lie on the ground, from geometry: the
+   bake-off's shared ground pass (`ground_pass.py`), behind a small adapter (`GROUND_PASS`;
    `scene_plants`' slope filter is the other choice). Its "unknown" splats (in the ground
    layer where no ground was seen: under an object's footprint, under a canopy) are ground
    unless the masks say otherwise. Cells never straddle the ground (`ground_cells`), and a
@@ -24,29 +26,28 @@ each named thing in every view, so objects are born with their names.
 4. **Lift** (`lift_concepts`), by `segment_scene`'s own voting: thing masks vote for the
    cells they cover and co-occurrence over co-visibility joins cells into objects
    (`segment_scene._grow`); each object is named by the concept most of its votes carry,
-   and objects that one track spans are one. Ground cells take the stuff class most views
-   gave them (smoothed over the cell graph); each class is one top-level instance in the
-   category Ground ("Grass", "Gravel"), so the objects panel lists Ground with its cover
-   classes, each hideable, with no new UI.
+   and objects that one track spans are one. Ground cells take the cover class most views
+   gave them, smoothed and cut into connected regions as candidate A cuts them
+   (`segment_ground_first._regions`), in the shared ground schema (§3b): one top-level
+   instance per class in the category Ground & soil, its regions as its children.
 5. **Leftovers.** Cells that are neither ground nor in a named thing are lifted from a
-   class-free pass (SAM 2 automatic masks, `segment_models.Sam2Masks`), as `segment_scene`
-   does: what nobody named still becomes an object (named by its tags, as today). The same
-   class-free masks give every object its parts (levels below the concept level).
+   class-free pass (SAM 2 automatic masks), as `segment_scene` does: what nobody named
+   still becomes an object (named by its tags, as today). The same class-free masks give
+   every object its parts (levels below the concept level).
 6. **Meaning.** `segment_scene.describe` embeds and tags every instance as today (search
    stays SigLIP's); a named object's name, category and first tag come from its concept.
 
-`instances.json` is the contract's v1 (docs/SCENE_OBJECTS.md §4), with optional fields per
-instance: `name` (the concept, or none), `nameSource` (`concept` | `tags`), `kind`
-(`thing` | `ground`), `concept`; and at the root `concepts` (the vocabulary, the models)
-and `ground` (the ground pass's summary). Viewers that know nothing of them still work.
+`instances.json` is the contract's v1 with the bake-off's fields (§3b): per instance `kind`,
+`name`, `nameSource` (`vlm` for a concept's name, `ground-cover`), `cover`, `scaleM`, and
+`concept`; at the root `variant`, `ground`, and `concepts` (the vocabulary and the models).
 
-Usage (`infra/modal/segment_concepts.py` runs it on a GPU):
-    python concept_scene.py TILESET.json TILES_DIR \\
-        --vocabulary concept_models:QwenVocabulary \\
-        --concepts concept_models:GroundedSam2Concepts \\
-        --masks segment_models:Sam2Masks --embedder segment_models:SiglipEmbedder \\
-        --renderer gsplat --out OUT --overviews OUT/overviews
-    python concept_scene.py yard/source/splat.ply yard/splat --truth yard/source/labels.json
+Usage (`infra/modal/segment.py` runs it as the variant `concept-first-standin`):
+    python concept_scene.py TILESET.json TILES_DIR --out OUT \\
+        --vlm concept_models:QwenVocabulary --concepts concept_models:GroundedSam2Concepts \\
+        --masks segment_models:Sam2LargeMasks --embedder segment_models:SiglipEmbedder \\
+        --vocabulary data/open_vocabulary.txt --renderer gsplat --stand-in --check check.png
+    python concept_scene.py yard/source/splat.ply yard/splat --out OUT \\
+        --truth yard/source/labels.json
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -66,16 +67,41 @@ from scipy.spatial import cKDTree
 import rebind_instances
 import scene_categories
 import scene_plants
+import segment_ground_first as sgf
 import segment_scene as ss
 from splat_render import Camera, SplatIndex, Splats, render
 
 # ----------------------------------------------------------------------------- constants
 
+#: What a run is published as (`variant` in `instances.json`): SAM 3's run is candidate C;
+#: the stand-in's has a name of its own, so it is never published as C.
+VARIANTS = {
+    "sam3": {
+        "name": "concept-first",
+        "label": "C · Concept first",
+        "about": (
+            "A vision-language model lists the scene's things and ground cover; SAM 3 finds "
+            "each of them in every view, the masks are voted onto the splats, and what nobody "
+            "named comes from a class-free pass."
+        ),
+    },
+    "standin": {
+        "name": "concept-first-standin",
+        "label": "C (stand-in) · Concept first, Grounding DINO + SAM 2",
+        "about": (
+            "Concept first as C, with Grounding DINO and SAM 2 standing in for SAM 3 (whose "
+            "weights are gated): a vision-language model lists the things and ground cover, "
+            "each is found in every view and voted onto the splats."
+        ),
+    },
+}
 #: Overview renders the vocabulary is read from (rings at two scales and elevations).
 OVERVIEW_VIEWS = 12
-#: The vocabulary is kept short: at most this many things and this much stuff.
+#: The vocabulary is kept short: at most this many things, cover classes, and other words
+#: per thing.
 MAX_THINGS = 12
 MAX_STUFF = 6
+MAX_SYNONYMS = 2
 #: Camera paths (`camera_paths`): consecutive views whose eyes are at most this share of
 #: the scan's radius apart, and whose axes turn at most `PATH_TURN_DEG`, are one path.
 PATH_STEP = 0.75
@@ -86,18 +112,10 @@ PATH_TURN_DEG = 50.0
 PROMOTE_SHARE = 0.6
 PROMOTE_VIEWS = 2
 PROMOTE_SHARE_UNSURE = 0.35
-#: A ground cell takes a stuff class with at least this much class weight (pixels x score).
-STUFF_MIN_WEIGHT = 1.0
-#: Ground cells without a class take the nearest classified ground cell's within this many
-#: cell edges, or `GROUND_FILL_M`, whichever is farther.
-GROUND_FILL_CELLS = 6.0
-GROUND_FILL_M = 1.0
-#: Rounds of majority smoothing of the cover classes over the cell graph.
-GROUND_SMOOTH_ROUNDS = 2
 #: Two objects of one concept are one when a track holds at least this share of each.
 TRACK_SHARE = 0.5
 #: Which ground pass `ground_layer` runs: "shared" (`ground_pass.py`, the bake-off's one
-#: ground pass, from candidate A's branch) or "slope" (`scene_plants`' Vosselman filter).
+#: ground pass) or "slope" (`scene_plants`' Vosselman filter).
 GROUND_PASS = "shared"
 #: Splats the slope filter is fitted on at most (seeded); every splat is then measured.
 GROUND_SAMPLE = 1_000_000
@@ -105,15 +123,19 @@ GROUND_SAMPLE = 1_000_000
 #: floaters under the ground would pull the terrain down.
 GROUND_MAX_SCALE_M = 0.5
 GROUND_OPACITY = 0.1
-#: The category every ground cover instance is in, and the name of ground no class took.
-GROUND_CATEGORY = "ground"
-GROUND_NAME = "Ground"
-#: Cover classes' colours in the overview renders (Tableau 10), ground with no class grey.
-CLASS_COLOURS = (
-    "#4e79a7", "#f28e2b", "#59a14f", "#e15759", "#b07aa1", "#edc948", "#76b7b2", "#ff9da7",
-    "#9c755f", "#bab0ac",
-)  # fmt: skip
-UNCLASSIFIED_COLOUR = "#808080"
+#: The category every ground instance is in (§3b).
+GROUND_CATEGORY = sgf.GROUND_CATEGORY
+#: Words a VLM may use for a cover class, beyond its id and name (`cover_of`).
+COVER_WORDS = {
+    "lawn": "grass", "short grass": "grass", "meadow": "tall-grass", "weeds": "tall-grass",
+    "soil": "dirt", "earth": "dirt", "bare soil": "dirt", "bare ground": "dirt",
+    "ground": "dirt", "pebbles": "gravel", "stones": "gravel", "crushed stone": "gravel",
+    "stone": "rock", "bedrock": "rock", "pavement": "paving", "pavers": "paving",
+    "brick": "paving", "road": "asphalt", "wood chips": "mulch", "bark": "mulch",
+    "leaves": "leaf-litter", "fallen leaves": "leaf-litter", "pine needles": "forest-floor",
+    "straw": "hay", "path": "trail", "footpath": "trail", "dirt path": "trail",
+    "puddle": "water", "wooden deck": "deck",
+}  # fmt: skip
 
 
 # --------------------------------------------------------------------------- the concepts
@@ -121,24 +143,44 @@ UNCLASSIFIED_COLOUR = "#808080"
 
 @dataclass(frozen=True)
 class Concept:
-    """One named concept of a scene: a thing (countable) or stuff (ground cover)."""
+    """One named concept of a scene: a thing (countable) or stuff (a ground-cover class)."""
 
     name: str
     kind: str  # "thing" | "stuff"
     #: A `data/categories.json` id.
     category: str = scene_categories.OTHER
-    #: What the segmenter is asked for (default: the name).
-    prompt: str | None = None
+    #: What a segmenter is asked for, best first (default: the name). For stuff, the cover
+    #: class's own prompts (`data/ground_cover.json`).
+    prompts: tuple[str, ...] = ()
+    #: For stuff, its `data/ground_cover.json` class id.
+    cover: str | None = None
 
     @property
     def query(self) -> str:
-        return self.prompt or self.name
+        return self.prompts[0] if self.prompts else self.name
 
-    def to_json(self) -> dict[str, str]:
-        out = {"name": self.name, "kind": self.kind, "category": self.category}
-        if self.prompt and self.prompt != self.name:
-            out["prompt"] = self.prompt
+    @property
+    def queries(self) -> tuple[str, ...]:
+        return self.prompts or (self.name,)
+
+    def to_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"name": self.name, "category": self.category}
+        if self.kind == "stuff":
+            out["cover"] = self.cover
+        elif self.prompts and self.prompts != (self.name,):
+            out["prompts"] = list(self.prompts)
         return out
+
+
+def cover_of(word: str, classes: Sequence[sgf.CoverClass] | None = None) -> sgf.CoverClass | None:
+    """The `data/ground_cover.json` class a word names: its id, its name, or `COVER_WORDS`."""
+    classes = list(classes or sgf.cover_classes()[0])
+    key = " ".join(str(word).strip().lower().replace("_", " ").split())
+    for c in classes:
+        if key in (c.id, c.id.replace("-", " "), c.name.lower()):
+            return c
+    found = COVER_WORDS.get(key)
+    return next((c for c in classes if c.id == found), None)
 
 
 def clean_concepts(
@@ -148,24 +190,33 @@ def clean_concepts(
     max_stuff: int = MAX_STUFF,
     categories: Sequence[str] | None = None,
 ) -> list[Concept]:
-    """Things then stuff, each name once (lower case, trimmed), an unknown category made
-    `other` (stuff: `ground`), at most `max_things` and `max_stuff`, in the order given."""
+    """Things then stuff, in the order given. A thing: its name once (lower case, trimmed),
+    an unknown category made `other`, at most `MAX_SYNONYMS` other words, at most
+    `max_things`. Stuff: the cover class it names (`cover_of`; a word that names none is
+    dropped), each class once, with the class's name and prompts, at most `max_stuff`."""
     known = set(categories or scene_categories.category_ids())
+    classes, _ = sgf.cover_classes()
     seen: set[str] = set()
     things: list[Concept] = []
     stuff: list[Concept] = []
     for c in concepts:
         name = " ".join(str(c.name).strip().lower().split())
-        kind = "stuff" if c.kind == "stuff" else "thing"
-        if not name or name in seen:
+        if not name:
             continue
-        fallback = GROUND_CATEGORY if kind == "stuff" else scene_categories.OTHER
-        category = c.category if c.category in known else fallback
-        out = things if kind == "thing" else stuff
-        if len(out) >= (max_things if kind == "thing" else max_stuff):
+        if c.kind == "stuff":
+            cover = cover_of(c.cover or name, classes)
+            if cover is None or f"cover:{cover.id}" in seen or len(stuff) >= max_stuff:
+                continue
+            seen.add(f"cover:{cover.id}")
+            stuff.append(Concept(cover.name, "stuff", GROUND_CATEGORY, cover.prompts, cover.id))
+            continue
+        if name in seen or len(things) >= max_things:
             continue
         seen.add(name)
-        out.append(Concept(name, kind, category, c.prompt))
+        others = [" ".join(str(p).strip().lower().split()) for p in c.prompts]
+        others = [p for p in dict.fromkeys(others) if p and p != name][:MAX_SYNONYMS]
+        category = c.category if c.category in known else scene_categories.OTHER
+        things.append(Concept(name, "thing", category, (name, *others)))
     return things + stuff
 
 
@@ -174,27 +225,17 @@ def split_concepts(concepts: Sequence[Concept]) -> tuple[list[Concept], list[Con
 
 
 def load_concepts(path: Path) -> list[Concept]:
-    """A vocabulary file: `{"things": [{"name", "category"?}, ...], "stuff": [...]}` (what
-    `vocabulary.json` holds), or a list of `{"name", "kind", "category"?}`."""
+    """A vocabulary file: `{"things": [{"name", "category"?, "prompts"?}, ...], "cover":
+    ["grass", ...]}` (a run's `concepts` block; entries of `stuff` are read as cover too)."""
     data = json.loads(path.read_text(encoding="utf-8"))
-    rows: list[dict] = []
-    if isinstance(data, dict):
-        for kind in ("things", "stuff"):
-            for row in data.get(kind, []):
-                rows.append({**row, "kind": "thing" if kind == "things" else "stuff"})
-    else:
-        rows = list(data)
-    return clean_concepts(
-        [
-            Concept(
-                str(r["name"]),
-                str(r.get("kind", "thing")),
-                str(r.get("category", "")),
-                r.get("prompt"),
-            )
-            for r in rows
-        ]
-    )
+    out = [
+        Concept(str(r["name"]), "thing", str(r.get("category", "")), tuple(r.get("prompts", ())))
+        for r in data.get("things", [])
+    ]
+    for entry in [*data.get("cover", []), *data.get("stuff", [])]:
+        word = (entry.get("cover") or entry.get("name")) if isinstance(entry, dict) else entry
+        out.append(Concept(str(word), "stuff"))
+    return clean_concepts(out)
 
 
 @runtime_checkable
@@ -298,6 +339,7 @@ def shared_ground(splats: Splats) -> Ground:
             "cellM": round(float(g.terrain.cell), 4),
             "share": round(float(flag.mean()), 4),
             "labels": g.stats.get("shares", {}),
+            "seenShare": g.stats.get("terrain", {}).get("seenShare"),
         },
         g.label == gp.UNKNOWN,
     )
@@ -477,15 +519,17 @@ class ConceptLift:
     kind: list[str]
     #: Per instance: its concept's thing index (itself or the object it is part of), -1 none.
     thing: np.ndarray
-    #: Per instance: the stuff index of a ground instance, -1 for none (or unclassified).
+    #: Per instance: the stuff index of a ground instance (a class or one of its regions).
     stuff: np.ndarray
     #: Per instance: True for the coarsest instance of an object (level 0).
     top: np.ndarray
     #: Per cell: on the ground after promotion; and the promoted cells.
     ground: np.ndarray
     promoted: np.ndarray
-    #: Per cell: its cover class (-1: unclassified; only ground cells have one).
+    #: Per cell: its cover class and region (-1 off the ground), and how sure the class is.
     cover: np.ndarray
+    region: np.ndarray
+    confidence: np.ndarray
     stats: dict = field(default_factory=dict)
 
 
@@ -562,59 +606,62 @@ def track_joins(
     return ss._relabel(out), len(pairs)
 
 
-def _majority(
-    labels: np.ndarray, a: np.ndarray, b: np.ndarray, who: np.ndarray, weights: np.ndarray
-) -> np.ndarray:
-    """One round of majority over the cell graph among `who` cells (labels >= 0 vote;
-    a cell's own label counts with its weight, each neighbour's with its)."""
-    n_labels = int(labels.max()) + 1 if labels.size and labels.max() >= 0 else 0
-    if n_labels == 0:
-        return labels
-    keep = who[a] & who[b] & (labels[a] >= 0) & (labels[b] >= 0)
-    src = np.concatenate([a[keep], b[keep], np.flatnonzero(who & (labels >= 0))])
-    lab = np.concatenate([labels[b[keep]], labels[a[keep]], labels[who & (labels >= 0)]])
-    w = np.concatenate([weights[b[keep]], weights[a[keep]], weights[who & (labels >= 0)]])
-    keys, inverse = np.unique(src * n_labels + lab, return_inverse=True)
-    sums = np.bincount(inverse, w, keys.size)
-    kc, kl = keys // n_labels, keys % n_labels
-    order = np.lexsort((kl, -sums, kc))
-    first = order[np.r_[True, kc[order][1:] != kc[order][:-1]]]
-    out = labels.copy()
-    out[kc[first]] = kl[first]
-    return out
-
-
-def cover_classes(
+def cover_regions(
     votes: ConceptVotes,
     centroids: np.ndarray,
     counts: np.ndarray,
-    edge: float,
     ground: np.ndarray,
     a: np.ndarray,
     b: np.ndarray,
-) -> np.ndarray:
-    """Per cell its cover class (-1: none): ground cells with `STUFF_MIN_WEIGHT` of class
-    weight take their heaviest class; the rest of the ground the nearest classified ground
-    cell's within `GROUND_FILL_CELLS` edges or `GROUND_FILL_M`; then `GROUND_SMOOTH_ROUNDS`
-    of majority among ground neighbours. Cells off the ground have none."""
-    cover = np.full(votes.n_cells, -1, np.int64)
-    if not votes.n_stuff or not ground.any():
-        return cover
-    total = votes.stuff_weight.sum(axis=1)
-    has = ground & (total >= STUFF_MIN_WEIGHT)
-    cover[has] = np.argmax(votes.stuff_weight[has], axis=1)
-    rest = np.flatnonzero(ground & ~has)
-    if rest.size and has.any():
-        source = np.flatnonzero(has)
-        reach = max(GROUND_FILL_CELLS * edge, GROUND_FILL_M)
-        distance, nearest = cKDTree(centroids[source]).query(
-            centroids[rest], k=1, distance_upper_bound=reach, workers=-1
-        )
-        ok = np.isfinite(distance)
-        cover[rest[ok]] = cover[source[nearest[ok]]]
-    for _ in range(GROUND_SMOOTH_ROUNDS):
-        cover = _majority(cover, a, b, ground, counts.astype(np.float64))
-    return cover
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per cell its cover class (an index into the stuff; -1 off the ground), its region
+    (-1 off the ground) and the class's smoothed probability there. As candidate A does it
+    (`segment_ground_first.run`): each ground cell's class weights normalised (a cell no view
+    classified takes the nearest classified ground cell's), smoothed over its
+    `COVER_NEIGHBOURS` nearest ground cells, a class under `COVER_MIN_CLASS_SHARE` of the
+    ground given to the cells' next best, then connected regions (`_regions`), those under
+    `COVER_MIN_REGION` splats folded into their neighbours (`_fold_small`)."""
+    n = votes.n_cells
+    klass_of = np.full(n, -1, np.int64)
+    region_of = np.full(n, -1, np.int64)
+    confidence_of = np.zeros(n)
+    gcells = np.flatnonzero(ground)
+    k = votes.n_stuff
+    if gcells.size == 0 or k == 0:
+        return klass_of, region_of, confidence_of
+    sums = votes.stuff_weight[:, :k].astype(np.float64)
+    weight = sums.sum(axis=1)
+    probability = np.full((n, k), 1.0 / k)
+    voted = weight > 0
+    probability[voted] = sums[voted] / weight[voted, None]
+    if voted[gcells].any():
+        known = gcells[voted[gcells]]
+        missing = gcells[~voted[gcells]]
+        if missing.size:
+            _, near = cKDTree(centroids[known]).query(centroids[missing], k=1, workers=-1)
+            probability[missing] = probability[known[near]]
+    smooth = sgf._smooth(
+        probability[gcells], centroids[gcells], sgf.COVER_NEIGHBOURS, sgf.COVER_ROUNDS
+    )
+    klass = np.argmax(smooth, axis=1)
+    ground_splats = counts[gcells].astype(np.float64)
+    total = float(ground_splats.sum())
+    local = np.full(n, -1, np.int64)
+    local[gcells] = np.arange(gcells.size)
+    keep = (local[a] >= 0) & (local[b] >= 0)
+    ga, gb = local[a[keep]], local[b[keep]]
+    share = np.bincount(klass, ground_splats, k) / max(total, 1.0)
+    rare = share < sgf.COVER_MIN_CLASS_SHARE
+    if rare.any() and (~rare).any():
+        second = np.where(rare[None, :], -1.0, smooth).argmax(axis=1)
+        klass = np.where(rare[klass], second, klass)
+    least = max(sgf.COVER_MIN_REGION, sgf.COVER_MIN_REGION_SHARE * total)
+    klass, region = sgf._regions(klass, ground_splats, ga, gb, least)
+    region = sgf._fold_small(region, klass, ground_splats, centroids[gcells], least)
+    klass_of[gcells] = klass
+    region_of[gcells] = region
+    confidence_of[gcells] = smooth[np.arange(gcells.size), klass]
+    return klass_of, region_of, confidence_of
 
 
 def _fill_unseen(
@@ -727,12 +774,11 @@ def lift_concepts(
     objects = ss._absorb(objects, a, b, seen & ~ground)
     objects[ground] = -1
 
-    # The ground's cover classes, one instance per class (and one for ground no class took).
-    cover = cover_classes(votes, centroids, counts, edge, ground, a, b)
-    n_stuff = votes.n_stuff
+    # The ground: one instance per cover class, its connected regions below it (§3b).
+    cover, cover_region, confidence = cover_regions(votes, centroids, counts, ground, a, b)
     base = n_regions + n_left
     level0 = np.where(objects >= 0, objects + 1, 0)
-    level0[ground] = base + 1 + np.where(cover[ground] >= 0, cover[ground], n_stuff)
+    level0[ground] = base + 1 + np.maximum(cover[ground], 0)
     labels = [level0]
     # Parts: the class-free levels over everything off the ground.
     for level in range(levels):
@@ -742,6 +788,11 @@ def lift_concepts(
         joined = _drop_small(ss._absorb(joined, a, b, seen & ~ground), counts)
         joined[ground] = -1
         labels.append(joined + 1)
+    if len(labels) == 1:
+        labels.append(np.zeros(n_cells, np.int64))
+    # A class's regions are its children (a class of one region has none: `_hierarchy`
+    # makes no child that is its whole parent).
+    labels[1] = np.where(ground, cover_region + 1, labels[1])
     stacked = np.stack(labels).astype(np.int64)
     # Cells off the ground that no view saw take the nearest seen cell's labels (the ground
     # has its class wherever it is, seen or not).
@@ -766,8 +817,7 @@ def lift_concepts(
         lab = int(label_of_top[top_of[k + 1]]) - 1  # level-0 label, 0-based
         if lab >= base:
             kind.append("ground")
-            s = lab - base
-            stuff[k] = s if s < n_stuff else -1
+            stuff[k] = lab - base
         else:
             kind.append("thing")
             if 0 <= lab < n_regions:
@@ -776,7 +826,11 @@ def lift_concepts(
     lifted.stats["unassignedShare"] = round(
         float(counts[lifted.cell_id == 0].sum()) / max(float(counts.sum()), 1.0), 4
     )
-    return ConceptLift(lifted, kind, thing, stuff, top, ground, promoted, cover, lifted.stats)
+    lifted.stats["coverRegions"] = len(np.unique(cover_region[ground])) if ground.any() else 0
+    return ConceptLift(
+        lifted, kind, thing, stuff, top, ground, promoted, cover, cover_region, confidence,
+        lifted.stats,
+    )  # fmt: skip
 
 
 # ------------------------------------------------------------------------------ the run
@@ -817,10 +871,13 @@ def segment_concepts(
     ground: Ground | None = None,
     progress: Callable[[str], None] | None = None,
     free_factory: Callable[[list[Camera]], ss.MaskSource] | None = None,
+    cache: Path | None = None,
 ) -> ConceptSegmentation:
     """Ground, cells, views, vocabulary, concept and class-free masks, the lift and
     meaning, for a scan held in memory. `free_factory(cameras)` builds the class-free mask
-    source that needs the cameras (`segment_scene.OracleMasks` in tests)."""
+    source that needs the cameras (`segment_scene.OracleMasks` in tests). `cache`: every
+    view's image and class-free masks are kept there (`segment_scene.cached_raster`,
+    `cached_masks`), and the VLM's answer (`names.json`), so a run can be re-assembled."""
     say = progress or (lambda message: None)
     timings: dict[str, float] = {}
     mark = time.perf_counter()
@@ -864,15 +921,27 @@ def segment_concepts(
     with ss.RenderPool(view_splats, view_cell, index=index, workers=count, tag=tag) as pool:
         # The vocabulary, from overview renders.
         mark = time.perf_counter()
+        if cache is not None:
+            cache.mkdir(parents=True, exist_ok=True)
         for camera in overview_cameras(splats.positions, overview_count):
             if renderer is not None:
                 overviews.append(
-                    ss.cached_raster(None, renderer, view_splats, camera, n_cells, tag, index)
+                    ss.cached_raster(cache, renderer, view_splats, camera, n_cells, tag, index)
                 )
             else:
                 frame = render(view_splats, camera, index=index)
                 overviews.append(np.round(np.clip(frame.rgb, 0, 1) * 255).astype(np.uint8))
         concepts = clean_concepts(vocabulary.concepts(overviews))
+        if cache is not None:
+            (cache / "names.json").write_text(
+                json.dumps(
+                    {
+                        "vocabulary": [c.to_json() | {"kind": c.kind} for c in concepts],
+                        "answer": getattr(vocabulary, "answer", None),
+                    }
+                ),
+                encoding="utf-8",
+            )
         close = getattr(vocabulary, "close", None)
         if close is not None:
             close()  # a VLM's GPU memory back before the segmenters load
@@ -892,13 +961,14 @@ def segment_concepts(
             clock["renderS"] += now - mark
             if renderer is not None:
                 image = ss.cached_raster(
-                    None, renderer, view_splats, view.camera, n_cells, tag, index
+                    cache, renderer, view_splats, view.camera, n_cells, tag, index
                 )
                 view = ss.View(view.camera, image, view.cell, view.purity, samples=view.rgb)
             rastered = time.perf_counter()
             clock["rasterS"] += rastered - now
             views.append(view)
-            masks = free.masks(view.rgb) if free is not None else []
+            drawn = tag + ("" if renderer is None else renderer.name)
+            masks = [] if free is None else ss.cached_masks(cache, view, free, n_cells, drawn)
             votes.add_free(view, masks)
             freed = time.perf_counter()
             clock["freeS"] += freed - rastered
@@ -929,7 +999,7 @@ def segment_concepts(
     lift.stats["paths"] = len(paths)
     lift.stats["cellEdgeM"] = round(edge, 4)
     mark = time.perf_counter()
-    words = list(dict.fromkeys([*words, *(c.name for c in concepts)]))
+    words = list(dict.fromkeys([*words, *(c.name.lower() for c in concepts)]))
     instances = ss.describe(
         lift.lifted, splats, cell, views, embedder, words,
         renderer=renderer, render_splats=view_splats, render_cell=view_cell,
@@ -950,43 +1020,54 @@ def segment_concepts(
     )
 
 
+def _scale(instance: ss.Instance) -> float:
+    """Half the bounds' diagonal, metres (§3b `scaleM`)."""
+    extent = np.asarray(instance.bounds_max) - np.asarray(instance.bounds_min)
+    return round(float(np.linalg.norm(extent)) / 2, 3)
+
+
 def name_instances(
     instances: list[ss.Instance], lift: ConceptLift, concepts: Sequence[Concept]
 ) -> list[dict[str, object]]:
     """Names, categories and first tags from the concepts, in place; and per instance the
-    fields `concept_document` adds. A named object and its parts take the concept's category
-    (so the panel lists the object whole); the object's first tag is the concept, so search
-    and the selection card find it by name. A ground instance is in `GROUND_CATEGORY`, named
-    by its cover class, static. Everything else keeps what `describe` gave it."""
+    fields `concept_document` adds (the §3b schema).
+
+    A named object (`nameSource: "vlm"`: the vision-language model's word for it) and its
+    parts take the concept's category, so the panel lists the object whole; the object's
+    first tag is the concept, so search finds it by name. A ground instance -- a cover class,
+    or a region of one -- is in `GROUND_CATEGORY`, named by its class
+    (`nameSource: "ground-cover"`), with its class's `cover` id and one tag, the class at its
+    mean confidence; static. Everything else keeps what `describe` gave it."""
     things, stuff = split_concepts(concepts)
+    region_confidence: dict[int, float] = {}
+    if lift.ground.any():
+        leaf = lift.lifted.cell_id
+        on = lift.ground & (leaf > 0)
+        sums = np.bincount(leaf[on], lift.confidence[on], len(instances) + 1)
+        cells = np.bincount(leaf[on], minlength=len(instances) + 1)
+        for k in np.flatnonzero(cells):
+            region_confidence[int(k)] = float(sums[k] / cells[k])
     extra: list[dict[str, object]] = []
     for k, instance in enumerate(instances):
-        record: dict[str, object] = {"kind": lift.kind[k]}
-        concept: Concept | None = None
+        record: dict[str, object] = {"kind": lift.kind[k], "scaleM": _scale(instance)}
         if lift.kind[k] == "ground":
-            s = int(lift.stuff[k])
-            concept = stuff[s] if s >= 0 else None
-            label = concept.name if concept else GROUND_NAME.lower()
+            cover = stuff[int(lift.stuff[k])]
+            members = [k + 1] + [i.id for i in instances if i.parent == k + 1]
+            known = [region_confidence[m] for m in members if m in region_confidence]
+            score = round(float(np.mean(known)) if known else 0.0, 4)
             instance.category = GROUND_CATEGORY
             instance.behaviour = "static"
-            source = "concept" if concept else "ground"
+            instance.tags = [{"label": cover.name.lower(), "score": score}]
+            record.update(name=cover.name, nameSource="ground-cover", cover=cover.cover)
         elif int(lift.thing[k]) >= 0:
             concept = things[int(lift.thing[k])]
-            label = concept.name
             instance.category = concept.category
-            source = "concept"
-        else:
-            if instance.tags:
-                record["nameSource"] = "tags"
-            extra.append(record)
-            continue
-        if concept is not None:
             record["concept"] = concept.name
-        if lift.top[k]:
-            record["name"] = label[:1].upper() + label[1:] if lift.kind[k] == "ground" else label
-            record["nameSource"] = source
-            rest = [t for t in instance.tags if t["label"] != label]
-            instance.tags = [{"label": label, "score": 1.0}, *rest][: ss.TAGS_TOP_K]
+            if lift.top[k]:
+                record["name"] = concept.name[:1].upper() + concept.name[1:]
+                record["nameSource"] = "vlm"
+                rest = [t for t in instance.tags if t["label"] != concept.name]
+                instance.tags = [{"label": concept.name, "score": 1.0}, *rest][: ss.TAGS_TOP_K]
         extra.append(record)
     return extra
 
@@ -1001,8 +1082,10 @@ def concept_document(
     segmenter: str,
     stand_in: bool,
 ) -> dict:
-    """`instances.json` (`segment_scene.instances_document`) with the concept fields: per
-    instance `name`, `nameSource`, `kind`, `concept`; at the root `concepts` and `ground`."""
+    """`instances.json` (`segment_scene.instances_document`) with the bake-off's fields
+    (§3b): per instance `kind`, `name`, `nameSource`, `cover`, `scaleM`, `concept`; at the
+    root `variant` (`VARIANTS`: the stand-in's own name when `stand_in`), `ground` and
+    `concepts` (the vocabulary and the models)."""
     document = ss.instances_document(
         result.instances,
         tiles,
@@ -1019,108 +1102,116 @@ def concept_document(
         "segmenter": segmenter,
         "standIn": bool(stand_in),
         "things": [c.to_json() for c in things],
-        "stuff": [c.to_json() for c in stuff],
+        "cover": [c.cover for c in stuff],
     }
+    lift = result.lift
+    splat_cover = lift.cover[result.cell]
+    splat_region = lift.region[result.cell]
+    report = []
+    for s, c in enumerate(stuff):
+        mine = splat_cover == s
+        if not mine.any():
+            continue
+        on = lift.ground & (lift.cover == s)
+        report.append(
+            {
+                "class": c.cover,
+                "splats": int(mine.sum()),
+                "regions": len(np.unique(splat_region[mine])),
+                "meanConfidence": round(float(lift.confidence[on].mean()), 4),
+            }
+        )
     info = result.ground.info
     document["ground"] = {
-        "source": result.ground.source,
-        **{k: info[k] for k in ("layerM", "cellM", "share") if k in info},
-        "promotedCells": int(result.lift.promoted.sum()),
-        "classes": [c.name for c in stuff],
+        "method": result.ground.source,
+        **{k: info[k] for k in ("layerM", "cellM", "seenShare") if k in info},
+        "promotedCells": int(lift.promoted.sum()),
+        "cover": sorted(report, key=lambda r: -r["splats"]),
     }
+    document["variant"] = dict(VARIANTS["standin" if stand_in else "sam3"])
     return document
 
 
 # --------------------------------------------------------------------------- the renders
 
 
-def _hex(colour: str) -> np.ndarray:
-    return np.array([int(colour[k : k + 2], 16) / 255 for k in (1, 3, 5)])
+def _palette(n: int, seed: int) -> np.ndarray:
+    """`n + 1` colours, 0 black (as `segment_ground_first`'s check sheet)."""
+    out = np.random.default_rng(seed).uniform(0.25, 1.0, (n + 1, 3))
+    out[0] = 0.0
+    return out
 
 
-def class_palette(n_stuff: int) -> np.ndarray:
-    """(n_stuff + 2, 3): index 0 nothing (black), 1 ground no class took, 2.. each class."""
-    rows = [np.zeros(3), _hex(UNCLASSIFIED_COLOUR)]
-    rows += [_hex(CLASS_COLOURS[k % len(CLASS_COLOURS)]) for k in range(n_stuff)]
-    return np.stack(rows)
+#: Cover classes' colours in the check sheet, in the vocabulary's order.
+COVER_PALETTE = np.array(
+    [[0.55, 0.8, 0.3], [0.85, 0.75, 0.45], [0.6, 0.45, 0.3], [0.65, 0.65, 0.7],
+     [0.3, 0.55, 0.25], [0.95, 0.6, 0.2], [0.4, 0.6, 0.9], [0.8, 0.4, 0.6]]
+)  # fmt: skip
 
 
-def splat_classes(result: ConceptSegmentation) -> np.ndarray:
-    """Per splat: 0 off the ground, 1 ground no class took, 2 + its cover class."""
-    lift = result.lift
-    per_cell = np.where(lift.ground, np.where(lift.cover >= 0, lift.cover + 2, 1), 0)
-    return per_cell[result.cell]
-
-
-def render_labels(
-    splats: Splats,
-    labels: np.ndarray,
-    colours: Callable[[np.ndarray], np.ndarray],
-    cameras: Sequence[Camera],
-    out: Path,
-    *,
-    legend: Sequence[tuple[str, np.ndarray]] = (),
-    index: SplatIndex | None = None,
-) -> None:
-    """The scan beside itself coloured by `labels` (per splat), one row per camera, with a
-    legend strip when given: what a person checks."""
+def render_check(result: ConceptSegmentation, splats: Splats, out: Path) -> dict[str, Any]:
+    """What a person checks (`--check`), as `segment_ground_first.render_check` lays it out:
+    per camera (two overviews, two of the plan's views) the scan, its top-level objects
+    coloured (ground grey), and its ground by cover class (things dark); under them a legend
+    of the largest named objects and the classes, also written beside it as JSON
+    (`<out>.legend.json`). Returns the legend."""
     from PIL import Image, ImageDraw
 
-    rows = []
-    for camera in cameras:
-        frame = render(splats, camera, labels=np.asarray(labels, np.int64), index=index)
-        colour = colours(np.maximum(frame.label, 0)) * frame.alpha[..., None]
-        rows.append(np.concatenate([frame.rgb, colour], axis=1))
-    pixels = np.round(np.clip(np.concatenate(rows), 0, 1) * 255).astype(np.uint8)
-    image = Image.fromarray(pixels)
-    if legend:
-        strip = Image.new("RGB", (image.width, 22 * len(legend) + 8), (24, 24, 24))
-        draw = ImageDraw.Draw(strip)
-        for k, (text, rgb) in enumerate(legend):
-            fill = tuple(round(255 * float(c)) for c in rgb)
-            draw.rectangle([8, 6 + 22 * k, 26, 22 + 22 * k], fill=fill)
-            draw.text((34, 8 + 22 * k), text, fill=(235, 235, 235))
-        both = Image.new("RGB", (image.width, image.height + strip.height))
-        both.paste(image, (0, 0))
-        both.paste(strip, (0, image.height))
-        image = both
-    image.save(out)
-
-
-def render_overviews(result: ConceptSegmentation, splats: Splats, out_dir: Path) -> list[Path]:
-    """`by-object.png` (each splat coloured by its object; the largest named ones in the
-    legend) and `by-ground-class.png` (the ground by cover class, the rest black), from two
-    overview cameras and two of the plan's views (`segment_scene.check_cameras`)."""
-    out_dir.mkdir(parents=True, exist_ok=True)
     index = SplatIndex.build(splats)
     cameras = overview_cameras(splats.positions, 4)[:2] + ss.check_cameras(result.views, 3)[1:]
     parent = result.lift.lifted.parent
-    objects = ss.top_level(parent)[result.splat_id]
-    sizes = np.bincount(objects, minlength=parent.size + 1)
+    top = ss.top_level(parent)[result.splat_id]
+    kinds = np.array(["none", *result.lift.kind])
+    _, stuff = split_concepts(result.concepts)
+    cover = np.where(result.lift.ground, result.lift.cover + 1, 0)[result.cell]
+    palette = _palette(parent.size, 7)
+    rows = []
+    for camera in cameras:
+        frame = render(splats, camera, labels=top.astype(np.int64), index=index)
+        label = np.maximum(frame.label, 0)
+        is_ground = kinds[label] == "ground"
+        things = np.where(is_ground[..., None], 0.35, palette[label]) * frame.alpha[..., None]
+        cover_frame = render(splats, camera, labels=cover.astype(np.int64), index=index)
+        c = COVER_PALETTE[(np.maximum(cover_frame.label, 1) - 1) % len(COVER_PALETTE)]
+        c = np.where((cover_frame.label > 0)[..., None], c, 0.08) * cover_frame.alpha[..., None]
+        rows.append(np.concatenate([frame.rgb, things, c], axis=1))
+    image = Image.fromarray(
+        np.round(np.clip(np.concatenate(rows, axis=0), 0, 1) * 255).astype(np.uint8)
+    )
+    sizes = np.bincount(top, minlength=parent.size + 1)
     named = sorted(
         (
-            (int(sizes[k + 1]), k + 1, str(extra["name"]))
-            for k, extra in enumerate(result.extra)
-            if parent[k] == 0 and extra.get("name")
+            (int(sizes[k + 1]), k + 1, str(e["name"]))
+            for k, e in enumerate(result.extra)
+            if parent[k] == 0 and e.get("name") and e["kind"] == "thing"
         ),
         reverse=True,
-    )[:14]
-    legend = [
-        (f"{name} ({size:,} splats)", ss._colours(np.array([i]))[0]) for size, i, name in named
-    ]
-    paths = [out_dir / "by-object.png", out_dir / "by-ground-class.png"]
-    render_labels(splats, objects, ss._colours, cameras, paths[0], legend=legend, index=index)
-    _, stuff = split_concepts(result.concepts)
-    palette = class_palette(len(stuff))
-    classes = splat_classes(result)
-    share = np.bincount(classes, minlength=len(palette)) / max(len(classes), 1)
-    legend = [(f"{GROUND_NAME}, no class ({share[1]:.1%} of splats)", palette[1])]
-    legend += [(f"{c.name} ({share[k + 2]:.1%})", palette[k + 2]) for k, c in enumerate(stuff)]
-    render_labels(
-        splats, classes, lambda ids: palette[np.minimum(ids, len(palette) - 1)], cameras,
-        paths[1], legend=legend, index=index,
-    )  # fmt: skip
-    return paths
+    )[:16]
+    share = np.bincount(cover, minlength=len(stuff) + 1) / max(len(cover), 1)
+    colour = [COVER_PALETTE[s % len(COVER_PALETTE)].round(2).tolist() for s in range(len(stuff))]
+    legend: dict[str, Any] = {
+        "objects": {
+            f"{name} #{i} ({size:,} splats)": palette[i].round(2).tolist()
+            for size, i, name in named
+        },
+        "cover": {
+            f"{c.name} ({share[s + 1]:.1%} of the splats)": colour[s] for s, c in enumerate(stuff)
+        },
+    }
+    entries = [*legend["objects"].items(), *legend["cover"].items()]
+    strip = Image.new("RGB", (image.width, 20 * ((len(entries) + 2) // 3) + 10), (24, 24, 24))
+    draw = ImageDraw.Draw(strip)
+    for k, (text, rgb) in enumerate(entries):
+        x, y = 8 + (k % 3) * (image.width // 3), 6 + 20 * (k // 3)
+        draw.rectangle([x, y, x + 14, y + 14], fill=tuple(round(255 * v) for v in rgb))
+        draw.text((x + 22, y + 2), text, fill=(235, 235, 235))
+    sheet = Image.new("RGB", (image.width, image.height + strip.height))
+    sheet.paste(image, (0, 0))
+    sheet.paste(strip, (0, image.height))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(out)
+    out.with_suffix(".legend.json").write_text(json.dumps(legend, indent=1), encoding="utf-8")
+    return legend
 
 
 # ---------------------------------------------------------------------------- the oracle
@@ -1196,8 +1287,8 @@ YARD_CONCEPTS = (
     Concept("shrub", "thing", "shrubs"),
     Concept("dead tree", "thing", "wood"),
     Concept("house", "thing", "buildings"),
-    Concept("grass", "stuff", "grass"),
-    Concept("path", "stuff", "paths"),
+    Concept("grass", "stuff"),
+    Concept("path", "stuff"),
 )
 
 
@@ -1241,29 +1332,36 @@ def _load_source(spec: str) -> ConceptSource:
 
 
 def main() -> None:
+    """The command line. It takes `segment_scene.py`'s arguments (`infra/modal/segment.py`
+    runs every bake-off variant with them): `--vocabulary` is the tag word list, as there;
+    `--coverage-rounds` and `--coverage-views` are accepted and not used (this run's views
+    are `--views`, with no coverage rounds)."""
     started = time.time()
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("source", type=Path, help="the scan's PLY, or its tileset.json")
     parser.add_argument("tiles", type=Path, help="its tileset directory (tileset.json)")
-    parser.add_argument("--vocabulary", default=None, help="module:Class, or a vocabulary .json")
+    parser.add_argument("--out", type=Path, required=True, help="instances.json goes here")
+    parser.add_argument("--vlm", default=None, help="module:Class, or a vocabulary .json")
     parser.add_argument("--concepts", default=None, help="module:Class, a ConceptSource")
     parser.add_argument("--masks", default=None, help="module:Class, the class-free MaskSource")
     parser.add_argument("--truth", type=Path, default=None, help="labels.json: oracle concepts")
     parser.add_argument("--embedder", default="segment_scene:FakeEmbedder")
-    parser.add_argument("--words", type=Path, default=None, help="tag vocabulary, one a line")
+    parser.add_argument("--vocabulary", type=Path, default=None, help="tag words, one a line")
     parser.add_argument("--views", type=int, default=ss.VIEW_COUNT)
     parser.add_argument("--max-views", type=int, default=ss.MAX_VIEWS)
     parser.add_argument("--overview-views", type=int, default=OVERVIEW_VIEWS)
     parser.add_argument("--renderer", choices=("cpu", "gsplat"), default="cpu")
     parser.add_argument("--max-scale-m", type=float, default=None)
+    parser.add_argument("--coverage-rounds", type=int, default=0, help="not used")
+    parser.add_argument("--coverage-views", type=int, default=0, help="not used")
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--cpus", type=int, default=None)
     parser.add_argument("--memory-gb", type=float, default=None)
-    parser.add_argument("--stand-in", action="store_true", help="mark the run a stand-in")
-    parser.add_argument("--out", type=Path, required=True, help="instances.json etc. go here")
-    parser.add_argument("--overviews", type=Path, default=None, help="PNGs to check, here")
+    parser.add_argument("--cache", type=Path, default=None, help="views, masks, the answer")
+    parser.add_argument("--stand-in", action="store_true", help="a run of the stand-in")
+    parser.add_argument("--check", type=Path, default=None, help="a PNG: by object, by cover")
     parser.add_argument("--summary", type=Path, default=None)
     parser.add_argument("--opacity-min", type=float, default=scene_plants.PACKAGE_OPACITY_MIN)
     parser.add_argument("--tile-gaussians", type=int, default=scene_plants.PACKAGE_TILE_GAUSSIANS)
@@ -1278,12 +1376,16 @@ def main() -> None:
         splats, rows, row_count = ss.load_source(args.source, args.opacity_min)
     embedder = ss.load_embedder(args.embedder)
     words = []
-    if args.words:
-        text = args.words.read_text(encoding="utf-8").splitlines()
+    if args.vocabulary:
+        text = args.vocabulary.read_text(encoding="utf-8").splitlines()
         words = [w.strip() for w in text if w.strip() and not w.lstrip().startswith("#")]
-    say = lambda message: print(message, flush=True)
+
+    def say(message: str) -> None:
+        print(message, flush=True)
+
     cameras = None
     free_factory = None
+    ground = None
     if args.truth:
         truth = json.loads(args.truth.read_text(encoding="utf-8"))
         ground = ground_layer(splats)
@@ -1303,19 +1405,18 @@ def main() -> None:
         free_factory = oracle_free
         free = None
     else:
-        if not (args.vocabulary and args.concepts):
-            parser.error("give --vocabulary and --concepts (or --truth)")
-        vocabulary = _load_vocabulary(args.vocabulary)
+        if not (args.vlm and args.concepts):
+            parser.error("give --vlm and --concepts (or --truth)")
+        vocabulary = _load_vocabulary(args.vlm)
         source = _load_source(args.concepts)
         free = ss.load_masks(args.masks) if args.masks else None
-        ground = None
     result = segment_concepts(
         splats, vocabulary, source, free, embedder, words,
         cameras=cameras, view_count=args.views, max_views=args.max_views,
         overview_count=args.overview_views, renderer=ss.make_renderer(args.renderer),
         max_scale_m=args.max_scale_m, workers=args.workers, cpus=args.cpus,
         memory_bytes=None if args.memory_gb is None else args.memory_gb * float(1 << 30),
-        ground=ground, progress=say, free_factory=free_factory,
+        ground=ground, progress=say, free_factory=free_factory, cache=args.cache,
     )  # fmt: skip
     if from_tiles:
         tiles = ss.tile_binding_by_position(args.tiles, splats.positions, result.splat_id)
@@ -1336,40 +1437,23 @@ def main() -> None:
     )
     document["tilesEncoding"] = rebind_instances.TILES_ENCODING
     ss.write_instances(args.out, document, result.instances)
-    (args.out / "vocabulary.json").write_text(
-        json.dumps(
-            {
-                "model": vocabulary.name,
-                "things": [c.to_json() for c in result.concepts if c.kind == "thing"],
-                "stuff": [c.to_json() for c in result.concepts if c.kind == "stuff"],
-            },
-            indent=1,
-        ),
-        encoding="utf-8",
-    )
-    if args.overviews:
-        from PIL import Image
-
-        args.overviews.mkdir(parents=True, exist_ok=True)
-        render_overviews(result, splats, args.overviews)
-        sheet = np.concatenate(
-            [np.concatenate(result.overviews[k : k + 4], axis=1) for k in range(0, 12, 4)
-             if len(result.overviews[k : k + 4]) == 4], axis=0,
-        ) if len(result.overviews) >= 4 else None  # fmt: skip
-        if sheet is not None:
-            Image.fromarray(sheet).save(args.overviews / "vocabulary-views.jpg", quality=85)
+    if args.cache:
+        (args.cache / "cameras.json").write_text(
+            json.dumps([v.camera.to_json() for v in result.views]), encoding="utf-8"
+        )
+    if args.check:
+        render_check(result, splats, args.check)
     usage = {"gaussians": len(splats), **ss.peak_usage(started)}
     say(ss.usage_line(usage))
     top = [r for r in document["instances"] if r["parent"] is None]
     summary = {
+        "variant": document["variant"]["name"],
         "instances": len(result.instances),
-        "objects": sum(1 for r in top if r.get("kind") == "thing"),
-        "namedObjects": sum(
-            1 for r in top if r.get("nameSource") == "concept" and r["kind"] == "thing"
-        ),
-        "groundInstances": sum(1 for r in top if r.get("kind") == "ground"),
+        "topLevelThings": sum(1 for r in top if r["kind"] == "thing"),
+        "named": sum(1 for r in top if r["kind"] == "thing" and r.get("nameSource") == "vlm"),
+        "groundClasses": sum(1 for r in top if r["kind"] == "ground"),
         "assignedShare": round(float((result.splat_id > 0).mean()), 4),
-        "concepts": [c.to_json() for c in result.concepts],
+        "concepts": document["concepts"],
         **result.lift.stats,
         "ground": document["ground"],
         "timingsS": {k: round(v, 2) for k, v in result.timings.items()},
@@ -1377,8 +1461,8 @@ def main() -> None:
     }
     if args.summary:
         args.summary.parent.mkdir(parents=True, exist_ok=True)
-        args.summary.write_text(json.dumps(summary, indent=1), encoding="utf-8")
-    print(json.dumps(summary, indent=1))
+        args.summary.write_text(json.dumps(summary, indent=1, default=str), encoding="utf-8")
+    print(json.dumps(summary, indent=1, default=str))
 
 
 if __name__ == "__main__":

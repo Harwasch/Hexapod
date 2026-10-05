@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import concept_scene as cs
+import segment_ground_first as sgf
 import segment_scene as ss
 import synthetic_yard
 from splat_render import Camera
@@ -103,33 +104,43 @@ def test_doubles_satisfy_the_protocols(run: dict) -> None:
 
 
 def test_clean_concepts_dedupes_and_keeps_the_list_short() -> None:
-    raw = [cs.Concept(f"Thing {k}", "thing", "furniture") for k in range(20)]
-    raw += [cs.Concept("thing 1", "thing", "trees"), cs.Concept("  Grass ", "stuff", "nope")]
-    raw += [cs.Concept(f"stuff {k}", "stuff", "ground") for k in range(10)]
+    others = ("other", "another", "a third")
+    raw = [cs.Concept(f"Thing {k}", "thing", "furniture", others) for k in range(20)]
+    raw += [cs.Concept("thing 1", "thing", "trees"), cs.Concept("  Lawn ", "stuff")]
+    raw += [cs.Concept(w, "stuff") for w in ("grass", "gravel", "nonsense", "path", "dirt")]
     out = cs.clean_concepts(raw, max_things=5, max_stuff=3)
     things, stuff = cs.split_concepts(out)
     assert [c.name for c in things] == ["thing 0", "thing 1", "thing 2", "thing 3", "thing 4"]
     assert things[1].category == "furniture"  # the first spelling wins
-    assert [c.name for c in stuff] == ["grass", "stuff 0", "stuff 1"]
-    assert stuff[0].category == cs.GROUND_CATEGORY  # an unknown category: ground, for stuff
+    assert things[0].queries == ("thing 0", "other", "another")  # at most two other words
+    # Cover: the class each word names, once each ("lawn" is grass), unknown words dropped.
+    assert [(c.name, c.cover) for c in stuff] == [
+        ("Grass", "grass"), ("Gravel", "gravel"), ("Trail", "trail"),
+    ]  # fmt: skip
+    assert all(c.category == cs.GROUND_CATEGORY and c.prompts for c in stuff)
     assert cs.clean_concepts([cs.Concept("x", "thing", "nope")])[0].category == "other"
 
 
-def test_load_concepts_reads_what_vocabulary_json_holds(tmp_path: Path) -> None:
+def test_cover_words_name_the_shared_classes() -> None:
+    assert cs.cover_of("Tall grass").id == "tall-grass"
+    assert cs.cover_of("tall-grass").id == "tall-grass"
+    assert cs.cover_of("straw").id == "hay"
+    assert cs.cover_of("pine needles").id == "forest-floor"
+    assert cs.cover_of("carpet") is None
+    ids = {c.id for c in sgf.cover_classes()[0]}
+    assert set(cs.COVER_WORDS.values()) <= ids
+
+
+def test_load_concepts_reads_a_runs_concepts_block(tmp_path: Path) -> None:
     path = tmp_path / "vocabulary.json"
-    path.write_text(
-        json.dumps(
-            {
-                "things": [{"name": "Cable Spool", "category": "equipment"}],
-                "stuff": [{"name": "gravel", "category": "paths"}],
-            }
-        ),
-        encoding="utf-8",
-    )
-    assert cs.load_concepts(path) == [
-        cs.Concept("cable spool", "thing", "equipment"),
-        cs.Concept("gravel", "stuff", "paths"),
-    ]
+    block = {
+        "things": [{"name": "Cable Spool", "category": "equipment", "prompts": ["reel"]}],
+        "cover": ["gravel"],
+    }
+    path.write_text(json.dumps(block), encoding="utf-8")
+    things, stuff = cs.split_concepts(cs.load_concepts(path))
+    assert things == [cs.Concept("cable spool", "thing", "equipment", ("cable spool", "reel"))]
+    assert [c.cover for c in stuff] == ["gravel"]
 
 
 def test_camera_paths_cut_where_the_camera_jumps() -> None:
@@ -184,7 +195,7 @@ def test_named_objects_match_the_true_objects(run: dict, yard: dict) -> None:
     objects = _objects(result)
     obj = run["obj"]
     names = {k + 1: e.get("name") for k, e in enumerate(result.extra)}
-    want = {0: "tree", 1: "shrub", 2: "dead tree", 3: "house"}
+    want = {0: "Tree", 1: "Shrub", 2: "Dead tree", 3: "House"}
     for o in np.unique(obj[obj >= 0]):
         mine = obj == o
         if mine.sum() < MIN_OBJECT_SPLATS:
@@ -194,23 +205,34 @@ def test_named_objects_match_the_true_objects(run: dict, yard: dict) -> None:
         assert names[best] == want[int(run["thing"][mine][0])]
 
 
-def test_the_ground_is_its_cover_classes(run: dict) -> None:
+def test_the_ground_is_its_cover_classes_in_the_shared_schema(run: dict) -> None:
     result = run["result"]
     lift = result.lift
     tops = [k for k in range(len(result.instances)) if lift.top[k] and lift.kind[k] == "ground"]
-    names = sorted(str(result.extra[k]["name"]) for k in tops)
-    assert names == ["Grass", "Path"]
+    assert sorted(str(result.extra[k]["name"]) for k in tops) == ["Grass", "Trail"]
     for k in tops:
         instance = result.instances[k]
+        extra = result.extra[k]
         assert instance.parent is None and instance.category == cs.GROUND_CATEGORY
-        assert result.extra[k]["kind"] == "ground" and instance.behaviour == "static"
-        assert instance.tags[0] == {"label": result.extra[k]["concept"], "score": 1.0}
+        assert extra["kind"] == "ground" and instance.behaviour == "static"
+        assert extra["nameSource"] == "ground-cover"
+        assert extra["cover"] in ("grass", "trail")
+        assert instance.tags == [
+            {"label": extra["name"].lower(), "score": instance.tags[0]["score"]}
+        ]
+        # Its regions (if more than one) are its children, of its class.
+        children = [i for i in result.instances if i.parent == k + 1]
+        assert len(children) != 1
+        assert instance.splats == (0 if children else instance.splats)
+        for child in children:
+            assert result.extra[child.id - 1]["cover"] == extra["cover"]
+            assert child.category == cs.GROUND_CATEGORY
     # Cover classes on the true lawn and path, by splats.
-    classes = cs.splat_classes(result)
+    cover = np.where(lift.ground, lift.cover, -1)[result.cell]
     stuff = run["stuff"]
     for s in (0, 1):
-        mine = (stuff == s) & result.lift.ground[result.cell]
-        assert (classes[mine] == s + 2).mean() > 0.9
+        mine = (stuff == s) & lift.ground[result.cell]
+        assert (cover[mine] == s).mean() > 0.9
 
 
 def test_ground_inside_a_things_masks_is_the_things(run: dict, yard: dict) -> None:
@@ -227,7 +249,11 @@ def test_ground_inside_a_things_masks_is_the_things(run: dict, yard: dict) -> No
 def test_parts_carry_their_objects_category_and_no_name(run: dict) -> None:
     result = run["result"]
     by_id = {i.id: i for i in result.instances}
-    parts = [i for i in result.instances if i.parent is not None]
+    parts = [
+        i
+        for i in result.instances
+        if i.parent is not None and result.extra[i.id - 1]["kind"] == "thing"
+    ]
     assert parts
     for part in parts:
         top = part
@@ -265,27 +291,36 @@ def test_instances_json_carries_the_concept_fields(run: dict, yard: dict, tmp_pa
         segmenter="oracle", stand_in=True,
     )  # fmt: skip
     assert doc["format"] == "hexapod.instances" and doc["version"] == 1
-    assert doc["concepts"]["standIn"] is True
-    assert [c["name"] for c in doc["concepts"]["stuff"]] == ["grass", "path"]
-    assert doc["ground"]["classes"] == ["grass", "path"]
+    # A stand-in is published under its own name, never as C.
+    assert doc["variant"] == cs.VARIANTS["standin"]
+    assert doc["variant"]["name"] == "concept-first-standin"
+    assert doc["concepts"]["standIn"] is True and doc["concepts"]["cover"] == ["grass", "trail"]
+    assert {r["class"] for r in doc["ground"]["cover"]} == {"grass", "trail"}
+    assert doc["ground"].keys() >= {"method", "layerM", "cellM", "cover"}
     records = doc["instances"]
     assert [r["id"] for r in records] == list(range(1, len(records) + 1))
-    named = [r for r in records if r.get("nameSource") == "concept"]
-    assert {r["name"] for r in named} >= {"tree", "shrub", "dead tree", "house", "Grass", "Path"}
+    things = {r["name"] for r in records if r.get("nameSource") == "vlm"}
+    assert things == {"Tree", "Shrub", "Dead tree", "House"}
     for r in records:
-        assert r["kind"] in ("thing", "ground")
+        assert r["kind"] in ("thing", "ground") and r["scaleM"] >= 0
         if r["kind"] == "ground":
-            assert r["category"] == cs.GROUND_CATEGORY
+            assert r["category"] == cs.GROUND_CATEGORY and r["cover"] in ("grass", "trail")
+            assert r["nameSource"] == "ground-cover" and r["behaviour"] == "static"
     ss.write_instances(tmp_path, doc, result.instances)
     again = json.loads((tmp_path / "instances.json").read_text(encoding="utf-8"))
     assert again["instances"][0].keys() >= {"id", "parent", "tags", "category", "kind"}
+    sam3 = cs.concept_document(
+        result, tiles, embedder=embedder, vocabulary_size=8, vocabulary_model="fixed",
+        segmenter="sam3", stand_in=False,
+    )  # fmt: skip
+    assert sam3["variant"]["name"] == "concept-first"
 
 
-def test_overviews_are_written(run: dict, yard: dict, tmp_path: Path) -> None:
+def test_the_check_sheet_is_written(run: dict, yard: dict, tmp_path: Path) -> None:
     from PIL import Image
 
-    paths = cs.render_overviews(run["result"], yard["splats"], tmp_path)
-    assert [p.name for p in paths] == ["by-object.png", "by-ground-class.png"]
-    for path in paths:
-        with Image.open(path) as image:
-            assert image.width > 0 and image.height > 0
+    legend = cs.render_check(run["result"], yard["splats"], tmp_path / "check.png")
+    with Image.open(tmp_path / "check.png") as image:
+        assert image.width == 3 * 512 and image.height > 4 * 384
+    assert json.loads((tmp_path / "check.legend.json").read_text()) == legend
+    assert len(legend["cover"]) == 2 and legend["objects"]

@@ -271,16 +271,14 @@ export interface CategoryIndex {
   objects: ReadonlyMap<number, SceneObject>;
 }
 
-/**
- * The label an object goes by: the name the file gives it, else its best tag whose label is
- * in its own category.
- */
+/** The label an object goes by: its name when the file gives one, else its best tag whose
+ * label is in its own category. */
 function objectName(
-  instance: Pick<Instance, "tags"> & { name?: string },
+  instance: Pick<Instance, "tags"> & Partial<Pick<Instance, "name">>,
   category: string,
   labels: ReadonlyMap<string, string>,
 ): string | null {
-  if (instance.name) return instance.name;
+  if (instance.name !== undefined && instance.name !== "") return instance.name;
   for (const tag of instance.tags) {
     if (categoryOfLabel(tag.label, labels) === category) return tag.label;
   }

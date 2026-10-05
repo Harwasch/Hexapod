@@ -1,6 +1,7 @@
 """concept_models.py's pure parts: reading the VLM's answer, naming a detector's phrase,
 choosing boxes, painting a cover map. The models themselves need torch and weights and run
-on the GPU (infra/modal/segment_concepts.py); nothing here imports them."""
+on the GPU (infra/modal/segment.py, variant `concept-first-standin`); nothing here imports
+them."""
 
 from __future__ import annotations
 
@@ -10,30 +11,33 @@ import pytest
 import concept_models as cm
 import concept_scene as cs
 import scene_categories
+import segment_ground_first as sgf
 
 
-def test_the_prompt_names_every_category_and_the_limits() -> None:
+def test_the_prompt_names_every_category_cover_class_and_the_limits() -> None:
     prompt = cm.vocabulary_prompt(12, max_things=7, max_stuff=3)
     assert "12 views" in prompt and "up to 7" in prompt and "up to 3" in prompt
     for category in scene_categories.category_ids():
         assert category in prompt
+    for cover in sgf.cover_classes()[0]:
+        assert cover.id in prompt
 
 
 def test_an_answer_in_a_code_fence_with_prose_is_read() -> None:
     answer = (
         "Here is the list:\n```json\n"
-        '{"things": [{"name": "Cable Spool", "category": "equipment"}, '
-        '{"name": "wooden plank", "category": "wood"}, "pumpkin"],\n'
-        ' "stuff": [{"name": "gravel", "category": "paths"}, {"name": "dirt", "category": "x"}]}'
+        '{"things": [{"name": "Cable Spool", "also": ["wooden reel", "drum"], '
+        '"category": "equipment"}, {"name": "wooden plank", "category": "wood"}, "pumpkin"],\n'
+        ' "cover": ["gravel", "dirt", "straw", "lava"]}'
         "\n```\nThat is all."
     )
-    assert cm.parse_vocabulary(answer) == [
-        cs.Concept("cable spool", "thing", "equipment"),
-        cs.Concept("wooden plank", "thing", "wood"),
-        cs.Concept("pumpkin", "thing", "other"),
-        cs.Concept("gravel", "stuff", "paths"),
-        cs.Concept("dirt", "stuff", "ground"),
+    things, stuff = cs.split_concepts(cm.parse_vocabulary(answer))
+    assert things == [
+        cs.Concept("cable spool", "thing", "equipment", ("cable spool", "wooden reel", "drum")),
+        cs.Concept("wooden plank", "thing", "wood", ("wooden plank",)),
+        cs.Concept("pumpkin", "thing", "other", ("pumpkin",)),
     ]
+    assert [c.cover for c in stuff] == ["gravel", "dirt", "hay"]  # "lava" names no class
 
 
 def test_an_answer_without_json_is_refused() -> None:
@@ -43,17 +47,17 @@ def test_an_answer_without_json_is_refused() -> None:
         cm.parse_vocabulary('{"things": [')
 
 
-def test_a_detector_phrase_names_its_concept() -> None:
+def test_a_detector_phrase_names_its_concept_by_any_of_its_words() -> None:
     concepts = [
-        cs.Concept("cable spool", "thing"),
+        cs.Concept("cable spool", "thing", prompts=("cable spool", "wooden reel")),
         cs.Concept("wooden plank", "thing"),
         cs.Concept("plank", "thing"),
         cs.Concept("pumpkin", "thing"),
     ]
     assert cm.match_phrase("cable spool", concepts) == 0
+    assert cm.match_phrase("reel", concepts) == 0  # another word of it
     assert cm.match_phrase("spool", concepts) == 0  # some of the prompt's words
     assert cm.match_phrase("plank", concepts) == 2  # the exact one before the longer
-    assert cm.match_phrase("wooden", concepts) == 1
     assert cm.match_phrase("pumpkin spool", concepts) == 0  # most words shared, first
     assert cm.match_phrase("hay", concepts) == -1
     assert cm.match_phrase("", concepts) == -1
@@ -75,7 +79,11 @@ def test_boxes_kept_per_concept_without_the_whole_view() -> None:
     concepts = np.array([0, 0, 0, 1, 0, -1])
     kept = cm.keep_boxes(boxes, scores, concepts, (100, 100), max_share=0.85, nms_iou=0.6)
     assert kept.tolist() == [1, 3, 4]
-    assert cm.box_iou(boxes[1], boxes[2])[0, 0] > 0.6
+    # One object found under two names keeps the better name.
+    kept = cm.keep_boxes(
+        boxes, scores, concepts, (100, 100), max_share=0.85, nms_iou=0.6, cross_iou=0.8
+    )
+    assert kept.tolist() == [1, 4]
 
 
 def test_a_cover_map_paints_finer_masks_over_coarser_on_the_ground_only() -> None:
@@ -89,6 +97,21 @@ def test_a_cover_map_paints_finer_masks_over_coarser_on_the_ground_only() -> Non
     assert out.label[0, 0] == 1 and out.label[1, 1] == 0 and out.label[0, 5] == -1
     assert out.score[1, 1] == pytest.approx(0.7) and out.score[0, 0] == pytest.approx(0.9)
     assert out.score[0, 5] == 0
+    # A mask whose best is a contrast prompt (not ground cover) paints nothing.
+    rows = cm.classify(np.array([[0.2, 0.1, 0.7], [0.6, 0.3, 0.1]]), classes=2)
+    assert rows[0].tolist() == [-1.0, -1.0] and rows[1].tolist() == [0.6, 0.3]
+    out = cm.paint_stuff([small, big], rows[::-1], region)  # small: not cover; big: class 0
+    assert out.label[1, 1] == 0 and out.score[1, 1] == pytest.approx(0.6)
+
+
+def test_tiles_cover_the_ground_no_mask_did() -> None:
+    region = np.zeros((8, 8), bool)
+    region[:, :6] = True
+    covered = np.zeros((8, 8), bool)
+    covered[:4, :4] = True
+    tiles = cm.ground_tiles(region, covered, side=4, least=0.4)
+    assert len(tiles) == 3  # the covered tile is left out
+    assert all((t & ~region).sum() == 0 and (t & covered).sum() == 0 for t in tiles)
 
 
 def test_the_models_satisfy_the_protocols() -> None:
