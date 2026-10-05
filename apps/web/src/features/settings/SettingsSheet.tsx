@@ -24,6 +24,7 @@ import {
   useSplatRenderer,
   type SplatRenderer,
 } from "@/state/settings";
+import { useSkinPoke } from "@/state/skinPoke";
 import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
@@ -120,6 +121,8 @@ function WindSection() {
   const reducedMotion = useSettings((s) => s.reducedMotion);
   const gpuMotion = useSettings((s) => s.livingGpuMotion);
   const setSettings = useSettings((s) => s.set);
+  const poke = useSkinPoke((s) => s.active);
+  const setPoke = useSkinPoke((s) => s.setActive);
   const site = status.sites.find((s) => s.phase === "ready");
   const on = wind.strength > 0;
   return (
@@ -159,6 +162,14 @@ function WindSection() {
             disabled={!env.splatGpuMotion}
             onCheckedChange={(livingGpuMotion) => setSettings({ livingGpuMotion })}
           />
+        }
+      />
+      <Row
+        id="poke-label"
+        label="Poke objects"
+        hint="Drag a plant or object that moves by its skin; let go to see it ring (K)"
+        control={
+          <GlassSwitch aria-labelledby="poke-label" checked={poke} onCheckedChange={setPoke} />
         }
       />
       <MotionReadout sites={status.sites} />

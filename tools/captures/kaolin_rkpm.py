@@ -25,7 +25,9 @@
 #   kernel;
 # - a relative ridge (MOMENT_RIDGE) on the RKPM moment matrix, so coplanar nodes (a flat
 #   object: a lawn, a wall) do not make it singular;
-# - kernel evaluations are chunked over query points to bound memory.
+# - kernel evaluations are chunked over query points to bound memory;
+# - (2026-10-05) an optional penalty that pins chosen points (`init(..., pinned=...)`), for
+#   eigenmodes of a rooted object whose base stays still.
 """FreeForm / Simplicits skinning weights from the Reproducing Kernel Particle Method.
 
 Vendored from NVIDIA Kaolin (master, 2026; Apache-2.0) because the pip release (0.18) does not
@@ -203,11 +205,23 @@ class SimplicitsRKPM:
     def _offset_scale(self, pts: np.ndarray) -> np.ndarray:
         return (np.asarray(pts, np.float64) - self.bb_min) / (self.bb_max - self.bb_min)
 
-    def init(self, pts: np.ndarray, yms: np.ndarray, prs: np.ndarray) -> None:
+    def init(
+        self,
+        pts: np.ndarray,
+        yms: np.ndarray,
+        prs: np.ndarray,
+        pinned: np.ndarray | None = None,
+        pin_stiffness: float = 1e4,
+    ) -> None:
         """Nodes by farthest point sampling, radii from node spacing, then the eigenanalysis.
 
         `pts` (n, 3) in the evaluation frame; `yms`, `prs` (n,) per point. (Kaolin's `init`
         also takes densities and a volume, which cancel out of the eigenvectors.)
+
+        Hexapod: `pinned` (n,) marks points held still (a rooted object's base). A penalty
+        `κ Φ_pᵀ Φ_p` over them is added to the Hessian (κ = `pin_stiffness` times the
+        Hessian's mean diagonal over the pinned mass's), so every mode nearly vanishes there
+        and none is the constant field: all `num_handles - 1` eigenvectors are kept.
         """
         pts = self._offset_scale(pts)
         n = pts.shape[0]
@@ -245,10 +259,22 @@ class SimplicitsRKPM:
         mass = self.get_mass_matrix(x)
         hess = self.get_hessian_matrix(x, np.asarray(yms)[sample], np.asarray(prs)[sample])
         mass = mass + np.eye(len(mass)) * self.mass_jitter * np.trace(mass) / len(mass)
-        want = min(self.num_handles + 1, len(mass))
-        evals, evecs = eigh(hess, mass, subset_by_index=[0, want - 1])
-        self.evecs = evecs[:, 1:]  # the first is the constant field
-        self.evals = evals[1:]
+        if pinned is not None and np.asarray(pinned).any():
+            held = pts[np.asarray(pinned, bool)]
+            penalty = np.zeros_like(hess)
+            for i in range(0, len(held), CHUNK):
+                phi = self.rkpm.phi(held[i : i + CHUNK])
+                penalty += phi.T @ phi
+            kappa = pin_stiffness * np.trace(hess) / max(np.trace(penalty), 1e-300)
+            hess = hess + kappa * penalty
+            want = min(self.num_handles, len(mass))
+            evals, evecs = eigh(hess, mass, subset_by_index=[0, want - 1])
+            self.evecs, self.evals = evecs, evals
+        else:
+            want = min(self.num_handles + 1, len(mass))
+            evals, evecs = eigh(hess, mass, subset_by_index=[0, want - 1])
+            self.evecs = evecs[:, 1:]  # the first is the constant field
+            self.evals = evals[1:]
         self.num_handles = self.evecs.shape[1]
 
     def get_mass_matrix(self, x: np.ndarray) -> np.ndarray:

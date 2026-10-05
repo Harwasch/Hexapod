@@ -130,7 +130,15 @@ describe("skin.json and skin.bin", () => {
     expect(rowWeight(words, 0, 3, 1)).toBe(-128);
     expect(rowWeight(words, 0, 12, 1)).toBe(-2);
     // The GLSL is the same expression: shift the byte to the top, sign-extend down.
-    expect(skinGlsl(1 / 127)).toContain("int(word << uint(24 - 8 * (k & 3))) >> 24");
+    expect(skinGlsl(1 / 127)).toContain("int(word << uint(24 - 8 * (kk & 3))) >> 24");
+    // A wide row's second texel holds weights 17..32 (k 16..31), decoded the same way.
+    const second = new Uint32Array([0x0000fe05, 0, 0, 0x81000000]);
+    expect(rowWeight(words, 0, 16, 1, second)).toBe(5);
+    expect(rowWeight(words, 0, 17, 1, second)).toBe(-2);
+    expect(rowWeight(words, 0, 31, 1, second)).toBe(-127);
+    expect(rowWeight(words, 0, 16, 1)).toBe(0);
+    expect(skinGlsl(1 / 127, true)).toContain("u_skinWeights2");
+    expect(skinGlsl(1 / 127)).not.toContain("u_skinWeights2");
   });
 
   it("refuses what is not a skin and drops tiles whose rows are missing", () => {

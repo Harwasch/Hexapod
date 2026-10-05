@@ -1,0 +1,200 @@
+name: Publish skins
+
+# The motion-skins bake-off (docs/SCENE_OBJECTS.md §9): every candidate skin of a scan,
+# fitted on the CPU of the runner and published beside its tiles as a variant,
+# `variants/skins/<name>/skin.json` + `skin.bin`, registered in the tileset's
+# `extras.variants.skins`. Today's `extras.skin` is left as it is. Opt-in, and never run by
+# default; no GPU, no Modal.
+#
+# * **What it does.** `build`, one job a scan (tools/captures/skin_variants.py `scan`): finds
+#   the scan's CURRENT tileset (a run's scan through the API, by its run in
+#   infra/modal/segment.py `SCANS`, or the `SCAN_ASSET_IDS` variable; the Minnetonka tree at
+#   its site), fetches its tileset, `instances.json` and the tiles of the bake-off's objects
+#   (`skin_variants.BAKEOFF`), fits every variant (`VARIANTS`: FreeForm by size, FreeForm,
+#   pinned FreeForm and volume FEM by stiffness class), and keeps the files, the request and
+#   the report as an artifact to review. `publish` (only when asked): merges this run's
+#   entries into the `extras.variants` the tileset declares at that moment (other systems'
+#   and other variants' entries kept) and
+#     - for a run's scan, attaches through the API (tools/captures/attach_sidecars.py: staged
+#       in the private bucket, a new generation cut; nothing written to the public bucket);
+#     - for the Minnetonka tree, whose tileset is a site under `sites/` (published by
+#       minnetonka-tree.yml with app.seed.publish, and refused by the attach: it is not a
+#       run's tileset), uploads the variant files beside it in the public bucket and rewrites
+#       its `tileset.json` with `extras.variants` merged, nothing else changed.
+# * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
+#   that, push a commit whose message carries `[skins]` (every scan, build only),
+#   `[skins|scans=spool,pumpkin]` to choose scans, `|variants=freeform,tetfem-stiff` to choose
+#   variants and `|publish` to publish.
+# * **What it costs.** Runner minutes only (CPU; the tree, two million splats, takes the
+#   longest).
+#
+# Variables: TWIN_API_URL, SCAN_ASSET_IDS (JSON, {"camp": "<asset id>", ...}). For `publish`
+# only, secrets CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, API_WRITE_TOKEN
+# and the variables R2_BUCKET (private) and R2_PUBLIC_BUCKET (the tree's site).
+
+on:
+  push:
+    branches: [bakeoff-skins]
+  workflow_dispatch:
+    inputs:
+      scans:
+        description: "Comma-separated: spool, pumpkin, camp, minnetonka-tree"
+        type: string
+        default: spool,pumpkin,camp,minnetonka-tree
+      variants:
+        description: "Comma-separated variant names (empty: all)"
+        type: string
+        default: ""
+      publish:
+        description: "Publish beside the tiles (otherwise build and review only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    name: What to run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[skins')
+    runs-on: ubuntu-latest
+    outputs:
+      scans: ${{ steps.plan.outputs.scans }}
+      variants: ${{ steps.plan.outputs.variants }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      # Read as data, validated here, never interpolated into a shell line.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          SCANS: ${{ inputs.scans }}
+          VARIANTS: ${{ inputs.variants }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          options = {"scans": "spool,pumpkin,camp,minnetonka-tree", "variants": "", "publish": "false"}
+          if os.environ["EVENT"] == "workflow_dispatch":
+              for name in options:
+                  options[name] = os.environ.get(name.upper(), "") or options[name]
+          else:
+              found = re.search(r"\[skins([^\]]*)\]", os.environ.get("MESSAGE", ""))
+              for part in (found.group(1) if found else "").split("|")[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options:
+                      raise SystemExit(f"unknown option {name!r} in the [skins] token")
+                  options[name] = value if value else "true"
+          valid = {
+              "scans": r"(spool|pumpkin|camp|minnetonka-tree)(,(spool|pumpkin|camp|minnetonka-tree))*",
+              "variants": r"([a-z0-9-]+(,[a-z0-9-]+)*)?",
+              "publish": r"true|false",
+          }
+          for name, pattern in valid.items():
+              if not re.fullmatch(pattern, options[name]):
+                  raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
+          print(f"scans={json.dumps(options['scans'].split(','))}")
+          print(f"variants={options['variants']}")
+          print(f"publish={options['publish']}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    name: Fit the skins of ${{ matrix.scan }}
+    needs: plan
+    runs-on: ubuntu-latest
+    # The tree: two million splats, four variants, on the runner's cores.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        scan: ${{ fromJSON(needs.plan.outputs.scans) }}
+    env:
+      SCAN: ${{ matrix.scan }}
+      VARIANTS: ${{ needs.plan.outputs.variants }}
+      TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
+      SCAN_ASSET_IDS: ${{ vars.SCAN_ASSET_IDS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Locate, fetch, fit, lay out
+        working-directory: tools/captures
+        run: |
+          uv sync --frozen
+          args=(scan "$SCAN" "$RUNNER_TEMP/skins")
+          if [ -n "$VARIANTS" ]; then args+=(--variants "$VARIANTS"); fi
+          uv run python skin_variants.py "${args[@]}"
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, os
+          scan = os.environ["SCAN"]
+          root = os.path.join(os.environ["RUNNER_TEMP"], "skins", "out")
+          plan = json.load(open(os.path.join(root, f"{scan}.publish.json")))
+          report = json.load(open(os.path.join(root, f"{scan}.report.json")))
+          print(f"## Skins: {scan}\n")
+          print(f"- {plan['kind']} at {plan['url']}" + (f" (asset `{plan['assetId']}`)" if plan.get("assetId") else ""))
+          print("\n| variant | skins | handles | skin.bin | fit s |\n|---|---|---|---|---|")
+          for entry in plan["variants"]["skins"]:
+              r = report[entry["name"]]
+              handles = ",".join(str(s["handles"]) for s in r["skins"])
+              print(f"| {entry['label']} | {len(r['skins'])} | {handles} | {r['skinBin']:,} B | {r['seconds']} |")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skins-${{ matrix.scan }}
+          path: ${{ runner.temp }}/skins/out/
+          if-no-files-found: error
+
+  publish:
+    name: Publish the skins of ${{ matrix.scan }}
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        scan: ${{ fromJSON(needs.plan.outputs.scans) }}
+    # One publish per scan at a time; the API serializes attaches to one asset anyway.
+    concurrency:
+      group: publish-skins-${{ matrix.scan }}
+      cancel-in-progress: false
+    env:
+      SCAN: ${{ matrix.scan }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+      OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      OBJECT_STORAGE_BUCKET: ${{ vars.R2_BUCKET || 'twin-assets' }}
+      OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
+      OBJECT_STORAGE_REGION: auto
+      API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+      TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
+    steps:
+      - name: The secrets this job needs
+        run: |
+          missing=""
+          for name in CLOUDFLARE_ACCOUNT_ID OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY API_WRITE_TOKEN; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: skins-${{ matrix.scan }}
+          path: ${{ runner.temp }}/skins/out
+      - name: Register in extras.variants and publish
+        working-directory: tools/captures
+        run: |
+          uv sync --frozen
+          uv run --with boto3 python skin_variants.py publish "$RUNNER_TEMP/skins/out/$SCAN"

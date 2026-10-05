@@ -58,7 +58,8 @@ ${SCAN_MOTION_GLSL}
 void hexapodSparkModify(
     int index, inout vec3 center, inout vec3 scales, inout vec4 quaternion, inout vec4 rgba,
     bool hasIds, bool hasSkin, highp usampler2D ids, highp usampler2D skins,
-    highp usampler2D weights, highp sampler2D uInstanceState, vec4 uInstanceParams,
+    highp usampler2D weights, bool wide, highp usampler2D weights2,
+    highp sampler2D uInstanceState, vec4 uInstanceParams,
     vec4 uInstanceTint, vec4 uInstanceDim, highp sampler2D handles, highp usampler2D slots,
     highp sampler2D poses, vec4 motion, vec4 extra) {
     ivec2 at = ivec2(index % ${String(SPARK_SPLATS_WIDTH)}, index / ${String(SPARK_SPLATS_WIDTH)});
@@ -68,7 +69,8 @@ void hexapodSparkModify(
         mat3 linear = mat3(0.0);
         if (hasSkin) {
             hexapodSkinMotion(handles, texelFetch(skins, at, 0).r, texelFetch(weights, at, 0),
-                              motion, extra.x, center, delta, linear);
+                              wide ? texelFetch(weights2, at, 0) : uvec4(0u), motion, extra.x,
+                              center, delta, linear);
         }
         if (hasIds) {
             hexapodRigidMotion(slots, poses, id, motion, center, delta, linear);
@@ -114,6 +116,8 @@ interface SparkTile {
   skinDoc: SkinDoc | null;
   skins: THREE.DataTexture | null;
   weights: THREE.DataTexture | null;
+  /** A wide row's second texel (a file with a skin of more than 16 handles). */
+  weights2: THREE.DataTexture | null;
   skinSet: ReadonlySet<number>;
   /** Whether it has a modifier (built from its textures as they are now). */
   modified: boolean;
@@ -233,8 +237,10 @@ export function createBackend(
     const ids = dyno.dynoUsampler2D(tile.ids ?? emptySplats);
     const skins = dyno.dynoUsampler2D(tile.skins ?? emptySplats);
     const weights = dyno.dynoUsampler2D(tile.weights ?? emptyUint);
+    const weights2 = dyno.dynoUsampler2D(tile.weights2 ?? emptyUint);
     const hasIds = tile.ids !== null;
     const hasSkin = tile.skins !== null;
+    const wide = hasSkin && tile.weights2 !== null;
     return dyno.dynoBlock({ gsplat: dyno.Gsplat }, { gsplat: dyno.Gsplat }, ({ gsplat }) => {
       if (!gsplat) throw new Error("No gsplat input");
       const rule = new dyno.Dyno({
@@ -243,6 +249,7 @@ export function createBackend(
           ids: "usampler2D",
           skins: "usampler2D",
           weights: "usampler2D",
+          weights2: "usampler2D",
           state: "sampler2D",
           params: "vec4",
           tint: "vec4",
@@ -260,7 +267,7 @@ export function createBackend(
           const i = (name: keyof typeof inputs): string => String(inputs[name]);
           return [
             `${out} = ${i("gsplat")};`,
-            `hexapodSparkModify(${i("gsplat")}.index, ${out}.center, ${out}.scales, ${out}.quaternion, ${out}.rgba, ${String(hasIds)}, ${String(hasSkin)}, ${i("ids")}, ${i("skins")}, ${i("weights")}, ${i("state")}, ${i("params")}, ${i("tint")}, ${i("dim")}, ${i("handles")}, ${i("slots")}, ${i("poses")}, ${i("motion")}, ${i("extra")});`,
+            `hexapodSparkModify(${i("gsplat")}.index, ${out}.center, ${out}.scales, ${out}.quaternion, ${out}.rgba, ${String(hasIds)}, ${String(hasSkin)}, ${i("ids")}, ${i("skins")}, ${i("weights")}, ${String(wide)}, ${i("weights2")}, ${i("state")}, ${i("params")}, ${i("tint")}, ${i("dim")}, ${i("handles")}, ${i("slots")}, ${i("poses")}, ${i("motion")}, ${i("extra")});`,
           ];
         },
       });
@@ -270,6 +277,7 @@ export function createBackend(
           ids,
           skins,
           weights,
+          weights2,
           state,
           params,
           tint,
@@ -313,9 +321,11 @@ export function createBackend(
       if (fits) for (const id of found.skins) if (id !== 0) skinSet.add(id);
       tile.skins?.dispose();
       tile.weights?.dispose();
+      tile.weights2?.dispose();
       const skinned = fits && skinSet.size > 0;
       tile.skins = skinned ? splatTexture(tile.count, 1, found.skins) : null;
       tile.weights = skinned ? splatTexture(tile.count, 4, found.words) : null;
+      tile.weights2 = skinned && found.words2 ? splatTexture(tile.count, 4, found.words2) : null;
       tile.skinSet = skinSet;
       replaced = true;
     }
@@ -443,6 +453,7 @@ export function createBackend(
           skinDoc: null,
           skins: null,
           weights: null,
+          weights2: null,
           skinSet: new Set(),
           modified: false,
           placement: null,
@@ -467,6 +478,7 @@ export function createBackend(
       tile?.ids?.dispose();
       tile?.skins?.dispose();
       tile?.weights?.dispose();
+      tile?.weights2?.dispose();
       tiles.delete(mesh);
       mesh.dispose();
     },
@@ -563,6 +575,7 @@ export function createBackend(
         tile.ids?.dispose();
         tile.skins?.dispose();
         tile.weights?.dispose();
+        tile.weights2?.dispose();
       }
       tiles.clear();
       stateTexture?.dispose();

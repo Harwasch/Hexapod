@@ -311,12 +311,23 @@ splat's ancestor chain owns it (a tree, not each branch), so the skin is smooth 
   j acts fully". Signed, never normalised to sum to one.
 - **Handles per object**: `m = clamp(round(8 + 2·log2(d / 2 m)), 8, 16)` for a bounds diagonal
   `d` (8 at 2 m, 12 at 8 m, 16 from 32 m), and at most its node count allows. Nodes: an eighth
-  of its splats, 48 to 600; at most 4000 integration points.
+  of its splats, 48 to 600; at most 4000 integration points, chosen (with the nodes) from at
+  most 120,000 of its splats (`FIT_POOL`: a seeded random subset of a bigger object's; the
+  weights are still evaluated at every splat). A handle policy may choose another `m` (§9:
+  the stiffness-aware rule gives a rigid object 1, a big tree 32).
 - **`skin.bin`**: one 16-byte row per **skinned** splat (unskinned splats take none), in each
   tile's order from `row`, tiles in checksum order. Byte `k` is handle `k + 1`'s weight,
   `int8 = round(127·w)` (weight = byte × `weights.scale`), unused bytes 0. 16 bytes is one
   RGBA32UI texel, the viewer's upload unit. Merged level-of-detail parents are evaluated at
-  their own position (the RKPM basis is defined everywhere), not fitted.
+  their own position (the RKPM basis is defined everywhere), not fitted. A file with any skin
+  of more than 16 handles has `weights.rowBytes` 32: two texels a splat, bytes 16..31 the
+  weights of handles 17..32 (every renderer reads the second texel from a second weight
+  texture or stream). A skin of **one** handle (only the constant field: a rigid object) takes
+  no rows at all; its splats carry its id in `tiles` and nothing in `skin.bin`.
+- **Optional per skin** (written by the bake-off's builder, §9): `traits` (`label`,
+  `category`, `behaviour`, `properties`: the instance's, for a viewer whose
+  `instances.json` does not list it -- the wind's prior and the poke read them) and `class`
+  (the handle policy's stiffness class).
 - **Dense, not top-k** (measured, `skin_scene.sparsity_report`, synthetic tree, 13 handles,
   random handles whose largest displacement is 5% of its half-height; error as a share of the
   rms displacement):
@@ -1065,3 +1076,135 @@ survives new tiles), and is left until something needs a split on the live site.
 tiles into a new generation and never deletes the legacy prefix). Once a scan is republished
 with new tiles, a segmentation of the legacy URL no longer binds the asset's tiles, and
 publish-instances refuses it at the binding check.
+
+## 9. The motion-skins bake-off
+
+The owner's decision (2026-10-05): "We do want to create skins, and should also do a bake-off
+here across methods and scenes (for the skins options, not the hand-tuned rigs or full
+simulation offline)." The owner judges in the app, by watching the wind and by poking objects.
+So every candidate is published beside a scan's tiles as a **variant**, in today's skin format,
+and the viewer can draw any of them under the same wind and the same poke.
+
+### The candidates
+
+Every candidate writes the §4 contract (`skin.json` + `skin.bin`, handle 0 the constant field,
+signed int8 weights), so the viewer, the wind and the poke need nothing per method
+(`tools/captures/skin_methods.py`, `skin_variants.py`). Two axes: **how the weight fields are
+found** and **how many handles** an object gets.
+
+| variant (`extras.variants.skins[].name`) | method                                                                                                                                                                    | handles             | licence                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----------------------------- |
+| `freeform`                               | FreeForm/RKPM skinning eigenmodes over the splat centres (today's method; a shell; free modes, the wind keeps the mixes that leave the base still)                        | size rule (today's) | Kaolin, Apache-2.0 (vendored) |
+| `freeform-stiff`                         | the same                                                                                                                                                                  | stiffness-aware     | Kaolin, Apache-2.0            |
+| `pinned-stiff`                           | FreeForm/RKPM with the base band held by a penalty (`kaolin_rkpm` `pinned`): every learned handle is a bending mode of a rooted object                                    | stiffness-aware     | Kaolin, Apache-2.0 + ours     |
+| `tetfem-stiff`                           | linear FEM (P1) on a Kuhn tetrahedral mesh of the object's filled occupancy, base nodes held, splats embedded barycentrically; mass and anchor integrated over the volume | stiffness-aware     | ours (NumPy/SciPy)            |
+
+The eigenvalues of every method are on one scale (the object in the unit box `fit_skin` uses,
+`E = 1`), so `ω_j = c·√λ_j / scale` and a material's `c` mean the same under each.
+
+**Not candidates, and why.** PhysSkin: no licence (§7). Simplicits' original per-object neural
+weights (Kaolin, Apache-2.0): a per-object MLP trained by stochastic elastic energy; FreeForm's
+own comparison has RKPM 40× faster and closer to converged FEM, and it would bring PyTorch
+training into the capture tools for a field that would draw like `freeform` under small wind --
+left out of this round, the obvious next one if the owner wants a learned field. VR-GS's cage
+and XPBD embedding: no code was released (project page only; the cage needs as many handles as
+cage vertices, which the 16- or 32-handle rows cannot carry, and XPBD in the browser). fTetWild
+(MPL-2.0, `pytetwild`) needs a watertight surface the splats do not give; the voxel mesh here
+needs none. GradRig (2026) needs a hand-made rig; Love Handles (2026) is for tetrahedral meshes
+and has no code.
+
+**The tet mesh, measured** (synthetic tree, 10 handles, random handles at 2% of its size): a
+mesh closed back to the occupancy (dilate, fill, erode) left twigs a voxel thin that hinged
+(kNN stretch p99 1.26, max 8); grown by a voxel and kept, p99 1.02, max 1.04 -- FreeForm's is
+1.02 / 1.08. With free modes the yard's shrubs kept no wind direction at all (every mix moved
+their base), so the volume FEM holds its base as `pinned` does: the two held methods differ
+only in surface against volume.
+
+### Handle policies
+
+- **Size** (today's, `skin_scene.handle_count`): `m = clamp(round(8 + 2·log2(d / 2 m)), 8, 16)`.
+- **Stiffness-aware** (`skin_methods.stiffness_policy`): a class per object from, in order, a
+  fitted `materials.json` stiffness (`c ≤ 7` m/s plant, `≤ 20` firm, else rigid), its
+  category (shrubs, trees, grass, flowers: plant; produce, animals, clothing: firm; fixtures,
+  furniture, vehicles, equipment, buildings, walls, rock, wood: rigid), its top names
+  (`bush`, `pumpkin`, `rock`...), then its property scores. Rigid things get **1 handle** (no
+  weights: a skin of one handle takes no rows of `skin.bin`; it moves only whole, or not at
+  all), firm compact things **4**, plants the size rule, and plants 6 m tall or more
+  (**trees**) **32**: two 16-byte texels a splat (`weights.rowBytes` 32, §4).
+
+**32 handles in the viewer.** All three renderers carry them: CesiumJS a second weight texture
+(`u_skinWeights2`, only for a file of wide rows), PlayCanvas a second stream
+(`splatWeights2`), Spark a second per-tile texture; the shared GLSL reads weight `k ≥ 16` from
+the second texel, the handle table holds 128 texels a skin (`TEXELS_PER_SKIN`). A file of
+16-byte rows draws as before. Cost: 32 bytes a skinned splat, and twice the multiply-adds in
+the vertex shader for those splats.
+
+### The scans and what is skinned
+
+`skin_variants.BAKEOFF`, the same objects under every variant (the bake-off's choice, whatever
+their segmented behaviour says; `skin_scene.owners_of`):
+
+| scan                   | objects                                                                                                                                | notes                                                                                                                                                                                                                                                                                 |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| spool (run 8e1cc115)   | 1, the spool                                                                                                                           | segmented `static`, `fixtures`, rigid 0.99: rigid under the stiffness rule (1 handle, nothing moves). Its bottom flange is **fused with the ground** in this segmentation, so under the size rule a patch of ground wobbles with it; not fixed here (the segmentation bake-off's job) |
+| pumpkin (run 430c1932) | 2 and 3, the pumpkins                                                                                                                  | 2 is `movable` (it slides whole when poked), 3 `in-place`; firm: 4 handles                                                                                                                                                                                                            |
+| camp (run 50c25673)    | shrubs and small trees: 26, 56, 67, 122 by the north fort; 93, 103, 148 by the east huts; 16 (a big shrub), 91 (a trunk), 276 (a pine) | the camp's tiles fetched for these objects only; `skin.json` lists only tiles with a skinned splat                                                                                                                                                                                    |
+| Minnetonka tree (site) | the whole scan, as one object (instance 1, made by the builder: the site has no `instances.json`)                                      | its procedural rig stands down while a candidate is drawn (`LivingSurveyManager`), so the comparison is skins against skins                                                                                                                                                           |
+
+### The poke driver
+
+`@twin/world` `skinPoke.ts` (the physics) and `apps/web/src/cesium/skinPoke.ts` (the
+controller), on by **`K`**, Settings' "Poke objects" switch under the wind, and off by `K`,
+Escape or the badge's close button (`state/skinPoke.ts`, `features/living/PokeBadge.tsx`).
+
+- **A press on a skinned object** (the front-most skinned splat under the cursor, by the scene
+  selection's ray cast on the renderer's pick source and the skin's own tile binding, so it
+  works under PlayCanvas, Spark and CesiumJS, with or without `instances.json`) is taken: it
+  never reaches CesiumJS's handlers, and the camera's inputs are held until the release. **A
+  press anywhere else** goes to the camera as always. Nothing is taken while the brush paints,
+  while measuring or exploring.
+- **The spring.** The cursor's point on the plane through the grabbed splat facing the camera
+  pulls that splat with an acceleration `κ (d − u)`, `κ = (2π·3 Hz)²`, `u = Σ_j w_j q_j` its
+  displacement; in the object's modal coordinates the spring is a rank-one term. A soft object
+  (its modes well below 3 Hz) follows the cursor; a stiff one barely gives. The pull is capped
+  at 0.6 of the object's size and every handle at 0.35 of its support radius (as the wind's
+  bound, `tanh`), so nothing folds.
+- **Rooted or movable.** A rooted object (behaviour `in-place`, or anything the wind sways)
+  bends in the wind's anchored modes: its base stays. A `movable` one moves whole as well (its
+  constant handle) and, with no ground or gravity yet (the rigid-body layer, research §3 P4),
+  springs home at 0.8 Hz. A rigid rooted object (one handle) does not move.
+- **Release** lets it ring down at its own frequencies: Newmark's average-acceleration rule on
+  a fixed 1/120 s grid (no numerical damping; frame-rate independent), and once every handle is
+  within 0.1% of the object's size and nearly still, the overlay is dropped: the measured
+  frame, pixel for pixel.
+- **With the wind**: the poke's handles are laid over the driver's (`setInstanceOverlay` in
+  `splatSkin.ts`), so a held branch still sways and calm leaves a ringing object ringing.
+- Material: the wind's (`materialPrior` from the instance's or the skin's own `traits`,
+  `materials.json` over it). Time is the page's clock, not the scene's.
+
+Tests: `packages/world/src/skinPoke.test.ts` (a soft object follows and a stiff one does not;
+released, it rings at its model frequency within 10%; it comes to rest and hands back `null`;
+no handle passes its limit; ten minutes at 60 Hz dragged about stays finite; the state is the
+same at 24, 60 and 144 fps; a movable object slides whole and springs home), and
+`apps/web/e2e/poke.spec.ts` on the yard's 32-handle skin (`synthetic-yard/skin-wide/`) with
+the real mouse, under CesiumJS, PlayCanvas and Spark: the press is taken and the camera holds,
+the tree bends while its base and its neighbour stay, it rings after the release and rests to
+the measured frame exactly, a press on empty space still turns the camera, the movable shrub
+slides whole, and with the tool off the same press turns the camera.
+
+### Publishing and choosing
+
+`.github/workflows/publish-skins.yml` (`[skins]`, `[skins|scans=...|variants=...|publish]`):
+one CPU job a scan runs `skin_variants.py scan` (locate the scan's current tileset, fetch,
+fit, lay out `variants/skins/<name>/`), and `publish` merges this run's entries into the
+`extras.variants.skins` the tileset declares at that moment (other systems' and variants'
+entries kept, an entry of the same name replaced) and attaches them through the API (a run's
+scan) or, for the Minnetonka tree, whose tileset is a site under `sites/` the attach refuses,
+uploads them beside it in the public bucket and rewrites its `tileset.json` with only
+`extras.variants` changed. `extras.skin` is never touched: "Today" stays the default.
+
+**Choosing in the viewer.** `state/skinVariant.ts`: `useSkinVariant.getState().select(assetId,
+name | null)` swaps the skin a scan draws (`attachSkin` follows it: the part drawn now goes,
+the chosen one loads, the wind and the poke move it). The "Compare methods" switcher is meant
+to call it. Until it lands, the **temporary** URL parameter `?skinVariant=<name>` picks that
+candidate on every scan that declares it.
