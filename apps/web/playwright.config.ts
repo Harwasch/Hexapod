@@ -27,6 +27,19 @@ const SOFTWARE_WEBGPU = [
 ];
 
 /**
+ * The 3D scene specs: each drives a renderer through a dev harness page (splats, motion, LOD,
+ * streaming, picking, the WebGPU trial), and together they are about two thirds of the
+ * suite's time on software GL. They are the `scene` project (and `webgpu`, which is all
+ * scene tests); every other spec is `chromium`. Locally both run as before. CI runs `scene`
+ * and `webgpu` on main, on a dispatch, and on a pull request that touches what they render
+ * from (.github/workflows/ci.yml, the `changes` job); a pull request that changes only the
+ * app's pages runs `chromium`. A new spec lands in `chromium` -- run on every web change --
+ * until it is listed here.
+ */
+const SCENE_SPECS =
+  /(^|[\\/])(instances|instancesPublished|instancesScan|livingCompare|livingSurvey|livingSurveyPerf|livingSurveyScene|livingSurveyTiles|livingSurveyYard|motionRenderers|navigationPerf|scanOverlayIdle|scanRenderers|sceneSelect|skin|splatLod|splatNavigation|splatStreaming|telemetry|viewCones|wind)\.spec\.ts$/;
+
+/**
  * End-to-end tests run against the Vite dev server with the catalog API
  * mocked at the network layer, so they are deterministic and need no
  * database. Cesium runs in headless Chromium with software WebGL.
@@ -61,7 +74,18 @@ export default defineConfig({
     },
   },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] }, grepInvert: /@webgpu/ },
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      grepInvert: /@webgpu/,
+      testIgnore: SCENE_SPECS,
+    },
+    {
+      name: "scene",
+      use: { ...devices["Desktop Chrome"] },
+      grepInvert: /@webgpu/,
+      testMatch: SCENE_SPECS,
+    },
     {
       name: "webgpu",
       grep: /@webgpu/,

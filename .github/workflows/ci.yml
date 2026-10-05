@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       web: ${{ steps.filter.outputs.web }}
+      scene: ${{ steps.filter.outputs.scene }}
+      shards: ${{ steps.filter.outputs.shards }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -34,8 +36,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
+          # The Playwright shards: six when the 3D scene specs run (about 86 runner-minutes of
+          # tests), four when only the app's pages do (about 32).
+          all() { printf 'web=true\nscene=true\nshards=[1,2,3,4,5,6]\n' >> "$GITHUB_OUTPUT"; }
           if [ "$EVENT" != "pull_request" ]; then
-            echo "web=true" >> "$GITHUB_OUTPUT"; exit 0
+            all; exit 0
           fi
           # The checkout is the PR merged onto its base, so its diff from the base commit is
           # the PR's changes -- with whatever the base gained since the event, which can
@@ -43,7 +48,7 @@ jobs:
           if ! git fetch --no-tags --depth=1 origin "$BASE" \
             || ! changed=$(git diff --name-only "$BASE" HEAD); then
             echo "::warning::could not diff against $BASE; running everything"
-            echo "web=true" >> "$GITHUB_OUTPUT"; exit 0
+            all; exit 0
           fi
           printf '%s\n' "$changed"
           # What the web app is built and served from, the e2e fixtures it loads off disk
@@ -52,11 +57,26 @@ jobs:
           # (apps/api, the rest of tools/, infra/, docs/) matches none of it. `contracts` is
           # under packages/.
           web='^(apps/web/|packages/|data/tiles/|tools/captures/data/|patches/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$|\.github/workflows/ci\.yml$)'
-          if printf '%s\n' "$changed" | grep -qE "$web"; then
-            echo "web=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "web=false" >> "$GITHUB_OUTPUT"
+          if ! printf '%s\n' "$changed" | grep -qE "$web"; then
+            # The shards job is skipped; a one-entry list keeps its matrix valid regardless.
+            printf 'web=false\nscene=false\nshards=[1]\n' >> "$GITHUB_OUTPUT"
             echo "Nothing the web app is built or tested from changed: Playwright is skipped."
+            exit 0
+          fi
+          # What the 3D scene specs (the `scene` and `webgpu` projects, apps/web/playwright.
+          # config.ts) render from: the renderers and their harnesses, what they import
+          # (lib/, state/), the world and geo packages, the fixtures on disk, the dependencies
+          # and build, and any e2e file but the six page specs. A diff that touches only the
+          # app's pages (features/, app/, admin/, upload/, view/, api/, styles, packages/ui,
+          # contracts) runs the `chromium` project alone; main and a dispatch run everything.
+          scene='^(apps/web/src/(cesium|dev|lib|state)/|apps/web/(public/|[^/]*\.html$|package\.json$|vite\.config\.ts$|playwright\.config\.ts$|tsconfig[^/]*\.json$)|packages/(world|geo)/|data/|tools/captures/data/|patches/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$|\.github/workflows/ci\.yml$)'
+          pages='^apps/web/e2e/(admin|app|captures|layout|phoneUpload|view)\.spec\.ts$'
+          if printf '%s\n' "$changed" | grep -qE "$scene" \
+            || printf '%s\n' "$changed" | grep -E '^apps/web/e2e/' | grep -qvE "$pages"; then
+            printf 'web=true\nscene=true\nshards=[1,2,3,4,5,6]\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'web=true\nscene=false\nshards=[1,2,3,4]\n' >> "$GITHUB_OUTPUT"
+            echo "Only the app's pages changed: the 3D scene specs are skipped (main runs them)."
           fi
 
   web:
@@ -144,18 +164,18 @@ jobs:
           sys.exit(1 if problems else 0)
           PY
 
-  # Playwright, in shards. 115 tests ran in ~45 min on one runner: Cesium on SwiftShader's
-  # software GL is CPU-bound, so a runner keeps `workers: 1` (apps/web/playwright.config.ts)
-  # and the parallelism is across runners instead -- each shard a fresh runner with its own
-  # dev server (18 of the 23 specs load /src/ modules -- the dev harnesses -- which only the
-  # dev server serves). Each shard runs every fourth test of the full listing (round robin,
-  # `--test-list`), not a quarter of the files: `--shard` cuts the list into consecutive
-  # slices, by file or by test, so the long scenes that sit together (motionRenderers'
-  # 600-900 s budgets, livingSurveyPerf) all landed on one runner -- on 2026-10-03 the
-  # shards took 17, 10, 12 and 33 minutes. Not `needs: web`: a shard does not use the build,
-  # so it starts at once rather than after lint, typecheck, unit tests and the build.
+  # Playwright, in shards. Cesium on SwiftShader's software GL is CPU-bound, so a runner keeps
+  # `workers: 1` (apps/web/playwright.config.ts) and the parallelism is across runners instead
+  # -- each shard a fresh runner with its own dev server (the harness specs load /src/
+  # modules, which only the dev server serves). Each shard runs every n-th test of the
+  # listing (round robin, `--test-list`), not a slice of it: `--shard` cuts the list into
+  # consecutive runs, and the long scenes that sit together alphabetically all landed on one
+  # runner (17, 10, 12 and 33 minutes on 2026-10-03). The `changes` job says which projects
+  # and how many shards: the page specs alone (`chromium`, about 32 runner-minutes) on four,
+  # everything (`scene` and `webgpu` too, about 86) on six. Not `needs: web`: a shard does
+  # not use the build, so it starts at once.
   e2e-shard:
-    name: Web · Playwright (shard ${{ matrix.shard }}/4)
+    name: Web · Playwright (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.web == 'true'
@@ -163,7 +183,7 @@ jobs:
       # Every shard to the end: one failing must not hide what the others would have found.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(needs.changes.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -173,13 +193,20 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @twin/web exec playwright install --with-deps chromium
-      # This shard's tests: every fourth line of the listing, starting at its own. The four
-      # residues cover the listing once, so no test is run twice or dropped.
+      # This shard's tests: every n-th line of the listing, starting at its own. The n
+      # residues cover the listing once, so no test is run twice or dropped. Without the
+      # scene specs, only the `chromium` project is listed.
       - name: This shard's tests
+        env:
+          SCENE: ${{ needs.changes.outputs.scene }}
+          SHARDS: ${{ strategy.job-total }}
+          SHARD: ${{ matrix.shard }}
         run: |
-          pnpm --filter @twin/web exec playwright test --list --reporter=list \
+          projects=()
+          if [ "$SCENE" != "true" ]; then projects=(--project=chromium); fi
+          pnpm --filter @twin/web exec playwright test --list --reporter=list "${projects[@]}" \
             | grep ' › ' | sed 's/^ *//' > "$RUNNER_TEMP/all-tests.txt"
-          awk -v n=4 -v i=${{ matrix.shard }} 'NR % n == i % n' "$RUNNER_TEMP/all-tests.txt" \
+          awk -v n="$SHARDS" -v i="$SHARD" 'NR % n == i % n' "$RUNNER_TEMP/all-tests.txt" \
             > "$RUNNER_TEMP/shard-tests.txt"
           echo "$(wc -l < "$RUNNER_TEMP/shard-tests.txt") of $(wc -l < "$RUNNER_TEMP/all-tests.txt") tests"
           test -s "$RUNNER_TEMP/shard-tests.txt"
