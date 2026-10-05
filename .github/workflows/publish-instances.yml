@@ -16,8 +16,19 @@ name: Publish instances
 #   cuts a new generation and repoints the asset. Nothing here writes the public bucket or a
 #   tileset.json (docs/DEPLOYMENT.md, "Sidecars: one publisher").
 # * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
-#   that, push a commit whose message carries `[instances|run=<segment.yml run id>]`,
-#   adding `|scans=camp,spool` to choose scans and `|publish` to publish.
+#   that, push a commit (to `living-models` or a `bakeoff-*` branch) whose message carries
+#   `[instances|run=<segment.yml run id>]`, adding `|scans=camp,spool` to choose scans and
+#   `|publish` to publish.
+# * **A variant** (`variant=<name>`, the segmentation bake-off): the files go to
+#   `variants/objects/<name>/` instead, and the root's `extras.variants.objects` gets the
+#   entry `{name, label, about, instances}` (label and about from the run's instances.json
+#   `variant` block), every other entry and system kept. The API replaces an extras key
+#   whole, so `attach_sidecars.attach` re-reads the asset's current `extras.variants` right
+#   before its request and merges the entry into it (`with_variant`): a variant another
+#   run attached since the build is kept. Today's `extras.instances` is not touched: it
+#   stays the default a viewer shows. Any candidate's `segmentation` artifact can be
+#   published this way (B and C too); its instances.json may carry
+#   `variant: {name, label, about}`.
 #
 # Variables: TWIN_API_URL, SCAN_ASSET_IDS (JSON, {"camp": "<asset id>", ...}). For `publish`
 # only, secrets CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, API_WRITE_TOKEN
@@ -25,7 +36,7 @@ name: Publish instances
 
 on:
   push:
-    branches: [living-models]
+    branches: [living-models, "bakeoff-*"]
   workflow_dispatch:
     inputs:
       run:
@@ -40,6 +51,10 @@ on:
         description: "Publish beside the tiles (otherwise build and review only)"
         type: boolean
         default: false
+      variant:
+        description: "Publish as this bake-off variant (variants/objects/<name>/), not today's"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -56,6 +71,7 @@ jobs:
       run: ${{ steps.plan.outputs.run }}
       scans: ${{ steps.plan.outputs.scans }}
       publish: ${{ steps.plan.outputs.publish }}
+      variant: ${{ steps.plan.outputs.variant }}
     steps:
       # Read as data, validated here, never interpolated into a shell line.
       - id: plan
@@ -65,10 +81,11 @@ jobs:
           RUN: ${{ inputs.run }}
           SCANS: ${{ inputs.scans }}
           PUBLISH: ${{ inputs.publish }}
+          VARIANT: ${{ inputs.variant }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
-          options = {"run": "", "scans": "spool,pumpkin,camp", "publish": "false"}
+          options = {"run": "", "scans": "spool,pumpkin,camp", "publish": "false", "variant": ""}
           if os.environ["EVENT"] == "workflow_dispatch":
               for name in options:
                   options[name] = os.environ.get(name.upper(), "") or options[name]
@@ -79,7 +96,8 @@ jobs:
                   if name not in options:
                       raise SystemExit(f"unknown option {name!r} in the [instances] token")
                   options[name] = value if value else "true"
-          valid = {"run": r"[0-9]+", "scans": r"[a-z0-9-]+(,[a-z0-9-]+)*", "publish": r"true|false"}
+          valid = {"run": r"[0-9]+", "scans": r"[a-z0-9-]+(,[a-z0-9-]+)*", "publish": r"true|false",
+                   "variant": r"([a-z0-9][a-z0-9-]{0,47})?"}
           for name, pattern in valid.items():
               if not re.fullmatch(pattern, options[name]):
                   raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
@@ -95,6 +113,7 @@ jobs:
     timeout-minutes: 60
     env:
       SCANS: ${{ needs.plan.outputs.scans }}
+      VARIANT: ${{ needs.plan.outputs.variant }}
       TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
       SCAN_ASSET_IDS: ${{ vars.SCAN_ASSET_IDS }}
     steps:
@@ -162,17 +181,40 @@ jobs:
               if len(doc["tiles"]) != len(set(doc["tiles"])) or len(doc["tiles"]) < len(set(uris)):
                   raise SystemExit(f"{name}: the binding does not match the tiles")
               out = temp / "out" / name
-              out.mkdir(parents=True)
+              variant = os.environ.get("VARIANT", "")
+              folder = attach_sidecars.variant_folder("objects", variant) if variant else ""
+              (out / folder).mkdir(parents=True)
               for file in ("instances.json", "instances.emb"):
-                  shutil.copy(src / file, out / file)
+                  shutil.copy(src / file, out / folder / file)
+              if variant:
+                  # Registered beside today's objects and the other variants, never over them.
+                  own = doc.get("variant") or {}
+                  if own.get("name") not in (None, variant):
+                      raise SystemExit(f"{name}: the run is variant {own.get('name')!r}, not {variant!r}")
+                  entry = {
+                      "name": variant,
+                      "label": str(own.get("label") or variant),
+                      "about": str(own.get("about") or ""),
+                      "instances": folder + "instances.json",
+                  }
+                  # For review: the merge as of now. The publish job merges again into the
+                  # asset's extras as they are when it attaches (attach_sidecars.attach).
+                  current = (published.get("root") or {}).get("extras") or {}
+                  extras = {"variants": attach_sidecars.with_variant(current.get("variants"), "objects", entry)}
+                  register = ("objects", entry)
+              else:
+                  extras = {"instances": {"uri": "instances.json", "count": len(doc["instances"])}}
+                  register = None
               attach_sidecars.write_manifest(
                   out,
                   asset_id=asset["assetId"],
                   based_on=url,
-                  extras={"instances": {"uri": "instances.json", "count": len(doc["instances"])}},
+                  extras=extras,
+                  variant=register,
               )
               top = sum(1 for r in doc["instances"] if r["level"] == 0)
-              print(f"- **{name}** (asset `{asset['assetId']}`): {len(uris)} tiles bound, "
+              where = f" as variant `{variant}` ({folder})" if variant else ""
+              print(f"- **{name}** (asset `{asset['assetId']}`){where}: {len(uris)} tiles bound, "
                     f"{len(doc['instances']):,} instances ({top:,} top-level); {url}")
           PY
       - uses: actions/upload-artifact@v4

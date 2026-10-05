@@ -105,6 +105,11 @@ PIT_WINDOW = 7
 LOW_BAND_FLOORS = 2.0
 #: Splats sampled for the point spacing.
 SPACING_SAMPLE = 200_000
+#: The raster's cell is at least the scan's robust extent over this.
+MAX_CELLS_SIDE = 1500
+#: The noise floor is at least this many times the ground's roughness: the robust spread of
+#: its cells' surface about their 3 x 3 median.
+ROUGHNESS_FLOORS = 3.0
 #: The harmonic fill solves directly up to this many raster cells, else coarse to fine.
 DIRECT_CELLS = 40_000
 FINE_SWEEPS = 60
@@ -292,7 +297,11 @@ def _cell_size(xy: np.ndarray, params: GroundParams) -> float:
         keys = np.floor((xy - low) / cell).astype(np.int64)
         occupied = np.unique(keys[:, 0] * (int(span[1] / cell) + 2) + keys[:, 1]).size
         cell = math.sqrt(params.points_per_cell * occupied * cell * cell / count)
-    return float(min(max(cell, params.min_cell_m), params.max_cell_m))
+    # A scan many hundred metres wide needs no centimetre raster: at least 1 / `MAX_CELLS_SIDE`
+    # of its robust extent.
+    lo, hi = np.percentile(xy, 1, axis=0), np.percentile(xy, 99, axis=0)
+    least = max(params.min_cell_m, float(np.max(hi - lo)) / MAX_CELLS_SIDE)
+    return float(min(max(cell, least), params.max_cell_m))
 
 
 def _fill_nearest(values: np.ndarray, known: np.ndarray) -> np.ndarray:
@@ -504,8 +513,17 @@ def ground_pass(
     timings["pitsS"] = time.perf_counter() - started
 
     # SMRF: progressive openings; what rises above an opening by more than the slope over
-    # the window's radius is an object.
+    # the window's radius (plus the noise floor) is an object. The floor is first the
+    # splats' spacing, then also the roughness of the ground that finds: a forest floor or
+    # a hay bed is rough at a few centimetres however densely it was captured.
     objects = _smrf(filled, observed, radii, params.slope, cell, floor)
+    ground_cells = observed & ~objects
+    if ground_cells.sum() >= 16:
+        deviation = (filled - ndimage.median_filter(filled, size=3, mode="nearest"))[ground_cells]
+        _, roughness = robust_spread(deviation)
+        if ROUGHNESS_FLOORS * roughness > floor:
+            floor = ROUGHNESS_FLOORS * roughness
+            objects = _smrf(filled, observed, radii, params.slope, cell, floor)
     ground_cells = observed & ~objects
     if ground_cells.sum() < max(4, 0.01 * observed.sum()):
         ground_cells = observed.copy()  # nothing but objects: take the surface as it is

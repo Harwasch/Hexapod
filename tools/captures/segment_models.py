@@ -47,7 +47,11 @@ from segment_scene import Mask
 VOCABULARY_FILE = Path(__file__).resolve().parent / "data" / "open_vocabulary.txt"
 
 SAM2_MODEL = "facebook/sam2.1-hiera-tiny"
+#: SAM 2.1's largest checkpoint (Apache-2.0): the ground-first candidate's masks.
+SAM2_LARGE_MODEL = "facebook/sam2.1-hiera-large"
 SIGLIP_MODEL = "google/siglip2-base-patch16-224"
+#: Qwen3-VL (Apache-2.0, code and weights): names objects for the ground-first candidate.
+QWEN_VL_MODEL = "Qwen/Qwen3-VL-4B-Instruct"
 
 #: How a label is asked about. SigLIP 2 was trained on lower-case captions.
 TAG_TEMPLATE = "a photo of a {}."
@@ -418,6 +422,23 @@ def _device(device: str | None) -> str:
 # --- SAM 2.1 --------------------------------------------------------------------------------
 
 
+@cache
+def _sam2(model_id: str, device: str) -> tuple[Any, Any, str]:
+    """SAM 2.1's processor and model on `device`, loaded once per process (the automatic
+    masks and the box prompts of one run share them)."""
+    import torch
+    from transformers import Sam2Model, Sam2Processor
+
+    processor = Sam2Processor.from_pretrained(model_id)
+    model = Sam2Model.from_pretrained(model_id).to(device).eval()
+    if device == "cpu":
+        torch.set_num_threads(max(1, torch.get_num_threads()))
+    else:
+        # The GPU does the work; CPU threads would only contend with the renderers.
+        torch.set_num_threads(GPU_HOST_THREADS)
+    return processor, model, device
+
+
 @dataclass
 class Sam2Masks:
     """SAM 2.1 automatic masks at three granularities (transformers' `Sam2Model`).
@@ -454,18 +475,7 @@ class Sam2Masks:
 
     def _load(self) -> tuple[Any, Any, str]:
         if self._loaded is None:
-            import torch
-            from transformers import Sam2Model, Sam2Processor
-
-            device = _device(self.device)
-            processor = Sam2Processor.from_pretrained(self.model)
-            model = Sam2Model.from_pretrained(self.model).to(device).eval()
-            if device == "cpu":
-                torch.set_num_threads(max(1, torch.get_num_threads()))
-            else:
-                # The GPU does the work; CPU threads would only contend with the renderers.
-                torch.set_num_threads(GPU_HOST_THREADS)
-            self._loaded = (processor, model, device)
+            self._loaded = _sam2(self.model, _device(self.device))
         return self._loaded
 
     def masks(self, rgb: np.ndarray) -> list[Mask]:
@@ -539,6 +549,152 @@ class Sam2Masks:
             for i, ((_, _, level), score) in enumerate(zip(chosen, scores, strict=True))
             if full_np[i].any()
         ]
+
+
+@dataclass
+class Sam2LargeMasks(Sam2Masks):
+    """`Sam2Masks` on SAM 2.1 hiera-large: the image encoder is ~3-4x hiera-tiny's, the mask
+    decoder (the per-point cost) the same, so a view costs little more on a GPU."""
+
+    model: str = SAM2_LARGE_MODEL
+
+
+@dataclass
+class Sam2BoxMasks:
+    """SAM 2.1 prompted with boxes (`segment_ground_first`'s refine pass): per box, one mask
+    (SAM's single answer to a box, which is not ambiguous) at the image's size, and SAM's
+    predicted IoU for it."""
+
+    model: str = SAM2_LARGE_MODEL
+    device: str | None = None
+
+    @property
+    def name(self) -> str:
+        return f"sam2-box:{self.model}"
+
+    def box_masks(self, rgb: np.ndarray, boxes: np.ndarray) -> list[tuple[np.ndarray, float]]:
+        """`boxes` (k, 4) pixels `x0, y0, x1, y1` -> per box `(mask (h, w) bool, score)`."""
+        import torch
+
+        boxes = np.asarray(boxes, np.float64).reshape(-1, 4)
+        if boxes.shape[0] == 0:
+            return []
+        processor, model, device = _sam2(self.model, _device(self.device))
+        h, w = rgb.shape[:2]
+        inputs = processor(images=np.ascontiguousarray(rgb, np.uint8), return_tensors="pt")
+        pixel_values = inputs["pixel_values"].to(device)
+        side = pixel_values.shape[-1]  # SAM's input is a stretched square (1024)
+        scaled = boxes * np.array([side / w, side / h, side / w, side / h])
+        prompt = torch.tensor(scaled[None], dtype=torch.float32, device=device)
+        with torch.inference_mode():
+            embeddings = model.get_image_embeddings(pixel_values)
+            out = model(image_embeddings=embeddings, input_boxes=prompt, multimask_output=False)
+        low = out.pred_masks[0][:, :1].float()  # (k, 1, 256, 256)
+        scores = out.iou_scores[0][:, 0].float().cpu().numpy()
+        full = torch.nn.functional.interpolate(low, size=(h, w), mode="bilinear")[:, 0] > 0
+        masks = full.cpu().numpy()
+        return [(masks[i], float(np.clip(scores[i], 0.0, 1.0))) for i in range(len(boxes))]
+
+
+# --- Qwen3-VL ----------------------------------------------------------------------------------
+
+#: What an object is asked (two crops: in context, the rest dimmed; then alone on black).
+NAME_PROMPT = (
+    "The two pictures show the same thing in a 3D scan of an outdoor place: first in its "
+    "surroundings (everything else dimmed), then alone on black. Answer with JSON only, no "
+    'other text: {"name": a short common name for it, lower case, such as "cable spool", '
+    '"pumpkin", "camping chair", "pine tree", "hay"; "whole": true if it is a whole object, '
+    'false if it is only a part of one; "part_of": what it is a part of, or null; '
+    '"material": its main material, one or two words; "movable": true if one or two people '
+    "could move it}"
+)
+
+
+def parse_answer(text: str) -> dict[str, Any] | None:
+    """The first JSON object in a model's answer, with `name` a non-empty string; else None."""
+    import json
+
+    start = text.find("{")
+    while start >= 0:
+        depth = 0
+        for end in range(start, len(text)):
+            depth += {"{": 1, "}": -1}.get(text[end], 0)
+            if depth == 0:
+                try:
+                    found = json.loads(text[start : end + 1])
+                except ValueError:
+                    break
+                name = found.get("name") if isinstance(found, dict) else None
+                if isinstance(name, str) and name.strip():
+                    found["name"] = " ".join(name.strip().split())[:60]
+                    return found
+                break
+        start = text.find("{", start + 1)
+    return None
+
+
+@dataclass
+class QwenNamer:
+    """Names objects with Qwen3-VL (`QWEN_VL_MODEL`, Apache-2.0): per object, its crops and
+    `NAME_PROMPT`, answered greedily as JSON (`parse_answer`). bf16 on a GPU; on a CPU,
+    float32 (test with the 2B model there)."""
+
+    model: str = QWEN_VL_MODEL
+    device: str | None = None
+    max_new_tokens: int = 96
+    #: torch dtype by name; None: bfloat16 on a GPU, float32 on a CPU.
+    dtype: str | None = None
+    _loaded: Any = field(default=None, init=False, repr=False)
+
+    @property
+    def name(self) -> str:
+        return f"qwen3-vl:{self.model}"
+
+    def _load(self) -> tuple[Any, Any, str]:
+        if self._loaded is None:
+            import torch
+            from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
+            device = _device(self.device)
+            default = torch.bfloat16 if device != "cpu" else torch.float32
+            dtype = getattr(torch, self.dtype) if self.dtype else default
+            processor = AutoProcessor.from_pretrained(self.model)
+            try:  # straight onto the device (with accelerate), not through host memory
+                model = Qwen3VLForConditionalGeneration.from_pretrained(
+                    self.model, dtype=dtype, device_map=device
+                )
+            except (ImportError, ValueError):
+                model = Qwen3VLForConditionalGeneration.from_pretrained(self.model, dtype=dtype)
+            self._loaded = (processor, model.to(device).eval(), device)
+        return self._loaded
+
+    def ask(self, images: list[np.ndarray], prompt: str) -> str:
+        """The model's answer to `prompt` about `images` (uint8 (h, w, 3) each)."""
+        import torch
+        from PIL import Image
+
+        processor, model, device = self._load()
+        content: list[dict[str, Any]] = [
+            {"type": "image", "image": Image.fromarray(np.ascontiguousarray(i, np.uint8))}
+            for i in images
+        ]
+        content.append({"type": "text", "text": prompt})
+        inputs = processor.apply_chat_template(
+            [{"role": "user", "content": content}],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to(device)
+        with torch.inference_mode():
+            out = model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False)
+        answer = out[:, inputs["input_ids"].shape[1] :]
+        return processor.batch_decode(answer, skip_special_tokens=True)[0]
+
+    def name_objects(self, crops: list[list[np.ndarray]]) -> list[dict[str, Any] | None]:
+        """Per object, its answer to `NAME_PROMPT` about its crops (None when it gave none
+        that parses)."""
+        return [parse_answer(self.ask(images, NAME_PROMPT)) if images else None for images in crops]
 
 
 # --- SigLIP 2 -------------------------------------------------------------------------------
