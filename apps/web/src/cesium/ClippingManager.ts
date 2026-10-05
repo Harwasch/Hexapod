@@ -53,6 +53,8 @@ export class ClippingManager {
   private readonly worldPolygons = new Map<string, ClippingPolygon[]>();
   private enabled = true;
   private photorealistic = false;
+  /** Seen from orbit: the photorealistic world gives way to the whole globe (`setOrbit`). */
+  private orbit = false;
   private floorless: string | null = null;
 
   constructor(private readonly scene: Scene) {
@@ -86,7 +88,7 @@ export class ClippingManager {
     if (this.photorealistic === photorealistic) return;
     this.photorealistic = photorealistic;
     if (!this.supported || !this.globeCollection) {
-      this.scene.globe.show = !photorealistic;
+      this.scene.globe.show = !photorealistic || this.orbit;
       return;
     }
     for (const key of Array.from(this.globePolygons.keys()))
@@ -102,6 +104,24 @@ export class ClippingManager {
     // inverse clip active (and every tile culled) when no site is engaged.
     if (photorealistic)
       this.addTo(this.globeCollection, this.globePolygons, SENTINEL_KEY, SENTINEL);
+    this.syncEnabled();
+  }
+
+  /**
+   * Seen from orbit the earth is the globe, whole, in either world: the photorealistic world
+   * hides its tileset there (LayerManager.setCameraAltitude) and the globe is drawn unclipped,
+   * everywhere. From that far out the world tileset is a handful of coarse tiles -- a
+   * polyhedron with straight edges for a horizon, and pieces missing until finer ones load --
+   * where the globe is a smooth ellipsoid with its atmosphere from the first frame.
+   */
+  setOrbit(orbit: boolean): void {
+    if (this.orbit === orbit) return;
+    this.orbit = orbit;
+    if (!this.supported || !this.globeCollection) {
+      this.scene.globe.show = !this.photorealistic || orbit;
+      this.scene.requestRender();
+      return;
+    }
     this.syncEnabled();
   }
 
@@ -254,9 +274,12 @@ export class ClippingManager {
     // sentinel keeps active; the globe itself stays shown so it keeps loading. Its work is
     // limited to the engaged outlines (plus a margin): loading and uploading imagery for
     // terrain that is clipped away everywhere else cost a third of a slow drag's main thread.
-    if (this.globeCollection && this.photorealistic) this.globeCollection.enabled = this.enabled;
-    this.scene.globe.show = !this.photorealistic || (this.globeCollection?.enabled ?? false);
-    this.scene.globe.cartographicLimitRectangle = this.photorealistic
+    // From orbit (`setOrbit`) it is the whole earth instead, unclipped.
+    const clippedWorld = this.photorealistic && !this.orbit;
+    if (this.globeCollection && this.photorealistic)
+      this.globeCollection.enabled = this.enabled && clippedWorld;
+    this.scene.globe.show = !clippedWorld || (this.globeCollection?.enabled ?? false);
+    this.scene.globe.cartographicLimitRectangle = clippedWorld
       ? this.globeLimit()
       : Rectangle.MAX_VALUE;
     this.scene.requestRender();

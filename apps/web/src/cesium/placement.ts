@@ -43,6 +43,19 @@ export interface MeasuredClamp {
   readonly spreadM: number;
 }
 
+/** Ground heights outside this band (m) are tiles still loading, not ground. */
+const PLAUSIBLE_GROUND_M: readonly [number, number] = [-500, 9000];
+
+/**
+ * A ground height worth believing, or undefined: the globe reports placeholder heights
+ * kilometres under the sea for tiles it has not loaded, and nowhere on land is lower than the
+ * Dead Sea's shore (-430 m) or higher than Everest.
+ */
+export function plausibleGround(height: number | undefined | null): number | undefined {
+  if (height === undefined || height === null || !Number.isFinite(height)) return undefined;
+  return height >= PLAUSIBLE_GROUND_M[0] && height <= PLAUSIBLE_GROUND_M[1] ? height : undefined;
+}
+
 /**
  * The ground at one point: the terrain, or the surface actually drawn there.
  *
@@ -57,12 +70,17 @@ export function groundAt(
   drawn: number | undefined,
   toleranceM: number,
 ): number | undefined {
-  const hasTerrain = terrain !== undefined && Number.isFinite(terrain);
-  if (drawn !== undefined && Number.isFinite(drawn)) {
-    if (!hasTerrain) return drawn;
-    if (Math.abs(drawn - terrain) < toleranceM) return drawn;
+  // Neither is believed outside the plausible band: a terrain tile not loaded yet reports a
+  // placeholder kilometres under the sea, and a drawn sample of a coarse tile can be the chord
+  // of a curve that sags kilometres under the ground (offline, with no terrain, the e2e
+  // flight's scan was put 3.6 km down that way, and the camera framed it there).
+  const ground = plausibleGround(terrain);
+  const seen = plausibleGround(drawn);
+  if (seen !== undefined) {
+    if (ground === undefined) return seen;
+    if (Math.abs(seen - ground) < toleranceM) return seen;
   }
-  return hasTerrain ? terrain : undefined;
+  return ground;
 }
 
 /**
