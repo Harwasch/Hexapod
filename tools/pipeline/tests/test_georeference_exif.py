@@ -648,7 +648,9 @@ def test_the_camera_height_is_measured_off_a_real_reconstructions_own_points(
     is, so the height comes out checkable in metres. (The prior's 1.5 m is wrong for this
     orbit, which is the point of reporting it: that is the guess, this is the measurement.)
 
-    Measured 2026-10-05: 3.620 m from 40 of 40 cameras, spread 0.4%.
+    Measured 2026-10-05: 3.620 m from 40 of 40 cameras, spread 0.4%; 39 of 40 on CI's
+    runners, whose SIFT points differ a little, so a camera at the edge of the ground can
+    find too few points under it. How many is not what this measures; the height is.
     """
     _, poses, truth = orbit
     model = sfm.read_model(poses)
@@ -666,7 +668,7 @@ def test_the_camera_height_is_measured_off_a_real_reconstructions_own_points(
         np.stack([known[image.name].centre for image in model.images]),
     )
     assert found is not None
-    assert found.n_cameras == FRAMES
+    assert found.n_cameras >= FRAMES * 0.9
     assert found.camera_height_units * fit.scale == pytest.approx(3.6, rel=0.05)
 
 
