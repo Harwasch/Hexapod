@@ -1411,7 +1411,12 @@ def occupied_share_of(
 
 
 def _metres_per_unit(georef: Mapping[str, Any] | None) -> float | None:
-    """Metres per model unit, when georeference measured one; None otherwise."""
+    """Metres per model unit, when georeference measured one; None otherwise.
+
+    Measured: `exif-gps` only. A `camera-height-estimate` frame carries metres per unit
+    too, but at ±20% or worse, and `keep_max_gsd_mm` would turn that guess into which
+    gaussians are published -- the criterion stays relative, as it is with no scale.
+    """
     if not georef or georef.get("scaleSource") != "exif-gps":
         return None
     frame = georef.get("frame")

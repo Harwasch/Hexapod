@@ -29,6 +29,7 @@ import { MeasurementManager } from "./MeasurementManager";
 import { MissionManager } from "./MissionManager";
 import { PerformanceManager } from "./PerformanceManager";
 import { FallbackGeocoder, IonGeocoder, NominatimGeocoder } from "./providers/geocoder";
+import { ScaleMeasure } from "./ScaleMeasure";
 import { SelectionManager } from "./SelectionManager";
 import { SiteManager } from "./SiteManager";
 import { installSplatTextureInterception } from "./splatCapture";
@@ -107,6 +108,8 @@ export class CesiumSceneManager {
   /** Selecting a scan's objects in the scene: click, cycle, paint (cesium/sceneSelect). */
   readonly sceneSelect: SceneSelectController;
   readonly measurement: MeasurementManager;
+  /** Two points on a scan, for the Set real size tool (features/inspector/RealSize.tsx). */
+  readonly scaleMeasure: ScaleMeasure;
   readonly mission: MissionManager;
   readonly areas: AreaEditor;
   readonly explore: ExploreController;
@@ -301,6 +304,9 @@ export class CesiumSceneManager {
     this.explore = new ExploreController(this.viewer, this.events);
     this.explore.setCollider(this.collider);
     this.explore.setCameraController(this.camera);
+    this.scaleMeasure = new ScaleMeasure(this.viewer, this.events, this.collider, (siteId) =>
+      this.sites.scalableTileset(siteId),
+    );
     this.keyboard = new KeyboardNavigator(this.viewer, this.camera);
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
       this.clipping.setEnabled(enabled),
@@ -548,6 +554,7 @@ export class CesiumSceneManager {
     this.debug.destroy();
     this.keyboard.destroy();
     this.explore.destroy();
+    this.scaleMeasure.destroy();
     this.measurement.destroy();
     this.mission.destroy();
     this.areas.destroy();

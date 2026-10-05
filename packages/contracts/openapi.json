@@ -823,6 +823,42 @@
         "title": "AssetRead",
         "type": "object"
       },
+      "AssetScaleUpdate": {
+        "additionalProperties": false,
+        "description": "`PUT /assets/{id}/scale`: a runtime scale and how it was found, or `reset: true`.\n\n`scale` is absolute -- relative to the model as registered, never to the scale before\nit. With no `evidence` it is taken as typed in (`direct`). A reset goes back to 1, drops\nthe evidence and restores the provenance the asset was registered with.",
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScaleEvidenceInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reset": {
+            "default": false,
+            "title": "Reset",
+            "type": "boolean"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.01,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scale"
+          }
+        },
+        "title": "AssetScaleUpdate",
+        "type": "object"
+      },
       "AssetUpdate": {
         "additionalProperties": false,
         "properties": {
@@ -6206,6 +6242,18 @@
               }
             ]
           },
+          "scaleUncertaintyPct": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scaleuncertaintypct"
+          },
           "sourceOrganization": {
             "anyOf": [
               {
@@ -6545,6 +6593,24 @@
             ],
             "title": "Rigurl"
           },
+          "scale": {
+            "default": 1.0,
+            "description": "Uniform scale the viewer applies to the tileset about its root transform's origin (the placed coordinate), relative to the model as registered. Set with `PUT /assets/{id}/scale`, which moves the site's boundary and centroid, the asset's footprint and its `groundSamples` with it: every position the catalog gives on the globe already describes the scaled model, and only what is drawn in the tileset's own frame (its tiles and sidecars) is the viewer's to scale. A PATCH of the render config leaves it, and `scaleEvidence`, as they are.",
+            "maximum": 100.0,
+            "minimum": 0.01,
+            "title": "Scale",
+            "type": "number"
+          },
+          "scaleEvidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScaleEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "screenSpaceErrorScale": {
             "default": 1.0,
             "exclusiveMinimum": 0.0,
@@ -6686,12 +6752,305 @@
         "title": "RunStatus",
         "type": "string"
       },
+      "ScaleEvidence": {
+        "additionalProperties": false,
+        "description": "`ScaleEvidenceInput` as stored, with what the server adds to it.\n\n`registeredScaleSource` and `registeredScaleUncertaintyPct` are the asset's provenance\nas its tileset was registered, before any runtime scale: what a reset puts back. They\nare carried from one scale to the next, so resetting after any number of changes\nreturns to the registration -- `unresolved` for a phone video registered before the\npipeline estimated scales -- not to the change before.",
+        "properties": {
+          "cameraHeightM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameraheightm"
+          },
+          "cameraHeightUnits": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameraheightunits"
+          },
+          "cameras": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameras"
+          },
+          "measuredAtScale": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.01,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measuredatscale"
+          },
+          "measuredLengthM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measuredlengthm"
+          },
+          "method": {
+            "enum": [
+              "camera-height-estimate",
+              "measured-length",
+              "direct"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "metresPerUnit": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metresperunit"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "registeredScaleSource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScaleSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registeredScaleUncertaintyPct": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registeredscaleuncertaintypct"
+          },
+          "setAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setat"
+          },
+          "trueLengthM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Truelengthm"
+          },
+          "uncertaintyPct": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uncertaintypct"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "title": "ScaleEvidence",
+        "type": "object"
+      },
+      "ScaleEvidenceInput": {
+        "additionalProperties": false,
+        "description": "How a runtime scale was arrived at, with the numbers it was arrived at from.\n\nWhich numbers depends on `method`; the ones a method needs are required for it, and the\nrest may be left out. Lengths are in metres *as drawn*: a length measured on the model\nwhile it was shown at `measuredAtScale` (1, the model as registered, when omitted).",
+        "properties": {
+          "cameraHeightM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameraheightm"
+          },
+          "cameraHeightUnits": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameraheightunits"
+          },
+          "cameras": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameras"
+          },
+          "measuredAtScale": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.01,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measuredatscale"
+          },
+          "measuredLengthM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measuredlengthm"
+          },
+          "method": {
+            "enum": [
+              "camera-height-estimate",
+              "measured-length",
+              "direct"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "metresPerUnit": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metresperunit"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "trueLengthM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Truelengthm"
+          },
+          "uncertaintyPct": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uncertaintypct"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "title": "ScaleEvidenceInput",
+        "type": "object"
+      },
       "ScaleSource": {
-        "description": "Where metric scale came from.\n\n``unresolved`` is a first-class answer, not a missing value: COLMAP alone recovers\ngeometry up to scale, and a measurement taken off an unresolved reconstruction is\nmeaningless rather than merely imprecise.",
+        "description": "Where metric scale came from.\n\n``unresolved`` is a first-class answer, not a missing value: COLMAP alone recovers\ngeometry up to scale, and a measurement taken off an unresolved reconstruction is\nmeaningless rather than merely imprecise.\n\n``camera-height-estimate`` is between a measurement and that: none was made, but a\nhandheld phone is about 1.5 m above the ground and the reconstruction says how many of\nits units that is (tools/pipeline/scale_estimate.py). Roughly the right size, at \u00b120%\nor worse -- the provenance carries the figure -- and never counted as metric.",
         "enum": [
           "arkit",
           "exif-gps",
           "manual",
+          "camera-height-estimate",
           "unresolved"
         ],
         "title": "ScaleSource",
@@ -8602,6 +8961,95 @@
           }
         ],
         "summary": "Update an asset",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/v1/assets/{asset_id}/scale": {
+      "put": {
+        "description": "Sets `renderConfig.scale`, the factor the viewer draws a pipeline-placed splat at relative to the model as registered, and `renderConfig.scaleEvidence`, how it was found: `{scale, evidence?}`, or `{reset: true}` for 1 as registered. The scale is absolute, never relative to the one before (0.8 then 0.5 is 0.5). The site's boundary and centroid, the asset's footprint and its `groundSamples` are resized about the tiles' placed origin with it, so every position the catalog gives already fits the scaled model. The provenance's `scaleSource` becomes `manual` (`measured-length`, `direct`, or no evidence) or `camera-height-estimate` with its `scaleUncertaintyPct`; a reset restores the one the asset was registered with. A re-run that registers new tiles resets it. 422 for a scale outside 0.01-100, evidence missing what its method needs, or a measured length that says another scale. See docs/DATA_MODEL.md.",
+        "operationId": "set_asset_scale_api_v1_assets__asset_id__scale_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetScaleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such asset"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`not_scalable`: not the splat a pipeline run registered (a seeded or hand-made asset, a mesh, a Cesium ion asset), so nothing records the origin its tiles are placed at"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Set an asset's real-world size, or reset it",
         "tags": [
           "assets"
         ]

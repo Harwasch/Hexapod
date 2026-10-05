@@ -1056,9 +1056,10 @@ and ten metres of uncertainty. `exif_gps` (Lane 2) writes one of two shapes:
   solved for, its per-image residuals, and the count within the RANSAC threshold. This is
   the only thing in the project that makes `scaleSource: exif-gps` true.
 - **located** — fixes but no poses, or an iPhone video whose only coordinate is the one
-  `ffmpeg_frames` scraped off the container. The capture is placed and nothing else is
-  claimed: `scaleSource: unresolved`, `alignment: null`, and ten metres — the same as a
-  hand placement, because a coordinate with no orientation is not a better answer.
+  `ffmpeg_frames` scraped off the container. The capture is placed and nothing is
+  measured: `alignment: null`, and ten metres — the same as a hand placement, because a
+  coordinate with no orientation is not a better answer. Its size, with a pose model, is
+  _estimated_ (below): `scaleSource: camera-height-estimate`. Otherwise `unresolved`.
 
 Three things it will not say:
 
@@ -1084,8 +1085,19 @@ people hold phones (nerfstudio's default `orientation_method="up"` and gsplat's
 `similarity_from_cameras` use the same estimate). On a real 50-frame reconstruction of
 hand-held photographs the dominant plane came out 0.39 degrees from vertical after
 levelling, with 71% of points above it and 3% below. Heading is not knowable from images
-(the capture's `headingDeg` turns it), scale stays unresolved (`scale`, metres per model
-unit, defaults to 1), and the splat is recentred on its own footprint as Lane 1 is. A
+(the capture's `headingDeg` turns it), and the splat is recentred on its own footprint as
+Lane 1 is. The scale, metres per model unit, is the run's `scale` parameter when it gives one
+(`scaleSource: manual`); otherwise it is **estimated from the camera height**
+(`scale_estimate.py`): a handheld phone is about 1.5 m above the ground, and the levelled
+reconstruction says how many of its units that is — each camera over the 5th-percentile
+height of COLMAP's sparse points in the nearest grid cell, the median over cameras. COLMAP
+normalises a model to about ten units across whatever it was in metres, so without this a
+phone capture drawn at one unit to the metre came out two to eight times its size. It is
+recorded as `scaleSource: camera-height-estimate` with its evidence in
+`frame.scaleEstimate` — the prior, the median height in units, how many cameras, and a ±%
+(the prior's 1.2-1.8 m, ±20%, with the cameras' spread in quadrature) — and is never treated
+as metric (`quality`'s mm/px, `fetch_capture`). A capture that shows too little ground under
+its cameras, or heights that disagree, gets no estimate: scale 1, `unresolved`. A
 video with no location falls back to the capture's own `lat`/`lon` -- the console sends
 where its camera was looking -- recorded as `manual`; with none of the three the stage
 refuses rather than placing the capture at (0, 0).
