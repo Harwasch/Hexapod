@@ -9,11 +9,12 @@ so nothing writes a shared manifest any more.
 
 What is left is two things, and they are both one-shot:
 
-* **`legacy_captures.json`**, beside this file. The four captures that existed before the
+* **`legacy_captures.json`**, beside this file. The captures that existed before the
   pipeline, frozen exactly as the old manifest described them, because their provenance
   (attribution, licence, capture date, image count, estimated GSD) is real and was not
-  reconstructible from the tiles. It is an archive: nothing writes it, and a fifth
-  capture does not go in it.
+  reconstructible from the tiles. It is an archive: nothing writes it, and a new capture
+  does not go in it. Of the four, only the synthetic tree is left: the other three's tiles
+  never reached the bucket, so they were withdrawn (`app.seed.WITHDRAWN_SITES`).
 * **`site.json`**, which `build_site.py` now writes into the site folder it builds. One
   document per capture, never shared, never hand-merged -- so a locally built capture
   still seeds on a developer's machine without a bucket. `publish.py` is what moves it
@@ -148,7 +149,7 @@ def tiles_base_url(settings: Settings, slug: str) -> str:
 
 
 def load_archive() -> list[Capture]:
-    """The four pre-pipeline captures, frozen. Nothing writes this file."""
+    """The pre-pipeline captures, frozen. Nothing writes this file."""
     return _load_document(ARCHIVE)
 
 
