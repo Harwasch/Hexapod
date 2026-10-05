@@ -6,7 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import DbSession, PublicStorage, RequireWriteToken, Storage
-from app.schemas.asset import AssetCreate, AssetRead, AssetUpdate
+from app.schemas.asset import AssetCreate, AssetRead, AssetScaleUpdate, AssetUpdate
 from app.schemas.common import Problem
 from app.schemas.sidecar import SidecarAttach, SidecarAttachment
 from app.services import assets as asset_service
@@ -46,6 +46,44 @@ def get_asset(asset_id: uuid.UUID, db: DbSession) -> AssetRead:
 )
 def update_asset(asset_id: uuid.UUID, payload: AssetUpdate, db: DbSession) -> AssetRead:
     return asset_service.asset_to_read(asset_service.update_asset(db, asset_id, payload))
+
+
+SCALE_RESPONSES: dict[int | str, dict[str, Any]] = {
+    404: {"model": Problem, "description": "No such asset"},
+    409: {
+        "model": Problem,
+        "description": (
+            "`not_scalable`: not the splat a pipeline run registered (a seeded or hand-made "
+            "asset, a mesh, a Cesium ion asset), so nothing records the origin its tiles are "
+            "placed at"
+        ),
+    },
+}
+
+
+@router.put(
+    "/{asset_id}/scale",
+    response_model=AssetRead,
+    responses=SCALE_RESPONSES,
+    dependencies=[RequireWriteToken],
+    summary="Set an asset's real-world size, or reset it",
+    description=(
+        "Sets `renderConfig.scale`, the factor the viewer draws a pipeline-placed splat at "
+        "relative to the model as registered, and `renderConfig.scaleEvidence`, how it was "
+        "found: `{scale, evidence?}`, or `{reset: true}` for 1 as registered. The scale is "
+        "absolute, never relative to the one before (0.8 then 0.5 is 0.5). The site's "
+        "boundary and centroid, the asset's footprint and its `groundSamples` are resized "
+        "about the tiles' placed origin with it, so every position the catalog gives already "
+        "fits the scaled model. The provenance's `scaleSource` becomes `manual` "
+        "(`measured-length`, `direct`, or no evidence) or `camera-height-estimate` with its "
+        "`scaleUncertaintyPct`; a reset restores the one the asset was registered with. A "
+        "re-run that registers new tiles resets it. 422 for a scale outside 0.01-100, "
+        "evidence missing what its method needs, or a measured length that says another "
+        "scale. See docs/DATA_MODEL.md."
+    ),
+)
+def set_asset_scale(asset_id: uuid.UUID, payload: AssetScaleUpdate, db: DbSession) -> AssetRead:
+    return asset_service.asset_to_read(asset_service.set_scale(db, asset_id, payload))
 
 
 @router.delete(
