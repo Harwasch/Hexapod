@@ -1,5 +1,5 @@
-"""Pins OpenBLAS to one CPU kernel before numpy loads, and keeps the pytest process from
-forking.
+"""Pins OpenBLAS to one CPU kernel and one thread before numpy loads, and keeps the pytest
+process from forking.
 
 The committed tiles are checked byte for byte against a fresh run, and packaging goes
 through BLAS (the batched covariance matmul, `eigh` on the merged parents). OpenBLAS picks
@@ -8,14 +8,17 @@ with SkylakeX kernels did not match one written on a CI runner's Haswell/Zen ker
 Haswell's run on any AVX2 machine, so every checkout and CI writes the same bytes;
 regenerate the committed fixtures the same way (synthetic_yard.py's usage).
 
-The whole suite runs in this one process, which by the segmentation tests holds three
-OpenBLAS thread pools (numpy's, scipy's, and the 0.3.15 that OpenCV's wheel bundles) and
-OpenCV's own. A fork copies the process but only the forking thread; each OpenBLAS tears
-its pool down in this process before the fork (its pthread_atfork handler) and rebuilds it
-on next use. On CI (Python 3.12), with 24 forks of this process by segment_scene's render
-workers behind it -- 22 of them with OpenCV's threads running, which Python 3.12 warns
-about -- the next heavy LAPACK call (`np.linalg.solve` in kaolin_rkpm, test_skin_scene)
-died of SIGBUS, twice in a row (SIGSEGV with no traceback the second time). So a test that
+**One thread**, because Haswell's kernels, forced, crash numpy's OpenBLAS (0.3.31) on the
+AMD EPYC 9V74 and 9V45 (Zen 4, Zen 5) runners: its worker threads die of SIGSEGV at one
+instruction of `dgemm_kernel_HASWELL`, in test_skin_scene's threaded `f @ pp` (kaolin_rkpm).
+Caught under gdb on CI in 2026-10: 8 of 8 runs on Zen 4/5 crashed there, while 4 of 4 on EPYC
+7763 (Zen 3) and every local run on Sapphire Rapids passed, so the runner a job drew
+decided whether Captures went red. With the kernel pinned, a single-threaded run is also
+the same bytes on every machine.
+
+The fork guard is the earlier, wrong suspect's, kept because it is still right: this
+process holds three OpenBLAS thread pools (numpy's, scipy's, and the 0.3.15 that OpenCV's
+wheel bundles) and OpenCV's own, and a fork copies only the forking thread. So a test that
 needs a fork runs it in a new interpreter (`fresh_process`: `subprocess`, which execs), and
 a test that forks this process fails.
 """
@@ -32,6 +35,7 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("OPENBLAS_CORETYPE", "Haswell")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 CAPTURES = Path(__file__).resolve().parents[1]
 #: Forks of this process (`os.fork`, which multiprocessing's fork context calls).
