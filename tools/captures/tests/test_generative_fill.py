@@ -76,9 +76,11 @@ def table(views: list[gf.RealView] | None = None) -> gf.Scene:
 # --- latent masks ----------------------------------------------------------------------------------
 
 
-def test_latent_known_marks_any_generated_pixel_and_grows() -> None:
+def test_latent_known_keeps_specks_and_grows_holes() -> None:
     masks = np.zeros((9, 32, 64), bool)
-    masks[5, 10, 40] = True  # pixel frame 5 -> latent frame 2 (frames 5..8)
+    masks[5, 10, 40] = True  # a speck: pixel frame 5 -> latent frame 2 (frames 5..8)
+    assert vfm.latent_known(masks, 4, 8, patch=2, grow=1).all()  # shown, not generated
+    masks[5:9, 8:16, 40:48] = True  # a hole: the whole cell (2, 1, 5) in all its frames
     known = vfm.latent_known(masks, 4, 8, patch=1, grow=0)
     assert known.shape == (3, 4, 8)
     assert not known[2, 1, 5] and known[2].sum() == 31 and known[:2].all()
@@ -86,6 +88,10 @@ def test_latent_known_marks_any_generated_pixel_and_grows() -> None:
     assert (~grown[2]).sum() == 9
     tokens = vfm.latent_known(masks, 4, 8, patch=2, grow=0)
     assert (~tokens[2]).sum() == 4  # the 2x2 token holding the cell
+    # Specks over a whole frame: a frame where 1 pixel in 40 is unknown is still given.
+    specks = np.zeros((9, 32, 64), bool)
+    specks[:, ::5, ::8] = True
+    assert vfm.latent_known(specks, 4, 8, patch=2, grow=1).mean() == 1.0
 
 
 def test_latent_frames_need_4k_plus_1() -> None:
@@ -420,4 +426,21 @@ def test_a_forced_unknown_region_is_withheld() -> None:
     assert w[is_top].max() == 0.0 and w[~is_top].max() > 0.5
     scene = gf.Scene("table", splats, known, ROI)
     assert len(scene.withheld()) == int(is_top.sum())
-    assert len(scene.conditioning()[0]) == len(splats)  # its shape is still shown
+    shown, _ = scene.conditioning()
+    assert len(shown) == len(splats)  # its shape is still shown, its look is not
+    assert np.all(shown.colours[is_top] == 0.5) and np.allclose(
+        shown.colours[~is_top], splats.colours[~is_top]
+    )
+    assert len(scene.given_index()) == int((~is_top).sum())  # what the distil keeps frozen
+
+
+def test_thin_fuses_each_voxels_colour_from_every_view() -> None:
+    a = _splats(np.array([[0.0, 0.0, 0.0], [0.001, 0.0, 0.0], [1.0, 1.0, 1.0]]), [1, 0, 0], 0.05)
+    a.colours[1] = [0.0, 0.0, 1.0]  # the same bit of surface, another frame's colour
+    lifted = gf.Lifted(a, np.array([0.9, 0.3, 0.5]), [], [])
+    out = gf.thin(lifted, budget=10)
+    assert len(out.splats) == 2
+    np.testing.assert_allclose(out.splats.colours[0], [0.75, 0.0, 0.25])
+    np.testing.assert_allclose(out.splats.positions[0], [0.0, 0.0, 0.0])  # the most confident
+    assert out.confidence.tolist() == [0.9, 0.5]
+    assert gf.thin(lifted, budget=1).confidence.tolist() == [0.9]

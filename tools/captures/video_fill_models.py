@@ -154,27 +154,37 @@ def latent_frames(n: int, temporal: int = 4) -> list[slice]:
     ]
 
 
+#: A latent cell is given as known when at most this share of its pixels (over its frames)
+#: is to be generated: the scan's scattered unknown specks (a gaussian or two too few
+#: views) would otherwise turn most cells of a frame into generated ones, and a model that
+#: is given almost nothing draws a scene of its own (run 37383986439: Wan2.2's known pixels
+#: at 13-19 dB, Cosmos' at 16-20 dB). The specks are shown with the scan's render there.
+CELL_GENERATE_SHARE = 0.1
+#: A cell at least this much to be generated is part of a hole proper, and only those grow.
+CELL_HOLE_SHARE = 0.5
+
+
 def latent_known(
     masks: np.ndarray, temporal: int, spatial: int, patch: int = 1, grow: int = 1
 ) -> np.ndarray:
-    """Which latent cells (t, h / spatial, w / spatial) hold only known pixels: a cell is
-    known when no pixel of its block (its frames, `spatial` x `spatial` pixels) is to be
-    generated, grown by `grow` cells around anything generated (a latent cell's decoder
-    reaches its neighbours), and -- with `patch` > 1 -- only whole patches of `patch` x `patch`
-    cells (a transformer token) are known."""
+    """Which latent cells (t, h / spatial, w / spatial) are given as known: a cell is known
+    when at most `CELL_GENERATE_SHARE` of its block (its frames, `spatial` x `spatial`
+    pixels) is to be generated, and it is not within `grow` cells of a hole (a cell at least
+    `CELL_HOLE_SHARE` generated: a latent cell's decoder reaches its neighbours); with
+    `patch` > 1, only whole patches of `patch` x `patch` cells (a transformer token)."""
     n, h, w = masks.shape
     if h % (spatial * patch) or w % (spatial * patch):
         raise ValueError(f"{w}x{h} is not a multiple of {spatial * patch}")
-    gen = np.zeros((len(latent_frames(n, temporal)), h // spatial, w // spatial), bool)
+    share = np.zeros((len(latent_frames(n, temporal)), h // spatial, w // spatial), np.float32)
     for k, frames in enumerate(latent_frames(n, temporal)):
-        block = masks[frames].any(axis=0)
-        gen[k] = block.reshape(h // spatial, spatial, w // spatial, spatial).any(axis=(1, 3))
+        block = masks[frames].mean(axis=0, dtype=np.float32)
+        share[k] = block.reshape(h // spatial, spatial, w // spatial, spatial).mean(axis=(1, 3))
+    gen = share > CELL_GENERATE_SHARE
     if grow > 0:
-        grown = gen.copy()
+        hole = share >= CELL_HOLE_SHARE
         for dy in range(-grow, grow + 1):
             for dx in range(-grow, grow + 1):
-                grown |= np.roll(np.roll(gen, dy, axis=1), dx, axis=2) & _edge_ok(gen.shape, dy, dx)
-        gen = grown
+                gen |= np.roll(np.roll(hole, dy, axis=1), dx, axis=2) & _edge_ok(gen.shape, dy, dx)
     if patch > 1:
         t, lh, lw = gen.shape
         tok = gen.reshape(t, lh // patch, patch, lw // patch, patch).any(axis=(2, 4))
@@ -329,14 +339,16 @@ def fill_clip(key: str, pipe: Any, request: dict) -> dict:
     seed = int(request.get("seed", 0))
     steps = int(request.get("steps") or spec.steps)
     guidance = float(request.get("guidance") or spec.guidance)
+    # Every model is shown the scan's render where it has a surface (a hint, and what a
+    # mostly known latent cell is encoded from) and mid grey where it has nothing.
+    void = unpack_void(request["clip"])
+    shown = greyed(frames, masks if void is None else void)
     if key == "vace":
-        void = unpack_void(request["clip"])
-        shown = greyed(frames, masks if void is None else void)
         out = _vace(pipe, shown, masks, prompt, negative, seed, steps, guidance)
     elif key == "wan22":
-        out = _wan22(pipe, frames, masks, prompt, negative, seed, steps, guidance)
+        out = _wan22(pipe, shown, masks, prompt, negative, seed, steps, guidance)
     elif key == "cosmos":
-        out = _cosmos(pipe, frames, masks, prompt, negative, seed, steps, guidance)
+        out = _cosmos(pipe, shown, masks, prompt, negative, seed, steps, guidance)
     else:
         raise ValueError(f"model {key!r}")
     if out.shape != frames.shape:
@@ -390,11 +402,11 @@ def _video_tensor(frames: np.ndarray, device: str, dtype: Any) -> Any:
     return x.to(dtype)
 
 
-def _wan22(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) -> np.ndarray:
+def _wan22(pipe: Any, shown, masks, prompt, negative, seed, steps, guidance) -> np.ndarray:
     """TI2V-5B conditions its first frame by giving that frame's latent tokens clean, at
     timestep 0, while the rest denoise (`WanImageToVideoPipeline`, `expand_timesteps`). The
-    same mechanism takes any set of tokens: every token whose pixels are all known is given
-    clean from the encoded clip, the others are generated."""
+    same mechanism takes any set of tokens: every token `latent_known` gives is clean from the
+    encoded clip (`shown`), the others are generated."""
     import torch
 
     device = "cuda"
@@ -403,7 +415,7 @@ def _wan22(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) ->
     spec = MODELS["wan22"]
     known = latent_known(masks, spec.temporal, spec.spatial, spec.patch)
     with torch.no_grad():
-        video = _video_tensor(greyed(frames, masks), device, vae.dtype)
+        video = _video_tensor(shown, device, vae.dtype)
         z = vae.encode(video).latent_dist.mode().float()
         mean = torch.tensor(vae.config.latents_mean, device=device).view(1, -1, 1, 1, 1)
         inv_std = 1.0 / torch.tensor(vae.config.latents_std, device=device).view(1, -1, 1, 1, 1)
@@ -461,7 +473,7 @@ def _wan22(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) ->
     return _u8(video_np)
 
 
-def _cosmos(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) -> np.ndarray:
+def _cosmos(pipe: Any, shown, masks, prompt, negative, seed, steps, guidance) -> np.ndarray:
     """Video2World on frame 0 (its own conditioning), and after every step the latents of the
     known cells replaced by the clip's own at that step's noise level: `x0 + sigma * eps` in
     the pipeline's EDM parameterisation (`latents = x0 + sigma * noise`)."""
@@ -475,7 +487,7 @@ def _cosmos(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) -
     known = latent_known(masks, spec.temporal, spec.spatial, 1)
     sigma_data = float(pipe.scheduler.config.sigma_data)
     with torch.no_grad():
-        video = _video_tensor(greyed(frames, masks), device, vae.dtype)
+        video = _video_tensor(shown, device, vae.dtype)
         z = vae.encode(video).latent_dist.mode().float()
         mean = torch.tensor(vae.config.latents_mean, device=device).view(1, -1, 1, 1, 1)
         std = torch.tensor(vae.config.latents_std, device=device).view(1, -1, 1, 1, 1)
@@ -495,7 +507,7 @@ def _cosmos(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) -
         return {"latents": mixed.to(latents.dtype)}
 
     result = pipe(
-        image=Image.fromarray(np.asarray(frames[0], np.uint8)),
+        image=Image.fromarray(np.asarray(shown[0], np.uint8)),
         prompt=prompt,
         negative_prompt=negative,
         height=h,

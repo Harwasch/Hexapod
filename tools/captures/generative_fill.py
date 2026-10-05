@@ -485,15 +485,30 @@ class Scene:
             cache["w"] = self.measured.take(np.flatnonzero(off))
         return cache["w"]
 
+    def given_index(self) -> np.ndarray:
+        """The shown gaussians whose look is given too (not forced unknown): what the
+        distil keeps frozen beside the layer."""
+        shown = self.shown_index()
+        never = getattr(self.known, "never", None)
+        return shown if never is None else shown[~never[shown]]
+
     def conditioning(self, extra: Splats | None = None) -> tuple[Splats, np.ndarray]:
         """What the generator is shown (the shown gaussians, then `extra`) and the shown
         ones' indices into `measured`; the same objects for the same `extra`, so a GPU
-        renderer uploads them once."""
+        renderer uploads them once. A forced-unknown gaussian keeps its shape and loses its
+        look (mid grey): a held-out check's answer is never drawn into a frame."""
         cache = self.__dict__.setdefault("_conditioning", {})
         key = id(extra) if extra is not None and len(extra) else None
         if key not in cache:
             shown = self.shown_index()
             splats = self.measured.take(shown)
+            never = getattr(self.known, "never", None)
+            if never is not None and never[shown].any():
+                colours = splats.colours.copy()
+                colours[never[shown]] = 0.5
+                splats = Splats(
+                    splats.positions, splats.rotations, splats.scales, colours, splats.opacities
+                )
             if key is not None:
                 splats = Splats.concat([splats, extra])  # type: ignore[list-item]
             if len(cache) > 4:
@@ -1044,6 +1059,9 @@ class RemoteClipFiller:
                 except Exception as error:  # noqa: BLE001 - recorded, the others go on
                     out.append(ClipResult(None, {"error": repr(error)[:1500]}))
                     continue
+                if "error" in response:  # failed on the GPU: its seconds still count
+                    out.append(ClipResult(None, dict(response)))
+                    continue
                 frames, _ = vfm.unpack_clip(response["clip"])
                 info = {k: v for k, v in response.items() if k != "clip"}
                 out.append(ClipResult(frames, info))
@@ -1358,20 +1376,34 @@ def merge(lifted: Sequence[Lifted]) -> Lifted:
 
 
 def thin(lifted: Lifted, budget: int) -> Lifted:
-    """At most `budget` gaussians: one per voxel (the most confident; the voxel the median
-    disc's size), then the most confident."""
+    """The views fused: one gaussian per voxel (the voxel the median disc's size), placed and
+    shaped as the voxel's most confident disc and coloured with the confidence-weighted mean
+    of every disc there -- each frame's colour for that bit of surface, so one frame's
+    stray pixel does not become a speck (run 37383986439 kept one frame's colour per voxel:
+    the held-out top came out speckled); then at most `budget`, the most confident."""
     s = lifted.splats
     if len(s) == 0:
         return lifted
     size = max(float(np.median(s.scales[:, 0])) / 0.6, 1e-6)
     keys = np.floor(s.positions / size).astype(np.int64)
     order = np.argsort(-lifted.confidence, kind="stable")
-    _, first = np.unique(keys[order], axis=0, return_index=True)
-    keep = order[np.sort(first)]
-    if keep.size > budget:
-        keep = keep[np.argsort(-lifted.confidence[keep], kind="stable")[:budget]]
-    keep = np.sort(keep)
-    return Lifted(s.take(keep), lifted.confidence[keep], lifted.cameras, lifted.report)
+    _, first, group = np.unique(keys[order], axis=0, return_index=True, return_inverse=True)
+    group = np.asarray(group).reshape(-1)
+    w = np.maximum(lifted.confidence[order], 1e-6)
+    total = np.bincount(group, w)
+    colours = (
+        np.column_stack([np.bincount(group, w * s.colours[order, c]) for c in range(3)])
+        / total[:, None]
+    )
+    keep = order[first]
+    fused = s.take(keep)
+    fused = Splats(fused.positions, fused.rotations, fused.scales, colours, fused.opacities)
+    confidence = lifted.confidence[keep]
+    chosen = np.argsort(keep, kind="stable")
+    if chosen.size > budget:
+        chosen = np.sort(np.argsort(-confidence, kind="stable")[:budget])
+        chosen = chosen[np.argsort(keep[chosen], kind="stable")]
+    return Lifted(fused.take(chosen), confidence[chosen], lifted.cameras, lifted.report)
 
 
 # --- carving ---------------------------------------------------------------------------------------
@@ -1469,8 +1501,8 @@ def distil_request(
 ) -> dict:
     """`distill_fill.run`'s request: the generated keyframes (their lift masks, weight
     `GENERATED_WEIGHT`) and up to `real` real photos (weight 1, on what the measured scan
-    covers there and no hidden object does), the measured scan (hidden objects out) cropped
-    to the layer's neighbourhood and frozen."""
+    covers there and no withheld gaussian does), the measured scan (withheld gaussians out)
+    cropped to the layer's neighbourhood and frozen."""
     import distill_fill as df
 
     cams, images, masks, weights, outside = [], [], [], [], []
@@ -1482,7 +1514,7 @@ def distil_request(
             masks.append(m)
             weights.append(GENERATED_WEIGHT)
             outside.append(GENERATED_OUTSIDE)
-    shown = scene.measured.take(scene.shown_index())
+    shown = scene.measured.take(scene.given_index())
     hidden = scene.withheld()
     if scene.views and real > 0:
         centre = scene.centre
@@ -2003,6 +2035,16 @@ class Finish:
             entry["paths2"] = s["paths2"]
         if "round2Failed" in s:
             entry["round2Failed"] = s["round2Failed"]
+        # What each clip was given and drew, kept or not (a gate that keeps nothing is
+        # judged by looking at it).
+        name = slug(filler.name)
+        renders = self.out / "renders"
+        renders.mkdir(parents=True, exist_ok=True)
+        for k, f in enumerate(s["fills"][:3]):
+            sheet = contact_sheet(f)
+            Image.fromarray(sheet).save(
+                renders / f"clip-{scene.name}-{name}-{f.clip.path.label}-{k}.png"
+            )
         if not len(lifted.splats):
             entry["skipped"] = "nothing lifted"
             return entry
@@ -2039,7 +2081,6 @@ class Finish:
         if not len(lifted.splats):
             entry["skipped"] = "nothing survived carving"
             return entry
-        name = slug(filler.name)
         layer = self.out / name / "inferred"
         evidence = tf.package_inferred(
             lifted.splats,
@@ -2061,13 +2102,6 @@ class Finish:
         )
         entry["evidence"] = evidence
         entry["layer"] = str(layer)
-        renders = self.out / "renders"
-        renders.mkdir(parents=True, exist_ok=True)
-        for k, f in enumerate(s["fills"][:3]):
-            sheet = contact_sheet(f)
-            Image.fromarray(sheet).save(
-                renders / f"clip-{scene.name}-{name}-{f.clip.path.label}-{k}.png"
-            )
         self.log(
             f"{filler.name}: {len(lifted.splats)} gaussians, "
             f"mean confidence {evidence['meanConfidence']}"

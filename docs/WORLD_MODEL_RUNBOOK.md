@@ -315,12 +315,13 @@ and the GPU side is in `infra/modal/fill.py` (`gen:<scan>` and `holdout:<scan>` 
    `placement.json`). Each gaussian has a support: how many real cameras saw it,
    depth-tested. It also has the directions they saw it from (64 octahedral bins). It is
    known from a viewpoint when 3 or more cameras saw it and one of them did so from within
-   40° of that viewpoint. The camp has no cameras, so its view cones stand in. A pixel is
+   55° of that viewpoint. The camp has no cameras, so its view cones stand in. A pixel is
    to be generated where only unknown gaussians cover it, or nothing does. It is lifted
    only where its ray meets the region being filled.
 2. **Paths** start at the real camera nearest the target direction; frame 0 is its photo.
    They end at the viewpoint (on a sphere about the region) that sees the most pixels still
-   to lift.
+   to lift, among those where at least 30 % of what is drawn is known (a clip with nothing
+   to continue from is not a fill).
 3. **Generate** only the unknown pixels:
    - Wan2.1-VACE 1.3B by its own masked video-to-video;
    - Wan2.2 TI2V-5B by its own clean-token conditioning (`expand_timesteps`), given every
@@ -331,7 +332,8 @@ and the GPU side is in `infra/modal/fill.py` (`gen:<scan>` and `holdout:<scan>` 
      need an H100.
 4. **Lift.** Depth Anything V2 Small (Apache-2.0) runs on each kept keyframe. Its inverse
    depth is fitted, affine, to the measured depth of the frame's covered pixels. Every 4th
-   pixel to lift becomes a disc at that depth. Confidence comes from the distance to known
+   pixel to lift becomes a disc: at the measured surface where the scan has one there (the
+   colour is new, the shape is the scan's), at the fitted depth where it has nothing. Confidence comes from the distance to known
    pixels, how well the depth fitted, and (with two seeds) how far the seeds agree.
 5. **Checks against the data:**
    - the gate: blurred PSNR ≥ 20 dB on the known pixels;

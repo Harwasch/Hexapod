@@ -413,23 +413,32 @@ video_fill_image = (
     .add_local_file(LOCAL_CAPTURES / "video_fill_models.py", "/root/video_fill_models.py")
 )
 
-#: Generators by key: the Modal class that holds each, its GPU, and the estimates the budget
-#: guard plans with (seconds per 49-frame clip and per container start, warm volume).
+#: Generators by key: the Modal class that holds each, its GPU, and what the budget guard
+#: plans with: seconds per 49-frame clip and per container start (measured on an L40S, run
+#: 37383986439: VACE 116-117 s a clip, Wan2.2 114-117 s, Cosmos 288-303 s, loads 17-37 s;
+#: rounded up), and `capS`, the most one clip may take (its class's timeout, about 2.5 times
+#: the measured clip).
 VIDEO_GPU = "L40S"
 GPU_RATES = {"L4": 0.80, "L40S": 1.95, "A10": 1.10, "H100": 3.95}
 GENERATORS = {
-    "vace": {"cls": "FillVace", "gpu": VIDEO_GPU, "clipS": 150, "loadS": 150},
-    "wan22": {"cls": "FillWan22", "gpu": VIDEO_GPU, "clipS": 240, "loadS": 150},
-    "cosmos": {"cls": "FillCosmos", "gpu": VIDEO_GPU, "clipS": 300, "loadS": 240},
-    # The per-view baseline: LaMa on InpaintSDXL's L40S (SDXL loads with it), ~1 s a keyframe.
-    "lama": {"cls": "InpaintSDXL", "gpu": "L40S", "clipS": 15, "loadS": 120},
+    "vace": {"cls": "FillVace", "gpu": VIDEO_GPU, "clipS": 150, "loadS": 90, "capS": 300},
+    "wan22": {"cls": "FillWan22", "gpu": VIDEO_GPU, "clipS": 150, "loadS": 90, "capS": 300},
+    "cosmos": {"cls": "FillCosmos", "gpu": VIDEO_GPU, "clipS": 330, "loadS": 90, "capS": 750},
+    # The per-view baseline: LaMa on InpaintSDXL's L40S (SDXL loads with it), ~1 s a keyframe;
+    # called by the job one keyframe at a time.
+    "lama": {"cls": "InpaintSDXL", "gpu": "L40S", "clipS": 15, "loadS": 120, "capS": 60},
 }
 #: A generator's container stays this long after its last call (`scaledown_window`).
 VIDEO_IDLE_S = 60
-#: One clip (or a container start) at most this long: a hung call costs this, not an hour.
-VIDEO_CALL_S = 20 * 60
-#: The gen/holdout job's own container (gsplat renders, depth, lift, carve, distil), minutes.
+#: A container start (the model's load) at most this long.
+VIDEO_START_S = 6 * 60
+#: The gen/holdout job's own container (gsplat renders, depth, lift, carve, distil), minutes:
+#: the estimate per scan, and the timeout of every job.
 GEN_JOB_MIN = {"spool": 30, "pumpkin": 35, "camp": 50}
+GEN_JOB_CAP_MIN = 75
+#: The worst case the guard refuses past: every clip and container start at this many times
+#: its estimate, and on top one clip per generator that hangs to its cap.
+WORST_FACTOR = 1.5
 
 
 def _video_module():  # noqa: ANN202 - video_fill_models, imported where it was copied
@@ -456,10 +465,22 @@ def _video_load(key: str) -> tuple[object, object, float, str]:
 
 
 def _video_fill(owner: object, key: str, request: dict) -> dict:
+    """One clip; a failure comes back as `error` with the GPU seconds it took, so the
+    run's cost counts it (`actual_gen_cost`)."""
+    done = {"loadSeconds": round(owner.load_seconds, 1), "gpu": VIDEO_GPU}  # type: ignore[attr-defined]
     if owner.error:  # type: ignore[attr-defined]
-        raise RuntimeError(f"{key} did not load:\n{owner.error}")  # type: ignore[attr-defined]
-    out = owner.vfm.fill_clip(key, owner.pipe, request)  # type: ignore[attr-defined]
-    return {**out, "loadSeconds": round(owner.load_seconds, 1), "gpu": VIDEO_GPU}  # type: ignore[attr-defined]
+        why = owner.error[-1400:]  # type: ignore[attr-defined]
+        return {"error": f"{key} did not load:\n{why}", "seconds": 0.0, **done}
+    start = time.time()
+    try:
+        out = owner.vfm.fill_clip(key, owner.pipe, request)  # type: ignore[attr-defined]
+    except Exception as error:  # reported back with its seconds; the other clips go on
+        with contextlib.suppress(Exception):
+            import torch
+
+            torch.cuda.empty_cache()
+        return {"error": repr(error)[:1500], "seconds": round(time.time() - start, 1), **done}
+    return {**out, **done}
 
 
 @app.cls(
@@ -468,7 +489,8 @@ def _video_fill(owner: object, key: str, request: dict) -> dict:
     volumes={"/weights": WEIGHTS},
     secrets=[HF_SECRET],
     memory=65536,
-    timeout=VIDEO_CALL_S,
+    timeout=GENERATORS["vace"]["capS"],
+    startup_timeout=VIDEO_START_S,
     scaledown_window=VIDEO_IDLE_S,
     max_containers=2,
 )
@@ -490,7 +512,8 @@ class FillVace:
     volumes={"/weights": WEIGHTS},
     secrets=[HF_SECRET],
     memory=65536,
-    timeout=VIDEO_CALL_S,
+    timeout=GENERATORS["wan22"]["capS"],
+    startup_timeout=VIDEO_START_S,
     scaledown_window=VIDEO_IDLE_S,
     max_containers=2,
 )
@@ -512,7 +535,8 @@ class FillWan22:
     volumes={"/weights": WEIGHTS},
     secrets=[HF_SECRET],
     memory=98304,
-    timeout=VIDEO_CALL_S,
+    timeout=GENERATORS["cosmos"]["capS"],
+    startup_timeout=VIDEO_START_S,
     scaledown_window=VIDEO_IDLE_S,
     max_containers=2,
 )
@@ -1003,7 +1027,7 @@ def _fetch_private(prefix: str, out: Path) -> int:
     gpu="L4",
     cpu=8.0,
     memory=65536,
-    timeout=2 * 3600,  # the budget: a hung job costs at most 2 h of L4
+    timeout=GEN_JOB_CAP_MIN * 60,  # the budget: a hung job costs at most this much L4
     volumes={"/weights": WEIGHTS},
     secrets=[STORAGE_SECRET, HF_SECRET],
 )
@@ -1013,6 +1037,14 @@ def run_genfill(kind: str, scan: str, options: dict) -> dict:
     highest (the ground truth the renders compare with). Returns the report, the renders and
     each generator's inferred layer (`<slug>/inferred.tar.gz`)."""
     _remote_classes()
+    import world_model_client
+
+    # The baseline's keyframes, each at most `capS` (the class's own timeout is an hour).
+    lama_cap = GENERATORS["lama"]["capS"]
+    world_model_client.LOCAL_CLASSES["InpaintSDXL"] = lambda: _Timed(
+        "InpaintSDXL",
+        InpaintSDXL.with_options(timeout=lama_cap),  # type: ignore[attr-defined]
+    )
     REMOTE_SECONDS.clear()
     os.chdir(CAPTURES)
     import generative_fill as gf
@@ -1105,26 +1137,35 @@ def run_genfill(kind: str, scan: str, options: dict) -> dict:
 
 
 def estimate_gen_cost(jobs: list[tuple[str, str]], generators: list[str], options: dict) -> dict:
-    """What a set of gen/holdout jobs should cost, from the planning estimates above: per
-    generator its clips, one container start per job (the jobs overlap, so this is the
-    worst case) and its idle tail; per job its L4."""
+    """What a set of gen/holdout jobs should cost, from the planning numbers above, and the
+    worst case the guard holds it to. Per generator: its clips, its container starts (per
+    job, round 1's parallel seeds up to `max_containers`, and one for round 2), each with a
+    load and an idle tail. Per job its L4. The worst case: clips and starts at
+    `WORST_FACTOR` times, one clip per generator hung to its cap, every job at its timeout."""
     paths, rounds = int(options.get("paths", 2)), int(options.get("rounds", 2))
     seeds, round2 = int(options.get("seeds", 1)), int(options.get("round2_paths", 1))
     out: dict[str, float] = {}
+    worst: dict[str, float] = {}
     clips: dict[str, int] = {}
     for key in generators:
         g = GENERATORS[key]
-        per_job = paths * (seeds if key != "lama" else 1) + (round2 if rounds >= 2 else 0)
+        first = paths * (seeds if key != "lama" else 1)
+        per_job = first + (round2 if rounds >= 2 else 0)
         n = per_job * len(jobs)
         clips[key] = n
-        seconds = n * g["clipS"] + len(jobs) * (g["loadS"] + VIDEO_IDLE_S)
-        out[key] = seconds / 3600 * GPU_RATES[g["gpu"]]
+        starts = len(jobs) * (min(first, 2) + (1 if rounds >= 2 else 0))
+        seconds = n * g["clipS"] + starts * (g["loadS"] + VIDEO_IDLE_S)
+        rate = GPU_RATES[g["gpu"]] / 3600
+        out[key] = seconds * rate
+        worst[key] = (WORST_FACTOR * seconds + max(g["capS"] - g["clipS"], 0)) * rate
     for kind, scan in jobs:
         out[f"{kind}:{scan}"] = GEN_JOB_MIN.get(scan, 45) / 60 * GPU_RATES["L4"]
+        worst[f"{kind}:{scan}"] = GEN_JOB_CAP_MIN / 60 * GPU_RATES["L4"]
     return {
         "clips": clips,
         "usd": {k: round(v, 2) for k, v in out.items()},
         "totalUsd": round(sum(out.values()), 2),
+        "worstUsd": round(sum(worst.values()), 2),
     }
 
 
@@ -1344,10 +1385,10 @@ def _run_gen(
     estimate["budgetUsd"], estimate["spentUsd"] = budget_usd, spent_usd
     (out / "gen-estimate.json").write_text(json.dumps(estimate, indent=1), encoding="utf-8")
     sys.stdout.write(f"generative fill, estimated: {json.dumps(estimate)}\n")
-    if budget_usd > 0 and estimate["totalUsd"] > budget_usd - spent_usd:
+    if budget_usd > 0 and estimate["worstUsd"] > budget_usd - spent_usd:
         raise SystemExit(
-            f"estimated ${estimate['totalUsd']} is more than the ${budget_usd - spent_usd:.2f} "
-            "left of the budget: not started"
+            f"the worst case ${estimate['worstUsd']} (estimated ${estimate['totalUsd']}) is more "
+            f"than the ${budget_usd - spent_usd:.2f} left of the budget: not started"
         )
     video = [g for g in options["generators"] if g in ("vace", "wan22", "cosmos")]
     if video:
