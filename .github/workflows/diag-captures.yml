@@ -1,16 +1,16 @@
-# Temporary: does a single-threaded OpenBLAS stop the captures suite's SIGSEGV on Zen 4?
+# Temporary: on the same runner, threaded OpenBLAS (expected to crash on Zen 4/5) vs one thread.
 name: Diag captures crash
 on:
   push:
     branches: [diag-captures-crash]
 jobs:
   captures:
-    name: Captures, one BLAS thread (${{ matrix.n }})
+    name: Captures, threaded vs one thread (${{ matrix.n }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        n: [1, 2, 3, 4, 5, 6, 7, 8]
+        n: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     defaults:
       run:
         working-directory: tools/captures
@@ -21,7 +21,13 @@ jobs:
           enable-cache: true
       - run: lscpu | grep "Model name"
       - run: uv sync --frozen
-      - run: uv run pytest -q
-      - run: uv run pytest -q
-      - name: Committed fixture is up to date
-        run: git diff --exit-code -- ../../data/tiles/synthetic-tree
+      - name: Control, four OpenBLAS threads
+        run: |
+          set +e
+          OPENBLAS_NUM_THREADS=4 uv run pytest -q -x tests/test_skeleton.py tests/test_skin_scene.py tests/test_segment_scene.py > control.txt 2>&1
+          echo "CONTROL EXIT $? on $(lscpu | grep 'Model name' | sed 's/.*: *//')"
+          tail -3 control.txt
+      - name: Fix, one OpenBLAS thread (the conftest's default)
+        run: |
+          uv run pytest -q
+          echo "FIX PASSED on $(lscpu | grep 'Model name' | sed 's/.*: *//')"
