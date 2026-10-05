@@ -288,6 +288,9 @@ ground schema of §3b, and the shared ground pass is its ground.
 - **Measured** (run 37382311130, an L4 with 4 cores and 16 GiB, $1.116/h): spool 179 photos
   (128 used, PSNR 19.3 dB against the splat drawn from their poses), masks 386 s, field 146 s,
   597 s in all, $0.19; pumpkin 56 photos (17.3 dB), masks 179 s, field 187 s, 468 s, $0.15.
+  The published files are its fields finished on the CPU (run 37389686654, a GitHub runner,
+  10 min for both): the spool one thing with its top and drum as parts, 13 things, 8 cover
+  classes; the pumpkins two whole things in the hay (2 specks besides), 5 cover classes.
 - **Run**: `.github/workflows/segment-feature-fields.yml` on an `ffield-*` push:
   `infra/modal/feature_fields.py` (the GPU, both halves), or with `[ffield|finish=<run id>]`
   the CPU half alone on that run's saved fields, on the runner (free). Its `segmentation`
