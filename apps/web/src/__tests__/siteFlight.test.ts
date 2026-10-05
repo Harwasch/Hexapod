@@ -826,6 +826,169 @@ describe("SiteManager.flyTo without a bookmark", () => {
   });
 });
 
+/**
+ * The production catalog's neighbours: the Pumpkin phone scan (a few metres across, no catalog
+ * height) and the seeded San Francisco mesh, 2.4 km in radius and 40 km away -- close enough
+ * to load by proximity whenever the camera is at the pumpkin.
+ */
+const PUMPKIN = { id: "bd3e9645-007b-401b-83c1-d0fe06bc668e", lon: -122.6998, lat: 38.0637 };
+const SF = { id: "017e3eda-2286-4c49-98ad-177098c6402c", lon: -122.4033, lat: 37.7913 };
+const CAMP = { id: "793e0c17-aaf8-4f7c-9dab-3a60634ae056", lon: -123.8806, lat: 46.1335 };
+
+function neighbour(
+  where: { id: string; lon: number; lat: number },
+  areaM2: number,
+): { summary: SiteSummary; record: Site } {
+  const d = Math.sqrt(areaM2) / 2 / 111_320;
+  const record = {
+    ...site([], 0),
+    id: where.id,
+    slug: where.id,
+    name: where.id,
+    centroid: { longitude: where.lon, latitude: where.lat, height: null },
+    boundary: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [where.lon - d, where.lat - d],
+          [where.lon + d, where.lat - d],
+          [where.lon + d, where.lat + d],
+          [where.lon - d, where.lat + d],
+          [where.lon - d, where.lat - d],
+        ],
+      ],
+    },
+  } as unknown as Site;
+  const summary = {
+    id: where.id,
+    slug: where.id,
+    name: where.id,
+    centroid: record.centroid,
+    areaM2,
+  } as unknown as SiteSummary;
+  return { summary, record };
+}
+
+const pumpkin = neighbour(PUMPKIN, 52);
+const sanFrancisco = neighbour(SF, 17_682_282);
+const camp = neighbour(CAMP, 22_047);
+
+/** Where a ground point `metres` east of a site is, in the harness's camera pose. */
+function eastOf(where: { lon: number; lat: number }, metres: number, altitude: number) {
+  return {
+    longitude: where.lon + metres / (111_320 * Math.cos((where.lat * Math.PI) / 180)),
+    latitude: where.lat,
+    altitude,
+  };
+}
+
+describe("the site the switcher names", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    terrain.height = undefined;
+    terrain.pending = null;
+    terrain.point = null;
+    tilesets.next = null;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  /** The sites loaded in the scene. */
+  const loaded = (manager: SiteManager) => [
+    ...(manager as unknown as { loaded: Map<string, unknown> }).loaded.keys(),
+  ];
+
+  /** The scene's proximity check, as a camera move would run it. */
+  const recheck = (manager: SiteManager) =>
+    (manager as unknown as { checkProximity(force: boolean): void }).checkProximity(true);
+
+  it("stays the site flown to, never a large site loaded beside it, as the camera moves about", async () => {
+    const { manager, flights, viewer, at, active } = harness();
+    const records = new Map([pumpkin, sanFrancisco].map((n) => [n.record.id, n.record]));
+    manager.setCatalog([pumpkin.summary, sanFrancisco.summary], (id) =>
+      Promise.resolve(records.get(id) ?? null),
+    );
+    await manager.flyTo(PUMPKIN.id);
+    Object.assign(at, eastOf(PUMPKIN, 60, 60));
+    land(viewer, flights[0]);
+    await vi.advanceTimersByTimeAsync(1);
+    // San Francisco is within 40 km: it loads by proximity once the camera has landed.
+    expect(loaded(manager)).toContain(SF.id);
+    expect(active).toEqual([PUMPKIN.id]);
+    // Zoomed out and panned towards the city, still looking at the pumpkin: the old ranking
+    // (distance over size) gave the city the switcher from about 500 m out.
+    for (const metres of [300, 700, 1_500, 4_000]) {
+      Object.assign(at, eastOf(PUMPKIN, -metres, metres / 2));
+      recheck(manager);
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(active).toEqual([PUMPKIN.id]);
+    expect(manager.activeSite?.id).toBe(PUMPKIN.id);
+    // In the city, it is the city.
+    Object.assign(at, eastOf(SF, 500, 800));
+    recheck(manager);
+    expect(manager.activeSite?.id).toBe(SF.id);
+  });
+
+  it("does not load what a flight passes over on its way", async () => {
+    const { manager, at } = harness();
+    const asked: string[] = [];
+    manager.setCatalog([pumpkin.summary, sanFrancisco.summary], (id) => {
+      asked.push(id);
+      return deferred<Site | null>().promise;
+    });
+    void manager.flyTo(PUMPKIN.id);
+    // Low over the city on the way in.
+    Object.assign(at, eastOf(SF, 0, 3_000));
+    recheck(manager);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(asked).toEqual([PUMPKIN.id]);
+  });
+
+  it("is not taken back by the record of a site picked before, answering late", async () => {
+    const { manager, active } = harness();
+    const late = deferred<Site | null>();
+    manager.setCatalog([pumpkin.summary, camp.summary], (id) =>
+      id === PUMPKIN.id ? late.promise : Promise.resolve(camp.record),
+    );
+    void manager.flyTo(PUMPKIN.id);
+    await vi.advanceTimersByTimeAsync(1);
+    // Changed their mind: Camp instead, whose record answers at once.
+    await manager.flyTo(CAMP.id);
+    expect(manager.activeSite?.id).toBe(CAMP.id);
+    late.resolve(pumpkin.record);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.activeSite?.id).toBe(CAMP.id);
+    expect(active).toEqual([CAMP.id]);
+  });
+
+  it("goes to the site being flown to when the one it named unloads, not to the first one loaded", async () => {
+    const { manager, flights, viewer, at, active } = harness();
+    const records = new Map([pumpkin, sanFrancisco, camp].map((n) => [n.record.id, n.record]));
+    const campRecord = deferred<Site | null>();
+    manager.setCatalog([pumpkin.summary, sanFrancisco.summary, camp.summary], (id) =>
+      id === CAMP.id ? campRecord.promise : Promise.resolve(records.get(id) ?? null),
+    );
+    // At the pumpkin, with the city loaded beside it (first, as on production: proximity).
+    Object.assign(at, eastOf(PUMPKIN, 60, 60));
+    await manager.activate(SF.id, { primary: false });
+    await manager.flyTo(PUMPKIN.id);
+    land(viewer, flights[0]);
+    expect(manager.activeSite?.id).toBe(PUMPKIN.id);
+    expect(loaded(manager)).toEqual([SF.id, PUMPKIN.id]);
+    const before = active.length;
+    // Off to Camp, whose record is slow; the pumpkin unloads on the way.
+    void manager.flyTo(CAMP.id);
+    await vi.advanceTimersByTimeAsync(1);
+    manager.deactivate(PUMPKIN.id);
+    expect(manager.activeSite).toBeNull();
+    expect(active.at(-1)).toBeNull();
+    campRecord.resolve(camp.record);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.activeSite?.id).toBe(CAMP.id);
+    expect(active.slice(before)).toEqual([null, CAMP.id]);
+  });
+});
+
 describe("site records reach the scene from the query cache", () => {
   it("hands over each site record the API answers, and nothing else", async () => {
     const { QueryClient } = await import("@tanstack/react-query");

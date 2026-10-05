@@ -153,6 +153,17 @@ const SETTLE_WINDOW_MS = 20_000;
 /** Where the load bar stands as each phase begins (state/sites.ts `SiteLoad`). */
 const LOAD_PROGRESS = { details: 0.05, model: 0.15, streaming: 0.3 } as const;
 
+/** A catalog site as `checkProximity` ranks it from where the camera is. */
+interface RankedSite {
+  summary: SiteSummary;
+  /** Ground distance from the camera to the site's centroid (m). */
+  distance: number;
+  /** The site's size, never under MIN_SITE_RADIUS_M (m). */
+  radius: number;
+  /** `distance` in units of `radius`: lower is nearer. */
+  score: number;
+}
+
 interface AssetHandle {
   asset: SiteAsset;
   tileset: Cesium3DTileset | null;
@@ -562,7 +573,11 @@ export class SiteManager {
     };
     entry.engaged = this.shouldEngage(entry, false);
     this.loaded.set(siteId, entry);
-    if (makePrimary || !this.primaryId) this.setPrimary(siteId);
+    // A fly-to's site is primary from the moment its record is in -- unless another site has
+    // been picked since: a record that answers late must not take the switcher back from it.
+    // A site loaded because the camera came near is ranked with the rest (`choosePrimary`).
+    if (options.flight ? this.flightSiteId === siteId : makePrimary) this.setPrimary(siteId);
+    else if (this.flightTarget === null) this.choosePrimary();
     await this.showRepresentation(entry, representation);
     return site;
   }
@@ -602,9 +617,13 @@ export class SiteManager {
     }
     if (this.primaryId && !this.loaded.has(this.primaryId)) {
       this.primaryId = null;
-      const next = this.loaded.keys().next();
-      if (!next.done) this.setPrimary(next.value);
-      else this.events.emit("site-active", null);
+      // Not whichever site happened to load first: during a fly-to, the site it is taking the
+      // camera to (or none until its record is in); otherwise the one the camera is at
+      // (`choosePrimary`).
+      const target = this.flightTarget;
+      if (target === null) this.choosePrimary();
+      else if (this.loaded.has(target)) this.setPrimary(target);
+      if (this.primaryId === null) this.events.emit("site-active", null);
     }
     if (this.loaded.size === 0) {
       this.camera.setObjectScale(false);
@@ -1957,16 +1976,7 @@ export class SiteManager {
     if (!force && now - this.lastProximityCheck < 400) return;
     this.lastProximityCheck = now;
     const pose = this.camera.pose();
-    const here = { longitude: pose.longitude, latitude: pose.latitude };
-    const ranked = this.summaries
-      .map((summary) => {
-        const distance = haversineDistance(here, summary.centroid);
-        const radius = Math.max(Math.sqrt(summary.areaM2 / Math.PI), MIN_SITE_RADIUS_M);
-        // Distance in units of the site's own size, so a campus 1 km away still outranks a
-        // rock 1 km away, while the rock wins once you are standing beside it.
-        return { summary, distance, radius, score: distance / radius };
-      })
-      .sort((a, b) => a.score - b.score);
+    const ranked = this.rank(pose);
 
     for (const { summary, distance } of ranked) {
       const entry = this.loaded.get(summary.id);
@@ -1978,7 +1988,14 @@ export class SiteManager {
       ) {
         log.info("unloading distant site", { site: entry.site.slug });
         this.deactivate(summary.id);
-      } else if (!entry && distance < ACTIVATE_DISTANCE_M && pose.altitude < ACTIVATE_DISTANCE_M) {
+      } else if (
+        !entry &&
+        // Not on the way to a fly-to's site: what the flight passes over is not where it is
+        // going, and its loads would compete with the destination's for the network.
+        this.flightTarget === null &&
+        distance < ACTIVATE_DISTANCE_M &&
+        pose.altitude < ACTIVATE_DISTANCE_M
+      ) {
         void this.activate(summary.id, { primary: false });
       }
     }
@@ -2001,9 +2018,8 @@ export class SiteManager {
     for (const entry of this.loaded.values())
       this.setView(entry, this.shouldEngage(entry, entry.engaged), this.farFor(entry));
 
+    if (this.flightTarget === null) this.choosePrimary(ranked, pose.altitude);
     const best = ranked.find((r) => this.loaded.has(r.summary.id));
-    if (best && this.flightTarget === null && best.summary.id !== this.primaryId)
-      this.setPrimary(best.summary.id);
 
     const nearest = ranked[0];
     const near =
@@ -2023,6 +2039,55 @@ export class SiteManager {
     this.performance.reportContext(pose.altitude, near !== null);
     this.updateObjectScale();
     this.refreshCalibration();
+  }
+
+  /** The catalog's sites, nearest first, each measured in units of its own size. */
+  private rank(pose: { longitude: number; latitude: number }): RankedSite[] {
+    const here = { longitude: pose.longitude, latitude: pose.latitude };
+    return this.summaries
+      .map((summary) => {
+        const distance = haversineDistance(here, summary.centroid);
+        const radius = Math.max(Math.sqrt(summary.areaM2 / Math.PI), MIN_SITE_RADIUS_M);
+        // Distance in units of the site's own size, so a campus 1 km away still outranks a
+        // rock 1 km away, while the rock wins once you are standing beside it.
+        return { summary, distance, radius, score: distance / radius };
+      })
+      .sort((a, b) => a.score - b.score);
+  }
+
+  /**
+   * Chooses the primary site -- the one the switcher, the badge, clipping and the HUD speak for
+   * -- once no fly-to is under way:
+   *
+   * 1. the site the latest fly-to took the camera to, while the camera is still there
+   *    (`flightSiteId`): a site picked from the switcher is the one the switcher names;
+   * 2. else the nearest loaded site, in units of its own size, that the camera still frames
+   *    (`framesSite`): a campus beside a rock, a rock once you stand beside it;
+   * 3. else, with no primary at all, the nearest loaded site, as before;
+   * 4. else the primary stays as it is.
+   *
+   * The second rule used to be "the nearest loaded site", framed or not. A large site loaded
+   * nearby then took over from a small one the camera was looking at: the seeded San Francisco
+   * mesh (2.4 km across, 40 km from the Pumpkin scan, so loaded with it) outranked the scan
+   * from a few hundred metres away, and the switcher said "San Francisco" over a pumpkin.
+   */
+  private choosePrimary(ranked?: RankedSite[], altitude?: number): void {
+    const flown = this.flightSiteId;
+    if (flown !== null && this.loaded.has(flown)) {
+      this.setPrimary(flown);
+      return;
+    }
+    if (!ranked || altitude === undefined) {
+      const pose = this.camera.pose();
+      ranked = this.rank(pose);
+      altitude = pose.altitude;
+    }
+    const height = altitude;
+    const loaded = ranked.filter((r) => this.loaded.has(r.summary.id));
+    const framed = loaded.find((r) => framesSite(r.distance, height, r.radius));
+    const current = this.primaryId !== null && this.loaded.has(this.primaryId);
+    const next = framed ?? (current ? undefined : loaded[0]);
+    if (next) this.setPrimary(next.summary.id);
   }
 
   /**
