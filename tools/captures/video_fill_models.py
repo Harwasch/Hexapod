@@ -196,11 +196,17 @@ def _edge_ok(shape: tuple[int, ...], dy: int, dx: int) -> np.ndarray:
     return ok
 
 
-def pack_clip(frames: np.ndarray, masks: np.ndarray | None = None) -> bytes:
+def pack_clip(
+    frames: np.ndarray, masks: np.ndarray | None = None, void: np.ndarray | None = None
+) -> bytes:
+    """A clip as one npz: frames, the pixels to generate, and of those the void (nothing
+    measured there: the others show the scan's own render, a hint VACE may use)."""
     buffer = io.BytesIO()
     arrays = {"frames": np.asarray(frames, np.uint8)}
     if masks is not None:
         arrays["masks"] = np.asarray(masks, bool)
+    if void is not None:
+        arrays["void"] = np.asarray(void, bool)
     np.savez_compressed(buffer, **arrays)
     return buffer.getvalue()
 
@@ -208,6 +214,11 @@ def pack_clip(frames: np.ndarray, masks: np.ndarray | None = None) -> bytes:
 def unpack_clip(blob: bytes) -> tuple[np.ndarray, np.ndarray | None]:
     with np.load(io.BytesIO(blob)) as z:
         return z["frames"], (z["masks"] if "masks" in z.files else None)
+
+
+def unpack_void(blob: bytes) -> np.ndarray | None:
+    with np.load(io.BytesIO(blob)) as z:
+        return z["void"] if "void" in z.files else None
 
 
 def greyed(frames: np.ndarray, masks: np.ndarray) -> np.ndarray:
@@ -291,9 +302,15 @@ def load(key: str, device: str = "cuda") -> Any:
         from diffusers import Cosmos2VideoToWorldPipeline
 
         # The guardrail (`safety_checker`) is built by the pipeline; the pipeline refuses to
-        # run without it.
+        # run without it, and runs it on every prompt and every clip.
         pipe = Cosmos2VideoToWorldPipeline.from_pretrained(COSMOS_MODEL, torch_dtype=torch.bfloat16)
-        return pipe.to(device)
+        pipe = pipe.to(device)
+        # diffusers 0.40 asks every component for `.device` to find where to compute;
+        # cosmos_guardrail 0.3.2's checker answers from a face filter that has none (every
+        # call of run 37381466964 failed there). Where to compute is said here instead.
+        here = torch.device(device)
+        type(pipe)._execution_device = property(lambda self: here)  # type: ignore[assignment]
+        return pipe
     raise ValueError(f"model {key!r}: one of {', '.join(MODELS)}")
 
 
@@ -313,7 +330,9 @@ def fill_clip(key: str, pipe: Any, request: dict) -> dict:
     steps = int(request.get("steps") or spec.steps)
     guidance = float(request.get("guidance") or spec.guidance)
     if key == "vace":
-        out = _vace(pipe, frames, masks, prompt, negative, seed, steps, guidance)
+        void = unpack_void(request["clip"])
+        shown = greyed(frames, masks if void is None else void)
+        out = _vace(pipe, shown, masks, prompt, negative, seed, steps, guidance)
     elif key == "wan22":
         out = _wan22(pipe, frames, masks, prompt, negative, seed, steps, guidance)
     elif key == "cosmos":
@@ -336,12 +355,14 @@ def _u8(video: Any) -> np.ndarray:
     return np.clip(np.round(np.asarray(video, np.float32) * 255), 0, 255).astype(np.uint8)
 
 
-def _vace(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) -> np.ndarray:
+def _vace(pipe: Any, shown, masks, prompt, negative, seed, steps, guidance) -> np.ndarray:
+    """VACE's masked video-to-video: white = generate. Where the scan has a surface it did not
+    see from here, the frame shows its render (VACE's reactive input, a hint it may repaint);
+    where it has nothing, mid grey (VACE's own inpainting convention)."""
     import torch
     from PIL import Image
 
     n, h, w = masks.shape
-    shown = greyed(frames, masks)
     video = [Image.fromarray(f) for f in shown]
     mask = [Image.fromarray(np.where(m, 255, 0).astype(np.uint8)) for m in masks]
     result = pipe(
@@ -393,6 +414,7 @@ def _wan22(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) ->
         g = torch.Generator(device).manual_seed(seed)
         latents = torch.randn(condition.shape, generator=g, device=device, dtype=torch.float32)
         do_cfg = guidance > 1.0
+        pipe.text_encoder.to(device)  # (back from the CPU, where the last clip left it)
         prompt_embeds, negative_embeds = pipe.encode_prompt(
             prompt=prompt,
             negative_prompt=negative,
@@ -405,6 +427,10 @@ def _wan22(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) ->
         prompt_embeds = prompt_embeds.to(dtype)
         if negative_embeds is not None:
             negative_embeds = negative_embeds.to(dtype)
+        # The text encoder (umt5-xxl, ~11 GB) waits on the CPU while the clip is denoised and
+        # decoded: the 720p decode needs the room (run 37381466964 ran out of memory there).
+        pipe.text_encoder.to("cpu")
+        torch.cuda.empty_cache()
         pipe.scheduler.set_timesteps(steps, device=device)
         token_gen = generate[0][0][:, :: spec.patch, :: spec.patch]
         for t in pipe.scheduler.timesteps:
@@ -426,8 +452,12 @@ def _wan22(pipe: Any, frames, masks, prompt, negative, seed, steps, guidance) ->
                 noise = uncond + guidance * (noise - uncond)
             latents = pipe.scheduler.step(noise, t, latents, return_dict=False)[0]
         latents = (1 - generate) * condition + generate * latents
+        del noise, model_input, condition, video, z
+        torch.cuda.empty_cache()
         decoded = vae.decode((latents / inv_std + mean).to(vae.dtype), return_dict=False)[0]
-    video_np = ((decoded.float().clamp(-1, 1) + 1) / 2)[0].permute(1, 2, 3, 0).cpu().numpy()
+        video_np = ((decoded.float().clamp(-1, 1) + 1) / 2)[0].permute(1, 2, 3, 0).cpu().numpy()
+    del decoded
+    torch.cuda.empty_cache()
     return _u8(video_np)
 
 

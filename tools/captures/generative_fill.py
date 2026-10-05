@@ -59,8 +59,13 @@ from splat_render import Camera, Frame, Splats, render
 
 #: A gaussian is known only where at least this many real cameras saw it (LIVING_ENGINE §3).
 SUPPORT_MIN = 3
-#: ...and one of them from within about this angle of the viewing direction.
-KNOWN_DEG = 40.0
+#: ...and one of them from within about this angle of the viewing direction. (At 40 deg, a
+#: lawn the phone saw from 16 deg up was unknown from 50 deg up and a clip there kept almost
+#: no context: run 37381466964.)
+KNOWN_DEG = 55.0
+#: A path's end view must keep at least this share of what the scan shows there known
+#: (context for the model).
+MIN_CONTEXT = 0.3
 #: Octahedral direction bins per side (64 bins of about 25 degrees).
 DIR_BINS = 8
 #: A real camera sees a gaussian when its centre is no more than this share of the
@@ -347,6 +352,18 @@ class SeenDirections:
 
 
 @dataclass
+class ForcedUnknown:
+    """Another model's knowledge with some gaussians never known: the held-out check's
+    region, whose look the generator must make although the scan has its shape."""
+
+    base: KnownModel
+    never: np.ndarray
+
+    def weights(self, positions: np.ndarray, eye: np.ndarray) -> np.ndarray:
+        return self.base.weights(positions, eye) * ~self.never
+
+
+@dataclass
 class ConeKnown:
     """No cameras: the view cones (observers inferred from the scan's finest detail)."""
 
@@ -454,6 +471,19 @@ class Scene:
         if self.dropped is None:
             return np.arange(len(self.measured))
         return np.flatnonzero(~self.dropped)
+
+    def withheld(self) -> Splats:
+        """The measured gaussians whose look the generator is not given (hidden, dropped, or
+        forced unknown): kept out of the start photo and of the real views' loss. Cached."""
+        cache = self.__dict__.setdefault("_withheld", {})
+        if "w" not in cache:
+            off = np.zeros(len(self.measured), bool)
+            never = getattr(self.known, "never", None)
+            for m in (self.hidden, self.dropped, never):
+                if m is not None:
+                    off |= m
+            cache["w"] = self.measured.take(np.flatnonzero(off))
+        return cache["w"]
 
     def conditioning(self, extra: Splats | None = None) -> tuple[Splats, np.ndarray]:
         """What the generator is shown (the shown gaussians, then `extra`) and the shown
@@ -607,11 +637,13 @@ def candidate_directions(elevations: Sequence[float], azimuths: int) -> np.ndarr
 class Masks:
     """One frame's pixels: given colour (known), to generate, to lift, known depth."""
 
-    rgb: np.ndarray  # (h, w, 3) uint8, meaningful where not `generate`
+    rgb: np.ndarray  # (h, w, 3) uint8: known colour; the scan's render where unknown; 0 in void
     generate: np.ndarray
     lift: np.ndarray
     depth: np.ndarray  # measured depth of covered pixels not lifted (anchors), nan elsewhere
     known_alpha: np.ndarray
+    void: np.ndarray  # nothing measured here
+    surface: np.ndarray  # the measured surface's depth wherever the scan covers, nan elsewhere
 
 
 def frame_masks(
@@ -653,17 +685,32 @@ def frame_masks(
         cv2.GaussianBlur(seen.rgb.astype(np.float32), (0, 0), 1.0) / np.maximum(w, 1e-4)[..., None]
     )
     colour = np.where((a >= COVERED)[..., None], seen.rgb / np.maximum(a, 1e-6)[..., None], smooth)
-    rgb = np.where(todo[..., None], 0.0, np.clip(colour, 0, 1))
+    # Where the scan has a surface it did not see from here, its render stays as a hint (VACE
+    # may repaint from it); void is black.
+    af = full.alpha.astype(np.float32)
+    wf = cv2.GaussianBlur(af, (0, 0), 1.0)
+    full_colour = (
+        cv2.GaussianBlur(full.rgb.astype(np.float32), (0, 0), 1.0) / np.maximum(wf, 1e-4)[..., None]
+    )
+    rgb = np.where(unknown[..., None], np.clip(full_colour, 0, 1), np.clip(colour, 0, 1))
+    rgb = np.where(void[..., None], 0.0, rgb)
     # The depth a generated frame's depth is fitted to: every covered pixel outside what is
     # lifted -- known or not, the scan measured a surface there (only not its look from here).
-    anchor = covered & ~lift & (full.alpha >= COVERED) & np.isfinite(full.depth)
-    depth = np.where(anchor, full.depth, np.nan)
-    return Masks(tf.to_u8(rgb), generate, lift, depth, seen.alpha)
+    solid = (full.alpha >= COVERED) & np.isfinite(full.depth)
+    depth = np.where(covered & ~lift & solid, full.depth, np.nan).astype(np.float32)
+    surface = np.where(covered & solid, full.depth, np.nan).astype(np.float32)
+    return Masks(tf.to_u8(rgb), generate, lift, depth, seen.alpha, void, surface)
 
 
-def unknown_score(scene: Scene, camera: Camera, renderer: Renderer, extra: Splats | None) -> int:
-    """How many pixels of the region a view would have to lift."""
-    return int(frame_masks(scene, camera, renderer, extra).lift.sum())
+def unknown_score(
+    scene: Scene, camera: Camera, renderer: Renderer, extra: Splats | None
+) -> tuple[int, float]:
+    """How many pixels of the region a view would have to lift, and the share of what the
+    scan shows there that is known (the context a model would have; empty sky does not count
+    against it)."""
+    m = frame_masks(scene, camera, renderer, extra)
+    shown = ~m.void
+    return int(m.lift.sum()), float((~m.generate & shown).sum() / max(int(shown.sum()), 1))
 
 
 def _fit_distance(radius: float, fov_deg: float, aspect: float) -> float:
@@ -701,10 +748,20 @@ def plan_paths(
         camera = Camera.look_at(
             eye, centre, fov_deg=FOV_DEG, width=probe[0], height=probe[1], up=tuple(scene.up)
         )
-        scores.append((unknown_score(scene, camera, renderer, extra), d))
-    report = [{"direction": d.round(3).tolist(), "unknownPx": s} for s, d in scores]
+        lift_px, context = unknown_score(scene, camera, renderer, extra)
+        scores.append((lift_px, context, d))
+    report = [
+        {"direction": d.round(3).tolist(), "unknownPx": s, "known": round(c, 3)}
+        for s, c, d in scores
+    ]
+    # Only views that keep enough of the frame known: a model given nothing invents the
+    # whole frame (run 37381466964's clips, from 50 deg up).
+    usable = [(s, d) for s, c, d in scores if c >= MIN_CONTEXT]
+    if not usable:  # nowhere keeps that much: the best-known quarter of the views
+        floor = float(np.quantile([c for _, c, _ in scores], 0.75)) if scores else 0.0
+        usable = [(s, d) for s, c, d in scores if c >= floor]
     chosen: list[np.ndarray] = []
-    for score, d in sorted(scores, key=lambda sd: -sd[0]):
+    for score, d in sorted(usable, key=lambda sd: -sd[0]):
         if score <= 0 or len(chosen) >= count:
             break
         others = [*avoid, *chosen]
@@ -790,6 +847,8 @@ class Clip:
     lift: np.ndarray  # (n, h, w) bool
     depth: np.ndarray  # (n, h, w) float: the anchors (`Masks.depth`), nan elsewhere
     photo_first: bool
+    void: np.ndarray | None = None  # (n, h, w) bool: nothing measured
+    surface: np.ndarray | None = None  # (n, h, w) float: the measured surface's depth
 
 
 def remap_photo(view: RealView, camera: Camera) -> tuple[np.ndarray, np.ndarray] | None:
@@ -833,6 +892,8 @@ def render_clip(
     generate = np.zeros((n, h, w), bool)
     lift = np.zeros((n, h, w), bool)
     depth = np.full((n, h, w), np.nan, np.float32)
+    void = np.zeros((n, h, w), bool)
+    surface = np.full((n, h, w), np.nan, np.float32)
     photo_first = False
     for k, camera in enumerate(cameras):
         known = None
@@ -842,15 +903,22 @@ def render_clip(
             known = known_cache[k]
         m = frame_masks(scene, camera, renderer, extra, known)
         frames[k], generate[k], lift[k], depth[k] = m.rgb, m.generate, m.lift, m.depth
+        void[k], surface[k] = m.void, m.surface
         if k == 0 and path.start is not None:
             seen = remap_photo(path.start, camera)
             if seen is not None:
                 rgb, cover = seen
+                # The photo shows what the scene withholds (a hidden object, a dropped top):
+                # those pixels stay to generate.
+                withheld = scene.withheld()
+                if len(withheld):
+                    cover &= ~tf._covered(renderer(withheld, camera).alpha * 4.0)
                 frames[0] = np.where(cover[..., None], rgb, frames[0])
                 generate[0] &= ~cover
                 lift[0] &= ~cover
+                void[0] &= ~cover
                 photo_first = bool(cover.mean() > 0.5)
-    return Clip(path, size, cameras, frames, generate, lift, depth, photo_first)
+    return Clip(path, size, cameras, frames, generate, lift, depth, photo_first, void, surface)
 
 
 def keyframes(clip: Clip) -> list[int]:
@@ -956,7 +1024,7 @@ class RemoteClipFiller:
         handles = []
         for r in requests:
             body: dict[str, object] = {
-                "clip": vfm.pack_clip(r.clip.frames, r.clip.generate),
+                "clip": vfm.pack_clip(r.clip.frames, r.clip.generate, r.clip.void),
                 "prompt": r.prompt,
                 "seed": int(r.seed),
             }
@@ -1231,8 +1299,13 @@ def lift_fill(
     import cv2
 
     parts, confs, cams, report = [], [], [], []
-    for k, depth in sorted(fill.depth.items()):
+    for k, mono in sorted(fill.depth.items()):
         clip = fill.clip
+        # Where the scan has a surface (only not seen from here), the fill is painted onto
+        # it; the generated views' depth places only what the scan has nothing of.
+        depth = mono
+        if clip.surface is not None:
+            depth = np.where(np.isfinite(clip.surface[k]), clip.surface[k], mono)
         mask = clip.lift[k]
         known = ~clip.generate[k]
         distance = cv2.distanceTransform((~known).astype(np.uint8), cv2.DIST_L2, 5)
@@ -1240,7 +1313,10 @@ def lift_fill(
         extra = np.full(mask.shape, quality)
         agreement = None
         if other is not None and k in other.depth:
-            agreement = seed_agreement(fill.frames[k], depth, other.frames[k], other.depth[k])
+            theirs = other.depth[k]
+            if clip.surface is not None:
+                theirs = np.where(np.isfinite(clip.surface[k]), clip.surface[k], theirs)
+            agreement = seed_agreement(fill.frames[k], depth, other.frames[k], theirs)
             extra = extra * agreement
         s, c = lift_frame(
             clip.cameras[k], fill.frames[k], depth, mask, distance, region, extra_confidence=extra
@@ -1407,7 +1483,7 @@ def distil_request(
             weights.append(GENERATED_WEIGHT)
             outside.append(GENERATED_OUTSIDE)
     shown = scene.measured.take(scene.shown_index())
-    hidden = scene.measured.take(np.flatnonzero(scene.hidden)) if scene.hidden is not None else None
+    hidden = scene.withheld()
     if scene.views and real > 0:
         centre = scene.centre
         ranked = sorted(
@@ -1718,7 +1794,10 @@ def run_bakeoff(
     region = grown(*scene.roi, ROI_PAD)
     budget = max(MIN_BUDGET, int(BUDGET_SHARE * len(scene.measured)))
     carvers = carving_cameras(scene)
-    present = scene.measured.take(scene.present_index())
+    # Carving is against everything measured: what the (kept) real cameras saw, including
+    # what the generator is not shown -- a hidden object, a dropped top -- since those
+    # cameras did see it. It only ever removes what lies in front of it.
+    present = scene.measured
     log(f"{scene.name}: planning {options.paths} paths")
     paths1, scores1 = plan_paths(
         scene,
@@ -1878,6 +1957,7 @@ class Finish:
     """Carve, thin, distil, carve again, package: one candidate's layer and report entry."""
 
     scene: Scene
+    #: What carving renders: everything measured.
     present: Splats
     carvers: list[Camera]
     renderer: Renderer
@@ -2275,6 +2355,10 @@ def build_scene(
             "belowMin": int((known.counts < SUPPORT_MIN).sum()),
         }
         known_model: KnownModel = known
+        if args.unknown_roi:
+            never = np.all((splats.positions >= low) & (splats.positions <= high), axis=1)
+            known_model = ForcedUnknown(known, never)
+            info["forcedUnknown"] = int(never.sum())
     else:
         grid = grid if grid is not None else vc.cone_grid_from_tileset(tileset)
         known_model = ConeKnown(grid)
@@ -2330,6 +2414,12 @@ def parser() -> Any:
         help="hold out this share of the cameras that see the region from highest",
     )
     run.add_argument("--min-frame-psnr", type=float, default=13.0)
+    run.add_argument(
+        "--unknown-roi",
+        action="store_true",
+        help="the held-out check: the region's look is never known (its shape is), so the "
+        "generator must make it; compared with the held-out photos",
+    )
     run.add_argument("--paths", type=int, default=2)
     run.add_argument("--seeds", type=int, default=1)
     run.add_argument("--rounds", type=int, default=2)

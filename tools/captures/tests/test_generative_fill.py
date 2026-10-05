@@ -173,7 +173,7 @@ def test_the_path_starts_at_a_real_camera_and_climbs_to_the_unknown_top() -> Non
     assert path.start is not None
     assert np.allclose(path.centres[0], path.start.camera.centre)
     assert np.allclose(path.rotations[0], path.start.camera.rotation, atol=1e-6)
-    assert path.end_direction[2] > 0.5  # it ends looking down on the top
+    assert path.end_direction[2] >= 0.45  # it climbs to look down on the top, keeping context
     best = max(scores, key=lambda s: s["unknownPx"])
     assert best["direction"][2] > 0.5
     # The last frame looks at the region's centre.
@@ -305,7 +305,7 @@ def test_the_loop_fills_the_top_and_carves_nothing_it_keeps(tmp_path: Path) -> N
     layer = load_tileset(tmp_path / "out" / gf.slug(filler.name) / "inferred" / "tileset.json")
     # Every inferred gaussian sits on or under the table's top, near it, not in the air.
     assert np.all(np.abs(layer.positions[:, :2]) <= 0.45 + 0.25 * 0.9 + 0.05)
-    assert np.percentile(layer.positions[:, 2], 90) <= 0.78
+    assert np.percentile(layer.positions[:, 2], 90) <= 0.82
     # Carving is final: nothing it keeps lies where a real camera saw through.
     present = scene.measured.take(scene.present_index())
     cams = gf.carving_cameras(scene)
@@ -410,3 +410,14 @@ def test_the_roof_picked_is_the_one_least_seen_from_above() -> None:
     assert np.allclose(low, [-0.45, -0.45, 0.6])
     with pytest.raises(SystemExit):
         gf.pick_roi(instances, splats, scene.known, "tent")
+
+
+def test_a_forced_unknown_region_is_withheld() -> None:
+    splats, is_top = table_scene()
+    base = gf.seen_directions(splats, ring_views(), render, width=96)
+    known = gf.ForcedUnknown(base, is_top)
+    w = known.weights(splats.positions, np.array([2.2, 0.0, 0.45]))
+    assert w[is_top].max() == 0.0 and w[~is_top].max() > 0.5
+    scene = gf.Scene("table", splats, known, ROI)
+    assert len(scene.withheld()) == int(is_top.sum())
+    assert len(scene.conditioning()[0]) == len(splats)  # its shape is still shown

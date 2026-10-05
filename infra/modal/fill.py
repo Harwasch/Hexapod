@@ -409,7 +409,7 @@ video_fill_image = (
         "cosmos_guardrail==0.3.2",
         "numpy",
     )
-    .env({"HF_HOME": "/weights/hf"})
+    .env({"HF_HOME": "/weights/hf", "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
     .add_local_file(LOCAL_CAPTURES / "video_fill_models.py", "/root/video_fill_models.py")
 )
 
@@ -1047,7 +1047,10 @@ def run_genfill(kind: str, scan: str, options: dict) -> dict:
         if setup.get("negative"):
             argv += ["--negative", setup["negative"]]
         if kind == "holdout":
+            # The frames from above are held out, and the ROI's look is never
+            # treated as known (its shape still is), so the fill has to make it.
             argv += ["--holdout-above", str(options.get("holdout", HOLDOUT_SHARE))]
+            argv += ["--unknown-roi"]
         for key in (
             "paths",
             "seeds",
