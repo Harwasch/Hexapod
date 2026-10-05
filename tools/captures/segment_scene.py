@@ -120,7 +120,10 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:  # typing.Self is 3.11; the GPU images run 3.10 (gsplat's wheel)
+    from typing import Self
 
 import numpy as np
 from scipy.sparse import coo_matrix
