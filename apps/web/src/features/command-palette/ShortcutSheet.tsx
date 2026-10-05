@@ -1,7 +1,9 @@
+import { Fragment } from "react";
+
 import { GlassSheet, Kbd } from "@twin/ui";
 
 import { env } from "@/app/env";
-import { hotkeyKeys, hotkeySheet } from "@/app/hotkeys";
+import { hotkeyChoices, hotkeySheet } from "@/app/hotkeys";
 import { useUi } from "@/state/ui";
 
 /** `?`: every key the console answers to, printed from the one registry (`app/hotkeys.ts`). */
@@ -33,8 +35,13 @@ export function ShortcutSheet() {
                 <div key={hotkey.label} className="shortcuts__row">
                   <dt>{hotkey.label}</dt>
                   <dd>
-                    {hotkeyKeys(hotkey).map((key) => (
-                      <Kbd key={key}>{key}</Kbd>
+                    {hotkeyChoices(hotkey).map((keys, choice) => (
+                      <Fragment key={choice}>
+                        {choice > 0 && <span className="shortcuts__or">or</span>}
+                        {keys.map((key) => (
+                          <Kbd key={key}>{key}</Kbd>
+                        ))}
+                      </Fragment>
                     ))}
                   </dd>
                 </div>

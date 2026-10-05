@@ -128,13 +128,22 @@ export class MeasurementManager {
     }
   }
 
-  remove(id: string): void {
+  /**
+   * Takes a finished measurement off the map. Returns what puts it back as it was (an undo,
+   * `MeasurePanel`), or null when there was none.
+   */
+  remove(id: string): (() => void) | null {
     const entities = this.finished.get(id);
-    if (entities) {
-      for (const entity of entities) this.viewer.entities.remove(entity);
-      this.finished.delete(id);
+    if (!entities) return null;
+    for (const entity of entities) this.viewer.entities.remove(entity);
+    this.finished.delete(id);
+    this.scene.requestRender();
+    return () => {
+      if (this.finished.has(id)) return;
+      for (const entity of entities) this.viewer.entities.add(entity);
+      this.finished.set(id, entities);
       this.scene.requestRender();
-    }
+    };
   }
 
   clearAll(): void {

@@ -1,12 +1,14 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
+import type { Footprint, PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
 
 import { planningOpened } from "@/lib/planningMetrics";
-import { isAreaZone } from "@/missions/areas";
+import { isAreaZone, reshapedZone } from "@/missions/areas";
 import type { GroundSource } from "@/missions/ground";
 import type { Plan, Project, Zone } from "@/missions/types";
+
+import { record } from "./history";
 
 export type MissionView = "map" | "plan" | "fleet";
 export type MissionSelection =
@@ -304,3 +306,32 @@ export const useMission = create<MissionState>()(
     },
   ),
 );
+
+/**
+ * An area's corners moved on the map (`AreaEditor`, through `SceneBridge`): the area takes the
+ * new outline as one undoable step (`state/history.ts`). Undo and redo put an outline back
+ * and `announce` it as the editor announces an edit, so an open plan redrafts for the outline
+ * it has again (`PlanCard`). Nothing when the area is not the project's.
+ */
+export function reshapeArea(
+  zoneId: string,
+  footprint: Footprint,
+  announce: (zoneId: string, footprint: Footprint) => void,
+): void {
+  const project = useMission.getState().project;
+  const zone = project?.zones.find((z) => z.id === zoneId);
+  if (!project || !zone) return;
+  const reshaped = reshapedZone(zone, footprint);
+  const put = (area: Zone): void => {
+    useMission.getState().addArea(project.id, area);
+    announce(zoneId, area.footprint);
+  };
+  useMission.getState().addArea(project.id, reshaped);
+  record({
+    label: `Reshape ${zone.name}`,
+    scope: "site",
+    alive: () => useMission.getState().project?.id === project.id,
+    undo: () => put(zone),
+    redo: () => put(reshaped),
+  });
+}
