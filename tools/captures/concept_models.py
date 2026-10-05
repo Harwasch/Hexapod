@@ -294,7 +294,7 @@ class GroundedSam2Concepts:
 
     detector: str = GDINO_MODEL
     sam: str = sm.SAM2_LARGE_MODEL
-    box_threshold: float = 0.25
+    box_threshold: float = 0.3
     text_threshold: float = 0.25
     #: A box over this share of the frame is not a thing.
     max_box_share: float = 0.85

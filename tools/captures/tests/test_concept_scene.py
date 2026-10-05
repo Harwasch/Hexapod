@@ -121,6 +121,15 @@ def test_clean_concepts_dedupes_and_keeps_the_list_short() -> None:
     assert cs.clean_concepts([cs.Concept("x", "thing", "nope")])[0].category == "other"
 
 
+def test_a_vocabulary_without_cover_classifies_among_every_class() -> None:
+    only = cs.with_cover([cs.Concept("pumpkin", "thing", "produce")])
+    things, stuff = cs.split_concepts(only)
+    assert [c.name for c in things] == ["pumpkin"]
+    assert [c.cover for c in stuff] == [c.id for c in sgf.cover_classes()[0]]
+    named = cs.clean_concepts([cs.Concept("pumpkin", "thing"), cs.Concept("hay", "stuff")])
+    assert cs.with_cover(named) == named
+
+
 def test_cover_words_name_the_shared_classes() -> None:
     assert cs.cover_of("Tall grass").id == "tall-grass"
     assert cs.cover_of("tall-grass").id == "tall-grass"

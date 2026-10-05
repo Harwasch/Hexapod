@@ -220,6 +220,16 @@ def clean_concepts(
     return things + stuff
 
 
+def with_cover(concepts: Sequence[Concept]) -> list[Concept]:
+    """`concepts`, and when they name no cover class, every class of
+    `data/ground_cover.json` (as candidate A classifies the ground): the ground always has
+    one."""
+    if any(c.kind == "stuff" for c in concepts):
+        return list(concepts)
+    every = [Concept(c.id, "stuff") for c in sgf.cover_classes()[0]]
+    return clean_concepts([*concepts, *every], max_stuff=len(every))
+
+
 def split_concepts(concepts: Sequence[Concept]) -> tuple[list[Concept], list[Concept]]:
     return [c for c in concepts if c.kind == "thing"], [c for c in concepts if c.kind == "stuff"]
 
@@ -931,7 +941,7 @@ def segment_concepts(
             else:
                 frame = render(view_splats, camera, index=index)
                 overviews.append(np.round(np.clip(frame.rgb, 0, 1) * 255).astype(np.uint8))
-        concepts = clean_concepts(vocabulary.concepts(overviews))
+        concepts = with_cover(clean_concepts(vocabulary.concepts(overviews)))
         if cache is not None:
             (cache / "names.json").write_text(
                 json.dumps(
