@@ -131,36 +131,28 @@ def production_settings(tmp_path: Path, **overrides: object) -> Settings:
 # --- the archive ------------------------------------------------------------------
 
 
-def test_the_four_pre_pipeline_captures_survive_the_move_with_their_provenance() -> None:
-    """The point of keeping an archive at all: attribution, licence and capture date."""
+def test_the_archive_keeps_only_what_this_deployment_can_serve() -> None:
+    """The synthetic tree, with its provenance; the three drone captures whose tiles never
+    reached the bucket were withdrawn (`app.seed.WITHDRAWN_SITES`)."""
     archive = {capture.slug: capture for capture in load_archive()}
-    assert sorted(archive) == ["brighton-beach", "mygla", "sheffield-park", "synthetic-tree"]
-    sheffield = archive["sheffield-park"]
-    assert sheffield.attribution == "Piero Toffanin / OpenDroneMap"
-    assert sheffield.license_name == "BSD-2-Clause"
-    assert sheffield.captured == "2016"
-    assert sheffield.images == 32
-    assert [asset.representation.value for asset in sheffield.assets] == [
-        "mesh",
-        "point-cloud",
-        "gaussian-splat",
-    ]
-    # The fixture that stays in git is still a catalog entry, and it is the one that moves.
+    assert sorted(archive) == ["synthetic-tree"]
     tree = archive["synthetic-tree"]
+    assert tree.attribution == "Hexapod synthetic fixture"
+    assert tree.license_name == "CC0-1.0"
+    assert [asset.representation.value for asset in tree.assets] == ["gaussian-splat"]
     assert [asset.rig for asset in tree.assets] == ["../source/rig.json"]
 
 
 def test_a_local_build_wins_over_the_archive(tmp_path: Path) -> None:
     """`build_site.py` rebuilt a slug the archive also names: the rebuild is the truth."""
-    site_dir = tmp_path / "mygla"
+    site_dir = tmp_path / "synthetic-tree"
     site_dir.mkdir()
-    rebuilt = dict(CAPTURE, slug="mygla", name="Rebuilt mygla")
+    rebuilt = dict(CAPTURE, slug="synthetic-tree", name="Rebuilt tree")
     (site_dir / SITE_DOCUMENT_NAME).write_text(json.dumps(rebuilt), encoding="utf-8")
     by_slug = {
         capture.slug: capture for capture in capture_descriptions(Settings(tiles_dir=str(tmp_path)))
     }
-    assert by_slug["mygla"].name == "Rebuilt mygla"
-    assert "sheffield-park" in by_slug
+    assert by_slug["synthetic-tree"].name == "Rebuilt tree"
 
 
 # --- where the tiles come from ----------------------------------------------------
@@ -176,10 +168,9 @@ def test_development_serves_a_capture_it_has_on_disk(tmp_path: Path) -> None:
 def test_development_falls_back_to_the_bucket_for_a_capture_it_does_not_have(
     tmp_path: Path,
 ) -> None:
-    """The three drone captures after A9: described here, but 104 MB of tiles are not.
-
-    Without this a fresh clone would seed three sites whose every asset 404s, which is a
-    worse answer than fetching them from the bucket they were migrated to.
+    """A capture described here whose tiles are not in the clone (the drone captures after
+    A9). Without this a fresh clone would seed a site whose every asset 404s, which is a
+    worse answer than fetching it from the bucket it was migrated to.
     """
     assert tiles_base_url(bucket_settings(tmp_path), "mygla") == (
         "https://s3.example.com/twin-assets/sites/mygla/"
@@ -188,7 +179,7 @@ def test_development_falls_back_to_the_bucket_for_a_capture_it_does_not_have(
 
 def test_with_no_disk_and_no_bucket_it_says_where_it_would_have_looked(tmp_path: Path) -> None:
     """A clone with no bucket at all. `mygla` 404s, and that is the honest answer: its
-    bytes are in git history and nowhere else this deployment can reach."""
+    bytes are nowhere this deployment can reach."""
     assert tiles_base_url(settings_for(tmp_path), "mygla") == (
         "http://api.test:8000/api/v1/tiles/mygla/"
     )
@@ -255,7 +246,7 @@ def test_a_production_capture_is_seeded_pointing_at_the_bucket(tmp_path: Path) -
 
 def test_every_archived_capture_resolves_in_production(tmp_path: Path) -> None:
     """Including `synthetic-tree`, which stays in git but is not in the image."""
-    archived = {"brighton-beach", "mygla", "sheffield-park", "synthetic-tree"}
+    archived = {capture.slug for capture in load_archive()}
     sites = [s for s in capture_sites(production_settings(tmp_path)) if s.slug in archived]
     urls = [
         str(a.source.url)
@@ -263,7 +254,7 @@ def test_every_archived_capture_resolves_in_production(tmp_path: Path) -> None:
         for a in site.assets
         if isinstance(a.source, TilesUrlSource)
     ]
-    assert len(urls) == 10
+    assert len(urls) == 1
     assert all(url.startswith(f"{PUBLIC_URL}/sites/") for url in urls)
 
 
@@ -273,12 +264,12 @@ def test_an_unreadable_site_document_is_skipped_not_fatal(tmp_path: Path) -> Non
     (broken / SITE_DOCUMENT_NAME).write_text("{not json", encoding="utf-8")
     slugs = [capture.slug for capture in capture_descriptions(Settings(tiles_dir=str(tmp_path)))]
     assert "broken" not in slugs
-    assert "sheffield-park" in slugs
+    assert "synthetic-tree" in slugs
 
 
 def test_missing_tiles_dir_still_seeds_the_archive(tmp_path: Path) -> None:
     slugs = [s.slug for s in capture_sites(Settings(tiles_dir=str(tmp_path / "nothing")))]
-    assert slugs == ["brighton-beach", "mygla", "sheffield-park", "synthetic-tree"]
+    assert slugs == ["synthetic-tree"]
 
 
 def test_rebuilt_capture_refreshes_the_seeded_site(tmp_path: Path, db: Session) -> None:

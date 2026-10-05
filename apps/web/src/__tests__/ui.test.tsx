@@ -2,13 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { GlassTooltipProvider } from "@twin/ui";
 
 import type { Site, SiteAsset } from "@twin/contracts";
 
 import { api } from "@/api/client";
+import { env } from "@/app/env";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { sceneRegistry } from "@/cesium/SceneContext";
 import { InspectorPanel } from "@/features/inspector/InspectorPanel";
@@ -408,6 +409,12 @@ describe("InspectorPanel: how the capture was placed", () => {
 describe("InspectorPanel: observed and simulated", () => {
   it("separates what was recorded from what is modelled, for a living site", async () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    // The offline demo site has a splat only when one is configured.
+    const configured = env.defaultSplatAssetId;
+    env.defaultSplatAssetId = 4547222;
+    onTestFinished(() => {
+      env.defaultSplatAssetId = configured;
+    });
     useLiving.getState().setStatus(livingStatus(true));
     useSelection.getState().setSelection({
       kind: "site",
@@ -428,9 +435,7 @@ describe("InspectorPanel: observed and simulated", () => {
     expect(screen.getByTestId("inspector-geometry")).toHaveTextContent(
       "No capture date or resolution recorded",
     );
-    expect(screen.getByTestId("inspector-geometry")).toHaveTextContent(
-      "Sample asset referenced by the official CesiumJS Sandcastle.",
-    );
+    expect(screen.getByTestId("inspector-geometry")).toHaveTextContent("VITE_DEFAULT_*_ASSET_ID");
     // The motion carries the rig's own provenance string, verbatim.
     expect(screen.getByTestId("inspector-motion")).toHaveTextContent(`Simulated · ${RIG_NOTE}`);
     expect(screen.getByTestId("inspector-motion")).toHaveTextContent("Modelled wind is moving it");

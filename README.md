@@ -29,8 +29,9 @@ clipped away under each local model, so nothing z-fights. Open datasets (terrain
 land cover, hydrography, buildings) are composable layers with provenance, license and
 attribution. Sites, assets and layers persist in PostGIS.
 
-A public demo site (Cesium's Gaussian-splat sample, ion asset 4547222) works out of the box
-using the evaluation token bundled with CesiumJS. On top of the world sits **mission control**
+A demo site in Redmond, WA (where Cesium's Gaussian-splat sample sits) carries a simulated
+fleet. The sample splat itself is withdrawn, because this deployment's ion account can't read
+it; `VITE_DEFAULT_SPLAT_ASSET_ID` gives the offline demo site a splat. On top of the world sits **mission control**
 for autonomous land-management robots: project badge, Map / Plan / Fleet views, zone and
 machine overlays, plans, fleet and treatment log, one command box (search, actions and the
 agent) and a status line for the fleet, the agent and the connection.

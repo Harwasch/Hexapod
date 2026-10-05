@@ -1,5 +1,12 @@
 # Comparing reality-model formats
 
+> **Withdrawn (2026-10).** These sites are no longer seeded, and a database that has them
+> deletes them at startup (`apps/api/app/seed/__init__.py`, `WITHDRAWN_SITES`). The
+> deployment's own ion token gets 404 for every asset below; the CesiumJS evaluation token
+> reached them. To bring one back: add the asset to the ion account from the Asset Depot,
+> restore its definition from git history (`apps/api/app/seed/data.py`), and take its slug
+> off the list. The rest of this page describes them as they were.
+
 Four public sites, one app, so the look, feel and cost of each 3D format can be compared
 side by side. All are Cesium ion sample assets that the CesiumJS evaluation token can
 reach; attribution and terms are stored on each catalog record and shown in the About sheet.

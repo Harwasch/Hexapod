@@ -19,9 +19,10 @@
  *    table someone keeps in step by hand.
  *
  * What stays hard-coded is the two things that are true with no deployment at all: the
- * public Cesium demo site and the open-data layer stack (mirroring
+ * demo site the simulated fleet runs on and the open-data layer stack (mirroring
  * apps/api/app/seed/data.py), so a fresh checkout with no bucket still shows a globe with
- * something on it. The UI labels this whole state explicitly, and `builtin: true` keeps
+ * something on it. The demo site's own Cesium ion splat is withdrawn there (the account's
+ * ion token cannot read it); `VITE_DEFAULT_SPLAT_ASSET_ID` gives it one again. The UI labels this whole state explicitly, and `builtin: true` keeps
  * every write form disabled — an offline capture is readable, never editable.
  */
 
@@ -31,7 +32,6 @@ import { destination, footprintAreaM2 } from "@twin/geo";
 import { env } from "@/app/env";
 
 export const DEMO_SITE_SLUG = "cesium-splat-demo";
-export const DEMO_SPLAT_ASSET_ID = 4547222;
 const DEMO_CENTER = { longitude: -122.13810992689156, latitude: 47.644519699638366 };
 const DEMO_HEIGHT = 120;
 const NOW = "2026-09-15T00:00:00Z";
@@ -57,12 +57,6 @@ function overviewBookmark() {
     createdAt: NOW,
   };
 }
-
-const cesiumAttribution = {
-  text: "Cesium sample data",
-  organization: "Cesium GS, Inc.",
-  url: "https://cesium.com/",
-};
 
 function envAsset(
   id: string,
@@ -120,40 +114,14 @@ const DEMO_BOUNDARY = {
 
 export function builtinDemoSite(): Site {
   const footprint = DEMO_BOUNDARY;
-  const assets: Site["assets"] = [
-    {
-      id: "builtin-demo-splat",
-      siteId: "builtin-demo-site",
-      provider: "cesium-ion",
-      name: "Gaussian splat (LOD)",
-      representation: "gaussian-splat",
-      source: { type: "cesium-ion", assetId: env.defaultSplatAssetId ?? DEMO_SPLAT_ASSET_ID },
-      footprint,
-      observedAt: null,
-      validFrom: null,
-      validTo: null,
-      resolution: null,
-      crs: null,
-      license: null,
-      attribution: [cesiumAttribution],
-      provenance: {
-        sourceOrganization: "Cesium GS, Inc.",
-        sourceUrl: "https://sandcastle.cesium.com/?id=3d-tiles-gaussian-splats-with-lod",
-        notes: "Sample asset referenced by the official CesiumJS Sandcastle.",
-      },
-      renderConfig: {
-        maximumScreenSpaceError: 16,
-        pointCloudShading: null,
-        clipsWorld: true,
-        clipFootprint: "tileset",
-        heightOffsetM: 0,
-      },
-      defaultVisible: true,
-      sidecarFlags: [],
-      createdAt: NOW,
-      updatedAt: NOW,
-    },
-  ];
+  const assets: Site["assets"] = [];
+  const splat = envAsset(
+    "builtin-demo-splat",
+    "Gaussian splat (configured)",
+    "gaussian-splat",
+    env.defaultSplatAssetId,
+  );
+  if (splat) assets.push({ ...splat, defaultVisible: true });
   const mesh = envAsset("builtin-demo-mesh", "Mesh (configured)", "mesh", env.defaultMeshAssetId);
   const points = envAsset(
     "builtin-demo-points",
@@ -168,23 +136,14 @@ export function builtinDemoSite(): Site {
     slug: DEMO_SITE_SLUG,
     name: "Cesium Gaussian splat demo",
     description:
-      "Public 3D Gaussian splat tileset with hierarchical level of detail, published by Cesium for the '3D Tiles Gaussian splats with LOD' Sandcastle.",
+      "Where the simulated fleet demo runs, in the photorealistic world around Cesium's '3D Tiles Gaussian splats with LOD' Sandcastle site. It has no reality model of its own.",
     boundary: footprint,
     centroid: { ...DEMO_CENTER, height: DEMO_HEIGHT },
     areaM2: footprintAreaM2(footprint),
     thumbnailUrl: null,
-    metadata: {
-      quality: { resolutionDescription: "Sub-decimetre splat detail (visual)" },
-      origin: "builtin",
-    },
-    attribution: [cesiumAttribution],
-    license: {
-      name: "Cesium ion sample asset",
-      url: "https://cesium.com/legal/terms-of-service/",
-      requiresAttribution: true,
-      spdxId: null,
-      notes: "Provided by Cesium for evaluation. Access depends on the ion token in use.",
-    },
+    metadata: { origin: "builtin" },
+    attribution: [],
+    license: null,
     assets,
     cameraBookmarks: [overviewBookmark()],
     createdAt: NOW,
