@@ -258,7 +258,7 @@ kept. Today's `extras.instances` stays the default.
 the scene and then looks for each named thing, so objects are born with names.
 
 1. **Vocabulary.** Qwen3-VL 4B Instruct (Apache-2.0) reads 12 overview renders and lists at
-   most 12 *things* ("cable spool", "pumpkin"), each with one of the categories of §3 step
+   most 12 _things_ ("cable spool", "pumpkin"), each with one of the categories of §3 step
    7, and which of `data/ground_cover.json`'s classes the ground shows.
 2. **Ground**: the shared pass; cells split at the ground (and at its `unknown` splats). A
    ground cell that the views keep seeing inside a thing's mask is the thing's (60% of its
@@ -282,7 +282,6 @@ snag and the house is a named object (IoU >= 0.8), the house's slab (ground to g
 the house's, the lawn and path are Grass and Trail (> 90% of their splats), and with "shrub"
 left out of the vocabulary the shrubs still become (unnamed) objects. It runs as a
 segment.yml variant (`[segment|names=spool,pumpkin|variant=concept-first-standin|views=64]`).
-
 
 ## 4. Data contract (v1)
 
