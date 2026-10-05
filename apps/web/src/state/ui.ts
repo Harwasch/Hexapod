@@ -14,6 +14,17 @@ export type LayersMode = "browse" | "compare";
 export type AddTab = "upload" | "link";
 /** Where the site switcher puts the keyboard when it opens. */
 export type SwitcherFocus = "sites" | "views";
+/**
+ * Where the map's menu is open (`features/map/MapContextMenu`): the point in CSS px from the
+ * canvas's top left, and the ground there.
+ */
+export interface MapMenuAt {
+  x: number;
+  y: number;
+  longitude: number;
+  latitude: number;
+  height: number;
+}
 
 interface UiState {
   activePanel: ToolPanel | null;
@@ -34,6 +45,8 @@ interface UiState {
   /** Which part of the site switcher takes focus when it opens (`s` sites, `v` saved views). */
   switcherFocus: SwitcherFocus;
   aboutLayerId: string | null;
+  /** The map's menu (a right-click or long press on the map), or null while it is closed. */
+  mapMenu: MapMenuAt | null;
   measureMode: MeasureMode | null;
   exploreMode: boolean;
   /** The swipe comparison, kept here so it outlives the Layers panel that sets it up. */
@@ -61,6 +74,7 @@ interface UiState {
   setMoreOpen: (open: boolean) => void;
   setSwitcherFocus: (focus: SwitcherFocus) => void;
   setAboutLayerId: (id: string | null) => void;
+  setMapMenu: (at: MapMenuAt | null) => void;
   setMeasureMode: (mode: MeasureMode | null) => void;
   setExploreMode: (on: boolean) => void;
   setCompareActive: (on: boolean) => void;
@@ -79,6 +93,7 @@ export const useUi = create<UiState>()((set) => ({
   moreOpen: false,
   switcherFocus: "sites",
   aboutLayerId: null,
+  mapMenu: null,
   measureMode: null,
   exploreMode: false,
   compareActive: false,
@@ -102,6 +117,7 @@ export const useUi = create<UiState>()((set) => ({
   setMoreOpen: (moreOpen) => set({ moreOpen }),
   setSwitcherFocus: (switcherFocus) => set({ switcherFocus }),
   setAboutLayerId: (aboutLayerId) => set({ aboutLayerId }),
+  setMapMenu: (mapMenu) => set({ mapMenu }),
   setMeasureMode: (measureMode) =>
     set((s) => ({ measureMode, activePanel: measureMode ? "measure" : s.activePanel })),
   setExploreMode: (exploreMode) => set({ exploreMode }),

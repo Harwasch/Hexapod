@@ -8,6 +8,7 @@ import {
   type DataSource,
   Entity,
   HeightReference,
+  KeyboardEventModifier,
   Math as CesiumMath,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
@@ -26,6 +27,7 @@ import type { Selection, SelectionProperty } from "@/state/selection";
 import { AREA_CANDIDATE_PREFIX, AREA_HANDLE_PREFIX } from "./AreaEditor";
 import type { CameraController } from "./CameraController";
 import type { LayerManager } from "./LayerManager";
+import { LongPress } from "./longPress";
 import { ZONE_ENTITY_PREFIX } from "./MissionManager";
 import type { SiteManager } from "./SiteManager";
 import type { SceneEvents } from "./types";
@@ -37,12 +39,25 @@ const ACCENT = Color.fromCssColorString("#0a84ff");
 interface PickContext {
   position: Cartesian3;
   carto: Cartographic;
+  /** The splat tileset the position is on, when a scan's solids answered (SplatCollider). */
+  splat?: object;
 }
 
-/** Click-to-inspect: resolves what is under the cursor into a Selection and highlights it. */
+/**
+ * What a pick is for. A plain click selects things on the map (a zone, a mapped feature, a 3D
+ * tile's feature) and leaves the ground and a site's surface alone; the map menu's "What's
+ * here" inspects whatever is at the point, the ground included.
+ */
+type SelectMode = "click" | "inspect";
+
 /** How long the pointer must rest before a hover pick runs. */
 const HOVER_REST_MS = 120;
 
+/**
+ * Click-to-select, the map menu and double-click: resolves what is under the cursor into a
+ * Selection and highlights it, raises the map menu (right-click, Ctrl+click, a long press) at a
+ * point, and flies towards a point.
+ */
 export class SelectionManager {
   private readonly scene: Scene;
   private readonly handler: ScreenSpaceEventHandler;
@@ -68,6 +83,9 @@ export class SelectionManager {
   private hoverEnabled = true;
   /** Asked first on every click: true when it took the click (scene selection hit a scan). */
   private claim: ((position: Cartesian2) => boolean) | null = null;
+  /** Asked before the map menu opens: false while a tool owns the pointer. */
+  private menuGate: () => boolean = () => true;
+  private readonly longPress: LongPress;
   /** The selection last reported, until cleared: what a terrain sample may still refine. */
   private current: Selection | null = null;
 
@@ -84,13 +102,26 @@ export class SelectionManager {
     // on installs no input actions at all, so there is nothing left to take away.
     this.handler = new ScreenSpaceEventHandler(viewer.canvas);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
+      // The finger lifting after a long press opened the menu is not a click on the map.
+      if (this.longPress.takeClick()) return;
       if (!this.enabled) return;
       if (this.claimed(event.position)) return;
-      void this.select(event.position);
+      void this.select(event.position, "click");
     }, ScreenSpaceEventType.LEFT_CLICK);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
-      if (this.enabled) void this.selectAndFly(event.position);
+      if (this.enabled) void this.flyTowards(event.position);
     }, ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    // The map menu: a right-click, or Ctrl+click for a one-button Mac. A drag with either
+    // orbits instead (CameraController); Cesium raises a click only for a press that moved
+    // less than its click tolerance (5 px), so the two never meet. On touch it is the long
+    // press below: Cesium's own touch hold also raises a RIGHT_CLICK, after 1.5 s, while the
+    // finger is still down, and that one is left alone.
+    const menu = (event: ScreenSpaceEventHandler.PositionedEvent): void => {
+      if (!this.longPress.touching) this.openMenu(event.position.x, event.position.y);
+    };
+    this.handler.setInputAction(menu, ScreenSpaceEventType.RIGHT_CLICK);
+    this.handler.setInputAction(menu, ScreenSpaceEventType.LEFT_CLICK, KeyboardEventModifier.CTRL);
+    this.longPress = new LongPress(viewer.canvas, (x, y) => this.openMenu(x, y));
     this.handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
       if (this.enabled) this.hover(event.endPosition);
     }, ScreenSpaceEventType.MOUSE_MOVE);
@@ -120,6 +151,14 @@ export class SelectionManager {
    */
   setClickClaim(claim: ((position: Cartesian2) => boolean) | null): void {
     this.claim = claim;
+  }
+
+  /**
+   * Whether the map menu may open now, beyond selection being on: the scene says no while an
+   * area's corners are being edited (a right-click there removes one) or the brush is out.
+   */
+  setMenuGate(gate: () => boolean): void {
+    this.menuGate = gate;
   }
 
   private claimed(position: Cartesian2): boolean {
@@ -170,8 +209,10 @@ export class SelectionManager {
     if (!position && far && ray) position = this.scene.globe.pick(ray, this.scene);
     if (!position && this.scene.pickPositionSupported) position = this.scene.pickPosition(window);
     if (!position && ray) position = this.scene.globe.pick(ray, this.scene);
+    // No terrain drawn there yet: the bare ellipsoid still says where the point is.
+    position ??= this.viewer.camera.pickEllipsoid(window, this.scene.globe.ellipsoid);
     if (!position) return null;
-    return { position, carto: Cartographic.fromCartesian(position) };
+    return { position, carto: Cartographic.fromCartesian(position), splat: splat?.tileset };
   }
 
   /**
@@ -192,7 +233,17 @@ export class SelectionManager {
     return { picked, current: ticket === this.pickTicket && !this.scene.isDestroyed() };
   }
 
-  private async select(window: Cartesian2): Promise<void> {
+  /**
+   * "What's here" (the map menu): whatever is at the point opens in the inspector, the ground
+   * included. On a splat scan of the active site it is the site's card, so what the site is and
+   * how it was placed can be read from its surface (splats are invisible to the GPU pick, which
+   * sees the ground beneath them).
+   */
+  inspectAt(window: { x: number; y: number }): Promise<void> {
+    return this.select(new Cartesian2(window.x, window.y), "inspect");
+  }
+
+  private async select(window: Cartesian2, mode: SelectMode): Promise<void> {
     const { picked, current } = await this.pickObject(window);
     if (!current) return;
     // Area handles and candidate outlines belong to the area editor, not to selection.
@@ -202,6 +253,11 @@ export class SelectionManager {
       (picked.id.id.startsWith(AREA_HANDLE_PREFIX) ||
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
+      return;
+    // A plain click is for things on the map. On the ground, or on a site's surface (its mesh,
+    // or the ground under a scan's splats), it does nothing at all: no marker, no card, and
+    // what is open stays open. "What's here" in the map menu is how to ask about a place.
+    if (mode === "click" && !(picked instanceof Cesium3DTileFeature) && !isEntityPick(picked))
       return;
     const context = this.pickPosition(window, picked);
     if (!context) {
@@ -218,7 +274,12 @@ export class SelectionManager {
       terrainHeight: null,
       at: Date.now(),
     };
+    // On the active site's scan the point is the scan's, whatever the GPU pick found under it
+    // (a zone drawn on the ground, the terrain): splats are invisible to that pick.
+    const scan = mode === "inspect" ? this.activeScan() : null;
+    const onScan = scan !== null && context.splat === scan;
     if (
+      !onScan &&
       isEntityPick(picked) &&
       typeof picked.id.id === "string" &&
       picked.id.id.startsWith(ZONE_ENTITY_PREFIX)
@@ -230,7 +291,9 @@ export class SelectionManager {
       return;
     }
     let selection: Selection;
-    if (picked instanceof Cesium3DTileFeature) {
+    if (scan && onScan) {
+      selection = this.selectTileset(scan, base);
+    } else if (picked instanceof Cesium3DTileFeature) {
       selection = this.selectTileFeature(picked, base);
     } else if (isEntityPick(picked)) {
       selection = this.selectEntity(picked.id, base);
@@ -245,12 +308,49 @@ export class SelectionManager {
     void this.enrichWithTerrain(selection);
   }
 
-  private async selectAndFly(window: Cartesian2): Promise<void> {
+  /** The active site's splat scan, while the site shows it. */
+  private activeScan(): Cesium3DTileset | null {
+    const site = this.sites.activeSite;
+    if (!site || this.sites.activeRepresentation !== "gaussian-splat") return null;
+    return this.sites.tilesetFor(site.id, "gaussian-splat");
+  }
+
+  /**
+   * The map menu at (`x`, `y`), CSS px from the canvas's top left, with the ground there: true
+   * when it is on its way (a long press then swallows the click that follows). Not while a
+   * tool owns the pointer, nor where there is no ground (the sky).
+   */
+  private openMenu(x: number, y: number): boolean {
+    if (!this.enabled || !this.menuGate()) return false;
+    void this.raiseMenu(new Cartesian2(x, y));
+    return true;
+  }
+
+  private async raiseMenu(window: Cartesian2): Promise<void> {
     const { picked, current } = await this.pickObject(window);
     if (!current) return;
     const context = this.pickPosition(window, picked);
+    // Asked again: measuring or an area's corners may have taken the pointer meanwhile.
+    if (!context || !this.enabled || !this.menuGate()) return;
+    this.events.emit("map-menu", {
+      x: window.x,
+      y: window.y,
+      longitude: CesiumMath.toDegrees(context.carto.longitude),
+      latitude: CesiumMath.toDegrees(context.carto.latitude),
+      height: context.carto.height,
+    });
+  }
+
+  /**
+   * Double-click, and the map menu's "Fly here": halfway towards the point, keeping the tilt.
+   * It selects nothing, and leaves a scan's objects alone (a click's business).
+   */
+  async flyTowards(window: { x: number; y: number }): Promise<void> {
+    const position = new Cartesian2(window.x, window.y);
+    const { picked, current } = await this.pickObject(position);
+    if (!current) return;
+    const context = this.pickPosition(position, picked);
     if (!context) return;
-    if (!this.claimed(window)) void this.select(window);
     const distance = Cartesian3.distance(this.viewer.camera.positionWC, context.position);
     const pose = this.camera.pose();
     const lon = CesiumMath.toDegrees(context.carto.longitude);
@@ -532,6 +632,7 @@ export class SelectionManager {
     window.removeEventListener("pointercancel", this.onPointerUp, { capture: true });
     if (this.hoverTimer !== null) clearTimeout(this.hoverTimer);
     this.unhighlight();
+    this.longPress.destroy();
     this.handler.destroy();
   }
 }

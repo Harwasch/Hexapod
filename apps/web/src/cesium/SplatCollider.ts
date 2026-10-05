@@ -144,9 +144,15 @@ export class SplatCollider {
     return clearance;
   }
 
-  /** The nearest splat surface along a world ray, within `maxDistance` metres. */
-  raycast(ray: Ray, maxDistance = 5_000): { point: Cartesian3; distance: number } | null {
-    let best: { point: Cartesian3; distance: number } | null = null;
+  /**
+   * The nearest splat surface along a world ray, within `maxDistance` metres, and the tileset
+   * it belongs to (whose scan the map menu's "What's here" is about).
+   */
+  raycast(
+    ray: Ray,
+    maxDistance = 5_000,
+  ): { point: Cartesian3; distance: number; tileset: object } | null {
+    let best: { point: Cartesian3; distance: number; tileset: object } | null = null;
     for (const [tileset, entry] of this.tracked) {
       if ((!tileset.show && tileset !== this.solidWhileHidden) || entry.solids.empty) continue;
       const origin = Matrix4.multiplyByPoint(entry.toLocal, ray.origin, scratchA);
@@ -158,7 +164,7 @@ export class SplatCollider {
         Cartesian3.multiplyByScalar(ray.direction, t, new Cartesian3()),
         new Cartesian3(),
       );
-      best = { point, distance: t };
+      best = { point, distance: t, tileset };
     }
     return best;
   }

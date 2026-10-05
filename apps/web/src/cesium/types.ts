@@ -6,6 +6,7 @@ import type { LivingSurveyStatus } from "@/state/living";
 import type { Measurement } from "@/state/measurements";
 import type { Selection } from "@/state/selection";
 import type { ToastTone } from "@/state/toasts";
+import type { MapMenuAt } from "@/state/ui";
 import type { CameraPose, PerformanceSnapshot, TokenState, ViewerStatus } from "@/state/viewer";
 
 export type { LoadState };
@@ -51,6 +52,8 @@ export interface SceneEvents extends Record<string, unknown> {
   "area-candidate-hover": string | null;
   /** True while the next map click is being waited for as the ground of a plan. */
   "ground-pick-mode": boolean;
+  /** A right-click, Ctrl+click or long press on the map: the menu opens at the point. */
+  "map-menu": MapMenuAt;
   /**
    * The Living Survey's whole state: the wind the scene is running and what every rigged site
    * is doing with it. Published on change, never per frame.

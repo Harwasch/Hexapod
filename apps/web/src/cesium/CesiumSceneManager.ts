@@ -14,6 +14,7 @@ import {
 
 import { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
+import { useSceneSelect } from "@/state/sceneSelect";
 
 import { AreaEditor } from "./AreaEditor";
 import { CameraController } from "./CameraController";
@@ -254,8 +255,15 @@ export class CesiumSceneManager {
     // One click, one answer: an object of a scan under the cursor first, else the cards.
     this.selection.setClickClaim((position) => this.sceneSelect.click(position.x, position.y));
     this.measurement = new MeasurementManager(this.viewer, this.events);
+    this.measurement.setCollider(this.collider);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.areas = new AreaEditor(this.viewer, this.events);
+    // The map menu (right-click, Ctrl+click, a long press) waits while a tool owns the pointer:
+    // measuring, exploring and picking ground switch selection off, an area's corners take the
+    // right button (it removes a corner), and the brush takes every press.
+    this.selection.setMenuGate(
+      () => this.areas.editing === null && useSceneSelect.getState().mode !== "paint",
+    );
     this.unsubscribe.push(
       // A photographic scan close up is shown in its own colours (PerformanceManager
       // setGradeSuppressed): within a few hundred metres of a splat site that is on screen.

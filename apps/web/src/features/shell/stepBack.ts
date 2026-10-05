@@ -12,6 +12,7 @@ export interface StepBackScene {
 
 /** Which step Escape took. */
 export type StepBack =
+  | "map-menu"
   | "shortcuts"
   | "more"
   | "activity"
@@ -30,8 +31,8 @@ export type StepBack =
 /**
  * Escape, once: the first of these that applies, and nothing else.
  *
- * 1. What floats over the HUD: the shortcut sheet, the phone's More sheet, the agent's
- *    activity log, the write-token prompt.
+ * 1. What floats over the HUD: the map's menu (a right-click or long press on the map), the
+ *    shortcut sheet, the phone's More sheet, the agent's activity log, the write-token prompt.
  * 2. A mode that holds the pointer: the brush (it holds the camera too), then measuring.
  * 3. The site switcher, a popover too.
  * 4. What is selected, the latest thing first: an object of a scan; a machine's camera feeds,
@@ -46,6 +47,10 @@ export function stepBack(scene: StepBackScene | null): StepBack | null {
   const ui = useUi.getState();
   const mission = useMission.getState();
   const objects = useSceneSelect.getState();
+  if (ui.mapMenu) {
+    ui.setMapMenu(null);
+    return "map-menu";
+  }
   if (ui.shortcutsOpen) {
     ui.setShortcutsOpen(false);
     return "shortcuts";
