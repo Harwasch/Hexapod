@@ -123,6 +123,9 @@ describe("the arithmetic", () => {
     expect(parseLength("6 ft")).toBeCloseTo(1.8288, 12);
     expect(parseLength('72"')).toBeCloseTo(1.8288, 12);
     expect(parseLength("1,5 m")).toBe(1.5);
+    // A bare number in feet for somebody who reads lengths in feet; a unit said still counts.
+    expect(parseLength("6", "ft")).toBeCloseTo(1.8288, 12);
+    expect(parseLength("1.8 m", "ft")).toBe(1.8);
     expect(parseLength("0")).toBeNull();
     expect(parseLength("tall")).toBeNull();
     expect(parseScale("0.25")).toBe(0.25);
@@ -140,7 +143,7 @@ function fakeScene(shown = 1) {
   let listener: ((state: ScaleMeasureState) => void) | null = null;
   const scene = {
     sites: {
-      previewScale: vi.fn(() => true),
+      previewScale: vi.fn((_siteId: string, _scale: number | null) => true),
       shownScale: vi.fn(() => shown),
     },
     scaleMeasure: {
@@ -185,7 +188,7 @@ function puts(spy: { mock: { calls: unknown[][] } }): { assetId: string; body: u
 }
 
 beforeEach(() => {
-  useSettings.setState({ writeToken: "" });
+  useSettings.setState({ writeToken: "", units: "metric" });
 });
 
 afterEach(() => {
@@ -290,6 +293,36 @@ describe("RealSize", () => {
     expect(useSettings.getState().writeToken).toBe("secret");
     expect(puts(put)[1]?.body).toEqual({ scale: 0.5, evidence: { method: "direct" } });
     await waitFor(() => expect(screen.queryByTestId("write-token-form")).not.toBeInTheDocument());
+  });
+
+  it("takes a bare true length in feet from somebody who reads lengths in feet", async () => {
+    const user = userEvent.setup();
+    useSettings.setState({ units: "imperial" });
+    const { scene, measure } = fakeScene(1);
+    sceneRegistry.set(scene as unknown as CesiumSceneManager);
+    render(wrap(<RealSize site={registered([splat()])} />));
+    await user.click(screen.getByTestId("real-size-open"));
+    await user.click(screen.getByTestId("real-size-measure"));
+    measure(3.6576);
+    // Said in metres, the length that is sent, and in feet beside it.
+    expect(screen.getByTestId("real-size-measured")).toHaveTextContent("m (12");
+    await user.type(screen.getByTestId("real-size-true"), "6");
+    // Six feet of a twelve-foot measurement: half the size.
+    await waitFor(() =>
+      expect(scene.sites.previewScale.mock.calls.at(-1)?.[1]).toBeCloseTo(0.5, 12),
+    );
+  });
+
+  it("takes the keyboard's focus in as it opens and back to its button as it closes", async () => {
+    const user = userEvent.setup();
+    const { scene } = fakeScene(1);
+    sceneRegistry.set(scene as unknown as CesiumSceneManager);
+    render(wrap(<RealSize site={registered([splat()])} />));
+    screen.getByTestId("real-size-open").focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("real-size-measure")).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.getByTestId("real-size-open")).toHaveFocus();
   });
 
   it("resets to the model as registered", async () => {

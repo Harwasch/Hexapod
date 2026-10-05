@@ -1637,6 +1637,13 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   gap: var(--space-2);
 }
 
+/* A finger, not a pointer: buttons big enough to tap beside the scan being tapped on. */
+@media (pointer: coarse) {
+  .real-size .glass-button {
+    min-height: 44px;
+  }
+}
+
 .category {
   display: flex;
   align-items: center;

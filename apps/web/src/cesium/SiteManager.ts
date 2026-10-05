@@ -1480,10 +1480,12 @@ export class SiteManager {
 
   /**
    * A fresh record of a loaded site whose scan was resized (`PUT /assets/{id}/scale`: the Set
-   * real size tool's Save, or anybody's): the site's boundary, centroid and assets -- what the
-   * clip, the engagement and the cards read -- become the record's, and the scan is drawn at
-   * the catalog's new scale, any preview dropped, resting on the ground the catalog moved with
-   * it. A record that places every asset as before (a bookmark saved) changes nothing here.
+   * real size tool's Save, or anybody's): the scan is drawn at the catalog's new scale, any
+   * preview dropped, resting on the ground the catalog moved with it. The site's boundary and
+   * centroid -- what the clip and the engagement read -- are taken from any record that moved
+   * them, since a resize moves them too and its record may come after the asset's (the save
+   * puts the asset in at once, the refetch brings the boundary). A record that changes neither
+   * (a bookmark saved) changes nothing here.
    */
   private applyScaleRecord(site: Site): void {
     const entry = this.loaded.get(site.id);
@@ -1492,7 +1494,10 @@ export class SiteManager {
       const next = site.assets.find((asset) => asset.id === handle.asset.id);
       return next !== undefined && !samePlacement(handle.asset, next);
     });
-    if (moved.length === 0) return;
+    const outlined =
+      JSON.stringify([site.boundary, site.centroid]) !==
+      JSON.stringify([entry.site.boundary, entry.site.centroid]);
+    if (moved.length === 0 && !outlined) return;
     entry.site = {
       ...entry.site,
       boundary: site.boundary,
@@ -1508,6 +1513,9 @@ export class SiteManager {
       placement.scale = placement.saved;
       this.relift(entry, handle, tileset, 0);
     }
+    const shown = this.handleFor(entry);
+    if (outlined && entry.engaged && shown?.tileset)
+      this.applyClip(entry, shown.asset, shown.tileset);
     this.scene.requestRender();
   }
 

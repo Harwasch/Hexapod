@@ -113,15 +113,15 @@ const LENGTH_UNITS: Record<string, number> = {
 };
 
 /**
- * A length as somebody types it, in metres: a number, in metres unless it says otherwise
- * (`1.8`, `180 cm`, `6 ft`, `72"`). A decimal comma is read as a point. Null for anything else,
- * and for a length that is not more than zero.
+ * A length as somebody types it, in metres: a number, in `bare` -- metres, or feet for somebody
+ * who reads lengths in feet -- unless it says otherwise (`1.8`, `180 cm`, `6 ft`, `72"`). A
+ * decimal comma is read as a point. Null for anything else, and for a length not above zero.
  */
-export function parseLength(text: string): number | null {
+export function parseLength(text: string, bare: "m" | "ft" = "m"): number | null {
   const match = /^\s*(\d+(?:[.,]\d*)?|[.,]\d+)\s*(m|cm|mm|km|ft|in|'|")?\s*$/i.exec(text);
   if (!match) return null;
   const value = Number.parseFloat((match[1] ?? "").replace(",", "."));
-  const unit = LENGTH_UNITS[(match[2] ?? "").toLowerCase()];
+  const unit = LENGTH_UNITS[(match[2] ?? bare).toLowerCase()];
   if (unit === undefined || !Number.isFinite(value) || value <= 0) return null;
   return value * unit;
 }

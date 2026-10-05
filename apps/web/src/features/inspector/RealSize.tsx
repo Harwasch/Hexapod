@@ -96,6 +96,15 @@ function RealSizeTool({ site, asset }: { site: Site; asset: SiteAsset }) {
 
   // The true length as typed, for a measurement that lands after it was typed.
   const typed = useRef("");
+  // Focus goes into the tool as it opens and back to its button as it closes.
+  const openButton = useRef<HTMLButtonElement>(null);
+  const measureButton = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) measureButton.current?.focus();
+    else if (wasOpen.current) openButton.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
   // What the unmount clean-up needs, current: the scene, and whether a preview is showing.
   const live = useRef({ scene, open, siteId: site.id });
   useEffect(() => {
@@ -157,9 +166,12 @@ function RealSizeTool({ site, asset }: { site: Site; asset: SiteAsset }) {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [open]);
 
+  // A bare number is in the unit lengths are read in here: metres, or feet.
+  const bare = units === "imperial" ? "ft" : "m";
+
   /** The scale a measured length and a true length typed say, if both are there and valid. */
   const fromLength = (length: Measured | null, text: string): Pending | null => {
-    const trueM = parseLength(text);
+    const trueM = parseLength(text, bare);
     if (!length || trueM === null) return null;
     const scale = scaleFromLength(length.lengthM, trueM, length.atScale);
     if (!isScale(scale)) return null;
@@ -193,6 +205,9 @@ function RealSizeTool({ site, asset }: { site: Site; asset: SiteAsset }) {
   };
 
   const onScale = (text: string): void => {
+    // Whichever is edited last is what Save sends: a factor typed puts the true length aside.
+    typed.current = "";
+    setTrueText("");
     setScaleText(text);
     const scale = parseScale(text);
     setPending(scale === null ? null : { kind: "direct", scale });
@@ -233,6 +248,7 @@ function RealSizeTool({ site, asset }: { site: Site; asset: SiteAsset }) {
           </span>
         </div>
         <GlassButton
+          ref={openButton}
           size="sm"
           leadingIcon={<Ruler size={13} aria-hidden="true" />}
           onClick={() => setOpen(true)}
@@ -260,6 +276,7 @@ function RealSizeTool({ site, asset }: { site: Site; asset: SiteAsset }) {
       <form className="real-size__form" onSubmit={submit} noValidate>
         <div className="real-size__step">
           <GlassButton
+            ref={measureButton}
             size="sm"
             type="button"
             active={picking}
@@ -290,21 +307,28 @@ function RealSizeTool({ site, asset }: { site: Site; asset: SiteAsset }) {
           )}
           {measured && (
             <p className="real-size__note" data-testid="real-size-measured">
-              Measured <strong>{formatLength(measured.lengthM, units)}</strong> on the scan as drawn
-              at {formatScale(measured.atScale)}.
+              Measured <strong>{formatLength(measured.lengthM, "metric")}</strong>
+              {units === "imperial" && ` (${formatLength(measured.lengthM, units)})`} on the scan as
+              drawn at {formatScale(measured.atScale)}.
             </p>
           )}
           <GlassField
             label="True length"
             htmlFor={trueId}
-            hint="Metres unless it says otherwise: 180 cm, 6 ft."
+            hint={
+              bare === "ft"
+                ? "Feet unless it says otherwise: 72 in, 1.8 m."
+                : "Metres unless it says otherwise: 180 cm, 6 ft."
+            }
           >
             <GlassInput
               id={trueId}
               mono
               inputMode="decimal"
               autoComplete="off"
-              placeholder={measured ? "e.g. 1.8 m" : "Measure first"}
+              placeholder={
+                measured ? (bare === "ft" ? "e.g. 6 ft" : "e.g. 1.8 m") : "Measure first"
+              }
               disabled={!measured}
               value={trueText}
               invalid={trueText !== "" && pending?.kind !== "measured"}

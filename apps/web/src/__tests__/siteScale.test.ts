@@ -356,6 +356,22 @@ describe("a scan at its runtime scale", () => {
     expect(sampled.length).toBe(count);
   });
 
+  it("takes the boundary from the refetch that follows the asset the save put in", async () => {
+    const record = site(splat(0.5));
+    const { manager, tileset } = harness(record);
+    await manager.activate(SITE_ID);
+    await manager.boundingSphere(record);
+    // The save puts the asset in the site's record at once; the boundary is still the old one.
+    manager.updateRecord(site(splat(0.25)));
+    expect(placement(tileset()).scale).toBeCloseTo(0.25, 12);
+    expect(manager.activeSite?.boundary).toEqual(record.boundary);
+    // The refetch: the same asset, the boundary the API moved with it.
+    const refetched = site(splat(0.25), 0.00015);
+    manager.updateRecord(refetched);
+    expect(manager.activeSite?.boundary).toEqual(refetched.boundary);
+    expect(placement(tileset()).scale).toBeCloseTo(0.25, 12);
+  });
+
   it("previews nothing for a site whose scan the API cannot resize", async () => {
     const record: Site = { ...site(splat(1)), metadata: {} };
     const { manager } = harness(record);
