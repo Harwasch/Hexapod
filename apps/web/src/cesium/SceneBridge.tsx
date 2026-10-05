@@ -10,12 +10,12 @@ import {
 import { api, ApiError, unwrap } from "@/api/client";
 import { builtinDemoSite } from "@/api/fallback";
 import { anywhereProject } from "@/missions/anywhere";
-import { reshapedZone } from "@/missions/areas";
 import { DemoMissionProvider } from "@/missions/demo";
 import { siteProject } from "@/missions/siteProject";
+import { isReplaying } from "@/state/history";
 import { useLayers } from "@/state/layers";
 import { useLiving } from "@/state/living";
-import { useMission } from "@/state/mission";
+import { reshapeArea, useMission } from "@/state/mission";
 import { useMeasurements } from "@/state/measurements";
 import { bindOneSelection } from "@/state/oneSelection";
 import { useSelection } from "@/state/selection";
@@ -88,12 +88,14 @@ export function SceneBridge() {
         useMission.getState().select({ kind, id });
         scene.mission.setSelectedZone(kind === "zone" ? id : null);
       }),
-      // A corner dragged on the map reshapes the area in the store; the map follows it.
+      // A corner dragged on the map reshapes the area in the store; the map follows it. One
+      // undoable step (`reshapeArea`), whose undo and redo say so here again: those are not
+      // new edits, but an open plan hears them and redrafts.
       scene.events.on("area-edit", ({ zoneId, footprint }) => {
-        const mission = useMission.getState();
-        const zone = mission.project?.zones.find((z) => z.id === zoneId);
-        if (!mission.project || !zone) return;
-        mission.addArea(mission.project.id, reshapedZone(zone, footprint));
+        if (isReplaying()) return;
+        reshapeArea(zoneId, footprint, (id, outline) =>
+          scene.events.emit("area-edit", { zoneId: id, footprint: outline }),
+        );
       }),
     ];
     // One selection at a time: a machine or zone, an object of a scan, a place in the inspector.
