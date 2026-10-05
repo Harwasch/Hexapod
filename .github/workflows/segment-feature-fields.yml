@@ -1,17 +1,25 @@
 name: Objects from feature fields (bake-off B, Modal GPU)
 
-# Segmentation bake-off candidate B (docs/SCENE_OBJECTS.md, "Bake-off"): objects, their parts
-# and the ground's cover classes from a scale-conditioned feature field trained on the splat
-# (tools/captures/feature_fields.py; infra/modal/feature_fields.py runs it on an L4 for the
-# scans with photos, spool and pumpkin). It uploads, per scan, instances.json and
-# instances.emb (the `segmentation` artifact, one folder per scan as segment.yml's, so
-# publish-instances.yml can publish it as the `feature-fields` variant), the overview sheet,
-# both halves' summaries, the trained field and what the call cost. Nothing is published.
+# Segmentation bake-off candidate B (docs/SCENE_OBJECTS.md, "Bake-off candidate B"): objects,
+# their parts and the ground's cover classes from a scale-conditioned feature field trained
+# on the splat (tools/captures/feature_fields.py). Two jobs, one per half:
 #
-# Only on a push to an `ffield-*` branch that touches its code, or by workflow_dispatch once
-# this file is on the default branch (a push of commits that already exist on another branch
-# changes no files and does not run it). Each run costs money (about $0.30 a scan, at most $0.84
-# a scan: the Modal function's timeout), so it is never triggered by anything else.
+# * `field` (a Modal GPU, costs money): infra/modal/feature_fields.py trains the field on an L4
+#   for the scans with photos (spool, pumpkin) and runs the CPU-able half after it. About
+#   $0.17 a scan (measured, run 37382311130), at most $0.84 a scan (the Modal timeout).
+# * `finish` (this runner's CPU, free): the CPU-able half alone -- the tree, the ground, SigLIP
+#   2's descriptions and cover votes, the binding -- re-read from the fields an earlier run
+#   saved (`field.npz` in its artifact). For a change to the tree that needs no new field.
+#
+# Both upload the `segmentation` artifact (one folder per scan, as segment.yml's:
+# instances.json, instances.emb, overview.png, summary.json, and the field), which
+# publish-instances.yml publishes as the `feature-fields` variant. Nothing is published here.
+#
+# On a push to an `ffield-*` branch that touches its code (a push of commits that already
+# exist on another branch changes no files and does not run it), or by workflow_dispatch once
+# this file is on the default branch. The head commit's message chooses: `[ffield|finish=<run
+# id>]` runs `finish` on that run's fields (and never the GPU), `[ffield|names=spool]` the
+# scans; without a token, `field` on spool and pumpkin.
 
 on:
   push:
@@ -26,14 +34,54 @@ on:
         description: Scans (comma-separated, from infra/modal/feature_fields.py SCANS)
         type: string
         default: spool,pumpkin
+      finish:
+        description: "Only the CPU half, on this earlier run's fields (a run id)"
+        type: string
+        default: ""
 
 concurrency:
   group: feature-fields
   cancel-in-progress: false
 
 jobs:
+  plan:
+    name: What to run
+    runs-on: ubuntu-latest
+    outputs:
+      names: ${{ steps.plan.outputs.names }}
+      finish: ${{ steps.plan.outputs.finish }}
+    steps:
+      # Read as data, validated here, never interpolated into a shell line.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          NAMES: ${{ inputs.names || 'spool,pumpkin' }}
+          FINISH: ${{ inputs.finish || '' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          options = {"names": os.environ["NAMES"], "finish": os.environ["FINISH"]}
+          if os.environ["EVENT"] == "push":
+              found = re.search(r"\[ffield([^\]]*)\]", os.environ.get("MESSAGE", ""))
+              for part in (found.group(1) if found else "").split("|")[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options:
+                      raise SystemExit(f"unknown option {name!r} in the [ffield] token")
+                  options[name] = value
+          if not re.fullmatch(r"[a-z0-9-]+(,[a-z0-9-]+)*", options["names"]):
+              raise SystemExit(f"names={options['names']!r} is not a list of [a-z0-9-] names")
+          if not re.fullmatch(r"([0-9]+)?", options["finish"]):
+              raise SystemExit(f"finish={options['finish']!r} is not a run id")
+          for name, value in options.items():
+              print(f"{name}={value}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
   field:
     name: Feature fields on a Modal GPU
+    needs: plan
+    if: needs.plan.outputs.finish == ''
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -46,17 +94,10 @@ jobs:
         run: |
           test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
             || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
-      # The input is read as data, validated here, never interpolated into a shell line.
       - name: modal run infra/modal/feature_fields.py
         env:
-          NAMES: ${{ inputs.names || 'spool,pumpkin' }}
+          NAMES: ${{ needs.plan.outputs.names }}
         run: |
-          python3 - <<'PY'
-          import os, re
-          names = os.environ["NAMES"]
-          if not re.fullmatch(r"[a-z0-9-]+(,[a-z0-9-]+)*", names):
-              raise SystemExit(f"names={names!r} is not a comma-separated list of [a-z0-9-] names")
-          PY
           set -o pipefail
           uv run --with modal==1.5.5 modal run infra/modal/feature_fields.py \
             --names "$NAMES" --out segment-out 2>&1 | tee modal.log
@@ -73,6 +114,62 @@ jobs:
               print(f"- **{s.get('name')}**: ok {s.get('ok')}, {s.get('totalS')} s, "
                     f"~${cost.get('dollars')} ({cost.get('basis')})")
           PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: segmentation
+          path: segment-out
+          if-no-files-found: warn
+
+  finish:
+    name: The CPU half, on saved fields
+    needs: plan
+    if: needs.plan.outputs.finish != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: segmentation
+          path: ${{ runner.temp }}/fields
+          run-id: ${{ needs.plan.outputs.finish }}
+          github-token: ${{ github.token }}
+      - name: feature_fields.py finish, per scan
+        working-directory: tools/captures
+        env:
+          NAMES: ${{ needs.plan.outputs.names }}
+          FROM_RUN: ${{ needs.plan.outputs.finish }}
+        run: |
+          set -o pipefail
+          uv sync --frozen
+          out="$GITHUB_WORKSPACE/segment-out"
+          for name in ${NAMES//,/ }; do
+            mkdir -p "$out/$name" "$RUNNER_TEMP/tiles/$name"
+            # The scan's tiles, by the Modal app's own SCANS and fetcher (modal is imported, not run).
+            uv run --with modal==1.5.5 python - "$name" "$RUNNER_TEMP/tiles/$name" <<'PY'
+          import importlib.util, sys
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location("ffapp", "../../infra/modal/feature_fields.py")
+          app = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(app)
+          url = app.SCANS[sys.argv[1]][0]
+          print(sys.argv[1], app._fetch_tiles(url, Path(sys.argv[2])), "tiles from", url)
+          PY
+            uv run --with "torch==2.4.1" --with "transformers==4.57.6" --with sentencepiece \
+              --index https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match \
+              python feature_fields.py finish "$RUNNER_TEMP/tiles/$name/tileset.json" \
+              --field "$RUNNER_TEMP/fields/$name/field.npz" --out "$out/$name" \
+              --embedder segment_models:SiglipEmbedder --vocabulary data/open_vocabulary.txt \
+              --cpus 4 --memory-gb 15 2>&1 | tail -n 60
+            for file in field.npz train.json train-sheet.jpg; do
+              cp "$RUNNER_TEMP/fields/$name/$file" "$out/$name/" 2>/dev/null || true
+            done
+            echo "{\"name\": \"$name\", \"ok\": true, \"finishOf\": $FROM_RUN}" > "$out/$name/run.json"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
