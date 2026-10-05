@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 
 import feature_fields as ff
-import ground_pass as gp
 import segment_scene
 import synthetic_yard as sy
 from splat_render import Splats
@@ -82,6 +81,44 @@ def test_placed_viewmat_sees_the_placed_point_where_colmap_saw_the_original():
     cam_placed = view[:3, :3] @ placed + view[:3, 3]
     # The same ray: camera coordinates scaled by the placement's scale, nothing else.
     assert np.allclose(cam_placed, 2.5 * cam, atol=1e-9)
+
+
+def _write_colmap(folder: Path, camera: tuple, images: list[tuple]) -> None:
+    """cameras.bin, images.bin and an empty points3D.bin in COLMAP's binary layout."""
+    import struct
+
+    folder.mkdir(parents=True, exist_ok=True)
+    model_id, width, height, params = camera
+    (folder / "cameras.bin").write_bytes(
+        struct.pack("<Q", 1)
+        + struct.pack("<IiQQ", 1, model_id, width, height)
+        + struct.pack(f"<{len(params)}d", *params)
+    )
+    out = struct.pack("<Q", len(images))
+    for k, (name, q, t) in enumerate(images):
+        out += struct.pack("<IdddddddI", k + 1, *q, *t, 1) + name.encode() + b"\0"
+        out += struct.pack("<Q", 0)
+    (folder / "images.bin").write_bytes(out)
+    (folder / "points3D.bin").write_bytes(struct.pack("<Q", 0))
+
+
+def test_colmap_views_project_a_placed_point_where_the_photo_shows_it(tmp_path: Path):
+    import cv2
+
+    f, cx, cy = 150.0, 96.0, 52.0
+    q, t = (0.9, 0.1, -0.3, 0.2), (0.3, -0.2, 4.0)
+    _write_colmap(tmp_path / "poses", (2, 200, 100, (f, cx, cy, 0.0)), [("a.jpg", q, t)])
+    (tmp_path / "frames").mkdir()
+    cv2.imwrite(str(tmp_path / "frames" / "a.jpg"), np.zeros((100, 200, 3), np.uint8))
+    placement = {"scale": 1.7, "rotation": np.eye(3).tolist(), "translation": [1.0, 2.0, 0.0]}
+    views = ff.colmap_views(tmp_path / "frames", tmp_path / "poses", placement, side=100)
+    assert len(views) == 1 and (views[0].width, views[0].height) == (100, 50)
+    x = np.array([0.2, -0.1, 0.5])
+    cam = ff.quat_rotation(q) @ x + np.asarray(t)
+    pixel = np.array([f * cam[0] / cam[2] + cx, f * cam[1] / cam[2] + cy]) * 0.5
+    placed = 1.7 * x + np.array([1.0, 2.0, 0.0])
+    p = views[0].viewmat[:3, :3] @ placed + views[0].viewmat[:3, 3]
+    assert np.allclose(views[0].K[:2, :2] @ (p[:2] / p[2]) + views[0].K[:2, 2], pixel)
 
 
 def test_intrinsics_read_colmap_models():
@@ -252,11 +289,19 @@ def test_ground_records_put_cover_classes_under_one_ground():
     text = embedder.embed_texts([ff.COVER_CLASSES[c][0] for c in ("gravel", "lawn")])
     instances = [
         segment_scene.Instance(
-            id=j + 1, parent=None, level=0, splats=3000, bounds_min=np.zeros(3),
-            bounds_max=np.ones(3), centroid=np.zeros(3), views=3, embedding=text[j], tags=[],
+            id=j + 1,
+            parent=None,
+            level=0,
+            splats=3000,
+            bounds_min=np.zeros(3),
+            bounds_max=np.ones(3),
+            centroid=np.zeros(3),
+            views=3,
+            embedding=text[j],
+            tags=[],
             properties={name: 0.1 for name in segment_scene.PROPERTY_PROMPTS},
             behaviour="static",
-        )  # fmt: skip
+        )
         for j in range(2)
     ]
     out = ff.ground_records(tree, instances, pos, embedder)
@@ -375,6 +420,44 @@ def test_finish_writes_instances_bound_to_every_tile(tmp_path: Path):
     assert (out / "overview.png").stat().st_size > 1000
     summary = json.loads((out / "summary.json").read_text())
     assert summary["assignedShare"] > 0.9
+
+
+def test_train_then_finish_on_a_small_tileset(tmp_path: Path):
+    """Both halves of the CLI on a few thousand of the yard's splats, rendered views (no
+    photos), colour regions for masks and the reference rasterizer: the plumbing a GPU run
+    goes through."""
+    torch = pytest.importorskip("torch")
+    import splat_tiles
+    from splat_render import save_ply
+
+    torch.set_num_threads(1)
+    data, klass, _, _ = sy.generate_yard(11)
+    rng = np.random.default_rng(0)
+    rows = np.sort(rng.choice(len(klass), 1500, replace=False))
+    splats = Splats(
+        data["position"][rows].astype(np.float64), data["quat_wxyz"][rows],
+        np.exp(data["log_scale"][rows]), data["rgb"][rows],
+        1.0 / (1.0 + np.exp(-data["opacity_logit"][rows])),
+    )  # fmt: skip
+    save_ply(tmp_path / "small.ply", splats)
+    splat_tiles.convert(tmp_path / "small.ply", tmp_path / "tiles", 46.0, -123.0, 0.0,
+                        tile_gaussians=600)  # fmt: skip
+    tileset = tmp_path / "tiles" / "tileset.json"
+    assert ff.main([
+        "train", str(tileset), "--out", str(tmp_path / "field.npz"), "--steps", "4",
+        "--pixels", "64", "--masks", "feature_fields:ColourMasks", "--render-views", "3",
+        "--render-side", "48", "--train-side", "32", "--summary", str(tmp_path / "train.json"),
+    ]) == 0  # fmt: skip
+    trained = ff.Field.load(tmp_path / "field.npz")
+    from splat_render import load_tileset
+
+    assert trained.features.shape[0] == len(load_tileset(tileset))
+    assert json.loads((tmp_path / "train.json").read_text())["views"] == "rendered"
+    assert ff.main([
+        "finish", str(tileset), "--field", str(tmp_path / "field.npz"),
+        "--out", str(tmp_path / "out"), "--views", "2", "--cpus", "3",
+    ]) == 0  # fmt: skip
+    assert (tmp_path / "out" / "instances.json").exists()
 
 
 def test_cli_parses_both_commands(tmp_path: Path):

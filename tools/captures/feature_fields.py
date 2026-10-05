@@ -477,6 +477,38 @@ def sam_masks(model: str = SAM_MODEL) -> Any:
     return segment_models.Sam2Masks(model=model, max_area=MASK_MAX_AREA)
 
 
+class ColourMasks:
+    """A class-free stand-in for SAM on a CPU (tests): connected regions of one quantized
+    colour, at two quantizations (coarse: level 0, fine: level 1)."""
+
+    name = "colour-regions"
+
+    def masks(self, rgb: np.ndarray) -> list[segment_scene.Mask]:
+        from scipy import ndimage
+
+        out = []
+        h, w = rgb.shape[:2]
+        for level, steps in ((0, 2), (1, 4)):
+            q = (np.asarray(rgb, np.int64) * steps // 256).reshape(h, w, 3)
+            key = (q[..., 0] * steps + q[..., 1]) * steps + q[..., 2]
+            for value in np.unique(key):
+                regions, count = ndimage.label(key == value)
+                for r in range(1, count + 1):
+                    mask = regions == r
+                    if 16 <= mask.sum() <= MASK_MAX_AREA * h * w:
+                        out.append(segment_scene.Mask(mask, level, 1.0))
+        return out
+
+
+def mask_source(spec: str) -> Any:
+    """`sam` (`sam_masks`), or a `module:Class` built with no arguments."""
+    if spec == "sam":
+        return sam_masks()
+    if spec.startswith("sam:"):
+        return sam_masks(spec[4:])
+    return segment_scene._load(spec)
+
+
 def robust_diameter(points: np.ndarray) -> float:
     """The diameter of a set of points that ignores its outer tenth on every axis: the
     10th-90th percentile box's diagonal, over 0.8 (exact for a uniform box)."""
@@ -577,8 +609,10 @@ def supervise(
     width, height = fit_side(view.width, view.height, side)
     small = shrink_masks(stack[keep], width, height)
     small_valid = shrink_masks(valid[None], width, height)[0]
-    flat = small.reshape(len(small), -1).T
-    bits = np.packbits(flat, axis=1) if len(small) else np.zeros((width * height, 0), np.uint8)
+    if len(small):
+        bits = np.packbits(small.reshape(len(small), -1).T, axis=1)
+    else:
+        bits = np.zeros((width * height, 0), np.uint8)
     return Supervision(
         view,
         width,
@@ -1430,6 +1464,8 @@ def rendered_views(
     *,
     count: int = 48,
     max_views: int = 96,
+    width: int = segment_scene.VIEW_WIDTH,
+    height: int = segment_scene.VIEW_HEIGHT,
 ) -> list[TrainView]:
     """Views drawn from the splat (`segment_scene.plan_views`: rings, eye-height views where
     it was seen from, and local views on a wide scan), for a scan without photos."""
@@ -1443,6 +1479,8 @@ def rendered_views(
         edge=edge,
         solid=centroids,
         max_views=max_views,
+        width=width,
+        height=height,
     )
     out = []
     for k, camera in enumerate(cameras):
@@ -1462,8 +1500,10 @@ def supervision_of(
     rasterize: Rasterize,
     device: str,
     progress: Callable[[str], None] | None = None,
+    side: int = TRAIN_SIDE,
 ) -> list[Supervision]:
-    """Every view's masks, measured in 3D on the splat's depth from the same camera."""
+    """Every view's masks, measured in 3D on the splat's depth from the same camera, at
+    `side` (the feature maps' long side)."""
     import torch
 
     out = []
@@ -1474,7 +1514,7 @@ def supervision_of(
             _, alpha, depth = rasterize(
                 scene, scene.colours, viewmat, K, view.width, view.height, depth=True
             )
-        sup = supervise(view, masks, depth.cpu().numpy(), alpha.cpu().numpy(), seed=k)
+        sup = supervise(view, masks, depth.cpu().numpy(), alpha.cpu().numpy(), side=side, seed=k)
         out.append(sup)
         if progress:
             progress(f"view {k + 1}/{len(views)}: {len(masks)} masks, {sup.count} with a scale")
@@ -1774,11 +1814,19 @@ def train_main(args: argparse.Namespace) -> dict[str, Any]:
             views = []
     summary["views"] = "photos" if views else "rendered"
     if not views:
-        views = rendered_views(shown, scene, rasterize, device)
+        width, height = fit_side(
+            segment_scene.VIEW_WIDTH, segment_scene.VIEW_HEIGHT, args.render_side
+        )
+        views = rendered_views(
+            shown, scene, rasterize, device, count=args.render_views,
+            max_views=2 * args.render_views, width=width, height=height,
+        )  # fmt: skip
     summary["viewCount"] = len(views)
     mark = time.time()
-    source = sam_masks(args.sam_model)
-    supervision = supervision_of(views, source, scene, rasterize, device, progress=_say)
+    source = mask_source(args.masks)
+    supervision = supervision_of(
+        views, source, scene, rasterize, device, progress=_say, side=args.train_side
+    )
     summary["masksS"] = round(time.time() - mark, 1)
     del source
     if device == "cuda":
@@ -1943,7 +1991,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     train.add_argument("--poses", type=Path, default=None, help="their COLMAP sparse model")
     train.add_argument("--placement", type=Path, default=None, help="the place stage's JSON")
     train.add_argument("--max-frames", type=int, default=MAX_FRAMES)
-    train.add_argument("--sam-model", default=SAM_MODEL)
+    train.add_argument(
+        "--masks", default="sam", help="sam, sam:<checkpoint>, or module:Class (a stand-in)"
+    )
+    train.add_argument("--render-views", type=int, default=48, help="views when no photos")
+    train.add_argument("--render-side", type=int, default=segment_scene.VIEW_WIDTH)
+    train.add_argument("--train-side", type=int, default=TRAIN_SIDE)
     train.add_argument("--dim", type=int, default=FEATURE_DIM)
     train.add_argument("--steps", type=int, default=STEPS)
     train.add_argument("--pixels", type=int, default=PIXELS)
