@@ -1,11 +1,11 @@
-# Temporary: which OpenBLAS kernel pin is safe on every runner CPU, and keeps the fixtures?
+# Temporary: the Sandybridge pin (fix-captures-blas) on ten runners, as CI runs the suite.
 name: Diag captures crash
 on:
   push:
     branches: [diag-captures-crash]
 jobs:
   captures:
-    name: Kernel pins (${{ matrix.n }})
+    name: Captures, Sandybridge pin (${{ matrix.n }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -19,26 +19,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: lscpu | grep "Model name"
+      - run: lscpu | grep -E "Model name"; grep -o -m1 avx512f /proc/cpuinfo || echo "no avx512f"
       - run: uv sync --frozen
-      - name: Probe each pin
-        run: |
-          set +e
-          cpu=$(lscpu | grep 'Model name' | sed 's/.*: *//')
-          for core in Haswell Zen SkylakeX Sandybridge native; do
-            for threads in 1 4; do
-              if [ "$core" = native ]; then unset OPENBLAS_CORETYPE; else export OPENBLAS_CORETYPE=$core; fi
-              OPENBLAS_VERBOSE=2 OPENBLAS_NUM_THREADS=$threads uv run python blas_probe.py > probe.txt 2>&1
-              probe=$?
-              OPENBLAS_NUM_THREADS=$threads uv run pytest -q -p no:cacheprovider tests/test_skin_scene.py > skin.txt 2>&1
-              skin=$?
-              echo "PIN core=$core threads=$threads probe=$probe skin=$skin selected=$(grep -m1 -i 'core:' probe.txt | tr -d '\n') cpu=$cpu"
-            done
-          done
-          unset OPENBLAS_CORETYPE
-      - name: Full suite pinned to Zen
-        run: |
-          OPENBLAS_CORETYPE=Zen uv run pytest -q -p no:cacheprovider
-          echo "ZEN SUITE PASSED on $(lscpu | grep 'Model name' | sed 's/.*: *//')"
+      - run: uv run pytest -q
       - name: Committed fixture is up to date
         run: git diff --exit-code -- ../../data/tiles/synthetic-tree

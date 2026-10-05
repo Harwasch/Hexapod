@@ -35,7 +35,8 @@ test that checks the committed tiles are still byte-identical to a fresh run.
 
 Byte-reproducible, like the tree: seeded RNG, positions snapped to the SPZ grid.
 
-Usage (OpenBLAS pinned as tests/conftest.py pins it, so the bytes are the CPU's own no more):
+Usage (OpenBLAS pinned to the kernel the committed bytes were written with, as the test that
+checks them pins it -- `FIXTURE_CORETYPE` -- so they are the CPU's own no more):
     OPENBLAS_CORETYPE=Haswell python synthetic_yard.py ../../data/tiles/synthetic-yard \
         [--seed 11] [--tile-gaussians 6000]
 """
@@ -59,6 +60,10 @@ from synthetic_tree import (
     synthetic_tree_rig,
     write_ply,
 )
+
+#: The OpenBLAS kernel the committed yard (data/tiles/synthetic-yard/splat) was written with;
+#: other kernels write other last bits (tests/conftest.py).
+FIXTURE_CORETYPE = "Haswell"
 
 #: Class names, in the order ``labels.json`` indexes them. Mirrors ``scene_plants.CLASSES``.
 CLASSES = ("tree", "shrub", "snag", "grass/low", "ground", "other-static")
