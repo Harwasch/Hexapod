@@ -316,6 +316,56 @@ def test_the_loop_fills_the_top_and_carves_nothing_it_keeps(tmp_path: Path) -> N
     assert any(p.name.startswith("clip-table-") for p in renders.iterdir())
 
 
+def test_the_held_out_comparison_renders(tmp_path: Path) -> None:
+    from PIL import Image
+
+    splats, _ = table_scene()
+    views = ring_views(8, 0.45) + ring_views(2, 2.0, 1.0)
+    for k, v in enumerate(views):
+        v.name = f"c{k}.png"
+        photo = render(splats, v.camera)
+        v.image = tmp_path / v.name
+        Image.fromarray((np.clip(photo.rgb, 0, 1) * 255).astype(np.uint8)).save(v.image)
+    kept, held = gf.split_held_out(views, np.array([0.0, 0.0, 0.35]), 0.2)
+    scene = gf.Scene(
+        "table", splats, gf.seen_directions(splats, kept, render, width=96), ROI, kept, held
+    )
+    filler = gf.TeleaClipFiller(size=(96, 54))
+    options = gf.Options(
+        paths=1, seeds=1, rounds=1, frames=9, distill=0, azimuths=4, probe=(96, 54)
+    )
+    report = gf.run_bakeoff(
+        scene,
+        [filler],
+        OracleDepth(splats),
+        render,
+        _measured_tileset(tmp_path / "scan"),
+        tmp_path / "out",
+        options,
+        log=lambda s: None,
+    )
+    assert (tmp_path / "out" / "renders" / "held-out-table.png").exists()
+    assert report["heldOutPsnrInRegion"] and "before" in report["heldOutPsnrInRegion"][0]
+    assert report["paths"][0]["start"] in {v.name for v in kept}
+
+
+def test_a_photo_is_undistorted_onto_its_camera(tmp_path: Path) -> None:
+    from PIL import Image
+
+    rgb = np.random.default_rng(3).integers(0, 255, (48, 64, 3), dtype=np.uint8)
+    Image.fromarray(rgb).save(tmp_path / "f.png")
+    intrinsics = gf.Intrinsics("SIMPLE_RADIAL", 64, 48, (50.0, 33.0, 24.0, 0.01))
+    camera = Camera(np.eye(3), np.zeros(3), intrinsics.focal, 64, 48)
+    view = gf.RealView("f.png", camera, intrinsics, tmp_path / "f.png")
+    photo = view.photo()
+    assert photo.shape == (48, 64, 3)
+    assert view.photo(width=32).shape == (24, 32, 3)
+    straight = gf.RealView(
+        "f.png", camera, gf.Intrinsics("PINHOLE", 64, 48, (50, 50, 32, 24)), tmp_path / "f.png"
+    )
+    assert np.array_equal(straight.photo(), rgb)
+
+
 def test_held_out_cameras_are_the_highest() -> None:
     views = ring_views(6, 0.45) + ring_views(2, 2.5, 1.0)
     for k, v in enumerate(views):
