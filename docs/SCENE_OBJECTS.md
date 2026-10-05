@@ -165,6 +165,94 @@ guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
 | pumpkin | 387,813        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
 | camp    | 22,577,243     | 6 cores (9), 22 GiB (44) | 45 min | 0.94     |
 
+## 3b. The ground pass, and bake-off candidate A "ground first"
+
+The segmentation bake-off (2026-10-05) runs three candidates on the same scans and publishes
+each as a variant the owner switches to in the app (`extras.variants.objects`, below). All
+three share the **ground pass** and the **ground schema** of this section.
+
+**Ground pass** (`tools/captures/ground_pass.py`, CPU, NumPy and SciPy; its API is at the
+top of the module and is stable): the terrain under any splat scan, every splat's height
+above it, and a label per splat -- `ground`, `above`, `below` (floaters under the
+surface) and `unknown` (in the ground layer where no ground was seen near it: under a
+canopy, under an object). The method is SMRF (Pingel et al. 2013: openings with growing
+windows; what rises above one by more than slope x radius is an object) on a robust lowest
+surface (transparent splats and blobs left out, a low quantile of each cell's lowest layer,
+cells deep under the low end of their neighbourhood dropped as floaters), and the terrain
+under objects interpolated harmonically, so it is flat under a pumpkin rather than raised.
+The repo's slope filter (`scene_plants.ground_model`) erodes a cone from each cell's lowest
+splat: one floater dents it for metres, and it bulges up under an object by slope x half
+its width. CSF needs PDAL or a compiled binding for nothing SMRF lacks here. The ground
+layer's thickness comes from the scan (what rests on the terrain: median + 3 sigma, within
+a floor from the splats' spacing and the ground's roughness, and 0.3 m). Measured: spool
+39% ground (layer 8 cm), pumpkin 80% (the hay bed, layer capped at 30 cm), ~0.5 s each; the
+camp (22.6 M splats) in ~100 s. What geometry cannot know: a board lying on the ground (the
+spool's bottom flange) is ground to any height filter.
+
+**Candidate A, ground first** (`tools/captures/segment_ground_first.py`, research §1.3):
+
+1. The ground pass; voxel cells cut at the ground surface (`ground_pass.split_cells`).
+2. `segment_scene.segment` with SAM 2.1 **large**, the ground's cells kept out of the object
+   graph, `_absorb` and the fills (`exclude`): an object can never absorb ground.
+3. A **refine pass** (the `refine` hook, while the render processes still run): each
+   top-level object (up to 32) seen from 10 views around its base (5 sides, 10° and 40°
+   up), SAM prompted with its box extended down to the terrain. A ground cell inside the box
+   that is in its mask in 60% of the views it is seen in is claimed by it (the flange); a
+   cell of it in its mask in at most 10% of 4+ views is let go; a smaller top-level object
+   70% inside its masks becomes a part of it (the spool's planks under the spool).
+4. A **stuff pass**: low objects (90th percentile under 2 ground layers) that describe as
+   grass, ground or paths are ground cover, not things. Every ground splat is classified
+   into the cover classes of `data/ground_cover.json` (grass, tall grass, moss, dirt, mud,
+   sand, gravel, rock, asphalt, concrete, paving, wooden deck, mulch, leaf litter, forest
+   floor, hay, crops, ploughed field, snow, ice, water, artificial turf, trail; with
+   contrast prompts that soak up things) by SigLIP 2 pooled inside each view's own SAM
+   masks (crops of the mask, the rest black; reconstructed from the per-cell votes, so no
+   mask is kept), smoothed among neighbouring ground cells, and cut into connected regions.
+5. **Naming**: Qwen3-VL 4B Instruct (Apache-2.0) shown each top-level thing (and the parts
+   of the six largest) in context and alone, answering JSON; its `name` is the object's.
+
+**The ground in `instances.json`** (every candidate writes it so): the Objects panel's top
+level is the scan's categories, so the top-level "Ground" is the category **Ground & soil**
+(`category: "ground"`), and its rows -- clickable, hideable, highlightable like any
+object -- are the cover classes:
+
+```jsonc
+// a cover class: top level, one per class present
+{ "id": 352, "parent": null, "level": 0, "kind": "ground", "category": "ground",
+  "cover": "grass",                         // data/ground_cover.json's class id
+  "name": "Grass", "nameSource": "ground-cover",
+  "tags": [{ "label": "grass", "score": 0.83 }],   // the class, its mean confidence
+  "behaviour": "static", "splats": 0, ... }       // 0: its splats carry its regions' ids
+// a region of it: connected ground of that class
+{ "id": 353, "parent": 352, "level": 1, "kind": "ground", "category": "ground",
+  "cover": "grass", "name": "Grass", ... }
+// a thing
+{ "id": 2, "parent": null, "kind": "thing", "name": "Cable spool", "nameSource": "vlm",
+  "wholeOrPart": "whole", "material": "wood", "movable": false, "scaleM": 1.31, ... }
+```
+
+There is no Ground root instance: one with `category: "ground"` would make the classes its
+parts, and the panel would list one "Ground" with nothing under it. A class with one region
+has no children (its splats carry its id). A click in the scene selects the class, a second
+click its region. Root `variant: {name, label, about}` and `ground: {method, layerM, cellM,
+seenShare, cover}` say what made the file. Still `hexapod.instances` v1: a reader that
+knows none of `kind`, `cover`, `name` reads it as before. The viewer honours `name` before
+any tag (`lib/categories.ts` object names, `lib/sceneSelect.ts` the selection card,
+`lib/instances.ts` search).
+
+**Running and publishing a variant.** segment.yml runs a candidate on a `seg-*` push whose
+head commit says `[segment|names=spool,pumpkin|variant=ground-first]`
+(`infra/modal/segment.py` `VARIANT_SCRIPTS`; each call stopped after 50 min, so its worst
+cost is known, ~$1 on the L4), and keeps `cache.tar` (every view's masks and image, the
+refine pass's box masks, the names) so a run can be re-assembled on a CPU. publish-instances
+publishes a run's artifact as a variant with `variant=<name>` (dispatch input, or
+`[instances|run=<id>|scans=spool,pumpkin|variant=ground-first|publish]` on a `bakeoff-*`
+push): the files go to `variants/objects/<name>/`, and `extras.variants.objects` gets
+`{name, label, about, instances}`. The API replaces an extras key whole, so
+`attach_sidecars.attach` re-reads the asset's current `extras.variants` just before its
+request and merges the entry in by name (`with_variant`), every other system and variant
+kept. Today's `extras.instances` stays the default.
+
 ### Bake-off candidate B: feature fields
 
 `tools/captures/feature_fields.py` (its docstring is the method; research brief §1.4

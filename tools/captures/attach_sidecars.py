@@ -268,6 +268,40 @@ def files_under(directory: Path) -> list[str]:
     return found
 
 
+#: The bake-off's systems (`extras.variants.<system>`) and what a variant's entry points at.
+VARIANT_SYSTEMS = {"objects": "instances", "fill": "inferredLayers", "skins": "skin"}
+VARIANT_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+
+
+def variant_folder(system: str, name: str) -> str:
+    """Where a variant's files sit beside `tileset.json`: `variants/<system>/<name>/`."""
+    if system not in VARIANT_SYSTEMS:
+        raise AttachError(f"{system!r} is not one of {sorted(VARIANT_SYSTEMS)}")
+    if not VARIANT_NAME.fullmatch(name):
+        raise AttachError(f"variant name {name!r} is not lower-case letters, digits and '-'")
+    return f"variants/{system}/{name}/"
+
+
+def with_variant(current: Any, system: str, entry: Mapping[str, Any]) -> dict[str, Any]:
+    """The root's `extras.variants` with `entry` registered under `system`: it replaces the
+    entry of its `name` there, or is added after the others. Every other system's entries,
+    and the other variants of this one, are kept as they are. The API replaces an extras
+    key whole, so the attach sends this whole value, read from the tileset it binds to."""
+    name = str(entry.get("name", ""))
+    variant_folder(system, name)
+    variants = {k: list(v) for k, v in dict(current or {}).items() if isinstance(v, list)}
+    listed = [e for e in variants.get(system, []) if isinstance(e, dict)]
+    found = False
+    for k, other in enumerate(listed):
+        if other.get("name") == name:
+            listed[k] = dict(entry)
+            found = True
+    if not found:
+        listed.append(dict(entry))
+    variants[system] = listed
+    return variants
+
+
 def write_manifest(
     directory: Path,
     *,
@@ -275,8 +309,15 @@ def write_manifest(
     based_on: str,
     extras: Mapping[str, Any] | None = None,
     rig_url: str | None = None,
+    variant: tuple[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """`attach.json` for the files under `directory`: the request `attach` will send."""
+    """`attach.json` for the files under `directory`: the request `attach` will send.
+
+    `variant` (`(system, entry)`, the bake-offs): the entry is registered in the root's
+    `extras.variants` (`with_variant`) by `attach`, from the asset's tileset as it is at
+    the moment of the request -- not as it was when this was built -- so a variant attached
+    by another run in between is kept. `extras.variants` here is that merge as of now, for
+    review."""
     if not UUID.match(asset_id):
         raise AttachError(f"{asset_id!r} is not an asset id (a UUID)")
     if not based_on.startswith(("https://", "http://")):
@@ -289,6 +330,10 @@ def write_manifest(
     }
     if rig_url is not None:
         manifest["rigUrl"] = check_name(rig_url)
+    if variant is not None:
+        system, entry = variant
+        with_variant(None, system, entry)  # checks the system and the name
+        manifest["variant"] = {"system": system, "entry": dict(entry)}
     (directory / MANIFEST).write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
     return manifest
 
@@ -308,7 +353,22 @@ def read_manifest(directory: Path) -> dict[str, Any]:
         raise AttachError(f"{path}'s files are not exactly the files beside it")
     if not isinstance(manifest.get("extras", {}), dict):
         raise AttachError(f"{path}'s extras are not an object")
+    variant = manifest.get("variant")
+    if variant is not None and (
+        not isinstance(variant, dict)
+        or not isinstance(variant.get("entry"), dict)
+        or variant.get("system") not in VARIANT_SYSTEMS
+    ):
+        raise AttachError(f"{path}'s variant is not {{system, entry}}")
     return manifest
+
+
+def current_variants(asset_id: str, *, api: str | None = None) -> Any:
+    """The asset's current tileset's `extras.variants` (None when it has none)."""
+    tileset = get_json(resolve_asset(asset_id, api=api)["url"])
+    root = tileset.get("root") if isinstance(tileset, dict) else None
+    extras = root.get("extras") if isinstance(root, dict) else None
+    return extras.get("variants") if isinstance(extras, dict) else None
 
 
 # --- staging and the request ------------------------------------------------------------
@@ -430,7 +490,13 @@ def attach(
     if "rigUrl" in manifest:
         body["rigUrl"] = manifest["rigUrl"]
     url = f"{api_url(api)}/api/v1/assets/{asset_id}/sidecars"
+    variant = manifest.get("variant")
     for attempt in range(1, BUSY_RETRIES + 2):
+        if variant is not None:
+            # The API replaces an extras key whole: merge into what is there now.
+            current = current_variants(asset_id, api=api)
+            merged = with_variant(current, variant["system"], variant["entry"])
+            body["extras"] = {**body["extras"], "variants": merged}
         status, answer = post(url, body, token)
         if status == 200 and isinstance(answer, dict):
             report(answer)
