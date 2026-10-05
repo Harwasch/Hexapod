@@ -79,7 +79,7 @@ Usage (the GPU half, then the CPU-able half):
         [--frames FRAMES --poses SPARSE --placement placement.json] [--steps 3000]
     python feature_fields.py finish TILES/tileset.json --field field.npz --out OUT \\
         [--embedder segment_models:SiglipEmbedder --vocabulary data/open_vocabulary.txt] \\
-        [--overview OUT/overview.png]
+        [--gsplat]   # the overview sheet (OUT/overview.png) drawn by gsplat on a GPU
 """
 
 from __future__ import annotations
