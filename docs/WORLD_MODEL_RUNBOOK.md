@@ -302,3 +302,59 @@ reports what the token can read.
   0.17-0.3 Hz is not. Chaining holds the pose at the joins but drifts colour (the 15 s
   clip desaturates) and restarts the motion's phase each 5 s; longer chains need the
   tracker to re-anchor per link. More length will not by itself make the fit physical.
+
+## 10. Generative fill bake-off (2026-10-05, branch `bakeoff-fill-generative`)
+
+The owner's direction: no rule-based geometry and no 3D object models. A video model makes
+the novel views, and the shape comes out of those views fused into gaussians. The loop is
+`tools/captures/generative_fill.py`, the models are in `tools/captures/video_fill_models.py`,
+and the GPU side is in `infra/modal/fill.py` (`gen:<scan>` and `holdout:<scan>` jobs).
+
+1. **Unknown pixels.** Spool and pumpkin have real cameras (the run's COLMAP poses and
+   photos, read from the private bucket and moved into the tiles' frame by
+   `placement.json`). Each gaussian has a support: how many real cameras saw it,
+   depth-tested. It also has the directions they saw it from (64 octahedral bins). It is
+   known from a viewpoint when 3 or more cameras saw it and one of them did so from within
+   40° of that viewpoint. The camp has no cameras, so its view cones stand in. A pixel is
+   to be generated where only unknown gaussians cover it, or nothing does. It is lifted
+   only where its ray meets the region being filled.
+2. **Paths** start at the real camera nearest the target direction; frame 0 is its photo.
+   They end at the viewpoint (on a sphere about the region) that sees the most pixels still
+   to lift.
+3. **Generate** only the unknown pixels:
+   - Wan2.1-VACE 1.3B by its own masked video-to-video;
+   - Wan2.2 TI2V-5B by its own clean-token conditioning (`expand_timesteps`), given every
+     fully known latent token, not just frame 0's;
+   - Cosmos-Predict2 2B with frame 0 as its condition, and the known latents put back at
+     each step's noise level through the pipeline's callback. Its guardrail stays on.
+   - The baseline is today's per-view inpainting (LaMa) on the keyframes. Qwen-chain would
+     need an H100.
+4. **Lift.** Depth Anything V2 Small (Apache-2.0) runs on each kept keyframe. Its inverse
+   depth is fitted, affine, to the measured depth of the frame's covered pixels. Every 4th
+   pixel to lift becomes a disc at that depth. Confidence comes from the distance to known
+   pixels, how well the depth fitted, and (with two seeds) how far the seeds agree.
+5. **Checks against the data:**
+   - the gate: blurred PSNR ≥ 20 dB on the known pixels;
+   - free-space carving: a point in front of the nearest measured surface that a real camera
+     saw along its 3x3 pixels is deleted (for the camp, cube views at its observers);
+   - the region (padded 25 %);
+   - a gsplat distil with the measured scan frozen. Real photos count at weight 1 on what
+     the scan covers, and generated keyframes at 0.2 on their unknown pixels. Carving runs
+     again after it.
+6. **Round 2** renders new paths with round 1's layer as known content, so the model
+   continues it rather than inventing it again.
+
+Run (fill.yml, dispatched on a `wm-*` branch; the estimate is written before anything
+starts, and a run past `budget_usd - spent_usd` does not start):
+
+```sh
+modal run infra/modal/fill.py --jobs holdout:spool,gen:spool,gen:pumpkin,gen:camp \
+  --generators vace,wan22,cosmos,lama --paths 1 --seeds 1 --rounds 2 \
+  --budget-usd 12 --spent-usd 0
+```
+
+Publish (publish-fill.yml with `variant`): `job` lists the run's
+`gen-<scan>-<layer>` folders. Each layer goes to `variants/fill/<name>/` and is declared in
+`extras.variants.fill` (`tools/captures/publish_variants.py`). The asset's current variants
+are re-read just before the attach, so another bake-off's entries stay. Today's
+`extras.inferredLayers` is not touched.

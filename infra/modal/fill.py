@@ -387,6 +387,167 @@ def inpaint_prefetch(keys: list[str]) -> dict[str, float]:
     return seconds
 
 
+# --- Video models that fill a clip's unknown pixels (generative fill bake-off) ---------------
+
+#: tools/captures/video_fill_models.py on diffusers: the stack `world_models.video_image` ran
+#: Wan 2.2 on (diffusers 0.40, transformers 5, torch 2.8), with Cosmos' guardrail package.
+video_fill_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg", "git", "libgl1", "libglib2.0-0")
+    .pip_install(
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "diffusers==0.40.0",
+        "transformers>=5,<6",
+        "accelerate>=1.6",
+        "ftfy",
+        "sentencepiece",
+        "protobuf",
+        "imageio[ffmpeg]>=2.37",
+        "pillow",
+        "huggingface_hub",
+        "cosmos_guardrail==0.3.2",
+        "numpy",
+    )
+    .env({"HF_HOME": "/weights/hf"})
+    .add_local_file(LOCAL_CAPTURES / "video_fill_models.py", "/root/video_fill_models.py")
+)
+
+#: Generators by key: the Modal class that holds each, its GPU, and the estimates the budget
+#: guard plans with (seconds per 49-frame clip and per container start, warm volume).
+VIDEO_GPU = "L40S"
+GPU_RATES = {"L4": 0.80, "L40S": 1.95, "A10": 1.10, "H100": 3.95}
+GENERATORS = {
+    "vace": {"cls": "FillVace", "gpu": VIDEO_GPU, "clipS": 150, "loadS": 150},
+    "wan22": {"cls": "FillWan22", "gpu": VIDEO_GPU, "clipS": 240, "loadS": 150},
+    "cosmos": {"cls": "FillCosmos", "gpu": VIDEO_GPU, "clipS": 300, "loadS": 240},
+    # The per-view baseline: LaMa on InpaintSDXL's L40S (SDXL loads with it), ~1 s a keyframe.
+    "lama": {"cls": "InpaintSDXL", "gpu": "L40S", "clipS": 15, "loadS": 120},
+}
+#: A generator's container stays this long after its last call (`scaledown_window`).
+VIDEO_IDLE_S = 60
+#: The gen/holdout job's own container (gsplat renders, depth, lift, carve, distil), minutes.
+GEN_JOB_MIN = {"spool": 30, "pumpkin": 35, "camp": 50}
+
+
+def _video_module():  # noqa: ANN202 - video_fill_models, imported where it was copied
+    sys.path.insert(0, "/root")
+    import video_fill_models
+
+    video_fill_models.find_token()
+    return video_fill_models
+
+
+def _video_load(key: str) -> tuple[object, object, float]:
+    started = time.time()
+    vfm = _video_module()
+    pipe = vfm.load(key)
+    return vfm, pipe, time.time() - started
+
+
+@app.cls(
+    image=video_fill_image,
+    gpu=VIDEO_GPU,
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=65536,
+    timeout=3600,
+    scaledown_window=VIDEO_IDLE_S,
+    max_containers=2,
+)
+class FillVace:
+    """Wan2.1-VACE 1.3B (Apache-2.0): masked video-to-video (`video_fill_models`)."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.vfm, self.pipe, self.load_seconds = _video_load("vace")
+
+    @modal.method()
+    def fill_clip(self, request: dict) -> dict:
+        out = self.vfm.fill_clip("vace", self.pipe, request)
+        return {**out, "loadSeconds": round(self.load_seconds, 1), "gpu": VIDEO_GPU}
+
+
+@app.cls(
+    image=video_fill_image,
+    gpu=VIDEO_GPU,
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=65536,
+    timeout=3600,
+    scaledown_window=VIDEO_IDLE_S,
+    max_containers=2,
+)
+class FillWan22:
+    """Wan2.2 TI2V-5B (Apache-2.0): its clean-token conditioning on every known token."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.vfm, self.pipe, self.load_seconds = _video_load("wan22")
+
+    @modal.method()
+    def fill_clip(self, request: dict) -> dict:
+        out = self.vfm.fill_clip("wan22", self.pipe, request)
+        return {**out, "loadSeconds": round(self.load_seconds, 1), "gpu": VIDEO_GPU}
+
+
+@app.cls(
+    image=video_fill_image,
+    gpu=VIDEO_GPU,
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=98304,
+    timeout=3600,
+    scaledown_window=VIDEO_IDLE_S,
+    max_containers=2,
+)
+class FillCosmos:
+    """Cosmos-Predict2 2B Video2World (NVIDIA Open Model License; its guardrail on)."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.vfm, self.pipe, self.load_seconds = _video_load("cosmos")
+
+    @modal.method()
+    def fill_clip(self, request: dict) -> dict:
+        out = self.vfm.fill_clip("cosmos", self.pipe, request)
+        return {**out, "loadSeconds": round(self.load_seconds, 1), "gpu": VIDEO_GPU}
+
+
+VIDEO_CLASSES = {"FillVace": FillVace, "FillWan22": FillWan22, "FillCosmos": FillCosmos}
+
+
+@app.function(image=video_fill_image, secrets=[HF_SECRET], timeout=300)
+def video_access(keys: list[str]) -> dict[str, str]:
+    """Whether the workspace's Hugging Face token can read each video model's repositories
+    (Cosmos and its guardrail are gated)."""
+    vfm = _video_module()
+    token = vfm.find_token()
+    return {"token": "found" if token else "missing", **vfm.access(token, tuple(keys))}
+
+
+@app.function(
+    image=video_fill_image,
+    secrets=[HF_SECRET],
+    volumes={"/weights": WEIGHTS},
+    cpu=4.0,
+    memory=16384,
+    timeout=2 * 3600,
+)
+def video_prefetch(keys: list[str]) -> dict[str, float]:
+    """Each video model's files into the weights volume once, on a CPU, before any GPU
+    container waits on a download. Seconds per key."""
+    vfm = _video_module()
+    token = vfm.find_token()
+    seconds = {}
+    for key in keys:
+        started = time.time()
+        vfm.prefetch(key, token)
+        WEIGHTS.commit()
+        seconds[key] = round(time.time() - started, 1)
+    return seconds
+
+
 # --- Distill (gsplat), as world_models.Distill ----------------------------------------------
 
 GSPLAT_WHEEL = (
@@ -436,7 +597,7 @@ job_image = (
 
 #: The same job with gsplat: the Distill image's torch and wheel (cp310), the captures'
 #: dependencies at versions built for numpy 1.26, and the tests (for `--parity-test`).
-gsplat_job_image = (
+_gsplat_base = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install("torch==2.4.1+cu124", index_url="https://download.pytorch.org/whl/cu124")
     .pip_install(
@@ -453,7 +614,9 @@ gsplat_job_image = (
         "opencv-python-headless==4.10.0.84",
         "pytest>=8",
     )
-    .env({"HEXAPOD_YARD_TILESET": f"{YARD}/tileset.json"})
+)
+gsplat_job_image = (
+    _gsplat_base.env({"HEXAPOD_YARD_TILESET": f"{YARD}/tileset.json"})
     .add_local_dir(LOCAL_YARD, YARD)
     .add_local_dir(
         LOCAL_CAPTURES,
@@ -461,6 +624,20 @@ gsplat_job_image = (
         ignore=["**/.venv/**", "**/__pycache__/**", "**/*.pyc"],
     )
 )
+#: The generative fill job (`generative_fill.py`): the gsplat job's stack, plus Depth Anything
+#: V2 Small through transformers (a version for torch 2.4) and boto3 for the run's photos and
+#: poses in the private bucket.
+genfill_image = (
+    _gsplat_base.pip_install("transformers==4.46.3", "huggingface_hub>=0.26,<1", "boto3")
+    .env({"HF_HOME": "/weights/hf"})
+    .add_local_dir(
+        LOCAL_CAPTURES,
+        CAPTURES,
+        ignore=["**/.venv/**", "**/__pycache__/**", "**/*.pyc", "tests/**"],
+    )
+)
+#: The private bucket (a run's photos, poses and placement), as infra/modal/app.py reads it.
+STORAGE_SECRET = modal.Secret.from_name("twin-object-storage")
 
 #: Wall seconds spent in each GPU class's calls from this job (cold starts included).
 REMOTE_SECONDS: dict[str, float] = {}
@@ -706,6 +883,257 @@ def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
         }
 
 
+# --- Generative fill (tools/captures/generative_fill.py): gen:<scan>, holdout:<scan> --------
+
+#: What each scan's generative fill fills, from what. `job`: the pipeline run whose photos
+#: and COLMAP poses (private bucket) give real cameras; none for an uploaded splat (the camp:
+#: its view cones' observers). `args`: generative_fill's region options. `prompt`: what the
+#: clips show (a plain caption of the scan; the object a hole is filled under is not named).
+GEN_SCANS: dict[str, dict] = {
+    "spool": {
+        "job": "8e1cc115-cb80-4af2-81fc-dccaf6b65891",
+        "args": ["--roi-instance", "57"],
+        "prompt": (
+            "A weathered round cable-spool table standing on a lawn, filmed on a phone in "
+            "daylight; the camera moves slowly and smoothly; nothing in the scene moves."
+        ),
+    },
+    "pumpkin": {
+        "job": "430c1932-5b6a-47b1-bb71-bb7fa2fec86b",
+        "args": [
+            "--roi-instance",
+            "74",
+            "--hide-instance",
+            "74",
+            "--roi-grow",
+            "0.4",
+            "--roi-top",
+            "0.45",
+        ],
+        "prompt": (
+            "Dry straw on a hay bale in a garden, filmed on a phone in daylight; the camera "
+            "moves slowly and smoothly over it; nothing in the scene moves."
+        ),
+        "negative": "pumpkin, orange fruit, gourd, ball",
+    },
+    "camp": {
+        "job": None,
+        "args": ["--roi-pick", "roof", "--crop-m", "25"],
+        "prompt": (
+            "Log cabins and tents in a forest clearing seen from above, filmed by a drone in "
+            "daylight; the camera moves slowly and smoothly; nothing in the scene moves."
+        ),
+    },
+}
+#: `holdout:<scan>`: the share of the cameras that see the region from highest, held out.
+HOLDOUT_SHARE = 0.15
+#: How long a job waits for one clip (queued behind the others on its generator).
+GEN_CALL_TIMEOUT_S = 90 * 60
+
+
+def _spawn_video(cls: str, method: str, request: dict) -> object:
+    if cls in VIDEO_CLASSES:
+        return getattr(VIDEO_CLASSES[cls](), method).spawn(request)
+    raise ValueError(f"no video class {cls!r}")
+
+
+def _wait_video(call: object) -> dict:
+    return call.get(timeout=GEN_CALL_TIMEOUT_S)  # type: ignore[attr-defined]
+
+
+def _private_client():  # noqa: ANN202 - boto3's client
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "s3",
+        endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
+        aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
+        region_name=os.environ.get("OBJECT_STORAGE_REGION", "auto"),
+        config=Config(s3={"addressing_style": "path"}, signature_version="s3v4"),
+    )
+
+
+def _fetch_private(prefix: str, out: Path) -> int:
+    """Every object under `prefix` in the private bucket into `out`; how many."""
+    import concurrent.futures
+
+    client = _private_client()
+    bucket = os.environ["OBJECT_STORAGE_BUCKET"]
+    keys = []
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        keys += [o["Key"] for o in page.get("Contents", []) if not o["Key"].endswith("/")]
+
+    def get(key: str) -> None:
+        # A prefix that is a whole key (a single file) lands under its own name.
+        dest = out / (key[len(prefix) :].lstrip("/") or PurePosixPath(key).name)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        client.download_file(bucket, key, str(dest))
+
+    with concurrent.futures.ThreadPoolExecutor(16) as pool:
+        list(pool.map(get, keys))
+    return len(keys)
+
+
+@app.function(
+    image=genfill_image,
+    gpu="L4",
+    cpu=8.0,
+    memory=65536,
+    timeout=2 * 3600,  # the budget: a hung job costs at most 2 h of L4
+    volumes={"/weights": WEIGHTS},
+    secrets=[STORAGE_SECRET, HF_SECRET],
+)
+def run_genfill(kind: str, scan: str, options: dict) -> dict:
+    """`generative_fill.py run` on one scan with every generator in `options["generators"]`:
+    `gen` fills the scan's region; `holdout` first holds out the cameras that see it from
+    highest (the ground truth the renders compare with). Returns the report, the renders and
+    each generator's inferred layer (`<slug>/inferred.tar.gz`)."""
+    _remote_classes()
+    REMOTE_SECONDS.clear()
+    os.chdir(CAPTURES)
+    import generative_fill as gf
+
+    gf.BACKEND = (_spawn_video, _wait_video)
+    started = time.time()
+    setup = GEN_SCANS[scan]
+    files: dict[str, bytes] = {}
+    timings: dict[str, float] = {}
+    with tempfile.TemporaryDirectory() as work:
+        root = Path(work)
+        tileset = _fetch(SCANS[scan], root / "scan")
+        timings["fetchS"] = round(time.time() - started, 1)
+        # (A scan without cameras gets its view cones from its leaves inside generative_fill:
+        # the observer points it starts from are not in a published viewcones.bin.)
+        argv = ["run", str(tileset), str(root / "out"), "--scan", scan]
+        if setup["job"]:
+            t = time.time()
+            run = f"runs/{setup['job']}"
+            counts = {
+                "poses": _fetch_private(f"{run}/pose/poses/", root / "poses"),
+                "frames": _fetch_private(f"{run}/normalize/frames/", root / "frames"),
+                "placement": _fetch_private(f"{run}/place/placement.json", root / "place"),
+            }
+            timings["privateS"] = round(time.time() - t, 1)
+            timings["privateFiles"] = counts  # type: ignore[assignment]
+            placement = next((root / "place").rglob("*.json"), None)
+            argv += ["--poses", str(root / "poses"), "--frames", str(root / "frames")]
+            if placement is not None:
+                argv += ["--placement", str(placement)]
+        argv += setup["args"] + ["--prompt", setup["prompt"]]
+        if setup.get("negative"):
+            argv += ["--negative", setup["negative"]]
+        if kind == "holdout":
+            argv += ["--holdout-above", str(options.get("holdout", HOLDOUT_SHARE))]
+        for key in (
+            "paths",
+            "seeds",
+            "rounds",
+            "round2_paths",
+            "frames_per_clip",
+            "distill",
+            "max_clips",
+            "steps",
+        ):
+            if options.get(key) is not None:
+                argv += [f"--{key.replace('_', '-')}", str(options[key])]
+        argv += ["--generators", ",".join(options["generators"]), "--renderer", "gsplat"]
+        argv += ["--depth", "depth-anything", "--distill-on", "local"]
+        t = time.time()
+        # Not through `_teacher_fill`: its progress streams to the run's log as it goes.
+        code, log = 1, ""
+        try:
+            code = gf.main(argv)
+        except (Exception, SystemExit):  # noqa: BLE001 - reported back with what it wrote
+            import traceback
+
+            log = traceback.format_exc()
+            sys.stderr.write(log)
+        timings["fillS"] = round(time.time() - t, 1)
+        out = root / "out"
+        result = (
+            json.loads((out / "report.json").read_text(encoding="utf-8"))
+            if (out / "report.json").exists()
+            else None
+        )
+        if (out / "renders").exists():
+            files.update({f"renders/{k}": v for k, v in _tree(out / "renders").items()})
+        if (out / "report.json").exists():
+            files["report.json"] = (out / "report.json").read_bytes()
+        for layer in sorted(out.glob("*/inferred/tileset.json")):
+            files[f"{layer.parent.parent.name}/inferred.tar.gz"] = _tar(layer.parent)
+        files["measured-tileset.json"] = tileset.read_bytes()
+    # The per-view baseline's calls (InpaintSDXL, an L40S), wall seconds from here.
+    timings.update({f"{k.lower()}S": round(v, 1) for k, v in REMOTE_SECONDS.items()})
+    timings["totalS"] = round(time.time() - started, 1)
+    return {
+        "kind": kind,
+        "scan": scan,
+        "ok": code == 0 and result is not None,
+        "argv": argv,
+        "result": result,
+        "timings": timings,
+        "files": files,
+        "log": log,
+    }
+
+
+def estimate_gen_cost(jobs: list[tuple[str, str]], generators: list[str], options: dict) -> dict:
+    """What a set of gen/holdout jobs should cost, from the planning estimates above: per
+    generator its clips, one container start per job (the jobs overlap, so this is the
+    worst case) and its idle tail; per job its L4."""
+    paths, rounds = int(options.get("paths", 2)), int(options.get("rounds", 2))
+    seeds, round2 = int(options.get("seeds", 1)), int(options.get("round2_paths", 1))
+    out: dict[str, float] = {}
+    clips: dict[str, int] = {}
+    for key in generators:
+        g = GENERATORS[key]
+        per_job = paths * (seeds if key != "lama" else 1) + (round2 if rounds >= 2 else 0)
+        n = per_job * len(jobs)
+        clips[key] = n
+        seconds = n * g["clipS"] + len(jobs) * (g["loadS"] + VIDEO_IDLE_S)
+        out[key] = seconds / 3600 * GPU_RATES[g["gpu"]]
+    for kind, scan in jobs:
+        out[f"{kind}:{scan}"] = GEN_JOB_MIN.get(scan, 45) / 60 * GPU_RATES["L4"]
+    return {
+        "clips": clips,
+        "usd": {k: round(v, 2) for k, v in out.items()},
+        "totalUsd": round(sum(out.values()), 2),
+    }
+
+
+def actual_gen_cost(results: list[dict]) -> dict:
+    """What the jobs cost, from what they report: each generator's call seconds plus, per
+    container start (a distinct load time), its load and its idle tail; each job's L4 wall
+    time. Modal bills a little more (image pulls, the CPU side), so this is a floor."""
+    gpu_s: dict[str, float] = {}
+    loads: dict[str, set] = {}
+    for r in results:
+        report = (r.get("result") or {}) if isinstance(r, dict) else {}
+        for name, entry in (report.get("candidates") or {}).items():
+            for call in entry.get("calls", []) or []:
+                gpu_s[name] = gpu_s.get(name, 0.0) + float(call.get("seconds") or 0.0)
+                if call.get("loadSeconds") is not None:
+                    loads.setdefault(name, set()).add(float(call["loadSeconds"]))
+    usd: dict[str, float] = {}
+    for name, s in gpu_s.items():
+        starts = loads.get(name, set())
+        total = s + sum(starts) + VIDEO_IDLE_S * max(1, len(starts))
+        usd[name] = total / 3600 * GPU_RATES[VIDEO_GPU]
+    for r in results:
+        if isinstance(r, dict) and r.get("timings", {}).get("totalS"):
+            usd[f"{r['kind']}:{r['scan']}"] = r["timings"]["totalS"] / 3600 * GPU_RATES["L4"]
+            sdxl = r["timings"].get("inpaintsdxlS")
+            if sdxl:
+                key = f"lama ({r['kind']}:{r['scan']})"
+                usd[key] = (float(sdxl) + VIDEO_IDLE_S) / 3600 * GPU_RATES["L40S"]
+    return {
+        "usd": {k: round(v, 3) for k, v in usd.items()},
+        "totalUsd": round(sum(usd.values()), 2),
+    }
+
+
 @app.function(image=job_image, cpu=8.0, memory=65536, timeout=3600)
 def probe(scan: str) -> dict:
     """Fixer on one scan's renders, prepared several ways: which input it can work with."""
@@ -778,14 +1206,45 @@ def main(
     renderer: str = "cpu",
     parity_test: bool = False,
     max_scale_m: float = 0.0,
+    generators: str = "vace,wan22,cosmos,lama",
+    paths: int = 2,
+    seeds: int = 1,
+    rounds: int = 2,
+    round2_paths: int = 1,
+    frames_per_clip: int = 49,
+    steps: int = 0,
+    budget_usd: float = 0.0,
+    spent_usd: float = 0.0,
 ) -> None:
     """Every `kind:scan` in `jobs` with every filler, in parallel containers; each result
     under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`. `selftest`: also Fixer on
     its repository's examples, under `out/selftest/`. `renderer`: `cpu` or `gsplat` (the
     jobs on a GPU). `parity_test`: CPU against gsplat on the yard, in `out/parity.txt`.
-    `max_scale_m` (fill jobs, 0 = off): condition without gaussians larger than this."""
+    `max_scale_m` (fill jobs, 0 = off): condition without gaussians larger than this.
+
+    `gen:<scan>` and `holdout:<scan>` run the generative fill (`run_genfill`) with every
+    generator in `generators` (vace, wan22, cosmos, lama) -- `paths`, `seeds`, `rounds`,
+    `round2_paths`, `frames_per_clip` and `steps` (0: each model's own) as
+    generative_fill.py takes them. Their estimated cost is written first
+    (`out/gen-estimate.json`); with `budget_usd` set, a run whose estimate exceeds what is
+    left of it (`budget_usd - spent_usd`) does not start. What they cost, from what they
+    report, is `out/gen-cost.json`."""
     if renderer not in ("cpu", "gsplat"):
         raise SystemExit(f"renderer {renderer!r}: cpu or gsplat")
+    every = [j.strip() for j in jobs.split(",") if j.strip()]
+    gen_jobs = [tuple(j.split(":", 1)) for j in every if j.split(":", 1)[0] in ("gen", "holdout")]
+    jobs = ",".join(j for j in every if j.split(":", 1)[0] not in ("gen", "holdout"))
+    if gen_jobs:
+        options = {
+            "generators": [g.strip() for g in generators.split(",") if g.strip()],
+            "paths": paths,
+            "seeds": seeds,
+            "rounds": rounds,
+            "round2_paths": round2_paths,
+            "frames_per_clip": frames_per_clip,
+            "steps": steps or None,
+        }
+        _run_gen(gen_jobs, options, Path(out), budget_usd, spent_usd)
     if parity_test:
         Path(out).mkdir(parents=True, exist_ok=True)
         text = parity.remote()
@@ -840,6 +1299,81 @@ def main(
             failed.append(folder.name)
     Path(out).mkdir(parents=True, exist_ok=True)
     (Path(out) / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
+    if failed:
+        raise SystemExit(f"failed: {', '.join(failed)}")
+
+
+def _run_gen(
+    jobs: list[tuple[str, ...]], options: dict, out: Path, budget_usd: float, spent_usd: float
+) -> None:
+    """The generative fill jobs: estimate, refuse past the budget, check access, prefetch,
+    run in parallel, write each job's files and the cost."""
+    for kind, scan in jobs:
+        if scan not in GEN_SCANS:
+            raise SystemExit(f"job {kind}:{scan}: scans are {', '.join(GEN_SCANS)}")
+    unknown = [g for g in options["generators"] if g not in GENERATORS]
+    if unknown:
+        raise SystemExit(f"generators {unknown}: known are {', '.join(GENERATORS)}")
+    out.mkdir(parents=True, exist_ok=True)
+    estimate = estimate_gen_cost(list(jobs), options["generators"], options)
+    estimate["budgetUsd"], estimate["spentUsd"] = budget_usd, spent_usd
+    (out / "gen-estimate.json").write_text(json.dumps(estimate, indent=1), encoding="utf-8")
+    sys.stdout.write(f"generative fill, estimated: {json.dumps(estimate)}\n")
+    if budget_usd > 0 and estimate["totalUsd"] > budget_usd - spent_usd:
+        raise SystemExit(
+            f"estimated ${estimate['totalUsd']} is more than the ${budget_usd - spent_usd:.2f} "
+            "left of the budget: not started"
+        )
+    video = [g for g in options["generators"] if g in ("vace", "wan22", "cosmos")]
+    if video:
+        access = video_access.remote(video)
+        (out / "gen-access.json").write_text(json.dumps(access, indent=1), encoding="utf-8")
+        sys.stdout.write(f"video models access: {json.dumps(access)}\n")
+        sys.path.insert(0, str(LOCAL_CAPTURES))
+        import video_fill_models as vfm
+
+        readable = [g for g in video if all(access.get(r) == "ok" for r in vfm.MODELS[g].repos)]
+        dropped = sorted(set(video) - set(readable))
+        if dropped:
+            sys.stdout.write(f"not run (the token cannot read them): {dropped}\n")
+            options["generators"] = [g for g in options["generators"] if g not in dropped]
+        if readable:
+            seconds = video_prefetch.remote(readable)
+            sys.stdout.write(f"video weights fetched: {json.dumps(seconds)}\n")
+    results, failed = [], []
+    calls = [(kind, scan, options) for kind, scan in jobs]
+    for result in run_genfill.starmap(calls, return_exceptions=True):
+        if isinstance(result, BaseException):
+            failed.append(repr(result))
+            sys.stdout.write(f"gen job raised: {result!r}\n")
+            continue
+        results.append(result)
+        base = f"{result['kind']}-{result['scan']}"
+        folder = out / base
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "log.txt").write_text(result["log"], encoding="utf-8")
+        for name, data in result.get("files", {}).items():
+            if name.endswith("/inferred.tar.gz"):
+                # One folder per layer, as publish-fill.yml takes them: <job>/inferred.tar.gz.
+                target = out / f"{base}-{name.split('/', 1)[0]}" / "inferred.tar.gz"
+            else:
+                target = folder / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        brief = {k: v for k, v in result.items() if k not in ("files", "log")}
+        (folder / "result.json").write_text(json.dumps(brief, indent=1), encoding="utf-8")
+        report = result.get("result") or {}
+        headline = {
+            name: (e.get("evidence") or {k: e.get(k) for k in ("failed", "skipped")})
+            for name, e in (report.get("candidates") or {}).items()
+        }
+        sys.stdout.write(f"{base}: ok={result['ok']} {json.dumps(headline)[:3000]}\n")
+        if not result["ok"]:
+            failed.append(base)
+    cost = actual_gen_cost(results)
+    cost["estimate"] = estimate["totalUsd"]
+    (out / "gen-cost.json").write_text(json.dumps(cost, indent=1), encoding="utf-8")
+    sys.stdout.write(f"generative fill, cost from what the jobs report: {json.dumps(cost)}\n")
     if failed:
         raise SystemExit(f"failed: {', '.join(failed)}")
 

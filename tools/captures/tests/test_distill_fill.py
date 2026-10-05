@@ -55,3 +55,42 @@ def test_distill_fills_the_mask_and_spares_the_measured() -> None:
     assert out["colours"][:, 2].mean() > 0.6  # blue now
     assert report["meanDriftM"] < 0.1
     assert report["rasteriser"] == "torch_rasterize"
+
+
+def test_view_weights_round_trip() -> None:
+    camera = Camera.look_at([0.0, -3.0, 0.0], [0.0, 0.0, 0.0], width=8, height=6)
+    images = np.zeros((2, 6, 8, 3), np.uint8)
+    masks = np.ones((2, 6, 8), bool)
+    views = [camera.to_json()] * 2
+    blob = df.pack_views(views, images, masks, weights=[1.0, 0.2], outside=[0.0, 0.5])
+    weights, outside = df.unpack_view_weights(blob)
+    assert np.allclose(weights, [1.0, 0.2]) and np.allclose(outside, [0.0, 0.5])
+    plain = df.pack_views([camera.to_json()], images[:1], masks[:1])
+    assert df.unpack_view_weights(plain) == (None, None)
+
+
+def test_distill_weighs_views_of_several_sizes() -> None:
+    pytest.importorskip("torch")
+    measured = _plane(np.linspace(-1.0, -0.1, 6), np.linspace(-0.7, 0.7, 5), [0.8, 0.1, 0.1], 0.1)
+    init = _plane(np.linspace(0.1, 1.0, 6), np.linspace(-0.7, 0.7, 5), [0.5, 0.5, 0.5], 0.1)
+    big = Camera.look_at([0.0, -3.0, 0.2], [0.0, 0.0, 0.0], width=24, height=16)
+    small = Camera.look_at([0.3, -3.0, 0.2], [0.0, 0.0, 0.0], width=16, height=12)
+    # Views of two sizes, padded to the larger (as `pack_views` carries them).
+    images = np.zeros((2, 16, 24, 3), np.uint8)
+    masks = np.zeros((2, 16, 24), bool)
+    masks[0, 2:-2, 14:-2] = True
+    masks[1, 2:10, 9:14] = True
+    images[0][masks[0]] = (40, 60, 220)
+    images[1][masks[1]] = (220, 220, 40)  # a low-weight view that disagrees
+    out, report = df.distill(
+        measured,
+        init,
+        [big.to_json(), small.to_json()],
+        images,
+        masks,
+        iterations=60,
+        weights=[1.0, 0.05],
+        outside=[0.5, 0.0],
+    )
+    assert len(report["views"]) == 2
+    assert out["colours"][:, 2].mean() > out["colours"][:, 0].mean() - 0.05  # the heavy view wins

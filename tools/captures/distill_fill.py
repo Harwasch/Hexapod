@@ -39,21 +39,44 @@ def pack(scan: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {f"{k}": np.asarray(scan[k], np.float32) for k in KEYS}
 
 
-def pack_views(cameras: Sequence[dict], images: np.ndarray, masks: np.ndarray) -> bytes:
-    """Views as one npz: the request body of `Distill.run`."""
+def pack_views(
+    cameras: Sequence[dict],
+    images: np.ndarray,
+    masks: np.ndarray,
+    *,
+    weights: Sequence[float] | None = None,
+    outside: Sequence[float] | None = None,
+) -> bytes:
+    """Views as one npz: the request body of `Distill.run`. `weights` (per view, default 1)
+    scale a view's whole loss; `outside` (per view, default `OUTSIDE_WEIGHT`) is the weight
+    of its pixels outside the mask, held to the measured render -- 0 for a view whose mask
+    is all it says (a real photo, on what the measured scan covers)."""
     buffer = io.BytesIO()
-    np.savez_compressed(
-        buffer,
-        cameras=np.array(json.dumps(list(cameras))),
-        images=np.asarray(images, np.uint8),
-        masks=np.asarray(masks, bool),
-    )
+    arrays = {
+        "cameras": np.array(json.dumps(list(cameras))),
+        "images": np.asarray(images, np.uint8),
+        "masks": np.asarray(masks, bool),
+    }
+    if weights is not None:
+        arrays["weights"] = np.asarray(weights, np.float32)
+    if outside is not None:
+        arrays["outside"] = np.asarray(outside, np.float32)
+    np.savez_compressed(buffer, **arrays)
     return buffer.getvalue()
 
 
 def unpack_views(blob: bytes) -> tuple[list[dict], np.ndarray, np.ndarray]:
     with np.load(io.BytesIO(blob)) as z:
         return json.loads(str(z["cameras"])), z["images"], z["masks"]
+
+
+def unpack_view_weights(blob: bytes) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """The optional per-view `weights` and `outside` of `pack_views`."""
+    with np.load(io.BytesIO(blob)) as z:
+        return (
+            z["weights"].astype(np.float64) if "weights" in z.files else None,
+            z["outside"].astype(np.float64) if "outside" in z.files else None,
+        )
 
 
 def pack_scan(scan: dict[str, np.ndarray]) -> bytes:
@@ -155,9 +178,13 @@ def distill(
     rasterize: Rasterize | None = None,
     device: str | None = None,
     seed: int = 0,
+    weights: Sequence[float] | None = None,
+    outside: Sequence[float] | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     """The inferred gaussians after `iterations` steps of Adam, and a report: the masked
-    and outside L1 per view before and after."""
+    and outside L1 per view before and after. `weights` and `outside` per view
+    (`pack_views`): a real photo at 1 on what it covers, a generated view lower and only on
+    its unknown pixels. Views are visited in turn, each step's loss times its weight."""
     import torch
 
     torch.manual_seed(seed)
@@ -187,8 +214,16 @@ def distill(
         ]
     )
     views = [camera_tensors(v, torch, device) for v in cameras]
-    filled = [t(im / 255.0) for im in np.asarray(images)]
-    inside = [torch.tensor(np.asarray(m), dtype=torch.bool, device=device) for m in masks]
+    # Views of several sizes come padded to the largest (`pack_views`): each cropped back.
+    filled = [
+        t(im[: v[3], : v[2]] / 255.0) for im, v in zip(np.asarray(images), views, strict=True)
+    ]
+    inside = [
+        torch.tensor(np.asarray(m)[: v[3], : v[2]], dtype=torch.bool, device=device)
+        for m, v in zip(masks, views, strict=True)
+    ]
+    view_weight = [1.0] * len(views) if weights is None else [float(w) for w in weights]
+    view_outside = [OUTSIDE_WEIGHT] * len(views) if outside is None else [float(o) for o in outside]
 
     def render(view, extra):
         viewmat, K, w, h = view
@@ -240,9 +275,12 @@ def distill(
         err = (rgb - targets[k]).abs().mean(dim=-1)
         m = inside[k]
         loss = err[m].mean() if m.any() else err.sum() * 0
-        if (~m).any():
-            loss = loss + OUTSIDE_WEIGHT * err[~m].mean()
-        loss = loss + ANCHOR_WEIGHT * ((params["positions"] - anchor) ** 2).sum(dim=1).mean()
+        if (~m).any() and view_outside[k] > 0:
+            loss = loss + view_outside[k] * err[~m].mean()
+        loss = (
+            view_weight[k] * loss
+            + ANCHOR_WEIGHT * ((params["positions"] - anchor) ** 2).sum(dim=1).mean()
+        )
         optimiser.zero_grad()
         loss.backward()
         optimiser.step()
@@ -278,6 +316,7 @@ def run(request: dict) -> dict:
     """The body of `Distill.run`: `{"measured": npz, "init": npz, "views": npz,
     "iterations"?}` -> `{"inferred": npz, "report": {...}}`."""
     cameras, images, masks = unpack_views(request["views"])
+    weights, outside = unpack_view_weights(request["views"])
     out, report = distill(
         unpack_scan(request["measured"]),
         unpack_scan(request["init"]),
@@ -285,5 +324,7 @@ def run(request: dict) -> dict:
         images,
         masks,
         iterations=int(request.get("iterations", 1500)),
+        weights=None if weights is None else weights.tolist(),
+        outside=None if outside is None else outside.tolist(),
     )
     return {"inferred": pack_scan(out), "report": report}
