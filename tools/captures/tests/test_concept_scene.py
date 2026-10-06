@@ -196,6 +196,52 @@ def test_track_joins_unite_what_one_track_spans() -> None:
     assert joins == 0 and joined.tolist() == [0, 0, 1, 1]
 
 
+def _view(cells: list[int], masks: list[int]) -> ss._Votes:
+    """One view's thing votes: the visible cells and the mask each is in (-1: none)."""
+    return ss._Votes(
+        np.array(cells, np.int32), np.ones(len(cells), np.float32), np.array([masks], np.int32)
+    )
+
+
+def test_touching_objects_of_one_concept_the_masks_never_part_are_one() -> None:
+    # Regions: A cells 0-1, B cells 2-3 (a flange the masks sometimes leave out), C 4-5.
+    region = np.array([0, 0, 1, 1, 2, 2])
+    a, b = np.array([1, 3]), np.array([2, 4])
+    votes = cs.ConceptVotes(n_cells=6, n_things=1, n_stuff=0)
+    votes.things = [
+        _view([0, 1, 2, 3], [0, 0, 0, 0]),  # A and B in one mask
+        _view([0, 1, 2, 3], [0, 0, -1, -1]),  # B left out: says nothing
+        _view([0, 1, 2, 3], [0, 0, 0, 0]),
+        _view([2, 3, 4, 5], [0, 0, 1, 1]),  # B and C in masks of their own
+        _view([2, 3, 4, 5], [1, 1, 0, 0]),
+    ]
+    joined, joins = cs.concept_joins(region, np.array([0, 0, 0]), votes, a, b)
+    assert joins == 1 and joined.tolist() == [0, 0, 0, 0, 1, 1]
+    # Not across concepts.
+    _, joins = cs.concept_joins(region, np.array([0, 1, 0]), votes, a, b)
+    assert joins == 0
+
+
+def test_a_fragment_between_two_objects_does_not_chain_them() -> None:
+    # B touches A and C and shares masks with each; A and C are in masks of their own.
+    region = np.array([0, 0, 1, 1, 2, 2])
+    a, b = np.array([1, 3]), np.array([2, 4])
+    votes = cs.ConceptVotes(n_cells=6, n_things=1, n_stuff=0)
+    votes.things = [
+        _view([0, 1, 2, 3], [0, 0, 0, 0]),
+        _view([0, 1, 2, 3], [0, 0, 0, 0]),
+        _view([0, 1, 2, 3], [0, 0, 0, 0]),
+        _view([2, 3, 4, 5], [0, 0, 0, 0]),
+        _view([2, 3, 4, 5], [0, 0, 0, 0]),
+        _view([0, 1, 4, 5], [0, 0, 1, 1]),
+        _view([0, 1, 4, 5], [1, 1, 0, 0]),
+        _view([0, 1, 4, 5], [0, 0, 1, 1]),
+    ]
+    joined, joins = cs.concept_joins(region, np.array([0, 0, 0]), votes, a, b)
+    assert joins == 1
+    assert joined[0] != joined[4]  # A and C stay apart
+
+
 # ------------------------------------------------------------------------ the whole run
 
 
