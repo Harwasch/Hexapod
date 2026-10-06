@@ -275,7 +275,9 @@ any tag (`lib/categories.ts` object names, `lib/sceneSelect.ts` the selection ca
 **Running and publishing a variant.** segment.yml runs a candidate on a `seg-*` push whose
 head commit says `[segment|names=spool,pumpkin|variant=ground-first]`
 (`infra/modal/segment.py` `VARIANT_SCRIPTS`; each call stopped after 50 min, so its worst
-cost is known, ~$1 on the L4), and keeps `cache.tar` (every view's masks and image, the
+cost is known, ~$1 on the L4; `crop=x0,y0,x1,y1` segments a part of a big scan, every tile
+still bound: candidate A on 8.15 M of the camp's splats, `crop=-5,8,30,33`, did not finish
+in the 50 min, run 37398872516, where the spool and the pumpkin take under 4), and keeps `cache.tar` (every view's masks and image, the
 refine pass's box masks, the names) so a run can be re-assembled on a CPU. publish-instances
 publishes a run's artifact as a variant with `variant=<name>` (dispatch input, or
 `[instances|run=<id>|scans=spool,pumpkin|variant=ground-first|publish]` on a `bakeoff-*`
