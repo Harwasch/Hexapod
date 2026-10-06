@@ -2229,13 +2229,17 @@ def pick_roi(
     known: KnownModel,
     keyword: str,
     *,
+    renderer: Renderer | None = None,
     min_splats: int = 5000,
     max_extent_m: float = 12.0,
     sample: int = 20000,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
-    """The region to fill among the instances tagged `keyword` (a roof): the one whose
-    gaussians are least seen from above (`known` from a point over its centre), weighted
-    by its size. Segmentation only says where to look; the fill does not use its shape."""
+    """The region to fill among the instances tagged `keyword` (a roof): the one the scan
+    most missed from above, weighted by its size. Missed is unseen (its gaussians' `known`
+    from a point over its centre) or, with a `renderer`, empty (the share of its footprint a
+    view from straight above finds nothing in: the camp's view cones call every roof seen,
+    run 37390698492's dry run, but a roof seen only from the ground has holes on top).
+    Segmentation only says where to look; the fill does not use its shape."""
     rng = np.random.default_rng(0)
     scored = []
     for inst in instances:
@@ -2260,25 +2264,61 @@ def pick_roi(
         else:
             weights = known.weights(splats.positions, eye)[rows]
         unseen = 1.0 - float(weights.mean())
+        empty = _empty_from_above(splats, low, high, renderer) if renderer is not None else 0.0
+        missed = 1.0 - (1.0 - unseen) * (1.0 - empty)
         scored.append(
-            (unseen * math.log1p(int(inst["splats"])), int(inst["id"]), unseen, low, high)
+            (missed * math.log1p(int(inst["splats"])), int(inst["id"]), unseen, empty, low, high)
         )
     if not scored:
         raise SystemExit(f"no instance tagged {keyword!r} to fill")
     scored.sort(key=lambda s: -s[0])
-    _, iid, unseen, low, high = scored[0]
+    _, iid, unseen, empty, low, high = scored[0]
     return (
         low,
         high,
         {
             "instance": iid,
             "unseenFromAbove": round(unseen, 3),
+            "emptyFromAbove": round(empty, 3),
             "candidates": [
-                {"instance": s[1], "score": round(s[0], 3), "unseen": round(s[2], 3)}
+                {
+                    "instance": s[1],
+                    "score": round(s[0], 3),
+                    "unseen": round(s[2], 3),
+                    "empty": round(s[3], 3),
+                }
                 for s in scored[:8]
             ],
         },
     )
+
+
+def _empty_from_above(
+    splats: Splats, low: np.ndarray, high: np.ndarray, renderer: Renderer, size: int = 96
+) -> float:
+    """The share of a box's footprint that a view from straight above finds nothing in (the
+    gaussians within a metre of the box drawn)."""
+    pad = 1.0
+    near = np.all((splats.positions >= low - pad) & (splats.positions <= high + pad), axis=1)
+    if not near.any():
+        return 1.0
+    centre = (low + high) / 2
+    extent = float(np.max((high - low)[:2])) + 0.5
+    fov = 40.0
+    height = (high[2] - centre[2]) + extent / (2 * math.tan(math.radians(fov / 2)))
+    camera = Camera.look_at(
+        centre + np.array([0.0, 0.0, height]),
+        centre,
+        fov_deg=fov,
+        width=size,
+        height=size,
+        up=(0.0, 1.0, 0.0),
+    )
+    footprint = ray_box(camera, low, high)
+    if not footprint.any():
+        return 0.0
+    frame = renderer(splats.take(np.flatnonzero(near)), camera)
+    return float((~tf._covered(frame.alpha))[footprint].mean())
 
 
 def shape_roi(
@@ -2334,7 +2374,9 @@ def build_scene(
         if args.poses:
             raise SystemExit("--roi-pick is for a scan without cameras (its view cones)")
         grid = vc.cone_grid_from_tileset(tileset)
-        low, high, picked = pick_roi(instances, splats, ConeKnown(grid), args.roi_pick)
+        low, high, picked = pick_roi(
+            instances, splats, ConeKnown(grid), args.roi_pick, renderer=renderer
+        )
         info["roiPicked"] = picked
         log(f"region picked: {json.dumps(picked)}")
     elif args.roi_instance is not None:

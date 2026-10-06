@@ -34,8 +34,10 @@ without them: `latent_known` is numpy.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -473,10 +475,38 @@ def _wan22(pipe: Any, shown, masks, prompt, negative, seed, steps, guidance) -> 
     return _u8(video_np)
 
 
+#: A frame 0 with more than this share to generate is not given as Video2World's condition.
+FRAME0_HOLE_SHARE = 0.01
+
+
+@contextlib.contextmanager
+def frame0_unpinned(pipe: Any) -> Iterator[None]:
+    """Video2World pins its condition frame's latent whole (`cond_indicator`): a frame 0 with
+    a hole (a held-out region, a hidden object's place, a render's empty sky) would have the
+    grey it is shown there kept as content and carried on (run 37390698492: the held-out
+    spool top came out a flat grey disc). Here no frame is pinned; the per-step replacement
+    holds frame 0's known cells as it does every other frame's."""
+    original = pipe.prepare_latents
+
+    def prepare(*args: Any, **kwargs: Any) -> Any:
+        latents, cond, cond_ind, uncond_ind, cond_mask, uncond_mask = original(*args, **kwargs)
+        cond_ind, cond_mask = cond_ind * 0, cond_mask * 0
+        if uncond_ind is not None:
+            uncond_ind, uncond_mask = uncond_ind * 0, uncond_mask * 0
+        return latents, cond, cond_ind, uncond_ind, cond_mask, uncond_mask
+
+    pipe.prepare_latents = prepare
+    try:
+        yield
+    finally:
+        del pipe.prepare_latents
+
+
 def _cosmos(pipe: Any, shown, masks, prompt, negative, seed, steps, guidance) -> np.ndarray:
-    """Video2World on frame 0 (its own conditioning), and after every step the latents of the
-    known cells replaced by the clip's own at that step's noise level: `x0 + sigma * eps` in
-    the pipeline's EDM parameterisation (`latents = x0 + sigma * noise`)."""
+    """Video2World on frame 0 (its own conditioning) when frame 0 is whole, and after every
+    step the latents of the known cells replaced by the clip's own at that step's noise level:
+    `x0 + sigma * eps` in the pipeline's EDM parameterisation (`latents = x0 + sigma *
+    noise`). A frame 0 with a hole is not pinned (`frame0_unpinned`)."""
     import torch
     from PIL import Image
 
@@ -506,19 +536,21 @@ def _cosmos(pipe: Any, shown, masks, prompt, negative, seed, steps, guidance) ->
         mixed = keep * given + (1 - keep) * latents.float()
         return {"latents": mixed.to(latents.dtype)}
 
-    result = pipe(
-        image=Image.fromarray(np.asarray(shown[0], np.uint8)),
-        prompt=prompt,
-        negative_prompt=negative,
-        height=h,
-        width=w,
-        num_frames=n,
-        num_inference_steps=steps,
-        guidance_scale=guidance,
-        fps=int(spec.fps),
-        generator=torch.Generator(device).manual_seed(seed),
-        output_type="np",
-        callback_on_step_end=replace,
-        callback_on_step_end_tensor_inputs=["latents"],
-    ).frames[0]
+    unpin = float(masks[0].mean()) > FRAME0_HOLE_SHARE
+    with frame0_unpinned(pipe) if unpin else contextlib.nullcontext():
+        result = pipe(
+            image=Image.fromarray(np.asarray(shown[0], np.uint8)),
+            prompt=prompt,
+            negative_prompt=negative,
+            height=h,
+            width=w,
+            num_frames=n,
+            num_inference_steps=steps,
+            guidance_scale=guidance,
+            fps=int(spec.fps),
+            generator=torch.Generator(device).manual_seed(seed),
+            output_type="np",
+            callback_on_step_end=replace,
+            callback_on_step_end_tensor_inputs=["latents"],
+        ).frames[0]
     return _u8(result)

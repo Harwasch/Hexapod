@@ -444,3 +444,49 @@ def test_thin_fuses_each_voxels_colour_from_every_view() -> None:
     np.testing.assert_allclose(out.splats.positions[0], [0.0, 0.0, 0.0])  # the most confident
     assert out.confidence.tolist() == [0.9, 0.5]
     assert gf.thin(lifted, budget=1).confidence.tolist() == [0.9]
+
+
+class _AllKnown:
+    def weights(self, positions: np.ndarray, eye: np.ndarray) -> np.ndarray:
+        return np.ones(len(positions))
+
+
+def test_the_roof_picked_without_cameras_is_the_one_with_holes_on_top() -> None:
+    splats, _ = table_scene()
+    p = splats.positions
+    hole = (p[:, 2] == 0) & (np.abs(p[:, 0] - 0.7) < 0.21) & (np.abs(p[:, 1] - 0.7) < 0.21)
+    splats = splats.take(np.flatnonzero(~hole))
+    instances = [
+        {
+            "id": 1,
+            "splats": 9000,
+            "tags": [{"label": "roof"}],
+            "bounds": {"min": [-0.45, -0.45, 0.6], "max": [0.45, 0.45, 0.75]},
+        },
+        {
+            "id": 5,
+            "splats": 9000,
+            "tags": [{"label": "roof"}],
+            "bounds": {"min": [0.2, 0.2, -0.05], "max": [1.2, 1.2, 0.05]},
+        },
+    ]
+    # Seen from everywhere (the camp's view cones): only what is empty from above tells.
+    _, _, blind = gf.pick_roi(instances, splats, _AllKnown(), "roof")
+    assert blind["unseenFromAbove"] == 0.0 and blind["emptyFromAbove"] == 0.0
+    _, _, picked = gf.pick_roi(instances, splats, _AllKnown(), "roof", renderer=render)
+    assert picked["instance"] == 5 and 0.04 < picked["emptyFromAbove"] < 0.4
+    assert picked["candidates"][1]["empty"] < 0.02
+
+
+class _Video2World:
+    def prepare_latents(self, *args: object) -> tuple:
+        one = np.ones((1, 1, 3, 1, 1))
+        return "latents", "cond", one, one, one, one
+
+
+def test_cosmos_frame0_with_a_hole_is_not_pinned() -> None:
+    pipe = _Video2World()
+    with vfm.frame0_unpinned(pipe):
+        _, cond, ci, ui, cm, um = pipe.prepare_latents()
+        assert cond == "cond" and all(float(x.sum()) == 0.0 for x in (ci, ui, cm, um))
+    assert float(pipe.prepare_latents()[2].sum()) == 3.0  # the pipeline's own again
