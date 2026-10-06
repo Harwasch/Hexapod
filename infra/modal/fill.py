@@ -1288,22 +1288,25 @@ anchor_model_image = (
     .add_local_file(LOCAL_CAPTURES / "anchor_models.py", "/root/anchor_models.py")
     .add_local_file(LOCAL_CAPTURES / "video_fill_models.py", "/root/video_fill_models.py")
 )
-#: What the budget guard plans with (seconds; UNVERIFIED until the first run measures them):
-#: an editor call at its fill size with two photos and 8 steps, and with none / 4 steps; a
-#: VACE-14B call on one set (~30 frames at 832x480, 25 steps); loads from the weights volume;
-#: the idle tails; each class's per-call cap (its timeout).
+#: What the budget guard plans with (seconds), about 1.25 times what run 37508234704
+#: measured (leaveout:spool, 3 arms): an editor call at its fill size with two photos and 8
+#: steps 4.8 s, without photos 2.7 s, a 4-step propagation call 2.8 / 1.6 s, an update
+#: 1.6-2.8 s; a VACE-14B call on a 21-frame set at 832x480, 25 steps, 58 s (a full run's
+#: set is up to 37 frames); loads from the weights volume 48-73 s (editor) and 119 s
+#: (VACE); the idle tails; each class's per-call cap (its timeout).
 ANCHOR_GPU = "H100"
-EDIT_CALL_S = {"anchor": 12.0, "anchorNoRefs": 6.0, "prop": 6.0, "propNoRefs": 3.5, "update": 5.0}
-EDIT_LOAD_S = 240
+EDIT_CALL_S = {"anchor": 6.0, "anchorNoRefs": 3.5, "prop": 3.5, "propNoRefs": 2.0, "update": 3.0}
+EDIT_LOAD_S = 120
 EDIT_IDLE_S = 120
 EDIT_CAP_S = 300
-SET_CALL_S = 200
-SET_LOAD_S = 300
+SET_CALL_S = 150
+SET_LOAD_S = 180
 SET_IDLE_S = 60
-SET_CAP_S = 1200
-#: The job's own L4 (renders, quality, depth, lift, carving, distil, scores), minutes.
-ANCHOR_JOB_MIN = {"spool": 45, "pumpkin": 55}
-ANCHOR_JOB_CAP_MIN = 110
+SET_CAP_S = 900
+#: The job's own L4 (renders, quality, depth, lift, carving, distil, scores), minutes (the
+#: spool's leave-out took 13; the pumpkin has 2.5 times the gaussians).
+ANCHOR_JOB_MIN = {"spool": 20, "pumpkin": 35}
+ANCHOR_JOB_CAP_MIN = 80
 #: Views the estimate assumes (the selection's maxima give the worst case).
 ANCHOR_VIEWS = {"anchors": 6, "props": 16}
 

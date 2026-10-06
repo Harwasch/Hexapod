@@ -70,6 +70,10 @@ def test_the_back_of_what_the_cameras_saw_is_not_known() -> None:
         plane, above[0], render, known, weak, fq.facing(q, above[0].centre, plane.positions)
     )
     assert from_above.known.sum() > 100
+    # An eye under the ground sees backs: not a view to fill from.
+    below_shares = seen_from_below.shares()
+    assert below_shares["back"] > 0.9 and not fv.eligible(below_shares, relaxed=True)
+    assert from_above.shares()["back"] < 0.05
 
 
 def test_select_views_covers_greedily_twice_with_suppression() -> None:

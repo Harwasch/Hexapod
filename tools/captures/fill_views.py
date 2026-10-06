@@ -11,8 +11,8 @@ camera paths. This module chooses them, with nothing picked by hand:
    seen at enough resolution (`RES_MIN` of the capture's own). Each candidate's pixels are
    classed (`pixel_classes`: known, weak, unknown, void; a hole enclosed by the scan is
    unknown, open background is not), and only views with something to fill (`DEFICIT_MIN`
-   of their pixels weak or unknown) that keep context (`UNKNOWN_MAX` unknown at most) are
-   eligible.
+   of their pixels weak or unknown) that keep context (`UNKNOWN_MAX` unknown at most) and
+   do not look out from under or behind a surface (`BACK_MAX`) are eligible.
 3. **Greedy weighted max coverage** (`select_views`): anchors first, each adding the most
    not-yet-seen fill weight (area x deficit); then propagation views until about
    `COVER_TARGET` of what can be covered is seen well by `MULTIPLICITY` views. Views too close
@@ -50,8 +50,12 @@ RES_MIN = 0.5
 #: at most this share unknown (the rest is context).
 DEFICIT_MIN = 0.10
 UNKNOWN_MAX = 0.50
-#: ...and when the scan covers at least this share of the frame.
+#: ...and when the scan covers at least this share of the frame...
 SHOWN_MIN = 0.2
+#: ...and at most this share of what it shows is the back of a surface the cameras saw: an
+#: eye under the ground or behind a bush sees mostly backs (the spool's -15 degree ring,
+#: at ground level, 0.34-0.95; the pumpkin's 15 degree ring at most 0.25).
+BACK_MAX = 0.25
 #: View directions closer than this to a chosen one are suppressed.
 NMS_DEG = 20.0
 COVER_TARGET = 0.95
@@ -120,6 +124,8 @@ class PixelClasses:
     colour: np.ndarray
     depth: np.ndarray
     full: Frame
+    #: Pixels whose front surface is the back of what the cameras saw (none without facing).
+    back: np.ndarray | None = None
 
     @property
     def shown(self) -> np.ndarray:
@@ -127,16 +133,21 @@ class PixelClasses:
 
     def shares(self, region: np.ndarray | None = None) -> dict[str, float]:
         """The frame's share the scan shows, and of the shown pixels (within `region`, the
-        pixels near the holes, when given) the unknown, weak and deficit (either) shares."""
+        pixels near the holes, when given) the unknown, weak and deficit (either) shares;
+        and of all shown pixels the share that shows the back of a seen surface."""
         total = self.known.size
         shown = self.shown if region is None else self.shown & region
         n = max(int(shown.sum()), 1)
+        back = 0.0
+        if self.back is not None:
+            back = float((self.back & self.shown).sum() / max(int(self.shown.sum()), 1))
         return {
             "shown": float(self.shown.sum() / total),
             "local": float(shown.sum() / total),
             "unknown": float((self.unknown & shown).sum() / n),
             "weak": float((self.weak & shown).sum() / n),
             "deficit": float(((self.unknown | self.weak) & shown).sum() / n),
+            "back": back,
         }
 
 
@@ -199,6 +210,7 @@ def pixel_classes(
 
     k_front = in_front(k) & covered
     kw_front = (in_front(kw) & covered) | k_front
+    back = None
     if facing is not None and not np.all(facing):
         # The front surface's facing share, drawn as a colour: below half, it is the back of
         # what the cameras saw (the underside of a lawn from below).
@@ -221,7 +233,7 @@ def pixel_classes(
     # look is kept there and refined).
     weak_px = covered & ~known_px & ~unknown
     void = ~(known_px | weak_px | unknown)
-    return PixelClasses(known_px, weak_px, unknown, void, unpremultiply(full), front, full)
+    return PixelClasses(known_px, weak_px, unknown, void, unpremultiply(full), front, full, back)
 
 
 # --- coverage --------------------------------------------------------------------------------------
@@ -354,13 +366,15 @@ def coverage(
 
 def eligible(shares: dict[str, float], *, relaxed: bool = False) -> bool:
     """A view with something to fill near the holes (`DEFICIT_MIN`, unless `relaxed`) that
-    keeps context there and in the frame (`UNKNOWN_MAX`)."""
+    keeps context there and in the frame (`UNKNOWN_MAX`), from an eye in the open
+    (`BACK_MAX`)."""
     return (
         shares["shown"] >= SHOWN_MIN
         and shares.get("local", 1.0) > 0.0
         and (relaxed or shares["deficit"] >= DEFICIT_MIN)
         and shares["unknown"] <= UNKNOWN_MAX
         and shares.get("frameUnknown", 0.0) <= UNKNOWN_MAX
+        and shares.get("back", 0.0) <= BACK_MAX
     )
 
 

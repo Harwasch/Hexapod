@@ -68,7 +68,11 @@ WEAK_STRENGTH = 0.45
 #: The ring of known pixels around a hole that seeds are scored on, px at a 1248-px width.
 RING_PX = 24
 #: A seed whose registered output keeps the known pixels below this (dB, blurred) drifted.
-DRIFT_DB = 18.0
+#: (Run 37508234704: the editor kept them at 16-29 dB, the outputs with photos at 16-18;
+#: 18 called nearly every one of those drifted, and the choice among them was blind.)
+DRIFT_DB = 15.0
+#: Seed choice: each share of the pixels to make left in the key colour costs this much.
+RESIDUE_WEIGHT = 2.0
 #: Seed choice: LPIPS on the ring plus this times (1 - agreement with the other anchors).
 AGREE_WEIGHT = 0.5
 #: Agreement halves every this much colour difference (0..1, RMS over channels).
@@ -80,6 +84,13 @@ DEPTH_MAX_RESIDUAL = 0.2
 HARMONIC_FACTOR = 4
 #: A propagation view is filled only when at least this share of its pixels needs it.
 PROP_MIN_SHARE = 0.01
+#: Lifted gaussians farther than this share of the focus radius from every gaussian to fill
+#: are dropped (an unknown pixel of the background lifted into a floater).
+LIFT_REACH = 0.08
+#: Context photos are cropped about the hole they show, padded by this share, at least
+#: this share of the photo across.
+CROP_PAD = 0.25
+CROP_MIN = 0.45
 #: The distil: a generated view's weight against a real photo's 1, its weight outside its
 #: mask, and real photos used.
 GENERATED_WEIGHT = 0.5
@@ -104,12 +115,14 @@ EDIT_PROMPT = (
 )
 REFS_SENTENCE = {
     1: (
-        " Picture 2 is a real photograph of the same scene taken from another position: use "
-        "it for the true appearance of every surface."
+        " Picture 2 is a close-up real photograph of the same scene taken from another "
+        "position: match its materials, colours, wear and light, but do not copy its framing "
+        "or paste anything from it into Picture 1."
     ),
     2: (
-        " Pictures 2 and 3 are real photographs of the same scene taken from other positions: "
-        "use them for the true appearance of every surface."
+        " Pictures 2 and 3 are close-up real photographs of the same scene taken from other "
+        "positions: match their materials, colours, wear and light, but do not copy their "
+        "framing or paste anything from them into Picture 1."
     ),
 }
 UPDATE_PROMPT = (
@@ -231,6 +244,42 @@ class Setup:
             self._cache[key] = self.views[k].photo(width=min(width, self.views[k].camera.width))
         return self._cache[key]
 
+    def context_photo(self, k: int, cluster: int | None, width: int = 2048) -> np.ndarray | None:
+        """Camera `k`'s photo cropped about hole `cluster` as it sees it: the middle 90 % of
+        the cluster's gaussians in its frame, padded (`CROP_PAD`), at least `CROP_MIN` of
+        the photo across, at the photo's aspect. A whole photo of the object beside the
+        render made the editor paste it in, ghosted (run 37508234704); a close-up of the
+        surface is a reference for its look. The whole photo when the hole is not in it.
+        Cached."""
+        key = f"context{k}-{cluster}-{width}"
+        if key in self._cache:
+            return self._cache[key]
+        photo = self.photo(k, width)
+        out = photo
+        members = (
+            np.flatnonzero(self.clusters.labels == cluster)
+            if cluster is not None and cluster >= 0
+            else np.zeros(0, np.int64)
+        )
+        if photo is not None and members.size >= 10:
+            h, w = photo.shape[:2]
+            cam = fv.scaled(self.views[k].camera, w, h)
+            uv, z = cam.project(self.measured.positions[members])
+            ok = (z > 1e-3) & (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
+            if ok.sum() >= 10:
+                lo = np.percentile(uv[ok], 5, axis=0)
+                hi = np.percentile(uv[ok], 95, axis=0)
+                span = (hi - lo) * (1 + 2 * CROP_PAD)
+                cw = min(float(w), max(span[0], span[1] * w / h, CROP_MIN * w))
+                ch = min(float(h), cw * h / w)
+                cw = ch * w / h
+                mid = (lo + hi) / 2
+                x0 = round(float(np.clip(mid[0] - cw / 2, 0, w - cw)))
+                y0 = round(float(np.clip(mid[1] - ch / 2, 0, h - ch)))
+                out = photo[y0 : y0 + max(1, round(ch)), x0 : x0 + max(1, round(cw))]
+        self._cache[key] = out
+        return out
+
     def region(self) -> tuple[np.ndarray, np.ndarray]:
         r = self.focus.radius
         return self.focus.centre - r, self.focus.centre + r
@@ -280,7 +329,7 @@ def make_setup(
     withheld = np.zeros(len(measured), bool)
     dropped = np.zeros(len(measured), bool)
     if held_idx:
-        withheld, dropped = fq.withheld_by_holdout(kept, everyone)
+        withheld, dropped = fq.withheld_by_holdout(kept, everyone, everyone.subset(held_idx))
     classes = kept.classes.copy()
     classes[withheld] = fq.UNKNOWN
     shown = ~dropped
@@ -765,6 +814,14 @@ def _dilate(mask: np.ndarray, px: int) -> np.ndarray:
     return cv2.dilate(mask.astype(np.uint8), kernel) > 0
 
 
+def _close(mask: np.ndarray, px: int) -> np.ndarray:
+    """Morphological closing: a region's pinholes and slivers between its specks filled."""
+    import cv2
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * px + 1, 2 * px + 1))
+    return cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel) > 0
+
+
 def composite(aligned: np.ndarray, render: np.ndarray, known: np.ndarray) -> np.ndarray:
     """The known pixels exactly as rendered, every other pixel as the editor drew it."""
     return np.where(known[..., None], render, aligned).astype(np.uint8)
@@ -804,6 +861,34 @@ class StandInPerceptual:
         return None
 
 
+def key_residue(image: np.ndarray, region: np.ndarray) -> np.ndarray:
+    """The pixels of `region` the editor left in (or near) the key colour: magenta (hue
+    within 20 degrees), saturated and bright."""
+    import cv2
+
+    hsv = cv2.cvtColor(np.asarray(image, np.uint8), cv2.COLOR_RGB2HSV)
+    hue = hsv[..., 0].astype(np.int16)  # 0..179; magenta is 150
+    return region & (np.abs(hue - 150) <= 10) & (hsv[..., 1] >= 150) & (hsv[..., 2] >= 120)
+
+
+def clean_residue(
+    image: np.ndarray, weight: np.ndarray, region: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Key-colour residue in `region` (and 2 px round it) painted over from its
+    surroundings, its weight 0: (image, weight, residue mask). Run 37508234704 lifted the
+    editor's leftover magenta specks into the layer."""
+    import cv2
+
+    residue = key_residue(image, region)
+    if not residue.any():
+        return image, weight, residue
+    residue = _dilate(residue, 2) & region
+    painted = cv2.inpaint(
+        np.asarray(image, np.uint8), residue.astype(np.uint8) * 255, 5, cv2.INPAINT_TELEA
+    )
+    return painted, np.where(residue, 0.0, weight), residue
+
+
 def seed_agreement(chosen: np.ndarray, others: Sequence[np.ndarray]) -> np.ndarray:
     """Per pixel, how far the chosen seed agrees with the other seeds (colour; the mean of
     `exp(-rms / AGREE_COLOUR * ln 2)` over them); 1 with no others."""
@@ -832,10 +917,22 @@ class Candidate:
     context: list[str]
     info: dict[str, Any]
     agreement: float = 1.0
+    #: The share of the pixels to make left in the key colour.
+    residue: float = 0.0
 
     @property
     def drifted(self) -> bool:
         return self.drift is not None and self.drift < DRIFT_DB
+
+    def score(self) -> float:
+        """Lower is better: the ring's LPIPS, disagreement with the other anchors, key-colour
+        residue, and a drifted seed last."""
+        return (
+            self.ring
+            + AGREE_WEIGHT * (1.0 - self.agreement)
+            + RESIDUE_WEIGHT * self.residue
+            + (10.0 if self.drifted else 0.0)
+        )
 
 
 @dataclass
@@ -851,6 +948,8 @@ class FilledView:
     depth_info: dict[str, Any] = field(default_factory=dict)
     lifted: int = 0
     fallback: bool = False
+    #: Pixels the editor left in the key colour (painted over, weight 0, never lifted).
+    residue: np.ndarray | None = None
 
     @property
     def camera(self) -> Camera:
@@ -872,6 +971,7 @@ class FilledView:
             "depth": self.depth_info,
             "lifted": self.lifted,
             "fallback": self.fallback,
+            "residuePx": 0 if self.residue is None else int(self.residue.sum()),
         }
 
 
@@ -893,16 +993,17 @@ def edit_requests(
     lightning: bool,
     update: bool = False,
     vae_area: int = 640 * 640,
+    cluster: int | None = None,
 ) -> list[tuple[EditRequest, list[str]]]:
     """One request per seed: the condition, the render and strength, and (with `refs`) the
-    seed's pair of context photos."""
+    seed's pair of context photos, cropped about the view's hole `cluster`."""
     out = []
     for j, seed in enumerate(seeds):
         names: list[str] = []
         photos: list[np.ndarray] = []
         if refs:
             for role, c in fv.context_for_seed(context, j):
-                photo = setup.photo(c)
+                photo = setup.context_photo(c, cluster)
                 if photo is not None:
                     photos.append(photo)
                     names.append(f"{role}:{setup.views[c].name}")
@@ -929,6 +1030,7 @@ def score_candidates(
     perceptual: Perceptual,
 ) -> list[Candidate]:
     ring = ring_mask(masks)
+    make = masks.unknown
     out = []
     for r, n in zip(results, names, strict=True):
         if r.image is None:
@@ -936,6 +1038,7 @@ def score_candidates(
         aligned, info = register(r.image, masks.render, masks.known)
         lp = perceptual.lpips(aligned, masks.render, ring) if ring.any() else None
         seed = int(r.key.rsplit("-s", 1)[-1])
+        residue = float(key_residue(aligned, make).sum() / max(int(make.sum()), 1))
         out.append(
             Candidate(
                 seed,
@@ -944,30 +1047,32 @@ def score_candidates(
                 known_psnr(aligned, masks),
                 n,
                 {**r.info, **info},
+                residue=residue,
             )
         )
     return out
 
 
 def choose(masks: ViewMasks, cands: Sequence[Candidate], key: str, role: str) -> FilledView | None:
-    """The best candidate (ring LPIPS + agreement, drifted ones last), composited; its
-    seed agreement with the rest as per-pixel weight."""
+    """The best candidate (`Candidate.score`), composited, key-colour residue painted over;
+    its agreement with every other seed as per-pixel weight (a drifted seed counts too:
+    with only drifted ones to compare, run 37508234704 weighted every pixel 1)."""
     if not cands:
         return None
-    score = [
-        c.ring + AGREE_WEIGHT * (1.0 - c.agreement) + (10.0 if c.drifted else 0.0) for c in cands
-    ]
+    score = [c.score() for c in cands]
     best = int(np.argmin(score))
     chosen = cands[best]
     image = composite(chosen.aligned, masks.render, masks.known)
-    others = [c.aligned for k, c in enumerate(cands) if k != best and not c.drifted]
+    others = [c.aligned for k, c in enumerate(cands) if k != best]
     weight = seed_agreement(chosen.aligned, others)
+    image, weight, residue = clean_residue(image, weight, masks.edit)
     seeds = [
         {
             "seed": c.seed,
             "ringLpips": round(c.ring, 4),
             "keptDb": None if c.drift is None else round(c.drift, 2),
             "agreement": round(c.agreement, 4),
+            "residue": round(c.residue, 4),
             "score": round(s, 4),
             "context": c.context,
             "seconds": c.info.get("seconds"),
@@ -975,7 +1080,9 @@ def choose(masks: ViewMasks, cands: Sequence[Candidate], key: str, role: str) ->
         }
         for c, s in zip(cands, score, strict=True)
     ]
-    return FilledView(key, role, masks, image, weight, seeds, chosen.seed, chosen.context)
+    return FilledView(
+        key, role, masks, image, weight, seeds, chosen.seed, chosen.context, residue=residue
+    )
 
 
 # --- agreement between anchors ----------------------------------------------------------------------------------
@@ -1194,7 +1301,7 @@ def lift_view(
     import cv2
 
     masks = fill.masks
-    target = masks.unknown
+    target = masks.unknown if fill.residue is None else masks.unknown & ~fill.residue
     empty = Splats(*(np.zeros((0, k)) for k in (3, 4, 3, 3)), np.zeros(0))
     if not target.any():
         return empty, np.zeros(0)
@@ -1403,6 +1510,20 @@ def _cover_crop(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     return resized[y0 : y0 + h, x0 : x0 + w]
 
 
+def _contain(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """`image` scaled to fit inside `size` (w, h), centred on black."""
+    import cv2
+
+    w, h = size
+    ih, iw = image.shape[:2]
+    f = min(w / iw, h / ih)
+    nw, nh = max(1, round(iw * f)), max(1, round(ih * f))
+    out = np.zeros((h, w, 3), np.uint8)
+    y0, x0 = (h - nh) // 2, (w - nw) // 2
+    out[y0 : y0 + nh, x0 : x0 + nw] = cv2.resize(image, (nw, nh), interpolation=cv2.INTER_AREA)
+    return out
+
+
 def build_set(
     setup: Setup,
     anchors: Sequence[FilledView],
@@ -1540,6 +1661,7 @@ def fill_anchors(run: Run, arms: Sequence[str]) -> dict[str, list[FilledView]]:
                 steps=opt.anchor_steps,
                 lightning=opt.lightning,
                 vae_area=opt.vae_area,
+                cluster=t.cluster,
             )
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
             meta.append((arm, t, [n for _, n in reqs]))
@@ -1554,23 +1676,15 @@ def fill_anchors(run: Run, arms: Sequence[str]) -> dict[str, list[FilledView]]:
                 continue
             cands = score_candidates(masks[t.key], res, names, run.perceptual)
             per_anchor[t.key] = (cands, anchor_points(setup, masks[t.key], scene_sample))
+        # First by each seed alone (agreement 1), then twice with the other anchors' choices.
         chosen = {
-            k: int(np.argmin([c.ring + (10.0 if c.drifted else 0.0) for c in v[0]])) if v[0] else 0
+            k: int(np.argmin([c.score() for c in v[0]])) if v[0] else 0
             for k, v in per_anchor.items()
         }
         for _ in range(2):
             agreement_scores(per_anchor, chosen)
             chosen = {
-                k: int(
-                    np.argmin(
-                        [
-                            c.ring + AGREE_WEIGHT * (1 - c.agreement) + (10.0 if c.drifted else 0.0)
-                            for c in v[0]
-                        ]
-                    )
-                )
-                if v[0]
-                else 0
+                k: int(np.argmin([c.score() for c in v[0]])) if v[0] else 0
                 for k, v in per_anchor.items()
             }
         fills = []
@@ -1624,10 +1738,36 @@ def _hole_sample(setup: Setup, limit: int = 6000) -> np.ndarray:
     return rows
 
 
+def near_holes(setup: Setup, positions: np.ndarray) -> np.ndarray:
+    """Which `positions` lie within `LIFT_REACH` of the focus radius of a gaussian to fill
+    (a hole cluster's member). The tree is cached."""
+    if not len(positions):
+        return np.zeros(0, bool)
+    tree = setup._cache.get("holeTree")
+    if tree is None:
+        from scipy.spatial import cKDTree
+
+        members = np.flatnonzero(setup.clusters.labels >= 0)
+        if members.size == 0:
+            return np.ones(len(positions), bool)
+        tree = cKDTree(setup.measured.positions[members])
+        setup._cache["holeTree"] = tree
+    d, _ = tree.query(positions, k=1)
+    return d <= LIFT_REACH * setup.focus.radius
+
+
 def lift_fills(run: Run, state: ArmState, fills: Sequence[FilledView]) -> None:
+    """Each view lifted (`lift_view`), what lands far from every hole dropped (a floater
+    from an unknown pixel of the background), carved, added to the arm."""
     region = run.setup.region()
     for fill in fills:
         splats, conf = lift_view(fill, run.depth, region, run.options.lift_stride)
+        near = near_holes(run.setup, splats.positions)
+        if len(splats) and not near.all():
+            state.report["farFromHoles"] = state.report.get("farFromHoles", 0) + int((~near).sum())
+            rows = np.flatnonzero(near)
+            splats, conf = splats.take(rows), conf[rows]
+            fill.lifted = len(splats)
         state.add(splats, conf, run.carver)
         state.fills.append(fill)
 
@@ -1655,6 +1795,7 @@ def propagate_sequential(run: Run, states: dict[str, ArmState]) -> None:
                 steps=opt.prop_steps,
                 lightning=opt.lightning,
                 vae_area=opt.vae_area,
+                cluster=t.cluster,
             )
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
             meta.append((arm, masks, [n for _, n in reqs]))
@@ -1793,15 +1934,24 @@ def distil_request(run: Run, state: ArmState, init: Splats, iterations: int) -> 
     }
 
 
+def _weak_rows(setup: Setup) -> np.ndarray:
+    c = setup.shown_classes()
+    return np.flatnonzero(
+        (c == fq.WEAK) & (setup.clusters.labels[setup.shown] >= 0) & ~setup.withheld[setup.shown]
+    )
+
+
+def weak_count(run: Run) -> int:
+    """How many weak gaussians in the holes could be copied."""
+    return int(_weak_rows(run.setup).size)
+
+
 def weak_copies(run: Run, limit: int) -> tuple[Splats, np.ndarray]:
     """Trainable copies of the weak gaussians in the holes (the distil refines their look;
     the originals stay frozen): at most `limit`, the worst seen first. Returns them and
     their shown indices."""
     setup = run.setup
-    c = setup.shown_classes()
-    rows = np.flatnonzero(
-        (c == fq.WEAK) & (setup.clusters.labels[setup.shown] >= 0) & ~setup.withheld[setup.shown]
-    )
+    rows = _weak_rows(setup)
     if rows.size > limit:
         best = setup.quality.best[setup.shown][rows]
         rows = np.sort(rows[np.argsort(best, kind="stable")[:limit]])
@@ -1830,8 +1980,11 @@ def fuse(
             out[arm] = None
             continue
         conf = np.concatenate(state.confs)
-        thinned = gf.thin(gf.Lifted(lifted, conf, [], []), budget)
-        copies, copy_rows = weak_copies(run, max(0, budget - len(thinned.splats)) // 2)
+        # Up to half the budget is kept for the weak gaussians' copies: run 37508234704
+        # thinned the lifted ones to the whole budget and refined no weak gaussian at all.
+        reserve = min(weak_count(run), budget // 2)
+        thinned = gf.thin(gf.Lifted(lifted, conf, [], []), budget - reserve)
+        copies, copy_rows = weak_copies(run, max(0, budget - len(thinned.splats)))
         state.report.update(
             {
                 "lifted": len(lifted),
@@ -1926,18 +2079,19 @@ def _update_round(
                 strength_map,
                 fill.masks.depth,
             )
-            ctx = next((t.context for t in run.targets if t.key == fill.key), {})
+            target = next((t for t in run.targets if t.key == fill.key), None)
             reqs = edit_requests(
                 setup,
                 f"{arm}/{fill.key}/u{strength:g}",
                 masks,
-                ctx,
+                target.context if target is not None else {},
                 refs=ANCHOR_ARM[arm] == "refs",
                 seeds=[fill.chosen],
                 steps=opt.update_steps,
                 lightning=opt.lightning,
                 vae_area=opt.vae_area,
                 update=True,
+                cluster=target.cluster if target is not None else None,
             )
             pending.append((fill.key, run.editor.start([r for r, _ in reqs])))
             meta.append((fill, masks))
@@ -1975,7 +2129,7 @@ def score_held_out(
             continue
         cam = fv.scaled(view.camera, photo.shape[1], photo.shape[0])
         region = (
-            tf._covered(run.renderer(withheld, cam).alpha)
+            _close(tf._covered(run.renderer(withheld, cam).alpha), 3)
             if len(withheld)
             else np.zeros(photo.shape[:2], bool)
         )
@@ -2006,9 +2160,8 @@ def score_held_out(
             score[arm] = _metrics(run, after, photo, region)
         full = tf.to_u8(run.renderer(setup.measured, cam).rgb)
         row.append(gf.label_image(full, "scan trained with them"))
-        edge = _dilate(region, 1) & ~region
-        for im in row:
-            im[edge] = (255, 0, 255)
+        # The scored region outlined on the photo only (the others stay clean to compare).
+        row[0][_dilate(region, 1) & ~region] = (255, 0, 255)
         rows.append(row)
         numbers.append(score)
     if rows:
@@ -2058,7 +2211,8 @@ def rerender_consistency(run: Run, state: ArmState, layer: Splats | None) -> dic
 
 
 def anchor_sheet(run: Run, fills: dict[str, list[FilledView]], out: Path) -> None:
-    """Per anchor: its context photos, what the editor was given, and each arm's fill."""
+    """Per anchor: its context photos (as the editor is given them, cropped about the
+    hole), what the editor was given, and each arm's fill."""
     import cv2
     from PIL import Image
 
@@ -2072,10 +2226,10 @@ def anchor_sheet(run: Run, fills: dict[str, list[FilledView]], out: Path) -> Non
             continue
         row = []
         for role, c in fv.context_roles(t.context).items():
-            photo = setup.photo(c, 768)
+            photo = setup.context_photo(c, t.cluster)
             if photo is not None:
                 row.append(
-                    gf.label_image(_cover_crop(photo, (w, h)), f"{role}: {setup.views[c].name}")
+                    gf.label_image(_contain(photo, (w, h)), f"{role}: {setup.views[c].name}")
                 )
         while len(row) < 4:
             row.append(np.zeros((h, w, 3), np.uint8))

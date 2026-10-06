@@ -40,6 +40,19 @@ def test_normals_come_from_the_neighbours_when_the_splats_say_nothing() -> None:
     assert np.abs(normals[:, 2]).min() > 0.99
 
 
+def test_a_layered_surface_keeps_an_upright_normal() -> None:
+    # A splat's surface is a layer of gaussians, not a sheet: the planes through 16 of them
+    # tilt every way (and are too thick to count as flat); the wider plane does not.
+    rng = np.random.default_rng(4)
+    p = np.column_stack([rng.uniform(-0.5, 0.5, (4000, 2)), rng.normal(0, 0.012, 4000)])
+    s = splats(p, [0.5, 0.5, 0.5])
+    fine, flat = fq.local_normals(s.positions, fq.NORMAL_NEIGHBOURS)
+    normals = fq.surface_normals(s)
+    inner = np.abs(p[:, :2]).max(axis=1) < 0.4
+    assert np.quantile(np.abs(normals[inner, 2]), 0.1) > 0.9
+    assert np.quantile(np.abs(fine[inner, 2]), 0.1) < 0.9 or np.median(flat[inner]) > fq.PLANAR
+
+
 def test_shortest_axis_is_a_flat_splats_normal() -> None:
     s = splats(_plane(5), [0.5, 0.5, 0.5])
     s.scales[:] = [0.05, 0.05, 0.001]
@@ -136,6 +149,27 @@ def test_a_subset_of_cameras_and_the_withheld_look() -> None:
     assert withheld[inner_top].mean() > 0.9
     assert not (withheld & dropped).any()
     assert not withheld[m["side"] & (scene.positions[:, 2] > 0.2)].any()
+
+
+def test_a_surface_the_held_out_cameras_saw_better_is_withheld() -> None:
+    # Kept: the top at about 10 degrees; held out: at about 22. The top is weak both ways,
+    # so "known only with the held-out cameras" misses it, but they saw it twice as well.
+    scene, m = table_scene()
+    low = ring_cameras(12, 18.0, 2.4)
+    high = ring_cameras(6, 30.0, 2.2, phase=0.2)
+    cams = low + high
+    focus = fq.capture_focus(cams)
+    everyone = fq.measure_quality(scene, cams, render, focus, width=96)
+    kept = everyone.subset(range(len(low)))
+    held = everyone.subset(range(len(low), len(cams)))
+    inner_top = m["top"] & (np.linalg.norm(scene.positions[:, :2], axis=1) < 0.3)
+    assert (everyone.classes[inner_top] != fq.KNOWN).mean() > 0.9
+    old, _ = fq.withheld_by_holdout(kept, everyone)
+    assert old[inner_top].mean() < 0.1
+    withheld, dropped = fq.withheld_by_holdout(kept, everyone, held)
+    assert withheld[inner_top].mean() > 0.9
+    assert not (withheld & dropped).any()
+    assert withheld[m["side"] & (scene.positions[:, 2] > 0.2)].mean() < 0.1
 
 
 def test_hole_clusters_are_found_and_ranked_without_a_region() -> None:

@@ -17,10 +17,10 @@ and is classed by it (`classify`):
   denoising strength, so the generator keeps what was seen and sharpens it;
 * **unknown** -- nobody saw it usefully: generated.
 
-The surface normal is the local plane of the gaussians around it (`surface_normals`), else
-the gaussian's own shortest axis. A splat optimised only from grazing views is often not
-flat along its surface, so its own axis can point anywhere; its neighbours still lie in the
-surface.
+The surface normal is the local plane of the gaussians around it (`surface_normals`: the
+wider neighbourhood's where that is flat, else the nearer one's), else the gaussian's own
+shortest axis. A splat optimised only from grazing views is often not flat along its
+surface, so its own axis can point anywhere; its neighbours still lie in the surface.
 
 What to fill is then grouped without picking regions by hand (`hole_clusters`): the weak
 and unknown gaussians near what the cameras were filming (`Focus`), joined where they touch
@@ -65,6 +65,13 @@ FACING_MARGIN = 0.1
 #: The fill works within this share of the median camera distance of what the cameras
 #: converge on (the object the capture is of, and its surroundings).
 FOCUS_SHARE = 0.55
+#: A leave-out withholds a gaussian a held-out camera saw this much better (factor and
+#: margin over the kept cameras' best quality).
+HELD_BETTER = 1.2
+HELD_MARGIN = 0.02
+#: ... decided by neighbourhood: withheld where this share of its nearest neighbours is.
+WITHHELD_NEIGHBOURS = 32
+WITHHELD_SHARE = 0.35
 #: Hole clusters: voxels this many median spacings across join; smaller clusters are noise.
 CLUSTER_SPACING = 2.5
 MIN_CLUSTER = 30
@@ -182,13 +189,27 @@ def local_normals(
     return normals, flat
 
 
-def surface_normals(splats: Splats, k: int = NORMAL_NEIGHBOURS) -> np.ndarray:
-    """Per gaussian the surface normal: its neighbourhood's plane where that is flat
-    (`PLANAR`), else its own shortest axis. Unit, unsigned (only |cos| is used)."""
+def surface_normals(
+    splats: Splats,
+    k: int = NORMAL_NEIGHBOURS,
+    coarse: tuple[np.ndarray, np.ndarray] | None = None,
+) -> np.ndarray:
+    """Per gaussian the surface normal: the flatter of two planes, through its `k` nearest
+    neighbours or its wider neighbourhood (`FACING_NEIGHBOURS`, or `coarse` = (normals,
+    flatness) already computed), where that is flat (`PLANAR`), else its own shortest axis.
+    Unit, unsigned (only |cos| is used). On a large flat surface the 16-neighbour planes of
+    a splat's layered gaussians tilt every way (a quarter of the spool top's came out more
+    than 60 degrees off vertical) and a tilted normal makes a camera at a grazing angle look
+    head-on; the wider plane averages the layer out. Where the wider one reaches round an
+    edge the nearer one is flatter and wins."""
     plane, flat = local_normals(splats.positions, k)
+    wide, wide_flat = (
+        coarse if coarse is not None else local_normals(splats.positions, FACING_NEIGHBOURS)
+    )
     own = shortest_axes(splats)
-    use = flat <= PLANAR
-    out = np.where(use[:, None], plane, own)
+    out = np.where((flat <= PLANAR)[:, None], plane, own)
+    use_wide = (wide_flat <= PLANAR) & (wide_flat < flat)
+    out = np.where(use_wide[:, None], wide, out)
     return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
 
 
@@ -360,8 +381,9 @@ def measure_quality(
     from scipy.sparse import csr_matrix
 
     n = len(splats)
+    side, side_flat = local_normals(splats.positions, FACING_NEIGHBOURS)
     if normals is None:
-        normals = surface_normals(splats)
+        normals = surface_normals(splats, coarse=(side, side_flat))
     sharp = np.ones(len(cameras)) if sharpness is None else np.asarray(sharpness, np.float64)
     reach = 2.0 * splats.scales.max(axis=1)
     rows_all, cols_all, vals_all = [], [], []
@@ -407,20 +429,38 @@ def measure_quality(
     else:
         matrix = csr_matrix((len(cameras), n), dtype=np.float32)
     centres = np.array([c.centre for c in cameras], np.float64).reshape(-1, 3)
-    side, _ = local_normals(splats.positions, FACING_NEIGHBOURS)
     return _summarise(
         matrix, normals, sharp, centres, np.asarray(splats.positions, np.float64), side
     )
 
 
-def withheld_by_holdout(kept: Quality, everyone: Quality) -> tuple[np.ndarray, np.ndarray]:
-    """The leave-out check: (withheld, dropped). Withheld: known with every camera but not
-    with the kept ones -- the scan learned their look from the held-out photos, so it must
-    not be shown (their look is withheld and they count as unknown). Dropped: seen only by
-    held-out cameras -- their very shape came from them, so they leave the scene."""
+def withheld_by_holdout(
+    kept: Quality, everyone: Quality, held: Quality | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """The leave-out check: (withheld, dropped). Withheld: not known with the kept cameras,
+    and either known only with the held-out ones added or seen clearly better by a held-out
+    camera (`HELD_BETTER`) -- the scan learned their look mostly from the held-out photos,
+    so it must not be shown (their look is withheld and they count as unknown). A surface
+    the kept cameras saw only at a grazing angle and the held-out ones from above (the
+    spool's top) is weak both ways, and only the second test catches it. Decided over each
+    gaussian's neighbourhood (`WITHHELD_SHARE` of its `WITHHELD_NEIGHBOURS`). Dropped: seen
+    only by held-out cameras -- their very shape came from them, so they leave the scene."""
     dropped = (kept.seen == 0) & (everyone.seen > 0)
-    withheld = (kept.classes != KNOWN) & (everyone.classes == KNOWN) & ~dropped
-    return withheld, dropped
+    learned = everyone.classes == KNOWN
+    if held is not None:
+        learned |= (held.best >= Q_WEAK) & (held.best > HELD_BETTER * kept.best + HELD_MARGIN)
+    learned &= kept.classes != KNOWN
+    # Per gaussian the call is noisy (a few of a surface's gaussians come out known with
+    # the kept cameras, and their learned look would leak into the scored region), so a
+    # surface is withheld where enough of its neighbourhood is.
+    n = len(learned)
+    if n > 1 and learned.any():
+        from scipy.spatial import cKDTree
+
+        k = min(WITHHELD_NEIGHBOURS, n)
+        _, idx = cKDTree(kept.positions).query(kept.positions, k=k)
+        learned = learned[idx].mean(axis=1) >= WITHHELD_SHARE
+    return learned & ~dropped, dropped
 
 
 # --- hole clusters ----------------------------------------------------------------------------------

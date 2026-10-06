@@ -145,10 +145,53 @@ def test_images_and_strength_survive_the_wire() -> None:
     assert np.isfinite(filled).all() and abs(filled[4, 15] - 2.0) < 1e-6
 
 
+def test_key_colour_left_behind_costs_the_seed_and_is_painted_over() -> None:
+    render = _texture()
+    hole = np.zeros(render.shape[:2], bool)
+    hole[24:48, 32:64] = True
+    masks = _masks(render, hole)
+    clean = render.copy()
+    clean[hole] = 128
+    specks = clean.copy()
+    specks[30:34, 40:44] = (255, 0, 255)
+    specks[40:42, 50:56] = (235, 30, 225)
+    results = [af.EditResult("a0-s17", specks), af.EditResult("a0-s1017", clean)]
+    cands = af.score_candidates(masks, results, [[], []], af.StandInPerceptual())
+    assert cands[0].residue > 0.02 and cands[1].residue == 0.0
+    fill = af.choose(masks, cands, "a0", "anchor")
+    assert fill is not None and fill.chosen == 1017
+    # Forced: the speckled seed's residue is painted over and weighs nothing.
+    only = af.choose(masks, cands[:1], "a0", "anchor")
+    assert only is not None and only.residue is not None and only.residue[31, 41]
+    assert not af.key_residue(only.image, hole).any()
+    assert only.weight[31, 41] == 0.0 and only.weight[26, 34] > 0.0
+    assert (only.image[~hole] == render[~hole]).all()
+
+
+def test_the_chosen_seed_is_weighed_against_drifted_seeds_too() -> None:
+    render = _texture()
+    hole = np.zeros(render.shape[:2], bool)
+    hole[24:48, 32:64] = True
+    masks = _masks(render, hole)
+    good = render.copy()
+    good[hole] = 128
+    other = _texture(seed=5)  # drifted, and a different fill in the hole
+    cands = af.score_candidates(
+        masks,
+        [af.EditResult("a0-s17", good), af.EditResult("a0-s1017", other)],
+        [[], []],
+        af.StandInPerceptual(),
+    )
+    fill = af.choose(masks, cands, "a0", "anchor")
+    assert fill is not None and fill.chosen == 17
+    assert fill.weight[hole].mean() < 0.9
+
+
 def test_prompts_name_the_photos_they_show() -> None:
-    assert "Pictures 2 and 3 are real photographs" in af.prompt_for("a table", 2)
+    assert "Pictures 2 and 3 are close-up real photographs" in af.prompt_for("a table", 2)
     one = af.prompt_for("a table", 1)
-    assert "Picture 2 is a real photograph" in one and "use it" in one and "Picture 3" not in one
+    assert "Picture 2 is a close-up real photograph" in one and "Picture 3" not in one
+    assert "do not copy its framing" in one
     assert "Picture 2" not in af.prompt_for("a table", 0)
     assert "magenta" in af.prompt_for("a table", 0) and "magenta" not in af.prompt_for(
         "x", 0, update=True
@@ -259,6 +302,16 @@ def test_the_whole_run_fills_the_held_out_top(tmp_path: Path) -> None:
     assert len(setup.held_out) == 5 and info["withheld"] > 0
     inner_top = m["top"] & (np.linalg.norm(scene.positions[:, :2], axis=1) < 0.3)
     assert (setup.classes[inner_top] == fq.UNKNOWN).mean() > 0.8  # withheld: to make
+    # Context photos are cropped about the hole, at the photo's aspect.
+    labels = setup.clusters.labels[inner_top]
+    top = int(np.bincount(labels[labels >= 0]).argmax())
+    whole, crop = setup.photo(0, 2048), setup.context_photo(0, top)
+    assert whole is not None and crop is not None
+    assert crop.shape[1] < whole.shape[1] and crop.shape[1] >= af.CROP_MIN * whole.shape[1] - 1
+    assert abs(crop.shape[1] / crop.shape[0] - whole.shape[1] / whole.shape[0]) < 0.1
+    # Lifted points far from every hole are floaters.
+    near = af.near_holes(setup, np.array([[0.0, 0.0, 0.7], [0.0, 0.0, 3.0]]))
+    assert near.tolist() == [True, False]
     options = af.Options(
         fill_size=(96, 56),
         set_size=(64, 36),

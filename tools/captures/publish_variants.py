@@ -85,8 +85,8 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
         "about": (
             "Finds what the photos saw badly or not at all, picks the views that show it, fills "
             "a few anchor views with an image editor given the masked render and two real "
-            "photos, then fills each other view with only what is still missing, placed in 3D "
-            "at depth that meets the scan."
+            "photos of that spot, then fills each other view with only what is still missing, "
+            "placed in 3D at depth that meets the scan."
         ),
     },
     "anchor-norefs": {

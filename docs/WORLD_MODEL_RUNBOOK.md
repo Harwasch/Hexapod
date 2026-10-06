@@ -422,3 +422,108 @@ Defects the runs found, all fixed before the runs after them:
   mid grey.
 - Cosmos pinned a frame 0 that had a hole in it.
 - Failed GPU calls were not costed.
+
+## 11. Inferred fill, round 2: anchor, then propagate (2026-10-06, branch `bakeoff-fill-v2`)
+
+The plan the owner approved after round 1: fill at the poses that need it, with real photos
+as context; a few views first (anchors), every later view continuing them. Nothing is picked
+by hand: no region, no shape, no plane. The loop is `tools/captures/anchor_fill.py`; where to
+fill is `fill_quality.py`, which views and photos `fill_views.py`, the models
+`anchor_models.py`; the GPU side is `infra/modal/fill.py` (`anchor:<scan>` and
+`leaveout:<scan>` jobs).
+
+1. **Quality-aware support** (`fill_quality`). Each gaussian's best supervision quality over
+   the real cameras: |cos| between the view ray and the surface normal (the flatter of the
+   planes through its 16 and its 64 nearest neighbours, else its shortest axis: on the spool
+   top the 16-neighbour planes of the splat's layered gaussians tilted every way, and a
+   quarter came out more than 60 degrees off vertical) x footprint (the camera's pixels per unit length
+   there against the capture's median, capped at 1) x the photo's sharpness (Laplacian
+   variance against the median photo's). Known: 0.5 or more and two cameras at 0.12 or
+   more; weak: 0.12 or more; unknown: the rest. A camera sees a gaussian when it is no
+   farther than the rendered surface (the 3x3 median where nearer, so a renderer's gap is not
+   a window) plus the local depth spread (a surface seen edge-on ramps steeply). Each
+   gaussian also has the side the cameras saw it from (a smoother, 64-neighbour plane turned
+   towards them); a view of its back counts it as unknown (the underside of a lawn from
+   below). Holes: the weak and unknown gaussians within 0.55 of the median camera distance
+   of the point the cameras' axes converge on, joined through 2.5-spacing voxels.
+2. **Views** (`fill_views`). Candidates: elevations -15, 15, 40, 65, 90 x 24 azimuths at the
+   real cameras' distance and field of view. A candidate covers a hole gaussian when it
+   passes the depth test there, faces it (|cos| > 0.5, from the seen side) and sees it at half
+   the capture's resolution or better. Eligible: something to fill near the holes (10 % or
+   more of the pixels there weak or unknown), context (50 % or less unknown), the scan in at
+   least 20 % of the frame, and at most 25 % of what it shows the back of a seen surface (an
+   eye at ground level, the spool's -15 degree ring in run 37508234704, looks up through
+   the lawn). Greedy weighted max coverage (area x deficit), directions within
+   20 degrees of a chosen one suppressed: anchors until 95 % of what can be covered is seen
+   once (4-8), then propagation views until 95 % is seen twice (12-24, padded from a wider
+   set). Propagation runs outwards from the anchors.
+3. **Context** (`retrieve_context`). The known gaussians bordering each hole vote for the
+   cameras that saw them, by quality: the top two (20 degrees apart), a wide shot (the
+   farthest strong voter) and a close-up (the nearest). The editor's optimum is 1-3 images,
+   so each seed gets the render and two photos: (top0, top1), (top0, wide), (top1, close),
+   (wide, close). Each photo is cropped about the hole as that camera sees it (the middle
+   90 % of the hole's gaussians, padded by a quarter, at least 45 % of the photo across):
+   given whole photos of the spool, the editor pasted a second spool in, ghosted.
+4. **Anchors** (`anchor_models.edit`). Qwen-Image-Edit-2511 with its 8-step Lightning LoRA:
+   picture 1 the render with the pixels to make magenta, pictures 2-3 the photos. After every
+   step the output tokens whose strength is at or below the next noise level go back to the
+   render's own latents at that level: known tokens end as rendered, weak ones (0.45) are
+   denoised from 0.45 down, unknown ones from noise. Four seeds; each registered to the
+   render (ECC affine on the known pixels, kept only when small and better) and colour
+   matched near the hole; the choice: LPIPS on a ring of known pixels around the hole, plus
+   half of (1 - agreement with the other anchors' choices at the hole gaussians both see),
+   plus twice the share of the pixels to make left magenta, drifted seeds (known pixels
+   below 15 dB) last. Known pixels are composited back exactly; magenta the editor left is
+   painted over from around it, weighted 0 and never lifted. The chosen seed's colour
+   agreement with every other seed is each pixel's weight from here on.
+5. **Lift** (`complete_depth`). Prompt Depth Anything (ViT-L) given the scan's own rendered
+   depth (holes filled smoothly) as its prompt; fitted to the known and weak pixels' rendered
+   depth by a robust affine map weighted towards the hole; the fit's residual spread over the
+   hole as a harmonic function, so the fill meets the scan at its edge. Gaussians only on
+   unknown pixels (every 4th), none farther than 8 % of the focus radius from a gaussian to
+   fill (an unknown pixel of the background lifts into a floater), carved against the kept
+   cameras.
+6. **Propagate.** 6A: each propagation view rendered with what the arm has filled so far
+   (as known), only what is still weak or unknown sent (two seeds, 4 steps), the best kept,
+   lifted before the next view. 6B: VACE-14B (25 steps) given every target view as a frame
+   of one clip: two real photos and the anchors unmasked, the propagation views masked, in a
+   nearest-neighbour tour, padded to 4k + 1 frames (two seeds).
+7. **Fuse.** Carve, one gaussian per voxel (round 1's `thin`), trainable copies of the weak
+   gaussians (up to half the layer's budget is kept for them), a gsplat distil with the measured scan frozen: generated views at 0.5 with
+   per-pixel weights (edit mask x seed agreement), the 12 nearest real photos at 1 on what
+   the scan shows; then one dataset update (every filled view rendered with the fused layer,
+   refined at strength 0.4, distilled again); a final carve; weak copies kept only where
+   their colour moved.
+8. **Leave-out.** The spool's highest 15 % of cameras or the pumpkin's lowest 15 % held out;
+   quality recomputed without them. Gaussians not known with the kept cameras whose look
+   came from the held-out ones (known only with them, or a held-out camera saw them better
+   than 1.2 times the kept cameras' best plus 0.02), decided over each one's 32 nearest
+   neighbours (withheld where 35 % of them are), keep their shape and lose their look (mid
+   grey, unknown); gaussians only held-out cameras saw leave. Run 37508234704 withheld only
+   those known with every camera: the spool top, weak both ways, kept its learned look, and
+   "before" scored as well as the fills (19.2 dB). Each held-out photo scores the scan as the kept cameras know it
+   (before) and with each layer, inside the region whose look was withheld: PSNR, LPIPS
+   (AlexNet), DreamSim (DINO ViT-B/16). MEt3R is not used (DUSt3R's weights are non-
+   commercial).
+
+Arms, on the same setup and views: `refs` (anchors with photos, then 6A), `norefs` (the
+masked render alone, then 6A: the owner's devil's-advocate test), `vace` (the `refs`
+anchors, then 6B). Each is packaged as a layer (`anchor-refs`, `anchor-norefs`,
+`anchor-vace`) and published as a fill variant with publish-fill.yml (`variant`, `job`
+`anchor-<scan>-<layer>`), registered through the shared attach (`register`; round 1's
+whole-`variants` writes are gone). Round 1's variants are withdrawn the same way
+(`withdraw`).
+
+Run (fill.yml dispatched on a `wm-*` branch; nothing starts without `budget_usd`, nor when
+the worst case is past what is left):
+
+```sh
+modal run infra/modal/fill.py --jobs leaveout:spool --anchor-options arms=refs+norefs+vace \
+  --budget-usd 15 --spent-usd 0
+```
+
+Licences (code and weights, commercial use): Qwen-Image-Edit-2511 and its Lightning LoRAs
+Apache-2.0 (not gated); Wan2.1-VACE-14B Apache-2.0 (the lightx2v 4-step distill LoRA,
+Apache-2.0, is loaded but off by default); Prompt Depth Anything ViT-L and Depth Anything V2
+Small Apache-2.0; the fallback Qwen-Image + InstantX inpainting ControlNet Apache-2.0; gsplat
+Apache-2.0. Scores only (nothing shipped): LPIPS BSD-2-Clause, DreamSim MIT.
