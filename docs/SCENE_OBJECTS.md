@@ -196,18 +196,39 @@ spool's bottom flange) is ground to any height filter.
    graph, `_absorb` and the fills (`exclude`): an object can never absorb ground.
 3. A **refine pass** (the `refine` hook, while the render processes still run): each
    top-level object (up to 32) seen from 10 views around its base (5 sides, 10° and 40°
-   up), SAM prompted with its box extended down to the terrain. A ground cell inside the box
-   that is in its mask in 60% of the views it is seen in is claimed by it (the flange); a
-   cell of it in its mask in at most 10% of 4+ views is let go; a smaller top-level object
-   70% inside its masks becomes a part of it (the spool's planks under the spool).
+   up), framed so its box fills 80% of the frame, SAM prompted with its tight box (2nd-98th
+   percentiles, extended down to the terrain). Of SAM's answers (its single one and its
+   three multimask ones) the largest is used that holds 60% of the object's own pixels,
+   at most 15% of other things', 10% outside the box and 12% ground beyond the object's
+   footprint; a view with none does not vote. A ground cell inside the (padded) box that is
+   in its mask in 60% of the views it is seen in is claimed by it (the flange); a cell of
+   it in its mask in at most 10% of 4+ views is let go; a smaller top-level object 80%
+   inside the box and 70% inside its masks becomes a part of it (the flange's rim, the
+   planks). Run 37383770486 framed the views by the box's bounding sphere instead, saw the
+   spool at a third of the frame, and SAM answered about the ground in half its views; the
+   fix was checked on the CPU with SAM tiny on the spool's views: the near-ground splats
+   under the spool in it 3% -> 63%, the ground ring around it taken 2.8%.
 4. A **stuff pass**: low objects (90th percentile under 2 ground layers) that describe as
    grass, ground or paths are ground cover, not things. Every ground splat is classified
    into the cover classes of `data/ground_cover.json` (grass, tall grass, moss, dirt, mud,
    sand, gravel, rock, asphalt, concrete, paving, wooden deck, mulch, leaf litter, forest
    floor, hay, crops, ploughed field, snow, ice, water, artificial turf, trail; with
    contrast prompts that soak up things) by SigLIP 2 pooled inside each view's own SAM
-   masks (crops of the mask, the rest black; reconstructed from the per-cell votes, so no
-   mask is kept), smoothed among neighbouring ground cells, and cut into connected regions.
+   masks (crops of the gsplat image, the rest black, the mask closed over the holes its
+   sparse pixel ownership leaves; reconstructed from the per-cell votes, so no mask is
+   kept), each crop's vote weighed by how much it reads as ground at all, smoothed among
+   neighbouring ground cells, and cut into connected regions. Run 37383770486 cropped the
+   CPU's point samples without closing: speckle on black, which read the pumpkin's hay as
+   dirt and leaf litter. Closing the masks was not enough: on the gsplat images, masked or
+   not, SigLIP 2 base reads that hay as "brown earth" or "bare dirt" ("hay" and "straw" are
+   not in its top 14 of 25 probes, all cosines 0.06-0.09). So SigLIP groups and the
+   vision-language model names: each of the 8 largest classes is shown to Qwen3-VL (its
+   pixels in the view with the most of them, the rest dimmed, and an undimmed close look
+   where it is densest), which picks one of the same class names (`COVER_PROMPT`); its
+   pick is the class's word (`nameSource: "vlm"`), and classes it gives one word become
+   one class. Checked on the CPU with the 2B model on the pumpkin's views: the code path
+   works, and the 2B answers "moss" for that hay, open question or list; the run uses the
+   4B, whose answers are in the run's `coverAsked`.
 5. **Naming**: Qwen3-VL 4B Instruct (Apache-2.0) shown each top-level thing (and the parts
    of the six largest) in context and alone, answering JSON; its `name` is the object's.
 
@@ -220,7 +241,7 @@ object -- are the cover classes:
 // a cover class: top level, one per class present
 { "id": 352, "parent": null, "level": 0, "kind": "ground", "category": "ground",
   "cover": "grass",                         // data/ground_cover.json's class id
-  "name": "Grass", "nameSource": "ground-cover",
+  "name": "Grass", "nameSource": "ground-cover",  // "vlm" when the VLM chose the word
   "tags": [{ "label": "grass", "score": 0.83 }],   // the class, its mean confidence
   "behaviour": "static", "splats": 0, ... }       // 0: its splats carry its regions' ids
 // a region of it: connected ground of that class

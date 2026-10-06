@@ -47,14 +47,25 @@ class ColourEmbedder:
 
 
 class StubNamer:
+    """Names every thing "thing"; calls green ground "moss" (the image-text model's grass)."""
+
     name = "stub"
 
     def __init__(self) -> None:
         self.asked = 0
+        self.cover_asked = 0
 
     def name_objects(self, crops):
         self.asked += len(crops)
         return [{"name": "thing", "whole": True, "material": "wood", "movable": True}] * len(crops)
+
+    def choose_cover(self, crops, choices):
+        self.cover_asked += len(crops)
+        out = []
+        for group in crops:
+            mean = np.asarray(group[1], np.float64).reshape(-1, 3).mean(axis=0)
+            out.append("moss" if mean[1] > max(mean[0], mean[2]) else None)
+        return out
 
 
 def _splats(points: np.ndarray, colours: np.ndarray, scale: float = 0.012) -> Splats:
@@ -160,7 +171,15 @@ def test_the_ground_is_a_named_class_and_things_are_named(spool) -> None:
     ground = [i for i in result.instances if result.extra[i.id]["kind"] == "ground"]
     assert ground
     assert all(i.category == "ground" for i in ground)
-    assert {result.extra[i.id]["name"] for i in ground if i.parent is None} == {"Grass"}
+    # The image-text model's grass, which the namer calls moss.
+    assert {result.extra[i.id]["name"] for i in ground if i.parent is None} == {"Moss"}
+    assert all(result.extra[i.id]["nameSource"] == "vlm" for i in ground)
+    assert spool["namer"].cover_asked >= 1
+    assert result.stats["coverAsked"] == [{"siglip": "grass", "vlm": "moss"}]
+    plain = spool["plain"]
+    plain_ground = [i for i in plain.instances if plain.extra[i.id]["kind"] == "ground"]
+    assert "Grass" in {plain.extra[i.id]["name"] for i in plain_ground if i.parent is None}
+    assert all(plain.extra[i.id]["nameSource"] == "ground-cover" for i in plain_ground)
     top = _top_ids(result)
     grass = next(i.id for i in ground if i.parent is None)
     assert (top[part < 0] == grass).mean() > 0.95
@@ -235,3 +254,77 @@ def test_the_document(yard, tmp_path) -> None:
             assert record["parent"] < record["id"]
     assert doc["ground"]["cover"] and doc["variant"]["name"] == "ground-first"
     json.dumps(doc)
+
+
+def test_the_namer_names_the_cover_classes_and_one_word_makes_one_class() -> None:
+    classes, _ = sgf.cover_classes()
+    ids = [c.id for c in classes]
+    dirt, forest, grass = ids.index("dirt"), ids.index("forest-floor"), ids.index("grass")
+    # Six ground cells side by side in one view: two dirt, two forest floor, two grass.
+    cell = np.repeat(np.repeat(np.arange(6).reshape(1, 6), 48, 0), 16, 1).astype(np.int32)
+    rgb = np.zeros((48, 96, 3), np.uint8)
+    rgb[:, :64] = (180, 160, 90)  # the hay
+    rgb[:, 64:] = (40, 140, 40)  # a lawn
+    view = ss.View(None, rgb, cell, np.ones(cell.shape, np.float32))
+
+    class Namer:
+        name = "hay or nothing"
+
+        def __init__(self) -> None:
+            self.seen: list = []
+
+        def choose_cover(self, crops, choices):
+            self.seen += crops
+            assert "hay" in choices and "forest floor" in choices
+            return [
+                "hay" if np.asarray(g[1], float).mean(axis=(0, 1))[0] > 100 else None for g in crops
+            ]
+
+    namer = Namer()
+    klass = np.array([dirt, dirt, forest, forest, grass, grass])
+    new, to, asked = sgf._ask_cover(
+        klass, np.arange(6), np.array([1.0, 1, 1, 1, 3, 3]), 6, [view], classes, namer, None,
+        lambda message: None,
+    )  # fmt: skip
+    hay = ids.index("hay")
+    assert new.tolist() == [hay, hay, hay, hay, grass, grass]
+    assert to[dirt] == to[forest] == hay and to[grass] == grass
+    assert asked[0] == {"siglip": "grass", "vlm": None}  # the largest first; no answer: kept
+    assert {r["siglip"]: r["vlm"] for r in asked[1:]} == {"dirt": "hay", "forest-floor": "hay"}
+    # Two crops each: in context (the rest dimmed), then a close look at it undimmed.
+    context, look = namer.seen[1]
+    assert context.ndim == 3 and look.ndim == 3 and context.dtype == look.dtype == np.uint8
+
+
+def test_refine_views_frame_the_box() -> None:
+    lo, hi = np.array([-1.5, -1.2, 0.0]), np.array([1.5, 1.2, 2.2])
+    for camera in sgf.refine_cameras(lo, hi):
+        box = sgf.project_box(camera, lo, hi)
+        assert box is not None
+        x0, y0, x1, y1 = box
+        # Inside the frame, and filling most of it one way or the other.
+        assert x0 > 0 and y0 > 0 and x1 < camera.width - 1 and y1 < camera.height - 1
+        assert max((x1 - x0) / camera.width, (y1 - y0) / camera.height) > 0.55
+
+
+def test_the_answer_used_holds_the_object_and_nothing_else() -> None:
+    h, w = 40, 60
+    own = np.zeros((h, w), bool)
+    own[10:30, 20:40] = True
+    other = np.zeros((h, w), bool)
+    other[10:30, 45:55] = True
+    box = np.array([15.0, 5.0, 44.0, 35.0])
+    ground = np.zeros((h, w), bool)
+    ground[30:36, 10:50] = True  # the ground the box holds, around the object's base
+    base = own.copy()
+    base[30:34, 18:42] = True  # the object with its base (a flange)
+    swallow = own | other
+    candidates = [(ground, 0.9), (own, 0.95), (base, 0.9), (swallow, 0.8)]
+    chosen = sgf.choose_candidate(candidates, own, other, box)
+    assert chosen is base  # the largest that holds the object, nothing foreign, in the box
+    assert sgf.choose_candidate([(ground, 0.99)], own, other, box) is None
+    # The lawn beyond its footprint is not its base.
+    beyond = np.zeros((h, w), bool)
+    beyond[30:36, 10:18] = beyond[30:36, 42:50] = True
+    lawn = base | ground
+    assert sgf.choose_candidate([(own, 0.9), (lawn, 0.9)], own, other, box, beyond) is own

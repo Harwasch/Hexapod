@@ -21,8 +21,12 @@ classified into cover classes, and things named by a vision-language model
    `STUFF_LAYERS` ground layers high: a tuft of grass, a clump of hay) are demoted to the
    ground. Every ground splat is classified into the cover classes of
    `data/ground_cover.json` -- grass, gravel, dirt, trail, hay, forest floor, ... -- by
-   the image-text model on tiles of the views where its cell is seen (`cover_votes`),
-   smoothed among neighbouring ground cells, and split into connected regions.
+   the image-text model inside the views' masks where its cell is seen (`cover_votes`),
+   smoothed among neighbouring ground cells, and split into connected regions. When there
+   is a namer that can (`CoverNamer`), it checks the word of each of the largest classes
+   from two crops of it, choosing among the same classes; its choice is the class's word
+   (two classes it gives one word become one): the image-text model groups, the
+   vision-language model names.
 5. **Ground in `instances.json`**: one top-level instance per cover class present (category
    `ground`, `name` "Grass", "Hay", ...), its regions as its children. The objects panel lists
    them under "Ground & soil" like any object; they hide, highlight and select like any
@@ -69,6 +73,7 @@ from splat_render import Camera, Splats, render
 __all__ = [
     "BoxMaskSource",
     "CoverClass",
+    "CoverNamer",
     "GroundFirst",
     "Namer",
     "OracleBoxMasks",
@@ -91,13 +96,29 @@ GROUND_CATEGORY = "ground"
 REFINE_OBJECTS = 32
 REFINE_MIN_SPLATS = 150
 #: ... each seen from `REFINE_AZIMUTHS` sides at each of `REFINE_ELEVATIONS_DEG` (the low
-#: one shows where it meets the ground), the box spanning `REFINE_FILL` of the frame.
+#: one shows where it meets the ground), its box filling `REFINE_FILL` of the frame (the
+#: box's own extent, not its bounding sphere's: run 37383770486 framed by the sphere and
+#: saw the spool at a third of the frame, too small for SAM to tell it from the ground).
 REFINE_AZIMUTHS = 5
 REFINE_ELEVATIONS_DEG = (10.0, 40.0)
-REFINE_FILL = 0.75
+REFINE_FILL = 0.8
 REFINE_FOV_DEG = 50.0
-#: The object's box, padded by this share of its size each side (and two cell edges).
+#: The box SAM is prompted with: the object's 2nd-98th percentiles, down to the terrain,
+#: padded by `PROMPT_PAD` of its size (and a cell edge) -- tight, or SAM answers with the
+#: ground the box holds. Cells are claimed within the box padded by `REFINE_PAD`.
+PROMPT_PAD = 0.04
 REFINE_PAD = 0.12
+#: Of SAM's three answers to a box, one is used when it holds `MASK_RECALL` of the object's
+#: own pixels in the view (else the view does not vote: SAM answered about something
+#: else), at most `MASK_FOREIGN` of its pixels belong to other things beyond its footprint
+#: (a thing inside it, such as a flange's rim, may be a part of it), and at most
+#: `MASK_SPILL` lie outside the box, and at most `MASK_LEAK` are ground beyond the object's
+#: own footprint (its box in plan: a flange is inside it, the lawn around it is not); the
+#: largest of those (the whole object, base included).
+MASK_RECALL = 0.6
+MASK_FOREIGN = 0.15
+MASK_SPILL = 0.1
+MASK_LEAK = 0.12
 #: Of its refine views, this many per object are kept for `describe` and naming.
 REFINE_KEEP = 4
 #: A ground (or unassigned) cell inside the box is claimed when it is in the object's mask
@@ -107,12 +128,15 @@ CLAIM_VIEWS = 3
 #: An object's cell is released when in at most `RELEASE_SHARE` of `RELEASE_VIEWS`+ views.
 RELEASE_SHARE = 0.1
 RELEASE_VIEWS = 4
-#: A smaller top-level object becomes a part when `MERGE_SHARE` of its cell-views (at least
-#: `MERGE_VIEWS` x its cells... at least `MERGE_VIEWS`) are in the larger one's masks, and
-#: `MERGE_SEEN` of its cells were seen at all.
+#: A smaller top-level object, mostly inside the box (`MERGE_INSIDE`), becomes a part when
+#: `MERGE_SHARE` of its cell-views (at least `MERGE_VIEWS`) are in the larger one's masks,
+#: and `MERGE_SEEN` of its cells were seen at all.
 MERGE_SHARE = 0.7
 MERGE_VIEWS = 6
 MERGE_SEEN = 0.3
+#: ... and when this share of its splats lie inside the (padded) box: a scatter of specks
+#: across the scan is not a part.
+MERGE_INSIDE = 0.8
 
 #: Stuff pass: a top-level object whose splats' 90th-percentile height above ground is at
 #: most this many ground layers (and `STUFF_MIN_M`) and whose category is one of these
@@ -133,6 +157,8 @@ COVER_MIN_PIXELS = 48
 COVER_MAX_WINDOWS = 6
 #: Mask region keys: level x this + the mask's index in its view.
 MASK_KEY = 1 << 20
+#: A region's pixels are closed over holes this wide before the rest of a crop is blacked.
+COVER_CLOSE_PX = 9
 #: Smoothing: each ground cell takes the mean of its `COVER_NEIGHBOURS` nearest ground
 #: cells' class probabilities, `COVER_ROUNDS` times.
 COVER_NEIGHBOURS = 16
@@ -151,6 +177,11 @@ NAME_PART_OBJECTS = 6
 NAME_PARTS_EACH = 8
 #: ... asked one at a time, for at most this long (seconds) in all.
 NAME_BUDGET_S = 420.0
+#: Cover classes the namer checks (the largest; the rest keep the image-text model's word).
+COVER_ASK_MAX = 8
+#: Its close look at a class: a square this share of the view's shorter side, where the
+#: class is densest.
+COVER_LOOK_SHARE = 0.35
 
 
 # ------------------------------------------------------------------------------ models
@@ -175,6 +206,19 @@ class Namer(Protocol):
 
     def name_objects(self, crops: list[list[np.ndarray]]) -> list[dict | None]:
         """Per object, `{"name", "whole", "part_of", "material", "movable"}` or None."""
+        ...
+
+
+@runtime_checkable
+class CoverNamer(Protocol):
+    """A namer that can also say which ground cover a kind of ground is."""
+
+    name: str
+
+    def choose_cover(
+        self, crops: list[list[np.ndarray]], choices: Sequence[str]
+    ) -> list[str | None]:
+        """Per kind of ground (its crops), one of `choices`, or None."""
         ...
 
 
@@ -261,16 +305,22 @@ def refine_cameras(
     fov_deg: float = REFINE_FOV_DEG,
 ) -> list[Camera]:
     """Views of the box `lo`..`hi` (its floor the terrain) from `azimuths` sides at each
-    elevation, aimed a third of the way up it, from where its bounding sphere spans
-    `REFINE_FILL` of the frame's height; the far plane just past the box."""
+    elevation, aimed at 40% of its height, from where the box fills `REFINE_FILL` of the
+    frame: its half plan diagonal against the horizontal field of view, its half height
+    (seen at the elevation) against the vertical; the far plane just past the box."""
     lo, hi = np.asarray(lo, np.float64), np.asarray(hi, np.float64)
-    radius = max(0.5 * float(np.linalg.norm(hi - lo)), 1e-3)
-    target = np.array([(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2] + (hi[2] - lo[2]) / 3])
-    vertical = math.radians(fov_deg) * height / width
-    distance = radius / math.tan(REFINE_FILL * vertical / 2)
+    half_plan = max(0.5 * float(np.linalg.norm((hi - lo)[:2])), 1e-3)
+    half_height = max(0.5 * float(hi[2] - lo[2]), 1e-3)
+    target = np.array([(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2] + 0.4 * (hi[2] - lo[2])])
+    across = math.tan(math.radians(fov_deg) / 2)
+    up = across * height / width
     cameras = []
     for e, elevation in enumerate(elevations):
         a = math.radians(elevation)
+        # Seen from above at `a`, the box's plan depth adds to its height on screen.
+        tall = half_height * math.cos(a) + half_plan * math.sin(a)
+        distance = max(half_plan / (REFINE_FILL * across), tall / (REFINE_FILL * up))
+        distance += half_plan  # from the box's near face, not its centre
         for k in range(azimuths):
             azimuth = turn + 2 * math.pi * (k + 0.5 * e) / azimuths
             direction = np.array(
@@ -281,7 +331,7 @@ def refine_cameras(
             cameras.append(
                 Camera.look_at(
                     eye, target, fov_deg=fov_deg, width=width, height=height,
-                    far=distance + 2 * radius,
+                    far=distance + 2 * half_plan,
                 )
             )  # fmt: skip
     return cameras
@@ -303,29 +353,84 @@ def project_box(camera: Camera, lo: np.ndarray, hi: np.ndarray) -> np.ndarray | 
     return np.array([x0, y0, x1, y1], np.float64)
 
 
-def cached_box_mask(
+def cached_box_candidates(
     cache: Path | None, source: BoxMaskSource, view: ss.View, box: np.ndarray
-) -> tuple[np.ndarray, float]:
-    """`source.box_masks(view.rgb, [box])[0]`, kept in `cache` (by camera, box and model)."""
+) -> list[tuple[np.ndarray, float]]:
+    """SAM's answers to `box` in `view` -- `source.box_candidates` (its three) when it has
+    them, else `box_masks`' one -- kept in `cache` (by camera, box and model)."""
+
+    def ask() -> list[tuple[np.ndarray, float]]:
+        many = getattr(source, "box_candidates", None)
+        if many is not None:
+            return [(np.asarray(m, bool), float(sc)) for m, sc in many(view.rgb, box)]
+        mask, score = source.box_masks(view.rgb, box[None])[0]
+        return [(np.asarray(mask, bool), float(score))]
+
     if cache is None:
-        return source.box_masks(view.rgb, box[None])[0]
+        return ask()
     key = json.dumps([view.camera.to_json(), [round(float(b), 2) for b in box], source.name])
     path = cache / f"boxmask-{hashlib.sha1(key.encode()).hexdigest()[:16]}.npz"
     if path.exists():
         with np.load(path) as z:
-            return z["mask"].astype(bool), float(z["score"])
-    mask, score = source.box_masks(view.rgb, box[None])[0]
+            if "masks" in z:
+                return [(m.astype(bool), float(sc)) for m, sc in zip(z["masks"], z["scores"])]
+            return [(z["mask"].astype(bool), float(z["score"]))]
+    found = ask()
     tmp = path.with_suffix(".tmp.npz")
-    np.savez_compressed(tmp, mask=np.asarray(mask, bool), score=np.float64(score))
+    np.savez_compressed(
+        tmp,
+        masks=np.array([m for m, _ in found], bool).reshape(len(found), *view.cell.shape),
+        scores=np.array([sc for _, sc in found], np.float64),
+    )
     tmp.replace(path)
-    return np.asarray(mask, bool), float(score)
+    return found
+
+
+def choose_candidate(
+    candidates: Sequence[tuple[np.ndarray, float]],
+    own: np.ndarray,
+    other: np.ndarray,
+    box: np.ndarray,
+    beyond: np.ndarray | None = None,
+) -> np.ndarray | None:
+    """The answer to use (module docstring, refine): of those holding `MASK_RECALL` of the
+    object's own pixels (`own`), with at most `MASK_FOREIGN` other things' pixels (`other`),
+    `MASK_SPILL` outside the box and `MASK_LEAK` ground beyond the object's footprint
+    (`beyond`), the largest; None when none qualifies."""
+    if not own.any():
+        return None
+    h, w = own.shape
+    x0, y0, x1, y1 = box
+    in_box = np.zeros((h, w), bool)
+    in_box[int(y0) : math.ceil(y1) + 1, int(x0) : math.ceil(x1) + 1] = True
+    best, best_area = None, -1
+    for mask, _ in candidates:
+        area = int(mask.sum())
+        if area == 0:
+            continue
+        recall = (mask & own).sum() / own.sum()
+        foreign = (mask & other).sum() / area
+        spill = (mask & ~in_box).sum() / area
+        leak = 0.0 if beyond is None else (mask & beyond).sum() / area
+        valid = (
+            recall >= MASK_RECALL
+            and foreign <= MASK_FOREIGN
+            and spill <= MASK_SPILL
+            and leak <= MASK_LEAK
+        )
+        if valid and area > best_area:
+            best, best_area = mask, area
+    return best
 
 
 @dataclass
 class _Plan:
     top: int
+    #: The prompt box (tight) and the box cells are claimed in (padded).
     lo: np.ndarray
     hi: np.ndarray
+    claim_lo: np.ndarray
+    claim_hi: np.ndarray
     cameras: list[Camera]
 
 
@@ -358,6 +463,7 @@ def make_refine(
     ground. `report` gets what it did."""
     n_cells = len(centroids)
     positions = splats.positions
+    counts = np.bincount(cell, minlength=n_cells).astype(np.float64)
 
     def refine(lifted: ss.Lifted, render_views) -> tuple[ss.Lifted, list[ss.View]]:
         n = lifted.parent.size
@@ -373,13 +479,18 @@ def make_refine(
         golden = math.pi * (3 - math.sqrt(5))
         for i, t in enumerate(tops):
             pts = positions[order[bounds[t] : bounds[t + 1]]]
-            lo = np.percentile(pts, 1, axis=0)
-            hi = np.percentile(pts, 99, axis=0)
-            pad = REFINE_PAD * (hi - lo) + 2 * edge
-            lo, hi = lo - pad, hi + pad
+            lo = np.percentile(pts, 2, axis=0)
+            hi = np.percentile(pts, 98, axis=0)
             corners = np.array([[x, y] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])])
             lo[2] = min(lo[2], float(ground.terrain.at(corners).min()) - edge)
-            plans.append(_Plan(t, lo, hi, refine_cameras(lo, hi, turn=i * golden)))
+            tight = PROMPT_PAD * (hi - lo) + edge
+            loose = REFINE_PAD * (hi - lo) + 2 * edge
+            plans.append(
+                _Plan(
+                    t, lo - tight, hi + tight, lo - loose, hi + loose,
+                    refine_cameras(lo - tight, hi + tight, turn=i * golden),
+                )
+            )  # fmt: skip
         cameras = [c for p in plans for c in p.cameras]
         if report is not None:
             report.update({"objects": len(plans), "views": len(cameras)})
@@ -391,13 +502,31 @@ def make_refine(
         owner = np.repeat(np.arange(len(plans)), [len(p.cameras) for p in plans])
         rows: list[list[tuple[np.ndarray, np.ndarray]]] = [[] for _ in plans]
         kept: list[ss.View] = []
+        cell_top0 = top_of[leaf]
+        thing = cell_top0 > 0
+        footprints: dict[int, np.ndarray] = {}
+        skipped = 0
         for k, view in enumerate(render_views(cameras)):
             plan = plans[owner[k]]
             box = project_box(view.camera, plan.lo, plan.hi)
             if box is None:
                 continue
-            mask, score = cached_box_mask(cache, source, view, box)
-            votes = ss.vote(view, [ss.Mask(mask, 0, score)], n_cells, 1)
+            pixel_cell = np.maximum(view.cell, 0)
+            good = (view.cell >= 0) & (view.purity >= ss.MIN_PURITY)
+            own = good & (cell_top0[pixel_cell] == plan.top)
+            if owner[k] not in footprints:
+                footprints[owner[k]] = np.all(
+                    (centroids[:, :2] >= plan.lo[:2]) & (centroids[:, :2] <= plan.hi[:2]), axis=1
+                )
+            outside = good & ~footprints[owner[k]][pixel_cell]
+            other = outside & thing[pixel_cell] & ~own
+            beyond = outside & ~thing[pixel_cell]
+            candidates = cached_box_candidates(cache, source, view, box)
+            mask = choose_candidate(candidates, own, other, box, beyond)
+            if mask is None:
+                skipped += 1
+                continue
+            votes = ss.vote(view, [ss.Mask(mask, 0, 1.0)], n_cells, 1)
             rows[owner[k]].append((votes.cells.astype(np.int64), votes.masks[0] >= 0))
             if (k - int(np.searchsorted(owner, owner[k]))) % max(
                 1, len(plan.cameras) // REFINE_KEEP
@@ -418,12 +547,17 @@ def make_refine(
             seen = np.bincount(cells, minlength=n_cells)
             held = np.bincount(cells, inside, minlength=n_cells)
             share = np.divide(held, seen, out=np.zeros(n_cells), where=seen > 0)
-            # Parts: smaller top-level objects mostly inside this one's masks.
+            # Parts: smaller top-level objects, centred in its box, mostly inside its masks.
             others = np.unique(cell_top[(seen > 0) & (cell_top > t)])
             for u in others:
                 if u in absorbed or parent[u - 1] != 0:
                     continue
                 mine = cell_top == u
+                within = np.all(
+                    (centroids[mine] >= plan.claim_lo) & (centroids[mine] <= plan.claim_hi), axis=1
+                )
+                if np.average(within, weights=counts[mine]) < MERGE_INSIDE:
+                    continue
                 views_u = seen[mine].sum()
                 if (
                     views_u >= MERGE_VIEWS
@@ -436,7 +570,7 @@ def make_refine(
                     merged += 1
             # Claims: ground or unassigned cells inside the box, in its masks.
             c = centroids
-            in_box = np.all((c >= plan.lo) & (c <= plan.hi), axis=1)
+            in_box = np.all((c >= plan.claim_lo) & (c <= plan.claim_hi), axis=1)
             free = exclude | (leaf == 0)
             claim = free & in_box & (seen >= CLAIM_VIEWS) & (share >= CLAIM_SHARE)
             leaf[claim] = t
@@ -450,7 +584,12 @@ def make_refine(
             released += int(release.sum())
         if report is not None:
             report.update(
-                {"claimedCells": claimed, "releasedCells": released, "mergedObjects": merged}
+                {
+                    "claimedCells": claimed,
+                    "releasedCells": released,
+                    "mergedObjects": merged,
+                    "viewsSkipped": skipped,
+                }
             )
         stats = dict(lifted.stats)
         stats["refine"] = dict(report or {})
@@ -517,6 +656,8 @@ def cover_votes(
     contrast: Sequence[str],
     *,
     votes: Sequence[ss._Votes] = (),
+    image: str = "rgb",
+    background: int | None = 0,
     progress=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per cell, the summed probability of each cover class (n_cells, k); per cell the
@@ -524,16 +665,23 @@ def cover_votes(
     probability.
 
     Pooled in masks: in a view whose mask votes are given (`votes[v]`, the lift's), the
-    ground pixels of each mask (`_mask_regions`, its finest level) are cropped -- one crop,
-    or windows over a large mask (`_windows_of`) -- with what is not the mask black; the
-    mask's probabilities are its crops' mean, voted to every ground cell in it by its
-    pixels. Ground pixels in no mask (and views without votes) are voted by `COVER_TILE`
-    tiles, weighed `COVER_TILE_WEIGHT`; only the masked views vote when there are any. A
-    crop's probabilities: a softmax over the classes and the contrast prompts
-    (`segment_scene.LOGIT_SCALE` x cosine), the classes renormalised. The image is the
-    CPU's point samples when the view has them (what `describe` reads best)."""
+    ground pixels of each mask (`_mask_regions`, its finest level, closed over the holes the
+    sparse pixel ownership leaves: `COVER_CLOSE_PX`) are cropped -- one crop, or windows over
+    a large mask (`_windows_of`) -- with what is not the mask black (`background`; None
+    keeps it); the mask's probabilities are its crops' mean, voted to every ground cell in
+    it by its pixels. Ground pixels in no mask (and views without votes) are voted by
+    `COVER_TILE` tiles, weighed `COVER_TILE_WEIGHT`; only the masked views vote when there
+    are any. A crop's probabilities: a softmax over the classes and the contrast prompts
+    (`segment_scene.LOGIT_SCALE` x cosine); the classes' share of it (how much the crop
+    reads as ground cover at all) weighs its vote, and the classes are renormalised. The
+    image is the view's own (`image="rgb"`: gsplat's, as a viewer draws it -- the CPU's
+    point samples, masked, are speckle; measured on the pumpkin, run 37383770486: they read
+    the hay as dirt and leaf litter) or the samples (`"samples"`)."""
+    import cv2
+
     n_cells = ground_cell.size
     k = len(classes)
+    closing = np.ones((COVER_CLOSE_PX, COVER_CLOSE_PX), np.uint8)
     bank = _text_bank(embedder, [c.prompts for c in classes] + [[p] for p in contrast])
     sums = np.zeros((n_cells, k), np.float64)
     weight = np.zeros(n_cells, np.float64)
@@ -546,16 +694,21 @@ def cover_votes(
         if not crops:
             return
         emb = np.asarray(embedder.embed_images(crops), np.float64).reshape(len(crops), -1)
-        p = ss._softmax(ss.LOGIT_SCALE * emb @ bank.T)[:, :k]
-        p /= np.maximum(p.sum(axis=1, keepdims=True), 1e-12)
-        class_embedding[:] += p.T @ emb
+        full = ss._softmax(ss.LOGIT_SCALE * emb @ bank.T)
+        # How much a crop reads as ground cover at all (the classes against the contrast
+        # prompts): a pumpkin's bottom in the ground layer barely votes.
+        groundness = full[:, :k].sum(axis=1)
+        p = full[:, :k] / np.maximum(groundness[:, None], 1e-12)
+        class_embedding[:] += (p * groundness[:, None]).T @ emb
         owner = np.asarray(group_of)
         mean = np.zeros((len(groups), k))
-        np.add.at(mean, owner, p)
-        mean /= np.maximum(np.bincount(owner, minlength=len(groups)), 1)[:, None]
-        for (cells, w), row in zip(groups, mean, strict=True):
-            sums[cells] += w[:, None] * row[None, :]
-            weight[cells] += w
+        np.add.at(mean, owner, p * groundness[:, None])
+        held = np.bincount(owner, groundness, len(groups))
+        mean /= np.maximum(held, 1e-12)[:, None]
+        trust = held / np.maximum(np.bincount(owner, minlength=len(groups)), 1)
+        for (cells, w), row, t in zip(groups, mean, trust, strict=True):
+            sums[cells] += (t * w)[:, None] * row[None, :]
+            weight[cells] += t * w
         crops.clear()
         group_of.clear()
         groups.clear()
@@ -566,14 +719,20 @@ def cover_votes(
             return
         groups.append((cells, weight * counts.astype(np.float64)))
         for xa, ya, xb, yb in windows:
-            crop = np.where(keep[ya:yb, xa:xb, None], image[ya:yb, xa:xb], 0)
+            crop = image[ya:yb, xa:xb]
+            if background is not None:
+                # The region's pixels are a sparse sampling of its cells: close its holes
+                # first, or the crop is speckle on black.
+                inside = keep[ya:yb, xa:xb].astype(np.uint8)
+                inside = cv2.morphologyEx(inside, cv2.MORPH_CLOSE, closing) > 0
+                crop = np.where(inside[..., None], crop, background)
             crops.append(np.ascontiguousarray(crop, np.uint8))
             group_of.append(len(groups) - 1)
 
     # Only the views that were masked (the lift's): the refine pass's close views of objects
     # have no masks, and tiles alone blur a path into the lawn beside it.
     for v, view in enumerate(views[: len(votes)] if votes else views):
-        image = view.samples if view.samples is not None else view.rgb
+        picture = view.samples if image == "samples" and view.samples is not None else view.rgb
         owner = view.cell
         h, w = owner.shape
         region, good = _mask_regions(view, votes[v] if v < len(votes) else None, ground_cell)
@@ -582,7 +741,7 @@ def cover_votes(
             keep = region == r
             ys, xs = np.nonzero(keep)
             if ys.size >= COVER_MIN_PIXELS:
-                add(image, keep, owner, _windows_of(ys, xs, (h, w)))
+                add(picture, keep, owner, _windows_of(ys, xs, (h, w)))
         rest = good & (region < 0)
         for y in range(0, h - COVER_TILE + 1, COVER_TILE):
             for x in range(0, w - COVER_TILE + 1, COVER_TILE):
@@ -591,7 +750,7 @@ def cover_votes(
                     keep = np.zeros((h, w), bool)
                     keep[y : y + COVER_TILE, x : x + COVER_TILE] = tile
                     windows = [(x, y, x + COVER_TILE, y + COVER_TILE)]
-                    add(image, keep, owner, windows, COVER_TILE_WEIGHT if votes else 1.0)
+                    add(picture, keep, owner, windows, COVER_TILE_WEIGHT if votes else 1.0)
         if len(crops) >= COVER_CHUNK:
             flush()
         if progress is not None and (v + 1) % 50 == 0:
@@ -858,6 +1017,16 @@ def run(
     if rare.any() and (~rare).any():
         second = np.where(rare[None, :], -1.0, smooth).argmax(axis=1)
         klass = np.where(rare[klass], second, klass)
+    asked: list[dict[str, Any]] = []
+    if isinstance(namer, CoverNamer):
+        klass, to, asked = _ask_cover(
+            klass, gcells, ground_splats, n_cells, seg.views, classes, namer,
+            segment_options.get("cache"), say,
+        )  # fmt: skip
+        merged = np.zeros_like(class_embedding)
+        np.add.at(merged, to, class_embedding)
+        class_embedding = merged
+    by_vlm = {r["vlm"] for r in asked if r["vlm"] is not None}
     min_region = max(COVER_MIN_REGION, COVER_MIN_REGION_SHARE * total)
     klass, region = _regions(klass, ground_splats, ga, gb, min_region)
     region = _fold_small(region, klass, ground_splats, centroids[gcells], min_region)
@@ -904,8 +1073,9 @@ def run(
         instances.append(
             _instance(class_id, None, 0, own, points, dim, tags, cover.vegetation, emb)
         )
+        source = "vlm" if cover.id in by_vlm else "ground-cover"
         extra[class_id] = {
-            "kind": "ground", "name": cover.name, "nameSource": "ground-cover",
+            "kind": "ground", "name": cover.name, "nameSource": source,
             "cover": cover.id, "scaleM": round(float(np.linalg.norm(np.ptp(points, axis=0))) / 2, 3),
         }  # fmt: skip
         if not children.size:
@@ -927,7 +1097,7 @@ def run(
                           cover.vegetation, emb)
             )  # fmt: skip
             extra[next_id] = {
-                "kind": "ground", "name": cover.name, "nameSource": "ground-cover",
+                "kind": "ground", "name": cover.name, "nameSource": source,
                 "cover": cover.id,
                 "scaleM": round(float(np.linalg.norm(np.ptp(rpoints, axis=0))) / 2, 3),
             }  # fmt: skip
@@ -935,7 +1105,8 @@ def run(
             next_id += 1
         cover_report.append(
             {"class": cover.id, "splats": int(points.shape[0]), "regions": int(max(children.size, 1)),
-             "meanConfidence": score}
+             "meanConfidence": score, "nameSource": source,
+             "fromClasses": sorted(r["siglip"] for r in asked if r["vlm"] == cover.id)}
         )  # fmt: skip
     splat_id = cell_id[cell]
     del splat_cell_ground
@@ -955,6 +1126,7 @@ def run(
         "refine": refine_report,
         "demotedObjects": len(demoted),
         "cover": sorted(cover_report, key=lambda r: -r["splats"]),
+        "coverAsked": asked,
         "things": len(things),
         "topLevelThings": sum(1 for i in things if i.parent is None),
         "named": named,
@@ -1015,7 +1187,10 @@ def _name(
             if area <= max(best_area[j], ss.MIN_VIEW_PX - 1):
                 continue
             ys, xs = np.nonzero(inside)
-            box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], np.float64)
+            # A robust box: a few stray splats of it across the view do not widen the crop.
+            x0, x1 = np.percentile(xs, [1, 99])
+            y0, y1 = np.percentile(ys, [1, 99])
+            box = np.array([x0, y0, x1, y1], np.float64)
             if box[0] <= 0 or box[1] <= 0 or box[2] >= w - 1 or box[3] >= h - 1:
                 area *= ss.TRUNCATED_WEIGHT
             if area > best_area[j]:
@@ -1056,23 +1231,122 @@ def _cached_names(
 ) -> list[dict | None]:
     """`namer.name_objects(crops)`, each answer kept in `cache/names.json` by its crops'
     bytes, so a run that is resumed (or re-assembled elsewhere) asks again only what is new."""
+    return _cached_answers(cache, crops, lambda group: namer.name_objects([group])[0])
+
+
+def _cached_answers(
+    cache: Path | None,
+    crops: list[list[np.ndarray]],
+    ask: Callable[[list[np.ndarray]], Any],
+    salt: str = "",
+) -> list[Any]:
+    """`ask(group)` per group of crops (at most `NAME_BUDGET_S` in all), each answer kept in
+    `cache/names.json` by the crops' bytes (and `salt`, the question when it is not the
+    names')."""
     path = None if cache is None else cache / "names.json"
     known: dict[str, Any] = {}
     if path is not None and path.exists():
         known = json.loads(path.read_text(encoding="utf-8"))
+    prefix = f"{hashlib.sha1(salt.encode()).hexdigest()[:12]}:" if salt else ""
     keys = [
-        hashlib.sha1(b"".join(np.ascontiguousarray(c).tobytes() for c in group)).hexdigest()
+        prefix
+        + hashlib.sha1(b"".join(np.ascontiguousarray(c).tobytes() for c in group)).hexdigest()
         for group in crops
     ]
-    ask = [i for i, key in enumerate(keys) if key not in known and crops[i]]
+    todo = [i for i, key in enumerate(keys) if key not in known and crops[i]]
     started = time.perf_counter()
-    for i in ask:
+    for i in todo:
         if time.perf_counter() - started > NAME_BUDGET_S:
-            break  # the rest keep their tags' names
-        (known[keys[i]],) = namer.name_objects([crops[i]])
-    if ask and path is not None:
+            break  # the rest keep the words they had
+        known[keys[i]] = ask(crops[i])
+    if todo and path is not None:
         path.write_text(json.dumps(known), encoding="utf-8")
     return [known.get(key) for key in keys]
+
+
+def _cover_crops(
+    views: Sequence[ss.View], class_of_cell: np.ndarray, wanted: Sequence[int]
+) -> list[list[np.ndarray]]:
+    """Per class of `wanted`, two crops from the view where it has the most pixels: its
+    pixels in their surroundings (the rest dimmed, `segment_scene._crops`' "context") and a
+    close look (an undimmed square, `COVER_LOOK_SHARE` of the view, where it is densest)."""
+    ids_of_cell = np.where(class_of_cell >= 0, class_of_cell + 1, 0)
+    best = {c: (0, -1) for c in wanted}
+    for v, view in enumerate(views):
+        owner = view.cell
+        good = (owner >= 0) & (view.purity >= ss.MIN_PURITY)
+        cls = np.where(good, class_of_cell[np.maximum(owner, 0)], -1)
+        counts = np.bincount(cls[cls >= 0], minlength=max(len(class_of_cell), 1))
+        for c in wanted:
+            if c < counts.size and counts[c] > max(best[c][0], ss.MIN_VIEW_PX - 1):
+                best[c] = (int(counts[c]), v)
+    out: list[list[np.ndarray]] = []
+    for c in wanted:
+        if best[c][1] < 0:
+            out.append([])
+            continue
+        view = views[best[c][1]]
+        owner = view.cell
+        good = (owner >= 0) & (view.purity >= ss.MIN_PURITY)
+        inside = good & (class_of_cell[np.maximum(owner, 0)] == c)
+        ys, xs = np.nonzero(inside)
+        x0, x1 = np.percentile(xs, [1, 99])
+        y0, y1 = np.percentile(ys, [1, 99])
+        box = np.array([x0, y0, x1, y1], np.float64)
+        context = ss._crops(view, view.rgb, box, ids_of_cell, np.array([c + 1]), ("context",))
+        h, w = inside.shape
+        side = max(int(COVER_LOOK_SHARE * min(h, w)), 8)
+        step = max(side // 4, 1)
+        total = np.pad(inside.astype(np.int64).cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+        ya = np.arange(0, max(h - side, 0) + 1, step)
+        xa = np.arange(0, max(w - side, 0) + 1, step)
+        yb, xb = np.minimum(ya + side, h), np.minimum(xa + side, w)
+        held = (
+            total[yb][:, xb] - total[ya][:, xb] - total[yb][:, xa] + total[ya][:, xa]
+        )  # per window (rows: ya, columns: xa)
+        r, q = np.unravel_index(int(np.argmax(held)), held.shape)
+        look = view.rgb[ya[r] : yb[r], xa[q] : xb[q]]
+        out.append([context["context"], ss._shrink(look)])
+    return out
+
+
+def _ask_cover(
+    klass: np.ndarray,
+    gcells: np.ndarray,
+    weight: np.ndarray,
+    n_cells: int,
+    views: Sequence[ss.View],
+    classes: Sequence[CoverClass],
+    namer: CoverNamer,
+    cache: Path | None,
+    say,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
+    """The namer's word for each of the `COVER_ASK_MAX` largest classes (`klass`: per
+    ground cell of `gcells`, weighed by `weight`), chosen among `classes`' names. Returns
+    the class per ground cell after (a class it named otherwise is that class now), the
+    mapping (old class -> class) and per class asked `{siglip, vlm}` (`vlm`: None when it
+    answered none of them)."""
+    k = len(classes)
+    share = np.bincount(klass, weight, k)
+    wanted = [int(c) for c in np.argsort(-share, kind="stable") if share[c] > 0][:COVER_ASK_MAX]
+    class_of_cell = np.full(n_cells, -1, np.int64)
+    class_of_cell[gcells] = klass
+    crops = _cover_crops(views, class_of_cell, wanted)
+    choices = [c.name.lower() for c in classes]
+    answers = _cached_answers(
+        cache, crops, lambda group: namer.choose_cover([group], choices)[0],
+        salt="cover:" + ",".join(choices),
+    )  # fmt: skip
+    to = np.arange(k)
+    asked = []
+    for c, answer in zip(wanted, answers, strict=True):
+        if answer in choices:
+            to[c] = choices.index(answer)
+        asked.append(
+            {"siglip": classes[c].id, "vlm": classes[to[c]].id if answer in choices else None}
+        )
+    say("cover checked: " + ", ".join(f"{r['siglip']} -> {r['vlm']}" for r in asked))
+    return to[klass], to, asked
 
 
 def document(result: GroundFirst, tiles: dict[str, list[int]], embedder: ss.Embedder,
@@ -1172,6 +1446,49 @@ def overview_cameras(positions: np.ndarray, count: int = 4) -> list[Camera]:
     return cams
 
 
+#: A cropped run binds a merged (parent) gaussian only within this of a segmented splat.
+CROP_REACH_M = 1.0
+
+
+def crop_binding(
+    tiles_dir: Path, positions: np.ndarray, splat_id: np.ndarray, box: Sequence[float]
+) -> dict[str, list[int]]:
+    """Every tile's binding for a run on a crop (`box` = x0, y0, x1, y1 of the tileset's
+    frame): a leaf gaussian is the segmented splat at its position (0 outside the crop); a
+    merged gaussian takes what most of the 8 segmented splats nearest to it carry, when
+    they are within `CROP_REACH_M` (`rebind_instances`' rule, on the crop alone); every
+    tile wholly outside is one run of 0. The scan stays whole: the rest of it simply has no
+    objects in this variant."""
+    from rebind_instances import encode_runs, plurality, tile_tree
+    from rig_tiles import tile_positions
+    from synthetic_tree import checksum_positions
+
+    tree = cKDTree(np.asarray(positions, np.float64))
+    ids = np.asarray(splat_id, np.int64)
+    x0, y0, x1, y1 = (float(v) for v in box)
+    tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    out: dict[str, list[int]] = {}
+    for uri, leaf in tile_tree(tileset):
+        at = tile_positions(tiles_dir / uri)
+        labels = np.zeros(len(at), np.int64)
+        near = (
+            (at[:, 0] >= x0 - CROP_REACH_M) & (at[:, 0] <= x1 + CROP_REACH_M)
+            & (at[:, 1] >= y0 - CROP_REACH_M) & (at[:, 1] <= y1 + CROP_REACH_M)
+        )  # fmt: skip
+        if near.any():
+            rows = np.flatnonzero(near)
+            k = 1 if leaf else 8
+            distance, index = tree.query(at[rows].astype(np.float64), k=k, workers=-1)
+            distance, index = np.atleast_2d(distance.T).T, np.atleast_2d(index.T).T
+            close = distance[:, 0] <= (0.0 if leaf else CROP_REACH_M)
+            if leaf:
+                labels[rows[close]] = ids[index[close, 0]]
+            elif close.any():
+                labels[rows[close]] = plurality(ids[index[close]])
+        out[checksum_positions(at)] = encode_runs(labels)
+    return dict(sorted(out.items()))
+
+
 def main() -> None:
     started = time.time()
     parser = argparse.ArgumentParser(
@@ -1199,6 +1516,12 @@ def main() -> None:
     parser.add_argument("--cache", type=Path, default=None)
     parser.add_argument("--summary", type=Path, default=None)
     parser.add_argument("--check", type=Path, default=None, help="a PNG: by object, by cover")
+    parser.add_argument(
+        "--crop",
+        default=None,
+        help="x0,y0,x1,y1 (metres, the tileset's frame): segment only this part of the scan; "
+        "every tile is still bound, the rest with no objects",
+    )
     parser.add_argument("--opacity-min", type=float, default=ss.scene_plants.PACKAGE_OPACITY_MIN)
     parser.add_argument(
         "--tile-gaussians", type=int, default=ss.scene_plants.PACKAGE_TILE_GAUSSIANS
@@ -1214,6 +1537,20 @@ def main() -> None:
         rows, row_count = np.arange(len(splats)), len(splats)
     else:
         splats, rows, row_count = ss.load_source(args.source, args.opacity_min)
+    box = None
+    if args.crop:
+        if not from_tiles:
+            parser.error("--crop needs the tileset (its leaves are the splats)")
+        box = [float(v) for v in args.crop.split(",")]
+        if len(box) != 4 or box[0] >= box[2] or box[1] >= box[3]:
+            parser.error("--crop is x0,y0,x1,y1 with x0 < x1 and y0 < y1")
+        p = splats.positions
+        inside = (
+            (p[:, 0] >= box[0]) & (p[:, 0] <= box[2]) & (p[:, 1] >= box[1]) & (p[:, 1] <= box[3])
+        )
+        splats = splats.take(np.flatnonzero(inside))
+        print(f"crop {box}: {len(splats):,} of {len(p):,} splats", flush=True)
+        del p, inside
     embedder = ss.load_embedder(args.embedder)
     vocabulary: list[str] = []
     if args.vocabulary:
@@ -1244,15 +1581,20 @@ def main() -> None:
         max_scale_m=args.max_scale_m, coverage_rounds=args.coverage_rounds,
         coverage_budget=args.coverage_views,
     )  # fmt: skip
-    if from_tiles:
+    if box is not None:
+        tiles = crop_binding(args.tiles, splats.positions, result.splat_id, box)
+    elif from_tiles:
         tiles = ss.tile_binding_by_position(args.tiles, splats.positions, result.splat_id)
     else:
         tiles = ss.tile_binding(
             args.tiles, args.source, rows, result.splat_id, row_count,
             opacity_min=args.opacity_min, tile_gaussians=args.tile_gaussians,
         )  # fmt: skip
-    tiles = ss.rebind_instances.rebind(args.tiles, tiles)
+    if box is None:
+        tiles = ss.rebind_instances.rebind(args.tiles, tiles)
     doc = document(result, tiles, embedder, len(vocabulary), namer)
+    if box is not None:
+        doc["variant"]["crop"] = box
     doc["tilesEncoding"] = ss.rebind_instances.TILES_ENCODING
     ss.write_instances(args.out, doc, result.instances)
     if args.cache:
