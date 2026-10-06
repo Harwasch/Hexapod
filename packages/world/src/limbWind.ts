@@ -378,6 +378,15 @@ export function limbBends(model: LimbWindModel, t: number, wind: LivingWind): Li
   return { theta, gust, load };
 }
 
+/** The rotation by `r`, softly capped at `limit` as the rig's joints are; uncapped when none. */
+function turn(r: Vec3, limit: number): readonly [number, number, number, number] {
+  if (Number.isFinite(limit) && limit > 0) return cappedRotation(r, limit);
+  const angle = Math.hypot(r[0], r[1], r[2]);
+  if (angle === 0) return [0, 0, 0, 1];
+  const s = Math.sin(angle / 2) / angle;
+  return [r[0] * s, r[1] * s, r[2] * s, Math.cos(angle / 2)];
+}
+
 /** Numbers `limbHandles` writes for a skin of `handles` handles: `12·m` plus its flutter. */
 export function limbHandleFloats(handles: number): number {
   return handles * 12 + LIMB_FLUTTER_FLOATS;
@@ -407,7 +416,7 @@ export function limbHandles(
       limb.gain * (bends.theta[j * 3 + 1] ?? 0),
       limb.gain * (bends.theta[j * 3 + 2] ?? 0),
     ];
-    const [x, y, z, w] = cappedRotation(angle, limb.limitRad);
+    const [x, y, z, w] = turn(angle, limb.limitRad);
     // R − I from the quaternion, so a small turn keeps its precision.
     const a = [
       -2 * (y * y + z * z),

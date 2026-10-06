@@ -2,6 +2,7 @@ export * from "./assign";
 export * from "./deform";
 export * from "./flutter";
 export * from "./leafFlutter";
+export * from "./limbWind";
 export * from "./living";
 export * from "./metrics";
 export * from "./modes";
