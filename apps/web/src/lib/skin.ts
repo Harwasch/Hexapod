@@ -22,7 +22,14 @@
  * rows at all.
  */
 
-import { decodeRuns, runsLength, tileRunsIssue } from "@twin/world";
+import {
+  decodeRuns,
+  LIMB_FLUTTER_FLOATS,
+  runsLength,
+  tileRunsIssue,
+  type LimbHandle,
+  type LimbSkinSource,
+} from "@twin/world";
 
 import { resolveBeside, type Vec3 } from "./instances";
 
@@ -73,7 +80,16 @@ export interface SkinEntry {
   traits?: SkinTraits;
   /** The handle policy's stiffness class (`rigid`, `firm`, `plant`, `tree`), when recorded. */
   stiffnessClass?: string;
+  /**
+   * A limbs skin's own driver data (`skin.json`'s `limbs`, docs/SCENE_OBJECTS.md §9): its
+   * handles are a plant's limbs, swayed by `@twin/world`'s `limbWind.ts`, not eigenmodes. Only
+   * in a document whose `method.name` is `limbs`, and only when the block is whole.
+   */
+  limbs?: LimbSkinSource;
 }
+
+/** `method.name` of a limbs skin's document. */
+export const LIMBS_METHOD = "limbs";
 
 export interface SkinTraits {
   label?: string;
@@ -101,6 +117,8 @@ export interface SkinTile {
 }
 
 export interface SkinDoc {
+  /** `method.name`: how the weights were made (`simplicits-rkpm`, `limbs`, ...), or null. */
+  method: string | null;
   skins: SkinEntry[];
   byId: ReadonlyMap<number, SkinEntry>;
   byInstance: ReadonlyMap<number, SkinEntry>;
@@ -185,6 +203,114 @@ function traitsOf(raw: unknown): SkinTraits | undefined {
   return out;
 }
 
+function positive(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** One limb of a limbs skin (`limbs.handles[j − 1]`), or null when any field is unusable. */
+function limbHandleOf(raw: unknown, handles: number): LimbHandle | null {
+  const r = raw as Record<string, unknown> | null | undefined;
+  if (typeof r !== "object" || r === null) return null;
+  const pivot = vec3(r.pivot);
+  const direction = vec3(r.direction);
+  const samplePoint = vec3(r.samplePoint);
+  const frequencyHz = positive(r.frequencyHz);
+  const gain = typeof r.gain === "number" && Number.isFinite(r.gain) ? r.gain : null;
+  const parent = r.parent;
+  if (!pivot || !direction || !samplePoint || frequencyHz === null || gain === null) return null;
+  if (!Number.isInteger(r.key) || (r.key as number) < 0) return null;
+  if (!Number.isInteger(parent) || (parent as number) < 0 || (parent as number) >= handles)
+    return null;
+  const damping = finite(r.damping, Number.NaN);
+  if (!(damping >= 0 && damping < 1)) return null;
+  return {
+    key: r.key as number,
+    pivot,
+    parent: parent as number,
+    level: Math.max(0, Math.round(finite(r.level))),
+    spanM: Math.max(0, finite(r.spanM)),
+    frequencyHz,
+    damping,
+    tree: r.tree === true,
+    gain,
+    limitRad: positive(r.limitRad) ?? Number.POSITIVE_INFINITY,
+    direction,
+    samplePoint,
+    widthM: Math.max(0, finite(r.widthM)),
+    heightM: Math.max(0, finite(r.heightM)),
+    staticTipM: Math.max(0, finite(r.staticTipM)),
+    flutterM: Math.max(0, finite(r.flutterM)),
+  };
+}
+
+/**
+ * A limbs skin's `limbs` block (written by `skin_methods.fit_limbs_from_rig`): the plant's wind
+ * (seed, reference speed, turbulence, gusts, seasons, flutter) and one record per learned
+ * handle, trunk first. Undefined when anything the driver needs is missing or malformed: such
+ * a skin is not swayed (and never as eigenmodes).
+ */
+function limbsOf(
+  raw: unknown,
+  handles: number,
+  origin: Vec3,
+  rowBytes: number,
+): LimbSkinSource | undefined {
+  const r = raw as Record<string, unknown> | null | undefined;
+  if (typeof r !== "object" || r === null) return undefined;
+  const wind = r.wind as Record<string, unknown> | undefined;
+  const turbulence = wind?.turbulence as Record<string, unknown> | undefined;
+  const gust = wind?.gust as Record<string, unknown> | undefined;
+  const winter = (r.seasons as { winter?: Record<string, unknown> } | undefined)?.winter;
+  const list = r.handles;
+  if (!Array.isArray(list) || list.length !== handles - 1) return undefined;
+  const limbs = list.map((h) => limbHandleOf(h, handles));
+  if (limbs.some((h) => h === null)) return undefined;
+  const seed = r.seed;
+  const reference = positive(r.referenceSpeedMps);
+  const leaf = positive(r.leafSizeM);
+  const lengthScale = positive(wind?.lengthScaleM);
+  if (!Number.isInteger(seed) || reference === null || leaf === null || lengthScale === null)
+    return undefined;
+  const along = finite(turbulence?.along, Number.NaN);
+  const across = finite(turbulence?.across, Number.NaN);
+  if (!(along >= 0) || !(across >= 0)) return undefined;
+  return {
+    origin,
+    seed: seed as number,
+    referenceSpeedMps: reference,
+    leafSizeM: leaf,
+    turbulence: { along, across },
+    lengthScaleM: lengthScale,
+    gust: {
+      strength: Math.max(0, finite(gust?.strength)),
+      variance: Math.max(0, finite(gust?.variance)),
+      frequencyPerMin: positive(gust?.frequencyPerMin) ?? 1,
+      durationS: positive(gust?.durationS) ?? 1,
+    },
+    canopyAdvection: Math.max(0, finite(wind?.canopyAdvection, 0.3)),
+    winter: {
+      dampingScale: positive(winter?.dampingScale) ?? 1,
+      branchFrequencyScale: positive(winter?.branchFrequencyScale) ?? 1,
+      flutterScale: Math.max(0, finite(winter?.flutterScale)),
+    },
+    flutterReferenceM: Math.max(
+      0,
+      finite((r.flutter as Record<string, unknown> | undefined)?.referenceM),
+    ),
+    // The row's last byte: no weight uses it (a row of b bytes holds at most b − 1).
+    flutterByte: rowBytes - 1,
+    handles: limbs as LimbHandle[],
+  };
+}
+
+/**
+ * Numbers a skin's driven handles take: `12·m`, and a limbs skin's flutter after them
+ * (`LIMB_FLUTTER_FLOATS`, `limbWind.ts`).
+ */
+export function skinFloats(skin: Pick<SkinEntry, "handles" | "limbs">): number {
+  return skin.handles * HANDLE_FLOATS + (skin.limbs ? LIMB_FLUTTER_FLOATS : 0);
+}
+
 /** Whether a skin's splats take rows of `skin.bin`: one of a single handle has no weights. */
 export function takesRows(skin: Pick<SkinEntry, "handles"> | undefined): boolean {
   return (skin?.handles ?? 0) > 1;
@@ -225,6 +351,8 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
   if (weights.rowBytes !== SKIN_ROW_BYTES && weights.rowBytes !== SKIN_WIDE_ROW_BYTES) return null;
   const rowBytes = weights.rowBytes;
   const rowWords = rowBytes === SKIN_WIDE_ROW_BYTES ? 8 : 4;
+  const methodName = (doc.method as { name?: unknown } | undefined)?.name;
+  const method = typeof methodName === "string" ? methodName : null;
   const issues: string[] = [];
   const skins: SkinEntry[] = [];
   const byId = new Map<number, SkinEntry>();
@@ -236,6 +364,16 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
         `a skin without an id, instance, handles (1..${String(rowBytes)}) and origin was skipped`,
       );
       continue;
+    }
+    if (method === LIMBS_METHOD && skin.handles > 1) {
+      const limbs = limbsOf(
+        (entry as { limbs?: unknown }).limbs,
+        skin.handles,
+        skin.origin,
+        rowBytes,
+      );
+      if (limbs) skin.limbs = limbs;
+      else issues.push(`skin ${String(skin.id)}'s limbs are incomplete; it is not swayed`);
     }
     if (byId.has(skin.id)) {
       issues.push(`skin ${String(skin.id)} is listed twice; the first is kept`);
@@ -274,6 +412,7 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
     issues.push("tiles must be an object keyed by tile checksum");
   }
   return {
+    method,
     skins,
     byId,
     byInstance,

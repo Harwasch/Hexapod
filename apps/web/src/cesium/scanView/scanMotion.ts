@@ -36,7 +36,7 @@
  * objects panel and the wind control show with a switch to CesiumJS (`state/instances.ts`).
  */
 
-import type { RigidMotion } from "@twin/world";
+import { LIMB_FLUTTER_WAVES, type RigidMotion } from "@twin/world";
 
 import { withDescendants, type InstancesDoc } from "@/lib/instances";
 import { splitObjectsOf } from "@/lib/sceneObjects";
@@ -46,7 +46,15 @@ import { variantsOf } from "@/lib/variants";
 import { useInstances } from "@/state/instances";
 
 import { instancesDocOf } from "../splatInstances";
-import { foldHandle, handleTextureRows, skinningOf, TEXELS_PER_SKIN } from "../splatSkin";
+import {
+  carriesFlutter,
+  FLUTTER_TEXEL,
+  foldFlutter,
+  foldHandle,
+  handleTextureRows,
+  skinningOf,
+  TEXELS_PER_SKIN,
+} from "../splatSkin";
 import { telemetryOf } from "../telemetry";
 import type { ScanBackend } from "./types";
 
@@ -135,6 +143,17 @@ export function packSkinHandles(
         IDENTITY,
         data,
         base + (1 + 3 * j) * FLOATS_PER_TEXEL,
+      );
+    }
+    // A limbs skin's leaf flutter: the scan frame is the rest frame, so it is copied as is.
+    if (carriesFlutter(handles, skin.handles)) {
+      foldFlutter(
+        handles,
+        skin.handles * HANDLE_FLOATS,
+        IDENTITY,
+        IDENTITY,
+        data,
+        base + FLUTTER_TEXEL * FLOATS_PER_TEXEL,
       );
     }
   }
@@ -284,6 +303,22 @@ void hexapodSkinMotion(highp sampler2D handles, uint skin, uvec4 words, uvec4 wo
         delta += w * vec3(dot(r0, xh), dot(r1, xh), dot(r2, xh));
         // mat3 is column-major: column c holds row entries (r0[c], r1[c], r2[c]).
         linear += w * mat3(r0.x, r1.x, r2.x, r0.y, r1.y, r2.y, r0.z, r1.z, r2.z);
+    }
+    // A limbs skin's leaf flutter (limbWind.ts): plane waves after the handles, the splat's
+    // share in its row's last byte. A translation per splat: the covariance is untouched.
+    vec4 flutter = hexapodMotionTexel(handles, base + ${String(FLUTTER_TEXEL)});
+    if (flutter.x > 0.5) {
+        float share = hexapodSkinWeight(words, words2, int(flutter.y), scale);
+        if (share > 0.0) {
+            for (int c = 0; c < 3; c++) {
+                float v = 0.0;
+                for (int k = 0; k < ${String(LIMB_FLUTTER_WAVES)}; k++) {
+                    vec4 wave = hexapodMotionTexel(handles, base + ${String(FLUTTER_TEXEL + 1)} + c * ${String(LIMB_FLUTTER_WAVES)} + k);
+                    v += cos(dot(wave.xyz, x) + wave.w);
+                }
+                delta += share * v * hexapodMotionTexel(handles, base + ${String(FLUTTER_TEXEL + 1 + 3 * LIMB_FLUTTER_WAVES)} + c).xyz;
+            }
+        }
     }
 }
 
@@ -446,6 +481,27 @@ export function evaluateScanMotion(
           [texel(motion.handles, at), texel(motion.handles, at + 1), texel(motion.handles, at + 2)],
           w,
         );
+      }
+      const flutter = texel(motion.handles, base + FLUTTER_TEXEL);
+      if ((flutter[0] ?? 0) >= 0.5) {
+        const k = Math.round(flutter[1] ?? 0);
+        const row = k < 16 ? splat.words : splat.words2;
+        const word = row?.[(k & 15) >> 2] ?? 0;
+        const byte = (word >>> (8 * (k & 3))) & 0xff;
+        const share = (byte >= 128 ? byte - 256 : byte) * motion.extra[0];
+        if (share > 0) {
+          for (let c = 0; c < 3; c += 1) {
+            let v = 0;
+            for (let w = 0; w < LIMB_FLUTTER_WAVES; w += 1) {
+              const wave = texel(motion.handles, base + FLUTTER_TEXEL + 1 + c * LIMB_FLUTTER_WAVES + w);
+              v += Math.cos(
+                (wave[0] ?? 0) * x[0] + (wave[1] ?? 0) * x[1] + (wave[2] ?? 0) * x[2] + (wave[3] ?? 0),
+              );
+            }
+            const dir = texel(motion.handles, base + FLUTTER_TEXEL + 1 + 3 * LIMB_FLUTTER_WAVES + c);
+            for (let r = 0; r < 3; r += 1) delta[r] = (delta[r] ?? 0) + share * v * (dir[r] ?? 0);
+          }
+        }
       }
     }
   }

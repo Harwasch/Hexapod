@@ -40,7 +40,7 @@
  * branch still sways and the wind lets go of nothing the poke holds.
  */
 
-import { checksumPositions } from "@twin/world";
+import { checksumPositions, LIMB_FLUTTER_FLOATS, LIMB_FLUTTER_WAVES } from "@twin/world";
 import type { Cesium3DTileset, Scene } from "cesium";
 
 import { createLogger } from "@/lib/log";
@@ -50,6 +50,7 @@ import {
   MAX_SKIN_HANDLES,
   loadSkin,
   rowWeight,
+  skinFloats,
   tileSkin,
   type SkinDoc,
   type SkinEntry,
@@ -89,6 +90,13 @@ export const SPLATS_PER_SKIN_ID_ROW = SKIN_TEXTURE_WIDTH * SKIN_IDS_PER_TEXEL;
 export const SPLATS_PER_WEIGHT_ROW = SKIN_TEXTURE_WIDTH;
 /** Handle-texture texels per skin: a header, then three per handle (`MAX_SKIN_HANDLES`). */
 export const TEXELS_PER_SKIN = 128;
+/**
+ * Where a limbs skin's leaf flutter starts in its texels: after the header and 32 handles. A
+ * header `(on, the row byte of the splat's share, waves, 0)`, then per component (along,
+ * across, up) `LIMB_FLUTTER_WAVES` waves `(κ, φ)` (the component is `Σ cos(κ·x + φ)`), then
+ * per component the vector a share of 1 moves along. Zero (off) for every other skin.
+ */
+export const FLUTTER_TEXEL = 1 + 3 * MAX_SKIN_HANDLES;
 /** Floats a handle texel holds. */
 const FLOATS_PER_TEXEL = 4;
 /** How far two tiles' bakes may differ and still share the folded handles. */
@@ -163,6 +171,23 @@ vec3 splatSkinMotion(uint splatIndex, vec3 position) {
         // mat3 is column-major: column c holds row entries (r0[c], r1[c], r2[c]).
         linear += w * mat3(r0.x, r1.x, r2.x, r0.y, r1.y, r2.y, r0.z, r1.z, r2.z);
     }
+    // A limbs skin's leaf flutter (limbWind.ts): plane waves after the handles, the splat's
+    // share in its row's last byte. A translation per splat: the covariance is untouched.
+    vec4 flutter = splatSkinTexel(base + ${String(FLUTTER_TEXEL)});
+    if (flutter.x > 0.5) {
+        int byteAt = int(flutter.y);
+        float share = splatSkinWeight(words, byteAt >= 16 ? ${second} : uvec4(0u), byteAt);
+        if (share > 0.0) {
+            for (int c = 0; c < 3; c++) {
+                float v = 0.0;
+                for (int k = 0; k < ${String(LIMB_FLUTTER_WAVES)}; k++) {
+                    vec4 wave = splatSkinTexel(base + ${String(FLUTTER_TEXEL + 1)} + c * ${String(LIMB_FLUTTER_WAVES)} + k);
+                    v += cos(dot(wave.xyz, position) + wave.w);
+                }
+                delta += share * v * splatSkinTexel(base + ${String(FLUTTER_TEXEL + 1 + 3 * LIMB_FLUTTER_WAVES)} + c).xyz;
+            }
+        }
+    }
     splatSkinLinear = linear;
     return delta;
 }
@@ -223,6 +248,85 @@ export function foldHandle(
 }
 
 /**
+ * A limbs skin's flutter (`LIMB_FLUTTER_FLOATS` numbers at `at`, rest frame, as
+ * `limbWind.ts` writes them) folded into the baked frame: each wave `κ·x + φ` with `x` the
+ * rest position becomes `κ_b·x_b + φ_b` (`κ_b = Mᵀκ`, `φ_b = φ + κ·m` for the un-bake
+ * `x = M·x_b + m`), each vector `o` becomes `L·o`. Writes `LIMB_FLUTTER_FLOATS / 4` texels.
+ */
+export function foldFlutter(
+  flutter: ArrayLike<number>,
+  at: number,
+  bake: Mat4,
+  inverse: Mat4,
+  out: Float32Array,
+  outAt: number,
+): void {
+  const l = (r: number, c: number): number => bake[c * 4 + r] ?? 0;
+  const li = (r: number, c: number): number => inverse[c * 4 + r] ?? 0;
+  const m = [inverse[12] ?? 0, inverse[13] ?? 0, inverse[14] ?? 0];
+  for (let k = 0; k < 4; k += 1) out[outAt + k] = flutter[at + k] ?? 0;
+  const waves = 3 * LIMB_FLUTTER_WAVES;
+  for (let w = 0; w < waves; w += 1) {
+    const i = at + 4 + w * 4;
+    const o = outAt + 4 + w * 4;
+    const k = [flutter[i] ?? 0, flutter[i + 1] ?? 0, flutter[i + 2] ?? 0];
+    for (let c = 0; c < 3; c += 1)
+      out[o + c] = li(0, c) * (k[0] ?? 0) + li(1, c) * (k[1] ?? 0) + li(2, c) * (k[2] ?? 0);
+    const phase =
+      (flutter[i + 3] ?? 0) +
+      (k[0] ?? 0) * (m[0] ?? 0) +
+      (k[1] ?? 0) * (m[1] ?? 0) +
+      (k[2] ?? 0) * (m[2] ?? 0);
+    out[o + 3] = phase - 2 * Math.PI * Math.floor(phase / (2 * Math.PI));
+  }
+  for (let c = 0; c < 3; c += 1) {
+    const i = at + 4 + waves * 4 + c * 4;
+    const o = outAt + 4 + waves * 4 + c * 4;
+    const v = [flutter[i] ?? 0, flutter[i + 1] ?? 0, flutter[i + 2] ?? 0];
+    for (let r = 0; r < 3; r += 1)
+      out[o + r] = l(r, 0) * (v[0] ?? 0) + l(r, 1) * (v[1] ?? 0) + l(r, 2) * (v[2] ?? 0);
+    out[o + 3] = 0;
+  }
+}
+
+/** Whether `driven` (a skin's handles as set) carries a limbs skin's flutter, switched on. */
+export function carriesFlutter(driven: ArrayLike<number>, handles: number): boolean {
+  const at = handles * HANDLE_FLOATS;
+  return driven.length >= at + LIMB_FLUTTER_FLOATS && (driven[at] ?? 0) > 0.5;
+}
+
+/** The flutter offset the shader adds for one splat from the texels at `base` (drawn frame). */
+function flutterAt(
+  texel: (index: number) => number[],
+  base: number,
+  words: ArrayLike<number>,
+  scale: number,
+  position: readonly [number, number, number],
+  words2?: ArrayLike<number>,
+): [number, number, number] {
+  const out: [number, number, number] = [0, 0, 0];
+  const head = texel(base + FLUTTER_TEXEL);
+  if ((head[0] ?? 0) < 0.5) return out;
+  const share = rowWeight(words, 0, Math.round(head[1] ?? 0), scale, words2);
+  if (!(share > 0)) return out;
+  for (let c = 0; c < 3; c += 1) {
+    let v = 0;
+    for (let k = 0; k < LIMB_FLUTTER_WAVES; k += 1) {
+      const wave = texel(base + FLUTTER_TEXEL + 1 + c * LIMB_FLUTTER_WAVES + k);
+      v += Math.cos(
+        (wave[0] ?? 0) * position[0] +
+          (wave[1] ?? 0) * position[1] +
+          (wave[2] ?? 0) * position[2] +
+          (wave[3] ?? 0),
+      );
+    }
+    const dir = texel(base + FLUTTER_TEXEL + 1 + 3 * LIMB_FLUTTER_WAVES + c);
+    for (let r = 0; r < 3; r += 1) out[r] = (out[r] ?? 0) + share * v * (dir[r] ?? 0);
+  }
+  return out;
+}
+
+/**
  * What the shader computes for one splat, from the same texture contents, in float64:
  * the displacement and the linear part. A reference for the tests.
  */
@@ -259,6 +363,8 @@ export function evaluateSkinMotion(
         linear[r * 3 + c] = (linear[r * 3 + c] ?? 0) + w * (row[c] ?? 0);
     }
   }
+  const flutter = flutterAt(texel, base, words, scale, position, words2);
+  for (let r = 0; r < 3; r += 1) displacement[r] = (displacement[r] ?? 0) + (flutter[r] ?? 0);
   return { displacement, linear };
 }
 
@@ -495,7 +601,8 @@ export class SplatSkinning implements SplatMotionPart {
       if (current === undefined) return;
       layer.delete(skinId);
     } else {
-      const copy = new Float64Array(skin.handles * HANDLE_FLOATS);
+      // 12·m numbers, and a limbs skin's flutter after them.
+      const copy = new Float64Array(skinFloats(skin));
       for (let i = 0; i < Math.min(copy.length, handles.length); i += 1) copy[i] = handles[i] ?? 0;
       if (current?.every((v, i) => Object.is(v, copy[i]))) return;
       layer.set(skinId, copy);
@@ -693,6 +800,16 @@ export class SplatSkinning implements SplatMotionPart {
           inverse,
           this.#handles,
           base + (1 + 3 * j) * FLOATS_PER_TEXEL,
+        );
+      }
+      if (carriesFlutter(driven, skin.handles)) {
+        foldFlutter(
+          driven,
+          skin.handles * HANDLE_FLOATS,
+          bake,
+          inverse,
+          this.#handles,
+          base + FLUTTER_TEXEL * FLOATS_PER_TEXEL,
         );
       }
     }

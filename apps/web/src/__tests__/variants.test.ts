@@ -438,6 +438,7 @@ describe("switching a scan's skin", () => {
   beforeEach(() => useVariants.setState({ offered: {}, picks: {}, status: {} }));
 
   const skinDoc = (skins: number): SkinDoc => ({
+    method: null,
     skins: [],
     byId: new Map(),
     byInstance: new Map(),
