@@ -45,6 +45,7 @@ import {
   type ScanRendererStatus,
 } from "./scanView/ScanRendererHost";
 import { SceneSelectController } from "./sceneSelect/SceneSelectController";
+import { SkinPokeController } from "./skinPoke";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
@@ -107,6 +108,8 @@ export class CesiumSceneManager {
   readonly selection: SelectionManager;
   /** Selecting a scan's objects in the scene: click, cycle, paint (cesium/sceneSelect). */
   readonly sceneSelect: SceneSelectController;
+  /** Poking and dragging objects that move by skins (cesium/skinPoke.ts). */
+  readonly poke: SkinPokeController;
   readonly measurement: MeasurementManager;
   /** Two points on a scan, for the Set real size tool (features/inspector/RealSize.tsx). */
   readonly scaleMeasure: ScaleMeasure;
@@ -255,6 +258,9 @@ export class CesiumSceneManager {
       ownKeys: false,
       fly: (sphere) => this.camera.flyToObject(sphere),
     });
+    // A press on a skinned object while the poke tool is on grabs it; anything else is the
+    // camera's or the click's as before.
+    this.poke = new SkinPokeController(this.viewer, { enabled: () => this.selectionWanted() });
     // One click, one answer: an object of a scan under the cursor first, else the cards.
     this.selection.setClickClaim((position) => this.sceneSelect.click(position.x, position.y));
     this.measurement = new MeasurementManager(this.viewer, this.events);
@@ -563,6 +569,7 @@ export class CesiumSceneManager {
     this.areas.destroy();
     this.selection.destroy();
     this.sceneSelect.destroy();
+    this.poke.destroy();
     this.living.destroy();
     this.sites.destroy();
     this.collider.destroy();

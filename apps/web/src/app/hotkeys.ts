@@ -66,6 +66,11 @@ export const HOTKEYS = {
   sites: { combo: "s", label: "Switch site", group: "Tools" },
   bookmarks: { combo: "v", label: "Saved views", group: "Tools" },
   brush: { combo: "b", label: "Paint to select objects (brush)", group: "Objects" },
+  poke: {
+    combo: "k",
+    label: "Poke objects: drag a plant or object that moves, let go to see it ring",
+    group: "Objects",
+  },
   cycleObject: {
     combo: "",
     keys: ["[", "]"],

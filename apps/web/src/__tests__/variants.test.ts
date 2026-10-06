@@ -425,6 +425,7 @@ describe("switching a scan's skin", () => {
     maxId: skins,
     tiles: new Map(),
     words: new Uint32Array(0),
+    rowWords: 4,
     rows: 0,
     scale: 1 / 127,
     issues: [],

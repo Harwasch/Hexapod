@@ -10,6 +10,7 @@ export * from "./noise";
 export * from "./plantBinding";
 export * from "./rig";
 export * from "./skin";
+export * from "./skinPoke";
 export * from "./skinWind";
 export * from "./spectral";
 export * from "./symmetricEigen";

@@ -69,6 +69,40 @@ def test_flat_objects_get_a_skin():
     assert np.allclose(np.abs(w).max(0), 1.0)
 
 
+def test_an_object_in_pieces_keeps_no_free_motion(monkeypatch):
+    # A crown cut from its trunk by segmentation (a gap of 0.7 m). Each piece alone would
+    # keep a rigid motion of its own: an eigenvalue of ~0 that the wind drives without bound.
+    rng = np.random.default_rng(4)
+    trunk = np.c_[rng.uniform(-0.12, 0.12, (1500, 2)), rng.uniform(0, 2, 1500)]
+    d = rng.normal(size=(3000, 3))
+    d /= np.linalg.norm(d, axis=1, keepdims=True)
+    crown = d * (0.8 * rng.uniform(size=(3000, 1)) ** (1 / 3)) + (0, 0, 3.5)
+    pieces = np.r_[trunk, crown]
+    bridged = kaolin_rkpm.bridged_radii
+    groups: list[int] = []
+
+    def spy(nodes, radius):
+        out = bridged(nodes, radius)
+        groups.append(out[1])
+        return out
+
+    monkeypatch.setattr(kaolin_rkpm, "bridged_radii", spy)
+    one = skin_scene.fit_skin(trunk, 1, 1)
+    two = skin_scene.fit_skin(pieces, 1, 1)
+    assert groups == [1, 2]
+    assert one.eigenvalues[0] > 0.01 * one.eigenvalues[1]
+    # Bridged, the lowest mode is the crown swaying on its trunk: soft, never free.
+    assert two.eigenvalues[0] > 1e-3 * two.eigenvalues[1]
+    monkeypatch.setattr(kaolin_rkpm, "bridged_radii", lambda nodes, radius: (radius, 1))
+    loose = skin_scene.fit_skin(pieces, 1, 1)
+    assert loose.eigenvalues[0] < 1e-6 * loose.eigenvalues[1]
+    # A shape in one piece keeps its radii exactly.
+    nodes = trunk[:200]
+    radius = np.full(200, 0.3)
+    same, count = bridged(nodes, radius)
+    assert count == 1 and np.array_equal(same, radius)
+
+
 def test_handle_count_scales_with_size_within_eight_to_sixteen():
     assert skin_scene.handle_count(0.5) == 8
     assert skin_scene.handle_count(2.0) == 8

@@ -40,7 +40,7 @@ import type { RigidMotion } from "@twin/world";
 
 import { withDescendants, type InstancesDoc } from "@/lib/instances";
 import { splitObjectsOf } from "@/lib/sceneObjects";
-import { HANDLE_FLOATS, rigidHandle, skinRefOf, type SkinDoc } from "@/lib/skin";
+import { HANDLE_FLOATS, MAX_SKIN_HANDLES, rigidHandle, skinRefOf, type SkinDoc } from "@/lib/skin";
 import { telemetryRefOf } from "@/lib/telemetry";
 import { variantsOf } from "@/lib/variants";
 import { useInstances } from "@/state/instances";
@@ -247,15 +247,18 @@ uint hexapodMotionQuad(highp usampler2D table, uint i) {
     return k == 0u ? v.r : (k == 1u ? v.g : (k == 2u ? v.b : v.a));
 }
 
-float hexapodSkinWeight(uvec4 words, int k, float scale) {
-    uint word = k < 4 ? words.x : (k < 8 ? words.y : (k < 12 ? words.z : words.w));
-    // Byte k & 3 of the word, sign-extended: an int8 weight.
-    return float(int(word << uint(24 - 8 * (k & 3))) >> 24) * scale;
+float hexapodSkinWeight(uvec4 words, uvec4 words2, int k, float scale) {
+    uvec4 row = k < 16 ? words : words2;
+    int kk = k & 15;
+    uint word = kk < 4 ? row.x : (kk < 8 ? row.y : (kk < 12 ? row.z : row.w));
+    // Byte kk & 3 of the word, sign-extended: an int8 weight.
+    return float(int(word << uint(24 - 8 * (kk & 3))) >> 24) * scale;
 }
 
-// Adds skin \`skin\`'s displacement of x to delta and its linear part to linear.
-void hexapodSkinMotion(highp sampler2D handles, uint skin, uvec4 words, vec4 params, float scale,
-                       vec3 x, inout vec3 delta, inout mat3 linear) {
+// Adds skin \`skin\`'s displacement of x to delta and its linear part to linear. \`words2\` is a
+// wide row's second texel (weights 17..32), zero for a file of one-texel rows.
+void hexapodSkinMotion(highp sampler2D handles, uint skin, uvec4 words, uvec4 words2, vec4 params,
+                       float scale, vec3 x, inout vec3 delta, inout mat3 linear) {
     if (params.x < 0.5 || skin == 0u || float(skin) > params.y) {
         return;
     }
@@ -266,11 +269,11 @@ void hexapodSkinMotion(highp sampler2D handles, uint skin, uvec4 words, vec4 par
     }
     int count = int(head.y);
     vec4 xh = vec4(x, 1.0);
-    for (int j = 0; j < 16; j++) {
+    for (int j = 0; j < ${String(MAX_SKIN_HANDLES)}; j++) {
         if (j >= count) {
             break;
         }
-        float w = j == 0 ? 1.0 : hexapodSkinWeight(words, j - 1, scale);
+        float w = j == 0 ? 1.0 : hexapodSkinWeight(words, words2, j - 1, scale);
         if (w == 0.0) {
             continue;
         }
@@ -406,7 +409,7 @@ void hexapodCovariance(mat3 j, inout vec4 rotation, inout vec3 scale) {
 /** What `hexapodSkinMotion` + `hexapodRigidMotion` compute for one splat, in float64. */
 export function evaluateScanMotion(
   motion: Pick<ScanMotion, "handles" | "slots" | "poses" | "params" | "extra">,
-  splat: { skin: number; words: ArrayLike<number>; id: number },
+  splat: { skin: number; words: ArrayLike<number>; words2?: ArrayLike<number>; id: number },
   x: readonly [number, number, number],
 ): { delta: [number, number, number]; linear: number[] } {
   const delta: [number, number, number] = [0, 0, 0];
@@ -428,11 +431,13 @@ export function evaluateScanMotion(
     const base = splat.skin * TEXELS_PER_SKIN;
     const head = texel(motion.handles, base);
     if ((head[0] ?? 0) >= 0.5) {
-      for (let j = 0; j < Math.min(head[1] ?? 0, 16); j += 1) {
+      for (let j = 0; j < Math.min(head[1] ?? 0, MAX_SKIN_HANDLES); j += 1) {
         let w = 1;
         if (j > 0) {
-          const word = splat.words[(j - 1) >> 2] ?? 0;
-          const byte = (word >>> (8 * ((j - 1) & 3))) & 0xff;
+          const k = j - 1;
+          const row = k < 16 ? splat.words : splat.words2;
+          const word = row?.[(k & 15) >> 2] ?? 0;
+          const byte = (word >>> (8 * (k & 3))) & 0xff;
           w = (byte >= 128 ? byte - 256 : byte) * motion.extra[0];
         }
         if (w === 0) continue;

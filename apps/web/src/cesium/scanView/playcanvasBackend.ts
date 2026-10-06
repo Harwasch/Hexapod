@@ -23,7 +23,8 @@
  *   rigid motion;
  * - `splatSkin` (R32U) and `splatWeights` (RGBA32U): the skin id and the `skin.bin` row
  *   (scanMotion.ts), only on tiles `skin.json` lists with skinned splats -- written within the
- *   frame budget (`hooks.work`), as a tile's resource is built.
+ *   frame budget (`hooks.work`), as a tile's resource is built; `splatWeights2` (RGBA32U) the
+ *   second texel of a wide row (a file with a skin of more than 16 handles).
  *
  * A work-buffer modifier reads them when PlayCanvas copies a tile into the buffer it sorts and
  * draws from: the scene-object colour rule (`modifySplatColor`), and the motion -- skin
@@ -101,6 +102,8 @@ interface Decoded {
 const INSTANCE_STREAM = "splatInstance";
 const SKIN_STREAM = "splatSkin";
 const WEIGHTS_STREAM = "splatWeights";
+/** A wide row's second texel (a file with a skin of more than 16 handles). */
+const WEIGHTS2_STREAM = "splatWeights2";
 
 /** Shortest time between two re-sorts of a moving object's tiles. */
 export const SORT_REFRESH_MS = 100;
@@ -109,10 +112,11 @@ export const SORT_REFRESH_MS = 100;
  * The work-buffer modifier (PlayCanvas's `gsplatModifyVS`) for a tile with ids, skin weights,
  * or both: the motion on the centre and the covariance, the scene-object rule on the colour.
  */
-export function playcanvasModifierGlsl(ids: boolean, skin: boolean): string {
+export function playcanvasModifierGlsl(ids: boolean, skin: boolean, wide = false): string {
   const id = ids ? "loadSplatInstance().r" : "0u";
+  const second = wide ? "loadSplatWeights2()" : "uvec4(0u)";
   const skinStep = skin
-    ? "hexapodSkinMotion(uSkinHandles, loadSplatSkin().r, loadSplatWeights(), uMotionParams, uMotionExtra.x, center, delta, hexapodLinear);"
+    ? `hexapodSkinMotion(uSkinHandles, loadSplatSkin().r, loadSplatWeights(), ${second}, uMotionParams, uMotionExtra.x, center, delta, hexapodLinear);`
     : "";
   const rigidStep = ids
     ? `hexapodRigidMotion(uRigidSlots, uRigidPoses, ${id}, uMotionParams, center, delta, hexapodLinear);`
@@ -196,12 +200,12 @@ const MODIFIERS = new Map<string, WorkBufferModifier>();
  * WebGPU renderer moves nothing (see the file comment). One object per kind, so a tile's
  * modifier is compared by identity.
  */
-export function playcanvasModifier(ids: boolean, skin: boolean): WorkBufferModifier {
-  const key = `${String(ids)}|${String(skin)}`;
+export function playcanvasModifier(ids: boolean, skin: boolean, wide = false): WorkBufferModifier {
+  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}`;
   let modifier = MODIFIERS.get(key);
   if (!modifier) {
     modifier = {
-      glsl: playcanvasModifierGlsl(ids, skin),
+      glsl: playcanvasModifierGlsl(ids, skin, skin && wide),
       ...(ids && !skin ? { wgsl: PLAYCANVAS_INSTANCE_WGSL } : {}),
     };
     MODIFIERS.set(key, modifier);
@@ -281,6 +285,8 @@ interface TileBinding {
   /** The skin doc the skin streams are (being) written from, and the skins the tile holds. */
   skinDoc: SkinDoc | null;
   skinned: boolean;
+  /** Its weights take two texels a splat (`splatWeights2` written). */
+  skinWide: boolean;
   skinSet: ReadonlySet<number>;
   /** The modifier on it now. */
   modifier: WorkBufferModifier | null;
@@ -601,25 +607,34 @@ function assemble(
       }
       return;
     }
+    const second = found.words2;
     resource.format.addExtraStreams([
       { name: SKIN_STREAM, format: pc.PIXELFORMAT_R32U },
       { name: WEIGHTS_STREAM, format: pc.PIXELFORMAT_RGBA32U },
+      ...(second ? [{ name: WEIGHTS2_STREAM, format: pc.PIXELFORMAT_RGBA32U }] : []),
     ]);
     const skins = resource.getTexture(SKIN_STREAM);
     const weights = resource.getTexture(WEIGHTS_STREAM);
-    if (!skins || !weights) return;
+    const weights2 = second ? resource.getTexture(WEIGHTS2_STREAM) : undefined;
+    if (!skins || !weights || (second && !weights2)) return;
     const skinOut = skins.lock() as Uint32Array;
     const wordOut = weights.lock() as Uint32Array;
+    const word2Out = weights2 ? (weights2.lock() as Uint32Array) : undefined;
     skinOut.fill(0);
     wordOut.fill(0);
+    word2Out?.fill(0);
     for (let i = 0; i < tile.order.length; i += 1) {
       const from = tile.order[i] ?? 0;
       skinOut[i] = found.skins[from] ?? 0;
       for (let k = 0; k < 4; k += 1) wordOut[i * 4 + k] = found.words[from * 4 + k] ?? 0;
+      if (word2Out && second)
+        for (let k = 0; k < 4; k += 1) word2Out[i * 4 + k] = second[from * 4 + k] ?? 0;
     }
     skins.unlock();
     weights.unlock();
+    weights2?.unlock();
     tile.skinned = true;
+    tile.skinWide = second !== undefined;
   };
 
   /** Sets every uniform the modifier reads; setting any marks the tile for a new copy. */
@@ -644,7 +659,7 @@ function assemble(
     if (!component) return;
     const hasIds = tile.doc !== null;
     if (!hasIds && !tile.skinned) return;
-    const modifier = playcanvasModifier(hasIds, tile.skinned);
+    const modifier = playcanvasModifier(hasIds, tile.skinned, tile.skinWide);
     if (modifier !== tile.modifier) {
       tile.modifier = modifier;
       component.setWorkBufferModifier(modifier);
@@ -865,6 +880,7 @@ function assemble(
         idSet: new Set(),
         skinDoc: null,
         skinned: false,
+        skinWide: false,
         skinSet: new Set(),
         modifier: null,
         restCenters: null,

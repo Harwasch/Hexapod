@@ -8,6 +8,7 @@ import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
+import { useSkinPoke } from "@/state/skinPoke";
 import { useUi } from "@/state/ui";
 
 import { AddPanel } from "../add-data/AddPanel";
@@ -19,6 +20,7 @@ import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
 import { LayerAboutSheet } from "../layers/LayerAboutSheet";
 import { LayersPanel } from "../layers/LayersPanel";
+import { PokeBadge } from "../living/PokeBadge";
 import { SimulatedBadge } from "../living/SimulatedBadge";
 import { MapContextMenu } from "../map/MapContextMenu";
 import { MeasurePanel } from "../measure/MeasurePanel";
@@ -74,6 +76,8 @@ function GlobalHotkeys() {
   useHotkey(HOTKEYS.brush.combo, (event) => {
     if (scene?.sceneSelect.togglePainting()) event.preventDefault();
   });
+  // Poke and drag objects that move by skins (cesium/skinPoke.ts).
+  useHotkey(HOTKEYS.poke.combo, () => useSkinPoke.getState().toggle());
   useHotkey(HOTKEYS.resetNorth.combo, () => scene?.camera.resetNorth());
   useHotkey(HOTKEYS.topDown.combo, () => scene?.camera.topDown());
   useHotkey(HOTKEYS.home.combo, () => scene?.camera.flyHome());
@@ -185,6 +189,7 @@ export function AppShell() {
           <div className="hud-stack hud-messages">
             <ErrorBoundary inline label="Simulated motion">
               <SimulatedBadge />
+              <PokeBadge />
             </ErrorBoundary>
             <Toasts />
           </div>
