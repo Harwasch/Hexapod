@@ -174,11 +174,16 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
         scene.sampleHeight = () => at;
         scene.sampleHeightSupported = true;
       },
-      /** A finer terrain tile under the camera, its top this far below the camera. */
+      /**
+       * A finer terrain tile under the camera, its top this far below the camera, there long
+       * enough that CesiumJS's collision believes it (it acts on a camera nobody moves only
+       * once the height under it has held steady).
+       */
       terrainBelow(metres) {
         const top = camera.positionCartographic.height - metres;
         scene.globe.getHeight = () => top;
         scene._globeHeightDirty = true;
+        scene.screenSpaceCameraController._lastGlobeHeight = top;
       },
     };
     scene.postRender.addEventListener(() => window.__rest.record());
@@ -204,9 +209,17 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
   const before = await page.evaluate<number>(
     `window.__twin.viewer.camera.positionCartographic.height`,
   );
-  for (let notch = 0; notch < 6; notch++) {
-    await page.mouse.wheel(0, -200);
-    await page.waitForTimeout(300);
+  // A few notches, and a few more if a slow software-GL frame swallowed the first ones.
+  for (let round = 0; round < 3; round++) {
+    for (let notch = 0; notch < 6; notch++) {
+      await page.mouse.wheel(0, -200);
+      await page.waitForTimeout(300);
+    }
+    await page.waitForTimeout(1_000);
+    const now = await page.evaluate<number>(
+      `window.__twin.viewer.camera.positionCartographic.height`,
+    );
+    if (now < before - 0.01) break;
   }
   expect(await page.evaluate(`window.__twin.camera.userHasCamera`)).toBe(true);
   // At rest: the gesture and its inertia are over, nothing moved for two seconds.
@@ -238,6 +251,9 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
     const rest = window.__rest;
     rest.frames.length = 0;
     rest.record();
+    // No scanned solids straight under the camera, as for a scan packaged without them (the
+    // Pumpkin's): the floor check reads the drawn surface instead.
+    twin.collider.raycast = () => null;
     // A finer terrain tile under the close-up, 0.2 m below it: within the 0.6 m zoom floor.
     rest.terrainBelow(0.2);
     // The floor check, as after any move: a drawn surface 2 m above the camera.
@@ -253,13 +269,18 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
     window.__ticker = setInterval(() => twin.scene.requestRender(), 100);
     return rest.frames[0];
   })()`);
+  // Six seconds and at least ten frames drawn, however slowly software GL draws them.
   await page.waitForTimeout(6_000);
+  await page.waitForFunction(`window.__rest.frames.length >= 10`, undefined, {
+    timeout: 120_000,
+    polling: 250,
+  });
   const frames = await page.evaluate<Pose[]>(`(() => {
     clearInterval(window.__ticker);
     return window.__rest.frames;
   })()`);
 
-  expect(frames.length).toBeGreaterThan(5);
+  expect(frames.length).toBeGreaterThanOrEqual(10);
   let drift = 0;
   let turn = 0;
   for (const frame of frames) {
