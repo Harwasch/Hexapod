@@ -2,7 +2,10 @@
  * The wind driver of scene-object skins (step C1, docs/SCENE_OBJECTS.md §4): per skinned
  * instance, the anchored modal model of `@twin/world`'s `skinWind.ts`, advanced on the scene
  * clock and written through the skin part's one driver interface,
- * `setInstanceHandles(instanceId, Z)` (`splatSkin.ts`).
+ * `setInstanceHandles(instanceId, Z)` (`splatSkin.ts`). A limbs skin (`skin.limbs`,
+ * docs/SCENE_OBJECTS.md §9) is swayed instead by its plant's own per-limb model
+ * (`limbWind.ts`: the Living Survey rig's sway, limb for limb, and its leaf flutter), and a
+ * skin of a limbs document without its limbs block is not swayed at all.
  *
  * Which instances sway, and how, is a material per instance: its property prior
  * (`materialPrior`: behaviour `in-place` sways, `movable` does not; vegetation is soft, damped
