@@ -196,25 +196,45 @@ def test_track_joins_unite_what_one_track_spans() -> None:
     assert joins == 0 and joined.tolist() == [0, 0, 1, 1]
 
 
-def _view(cells: list[int], masks: list[int]) -> ss._Votes:
-    """One view's thing votes: the visible cells and the mask each is in (-1: none)."""
-    return ss._Votes(
-        np.array(cells, np.int32), np.ones(len(cells), np.float32), np.array([masks], np.int32)
-    )
+View = tuple[list[int], list[int], dict[int, list[int]]]
+
+
+def _view(cells: list[int], masks: list[int], also: dict[int, list[int]] | None = None) -> View:
+    """One view's thing masks: the visible cells, the mask each is voted to (-1: none), and
+    the cells a mask holds beyond those voted to it (masks that overlap)."""
+    return cells, masks, also or {}
+
+
+def _votes(n_cells: int, views: list[View]) -> cs.ConceptVotes:
+    """`ConceptVotes` of one concept from `_view`s, as `ConceptVotes.add_things` keeps them."""
+    votes = cs.ConceptVotes(n_cells=n_cells, n_things=1, n_stuff=0)
+    for cells, masks, also in views:
+        voted = np.array(masks, np.int32)
+        n_masks = max([int(voted.max()) + 1, *(k + 1 for k in also)])
+        holds = []
+        for k in range(n_masks):
+            mine = {c for c, m in zip(cells, masks, strict=True) if m == k}
+            holds.append(np.array(sorted(mine | set(also.get(k, []))), np.int32))
+        votes.things.append(
+            ss._Votes(np.array(cells, np.int32), np.ones(len(cells), np.float32), voted[None])
+        )
+        votes.thing_holds.append(holds)
+        votes.thing_concept.append(np.zeros(n_masks, np.int64))
+        votes.thing_track.append(np.full(n_masks, -1, np.int64))
+    return votes
 
 
 def test_touching_objects_of_one_concept_the_masks_never_part_are_one() -> None:
     # Regions: A cells 0-1, B cells 2-3 (a flange the masks sometimes leave out), C 4-5.
     region = np.array([0, 0, 1, 1, 2, 2])
     a, b = np.array([1, 3]), np.array([2, 4])
-    votes = cs.ConceptVotes(n_cells=6, n_things=1, n_stuff=0)
-    votes.things = [
+    votes = _votes(6, [
         _view([0, 1, 2, 3], [0, 0, 0, 0]),  # A and B in one mask
         _view([0, 1, 2, 3], [0, 0, -1, -1]),  # B left out: says nothing
         _view([0, 1, 2, 3], [0, 0, 0, 0]),
         _view([2, 3, 4, 5], [0, 0, 1, 1]),  # B and C in masks of their own
         _view([2, 3, 4, 5], [1, 1, 0, 0]),
-    ]
+    ])  # fmt: skip
     joined, joins = cs.concept_joins(region, np.array([0, 0, 0]), votes, a, b)
     assert joins == 1 and joined.tolist() == [0, 0, 0, 0, 1, 1]
     # Not across concepts.
@@ -226,8 +246,7 @@ def test_a_fragment_between_two_objects_does_not_chain_them() -> None:
     # B touches A and C and shares masks with each; A and C are in masks of their own.
     region = np.array([0, 0, 1, 1, 2, 2])
     a, b = np.array([1, 3]), np.array([2, 4])
-    votes = cs.ConceptVotes(n_cells=6, n_things=1, n_stuff=0)
-    votes.things = [
+    votes = _votes(6, [
         _view([0, 1, 2, 3], [0, 0, 0, 0]),
         _view([0, 1, 2, 3], [0, 0, 0, 0]),
         _view([0, 1, 2, 3], [0, 0, 0, 0]),
@@ -236,10 +255,39 @@ def test_a_fragment_between_two_objects_does_not_chain_them() -> None:
         _view([0, 1, 4, 5], [0, 0, 1, 1]),
         _view([0, 1, 4, 5], [1, 1, 0, 0]),
         _view([0, 1, 4, 5], [0, 0, 1, 1]),
-    ]
+    ])  # fmt: skip
     joined, joins = cs.concept_joins(region, np.array([0, 0, 0]), votes, a, b)
     assert joins == 1
     assert joined[0] != joined[4]  # A and C stay apart
+
+
+def test_a_part_mask_inside_the_whole_does_not_part_the_object() -> None:
+    # A spool's top (A) and its bottom flange (B). In most views the detector boxed both
+    # the whole spool (mask 0) and the top alone (mask 1), and the top's own mask won the
+    # top's cells: the whole still holds A, so A and B are one.
+    region = np.array([0, 0, 1, 1])
+    a, b = np.array([1]), np.array([2])
+    whole_and_top = _view([0, 1, 2, 3], [1, 1, 0, 0], also={0: [0, 1]})
+    votes = _votes(4, [whole_and_top] * 3 + [_view([0, 1, 2, 3], [0, 0, 0, 0])])
+    joined, joins = cs.concept_joins(region, np.array([0, 0]), votes, a, b)
+    assert joins == 1 and joined.tolist() == [0, 0, 0, 0]
+    # Without the whole's hold on the top, the views part them.
+    votes = _votes(4, [_view([0, 1, 2, 3], [1, 1, 0, 0])] * 3 + [_view([0, 1, 2, 3], [0] * 4)])
+    _, joins = cs.concept_joins(region, np.array([0, 0]), votes, a, b)
+    assert joins == 0
+
+
+def test_holds_counts_every_mask_a_cell_is_in() -> None:
+    # A 2x2 view, a cell per pixel; mask 0 the whole view but one pixel, mask 1 one pixel.
+    camera = None  # not read
+    cell = np.array([[0, 1], [2, 3]])
+    view = ss.View(camera, np.zeros((2, 2, 3), np.uint8), cell, np.ones((2, 2), np.float32))  # type: ignore[arg-type]
+    whole = np.array([[True, True], [True, False]])
+    top = np.array([[True, False], [False, False]])
+    masks = [cs.ConceptMask(whole, 0, 0.5), cs.ConceptMask(top, 0, 0.9)]
+    holds = cs._holds(view, masks, np.array([0, 1, 2, 3], np.int32))
+    # Mask 0 covers 3 of 4 pixels: within `segment_scene.MAX_MASK_SHARE`, so it holds 0-2.
+    assert holds[0].tolist() == [0, 1, 2] and holds[1].tolist() == [0]
 
 
 # ------------------------------------------------------------------------ the whole run

@@ -114,17 +114,21 @@ PATH_TURN_DEG = 50.0
 PROMOTE_SHARE = 0.6
 PROMOTE_VIEWS = 2
 PROMOTE_SHARE_UNSURE = 0.35
-#: A cell off the ground is a named thing's when the thing masks held at least this share
-#: of its visible weight, in at least `THING_VIEWS` views: a pumpkin's mask that strays
-#: over the hay in a view or two does not make the hay a pumpkin.
+#: A cell off the ground is a named thing's when a thing's masks held at least this share
+#: of its visible weight over the views where that thing was found at all
+#: (`ConceptVotes.thing_share`; a view where the detector missed the spool says nothing),
+#: in at least `THING_VIEWS` views: a pumpkin's mask that strays over the hay in a view or
+#: two does not make the hay a pumpkin.
 THING_SHARE = 0.5
 THING_VIEWS = 2
 #: Two objects of one concept are one when a track holds at least this share of each.
 TRACK_SHARE = 0.5
 #: Two touching objects of one concept are one when, over the views where both are in a
-#: mask of it, they are in the same mask at least this share of the time (and in at least
+#: mask of it, one mask holds both at least this share of the time (and in at least
 #: `segment_scene.MIN_COVISIBLE` views): a spool's bottom flange, which the masks leave out
 #: in some views, and its drum. Two pumpkins side by side are each in a mask of their own.
+#: Every mask that holds them counts, not only the one each cell is voted to: where the
+#: detector boxed the whole spool and its top too, the top's own mask wins the top's cells.
 SAME_MASK_SHARE = 0.8
 CONCEPT_JOIN_ROUNDS = 4
 #: Which ground pass `ground_layer` runs: "shared" (`ground_pass.py`, the bake-off's one
@@ -460,6 +464,31 @@ def overview_cameras(positions: np.ndarray, count: int = OVERVIEW_VIEWS) -> list
 # ---------------------------------------------------------------------------- the votes
 
 
+def _holds(view: ss.View, masks: Sequence[ConceptMask], cells: np.ndarray) -> list[np.ndarray]:
+    """Per mask, which of `cells` (a view's visible cells, ascending: `segment_scene.vote`)
+    it holds, by `vote`'s rules, whichever mask each cell is voted to."""
+    owner = view.cell.reshape(-1)
+    weight = view.purity.reshape(-1).astype(np.float64)
+    pixels = np.flatnonzero((owner >= 0) & (weight >= ss.MIN_PURITY))
+    m = cells.size
+    if not m or not pixels.size:
+        return [cells[:0] for _ in masks]
+    local = np.minimum(np.searchsorted(cells, owner[pixels]), m - 1)
+    keep = cells[local] == owner[pixels]
+    local, weight = local[keep], weight[pixels][keep]
+    seen = np.bincount(local, weight, m)
+    out = []
+    for mask in masks:
+        flat = np.asarray(mask.mask, bool).reshape(-1)[pixels]
+        if flat.sum() > ss.MAX_MASK_SHARE * pixels.size:
+            out.append(cells[:0])  # (nearly) the whole view: `vote` skips it too
+            continue
+        inside = flat[keep]
+        held = np.bincount(local[inside], weight[inside], m)
+        out.append(cells[(seen > 0) & (held >= ss.MASK_SHARE * seen)])
+    return out
+
+
 @dataclass
 class ConceptVotes:
     """Every view's evidence, as `lift_concepts` reads it."""
@@ -472,6 +501,9 @@ class ConceptVotes:
     things: list[ss._Votes] = field(default_factory=list)
     thing_concept: list[np.ndarray] = field(default_factory=list)
     thing_track: list[np.ndarray] = field(default_factory=list)
+    #: Per view and thing mask: the cells it holds (`segment_scene.MASK_SHARE` of their
+    #: visible weight there), whichever mask each is voted to.
+    thing_holds: list[list[np.ndarray]] = field(default_factory=list)
     #: Per view: the class-free masks' votes (`segment_scene.vote`, its levels).
     free: list[ss._Votes] = field(default_factory=list)
     #: Per cell: visible weight over all views, weight inside a thing mask, views inside one.
@@ -480,6 +512,8 @@ class ConceptVotes:
     thing_views: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int32))
     #: Per cell and thing: weight inside that thing's masks.
     concept_weight: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    #: Per cell and thing: visible weight in the views where that thing was found at all.
+    concept_seen: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     #: Per cell and stuff class: pixels x score.
     stuff_weight: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
 
@@ -489,6 +523,7 @@ class ConceptVotes:
             self.thing_in = np.zeros(self.n_cells)
             self.thing_views = np.zeros(self.n_cells, np.int32)
             self.concept_weight = np.zeros((self.n_cells, max(self.n_things, 1)), np.float32)
+            self.concept_seen = np.zeros((self.n_cells, max(self.n_things, 1)), np.float32)
             self.stuff_weight = np.zeros((self.n_cells, max(self.n_stuff, 1)), np.float32)
 
     def add_free(self, view: ss.View, masks: Sequence[ss.Mask]) -> None:
@@ -502,6 +537,7 @@ class ConceptVotes:
         self.things.append(votes)
         self.thing_concept.append(concept)
         self.thing_track.append(track)
+        self.thing_holds.append(_holds(view, masks, votes.cells))
         np.add.at(self.seen, votes.cells, votes.weight)
         inside = votes.masks[0] >= 0
         cells = votes.cells[inside]
@@ -510,6 +546,17 @@ class ConceptVotes:
         np.add.at(self.thing_views, cells, 1)
         if cells.size and self.n_things:
             np.add.at(self.concept_weight, (cells, concept[votes.masks[0][inside]]), weight)
+        found = np.unique(concept)
+        if found.size and votes.cells.size:  # a view's cells are distinct: += is exact
+            self.concept_seen[np.ix_(votes.cells, found)] += votes.weight[:, None]
+
+    def thing_share(self) -> np.ndarray:
+        """Per cell, the most any thing's masks held of it, over the views where that thing
+        was found at all (a view where the detector missed it says nothing)."""
+        seen = self.concept_seen[:, : max(self.n_things, 1)]
+        held = self.concept_weight[:, : max(self.n_things, 1)]
+        share = np.divide(held, seen, out=np.zeros(seen.shape, np.float64), where=seen > 0)
+        return share.max(axis=1) if share.size else np.zeros(self.n_cells)
 
     def add_stuff(self, view: ss.View, stuff: StuffMap) -> None:
         if not self.n_stuff:
@@ -676,6 +723,39 @@ def track_joins(
     return ss._relabel(out), len(pairs)
 
 
+def held_by(
+    region: np.ndarray, region_concept: np.ndarray, votes: ConceptVotes
+) -> dict[int, dict[int, set[int]]]:
+    """Per region, per view where it is visible: the masks of its concept that hold it as a
+    whole (`segment_scene.MASK_SHARE` of its visible weight there, as `segment_scene._seen`
+    judges a region), every one of them (`ConceptVotes.thing_holds`). Views where none
+    does are left out."""
+    n = int(region.max()) + 1 if region.size and region.max() >= 0 else 0
+    out: dict[int, dict[int, set[int]]] = {}
+    for v, (vote, holds) in enumerate(zip(votes.things, votes.thing_holds, strict=True)):
+        reg = region[vote.cells]
+        ok = reg >= 0
+        if not n or not ok.any():
+            continue
+        visible = np.bincount(reg[ok], vote.weight[ok], n)
+        for k, held in enumerate(holds):
+            if not held.size:
+                continue
+            at = np.searchsorted(vote.cells, held)
+            r = reg[at]
+            good = r >= 0
+            inside = np.bincount(r[good], vote.weight[at][good], n)
+            whole = (
+                (visible >= ss.MIN_VISIBLE_PX)
+                & (inside > 0)
+                & (inside >= ss.MASK_SHARE * visible)
+                & (region_concept[:n] == votes.thing_concept[v][k])
+            )
+            for x in np.flatnonzero(whole).tolist():
+                out.setdefault(x, {}).setdefault(v, set()).add(k)
+    return out
+
+
 def concept_joins(
     region: np.ndarray,
     region_concept: np.ndarray,
@@ -685,27 +765,22 @@ def concept_joins(
 ) -> tuple[np.ndarray, int]:
     """Touching objects of one concept that the masks never tell apart are one object: for
     each pair of regions joined by an edge of the cell graph (`a`, `b`) and of one concept,
-    over the views where each is in some thing mask (`segment_scene._seen`, the region judged
-    as a whole), they join when they are in the same mask in at least `SAME_MASK_SHARE` of
-    them and at least `segment_scene.MIN_COVISIBLE` of them. A view where one of them is in
-    no mask says nothing (the mask left a flange out), unlike `segment_scene._grow`'s
-    agreement. Returns the regions renumbered, and how many pairs joined."""
+    over the views where each is held by some mask of that concept (`held_by`), they join
+    when one mask holds both in at least `SAME_MASK_SHARE` of them and at least
+    `segment_scene.MIN_COVISIBLE` of them. A view where one of them is in no mask says
+    nothing (the mask left a flange out), unlike `segment_scene._grow`'s agreement. Returns
+    the regions renumbered, and how many pairs joined."""
     n = int(region.max()) + 1 if region.size and region.max() >= 0 else 0
     if n < 2 or not votes.things:
         return region, 0
-    obs = ss._observed(votes.things, 0, region >= 0)
-    seen = ss._seen(obs, region)
     pa, pb = ss._pairs(region, a, b, n)
     keep = region_concept[pa] == region_concept[pb]
     pa, pb = pa[keep], pb[keep]
-    masked = seen.best >= 0
-    best_of: dict[int, dict[int, int]] = {}
-    for r, v, m in zip(seen.region[masked], seen.view[masked], seen.best[masked], strict=True):
-        best_of.setdefault(int(r), {})[int(v)] = int(m)
+    best_of = held_by(region, region_concept, votes)
 
-    def agree(mx: dict[int, int], my: dict[int, int]) -> tuple[int, int]:
+    def agree(mx: dict[int, set[int]], my: dict[int, set[int]]) -> tuple[int, int]:
         both = mx.keys() & my.keys()
-        return sum(1 for v in both if mx[v] == my[v]), len(both)
+        return sum(1 for v in both if mx[v] & my[v]), len(both)
 
     scored = []
     for x, y in zip(pa.tolist(), pb.tolist(), strict=True):
@@ -715,7 +790,7 @@ def concept_joins(
     # Strongest first; a join is checked again between the groups as they have grown, so a
     # fragment touching two pumpkins does not chain them into one.
     root = np.arange(n)
-    groups = {r: dict(best_of.get(r, {})) for r in range(n)}
+    groups = {r: {v: set(m) for v, m in best_of.get(r, {}).items()} for r in range(n)}
 
     def find(r: int) -> int:
         while root[r] != r:
@@ -733,8 +808,11 @@ def concept_joins(
             continue
         keep, gone = min(gx, gy), max(gx, gy)
         root[gone] = keep
-        for view, mask in groups.pop(gone).items():
-            groups[keep].setdefault(view, mask)
+        # A group is held, in a view, by the masks that hold all of it there (none: its
+        # members were in masks apart, which a later join counts against).
+        for view, masks in groups.pop(gone).items():
+            mine = groups[keep].get(view)
+            groups[keep][view] = masks if mine is None else mine & masks
         joins += 1
     if not joins:
         return region, 0
@@ -865,7 +943,8 @@ def lift_concepts(
 
     # Named things: cells the thing masks hold most of the time (`THING_SHARE`), and the
     # ground they claimed.
-    in_thing = ((share >= THING_SHARE) & (votes.thing_views >= THING_VIEWS) & ~ground) | promoted
+    held = votes.thing_share()
+    in_thing = ((held >= THING_SHARE) & (votes.thing_views >= THING_VIEWS) & ~ground) | promoted
     stats["thingCells"] = int(in_thing.sum())
     region = np.full(n_cells, -1, np.int64)
     if votes.things and in_thing.any():

@@ -270,9 +270,13 @@ the scene and then looks for each named thing, so objects are born with names.
    boxes each thing, SAM 2.1 cuts its mask, and SigLIP 2 classifies each class-free mask
    over the ground against the chosen cover classes' prompts. A stand-in run is its own
    variant (`concept-first-standin`, `concepts.standIn` in the file), never published as C.
-4. **Lift** by §3's voting: thing masks join cells into objects, each named by the concept
-   most of its votes carry (`nameSource: "vlm"`); one track spanning two objects makes them
-   one. Ground cells take the cover class most views gave them, smoothed over the cell
+4. **Lift** by §3's voting: a cell is a thing's when that thing's masks hold it in at
+   least half the views where the detector found that thing at all (a view where it missed
+   the spool says nothing); thing masks join cells into objects, each named by the concept
+   most of its votes carry (`nameSource: "vlm"`). One track spanning two objects makes them
+   one, and so do two touching objects of one concept that one mask holds together in 80%
+   of the views where both are masked (every mask counts, not only the one each cell is
+   voted to: a box around the spool's top must not cut it from its flange). Ground cells take the cover class most views gave them, smoothed over the cell
    graph and cut into connected regions (the §3b schema). **Leftovers**: what is neither
    ground nor named is lifted from SAM 2's class-free masks, so nothing goes unsegmented
    for want of a name; the same masks give every object its parts.
