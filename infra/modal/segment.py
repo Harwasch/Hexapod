@@ -97,9 +97,11 @@ image = (
         "rich",
         "packaging",
         GSPLAT_WHEEL,
-        # SAM 2 and SigLIP 2; the 5.x line needs torch 2.5.
+        # SAM 2, SigLIP 2 and Qwen3-VL; the 5.x line needs torch 2.5.
         "transformers==4.57.6",
         "sentencepiece",
+        # Loads Qwen3-VL straight onto the GPU (`device_map`), not through host memory.
+        "accelerate==1.10.1",
         # tools/captures/pyproject.toml's dependencies, at versions built for numpy 1.26.
         "pillow>=10",
         "laspy[lazrs]>=2.5",
@@ -125,6 +127,24 @@ COVERAGE_VIEWS = 96
 #: Also embed every crop kind and score `segment_scene.describe_variants` (variants.json,
 #: variants.npz): to compare how instances are described. It costs a third more time.
 VARIANTS = False
+
+#: The segmentation bake-off's candidates that run here (`--variant`), each a script of
+#: tools/captures with segment_scene's arguments and its own. A variant's call has a hard
+#: `VARIANT_TIMEOUT_S`, so a run that hangs costs at most that; it keeps its cache
+#: (`cache.tar`: every view's masks and image, the refine pass's box masks, the names) so it
+#: can be re-assembled on a CPU without another GPU run.
+VARIANT_SCRIPTS: dict[str, tuple[str, ...]] = {
+    "ground-first": (
+        "segment_ground_first.py",
+        "--masks", "segment_models:Sam2LargeMasks",
+        "--boxes", "segment_models:Sam2BoxMasks",
+        "--namer", "segment_models:QwenNamer",
+    ),
+}  # fmt: skip
+VARIANT_TIMEOUT_S = 50 * 60
+#: What a variant adds to the main process's memory: SAM 2.1 large and Qwen3-VL 4B's host
+#: side (their weights go to the GPU), and the refine pass's views.
+VARIANT_BYTES = 4 * (1 << 30)
 
 
 # ------------------------------------------------------------------- what a run reserves
@@ -269,7 +289,13 @@ def render_worker_bytes(gaussians: int) -> float:
     return max(RENDER_WORKER_BYTES, RENDER_BYTES_PER_GAUSSIAN * float(gaussians))
 
 
-def sizing(gaussians: int, *, views: int = 24, coverage_rounds: int = COVERAGE_ROUNDS) -> dict:
+def sizing(
+    gaussians: int,
+    *,
+    views: int = 24,
+    coverage_rounds: int = COVERAGE_ROUNDS,
+    extra_bytes: float = 0.0,
+) -> dict:
     """The reservation for a scan of `gaussians` leaf gaussians: requests, limits and the
     estimate's terms (GiB), as the summary keeps them.
 
@@ -288,6 +314,8 @@ def sizing(gaussians: int, *, views: int = 24, coverage_rounds: int = COVERAGE_R
         "scan": float(SCAN_BYTES_PER_GAUSSIAN) * gaussians,
         "views": float(count * VIEW_BYTES),
     }
+    if extra_bytes:
+        terms["variant"] = float(extra_bytes)
     held = sum(terms.values())
     renders = max(1, int(cores) - MAIN_PROCESS_CORES)
     memory_mib = math.ceil((held + renders * worker) / GIB) * 1024
@@ -458,20 +486,29 @@ def segment_argv(
     renderer: str = "gsplat",
     coverage_rounds: int = COVERAGE_ROUNDS,
     cache: Path | None = None,
+    variant: str = "",
+    crop: str = "",
 ) -> list[str]:
     """`segment_scene.py`'s command line for one scan in `work` (the call's scratch
     directory: variants, debug sheets and the run's summary, `run.json`, go there): the
     views drawn by `renderer` without the floaters past `MAX_SCALE_M`, `coverage_rounds`
     rounds of `COVERAGE_VIEWS`, and the reservation's request (`cpus`, `memory_mib`; never
     the limit), not a worker count, so the render processes follow the memory the scan
-    leaves (`default_workers`)."""
+    leaves (`default_workers`). A `variant` (`VARIANT_SCRIPTS`) runs its script instead,
+    writing into `work/out` with a check sheet (`check.png`)."""
+    if variant:
+        script, *own = VARIANT_SCRIPTS[variant]
+        head = [
+            sys.executable, script, str(tiles / "tileset.json"), str(tiles),
+            "--out", str(work / "out"), "--check", str(work / "check.png"), *own,
+        ]  # fmt: skip
+    else:
+        head = [
+            sys.executable, "segment_scene.py", str(tiles / "tileset.json"), str(tiles),
+            "--masks", "segment_models:Sam2Masks",
+        ]  # fmt: skip
     return [
-        sys.executable,
-        "segment_scene.py",
-        str(tiles / "tileset.json"),
-        str(tiles),
-        "--masks",
-        "segment_models:Sam2Masks",
+        *head,
         "--embedder",
         "segment_models:SiglipEmbedder",
         "--vocabulary",
@@ -486,9 +523,8 @@ def segment_argv(
         str(coverage_rounds),
         "--coverage-views",
         str(COVERAGE_VIEWS),
-        *(["--variants", str(work / "variants.json")] if VARIANTS else []),
-        "--debug-dir",
-        str(work / "debug"),
+        *(["--variants", str(work / "variants.json")] if VARIANTS and not variant else []),
+        *([] if variant else ["--debug-dir", str(work / "debug")]),
         "--cpus",
         str(int(cpus)),
         "--memory-gb",
@@ -496,6 +532,8 @@ def segment_argv(
         "--summary",
         str(work / "run.json"),
         *(["--cache", str(cache)] if cache is not None else []),
+        # One argument: a crop starting "-5," would read as an option of its own.
+        *([f"--crop={crop}"] if variant and crop else []),
     ]
 
 
@@ -563,6 +601,8 @@ def segment_scan(
     renderer: str = "gsplat",
     coverage_rounds: int = COVERAGE_ROUNDS,
     plan: dict | None = None,
+    variant: str = "",
+    crop: str = "",
 ) -> dict:
     """Segment one published scan; returns the files (bytes) and the run's summary.
     `keep_masks`: also return `masks.tar` (every view's masks and the cameras, the
@@ -597,7 +637,9 @@ def segment_scan(
                     memory_mib=plan["memoryMiB"],
                     renderer=renderer,
                     coverage_rounds=coverage_rounds,
-                    cache=cache if keep_masks else None,
+                    cache=cache if keep_masks or variant else None,
+                    variant=variant,
+                    crop=crop,
                 ),
                 cwd=CAPTURES,
                 capture_output=True,
@@ -615,48 +657,67 @@ def segment_scan(
             usage = call_usage(segmentation, gpu_text)
             return {"name": name, "ok": False, "sizing": plan, "usage": usage, "log": log}
         segmented = time.time()
+        written = Path(work) / "out" if variant else tiles
         files = {
-            k: (tiles / k).read_bytes()
+            k: (written / k).read_bytes()
             for k in ("instances.json", "instances.emb")
-            if (tiles / k).exists()
+            if (written / k).exists()
         }
         # The new run against the published one: coverage, categories and a contact sheet.
+        # (Not for a variant: it brings its own check sheet, and the report would spend its
+        # timeout drawing the whole scan.)
         new = Path(work) / "new" / "instances.json"
         new.parent.mkdir()
         new.write_bytes(files["instances.json"])
-        report = subprocess.run(  # noqa: S603 - fixed argv; only paths we made vary
-            [
-                sys.executable,
-                "instances_report.py",
-                str(tiles),
-                *([str(before)] if before else []),
-                str(new),
-                "--sheet",
-                str(Path(work) / "compare.png"),
-                "--max-scale-m",
-                str(MAX_SCALE_M),
-                *(["--gsplat"] if renderer == "gsplat" else []),
-                "--out",
-                str(Path(work) / "report.json"),
-            ],
-            cwd=CAPTURES,
-            capture_output=True,
-            text=True,
-        )
+        report = subprocess.CompletedProcess([], 0, "variant: no report", "")
+        if not variant:
+            report = subprocess.run(  # noqa: S603 - fixed argv; only paths we made vary
+                [
+                    sys.executable,
+                    "instances_report.py",
+                    str(tiles),
+                    *([str(before)] if before else []),
+                    str(new),
+                    "--sheet",
+                    str(Path(work) / "compare.png"),
+                    "--max-scale-m",
+                    str(MAX_SCALE_M),
+                    *(["--gsplat"] if renderer == "gsplat" else []),
+                    "--out",
+                    str(Path(work) / "report.json"),
+                ],
+                cwd=CAPTURES,
+                capture_output=True,
+                text=True,
+            )
         log += "\n--- report\n" + report.stdout[-20000:] + report.stderr[-20000:]
-        for k in ("compare.png", "report.json", "variants.json", "variants.npz", "debug/views.jpg", "debug/crops.jpg"):
+        for k in (
+            "compare.png",
+            "report.json",
+            "variants.json",
+            "variants.npz",
+            "debug/views.jpg",
+            "debug/crops.jpg",
+            "check.png",
+            "check.legend.json",
+        ):
             if (Path(work) / k).exists():
                 files[k.rsplit("/", 1)[-1]] = (Path(work) / k).read_bytes()
-        if keep_masks and cache.exists():
+        if (keep_masks or variant) and cache.exists():
             tar = Path(work) / "masks.tar"
+            kept = ("masks-*.npz", "raster-*.npz", "boxmask-*.npz") if variant else ("masks-*.npz",)
             with tarfile.open(tar, "w") as out:
-                for path in sorted(cache.glob("masks-*.npz")) + [cache / "cameras.json"]:
+                for pattern in kept:
+                    for path in sorted(cache.glob(pattern)):
+                        out.add(path, arcname=path.name)
+                for path in (cache / "cameras.json", cache / "names.json"):
                     if path.exists():
                         out.add(path, arcname=path.name)
-            files["masks.tar"] = tar.read_bytes()
+            files["cache.tar" if variant else "masks.tar"] = tar.read_bytes()
         return {
             "name": name,
             "ok": True,
+            "variant": variant,
             "tiles": count,
             "sizing": plan,
             "fetchS": round(fetched, 1),
@@ -678,8 +739,13 @@ def main(
     keep_masks: bool = False,
     renderer: str = "gsplat",
     coverage_rounds: int = COVERAGE_ROUNDS,
+    variant: str = "",
+    crop: str = "",
 ) -> None:
     """Segment the named scans in parallel containers; write each result under `out/`.
+    `variant`: a bake-off candidate (`VARIANT_SCRIPTS`) instead of segment_scene, each call
+    stopped after `VARIANT_TIMEOUT_S`. `crop` (`x0,y0,x1,y1`, metres in the tileset's
+    frame; a variant only): segment that part of each scan, every tile still bound.
 
     Each scan's reservation follows its size (`sizing`): its tileset.json is read here
     first -- a few kB, hundreds for the camp -- for its tiles and gaussians, and it is
@@ -699,14 +765,26 @@ def main(
             sys.stdout.write(f"{name}: could not read its size ({error}); sized as the camp\n")
             size = None
         gaussians = FALLBACK_GAUSSIANS if size is None else size["gaussians"]
-        plan = sizing(gaussians, views=views, coverage_rounds=coverage_rounds)
+        if variant and variant not in VARIANT_SCRIPTS:
+            raise SystemExit(f"variant {variant!r}: one of {', '.join(VARIANT_SCRIPTS)}")
+        plan = sizing(
+            gaussians, views=views, coverage_rounds=coverage_rounds,
+            extra_bytes=VARIANT_BYTES if variant else 0,
+        )  # fmt: skip
         sys.stdout.write(sizing_line(name, size, plan) + "\n")
+        chosen_options = options(plan)
+        if variant:
+            chosen_options["timeout"] = VARIANT_TIMEOUT_S
+            worst = plan["dollarsPerHour"] * VARIANT_TIMEOUT_S / 3600
+            sys.stdout.write(
+                f"{name}: {variant}, stopped after {VARIANT_TIMEOUT_S} s: at most ${worst:.2f}\n"
+            )
         calls.append(
             (
                 name,
                 plan,
-                segment_scan.with_options(**options(plan)).spawn(
-                    name, url, views, keep_masks, renderer, coverage_rounds, plan
+                segment_scan.with_options(**chosen_options).spawn(
+                    name, url, views, keep_masks, renderer, coverage_rounds, plan, variant, crop
                 ),
             )
         )

@@ -466,12 +466,50 @@ def test_segment_scan_takes_v2s_options_and_the_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`main` spawns `segment_scan(name, url, views, keep_masks, renderer, coverage_rounds,
-    plan)` positionally: the function's parameters must stay in that order."""
+    plan, variant, crop)` positionally: the function's parameters must stay in that order."""
     import inspect
 
     app = _segment_app(monkeypatch)
     names = list(inspect.signature(app.app.functions["segment_scan"].fn).parameters)
-    assert names == ["name", "url", "views", "keep_masks", "renderer", "coverage_rounds", "plan"]
+    assert names == [
+        "name", "url", "views", "keep_masks", "renderer", "coverage_rounds", "plan", "variant",
+        "crop",
+    ]  # fmt: skip
+
+
+def test_a_variant_runs_its_own_script_with_a_cache_and_a_known_worst_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _segment_app(monkeypatch)
+    argv = app.segment_argv(
+        Path("/t"), Path("/w"), views=24, cpus=6, memory_mib=16384, cache=Path("/c"),
+        variant="ground-first",
+    )  # fmt: skip
+    assert argv[1] == "segment_ground_first.py"
+    assert argv[argv.index("--out") + 1] == "/w/out"
+    assert argv[argv.index("--masks") + 1] == "segment_models:Sam2LargeMasks"
+    assert argv[argv.index("--boxes") + 1] == "segment_models:Sam2BoxMasks"
+    assert argv[argv.index("--namer") + 1] == "segment_models:QwenNamer"
+    assert argv[argv.index("--cache") + 1] == "/c"
+    assert "--debug-dir" not in argv and "--crop" not in argv
+    cropped = app.segment_argv(
+        Path("/t"), Path("/w"), views=24, cpus=6, memory_mib=16384, variant="ground-first",
+        crop="-5,8,30,33",
+    )  # fmt: skip
+    assert "--crop=-5,8,30,33" in cropped
+    # The script reads it so (run 37398510267 passed "--crop", "-5,..." and argparse took
+    # the crop for an option).
+    import segment_ground_first
+
+    args = segment_ground_first.build_parser().parse_args(cropped[2:])
+    assert args.crop == "-5,8,30,33" and args.out == Path("/w/out")
+    assert args.boxes == "segment_models:Sam2BoxMasks" and args.cache is None
+    plain = app.segment_argv(Path("/t"), Path("/w"), views=24, cpus=6, memory_mib=16384)
+    assert plain[1] == "segment_scene.py" and "--out" not in plain
+    plan = app.sizing(153_566, extra_bytes=app.VARIANT_BYTES)
+    assert plan["termsGiB"]["variant"] == 4.0
+    # The worst a variant's call can cost: its rate for its whole timeout, under a dollar.
+    assert plan["dollarsPerHour"] * app.VARIANT_TIMEOUT_S / 3600 < 1.2
 
 
 def test_main_spawns_each_scan_on_its_own_estimate(

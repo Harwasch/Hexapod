@@ -1,0 +1,179 @@
+{
+  "format": "hexapod.groundcover",
+  "version": 1,
+  "note": "Ground and ground-cover classes for segment_ground_first's stuff pass (docs/SCENE_OBJECTS.md 3b), from the research notes' vocabulary (lawn ... artificial turf, trail). Each class: an id, the name the objects panel shows (and the vision-language model chooses among when it checks a class's word), prompts for the image-text model (averaged), and whether it is vegetation. `contrast` soaks up what is not ground cover (a thing seen in a tile of ground); it never becomes a class. Data, like categories.json: add a class by adding a line.",
+  "classes": [
+    {
+      "id": "grass",
+      "name": "Grass",
+      "vegetation": true,
+      "prompts": ["a photo of grass", "a photo of a lawn", "a photo of short grass on the ground"]
+    },
+    {
+      "id": "tall-grass",
+      "name": "Tall grass",
+      "vegetation": true,
+      "prompts": [
+        "a photo of tall grass in a meadow",
+        "a photo of long wild grass",
+        "a photo of weeds and wild plants on the ground"
+      ]
+    },
+    {
+      "id": "moss",
+      "name": "Moss",
+      "vegetation": true,
+      "prompts": ["a photo of moss", "a photo of moss covering the ground"]
+    },
+    {
+      "id": "dirt",
+      "name": "Dirt",
+      "vegetation": false,
+      "prompts": ["a photo of bare dirt", "a photo of bare soil", "a photo of brown earth"]
+    },
+    {
+      "id": "mud",
+      "name": "Mud",
+      "vegetation": false,
+      "prompts": ["a photo of mud", "a photo of wet muddy ground"]
+    },
+    {
+      "id": "sand",
+      "name": "Sand",
+      "vegetation": false,
+      "prompts": ["a photo of sand", "a photo of sandy ground"]
+    },
+    {
+      "id": "gravel",
+      "name": "Gravel",
+      "vegetation": false,
+      "prompts": [
+        "a photo of gravel",
+        "a photo of crushed stone",
+        "a photo of small pebbles on the ground"
+      ]
+    },
+    {
+      "id": "rock",
+      "name": "Rock",
+      "vegetation": false,
+      "prompts": ["a photo of bare rock", "a photo of a flat rock surface", "a photo of bedrock"]
+    },
+    {
+      "id": "asphalt",
+      "name": "Asphalt",
+      "vegetation": false,
+      "prompts": ["a photo of asphalt", "a photo of a paved road surface"]
+    },
+    {
+      "id": "concrete",
+      "name": "Concrete",
+      "vegetation": false,
+      "prompts": ["a photo of concrete", "a photo of a concrete slab"]
+    },
+    {
+      "id": "paving",
+      "name": "Paving",
+      "vegetation": false,
+      "prompts": ["a photo of paving stones", "a photo of brick paving", "a photo of pavers"]
+    },
+    {
+      "id": "deck",
+      "name": "Wooden deck",
+      "vegetation": false,
+      "prompts": ["a photo of a wooden deck", "a photo of wooden floor boards outdoors"]
+    },
+    {
+      "id": "mulch",
+      "name": "Mulch",
+      "vegetation": false,
+      "prompts": [
+        "a photo of mulch",
+        "a photo of bark mulch",
+        "a photo of wood chips on the ground"
+      ]
+    },
+    {
+      "id": "leaf-litter",
+      "name": "Leaf litter",
+      "vegetation": true,
+      "prompts": ["a photo of fallen leaves on the ground", "a photo of leaf litter"]
+    },
+    {
+      "id": "forest-floor",
+      "name": "Forest floor",
+      "vegetation": true,
+      "prompts": [
+        "a photo of the forest floor",
+        "a photo of pine needles on the ground",
+        "a photo of the ground in a forest with twigs and needles"
+      ]
+    },
+    {
+      "id": "hay",
+      "name": "Hay",
+      "vegetation": true,
+      "prompts": ["a photo of hay", "a photo of straw", "a photo of dry straw spread on the ground"]
+    },
+    {
+      "id": "crops",
+      "name": "Crops",
+      "vegetation": true,
+      "prompts": ["a photo of crop rows in a field", "a photo of a vegetable patch"]
+    },
+    {
+      "id": "ploughed",
+      "name": "Ploughed field",
+      "vegetation": false,
+      "prompts": ["a photo of a ploughed field", "a photo of tilled soil"]
+    },
+    {
+      "id": "snow",
+      "name": "Snow",
+      "vegetation": false,
+      "prompts": ["a photo of snow on the ground"]
+    },
+    {
+      "id": "ice",
+      "name": "Ice",
+      "vegetation": false,
+      "prompts": ["a photo of ice", "a photo of a frozen surface"]
+    },
+    {
+      "id": "water",
+      "name": "Water",
+      "vegetation": false,
+      "prompts": ["a photo of water", "a photo of a puddle", "a photo of a pond"]
+    },
+    {
+      "id": "turf",
+      "name": "Artificial turf",
+      "vegetation": false,
+      "prompts": ["a photo of artificial turf"]
+    },
+    {
+      "id": "trail",
+      "name": "Trail",
+      "vegetation": false,
+      "prompts": [
+        "a photo of a dirt trail",
+        "a photo of a hiking trail through the woods",
+        "a photo of a footpath",
+        "a photo of a worn path"
+      ]
+    }
+  ],
+  "contrast": [
+    "a photo of an object",
+    "a photo of a wooden object",
+    "a photo of furniture",
+    "a photo of a chair",
+    "a photo of a tree trunk",
+    "a photo of a bush",
+    "a photo of a fruit or a vegetable",
+    "a photo of a wall",
+    "a photo of a vehicle",
+    "a photo of a person",
+    "a photo of a tool or a machine"
+  ]
+}

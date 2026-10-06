@@ -165,7 +165,8 @@ function humanise(name: string): string {
 }
 
 /**
- * What an instance is called, as the objects panel names it (lib/categories.ts): its top tag,
+ * What an instance is called, as the objects panel names it (lib/categories.ts): its name
+ * when the file gives one, else its top tag,
  * else its broad category's name (`category`, a category id, else the file's own), never an id.
  */
 export function selectionLabel(
@@ -173,6 +174,7 @@ export function selectionLabel(
   id: number,
   category?: string,
 ): string {
+  if (instance?.name) return instance.name;
   const tag = instance?.tags[0]?.label;
   if (tag) return humanise(tag);
   const known = category ?? instance?.category;

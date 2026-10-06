@@ -165,6 +165,128 @@ guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
 | pumpkin | 387,813        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
 | camp    | 22,577,243     | 6 cores (9), 22 GiB (44) | 45 min | 0.94     |
 
+## 3b. The ground pass, and bake-off candidate A "ground first"
+
+The segmentation bake-off (2026-10-05) runs three candidates on the same scans and publishes
+each as a variant the owner switches to in the app (`extras.variants.objects`, below). All
+three share the **ground pass** and the **ground schema** of this section.
+
+**Ground pass** (`tools/captures/ground_pass.py`, CPU, NumPy and SciPy; its API is at the
+top of the module and is stable): the terrain under any splat scan, every splat's height
+above it, and a label per splat -- `ground`, `above`, `below` (floaters under the
+surface) and `unknown` (in the ground layer where no ground was seen near it: under a
+canopy, under an object). The method is SMRF (Pingel et al. 2013: openings with growing
+windows; what rises above one by more than slope x radius is an object) on a robust lowest
+surface (transparent splats and blobs left out, a low quantile of each cell's lowest layer,
+cells deep under the low end of their neighbourhood dropped as floaters), and the terrain
+under objects interpolated harmonically, so it is flat under a pumpkin rather than raised.
+The repo's slope filter (`scene_plants.ground_model`) erodes a cone from each cell's lowest
+splat: one floater dents it for metres, and it bulges up under an object by slope x half
+its width. CSF needs PDAL or a compiled binding for nothing SMRF lacks here. The ground
+layer's thickness comes from the scan (what rests on the terrain: median + 3 sigma, within
+a floor from the splats' spacing and the ground's roughness, and 0.3 m). Measured: spool
+39% ground (layer 8 cm), pumpkin 80% (the hay bed, layer capped at 30 cm), ~0.5 s each; the
+camp (22.6 M splats) in ~100 s. What geometry cannot know: a board lying on the ground (the
+spool's bottom flange) is ground to any height filter.
+
+**Candidate A, ground first** (`tools/captures/segment_ground_first.py`, research §1.3):
+
+1. The ground pass; voxel cells cut at the ground surface (`ground_pass.split_cells`).
+2. `segment_scene.segment` with SAM 2.1 **large**, the ground's cells kept out of the object
+   graph, `_absorb` and the fills (`exclude`): an object can never absorb ground.
+3. A **refine pass** (the `refine` hook, while the render processes still run): each
+   top-level object (up to 32) seen from 10 views around its base (5 sides, 10° and 40°
+   up), framed so its box fills 80% of the frame, SAM prompted with its tight box (2nd-98th
+   percentiles, extended down to the terrain). Of SAM's answers (its single one and its
+   three multimask ones) the largest is used that holds 60% of the object's own pixels,
+   at most 15% of other things', 10% outside the box and 12% ground beyond the object's
+   footprint; a view with none does not vote. A ground cell inside the (padded) box that is
+   in its mask in 60% of the views it is seen in is claimed by it (the flange); a cell of
+   it in its mask in at most 10% of 4+ views is let go; a smaller top-level object 80%
+   inside the box and 70% inside its masks becomes a part of it (the flange's rim, the
+   planks). Run 37383770486 framed the views by the box's bounding sphere instead, saw the
+   spool at a third of the frame, and SAM answered about the ground in half its views; the
+   fix was checked on the CPU with SAM tiny on the spool's views: the near-ground splats
+   under the spool in it 3% -> 63%, the ground ring around it taken 2.8%.
+4. A **stuff pass**: low objects (90th percentile under 2 ground layers) that describe as
+   grass, ground or paths are ground cover, not things. Every ground splat is classified
+   into the cover classes of `data/ground_cover.json` (grass, tall grass, moss, dirt, mud,
+   sand, gravel, rock, asphalt, concrete, paving, wooden deck, mulch, leaf litter, forest
+   floor, hay, crops, ploughed field, snow, ice, water, artificial turf, trail; with
+   contrast prompts that soak up things) by SigLIP 2 pooled inside each view's own SAM
+   masks (crops of the gsplat image, the rest black, the mask closed over the holes its
+   sparse pixel ownership leaves; reconstructed from the per-cell votes, so no mask is
+   kept), each crop's vote weighed by how much it reads as ground at all, smoothed among
+   neighbouring ground cells, and cut into connected regions. Run 37383770486 cropped the
+   CPU's point samples without closing: speckle on black, which read the pumpkin's hay as
+   dirt and leaf litter. Closing the masks was not enough: on the gsplat images, masked or
+   not, SigLIP 2 base reads that hay as "brown earth" or "bare dirt" ("hay" and "straw" are
+   not in its top 14 of 25 probes, all cosines 0.06-0.09). So SigLIP groups and the
+   vision-language model names: each of the 8 largest classes is shown to Qwen3-VL (its
+   pixels in the view with the most of them, the rest dimmed, and an undimmed close look
+   where it is densest), which picks one of the same class names (`COVER_PROMPT`); its
+   pick is the class's word (`nameSource: "vlm"`), and classes it gives one word become
+   one class. Checked on the CPU with the 2B model on the pumpkin's views: the code path
+   works, and the 2B answers "moss" for that hay, whether asked an open question or given
+   the list. The runs use the 4B, whose answers are in each run's `coverAsked`. In run
+   37397740104 it kept SigLIP's "hay" class as Hay but called the classes SigLIP read as
+   moss, forest floor and mulch Moss. So the pumpkin's hay bed came out 37% Hay, 58% Moss
+   and 5% Mud (SigLIP's dirt), in patches. The spool's ground came out 58% Moss and 37%
+   Grass. The cover classes are the weakest part of this candidate: SigLIP's grouping of
+   the ground is noisy, and the word the VLM gives a group is only as good as one crop.
+5. **Naming**: Qwen3-VL 4B Instruct (Apache-2.0) shown each top-level thing (and the parts
+   of the six largest) in context and alone, answering JSON; its `name` is the object's.
+   The crops come from the view that shows the thing whole with the most pixels, unless
+   that view has under a quarter of the pixels of the best view overall. Run 37394072441
+   halved the pixels of a view that cuts the thing instead, but tested the cut on a robust
+   box (1st-99th percentiles) that never reaches the frame's edge. So it named the spool
+   "Stone" from a close view of its drum under the cut-off top, and the red pumpkin "Hay"
+   from a view that cut it.
+
+**The ground in `instances.json`** (every candidate writes it so): the Objects panel's top
+level is the scan's categories, so the top-level "Ground" is the category **Ground & soil**
+(`category: "ground"`), and its rows -- clickable, hideable, highlightable like any
+object -- are the cover classes:
+
+```jsonc
+// a cover class: top level, one per class present
+{ "id": 352, "parent": null, "level": 0, "kind": "ground", "category": "ground",
+  "cover": "grass",                         // data/ground_cover.json's class id
+  "name": "Grass", "nameSource": "ground-cover",  // "vlm" when the VLM chose the word
+  "tags": [{ "label": "grass", "score": 0.83 }],   // the class, its mean confidence
+  "behaviour": "static", "splats": 0, ... }       // 0: its splats carry its regions' ids
+// a region of it: connected ground of that class
+{ "id": 353, "parent": 352, "level": 1, "kind": "ground", "category": "ground",
+  "cover": "grass", "name": "Grass", ... }
+// a thing
+{ "id": 2, "parent": null, "kind": "thing", "name": "Cable spool", "nameSource": "vlm",
+  "wholeOrPart": "whole", "material": "wood", "movable": false, "scaleM": 1.31, ... }
+```
+
+There is no Ground root instance: one with `category: "ground"` would make the classes its
+parts, and the panel would list one "Ground" with nothing under it. A class with one region
+has no children (its splats carry its id). A click in the scene selects the class, a second
+click its region. Root `variant: {name, label, about}` and `ground: {method, layerM, cellM,
+seenShare, cover}` say what made the file. Still `hexapod.instances` v1: a reader that
+knows none of `kind`, `cover`, `name` reads it as before. The viewer honours `name` before
+any tag (`lib/categories.ts` object names, `lib/sceneSelect.ts` the selection card,
+`lib/instances.ts` search).
+
+**Running and publishing a variant.** segment.yml runs a candidate on a `seg-*` push whose
+head commit says `[segment|names=spool,pumpkin|variant=ground-first]`
+(`infra/modal/segment.py` `VARIANT_SCRIPTS`; each call stopped after 50 min, so its worst
+cost is known, ~$1 on the L4; `crop=x0,y0,x1,y1` segments a part of a big scan, every tile
+still bound: candidate A on 8.15 M of the camp's splats, `crop=-5,8,30,33`, did not finish
+in the 50 min, run 37398872516, where the spool and the pumpkin take under 4), and keeps `cache.tar` (every view's masks and image, the
+refine pass's box masks, the names) so a run can be re-assembled on a CPU. publish-instances
+publishes a run's artifact as a variant with `variant=<name>` (dispatch input, or
+`[instances|run=<id>|scans=spool,pumpkin|variant=ground-first|publish]` on a `bakeoff-*`
+push): the files go to `variants/objects/<name>/`, and `extras.variants.objects` gets
+`{name, label, about, instances}`. The API replaces an extras key whole, so
+`attach_sidecars.attach` re-reads the asset's current `extras.variants` just before its
+request and merges the entry in by name (`with_variant`), every other system and variant
+kept. Today's `extras.instances` stays the default.
+
 ## 4. Data contract (v1)
 
 Written beside the measured tiles; read by the viewer, the skinning step and the engine.

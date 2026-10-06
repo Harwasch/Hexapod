@@ -173,6 +173,22 @@ describe("objects and groups", () => {
     for (const object of index.objects.values()) expect(object.name).not.toMatch(/Object/);
   });
 
+  it("names an object by the name the file gives it: a ground class, a model's answer", () => {
+    const named: CategorisedInstance[] = [
+      { ...inst(1, null, 300, [["grass", 0.8]]), category: "ground", name: "Grass" },
+      { ...inst(2, 1, 200, [["grass", 0.8]]), category: "ground", name: "Grass" },
+      { ...inst(3, null, 90, [["hay", 0.7]]), category: "ground", name: "Hay" },
+      { ...inst(4, null, 50, [["oak", 0.4]]), name: "Cable spool" },
+    ];
+    const index = indexCategories(named, LABELS);
+    // The ground's classes are objects of Ground & soil, whatever their tags' category.
+    expect(
+      index.groups.find((g) => g.category.id === "ground")?.objects.map((o) => o.name),
+    ).toEqual(["Grass", "Hay"]);
+    expect(index.objects.get(1)?.members).toEqual([1, 2]);
+    expect(index.objects.get(4)?.name).toBe("Cable spool");
+  });
+
   it("finds categories by name, plural or not", () => {
     const trees = categoryById("trees");
     expect(matchCategory(["trees"], trees)).toBe(1);

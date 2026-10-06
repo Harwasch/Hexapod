@@ -41,6 +41,7 @@ import {
   withDescendants,
   type InstancesDoc,
 } from "@/lib/instances";
+import { selectionLabel } from "@/lib/sceneSelect";
 import { cellCount, type ViewConesMeta } from "@/lib/viewCones";
 import { useInstances } from "@/state/instances";
 
@@ -226,6 +227,34 @@ describe("per-tile ids (the plants.json encoding, shared)", () => {
     expect(tileRunsIssue("fnv1a32:6:0000abcd", [...runs], 1, "a plant")).toMatch(
       /label 2 is not 0 or a plant/,
     );
+  });
+});
+
+describe("names from the file", () => {
+  const named = (): InstancesDoc => {
+    const raw = structuredClone(RAW) as { instances: Record<string, unknown>[] };
+    raw.instances[3] = { ...raw.instances[3], name: " Cable spool " };
+    raw.instances[0] = { ...raw.instances[0], name: "" };
+    const parsed = parseInstances(raw);
+    if (!parsed) throw new Error("fixture did not parse");
+    return parsed;
+  };
+
+  it("reads a name, trimmed, and ignores an empty one", () => {
+    const d = named();
+    expect(d.byId.get(4)?.name).toBe("Cable spool");
+    expect(d.byId.get(1)?.name).toBeUndefined();
+  });
+
+  it("finds an instance by its name, and calls it by its name", () => {
+    const d = named();
+    const hits = searchInstances(d.instances, "spool");
+    expect(hits[0]?.id).toBe(4);
+    expect(hits[0]?.label).toBe("Cable spool");
+    expect(instanceLabel(d.byId.get(4)!)).toBe("Cable spool");
+    expect(selectionLabel(d.byId.get(4), 4)).toBe("Cable spool");
+    // An empty name is no name: the top tag still names it.
+    expect(selectionLabel(d.byId.get(1), 1)).toBe("Pickup truck");
   });
 });
 
