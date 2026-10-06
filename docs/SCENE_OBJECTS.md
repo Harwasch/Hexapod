@@ -1314,6 +1314,32 @@ their segmented behaviour says; `skin_scene.owners_of`):
 | camp (run 50c25673)    | shrubs and small trees: 26, 56, 67, 122 by the north fort; 93, 103, 148 by the east huts; 16 (a big shrub), 91 (a trunk), 276 (a pine) | the camp's tiles fetched for these objects only; `skin.json` lists only tiles with a skinned splat                                                                                                                                                                                    |
 | Minnetonka tree (site) | the whole scan, as one object (instance 1, made by the builder: the site has no `instances.json`)                                      | its procedural rig stands down while a candidate is drawn (`LivingSurveyManager`), so the comparison is skins against skins                                                                                                                                                           |
 
+**Measured** (publish-skins run 37389830876, 2026-10-05, GitHub-hosted 4-core CPU runners, no
+GPU; the lowest wind mode is at the object's property prior, as the viewer computes it,
+`skin_variants.wind_summary`):
+
+| scan    | variant          | handles           | `skin.bin`     | fit    | lowest wind mode                         |
+| ------- | ---------------- | ----------------- | -------------- | ------ | ---------------------------------------- |
+| spool   | `freeform`       | 11                | 1.15 MB        | 12.0 s | 2.57 Hz (static: only the poke bends it) |
+| spool   | the three stiff  | 1 (rigid)         | 0              | 0.2 s  | does not move                            |
+| pumpkin | `freeform`       | 10, 10            | 1.05 MB        | 7.9 s  | 3: 5.00 Hz                               |
+| pumpkin | `freeform-stiff` | 4, 4              | 1.05 MB        | 7.8 s  | 3: 5.11 Hz (2 keeps no anchored mode)    |
+| pumpkin | `pinned-stiff`   | 4, 4              | 1.05 MB        | 7.9 s  | 3: 2.84 Hz                               |
+| pumpkin | `tetfem-stiff`   | 4, 4              | 1.05 MB        | 1.9 s  | 3: 2.70 Hz                               |
+| camp    | `freeform`       | 8 to 13           | 11.3 MB        | 82.5 s | 0.52 to 6.64 Hz                          |
+| camp    | `freeform-stiff` | 8 to 13; 91 at 32 | 22.6 MB (wide) | 82.7 s | 0.52 to 6.64 Hz                          |
+| camp    | `pinned-stiff`   | 8 to 13; 91 at 32 | 22.6 MB (wide) | 83.2 s | 0.30 to 3.48 Hz                          |
+| camp    | `tetfem-stiff`   | 8 to 13; 91 at 32 | 22.6 MB (wide) | 14.3 s | 0.29 to 3.02 Hz                          |
+| tree    | `freeform`       | 12                | 37.5 MB        | 45.2 s | 0.77 Hz                                  |
+| tree    | `freeform-stiff` | 32                | 75.0 MB        | 46.1 s | 0.78 Hz                                  |
+| tree    | `pinned-stiff`   | 32                | 75.0 MB        | 50.4 s | 0.47 Hz                                  |
+| tree    | `tetfem-stiff`   | 32                | 75.0 MB        | 18.2 s | 0.19 Hz                                  |
+
+The wind sways only `in-place` objects: the spool (`static`) and pumpkin 2 (`movable`, which
+the poke slides) stay still in it under every variant. Rows are per file, so one tree-class
+trunk (camp 91) puts the whole camp file in 32-byte rows, twice the bytes; a 32-handle tree
+costs 75 MB a candidate to download.
+
 ### The poke driver
 
 `@twin/world` `skinPoke.ts` (the physics) and `apps/web/src/cesium/skinPoke.ts` (the
