@@ -1502,8 +1502,8 @@ def crop_binding(
     return dict(sorted(out.items()))
 
 
-def main() -> None:
-    started = time.time()
+def build_parser() -> argparse.ArgumentParser:
+    """The command line (`main`; infra/modal/segment.py's `segment_argv` writes it)."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -1539,6 +1539,12 @@ def main() -> None:
     parser.add_argument(
         "--tile-gaussians", type=int, default=ss.scene_plants.PACKAGE_TILE_GAUSSIANS
     )
+    return parser
+
+
+def main() -> None:
+    started = time.time()
+    parser = build_parser()
     args = parser.parse_args()
     if (args.masks is None) == (args.truth is None):
         parser.error("give exactly one of --masks and --truth")

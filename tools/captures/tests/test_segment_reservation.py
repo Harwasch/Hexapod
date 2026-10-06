@@ -496,7 +496,14 @@ def test_a_variant_runs_its_own_script_with_a_cache_and_a_known_worst_cost(
         Path("/t"), Path("/w"), views=24, cpus=6, memory_mib=16384, variant="ground-first",
         crop="-5,8,30,33",
     )  # fmt: skip
-    assert cropped[cropped.index("--crop") + 1] == "-5,8,30,33"
+    assert "--crop=-5,8,30,33" in cropped
+    # The script reads it so (run 37398510267 passed "--crop", "-5,..." and argparse took
+    # the crop for an option).
+    import segment_ground_first
+
+    args = segment_ground_first.build_parser().parse_args(cropped[2:])
+    assert args.crop == "-5,8,30,33" and args.out == Path("/w/out")
+    assert args.boxes == "segment_models:Sam2BoxMasks" and args.cache is None
     plain = app.segment_argv(Path("/t"), Path("/w"), views=24, cpus=6, memory_mib=16384)
     assert plain[1] == "segment_scene.py" and "--out" not in plain
     plan = app.sizing(153_566, extra_bytes=app.VARIANT_BYTES)
