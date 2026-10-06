@@ -977,7 +977,9 @@ carries `extras.evidence` -- and the measured tileset's root declares them all i
 - **Paths** are relative to the measured `tileset.json`, as `extras.instances`, `extras.skin`
   and `extras.inferredLayers` are, and resolve the same way (a signed URL's query is kept).
 - **`name`** is unique within its system (a repeat keeps the first); **`label`** is what the
-  viewer shows (the name when absent); **`about`** is one plain sentence, shown under the pick.
+  viewer shows (the name when absent); **`about`** is one plain sentence, shown under the pick;
+  **`look`** (optional) is one short line on what to look for to judge the method, shown under
+  `about` in place of its system's default (`LOOK_FOR` in `lib/variants.ts`).
 - **Today stays the default.** The scan's own `extras.instances`, `extras.skin` and
   `extras.inferredLayers` are "Today": a viewer who never picks a variant sees exactly what it
   saw before, and a system with no Today (no `extras.skin`, say) is "nothing" until a variant
@@ -997,8 +999,11 @@ carries `extras.evidence` -- and the measured tileset's root declares them all i
 
 **In the viewer.** A scan that declares variants gets a **Methods** button beside the
 representation switcher (`features/sites/CompareMethods.tsx`): a panel with one row per system
-it offers -- Objects, Fill, Motion -- each with Today and the variants by label (a segmented
-control while they fit one line, a list beyond), and the pick's `about` beneath. A pick is
+it offers -- Objects, Fill, Motion -- each with Today and the variants by label in one radio
+group (side by side while the labels fit one line; otherwise one row a method, the picked
+row lit as a segment is -- the app's segmented control, stacked; never a native select), the
+pick's `about` beneath, and under it what to look for (the variant's `look`, else the
+system's). A pick is
 kept per scan for the session (`state/variants.ts`, `sessionStorage`), and swaps what is drawn
 in place, with no reload and the camera where it is, under every renderer:
 
@@ -1041,7 +1046,8 @@ the scan) runs under PlayCanvas, Spark and CesiumJS and checks that picking an o
 changes what the objects panel lists, picking a fill draws its layer and not the other's,
 Highlight turns the layer's pixels purple and changes no other pixel, Hide leaves the frame
 the scan's own, and a skins pick replaces the skin; and that the panel fits a 400 px phone and
-works from the keyboard. Unit tests: `__tests__/variants.test.ts` (the parser, the store, the
+works from the keyboard, with the yard's names and with the spool's long ones (four methods a
+system, listed one a row, no native select). Unit tests: `__tests__/variants.test.ts` (the parser, the store, the
 swaps), `__tests__/inferred.test.ts`, `__tests__/compareMethods.test.tsx`.
 
 ## 5. Storage by behaviour

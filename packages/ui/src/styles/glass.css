@@ -311,6 +311,24 @@
   cursor: not-allowed;
 }
 
+/* Stacked: one segment a row, for choices whose labels do not fit side by side. The picked
+   one is lit as a segment is; labels wrap rather than clip. */
+.glass-segment--vertical {
+  flex-direction: column;
+  border-radius: var(--glass-radius-sm);
+}
+
+.glass-segment--vertical .glass-segment__item {
+  flex: none;
+  justify-content: flex-start;
+  min-height: 2rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: calc(var(--glass-radius-sm) - 3px);
+  line-height: 1.25;
+  text-align: left;
+  white-space: normal;
+}
+
 /* ---- Inputs -------------------------------------------------------------- */
 .glass-input {
   width: 100%;

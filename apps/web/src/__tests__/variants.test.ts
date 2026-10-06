@@ -19,6 +19,8 @@ import {
   hasVariants,
   inferredLayersFor,
   instancesRefFor,
+  LOOK_FOR,
+  lookFor,
   NO_VARIANTS,
   resolveVariantUrl,
   skinRefFor,
@@ -72,6 +74,23 @@ describe("extras.variants", () => {
     expect(v.fill[0]?.inferredLayers[0]?.evidence.filler).toBe("wan2.1-vace-14b");
     expect(v.skins[0]?.skin).toBe("variants/skins/freeform/skin.json");
     expect(hasVariants(v)).toBe(true);
+  });
+
+  it("takes a method's own line on what to look for, else its system's", () => {
+    const v = variantsOf({
+      variants: {
+        skins: [
+          { name: "a", skin: "a.json", look: "  Watch the base.  " },
+          { name: "b", skin: "b.json", look: 7 },
+        ],
+      },
+    });
+    expect(v.skins[0]?.look).toBe("Watch the base.");
+    expect(v.skins[1]).not.toHaveProperty("look");
+    expect(lookFor("skins", v.skins[0] ?? null)).toBe("Watch the base.");
+    expect(lookFor("skins", v.skins[1] ?? null)).toBe(LOOK_FOR.skins);
+    expect(lookFor("fill", null)).toMatch(/Highlight/);
+    expect(lookFor("objects", null)).toMatch(/Ground & soil/);
   });
 
   it("is none when nothing is declared", () => {

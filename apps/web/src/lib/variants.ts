@@ -12,7 +12,9 @@
  * Paths are relative to the measured `tileset.json`, as `extras.instances`, `extras.skin` and
  * `extras.inferredLayers` are, and resolve the same way (`resolveLayerUrl`, keeping a signed
  * URL's query). The files are today's formats. Today's own files stay the default ("Today"):
- * a viewer who never picks a variant sees exactly what the scan published before.
+ * a viewer who never picks a variant sees exactly what the scan published before. An entry
+ * may also carry `look`: one short line on what to look for to judge it, in place of its
+ * system's (`LOOK_FOR`).
  *
  * Read defensively, like `inferredLayersOf`: a malformed entry costs that entry, not the list.
  */
@@ -42,7 +44,24 @@ interface VariantBase {
   label: string;
   /** One plain sentence on what the method does; may be empty. */
   about: string;
+  /**
+   * What to look for to judge it, in one short line, when the method has something of its own
+   * to say; otherwise the viewer shows its system's (`LOOK_FOR`).
+   */
+  look?: string;
 }
+
+/**
+ * What to look for to judge each system, shown under the pick's `about` (a variant's own
+ * `look` replaces it): where in the app the difference between methods shows.
+ */
+export const LOOK_FOR: Record<VariantSystem, string> = {
+  objects:
+    "Click things: the first click should pick the whole object, the next its part. Ground types are listed under Ground & soil in the Objects panel.",
+  fill: "Set Inferred to Highlight: generated splats turn purple. Orbit to check they look real from every side.",
+  skins:
+    "Turn wind up in Settings › Simulated wind and watch trees and shrubs; rigid things like the spool should not bend.",
+};
 
 export interface ObjectsVariant extends VariantBase {
   /** Its `instances.json`, relative to the measured tileset. */
@@ -87,7 +106,18 @@ function baseOf(entry: unknown): VariantBase | null {
   if (typeof e !== "object" || e === null) return null;
   const name = textOf(e.name);
   if (name === null) return null;
-  return { name, label: textOf(e.label) ?? name, about: textOf(e.about) ?? "" };
+  const look = textOf(e.look);
+  return {
+    name,
+    label: textOf(e.label) ?? name,
+    about: textOf(e.about) ?? "",
+    ...(look === null ? {} : { look }),
+  };
+}
+
+/** What to look for with `variant` of `system` picked (Today: `null`). */
+export function lookFor(system: VariantSystem, variant: { look?: string } | null): string {
+  return variant?.look ?? LOOK_FOR[system];
 }
 
 /** Reads one system's list: entries `read` accepts, the first of each name. */

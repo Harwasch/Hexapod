@@ -320,8 +320,15 @@ any, **Methods** appears in the strip beside Splat · Mesh · Points
   session starts from Today.
 - A row says "Loading" while a pick's files arrive and "Did not load: …" if they do not, and
   then draws nothing for that system rather than the method before.
-- It is a radio group per row (arrow keys move, Space or Enter picks; a list when the labels do
-  not fit one line) and fits a 400 px phone.
+- Under that, **What to look for**: where the difference between methods shows. Objects: click
+  things (the first click should pick the whole object, the next its part; ground types are
+  under Ground & soil in the Objects panel). Fill: set Inferred to Highlight and orbit. Motion:
+  turn up Settings › Simulated wind and watch trees and shrubs; rigid things like the spool
+  should not bend. A method can say its own (`look` in its entry).
+- Each row is one radio group (arrow keys move, Space or Enter picks): segments side by side
+  while the labels fit one line, otherwise one row a method with the picked one lit, as on the
+  spool, whose motion bake-off has five. It fits a 400 px phone, and the panel scrolls on a
+  short screen.
 
 Generated content is easy to tell apart while comparing fills: **Highlight** (beside the
 switcher) turns every inferred splat purple and hatched and changes no measured pixel, and
@@ -396,3 +403,13 @@ Fonts with system fallbacks; the light glass theme is opt-in in Settings.
   selection card for a machine and for an object with the brush out among them), and the
   phone layout (tab bar, More, full-screen search, one-row status, the credits strip with and
   without Google's logo).
+- `src/__tests__/compareMethods.test.tsx` — the methods panel: a row per system, Today first,
+  labels shown, picks from the keyboard, long names one a row in a vertical radio group (no
+  native select), what to look for (the system's, or the method's own), "Did not load"; and
+  Show · Highlight · Hide with its legend. `src/__tests__/variants.test.ts` — `extras.variants`
+  read defensively (`look` included), the session's picks, the objects and skin swaps.
+- `e2e/variants.spec.ts` — on the synthetic yard under PlayCanvas, Spark and CesiumJS: an
+  objects pick changes what the objects panel lists, a fill pick draws its layer and not the
+  other's, Highlight changes only inferred pixels, Hide removes them, a motion pick swaps the
+  skin; the panel at 400 px and from the keyboard, with the yard's names and the spool's long
+  ones.
