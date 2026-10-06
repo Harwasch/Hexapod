@@ -427,11 +427,51 @@ def test_a_withdrawn_scan_is_not_fitted_and_its_entries_are_taken_off(tmp_path, 
     # The workflow's artifact holds no empty folder: publish makes it again.
     out.rmdir()
     mine = [{"name": n, "skin": f"variants/skins/{n}/skin.json"} for n in names]
-    current = {"root": {"extras": {"instances": {"uri": "i.json"}, "variants": {"skins": mine}}}}
+    others = {
+        "objects": [{"name": "feature-fields", "instances": "variants/objects/ff/i.json"}],
+        "fill": [
+            {"name": "vace-1-3b", "inferredLayers": [{"uri": "variants/fill/v/t.json"}]},
+            {"name": "lama-baseline", "inferredLayers": []},
+        ],
+    }
+    variants = {**others, "skins": [*mine, {"name": "candidate-c", "skin": "c.json"}]}
+    current = {"root": {"extras": {"instances": {"uri": "i.json"}, "variants": variants}}}
     monkeypatch.setattr(attach_sidecars, "resolve_asset", lambda a: {"assetId": a, "url": "u"})
     monkeypatch.setattr(skin_variants, "_get", lambda u: json.dumps(current).encode())
     monkeypatch.setattr(attach_sidecars, "attach", lambda directory: {})
     skin_variants.publish(out)
     manifest = json.loads((out / "attach.json").read_text(encoding="utf-8"))
-    # Nothing staged; extras.variants removed (only this tool's entries were there).
-    assert manifest["files"] == [] and manifest["extras"] == {"variants": None}
+    # Nothing staged; only this tool's entries withdrawn, at the request (attach merges into
+    # the tileset as it is then); the preview keeps everyone else's byte for byte.
+    assert manifest["files"] == []
+    assert manifest["withdraw"] == [{"system": "skins", "name": n} for n in names]
+    preview = manifest["extras"]["variants"]
+    assert json.dumps(preview["objects"]) == json.dumps(others["objects"])
+    assert json.dumps(preview["fill"]) == json.dumps(others["fill"])
+    assert preview["skins"] == [{"name": "candidate-c", "skin": "c.json"}]
+    # Had only this tool's entries been there, nothing would be left: the key goes.
+    alone = {"variants": {"skins": mine}}
+    assert skin_variants.merged_variants(alone, {"skins": []}, plan["withdraw"]) == {}
+
+
+def test_withdrawing_skins_keeps_objects_and_fill_byte_for_byte():
+    extras = {
+        "instances": {"uri": "instances.json"},
+        "variants": {
+            "objects": [{"name": "feature-fields", "label": "B · Feature fields", "about": "x"}],
+            "fill": [
+                {"name": "wan22-5b", "inferredLayers": [{"uri": "a.json", "evidence": {"k": 1}}]},
+                {"name": "cosmos-p2-2b", "inferredLayers": []},
+            ],
+            "skins": [
+                {"name": "freeform", "skin": "s.json"},
+                {"name": "pinned-stiff", "skin": "p.json"},
+            ],
+        },
+    }
+    before = json.dumps(extras, sort_keys=True)
+    left = skin_variants.merged_variants(extras, {}, {"skins": ["freeform", "pinned-stiff"]})
+    assert json.dumps(extras, sort_keys=True) == before
+    assert json.dumps(left["objects"]) == json.dumps(extras["variants"]["objects"])
+    assert json.dumps(left["fill"]) == json.dumps(extras["variants"]["fill"])
+    assert "skins" not in left and sorted(left) == ["fill", "objects"]

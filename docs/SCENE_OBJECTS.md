@@ -1385,17 +1385,24 @@ slides whole, and with the tool off the same press turns the camera.
 
 `.github/workflows/publish-skins.yml` (`[skins]`, `[skins|scans=...|variants=...|publish]`):
 one CPU job a scan runs `skin_variants.py scan` (locate the scan's current tileset, fetch,
-fit, lay out `variants/skins/<name>/`), and `publish` merges this run's entries into the
-`extras.variants.skins` the tileset declares at that moment (other systems' and variants'
-entries kept, an entry of the same name replaced) and attaches them through the API (a run's
-scan) or, for the Minnetonka tree, whose tileset is a site under `sites/` the attach refuses,
-uploads them beside it in the public bucket and rewrites its `tileset.json` with only
-`extras.variants` changed. `extras.skin` is never touched: "Today" stays the default. Each
+fit, lay out `variants/skins/<name>/`), and `publish` registers this run's entries in
+`extras.variants.skins` (other systems' and variants' entries kept, an entry of the same name
+replaced): through the API for a run's scan, where `attach_sidecars.attach` merges them
+(`with_variant`) into the tileset as it is at the moment of the request, after staging, so a
+variant another bake-off attached meanwhile is kept; or, for the Minnetonka tree, whose
+tileset is a site under `sites/` the attach refuses, by uploading them beside it in the public
+bucket and rewriting its `tileset.json`, read just before, with only `extras.variants`
+changed. `extras.skin` is never touched: "Today" stays the default. Each
 entry carries `look` beside `about`: one plain sentence, per scan, on what to watch (the
 Minnetonka tree: "Turn the wind up and watch the crown: with 12 handles it sways in a few
 broad bends..."), which the Methods panel shows under the pick. A scan where nothing visibly
 moves is `withdrawn` in `BAKEOFF` (the spool): the workflow fits nothing there and takes this
-tool's own entries off its `extras.variants.skins`, an attach of `extras` alone.
+tool's own entries off, by name (`without_variant`, merged at the request like a
+registration): every other system's and variant's entry stays, the `skins` key goes only if
+nothing is left in it, and `variants` is removed only if no system is left. A withdrawal is
+the one attach that stages no files; `attach_sidecars` refuses any other empty attach, and
+any manifest that sets `extras.variants` without an entry to register or withdraw (a whole
+value read earlier would erase what others attached since).
 
 **Choosing in the viewer.** The **Methods** panel's **Motion** row (§4, "Variants") lists
 Today and the four candidates by label; a pick swaps the skin in place (`attachSkin`), the

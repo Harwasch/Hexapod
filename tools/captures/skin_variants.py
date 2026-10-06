@@ -32,17 +32,17 @@ variant kept.
 API, `attach_sidecars.resolve_scan`, by its legacy URL in infra/modal/segment.py `SCANS`; the
 Minnetonka tree at its site), fetches and builds, and lays out `WORK/out/<scan>/` as it will
 sit beside `tileset.json` (`variants/skins/<name>/skin.json`, `skin.bin`), with `publish.json`
-(where it goes) and the report. `publish` merges this run's entries into the
-`extras.variants` the tileset declares **now** (re-read at publish time, so a variant another
-bake-off registered meanwhile is kept) and:
+(where it goes) and the report. `publish` registers this run's entries in the
+`extras.variants` the tileset declares at that moment (`attach_sidecars.with_variant`, so a
+variant another bake-off registered meanwhile is kept) and:
 
 * a scan `BAKEOFF` marks `withdrawn` (nothing on it visibly moves under any candidate) is not
-  fitted: `publish` takes this tool's own entries (by name) off its `extras.variants.skins`,
-  and every other system's and variant's entry stays;
-
+  fitted: `publish` takes this tool's own entries (by name) off its `extras.variants.skins`
+  (`attach_sidecars.without_variant`), and every other system's and variant's entry stays;
 * a run's scan: writes `attach.json` and attaches through the API (`attach_sidecars.attach`:
-  the files staged in the private bucket, a new generation cut, nothing written to the public
-  bucket or a `tileset.json` by hand);
+  the files staged in the private bucket, the entries merged into the asset's tileset as it
+  is at the request, a new generation cut, nothing written to the public bucket or a
+  `tileset.json` by hand);
 * a site (the Minnetonka tree, published by app.seed.publish under `sites/`, which the attach
   refuses: it is not a run's tileset): uploads the files beside its `tileset.json` in the
   public bucket and rewrites that `tileset.json` with only `extras.variants` changed, as
@@ -577,17 +577,23 @@ def publish(out: Path) -> dict:
     withdraw = plan.get("withdraw") or {}
     out.mkdir(parents=True, exist_ok=True)  # a withdrawal stages no files
     if plan["kind"] == "attach":
+        register = [(system, e) for system, mine in entries.items() for e in mine]
+        gone = [(system, n) for system, names in withdraw.items() for n in names]
+        # For review only: the merge into the tileset as it is now. `attach` merges again,
+        # into the tileset as it is at the request (attach_sidecars.with_variant and
+        # without_variant), so another bake-off's entry attached meanwhile is kept.
         now = attach_sidecars.resolve_asset(plan["assetId"])
         current = json.loads(_get(now["url"]))
-        variants = merged_variants(current["root"].get("extras") or {}, entries, withdraw)
+        preview = merged_variants(current["root"].get("extras") or {}, entries, withdraw)
         # basedOn: the tiles the skins were bound to; the API accepts it while the asset's
-        # tiles are those (another attach since only copied them). No variants left: the key
-        # is removed (null).
+        # tiles are those (another attach since only copied them).
         attach_sidecars.write_manifest(
             out,
             asset_id=plan["assetId"],
             based_on=plan["url"],
-            extras={"variants": variants or None},
+            extras={"variants": preview or None},
+            register=register,
+            withdraw=gone,
         )
         return attach_sidecars.attach(out)
     return publish_site(out, plan["url"], entries, withdraw)
@@ -655,31 +661,16 @@ def merged_variants(
     entries: Mapping[str, Sequence[Mapping]],
     withdraw: Mapping[str, Sequence[str]] | None = None,
 ) -> dict:
-    """`extras.variants` with `entries` (by system) added, each replacing the entry of its name,
-    and the entries `withdraw` names (by system) taken off; every other system and variant
-    kept, in order. A system left with no entries is dropped."""
-    current = extras.get("variants")
-    out: dict = {k: list(v) for k, v in current.items()} if isinstance(current, dict) else {}
-    for system, mine in entries.items():
-        if not mine:
-            continue
-        kept = [e for e in out.get(system, []) if isinstance(e, dict)]
-        names = {e["name"] for e in mine}
-        replaced = [
-            next(m for m in mine if m["name"] == e.get("name")) if e.get("name") in names else e
-            for e in kept
-        ]
-        seen = {e.get("name") for e in replaced}
-        out[system] = replaced + [dict(m) for m in mine if m["name"] not in seen]
-    for system, gone in (withdraw or {}).items():
-        if system not in out:
-            continue
-        out[system] = [
-            e for e in out[system] if not isinstance(e, dict) or e.get("name") not in set(gone)
-        ]
-        if not out[system]:
-            del out[system]
-    return out
+    """`extras.variants` with `entries` (by system) registered, each replacing the entry of its
+    name, and the entries `withdraw` names (by system) taken off -- attach_sidecars'
+    `with_variant` and `without_variant`, the merge `attach` makes at the request; every
+    other system and variant kept, in order. A system left with no entries is dropped; `{}`
+    is no variants at all."""
+    import attach_sidecars
+
+    changes = [("with", system, e) for system, mine in entries.items() for e in mine]
+    changes += [("without", system, n) for system, names in (withdraw or {}).items() for n in names]
+    return attach_sidecars.changed_variants(extras.get("variants"), changes) or {}
 
 
 def main(argv: list[str] | None = None) -> int:
