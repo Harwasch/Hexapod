@@ -12,9 +12,14 @@
  * to their set's id in the tile runs and the sets appended as top-level instances, so the
  * renderers -- which read ids from the document by checksum -- hide and highlight a set as
  * any instance. A splat in a set no longer carries its segmented id while the set exists.
+ *
+ * A combination of instances the brush selected is kept the same way (`setFromInstances`): as
+ * the splats its instances carry in every tile of the scan, not as their ids -- the format
+ * draws a set by its splats, and a set's splats stay the same object if the scan is segmented
+ * again, where its ids would name others.
  */
 
-import type { Instance, InstancesDoc, Vec3 } from "./instances";
+import { withDescendants, type Instance, type InstancesDoc, type Vec3 } from "./instances";
 
 export const CUSTOM_SETS_FORMAT = "hexapod.custom-objects";
 export const CUSTOM_SETS_VERSION = 1;
@@ -81,6 +86,51 @@ function vec3(value: unknown): Vec3 | null {
   if (!Array.isArray(value) || value.length !== 3) return null;
   if (!value.every((v) => typeof v === "number" && Number.isFinite(v))) return null;
   return [value[0] as number, value[1] as number, value[2] as number];
+}
+
+/**
+ * A set of every splat the instances `ids` (with everything below them) carry in `doc` -- in
+ * every tile it lists, so at every level of detail, not only those drawn now -- bounded by the
+ * instances' bounds: a combination kept as an object. Null when they carry none.
+ */
+export function setFromInstances(
+  doc: Pick<InstancesDoc, "instances" | "byId" | "tiles">,
+  ids: readonly number[],
+  name: string,
+  key: string,
+  created: number,
+): CustomSet | null {
+  const wanted = withDescendants(doc, ids);
+  const tiles: Record<string, number[]> = {};
+  let splats = 0;
+  for (const [checksum, runs] of doc.tiles) {
+    const ranges: number[] = [];
+    let at = 0;
+    for (let k = 0; k + 1 < runs.length; k += 2) {
+      const count = runs[k + 1] ?? 0;
+      if (count > 0 && wanted.has(runs[k] ?? 0)) {
+        const last = ranges.length - 2;
+        if (last >= 0 && (ranges[last] ?? 0) + (ranges[last + 1] ?? 0) === at)
+          ranges[last + 1] = (ranges[last + 1] ?? 0) + count;
+        else ranges.push(at, count);
+        splats += count;
+      }
+      at += Math.max(0, count);
+    }
+    if (ranges.length > 0) tiles[checksum] = ranges;
+  }
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (const id of ids) {
+    const bounds = doc.byId.get(id)?.bounds;
+    if (!bounds) continue;
+    for (let a = 0; a < 3; a++) {
+      min[a] = Math.min(min[a] ?? Infinity, bounds.min[a] ?? Infinity);
+      max[a] = Math.max(max[a] ?? -Infinity, bounds.max[a] ?? -Infinity);
+    }
+  }
+  if (splats === 0 || !min.every(Number.isFinite) || !max.every(Number.isFinite)) return null;
+  return { key, name, tiles, splats, bounds: { min, max }, created };
 }
 
 /** The sets as stored. */

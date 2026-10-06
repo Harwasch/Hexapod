@@ -1,4 +1,5 @@
 import {
+  type Camera as CesiumCamera,
   CameraEventType,
   Transforms,
   Matrix4,
@@ -11,6 +12,7 @@ import {
   HeadingPitchRange,
   Math as CesiumMath,
   Rectangle,
+  sampleTerrainMostDetailed,
   type Scene,
   type CesiumWidget,
 } from "cesium";
@@ -25,6 +27,8 @@ import { isTyping } from "@/lib/hotkeys";
 import { throttle } from "@/lib/throttle";
 
 import type { ArrivalPose } from "./flightRetarget";
+import { Glide, type GlideCarry, type GlidePose } from "./glide";
+import { plausibleGround } from "./placement";
 import type { ScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatCollider } from "./SplatCollider";
 import type { SceneEvents } from "./types";
@@ -38,12 +42,37 @@ export interface FlyOptions {
   onComplete?: () => void;
   /** Called instead when the flight is replaced or cancelled before it arrives. */
   onCancel?: () => void;
-  /**
-   * The flight's time curve, quadratic in-out (Cesium's) by default. A flight that replaces
-   * one already under way passes a curve that starts at the camera's current speed
-   * (flightRetarget.ts), so the hand-over is not a stop and a re-launch.
-   */
-  easing?: (time: number) => number;
+}
+
+/** What `glide` reports back: arrival, or the flight given up for another, or for a hand. */
+export interface GlideOptions {
+  /** Seconds; by default the path's own length decides (glide.ts). */
+  durationS?: number;
+  onComplete?: () => void;
+  /** Called instead when another flight, a gesture or a key takes the camera first. */
+  onCancel?: () => void;
+}
+
+/** A flight `glide` started: pointed at a better pose on the way, or stopped. */
+export interface GlideHandle {
+  /** Moves where the flight is going, smoothly, however far along it is. */
+  retarget(pose: GlidePose): void;
+  /** Stops it where it is (its `onCancel` is called). */
+  cancel(): void;
+  /** Whether it is still flying. */
+  readonly active: boolean;
+}
+
+/** The glide under way: its flight, its callbacks, and what stands in for it on the camera. */
+interface ActiveGlide {
+  glide: Glide;
+  options: GlideOptions;
+  /** The last two poses it gave the camera, Earth-fixed, with their times (`motion`). */
+  trail: { at: number; position: Cartesian3; heading: number; pitch: number }[];
+  /** Stands in for a Cesium flight on the camera (`_currentFlight`), so a `camera.flyTo` from
+   *  anywhere, or `cancelFlight`, ends this glide first, as it would a flight of its own. */
+  sentinel: { cancelTween: () => void };
+  handle: GlideHandle & { active: boolean };
 }
 
 const scratchCarto = new Cartographic();
@@ -78,6 +107,27 @@ const FLOOR_CHECK_MIN_INTERVAL_MS = 1500;
 const ROLL_TOLERANCE_RAD = 0.0005;
 /** Largest correction the floor check applies; more than this is a mis-sample, not the ground. */
 const MAX_FLOOR_LIFT_M = 40;
+/** How long the floor check's lift takes (s). */
+const FLOOR_LIFT_S = 0.6;
+/**
+ * A camera this far under the terrain at full detail (m) once a flight has landed is
+ * underground: black, or the inside of the earth. Less is a scan's own ground or the
+ * photorealistic world's, a few metres off the terrain model, which the floor check handles.
+ */
+const UNDERGROUND_M = 25;
+/** A camera found underground is brought up to this far over the terrain (m), in this long (s). */
+const SURFACED_M = 30;
+const SURFACE_S = 1.2;
+
+/**
+ * Where a camera that landed at `height` over terrain sampled at `terrain` is brought up to,
+ * or null when it is not underground (or the terrain is no answer worth believing).
+ */
+export function surfacedHeight(height: number, terrain: number | undefined): number | null {
+  const ground = plausibleGround(terrain);
+  if (ground === undefined || height >= ground - UNDERGROUND_M) return null;
+  return ground + SURFACED_M;
+}
 /** Wheel events closer than this belong to one gesture. */
 const WHEEL_GESTURE_MS = 250;
 /** A cursor that moved less than this (Manhattan pixels) is still over the same point. */
@@ -165,9 +215,13 @@ export class CameraController {
   /**
    * Fetches ahead what a dedicated splat renderer will show where a flight ends, returning its
    * cancel (`prefetchScanDestination`, set by the scene manager; SiteManager's fly-to does the
-   * same for its own legs).
+   * same for its own glides).
    */
   private prefetch: ((destination: ScanDestination) => () => void) | null = null;
+  /** The glide under way, if any (`glide`). */
+  private current: ActiveGlide | null = null;
+  /** The clock glides run on (ms; `setGlideClock`). */
+  private glideClock: () => number = () => performance.now();
 
   constructor(
     private readonly viewer: CesiumWidget,
@@ -217,6 +271,11 @@ export class CameraController {
     window.addEventListener("keyup", this.onPassKey);
     window.addEventListener("blur", this.onPassBlur);
     const removeGuard = this.scene.preRender.addEventListener(this.guard);
+    // A glide moves the camera at the start of every frame, before anything reads it.
+    const removeGlide = this.scene.preUpdate.addEventListener(this.stepGlide);
+    // A hand on the map takes the camera from a glide at once: a press, a wheel, a pinch.
+    canvas.addEventListener("pointerdown", this.interruptGlide);
+    canvas.addEventListener("wheel", this.interruptGlide, { passive: true });
     this.unsubscribe.push(
       () => {
         container.removeEventListener("wheel", this.onSurfaceWheel, { capture: true });
@@ -224,6 +283,9 @@ export class CameraController {
         window.removeEventListener("keyup", this.onPassKey);
         window.removeEventListener("blur", this.onPassBlur);
         removeGuard();
+        removeGlide();
+        canvas.removeEventListener("pointerdown", this.interruptGlide);
+        canvas.removeEventListener("wheel", this.interruptGlide);
       },
       () => {
         canvas.removeEventListener("pointerdown", this.onPointerHeld);
@@ -381,6 +443,8 @@ export class CameraController {
     if (this.occludedAt(scratchWindow, hit.distance)) return;
     event.preventDefault();
     event.stopPropagation();
+    // Stopped here, it never reaches the canvas's own listener that ends a glide.
+    this.endGlide("cancel");
     const pixels = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY;
     const notches = CesiumMath.clamp(pixels / 100, -3, 3);
     const next = hit.distance * Math.pow(SURFACE_ZOOM_STEP, -notches);
@@ -498,12 +562,19 @@ export class CameraController {
     // Only ever a small correction: a big difference means the sample hit something else
     // (a roof edge, a tree) rather than the ground the camera is over.
     if (lift > MAX_FLOOR_LIFT_M) return;
-    camera.flyTo({
-      destination: Cartesian3.fromRadians(carto.longitude, carto.latitude, floor),
-      orientation: { heading: camera.heading, pitch: camera.pitch, roll: camera.roll },
-      duration: 0.35,
-      easingFunction: EasingFunction.QUADRATIC_OUT,
-    });
+    // Eased in as well as out: the camera is at rest, and a lift that leaves at full speed
+    // (Cesium's quadratic-out, as it was) is a jolt straight after a fly-to has landed.
+    this.glide(
+      {
+        longitude: CesiumMath.toDegrees(carto.longitude),
+        latitude: CesiumMath.toDegrees(carto.latitude),
+        height: floor,
+        heading: CesiumMath.toDegrees(camera.heading),
+        pitch: CesiumMath.toDegrees(camera.pitch),
+        ground: { height: surface, measured: true },
+      },
+      { durationS: FLOOR_LIFT_S },
+    );
   }
 
   /** Whether a splat's solids lie straight below the camera, within a floor correction. */
@@ -697,6 +768,7 @@ export class CameraController {
    * negative towards straight down) and stops at both.
    */
   orbit(pivot: Cartesian3, headingRad: number, pitchDeltaRad: number): void {
+    this.endGlide("cancel");
     const camera = this.viewer.camera;
     const pitch = CesiumMath.toDegrees(camera.pitch);
     const nextPitch = CesiumMath.clamp(
@@ -788,6 +860,7 @@ export class CameraController {
 
   /** Slides the camera parallel to the ground by a screen-space amount (pixels at the view centre). */
   pan(dxPx: number, dyPx: number): void {
+    this.endGlide("cancel");
     const camera = this.viewer.camera;
     const pivot = this.pivotAtCenter();
     const distance = pivot ? Cartesian3.distance(camera.positionWC, pivot) : this.pose().altitude;
@@ -810,6 +883,7 @@ export class CameraController {
 
   /** Moves toward (factor < 1) or away from (factor > 1) the view centre, keeping it centred. */
   zoomToward(pivot: Cartesian3, factor: number): void {
+    this.endGlide("cancel");
     const camera = this.viewer.camera;
     const toPivot = Cartesian3.subtract(pivot, camera.positionWC, scratchDirection);
     const distance = Cartesian3.magnitude(toPivot);
@@ -826,6 +900,7 @@ export class CameraController {
   /** Zoom toward the point under the cursor by a fixed fraction of the remaining distance. */
   private readonly onObjectWheel = (event: WheelEvent): void => {
     event.preventDefault();
+    this.endGlide("cancel");
     const camera = this.viewer.camera;
     scratchWindow.x = event.offsetX;
     scratchWindow.y = event.offsetY;
@@ -972,11 +1047,210 @@ export class CameraController {
         roll: 0,
       },
       duration: options.durationS ?? this.durationFor(destination),
-      easingFunction: options.easing ?? EasingFunction.QUADRATIC_IN_OUT,
+      easingFunction: EasingFunction.QUADRATIC_IN_OUT,
       pitchAdjustHeight: this.pitchAdjustHeight(height),
       complete: options.onComplete,
       cancel: options.onCancel,
     });
+  }
+
+  /**
+   * Flies to `pose` as one continuous flight that can be pointed elsewhere on the way
+   * (glide.ts): the site fly-to, whose destination keeps improving while it flies. The camera
+   * leaves and lands at rest, never goes below the ground the globe has under it, and a
+   * `retarget` moves the destination without a jump in position or speed. Anything else that
+   * takes the camera -- another flight (Cesium's `flyTo` included), a press or a wheel on the
+   * map, the keyboard, explore mode -- ends it, with `onCancel`.
+   *
+   * Cesium's tilesets preload the destination's tiles during it, as for one of Cesium's own
+   * flights (`preloadFlightDestinations`): the glide stands in for one on the camera.
+   */
+  glide(pose: GlidePose, options: GlideOptions = {}): GlideHandle {
+    this.flightCount += 1;
+    // A glide that replaces one under way takes its motion over rather than stopping dead.
+    const carry = this.motion();
+    this.endGlide("cancel");
+    const camera = this.viewer.camera;
+    camera.cancelFlight();
+    const start = camera.positionCartographic;
+    const globe = this.scene.globe;
+    const glide = new Glide(
+      {
+        longitude: CesiumMath.toDegrees(start.longitude),
+        latitude: CesiumMath.toDegrees(start.latitude),
+        height: start.height,
+        heading: CesiumMath.toDegrees(camera.heading),
+        pitch: CesiumMath.toDegrees(camera.pitch),
+      },
+      pose,
+      {
+        ground: (longitude, latitude) =>
+          globe.getHeight(Cartographic.fromDegrees(longitude, latitude, 0, scratchCarto)),
+      },
+      this.glideClock(),
+      { durationS: options.durationS, startGround: this.lastSurfaceHeight, carry },
+    );
+    const handle = {
+      active: true,
+      retarget: (next: GlidePose) => {
+        if (this.current?.handle !== handle) return;
+        glide.retarget(next);
+        this.preloadDestination(glide.aim);
+      },
+      cancel: () => {
+        if (this.current?.handle === handle) this.endGlide("cancel");
+      },
+    };
+    const sentinel = {
+      cancelTween: () => {
+        if (this.current?.sentinel === sentinel) this.endGlide("cancel");
+      },
+    };
+    this.current = { glide, options, sentinel, handle, trail: [] };
+    (camera as unknown as { _currentFlight?: unknown })._currentFlight = sentinel;
+    this.preloadDestination(glide.aim);
+    this.scene.requestRender();
+    return handle;
+  }
+
+  /**
+   * The clock glides run on: `performance.now` (null), or a test's, which steps a fixed time
+   * per frame so a flight's path is measured frame by frame at 60 fps on any machine (e2e
+   * siteFlight.spec.ts, under software GL).
+   */
+  setGlideClock(clock: (() => number) | null): void {
+    this.glideClock = clock ?? (() => performance.now());
+  }
+
+  /** Whether a glide (`glide`) has the camera. */
+  get gliding(): boolean {
+    return this.current !== null;
+  }
+
+  /**
+   * Tells Cesium's tilesets where the glide is going, as `camera.flyTo` does for its own
+   * flights, so the destination's tiles load during the flight (the preload flight pass).
+   */
+  private preloadDestination(pose: ArrivalPose): void {
+    const scene = this.scene as Scene & {
+      preloadFlightCamera?: CesiumCamera;
+      preloadFlightCullingVolume?: unknown;
+    };
+    const preload = scene.preloadFlightCamera;
+    if (!preload) return;
+    preload.setView({
+      destination: Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height),
+      orientation: {
+        heading: CesiumMath.toRadians(pose.heading),
+        pitch: CesiumMath.toRadians(pose.pitch),
+        roll: 0,
+      },
+    });
+    scene.preloadFlightCullingVolume = preload.frustum.computeCullingVolume(
+      preload.positionWC,
+      preload.directionWC,
+      preload.upWC,
+    );
+  }
+
+  /** Each frame, first thing: the glide's pose for this moment, and its arrival. */
+  private readonly stepGlide = (): void => {
+    const current = this.current;
+    if (!current) return;
+    const at = this.glideClock();
+    const pose = current.glide.step(at);
+    const position = Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height);
+    this.viewer.camera.setView({
+      destination: position,
+      orientation: {
+        heading: CesiumMath.toRadians(pose.heading),
+        pitch: CesiumMath.toRadians(pose.pitch),
+        roll: 0,
+      },
+    });
+    current.trail = [
+      ...current.trail.slice(-1),
+      { at, position, heading: pose.heading, pitch: pose.pitch },
+    ];
+    if (current.glide.done) this.endGlide("complete");
+  };
+
+  /** How the glide under way is moving now, from its last two frames; none without one. */
+  private motion(): GlideCarry | undefined {
+    const [a, b] = this.current?.trail ?? [];
+    if (!a || !b) return undefined;
+    const dt = (b.at - a.at) / 1000;
+    if (!(dt > 0)) return undefined;
+    const turn = ((((b.heading - a.heading + 180) % 360) + 360) % 360) - 180;
+    return {
+      velocity: {
+        x: (b.position.x - a.position.x) / dt,
+        y: (b.position.y - a.position.y) / dt,
+        z: (b.position.z - a.position.z) / dt,
+      },
+      heading: turn / dt,
+      pitch: (b.pitch - a.pitch) / dt,
+    };
+  }
+
+  /** A press or a wheel on the map: the person takes the camera. */
+  private readonly interruptGlide = (): void => {
+    if (this.current) this.endGlide("cancel");
+  };
+
+  /** Ends the glide under way, if any, and says how. */
+  private endGlide(how: "complete" | "cancel"): void {
+    const current = this.current;
+    if (!current) return;
+    this.current = null;
+    current.handle.active = false;
+    const camera = this.viewer.camera as unknown as { _currentFlight?: unknown };
+    if (camera._currentFlight === current.sentinel) camera._currentFlight = undefined;
+    if (how === "complete") {
+      current.options.onComplete?.();
+      void this.surfaceIfUnderground();
+    } else current.options.onCancel?.();
+  }
+
+  /**
+   * The last guard against a black arrival: once a glide has landed, the terrain under the
+   * camera is sampled at full detail, and a camera that ended up underground -- whatever aimed
+   * it there -- glides up to stand over it, if nothing has taken the camera meanwhile. The
+   * terrain the globe has loaded is not asked: on landing it can still be a coarse tile,
+   * hundreds of metres off in the mountains.
+   */
+  private async surfaceIfUnderground(): Promise<void> {
+    const provider = this.viewer.terrainProvider as { availability?: unknown };
+    if (!provider.availability) return;
+    const camera = this.viewer.camera;
+    const at = Cartographic.clone(camera.positionCartographic);
+    const position = Cartesian3.clone(camera.positionWC);
+    const { heading, pitch } = camera;
+    let terrain: number | undefined;
+    try {
+      const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
+        Cartographic.clone(at),
+      ]);
+      terrain = sample?.height;
+    } catch {
+      return;
+    }
+    const height = surfacedHeight(at.height, terrain);
+    if (height === null || this.current) return;
+    const untouched =
+      Cartesian3.distance(position, camera.positionWC) < 0.01 && camera.heading === heading;
+    if (!untouched) return;
+    this.glide(
+      {
+        longitude: CesiumMath.toDegrees(at.longitude),
+        latitude: CesiumMath.toDegrees(at.latitude),
+        height,
+        heading: CesiumMath.toDegrees(heading),
+        pitch: CesiumMath.toDegrees(pitch),
+        ground: { height: height - SURFACED_M, measured: true },
+      },
+      { durationS: SURFACE_S },
+    );
   }
 
   /**
@@ -1159,6 +1433,7 @@ export class CameraController {
   }
 
   cancelFlight(): void {
+    this.endGlide("cancel");
     this.viewer.camera.cancelFlight();
   }
 
@@ -1170,6 +1445,7 @@ export class CameraController {
   }
 
   destroy(): void {
+    this.endGlide("cancel");
     this.reportPose.cancel();
     for (const timer of this.settleTimers) clearTimeout(timer);
     clearInterval(this.idleRefresh);

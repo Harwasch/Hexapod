@@ -17,6 +17,8 @@ export type HotkeyGroup = "General" | "Views" | "Tools" | "Objects" | "Camera" |
 export interface Hotkey {
   /** As `useHotkey` takes it: "mod+k", "shift+?", "l". Empty for scene keys. */
   combo: string;
+  /** Other combos bound to the same action ("mod+y" beside "mod+shift+z"), printed after it. */
+  also?: readonly string[];
   label: string;
   group: HotkeyGroup;
   /** Shown instead of the formatted combo, for keys the scene handles. */
@@ -43,6 +45,9 @@ export const HOTKEYS = {
   agent: { combo: "a", label: "Agent activity", group: "General" },
   settings: { combo: ",", label: "Settings", group: "General" },
   escape: { combo: "escape", label: "Close, or step back", group: "General" },
+  // Not while typing: a text field keeps its own undo (features/shell/undoHotkeys.ts).
+  undo: { combo: "mod+z", label: "Undo", group: "General" },
+  redo: { combo: "mod+shift+z", also: ["mod+y"], label: "Redo", group: "General" },
   mapMenu: {
     combo: "",
     keys: ["Right-click"],
@@ -61,6 +66,11 @@ export const HOTKEYS = {
   sites: { combo: "s", label: "Switch site", group: "Tools" },
   bookmarks: { combo: "v", label: "Saved views", group: "Tools" },
   brush: { combo: "b", label: "Paint to select objects (brush)", group: "Objects" },
+  poke: {
+    combo: "k",
+    label: "Poke objects: drag a plant or object that moves, let go to see it ring",
+    group: "Objects",
+  },
   cycleObject: {
     combo: "",
     keys: ["[", "]"],
@@ -138,7 +148,16 @@ const KEY_NAMES: Record<string, string> = {
 /** The keys to show for a shortcut, one token per key cap: "mod+k" → ["⌘", "K"]. */
 export function hotkeyKeys(hotkey: Hotkey): string[] {
   if (hotkey.keys) return [...hotkey.keys];
-  const parts = hotkey.combo.split("+");
+  return comboKeys(hotkey.combo);
+}
+
+/** Every way to press a shortcut, each as `hotkeyKeys` shows it: the combo, then `also`. */
+export function hotkeyChoices(hotkey: Hotkey): string[][] {
+  return [hotkeyKeys(hotkey), ...(hotkey.also ?? []).map(comboKeys)];
+}
+
+function comboKeys(combo: string): string[] {
+  const parts = combo.split("+");
   const key = parts.at(-1) ?? "";
   // "?" already means Shift on the keyboards that need it; "Shift ?" would read as two keys.
   const modifiers = parts.slice(0, -1).filter((part) => !(part === "shift" && key === "?"));

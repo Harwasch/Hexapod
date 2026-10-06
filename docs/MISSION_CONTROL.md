@@ -90,6 +90,12 @@ labelled tools above the bar.
 - **Objects** beside the representation switcher (`features/sites/InstanceSearch`) opens the
   scan's objects panel as a popover over the regions (`data-hud-popover`, like the site
   switcher and the command box's results).
+- **Inferred** beside it, on a scan with inferred fill (`features/sites/InferredStyle`):
+  **Show · Highlight · Hide** for what an image model generated where no camera saw, with a
+  one-line legend under the strip while it is drawn ("Inferred: generated where no camera
+  saw. Not measured."). Highlight turns it purple and hatched and leaves the measured splats
+  as they are; the choice is kept on the device (`inferredStyle`), hidden until chosen.
+- **Methods**, on a scan that declares other methods' outputs: below.
 - **Plans** and **Fleet** open as a drawer at the right edge, full height (a bottom sheet on a
   phone): plans with detail + "Show on map", and machines with a treatment log. The map
   beside it stays live — it takes clicks, and a Fleet row flies to its machine and opens its
@@ -124,6 +130,10 @@ labelled tools above the bar.
   the Plan / Fleet drawer, the inspector and last the tool panel. A dialog, popover or tooltip
   that closes itself on Escape marks the key as handled, and the app's keys leave a handled
   key alone (`useHotkey`), so one press never does two things.
+- **Undo and redo** (`Ctrl+Z` / `⌘Z`; `Ctrl+Shift+Z` / `⌘⇧Z` or `Ctrl+Y`) take back and do
+  again what changed what the map shows — see "Undo and redo" below. In a text field, a text
+  area or editable content they are the browser's own; from anywhere else, a button or a switch
+  included, they are the app's.
 - **Status line** (`StatusLine`, bottom left) is one pill: the fleet in view ("Fleet: 4
   working · 2 need attention", counted as the Fleet window's KPIs count it), the agent's
   line ("Agent: <current task> +N tasks"; a reply holds it for 15 s, so the answer to what
@@ -151,6 +161,47 @@ labelled tools above the bar.
 - **Other pages**: the scan gallery (`view.html`) and the data console (`admin.html`) share a
   slim header — Globe · Scans · Data console (`src/shared/product.ts`) — on the same tokens
   and fonts. The phone's capture page (`upload.html`) stays on its own.
+
+## Undo and redo
+
+One linear history (`state/history.ts`), as every editor keeps it: `Ctrl+Z` / `⌘Z` takes back
+the last step, `Ctrl+Shift+Z` / `⌘⇧Z` or `Ctrl+Y` does it again, and anything new done after
+an undo empties what there was to redo. It keeps the last 50 steps. Each press is said in the
+toasts' place, one line replacing the last: "Undid: Hide Pumpkin 3" with **Redo** beside it,
+"Redid: …" with **Undo**, or "Nothing to undo". The keys are bound by `GlobalHotkeys`
+(`features/shell/undoHotkeys.ts`) from the registry and printed on the `?` sheet.
+
+What is a step, and how it is taken back:
+
+| Change                                                                                                                                                  | Where it is recorded                                     | Undo                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Hide, Show, Show only on an object (the selection card), a category's or an object's eye in the objects panel, the search's Hide all / Show only, Reset | `state/instances.ts`, every action that changes `hidden` | the scan's hidden set exactly as it was (a category partly hidden stays partly hidden)                                  |
+| A painted object made (**Use painted area**) or deleted                                                                                                 | `state/sceneSelect.ts` `addCustom` / `removeCustom`      | the scan's painted objects as they were, stored again; a deleted one returns at its place, so later ones keep their ids |
+| A layer switched on or off (Layers, the layer pills, the command box)                                                                                   | `features/layers/layerVisibility.ts`                     | the layer back; a basemap that a new one switched off comes back on                                                     |
+| Zones or tracks switched (the layer pills)                                                                                                              | `features/mission/quickLayers.ts`                        | switched back                                                                                                           |
+| Swipe comparison on or off                                                                                                                              | `features/compare/Compare.tsx`                           | switched back (the two layers it showed stay on)                                                                        |
+| A measurement removed, or Clear all                                                                                                                     | `features/measure/MeasurePanel.tsx`                      | the same entities back on the map (`MeasurementManager.remove` returns their restore) and in the list in the order made |
+| An area's corners moved, added or removed on the map                                                                                                    | `state/mission.ts` `reshapeArea` (from `SceneBridge`)    | the area exactly as it was; the undo is announced as an edit, so an open plan redrafts for it                           |
+
+Not recorded: camera moves and flights, selections and highlights (a click, the cycle keys,
+the brush's strokes, the panel's row highlight), the objects search's words, settings (the
+photorealistic world is one), and writes to the server (renames, a scan's scale, saved views,
+uploads) — those are confirmed where they are made and are not the map's state to flip back.
+
+- **One gesture, one step.** What a press changes in one task is one step: the card's Show
+  only (show everything, then hide the rest) is one, named from what it did.
+- **A toggle and its toggle back fold together.** The same thing changed again within 0.8 s
+  (an eye flicked off and on) joins the step before it, which disappears when the change comes
+  to nothing. Nothing folds into a step that was undone or redone.
+- **A site's steps stay at the site.** Steps about the active site's things — its scans'
+  objects, painted objects, areas — are dropped when the active site changes, so `Ctrl+Z` at
+  site B never reaches into site A (which may still be loaded, off screen), and coming back to
+  A starts afresh: its scans reload and the old ids mean nothing. Layers, the comparison and
+  measurements are the globe's and stay. A step whose scan was loaded again since (a new
+  table) is dropped when reached, as is a step that fails, and the next one is undone.
+- **Opting in.** A new change becomes undoable with `recordAction(label, apply, revert)` (or
+  `record` once applied, with `scope: "site"` and an `alive` check when it belongs to the
+  site); while a step is replayed nothing is recorded, so `revert` may call recording actions.
 
 ## Planning with the agent
 
@@ -250,6 +301,39 @@ evaluation set: `uv run python -m app.scripts.eval_planner` runs it against the 
 session's time-to-approve, redrafts and unedited approvals. `docs/PLANNING.md` is the
 product record.
 
+## Comparing methods (bake-offs)
+
+A bake-off is judged by eye, in the app, on the same scan: object segmentation, inferred fill
+and motion skins each have candidate methods, published beside the scan's tiles and declared on
+its tileset (`extras.variants`, docs/SCENE_OBJECTS.md "Variants"). When the scan shown declares
+any, **Methods** appears in the strip beside Splat · Mesh · Points
+(`features/sites/CompareMethods`). It opens a panel with one row per system the scan offers:
+
+- **Objects**, **Fill**, **Motion**: **Today** (what the scan publishes now, the default) and
+  each method by its label -- labels are shown, it is not blind -- and under the row what the
+  picked method does, in a sentence.
+- A pick swaps in place: no reload, the camera where it is, under PlayCanvas, Spark or
+  CesiumJS. Objects reload the objects panel and clear the selection (painted objects stay);
+  Fill swaps the inferred layer (picking one while Inferred is on Hide shows it); Motion swaps
+  the skin the wind moves.
+- The pick is kept per scan for the session, so moving between scans and back keeps it; a new
+  session starts from Today.
+- A row says "Loading" while a pick's files arrive and "Did not load: …" if they do not, and
+  then draws nothing for that system rather than the method before.
+- Under that, **What to look for**: where the difference between methods shows. Objects: click
+  things (the first click should pick the whole object, the next its part; ground types are
+  under Ground & soil in the Objects panel). Fill: set Inferred to Highlight and orbit. Motion:
+  turn up Settings › Simulated wind and watch trees and shrubs; rigid things like the spool
+  should not bend. A method can say its own (`look` in its entry).
+- Each row is one radio group (arrow keys move, Space or Enter picks): segments side by side
+  while the labels fit one line, otherwise one row a method with the picked one lit, as on the
+  spool, whose motion bake-off has five. It fits a 400 px phone, and the panel scrolls on a
+  short screen.
+
+Generated content is easy to tell apart while comparing fills: **Highlight** (beside the
+switcher) turns every inferred splat purple and hatched and changes no measured pixel, and
+**Hide** takes it away.
+
 ## Data flow
 
 ```text
@@ -295,6 +379,14 @@ Fonts with system fallbacks; the light glass theme is opt-in in Settings.
   Layers' favourites and Compare, the site switcher, the drawer beside a selection, the phone
   tab bar, the site pin, the console's labels and the shared header.
 - `src/__tests__/siteLoadToast.test.ts` — a failed model is said by the pill, not a toast.
+- `src/__tests__/history.test.ts` — the history (order, redo emptied by a new step, the 50
+  kept, dead and failing steps skipped, nothing recorded while replaying, the site's steps
+  dropped on a site change) and each recorded change undone and redone exactly: objects
+  (a category partly hidden included, Show only as one step, quick toggles folded, a reloaded
+  scan), painted objects, measurements, layers in an exclusive group, an area reshaped.
+- `src/__tests__/undoHotkeys.test.tsx` — the keys and their line, a text field, a text area
+  and editable content left alone, the registry and the `?` sheet, the selection card's Hide and
+  Show only taken back and done again, a measurement removed and Clear all.
 - `src/__tests__/statusLine.test.tsx` — fleet counts and lines, the agent's line, the
   activity log, globe-scale summary, model load feedback.
 - `e2e/app.spec.ts` "mission control" — tabs, plan → show on map, a fleet row → its card
@@ -302,7 +394,22 @@ Fonts with system fallbacks; the light glass theme is opt-in in Settings.
   pin; "interaction" — the command box, `?`, Settings › Advanced; the site switcher; "a scan
   object in the selection card" — one press of `B`, then of `V`; one Escape, one step; Tab
   not trapped on the body; an object replacing a machine and back; the touch screen's brush.
+- `e2e/undo.spec.ts` — `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` in the app, the line and its
+  button, the command box keeping its own undo, a layer switched back, an area's corner put
+  back and taken off again, both keys on the sheet;
+  `e2e/undoYard.spec.ts` (a scene spec) — on the synthetic yard, the card's Hide and Show
+  only taken back with two presses and done again with two.
 - `e2e/layout.spec.ts` — no surfaces overlap at desktop, laptop and phone sizes (the
   selection card for a machine and for an object with the brush out among them), and the
   phone layout (tab bar, More, full-screen search, one-row status, the credits strip with and
   without Google's logo).
+- `src/__tests__/compareMethods.test.tsx` — the methods panel: a row per system, Today first,
+  labels shown, picks from the keyboard, long names one a row in a vertical radio group (no
+  native select), what to look for (the system's, or the method's own), "Did not load"; and
+  Show · Highlight · Hide with its legend. `src/__tests__/variants.test.ts` — `extras.variants`
+  read defensively (`look` included), the session's picks, the objects and skin swaps.
+- `e2e/variants.spec.ts` — on the synthetic yard under PlayCanvas, Spark and CesiumJS: an
+  objects pick changes what the objects panel lists, a fill pick draws its layer and not the
+  other's, Highlight changes only inferred pixels, Hide removes them, a motion pick swaps the
+  skin; the panel at 400 px and from the keyboard, with the yard's names and the spool's long
+  ones.

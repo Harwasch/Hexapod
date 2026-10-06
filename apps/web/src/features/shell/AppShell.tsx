@@ -8,6 +8,7 @@ import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
+import { useSkinPoke } from "@/state/skinPoke";
 import { useUi } from "@/state/ui";
 
 import { AddPanel } from "../add-data/AddPanel";
@@ -19,6 +20,7 @@ import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
 import { LayerAboutSheet } from "../layers/LayerAboutSheet";
 import { LayersPanel } from "../layers/LayersPanel";
+import { PokeBadge } from "../living/PokeBadge";
 import { SimulatedBadge } from "../living/SimulatedBadge";
 import { MapContextMenu } from "../map/MapContextMenu";
 import { MeasurePanel } from "../measure/MeasurePanel";
@@ -41,6 +43,7 @@ import { MapCorner } from "./MapCorner";
 import { PhoneTabBar } from "./PhoneTabBar";
 import { stepBack } from "./stepBack";
 import { ToolRail } from "./ToolRail";
+import { useUndoHotkeys } from "./undoHotkeys";
 
 const SettingsSheet = lazy(() =>
   import("../settings/SettingsSheet").then((m) => ({ default: m.SettingsSheet })),
@@ -73,6 +76,8 @@ function GlobalHotkeys() {
   useHotkey(HOTKEYS.brush.combo, (event) => {
     if (scene?.sceneSelect.togglePainting()) event.preventDefault();
   });
+  // Poke and drag objects that move by skins (cesium/skinPoke.ts).
+  useHotkey(HOTKEYS.poke.combo, () => useSkinPoke.getState().toggle());
   useHotkey(HOTKEYS.resetNorth.combo, () => scene?.camera.resetNorth());
   useHotkey(HOTKEYS.topDown.combo, () => scene?.camera.topDown());
   useHotkey(HOTKEYS.home.combo, () => scene?.camera.flyHome());
@@ -94,6 +99,8 @@ function GlobalHotkeys() {
   useHotkey(HOTKEYS.escape.combo, (event) => {
     if (stepBack(scene)) event.preventDefault();
   });
+  // Ctrl+Z / Ctrl+Shift+Z: what was hidden, painted, switched or removed (`state/history.ts`).
+  useUndoHotkeys();
   return null;
 }
 
@@ -182,6 +189,7 @@ export function AppShell() {
           <div className="hud-stack hud-messages">
             <ErrorBoundary inline label="Simulated motion">
               <SimulatedBadge />
+              <PokeBadge />
             </ErrorBoundary>
             <Toasts />
           </div>

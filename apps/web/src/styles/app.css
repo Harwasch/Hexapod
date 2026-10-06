@@ -1765,7 +1765,7 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   text-overflow: ellipsis;
 }
 
-/* Inferred fill (lib/inferred.ts): labelled as what it is, and switchable off. */
+/* Inferred fill (lib/inferred.ts): labelled as what it is; Show, Highlight or Hide. */
 .rep-switch__inferred {
   display: flex;
   align-items: center;
@@ -1775,6 +1775,146 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   color: var(--text-secondary);
   white-space: nowrap;
   cursor: help;
+}
+
+.rep-switch__inferred-control .glass-segment__item {
+  min-height: 1.5rem;
+  padding: 0 0.55rem;
+  font-size: var(--text-xs);
+  font-style: normal;
+}
+
+/* The purple of inferred content (lib/inferred.ts INFERRED_PURPLE), hatched as Highlight draws it. */
+.inferred-legend {
+  --inferred: #b36bff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin: 0.3rem 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.inferred-legend__swatch {
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: var(--inferred);
+}
+
+.inferred-legend__swatch--highlight {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--inferred) 0 3px,
+    color-mix(in srgb, var(--inferred) 45%, black) 3px 6px
+  );
+}
+
+/* Compare methods (lib/variants.ts): one row per system, Today and the variants. */
+.compare-popover {
+  width: min(22rem, calc(100vw - 2rem));
+  /* Five methods a system and a hint each outgrow a short screen: the panel scrolls. */
+  max-height: min(var(--radix-popover-content-available-height, 80vh), 80vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.7rem;
+}
+
+.compare {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.compare__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.compare__row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.compare__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.compare__label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.compare__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.compare__status[data-state="error"] {
+  color: var(--danger);
+}
+
+.compare__control .glass-segment__item {
+  padding: 0 0.5rem;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* Long method names: the same radio group, one row a method (packages/ui `--vertical`). */
+.compare__control--list .glass-segment__item {
+  padding: 0.4rem 0.7rem;
+  white-space: normal;
+}
+
+.compare__about {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+/* What to look for to judge the system: a hint, in the accent, under what the method does. */
+.compare__look {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.compare__look-icon {
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--accent-strong);
+}
+
+.compare__look-label {
+  font-weight: 600;
+  color: var(--accent-strong);
 }
 
 /* Scene objects (lib/categories.ts): categories to hide and highlight, beside the switcher. */
@@ -2116,6 +2256,11 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   font-size: var(--text-xs);
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+}
+
+.toast__action {
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 /* ---- Explore HUD --------------------------------------------------------- */
@@ -2594,8 +2739,15 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .shortcuts__row dd {
   display: inline-flex;
   flex: none;
+  align-items: center;
   gap: 3px;
   margin: 0;
+}
+
+.shortcuts__or {
+  padding: 0 0.2rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
 /* On a phone the message row keeps to the two newest toasts. */
@@ -2615,5 +2767,18 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 @media (max-width: 899px) {
   .rep-switch__label {
     display: none;
+  }
+
+  /* A scan with inferred fill, methods to compare and objects has more than one row's worth
+     of controls on a phone: they wrap, centred, in a rounded panel rather than a pill. */
+  .rep-switch {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 0.35rem;
+    padding: 0.35rem 0.5rem;
+  }
+
+  .rep-switch:has(> :nth-child(4)) {
+    border-radius: var(--glass-radius);
   }
 }

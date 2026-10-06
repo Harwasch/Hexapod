@@ -96,6 +96,7 @@ export function LayersPanel() {
             filter={filter}
             onFilter={setFilter}
             groups={groups}
+            catalog={catalog.data ?? []}
             loading={catalog.isLoading}
             builtin={catalog.builtin}
             onAdd={() => openAdd("link")}
@@ -110,6 +111,7 @@ function LayerCatalog({
   filter,
   onFilter,
   groups,
+  catalog,
   loading,
   builtin,
   onAdd,
@@ -117,6 +119,8 @@ function LayerCatalog({
   filter: string;
   onFilter: (value: string) => void;
   groups: { category: LayerCategory; layers: Layer[] }[];
+  /** Every layer, filtered or not: a switch's undo needs its exclusive group's others. */
+  catalog: readonly Layer[];
   loading: boolean;
   builtin: boolean;
   onAdd: () => void;
@@ -167,7 +171,7 @@ function LayerCatalog({
           </div>
           <ul className="glass-list">
             {layers.map((layer) => (
-              <LayerCard key={layer.id} layer={layer} />
+              <LayerCard key={layer.id} layer={layer} catalog={catalog} />
             ))}
           </ul>
         </section>

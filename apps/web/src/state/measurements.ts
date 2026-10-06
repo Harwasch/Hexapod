@@ -28,6 +28,8 @@ interface MeasurementsState {
   upsert: (measurement: Measurement) => void;
   remove: (id: string) => void;
   clear: () => void;
+  /** Puts removed measurements back, in the order they were made (an undo; `MeasurePanel`). */
+  restore: (items: readonly Measurement[]) => void;
 }
 
 export const useMeasurements = create<MeasurementsState>()((set) => ({
@@ -42,4 +44,10 @@ export const useMeasurements = create<MeasurementsState>()((set) => ({
     }),
   remove: (id) => set((s) => ({ items: s.items.filter((m) => m.id !== id) })),
   clear: () => set({ items: [] }),
+  restore: (back) =>
+    set((s) => {
+      const known = new Set(s.items.map((m) => m.id));
+      const items = [...s.items, ...back.filter((m) => !known.has(m.id))];
+      return { items: items.sort((a, b) => a.createdAt - b.createdAt) };
+    }),
 }));

@@ -49,10 +49,17 @@ import {
   type Scene,
 } from "cesium";
 
-import { instancesRefOf, loadInstances, tileInstanceIds, type InstancesDoc } from "@/lib/instances";
+import {
+  loadInstances,
+  tileInstanceIds,
+  type InstancesDoc,
+  type InstancesRef,
+} from "@/lib/instances";
 import { createLogger } from "@/lib/log";
+import { instancesRefFor, NO_VARIANTS, variantsOf } from "@/lib/variants";
 import { useInstances } from "@/state/instances";
-import { effectiveDoc, onCustomSetsChange } from "@/state/sceneSelect";
+import { effectiveDoc, onCustomSetsChange, useSceneSelect } from "@/state/sceneSelect";
+import { onPickChange, pickedVariant, useVariants, type VariantStatus } from "@/state/variants";
 
 import { cesiumPickSource } from "./sceneSelect/cesiumPickSource";
 import { CESIUM_PRIORITY, registerPickSource } from "./sceneSelect/pickSources";
@@ -807,10 +814,16 @@ export interface AttachInstancesOptions {
 
 /**
  * Lets `tileset`'s objects be hidden and highlighted, when its root declares
- * `extras.instances`: the file is fetched once, its table put in the store
- * (`state/instances.ts`) under `assetId`, and the hooks installed on the splat primitive.
- * Returns the disposer. A tileset without instances, or an engine without the hooks, costs
- * nothing.
+ * `extras.instances` or offers objects variants (`extras.variants.objects`, lib/variants.ts):
+ * the file is fetched, its table put in the store (`state/instances.ts`) under `assetId`, and
+ * the hooks installed on the splat primitive. Returns the disposer. A tileset without
+ * instances, or an engine without the hooks, costs nothing.
+ *
+ * Which file is the pick's (`state/variants.ts`): Today's `extras.instances`, or a variant's
+ * `instances.json`. Picking another loads it and swaps it in where the old one was drawn --
+ * the same hooks, a new table -- with the scan's selection cleared (its ids were the old
+ * file's) and its painted objects drawn over the new one (lib/customSets.ts keys them by
+ * splat, not by id). A dedicated renderer follows through the store (scanInstances.ts).
  */
 export function attachInstances(
   tileset: Cesium3DTileset,
@@ -820,9 +833,16 @@ export function attachInstances(
   load: LoadInstances = loadInstances,
   { follower = false }: AttachInstancesOptions = {},
 ): () => void {
-  const ref = instancesRefOf((tileset.root as { extras?: unknown } | undefined)?.extras);
+  const extras = (tileset.root as { extras?: unknown } | undefined)?.extras;
   const url = (tileset as unknown as { resource?: { url?: string } }).resource?.url;
-  if (!ref || !url || !gpu) return () => undefined;
+  // A split object's tileset follows its own declaration; the scan's follows the pick.
+  const variants = follower ? NO_VARIANTS : variantsOf(extras);
+  const offersVariants = variants.objects.length > 0;
+  const current = (): { ref: InstancesRef | null; variant: string | null } => {
+    const picked = offersVariants ? pickedVariant(assetId, "objects", variants) : null;
+    return { ref: instancesRefFor(extras, picked), variant: picked?.name ?? null };
+  };
+  if (!url || !gpu || (current().ref === null && !offersVariants)) return () => undefined;
   let hook: SplatInstances | undefined;
   let disposed = false;
   const push = (): void => {
@@ -856,41 +876,98 @@ export function attachInstances(
   const offPick = follower
     ? () => undefined
     : registerPickSource(assetId, cesiumPickSource(tileset), CESIUM_PRIORITY);
-  load(url, ref)
-    .then((doc) => {
-      if (disposed) return;
-      base = doc;
-      hook = new SplatInstances(effectiveDoc(assetId, doc), gpu, splatTilesetOf(tileset));
-      if (!follower) {
-        ATTACHED.set(assetId, { tileset, doc, hook });
-        useInstances.getState().setTable(assetId, doc);
-      }
-      push();
-      log.info("instances attached", {
-        asset: assetId,
-        instances: doc.instances.length,
-        tiles: doc.tiles.size,
-        issues: doc.issues.length,
+  const report = (status: VariantStatus | null): void => {
+    if (offersVariants) useVariants.getState().setStatus(assetId, "objects", status);
+  };
+  /** Draws from `doc`: the hooks keep their place on the primitive, the table is replaced. */
+  const adopt = (doc: InstancesDoc): void => {
+    base = doc;
+    const drawn = effectiveDoc(assetId, doc);
+    if (hook) hook.setDoc(drawn);
+    else hook = new SplatInstances(drawn, gpu, splatTilesetOf(tileset));
+    if (!follower) {
+      // Before the table: a dedicated renderer reads the document as the store changes.
+      ATTACHED.set(assetId, { tileset, doc, hook });
+      useInstances.getState().setTable(assetId, doc);
+    }
+    push();
+    scene.requestRender();
+  };
+  /** Draws no objects: a pick that has none, or one that did not load. */
+  const drop = (): void => {
+    base = undefined;
+    hook?.destroy();
+    hook = undefined;
+    if (follower) return;
+    if (ATTACHED.get(assetId)?.tileset === tileset) ATTACHED.delete(assetId);
+    useInstances.getState().setTable(assetId, null);
+    scene.requestRender();
+  };
+  /** The file drawn now (its uri, "" for none), and which load is the latest. */
+  let shown: string | null = null;
+  let serial = 0;
+  const follow = (): void => {
+    const { ref, variant } = current();
+    const key = ref?.uri ?? "";
+    if (key === shown) return;
+    const swapping = shown !== null;
+    shown = key;
+    const mine = ++serial;
+    // What is selected was picked from the old file's ids.
+    if (swapping && !follower) clearSceneSelection(assetId);
+    if (ref === null) {
+      drop();
+      report({ state: "ready" });
+      return;
+    }
+    report({ state: "loading" });
+    load(url, ref)
+      .then((doc) => {
+        if (disposed || mine !== serial) return;
+        adopt(doc);
+        report({ state: "ready" });
+        log.info("instances attached", {
+          asset: assetId,
+          variant,
+          instances: doc.instances.length,
+          tiles: doc.tiles.size,
+          issues: doc.issues.length,
+        });
+        if (doc.issues.length > 0)
+          log.warn("instances.json had problems", { first: doc.issues[0] });
+      })
+      .catch((error: unknown) => {
+        if (disposed || mine !== serial) return;
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn("instances did not load; nothing to search", { variant, message });
+        // A pick that did not load is not drawn as if it had: no objects, and the panel says why.
+        if (swapping) drop();
+        report({ state: "error", message });
       });
-      if (doc.issues.length > 0) log.warn("instances.json had problems", { first: doc.issues[0] });
-    })
-    .catch((error: unknown) => {
-      log.warn("instances did not load; nothing to search", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
+  };
+  const offVariant = offersVariants ? onPickChange(assetId, "objects", follow) : () => undefined;
+  follow();
   return () => {
     disposed = true;
+    offVariant();
     offStore();
     offUpdate();
     offCustom();
     offPick();
     hook?.destroy();
     hook = undefined;
+    report(null);
     if (follower) return;
     if (ATTACHED.get(assetId)?.tileset === tileset) ATTACHED.delete(assetId);
     useInstances.getState().setTable(assetId, null);
   };
+}
+
+/** Clears a scene selection of `assetId`'s objects: its ids were a file's no longer drawn. */
+function clearSceneSelection(assetId: string): void {
+  const select = useSceneSelect.getState();
+  if (select.assetId !== assetId) return;
+  if (select.candidates.length > 0 || select.paint !== null) select.clear();
 }
 
 /** The splat primitive of a tileset, as the hooks see it. For harnesses and tests. */

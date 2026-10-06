@@ -60,6 +60,41 @@ export function resolveLayerUrl(tilesetUrl: string, uri: string): string {
   return resolved.href;
 }
 
+/**
+ * How inferred layers are drawn (a viewer's setting, `inferredStyle`): as they are, marked
+ * unmistakably (`INFERRED_HIGHLIGHT`), or not at all. The measured splats are never touched.
+ */
+export type InferredStyle = "show" | "highlight" | "hide";
+
+/** Every style, in the order the viewer offers them. */
+export const INFERRED_STYLES: readonly InferredStyle[] = ["show", "highlight", "hide"];
+
+export const INFERRED_STYLE_LABELS: Record<InferredStyle, string> = {
+  show: "Show",
+  highlight: "Highlight",
+  hide: "Hide",
+};
+
+/** The one line that says what inferred is, wherever it can be seen. */
+export const INFERRED_LEGEND = "Inferred: generated where no camera saw. Not measured.";
+
+/** The purple accent of inferred content, sRGB (the legend's swatch is the same colour). */
+export const INFERRED_PURPLE = "#b36bff";
+
+/**
+ * What Highlight does to an inferred splat (cesium/inferredLayers.ts): its colour pulled toward
+ * the purple (`tint`: `INFERRED_PURPLE` as the splats' own colours are stored, by `a`), every
+ * other band of `stripeM` metres across the layer darkened to `stripeDark`, and its opacity
+ * times `opacity` -- so a fill reads as hatched, see-through purple whatever colour it was
+ * painted.
+ */
+export const INFERRED_HIGHLIGHT = {
+  tint: [0.7, 0.42, 1.0, 0.7] as const,
+  stripeM: 0.35,
+  stripeDark: 0.45,
+  opacity: 0.8,
+};
+
 /** One line for a reader: what painted it and from how much. */
 export function describeEvidence(e: InferredEvidence): string {
   const confidence = Math.round(e.meanConfidence * 100);

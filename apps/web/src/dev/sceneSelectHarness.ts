@@ -34,9 +34,16 @@ import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats } from "@/cesium/splatInternals";
 import { ObjectCard } from "@/features/sites/ObjectCard";
 import { tileInstanceIds, withDescendants } from "@/lib/instances";
+import { projectTiles, visibleSplats } from "@/lib/splatPaint";
 import { castRay } from "@/lib/splatPick";
 import { useInstances } from "@/state/instances";
-import { objectSelected, selectedId, useSceneSelect } from "@/state/sceneSelect";
+import {
+  chosenCombination,
+  objectSelected,
+  selectedId,
+  selectedIds,
+  useSceneSelect,
+} from "@/state/sceneSelect";
 // The styles the card is drawn with in the app: the glass, and the selection card's own.
 import "@twin/ui/styles.css";
 import "@/styles/mission.css";
@@ -56,6 +63,11 @@ export interface SceneSelectHarness {
   view(id: number, headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
   /** Where instance `id`'s drawn splats are on screen (CSS px): their median and 10-90% box. */
   screenOf(id: number): { x: number; y: number; rect: Rect; splats: number } | null;
+  /**
+   * As `screenOf`, of the splats of `id` the brush would paint: those in front, seen from the
+   * camera (lib/splatPaint.ts `visibleSplats`), not hidden behind another object.
+   */
+  visibleOf(id: number): { x: number; y: number; rect: Rect; splats: number } | null;
   /** Every instance. */
   instances(): { id: number; parent: number | null; splats: number }[];
   /** The selection as the stores have it. */
@@ -64,8 +76,18 @@ export interface SceneSelectHarness {
     chain: number;
     index: number;
     selected: number | null;
+    /** What is selected: a combination's members, else the one chosen (`selectedIds`). */
+    selectedIds: number[];
+    /** The combination chosen, if one is. */
+    combination: { ids: number[]; iou: number } | null;
     mode: string;
-    paint: { best: number | null; iou: number; painted: number; live?: boolean } | null;
+    paint: {
+      ids: readonly number[];
+      best: number | null;
+      iou: number;
+      painted: number;
+      live?: boolean;
+    } | null;
     hidden: number[];
     highlighted: number[];
     custom: number;
@@ -175,6 +197,29 @@ export async function startSceneSelectHarness(options: {
 
   const settle = async (frames: number): Promise<void> => {
     for (let frame = 0; frame < frames; frame += 1) await nextFrame(scene);
+  };
+
+  /** The median and 10-90% box of points (CSS px). */
+  const spread = (
+    xs: number[],
+    ys: number[],
+  ): { x: number; y: number; rect: Rect; splats: number } | null => {
+    if (xs.length === 0) return null;
+    xs.sort((a, b) => a - b);
+    ys.sort((a, b) => a - b);
+    const q = (list: number[], f: number): number =>
+      list[Math.min(list.length - 1, Math.floor(f * list.length))] ?? 0;
+    return {
+      x: q(xs, 0.5),
+      y: q(ys, 0.5),
+      rect: {
+        x: q(xs, 0.1),
+        y: q(ys, 0.1),
+        width: q(xs, 0.9) - q(xs, 0.1),
+        height: q(ys, 0.9) - q(ys, 0.1),
+      },
+      splats: xs.length,
+    };
   };
 
   let held: Uint8ClampedArray | null = null;
@@ -287,22 +332,45 @@ export async function startSceneSelectHarness(options: {
           ys.push(at.y);
         }
       }
-      if (xs.length === 0) return null;
-      xs.sort((a, b) => a - b);
-      ys.sort((a, b) => a - b);
-      const q = (list: number[], f: number): number =>
-        list[Math.min(list.length - 1, Math.floor(f * list.length))] ?? 0;
-      return {
-        x: q(xs, 0.5),
-        y: q(ys, 0.5),
-        rect: {
-          x: q(xs, 0.1),
-          y: q(ys, 0.1),
-          width: q(xs, 0.9) - q(xs, 0.1),
-          height: q(ys, 0.9) - q(ys, 0.1),
-        },
-        splats: xs.length,
-      };
+      return spread(xs, ys);
+    },
+    visibleOf(id) {
+      const source = pickSourceOf(ASSET);
+      const doc = paintedDocOf(ASSET);
+      const toWorld = source?.toWorld();
+      if (!source || !doc || !toWorld) return null;
+      const tiles = source.tiles();
+      const ids = tiles.map((tile) => tileInstanceIds(doc, tile.checksum));
+      const hiddenIds = useInstances.getState().assets[ASSET]?.hidden;
+      const hidden = hiddenIds?.size ? withDescendants(doc, hiddenIds) : new Set<number>();
+      const camera = scene.camera;
+      const viewProj = Matrix4.multiply(
+        camera.frustum.projectionMatrix,
+        Matrix4.multiply(camera.viewMatrix, toWorld, new Matrix4()),
+        new Matrix4(),
+      );
+      // As the controller projects for the brush: 3 px cells, what is hidden left out.
+      const cellPx = 3;
+      const screen = projectTiles(
+        tiles,
+        Matrix4.toArray(viewProj),
+        scene.canvas.clientWidth,
+        scene.canvas.clientHeight,
+        cellPx,
+        hidden.size ? (tile, index) => !hidden.has(ids[tile]?.[index] ?? 0) : undefined,
+      );
+      const visible = visibleSplats(screen);
+      const wanted = withDescendants(doc, [id]);
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (let k = 0; k < screen.count; k += 1) {
+        if (!visible[k] || (screen.opacity[k] ?? 0) < 0.3) continue;
+        if (!wanted.has(ids[screen.tile[k] ?? 0]?.[screen.index[k] ?? 0] ?? 0)) continue;
+        const cell = screen.cell[k] ?? 0;
+        xs.push(((cell % screen.cols) + 0.5) * cellPx);
+        ys.push((Math.floor(cell / screen.cols) + 0.5) * cellPx);
+      }
+      return spread(xs, ys);
     },
     instances() {
       return (useInstances.getState().assets[ASSET]?.instances ?? []).map(
@@ -317,6 +385,11 @@ export async function startSceneSelectHarness(options: {
         chain: s.chain,
         index: s.index,
         selected: selectedId(s),
+        selectedIds: [...selectedIds(s)],
+        combination: (() => {
+          const combination = chosenCombination(s);
+          return combination ? { ids: [...combination.ids], iou: combination.iou } : null;
+        })(),
         mode: s.mode,
         paint: s.paint,
         hidden: [...(entry?.hidden ?? [])],

@@ -48,6 +48,7 @@ export function bindOneSelection(scene: SelectionScene = STORES_ONLY): () => voi
       (state.mode === "paint" && previous.mode !== "paint") ||
       (objectSelected(state) &&
         (state.candidates[state.index] !== previous.candidates[previous.index] ||
+          state.combination !== previous.combination ||
           state.assetId !== previous.assetId));
     if (!started) return;
     if (useMission.getState().selection) {

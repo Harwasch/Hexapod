@@ -20,6 +20,11 @@ export interface GlassSegmentedControlProps<T extends string> {
   /** Forwarded to the group element, for tests. */
   "data-testid"?: string;
   block?: boolean;
+  /**
+   * Side by side (the default) or stacked, one segment a row: arrow keys follow it, and
+   * assistive technology is told (`aria-orientation`).
+   */
+  orientation?: "horizontal" | "vertical";
   className?: string;
 }
 
@@ -29,6 +34,7 @@ export function GlassSegmentedControl<T extends string>({
   onValueChange,
   options,
   block = false,
+  orientation,
   className,
   ...aria
 }: GlassSegmentedControlProps<T>) {
@@ -39,9 +45,16 @@ export function GlassSegmentedControl<T extends string>({
       onValueChange={(next) => {
         if (next) onValueChange(next as T);
       }}
+      orientation={orientation}
+      aria-orientation={orientation}
       aria-label={aria["aria-label"]}
       data-testid={aria["data-testid"]}
-      className={clsx("glass-segment", block && "glass-segment--block", className)}
+      className={clsx(
+        "glass-segment",
+        block && "glass-segment--block",
+        orientation === "vertical" && "glass-segment--vertical",
+        className,
+      )}
     >
       {options.map((option) => (
         <ToggleGroup.Item

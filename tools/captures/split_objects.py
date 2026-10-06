@@ -541,18 +541,24 @@ def rebind_skin(
 ) -> tuple[dict, bytes]:
     """`skin.json` + `skin.bin` with every changed tile (old checksum -> new checksum, kept
     gaussians) re-bound: its runs without the removed gaussians and its rows without theirs.
-    Rows are re-packed in the new checksums' order, as `skin_scene` writes them."""
+    Rows are re-packed in the new checksums' order, as `skin_scene` writes them: the file's
+    own row width, and none for a skin of one handle."""
     from skin_scene import ROW_BYTES
 
-    rows = np.frombuffer(blob, np.uint8).reshape(-1, ROW_BYTES)
+    row_bytes = int(skin["weights"].get("rowBytes", ROW_BYTES))
+    rows = np.frombuffer(blob, np.uint8).reshape(-1, row_bytes)
+    handles = np.zeros(1 + max((int(s["id"]) for s in skin["skins"]), default=0), np.int64)
+    for s in skin["skins"]:
+        handles[int(s["id"])] = int(s["handles"])
     blocks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for checksum, entry in skin["tiles"].items():
         which = decode_runs(entry["skins"])
+        takes = handles[np.clip(which, 0, handles.size - 1)] > 1
         start = int(entry["row"])
-        mine = rows[start : start + int((which > 0).sum())]
+        mine = rows[start : start + int(takes.sum())]
         if checksum in changes:
             new, keep = changes[checksum]
-            kept_rows = mine[np.flatnonzero(keep[which > 0])] if mine.size else mine
+            kept_rows = mine[np.flatnonzero(keep[takes])] if mine.size else mine
             which = which[keep]
             checksum, mine = new, kept_rows
             if which.size == 0:

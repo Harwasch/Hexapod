@@ -16,7 +16,10 @@
  * `skin.json`'s `tiles` maps each tile checksum to run-length `[skin, count, ...]` pairs in the
  * tile's own gaussian order (0: no skin; `tileRuns.ts`) and `row`, where the tile's skinned
  * splats' rows start in `skin.bin`: 16 bytes a skinned splat, byte `k` the int8 weight of
- * handle `k + 1` (times `weights.scale`), in the tile's order.
+ * handle `k + 1` (times `weights.scale`), in the tile's order. A file whose `weights.rowBytes`
+ * is 32 (a skin of more than 16 handles: a big tree, docs/SCENE_OBJECTS.md §9) takes two
+ * texels a splat. A skin of one handle (a rigid object: only the constant handle) takes no
+ * rows at all.
  */
 
 import { decodeRuns, runsLength, tileRunsIssue } from "@twin/world";
@@ -27,8 +30,10 @@ export const SKIN_FORMAT = "hexapod.skin";
 export const SKIN_VERSION = 1;
 /** Bytes of one splat's weight row: one RGBA32UI texel. */
 export const SKIN_ROW_BYTES = 16;
-/** Handles a skin may have, the constant one included. */
-export const MAX_SKIN_HANDLES = 16;
+/** ... or two texels, in a file with a skin of more than 16 handles. */
+export const SKIN_WIDE_ROW_BYTES = 32;
+/** Handles a skin may have, the constant one included (16 in a file of one-texel rows). */
+export const MAX_SKIN_HANDLES = 32;
 
 /** `root.extras.skin`. */
 export interface SkinRef {
@@ -60,6 +65,21 @@ export interface SkinEntry {
   support: SkinSupport[];
   /** What a modal driver needs (`dynamics`), when the file carries it. */
   dynamics?: SkinDynamics;
+  /**
+   * What the skin carries of the object it moves (a variant's skin, skin_variants.py): its
+   * name, behaviour and property scores, for a viewer whose `instances.json` does not list it
+   * (a scan with none: the wind's prior and the poke read these).
+   */
+  traits?: SkinTraits;
+  /** The handle policy's stiffness class (`rigid`, `firm`, `plant`, `tree`), when recorded. */
+  stiffnessClass?: string;
+}
+
+export interface SkinTraits {
+  label?: string;
+  category?: string;
+  behaviour?: string;
+  properties?: Record<string, number>;
 }
 
 /**
@@ -86,8 +106,10 @@ export interface SkinDoc {
   byInstance: ReadonlyMap<number, SkinEntry>;
   maxId: number;
   tiles: ReadonlyMap<string, SkinTile>;
-  /** `skin.bin` as words: four a row. */
+  /** `skin.bin` as words: `rowWords` a row. */
   words: Uint32Array;
+  /** 4 (one texel a splat) or 8 (two: a file with a skin of more than 16 handles). */
+  rowWords: 4 | 8;
   rows: number;
   /** A stored byte times this is the weight. */
   scale: number;
@@ -132,6 +154,7 @@ function skinOf(raw: unknown): SkinEntry | null {
       }))
     : [];
   const dynamics = dynamicsOf(r.dynamics, handles as number);
+  const traits = traitsOf(r.traits);
   return {
     id: id as number,
     instance: instance as number,
@@ -141,7 +164,30 @@ function skinOf(raw: unknown): SkinEntry | null {
     eigenvalues,
     support,
     ...(dynamics ? { dynamics } : {}),
+    ...(traits ? { traits } : {}),
+    ...(typeof r.class === "string" ? { stiffnessClass: r.class } : {}),
   };
+}
+
+function traitsOf(raw: unknown): SkinTraits | undefined {
+  const r = raw as Record<string, unknown> | null | undefined;
+  if (typeof r !== "object" || r === null) return undefined;
+  const out: SkinTraits = {};
+  if (typeof r.label === "string") out.label = r.label;
+  if (typeof r.category === "string") out.category = r.category;
+  if (typeof r.behaviour === "string") out.behaviour = r.behaviour;
+  if (typeof r.properties === "object" && r.properties !== null) {
+    const properties: Record<string, number> = {};
+    for (const [k, v] of Object.entries(r.properties as Record<string, unknown>))
+      if (typeof v === "number" && Number.isFinite(v)) properties[k] = v;
+    out.properties = properties;
+  }
+  return out;
+}
+
+/** Whether a skin's splats take rows of `skin.bin`: one of a single handle has no weights. */
+export function takesRows(skin: Pick<SkinEntry, "handles"> | undefined): boolean {
+  return (skin?.handles ?? 0) > 1;
 }
 
 function upperOf(value: unknown, m: number): number[] | null {
@@ -175,15 +221,20 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
   if (doc?.format !== SKIN_FORMAT || doc.version !== SKIN_VERSION) return null;
   if (!Array.isArray(doc.skins)) return null;
   const weights = doc.weights as Record<string, unknown> | undefined;
-  if (weights?.dtype !== "int8" || weights.rowBytes !== SKIN_ROW_BYTES) return null;
+  if (weights?.dtype !== "int8") return null;
+  if (weights.rowBytes !== SKIN_ROW_BYTES && weights.rowBytes !== SKIN_WIDE_ROW_BYTES) return null;
+  const rowBytes = weights.rowBytes;
+  const rowWords = rowBytes === SKIN_WIDE_ROW_BYTES ? 8 : 4;
   const issues: string[] = [];
   const skins: SkinEntry[] = [];
   const byId = new Map<number, SkinEntry>();
   const byInstance = new Map<number, SkinEntry>();
   for (const entry of doc.skins as unknown[]) {
     const skin = skinOf(entry);
-    if (!skin) {
-      issues.push("a skin without an id, instance, handles (1..16) and origin was skipped");
+    if (!skin || skin.handles > rowBytes) {
+      issues.push(
+        `a skin without an id, instance, handles (1..${String(rowBytes)}) and origin was skipped`,
+      );
       continue;
     }
     if (byId.has(skin.id)) {
@@ -196,8 +247,8 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
   }
   let maxId = 0;
   for (const skin of skins) maxId = Math.max(maxId, skin.id);
-  const rows = Math.floor(blob.byteLength / SKIN_ROW_BYTES);
-  const words = new Uint32Array(blob, 0, rows * 4);
+  const rows = Math.floor(blob.byteLength / rowBytes);
+  const words = new Uint32Array(blob, 0, rows * rowWords);
   const tiles = new Map<string, SkinTile>();
   const entries = doc.tiles;
   if (typeof entries === "object" && entries !== null && !Array.isArray(entries)) {
@@ -211,7 +262,8 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
       const runs = Int32Array.from(v?.skins as number[]);
       const row = v?.row;
       let skinned = 0;
-      for (let i = 0; i < runs.length; i += 2) if ((runs[i] ?? 0) > 0) skinned += runs[i + 1] ?? 0;
+      for (let i = 0; i < runs.length; i += 2)
+        if (takesRows(byId.get(runs[i] ?? 0))) skinned += runs[i + 1] ?? 0;
       if (!Number.isInteger(row) || (row as number) < 0 || (row as number) + skinned > rows) {
         issues.push(`${key}: its rows are not in skin.bin`);
         continue;
@@ -228,6 +280,7 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
     maxId,
     tiles,
     words,
+    rowWords,
     rows,
     scale: finite(weights.scale, 1 / 127),
     issues,
@@ -238,8 +291,10 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
 export interface TileSkin {
   /** The skin id of every gaussian (0: none). */
   skins: Uint32Array;
-  /** Four words a gaussian: its row of `skin.bin`, zeros where it has no skin. */
+  /** Four words a gaussian: its row of `skin.bin` (weights 1..16), zeros where it has none. */
   words: Uint32Array;
+  /** In a file of wide rows, the second texel (weights 17..32), four words a gaussian. */
+  words2?: Uint32Array;
 }
 
 /** The skins and rows of the tile whose checksum is `checksum`, or undefined. */
@@ -249,19 +304,43 @@ export function tileSkin(doc: SkinDoc, checksum: string): TileSkin | undefined {
   const count = runsLength(tile.runs);
   const skins = decodeRuns(tile.runs, new Uint32Array(count));
   const words = new Uint32Array(count * 4);
+  const wide = doc.rowWords === 8;
+  const words2 = wide ? new Uint32Array(count * 4) : undefined;
+  const stride = doc.rowWords;
   let row = tile.row;
+  let last = -1;
+  let rows = false;
   for (let i = 0; i < count; i += 1) {
-    if (skins[i] === 0) continue;
-    words.set(doc.words.subarray(row * 4, row * 4 + 4), i * 4);
+    const id = skins[i] ?? 0;
+    if (id === 0) continue;
+    if (id !== last) {
+      last = id;
+      rows = takesRows(doc.byId.get(id));
+    }
+    if (!rows) continue;
+    words.set(doc.words.subarray(row * stride, row * stride + 4), i * 4);
+    if (words2) words2.set(doc.words.subarray(row * stride + 4, row * stride + 8), i * 4);
     row += 1;
   }
-  return { skins, words };
+  return words2 ? { skins, words, words2 } : { skins, words };
 }
 
-/** Weight `k` (handle `k + 1`) of a splat's row, as the shader decodes it. */
-export function rowWeight(words: ArrayLike<number>, at: number, k: number, scale: number): number {
-  const word = words[at * 4 + (k >> 2)] ?? 0;
-  const byte = (word >>> (8 * (k & 3))) & 0xff;
+/**
+ * Weight `k` (handle `k + 1`) of a splat's row, as the shader decodes it: from `words` (four a
+ * splat) for `k < 16`, from `words2` (a wide row's second texel) beyond.
+ */
+export function rowWeight(
+  words: ArrayLike<number>,
+  at: number,
+  k: number,
+  scale: number,
+  words2?: ArrayLike<number>,
+): number {
+  const source = k < 16 ? words : words2;
+  if (!source) return 0;
+  const kk = k & 15;
+  const word = source[at * 4 + (kk >> 2)] ?? 0;
+  const byte = (word >>> (8 * (kk & 3))) & 0xff;
   return (byte >= 128 ? byte - 256 : byte) * scale;
 }
 
