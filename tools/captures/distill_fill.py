@@ -46,11 +46,13 @@ def pack_views(
     *,
     weights: Sequence[float] | None = None,
     outside: Sequence[float] | None = None,
+    pixel_weights: np.ndarray | None = None,
 ) -> bytes:
     """Views as one npz: the request body of `Distill.run`. `weights` (per view, default 1)
     scale a view's whole loss; `outside` (per view, default `OUTSIDE_WEIGHT`) is the weight
     of its pixels outside the mask, held to the measured render -- 0 for a view whose mask
-    is all it says (a real photo, on what the measured scan covers)."""
+    is all it says (a real photo, on what the measured scan covers). `pixel_weights` (v, h,
+    w in 0..1, default 1) weight each masked pixel (a generated view's seed agreement)."""
     buffer = io.BytesIO()
     arrays = {
         "cameras": np.array(json.dumps(list(cameras))),
@@ -61,6 +63,10 @@ def pack_views(
         arrays["weights"] = np.asarray(weights, np.float32)
     if outside is not None:
         arrays["outside"] = np.asarray(outside, np.float32)
+    if pixel_weights is not None:
+        arrays["pixelWeights"] = np.clip(np.round(np.asarray(pixel_weights) * 255), 0, 255).astype(
+            np.uint8
+        )
     np.savez_compressed(buffer, **arrays)
     return buffer.getvalue()
 
@@ -77,6 +83,14 @@ def unpack_view_weights(blob: bytes) -> tuple[np.ndarray | None, np.ndarray | No
             z["weights"].astype(np.float64) if "weights" in z.files else None,
             z["outside"].astype(np.float64) if "outside" in z.files else None,
         )
+
+
+def unpack_pixel_weights(blob: bytes) -> np.ndarray | None:
+    """The optional per-pixel weights of `pack_views` (v, h, w in 0..1)."""
+    with np.load(io.BytesIO(blob)) as z:
+        if "pixelWeights" not in z.files:
+            return None
+        return z["pixelWeights"].astype(np.float32) / 255.0
 
 
 def pack_scan(scan: dict[str, np.ndarray]) -> bytes:
@@ -180,6 +194,7 @@ def distill(
     seed: int = 0,
     weights: Sequence[float] | None = None,
     outside: Sequence[float] | None = None,
+    pixel_weights: np.ndarray | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     """The inferred gaussians after `iterations` steps of Adam, and a report: the masked
     and outside L1 per view before and after. `weights` and `outside` per view
@@ -222,6 +237,11 @@ def distill(
         torch.tensor(np.asarray(m)[: v[3], : v[2]], dtype=torch.bool, device=device)
         for m, v in zip(masks, views, strict=True)
     ]
+    per_pixel = None
+    if pixel_weights is not None:
+        per_pixel = [
+            t(np.asarray(pw)[: v[3], : v[2]]) for pw, v in zip(pixel_weights, views, strict=True)
+        ]
     view_weight = [1.0] * len(views) if weights is None else [float(w) for w in weights]
     view_outside = [OUTSIDE_WEIGHT] * len(views) if outside is None else [float(o) for o in outside]
 
@@ -274,7 +294,11 @@ def distill(
         rgb, _ = render(views[k], current())
         err = (rgb - targets[k]).abs().mean(dim=-1)
         m = inside[k]
-        loss = err[m].mean() if m.any() else err.sum() * 0
+        if per_pixel is not None and m.any():
+            pw = per_pixel[k][m]
+            loss = (err[m] * pw).sum() / pw.sum().clamp(min=1e-6)
+        else:
+            loss = err[m].mean() if m.any() else err.sum() * 0
         if (~m).any() and view_outside[k] > 0:
             loss = loss + view_outside[k] * err[~m].mean()
         loss = (
@@ -326,5 +350,6 @@ def run(request: dict) -> dict:
         iterations=int(request.get("iterations", 1500)),
         weights=None if weights is None else weights.tolist(),
         outside=None if outside is None else outside.tolist(),
+        pixel_weights=unpack_pixel_weights(request["views"]),
     )
     return {"inferred": pack_scan(out), "report": report}

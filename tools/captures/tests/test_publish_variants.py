@@ -1,4 +1,6 @@
-"""`publish_variants`: a fill layer staged as a variant, the scan's other variants kept."""
+"""`publish_variants`: fill layers staged as variants and registered, and variants withdrawn,
+only through the shared attach (`register` / `withdraw`): the request never carries a
+`variants` value of its own, and every other system's entry survives the attach's merge."""
 
 from __future__ import annotations
 
@@ -16,6 +18,10 @@ from splat_render import Camera, Splats
 
 TRANSFORM = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1]
 ASSET = {"assetId": "11111111-2222-3333-4444-555555555555", "url": "https://x.test/t/tileset.json"}
+OTHERS = {
+    "objects": [{"name": "ground-first"}, {"name": "feature-fields"}],
+    "skins": [{"name": "freeform"}],
+}
 
 
 def _current(variants: dict | None = None) -> dict:
@@ -48,66 +54,141 @@ def _layer_archive(folder: Path, filler: str) -> Path:
     return archive
 
 
-def test_register_keeps_every_other_entry() -> None:
-    variants = {
-        "objects": [{"name": "ground-first"}],
-        "fill": [{"name": "vace-1-3b", "label": "old"}, {"name": "other"}],
-    }
-    out = pv.register(variants, "fill", {"name": "vace-1-3b", "label": "new"})
-    out = pv.register(out, "fill", {"name": "cosmos-p2-2b"})
-    assert out["objects"] == [{"name": "ground-first"}]
-    assert [e["name"] for e in out["fill"]] == ["vace-1-3b", "other", "cosmos-p2-2b"]
-    assert out["fill"][0]["label"] == "new"
-    assert variants["fill"][0]["label"] == "old"  # the input is not changed
-    with pytest.raises(ValueError):
-        pv.register(out, "fill", {"label": "no name"})
-
-
-def test_build_stages_the_layer_and_refresh_keeps_newer_variants(tmp_path: Path) -> None:
+def _fill(tmp_path: Path, jobs: list[str]) -> Path:
     fill = tmp_path / "fill"
-    job = "gen-spool-wan2-1-vace-1-3b"
-    (fill / job).mkdir(parents=True)
-    archive = _layer_archive(tmp_path / "make", "wan2.1-vace-1.3b")
-    (fill / job / "inferred.tar.gz").write_bytes(archive.read_bytes())
+    for k, job in enumerate(jobs):
+        (fill / job).mkdir(parents=True)
+        archive = _layer_archive(tmp_path / f"make{k}", job)
+        (fill / job / "inferred.tar.gz").write_bytes(archive.read_bytes())
+    return fill
+
+
+class _Bucket:
+    def __init__(self) -> None:
+        self.uploaded: list[str] = []
+
+    def list_objects_v2(self, **kw):
+        return {}
+
+    def delete_objects(self, **kw) -> None:
+        pass
+
+    def upload_file(self, path, bucket, key, ExtraArgs=None) -> None:
+        self.uploaded.append(key)
+
+
+def _attach(out: Path, live: dict, monkeypatch: pytest.MonkeyPatch) -> dict:
+    """`attach_sidecars.attach` on `out` against a stub API whose tileset is `live`: the body
+    it posts."""
+    sent: list[dict] = []
+    monkeypatch.setattr(attach_sidecars, "resolve_asset", lambda asset_id, api=None: dict(ASSET))
+    monkeypatch.setattr(attach_sidecars, "get_json", lambda url: live)
+
+    def post(url, body, token):
+        sent.append(json.loads(json.dumps(body)))
+        return 200, {"generation": "g", "url": "u", "previousUrl": "p", "staged": body["files"]}
+
+    monkeypatch.setattr(attach_sidecars, "post", post)
+    monkeypatch.setenv("GITHUB_RUN_ID", "1")
+    attach_sidecars.attach(out, s3=_Bucket(), bucket="b", write_token="t")
+    (body,) = sent
+    return body
+
+
+def test_v2_layers_register_through_the_shared_attach(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs = ["anchor-spool-anchor-refs", "anchor-spool-anchor-norefs", "anchor-spool-anchor-vace"]
+    fill = _fill(tmp_path, jobs)
     out = tmp_path / "out" / "spool"
-    current = _current({"objects": [{"name": "ground-first"}]})
-    manifest = pv.build("spool", fill, out, [job], asset=ASSET, current=current)
-    assert (out / "variants" / "fill" / "vace-1-3b" / "tileset.json").exists()
-    assert all(f.startswith("variants/fill/vace-1-3b/") for f in manifest["files"])
-    variants = manifest["extras"]["variants"]
-    assert set(manifest["extras"]) == {"variants"}  # today's layers untouched
-    assert variants["objects"] == [{"name": "ground-first"}]
-    (entry,) = variants["fill"]
-    assert entry["name"] == "vace-1-3b" and entry["label"] == "Wan2.1-VACE 1.3B"
-    layer = entry["inferredLayers"][0]
-    assert layer["uri"] == "variants/fill/vace-1-3b/tileset.json"
-    assert layer["evidence"]["kind"] == "inferred" and layer["evidence"]["gaussians"] == 50
-    # Another bake-off published in between: refresh keeps it, and moves basedOn.
-    newer = _current(
+    round1 = [{"name": n} for n in ("vace-1-3b", "wan22-5b", "cosmos-p2-2b", "lama-baseline")]
+    current = _current({**OTHERS, "fill": round1})
+    manifest = pv.build("spool", fill, out, jobs, asset=ASSET, current=current)
+    # The request carries no variants value of its own: only the entries to register.
+    on_disk = json.loads((out / attach_sidecars.MANIFEST).read_text())
+    assert "variants" not in on_disk["extras"] and on_disk["extras"] == {}
+    names = [r["entry"]["name"] for r in on_disk["register"]]
+    assert names == ["anchor-refs", "anchor-norefs", "anchor-vace"]
+    entry = on_disk["register"][0]["entry"]
+    assert (
+        entry["look"]
+        == "Set Inferred to Highlight; orbit to look down on the spool's top. Purple is generated."
+    )
+    assert entry["inferredLayers"][0]["uri"] == "variants/fill/anchor-refs/tileset.json"
+    assert entry["inferredLayers"][0]["evidence"]["kind"] == "inferred"
+    assert all(f.startswith("variants/fill/anchor-") for f in on_disk["files"])
+    assert manifest["preflight"]["fill"][:4] == [e["name"] for e in round1]
+    # Meanwhile another bake-off attached a skin and a fill variant: the attach keeps them.
+    live = _current(
         {
-            "objects": [{"name": "ground-first"}],
-            "skins": [{"name": "freeform"}],
-            "fill": [{"name": "other"}],
+            **OTHERS,
+            "skins": [{"name": "freeform"}, {"name": "tetfem-stiff"}],
+            "fill": [*round1, {"name": "someone-else"}],
         }
     )
-    moved = {**ASSET, "url": "https://x.test/g2/tileset.json"}
-    again = pv.refresh(out, asset=moved, current=newer)
-    assert again["basedOn"] == moved["url"]
-    assert [e["name"] for e in again["extras"]["variants"]["fill"]] == ["other", "vace-1-3b"]
-    assert again["extras"]["variants"]["skins"] == [{"name": "freeform"}]
-    assert attach_sidecars.read_manifest(out)["extras"] == again["extras"]
+    body = _attach(out, live, monkeypatch)
+    variants = body["extras"]["variants"]
+    assert variants["objects"] == OTHERS["objects"]
+    assert variants["skins"] == [{"name": "freeform"}, {"name": "tetfem-stiff"}]
+    assert [e["name"] for e in variants["fill"]] == [
+        *(e["name"] for e in round1),
+        "someone-else",
+        "anchor-refs",
+        "anchor-norefs",
+        "anchor-vace",
+    ]
+    assert "inferredLayers" not in body["extras"]  # today's layers are not touched
+
+
+def test_round1_variants_are_withdrawn_and_the_rest_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fill_now = [
+        {"name": n}
+        for n in ("vace-1-3b", "wan22-5b", "cosmos-p2-2b", "lama-baseline", "anchor-refs")
+    ]
+    current = _current({**OTHERS, "fill": fill_now})
+    out = tmp_path / "out" / "spool"
+    names = ["wan22-5b", "cosmos-p2-2b", "lama-baseline"]
+    manifest = pv.withdraw("spool", out, names, asset=ASSET, current=current)
+    on_disk = json.loads((out / attach_sidecars.MANIFEST).read_text())
+    assert on_disk["files"] == [] and on_disk["extras"] == {}
+    assert [w["name"] for w in on_disk["withdraw"]] == names
+    assert manifest["preflight"]["fill"] == ["vace-1-3b", "anchor-refs"]
+    body = _attach(out, current, monkeypatch)
+    variants = body["extras"]["variants"]
+    assert [e["name"] for e in variants["fill"]] == ["vace-1-3b", "anchor-refs"]
+    assert variants["objects"] == OTHERS["objects"] and variants["skins"] == OTHERS["skins"]
+    with pytest.raises(SystemExit):
+        pv.withdraw("spool", tmp_path / "x", ["not-there"], asset=ASSET, current=current)
+
+
+def test_preflight_refuses_a_merge_that_loses_anything_else() -> None:
+    current = {**OTHERS, "fill": [{"name": "a"}]}
+    _, summary = pv.preflight(current, [("with", "fill", {"name": "b"})])
+    assert summary == {
+        "objects": ["ground-first", "feature-fields"],
+        "skins": ["freeform"],
+        "fill": ["a", "b"],
+    }
+    with pytest.raises(SystemExit):  # no variants at all would be left: never send none
+        pv.preflight({"fill": [{"name": "a"}]}, [("without", "fill", "a")])
+    assert pv.preflight(current, [("without", "fill", "a")])[1].get("fill") is None
 
 
 def test_a_layer_in_another_frame_or_a_held_out_run_is_refused(tmp_path: Path) -> None:
-    fill = tmp_path / "fill"
-    job = "gen-spool-inpaint-lama"
-    (fill / job).mkdir(parents=True)
-    archive = _layer_archive(tmp_path / "make", "inpaint-lama")
-    (fill / job / "inferred.tar.gz").write_bytes(archive.read_bytes())
+    fill = _fill(tmp_path, ["anchor-spool-anchor-refs"])
     other = {"root": {"transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]}}
     with pytest.raises(SystemExit):
-        pv.build("spool", fill, tmp_path / "o" / "spool", [job], asset=ASSET, current=other)
-    with pytest.raises(SystemExit):
-        pv.variant_for("holdout-spool-inpaint-lama", "spool")
-    with pytest.raises(SystemExit):
-        pv.variant_for("gen-spool-something-else", "spool")
+        pv.build(
+            "spool",
+            fill,
+            tmp_path / "o" / "spool",
+            ["anchor-spool-anchor-refs"],
+            asset=ASSET,
+            current=other,
+        )
+    for job in ("holdout-spool-inpaint-lama", "leaveout-spool-anchor-refs", "anchor-spool-nope"):
+        with pytest.raises(SystemExit):
+            pv.variant_for(job, "spool")
+    assert pv.variant_for("gen-spool-wan2-1-vace-1-3b", "spool")[1]["name"] == "vace-1-3b"

@@ -25,13 +25,17 @@ on:
       - tools/captures/distill_fill.py
       - tools/captures/generative_fill.py
       - tools/captures/video_fill_models.py
+      - tools/captures/anchor_fill.py
+      - tools/captures/anchor_models.py
+      - tools/captures/fill_quality.py
+      - tools/captures/fill_views.py
       - .github/workflows/fill.yml
   workflow_dispatch:
     inputs:
       jobs:
         description: >-
-          kind:scan pairs (drop|fill|split, or gen|holdout for the generative fill; scans in
-          infra/modal/fill.py)
+          kind:scan pairs (drop|fill|split, gen|holdout for the generative fill, anchor|leaveout
+          for round 2: anchor, then propagate; scans in infra/modal/fill.py)
         type: string
         default: drop:yard,drop:spool,fill:camp
       generators:
@@ -45,9 +49,17 @@ on:
         type: string
         default: paths=1,seeds=1,rounds=2
       budget_usd:
-        description: gen/holdout jobs do not start when their estimate exceeds budget - spent
+        description: >-
+          gen/holdout/anchor/leaveout jobs do not start when their worst case exceeds
+          budget - spent
         type: string
         default: "0"
+      anchor_options:
+        description: >-
+          anchor/leaveout jobs: anchor_fill options as key=value pairs, lists joined by +
+          (e.g. arms=refs+norefs+vace,seeds=4; infra/modal/fill.py ANCHOR_OPTIONS)
+        type: string
+        default: ""
       spent_usd:
         description: GPU dollars already spent from that budget
         type: string
@@ -86,6 +98,8 @@ env:
   GEN_OPTIONS: ${{ inputs.gen_options || 'paths=1,seeds=1,rounds=2' }}
   BUDGET_USD: ${{ inputs.budget_usd || '0' }}
   SPENT_USD: ${{ inputs.spent_usd || '0' }}
+  # Round 2 (anchor/leaveout jobs): checked by infra/modal/fill.py, passed as one argument.
+  ANCHOR_OPTIONS: ${{ inputs.anchor_options || '' }}
 
 jobs:
   fill:
@@ -144,7 +158,8 @@ jobs:
             --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out \
             --probes "$PROBES" --renderer "$RENDERER" ${PARITY:+--parity-test} \
             --max-scale-m "$MAX_SCALE" --generators "$GENERATORS" $GEN_FLAGS \
-            --budget-usd "$BUDGET_USD" --spent-usd "$SPENT_USD"
+            --budget-usd "$BUDGET_USD" --spent-usd "$SPENT_USD" \
+            --anchor-options "$ANCHOR_OPTIONS"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

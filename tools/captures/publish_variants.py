@@ -1,21 +1,24 @@
 """Publish inferred layers as bake-off variants beside a scan's tiles: `variants/fill/<name>/`,
-declared in the measured root's `extras.variants.fill` (bake-off conventions).
+declared in the measured root's `extras.variants.fill` (bake-off conventions); and withdraw
+variants that are no longer wanted.
 
 Today's layers stay what they are (`extras.inferredLayers`); a variant is another layer the
 viewer offers on the same scan. A variant entry:
 
-    {"name": "vace-1-3b", "label": "Wan2.1-VACE 1.3B", "about": "...",
-     "inferredLayers": [{"uri": "variants/fill/vace-1-3b/tileset.json", "evidence": {...}}]}
+    {"name": "anchor-refs", "label": "...", "about": "...", "look": "...",
+     "inferredLayers": [{"uri": "variants/fill/anchor-refs/tileset.json", "evidence": {...}}]}
 
-The API replaces a root extras key whole (apps/api app/services/sidecars.py `merge_extras`),
-so `extras.variants` is sent whole: the asset's *current* variants with this run's entries
-added or put in place of the ones with their names -- never another system's entries, never
-another variant. `refresh` re-reads the current tileset just before the attach, so a variant
-another bake-off published in between is kept.
+**Only through the shared helpers.** The request this writes (`attach.json`) never carries
+an `extras.variants` value: it names the entries to register (`register`) or the names to
+withdraw (`withdraw`), and `attach_sidecars.attach` merges them, at the request, into the
+tileset as it is then (`with_variant` / `without_variant`), so every other system's entries
+and every other variant -- including one attached by another bake-off meanwhile -- stay.
+Before writing, `preflight` merges the same changes into the tileset as it is now and refuses
+any result that would drop another system's entry or leave no variants at all.
 
     publish_variants.py build --scan spool --fill <artifact dir> --out <dir> \\
-        --jobs gen-spool-wan2-1-vace-1-3b,gen-spool-inpaint-lama
-    publish_variants.py refresh <dir>/spool      # just before attach_sidecars.py attach
+        --jobs anchor-spool-anchor-refs,anchor-spool-anchor-norefs
+    publish_variants.py withdraw --scan spool --out <dir> --names wan22-5b,cosmos-p2-2b
 
 Standard library and `attach_sidecars` only (a workflow runs it with the captures project).
 """
@@ -34,8 +37,14 @@ from typing import Any
 import attach_sidecars
 
 SYSTEM = "fill"
-#: Each generator's layer folder (`generative_fill.slug` of its filler name) and the variant
-#: it is published as.
+#: Where to look, per scan, in a variant's `look` line.
+LOOK_WHERE = {
+    "spool": "orbit to look down on the spool's top",
+    "pumpkin": "orbit low, under the pumpkins, where they meet the straw",
+}
+LOOK = "Set Inferred to Highlight; {where}. Purple is generated."
+#: Each layer folder (round 1: `generative_fill.slug` of its filler name; round 2:
+#: `anchor_fill.LAYERS`) and the variant it is published as.
 FILL_VARIANTS: dict[str, dict[str, str]] = {
     "wan2-1-vace-1-3b": {
         "name": "vace-1-3b",
@@ -70,24 +79,38 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
             "lifted and carved the same way. The baseline the video models are judged against."
         ),
     },
+    "anchor-refs": {
+        "name": "anchor-refs",
+        "label": "Anchors + photos, then view by view (Qwen-Image-Edit 2511)",
+        "about": (
+            "Finds what the photos saw badly or not at all, picks the views that show it, fills "
+            "a few anchor views with an image editor given the masked render and two real "
+            "photos, then fills each other view with only what is still missing, placed in 3D "
+            "at depth that meets the scan."
+        ),
+    },
+    "anchor-norefs": {
+        "name": "anchor-norefs",
+        "label": "Anchors without photos, then view by view (Qwen-Image-Edit 2511)",
+        "about": (
+            "The same, but the editor sees only the masked render and no real photo: the test "
+            "of what the photos add."
+        ),
+    },
+    "anchor-vace": {
+        "name": "anchor-vace",
+        "label": "Anchors + photos, then all views at once (Wan2.1-VACE 14B)",
+        "about": (
+            "The same photo-guided anchors, then a video model fills every other view in one "
+            "pass, all the views as frames of one clip with the real photos and anchors, so "
+            "they agree with each other."
+        ),
+    },
 }
+#: Job kinds whose folders hold layers to publish; the others are checks.
+PUBLISHED_KINDS = ("gen", "anchor")
+CHECK_KINDS = ("holdout", "leaveout")
 USER_AGENT = "curl/8.5.0 (hexapod-publish-variants)"
-
-
-def register(variants: Mapping[str, Any] | None, system: str, entry: Mapping[str, Any]) -> dict:
-    """`variants` with `entry` added to `variants[system]`, or put in place of the entry with
-    its `name`; every other system and every other variant kept, in order."""
-    out = {k: list(v) if isinstance(v, list) else v for k, v in dict(variants or {}).items()}
-    name = entry.get("name")
-    if not isinstance(name, str) or not name:
-        raise ValueError("a variant needs a name")
-    current = [v for v in out.get(system, []) if isinstance(v, dict)]
-    if any(v.get("name") == name for v in current):
-        current = [dict(entry) if v.get("name") == name else v for v in current]
-    else:
-        current.append(dict(entry))
-    out[system] = current
-    return out
 
 
 def _check_layer(folder: Path) -> dict[str, Any]:
@@ -141,22 +164,57 @@ def _extract(archive: Path, dest: Path) -> None:
             (dest / parts[1]).write_bytes(source.read())
 
 
-def entries_path(out: Path) -> Path:
-    return out.parent / f"{out.name}.variant-entries.json"
-
-
 def variant_for(job: str, scan: str) -> tuple[str, dict[str, str]]:
-    """The variant a fill.yml job folder (`<kind>-<scan>-<layer slug>`) publishes as."""
-    for kind in ("gen", "holdout"):
+    """The variant a fill.yml job folder (`<kind>-<scan>-<layer>`) publishes as."""
+    for kind in (*PUBLISHED_KINDS, *CHECK_KINDS):
         prefix = f"{kind}-{scan}-"
         if job.startswith(prefix):
             slug = job[len(prefix) :]
-            if kind == "holdout":
+            if kind in CHECK_KINDS:
                 raise SystemExit(f"{job}: a held-out run is a check, not a layer to publish")
             if slug not in FILL_VARIANTS:
                 raise SystemExit(f"{job}: no variant for layer {slug!r} ({sorted(FILL_VARIANTS)})")
             return slug, FILL_VARIANTS[slug]
-    raise SystemExit(f"{job} is not a gen-{scan}-<layer> folder")
+    kinds = "|".join(PUBLISHED_KINDS)
+    raise SystemExit(f"{job} is not a ({kinds})-{scan}-<layer> folder")
+
+
+def entry_for(meta: Mapping[str, str], scan: str, evidence: Mapping[str, Any]) -> dict[str, Any]:
+    entry: dict[str, Any] = {"name": meta["name"], "label": meta["label"], "about": meta["about"]}
+    if scan in LOOK_WHERE and meta["name"].startswith("anchor-"):
+        entry["look"] = LOOK.format(where=LOOK_WHERE[scan])
+    entry["inferredLayers"] = [
+        {"uri": f"variants/{SYSTEM}/{meta['name']}/tileset.json", "evidence": dict(evidence)}
+    ]
+    return entry
+
+
+def preflight(
+    current: Any, changes: Sequence[tuple[str, str, Any]]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The merge `attach` will make, made now on the tileset as it is (for review), and a
+    summary. Refuses a result with no variants at all (the attach would then send none: never
+    a `variants: null`), one that drops or changes another system's entries, or one that
+    drops a fill variant this run did not name."""
+    before = {k: list(v) for k, v in dict(current or {}).items() if isinstance(v, list)}
+    after = attach_sidecars.changed_variants(before, changes)
+    if after is None:
+        raise SystemExit("the merge would leave no variants at all: refused")
+    for system, entries in before.items():
+        if system == SYSTEM:
+            continue
+        if after.get(system) != entries:
+            raise SystemExit(f"the merge would change the {system!r} variants: refused")
+    named = {str(v["name"] if isinstance(v, dict) else v) for _, s, v in changes if s == SYSTEM}
+    kept = {e.get("name") for e in after.get(SYSTEM, []) if isinstance(e, dict)}
+    lost = {e.get("name") for e in before.get(SYSTEM, []) if isinstance(e, dict)} - kept - named
+    if lost:
+        raise SystemExit(f"the merge would drop fill variants {sorted(lost)}: refused")
+    summary = {
+        system: [e.get("name") for e in entries if isinstance(e, dict)]
+        for system, entries in after.items()
+    }
+    return after, summary
 
 
 def build(
@@ -169,9 +227,9 @@ def build(
     current: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Every job's layer under `out/variants/fill/<name>/`, checked against the scan's
-    `current` tileset (same frame), and `attach.json` with the merged variants. Returns the
-    manifest."""
-    entries = []
+    `current` tileset (same frame), and `attach.json` registering their entries (merged at
+    the request by the shared attach). Returns the manifest."""
+    register = []
     for job in jobs:
         _, meta = variant_for(job, scan)
         dest = out / "variants" / SYSTEM / meta["name"]
@@ -179,40 +237,46 @@ def build(
         checked = _check_layer(dest)
         if checked["transform"] != current["root"]["transform"]:
             raise SystemExit(f"{job}: the layer is not in the scan's current tileset's frame")
-        entries.append(
-            {
-                "name": meta["name"],
-                "label": meta["label"],
-                "about": meta["about"],
-                "inferredLayers": [
-                    {
-                        "uri": f"variants/{SYSTEM}/{meta['name']}/tileset.json",
-                        "evidence": checked["evidence"],
-                    }
-                ],
-            }
-        )
-    # This run's entries, for `refresh`: beside the folder, not in it (it is not a sidecar).
-    entries_path(out).write_text(json.dumps(entries, indent=1), encoding="utf-8")
-    variants = current["root"].get("extras", {}).get("variants")
-    for entry in entries:
-        variants = register(variants, SYSTEM, entry)
-    return attach_sidecars.write_manifest(
-        out, asset_id=asset["assetId"], based_on=asset["url"], extras={"variants": variants}
+        register.append((SYSTEM, entry_for(meta, scan, checked["evidence"])))
+    changes = [("with", s, e) for s, e in register]
+    _, summary = preflight(current["root"].get("extras", {}).get("variants"), changes)
+    manifest = attach_sidecars.write_manifest(
+        out, asset_id=asset["assetId"], based_on=asset["url"], extras={}, register=register
     )
+    manifest["preflight"] = summary
+    return manifest
 
 
-def refresh(out: Path, *, asset: Mapping[str, str], current: Mapping[str, Any]) -> dict:
-    """`attach.json` re-merged onto the scan's tileset as it is now (another variant may have
-    been published since `build`), and based on its current URL."""
-    manifest = attach_sidecars.read_manifest(out)
-    entries = json.loads(entries_path(out).read_text(encoding="utf-8"))
-    variants = current["root"].get("extras", {}).get("variants")
-    for entry in entries:
-        variants = register(variants, SYSTEM, entry)
-    manifest["extras"] = {"variants": variants}
-    manifest["basedOn"] = asset["url"]
-    (out / attach_sidecars.MANIFEST).write_text(json.dumps(manifest, indent=1) + "\n")
+def withdraw(
+    scan: str,
+    out: Path,
+    names: Sequence[str],
+    *,
+    asset: Mapping[str, str],
+    current: Mapping[str, Any],
+) -> dict[str, Any]:
+    """`attach.json` (and no files) withdrawing the fill variants `names`: the attach takes
+    them off the tileset as it is at the request (`without_variant`); every other entry
+    stays. A name the tileset does not declare is refused (nothing to withdraw)."""
+    declared = {
+        e.get("name")
+        for e in (current["root"].get("extras", {}).get("variants") or {}).get(SYSTEM, [])
+        if isinstance(e, dict)
+    }
+    missing = sorted(set(names) - declared)
+    if missing:
+        raise SystemExit(f"{scan} declares no fill variants {missing}: nothing to withdraw")
+    changes = [("without", SYSTEM, n) for n in names]
+    _, summary = preflight(current["root"].get("extras", {}).get("variants"), changes)
+    out.mkdir(parents=True, exist_ok=True)
+    manifest = attach_sidecars.write_manifest(
+        out,
+        asset_id=asset["assetId"],
+        based_on=asset["url"],
+        extras={},
+        withdraw=[(SYSTEM, n) for n in names],
+    )
+    manifest["preflight"] = summary
     return manifest
 
 
@@ -230,35 +294,39 @@ def _resolve(scan: str, legacy: str | None, get: Callable[[str], Any]) -> tuple[
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    b = sub.add_parser("build")
+    b = sub.add_parser("build", help="lay out and register layers as fill variants")
     b.add_argument("--scan", required=True)
     b.add_argument("--legacy-url", help="the scan's run URL, to find its asset by")
     b.add_argument("--fill", type=Path, required=True, help="the fill.yml artifact's folder")
     b.add_argument("--out", type=Path, required=True)
-    b.add_argument("--jobs", required=True, help="comma-separated gen-<scan>-<layer> folders")
-    r = sub.add_parser("refresh")
-    r.add_argument("dir", type=Path, help="the folder build wrote (holding attach.json)")
+    b.add_argument("--jobs", required=True, help="comma-separated <kind>-<scan>-<layer> folders")
+    w = sub.add_parser("withdraw", help="withdraw fill variants by name")
+    w.add_argument("--scan", required=True)
+    w.add_argument("--legacy-url")
+    w.add_argument("--out", type=Path, required=True)
+    w.add_argument("--names", required=True, help="comma-separated variant names")
     args = parser.parse_args(argv)
+    asset, current = _resolve(args.scan, args.legacy_url, fetch_json)
     if args.command == "build":
-        asset, current = _resolve(args.scan, args.legacy_url, fetch_json)
         jobs = [j.strip() for j in args.jobs.split(",") if j.strip()]
         manifest = build(args.scan, args.fill, args.out, jobs, asset=asset, current=current)
-        fill = manifest["extras"]["variants"].get(SYSTEM, [])
         print(f"## Fill variants: {args.scan}\n")
         print(f"- asset `{asset['assetId']}`: {asset['url']}")
-        for entry in fill:
-            ev = entry.get("inferredLayers", [{}])[0].get("evidence", {})
+        for item in manifest["register"]:
+            entry = item["entry"]
+            ev = entry["inferredLayers"][0]["evidence"]
             print(
-                f"- `{entry['name']}` ({entry.get('label')}): {ev.get('filler')}, "
+                f"- register `{entry['name']}` ({entry['label']}): {ev.get('filler')}, "
                 f"{ev.get('views')} views, {ev.get('gaussians')} gaussians, "
                 f"mean confidence {ev.get('meanConfidence')}"
             )
-        print(f"- other systems kept: {sorted(set(manifest['extras']['variants']) - {SYSTEM})}")
     else:
-        # The asset build resolved, at its current URL (an attach since may have moved it).
-        asset = attach_sidecars.resolve_asset(attach_sidecars.read_manifest(args.dir)["assetId"])
-        manifest = refresh(args.dir, asset=asset, current=fetch_json(asset["url"]))
-        print(json.dumps({"basedOn": manifest["basedOn"], "variants": manifest["extras"]}))
+        names = [n.strip() for n in args.names.split(",") if n.strip()]
+        manifest = withdraw(args.scan, args.out, names, asset=asset, current=current)
+        print(f"## Withdraw fill variants: {args.scan}\n")
+        print(f"- asset `{asset['assetId']}`: {asset['url']}")
+        print(f"- withdraw {names}")
+    print(f"- after the merge (as of now): {json.dumps(manifest['preflight'])}")
     return 0
 
 

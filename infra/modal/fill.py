@@ -1260,6 +1260,574 @@ def probe(scan: str) -> dict:
     return {"scan": scan, "files": files}
 
 
+# --- Round 2: anchor, then propagate (tools/captures/anchor_fill.py): anchor:<scan>, leaveout:<scan>
+
+#: The editor (Qwen-Image-Edit-2511 + its Lightning LoRA) and VACE-14B: tools/captures/
+#: anchor_models.py on diffusers 0.40 / transformers 5 / peft, the versions its CPU check ran.
+anchor_model_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg", "libgl1", "libglib2.0-0")
+    .pip_install(
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "diffusers==0.40.0",
+        "transformers==5.18.0",
+        "peft==0.21.2",
+        "accelerate==1.15.0",
+        "huggingface_hub>=1.23,<2",
+        "safetensors",
+        "sentencepiece",
+        "protobuf",
+        "ftfy",
+        "imageio[ffmpeg]>=2.37",
+        "opencv-python-headless==4.10.0.84",
+        "pillow",
+        "numpy",
+    )
+    .env({"HF_HOME": "/weights/hf", "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+    .add_local_file(LOCAL_CAPTURES / "anchor_models.py", "/root/anchor_models.py")
+    .add_local_file(LOCAL_CAPTURES / "video_fill_models.py", "/root/video_fill_models.py")
+)
+#: What the budget guard plans with (seconds; UNVERIFIED until the first run measures them):
+#: an editor call at its fill size with two photos and 8 steps, and with none / 4 steps; a
+#: VACE-14B call on one set (~30 frames at 832x480, 25 steps); loads from the weights volume;
+#: the idle tails; each class's per-call cap (its timeout).
+ANCHOR_GPU = "H100"
+EDIT_CALL_S = {"anchor": 12.0, "anchorNoRefs": 6.0, "prop": 6.0, "propNoRefs": 3.5, "update": 5.0}
+EDIT_LOAD_S = 240
+EDIT_IDLE_S = 120
+EDIT_CAP_S = 300
+SET_CALL_S = 200
+SET_LOAD_S = 300
+SET_IDLE_S = 60
+SET_CAP_S = 1200
+#: The job's own L4 (renders, quality, depth, lift, carving, distil, scores), minutes.
+ANCHOR_JOB_MIN = {"spool": 45, "pumpkin": 55}
+ANCHOR_JOB_CAP_MIN = 110
+#: Views the estimate assumes (the selection's maxima give the worst case).
+ANCHOR_VIEWS = {"anchors": 6, "props": 16}
+
+
+def _anchor_module():  # noqa: ANN202 - anchor_models, imported where it was copied
+    sys.path.insert(0, "/root")
+    import anchor_models
+    import video_fill_models
+
+    video_fill_models.find_token()
+    return anchor_models
+
+
+@app.cls(
+    image=anchor_model_image,
+    gpu=ANCHOR_GPU,
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=131072,
+    timeout=EDIT_CAP_S,
+    startup_timeout=15 * 60,
+    scaledown_window=EDIT_IDLE_S,
+    max_containers=2,
+)
+class EditQwen:
+    """Qwen-Image-Edit-2511 (Apache-2.0) with its Lightning LoRAs (Apache-2.0): the anchor and
+    propagation fills (`anchor_models.edit`)."""
+
+    @modal.enter()
+    def load(self) -> None:
+        import traceback
+
+        started = time.time()
+        self.error = ""
+        try:
+            self.am = _anchor_module()
+            self.editor = self.am.load_editor()
+        except Exception:  # noqa: BLE001 - every call reports it (no reload loop)
+            self.error = traceback.format_exc()[-3000:]
+        self.load_seconds = round(time.time() - started, 1)
+
+    @modal.method()
+    def edit(self, request: dict) -> dict:
+        done = {"loadSeconds": self.load_seconds, "gpu": ANCHOR_GPU}
+        if self.error:
+            return {
+                "error": f"the editor did not load:\n{self.error[-1400:]}",
+                "seconds": 0.0,
+                **done,
+            }
+        started = time.time()
+        try:
+            return {**self.am.edit(self.editor, request), **done}
+        except Exception as error:  # noqa: BLE001 - reported with its seconds
+            with contextlib.suppress(Exception):
+                import torch
+
+                torch.cuda.empty_cache()
+            return {"error": repr(error)[:1500], "seconds": round(time.time() - started, 1), **done}
+
+
+@app.cls(
+    image=anchor_model_image,
+    gpu=ANCHOR_GPU,
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=131072,
+    timeout=SET_CAP_S,
+    startup_timeout=15 * 60,
+    scaledown_window=SET_IDLE_S,
+    max_containers=1,
+)
+class FillVace14:
+    """Wan2.1-VACE-14B (Apache-2.0): every target view as a frame of one clip
+    (`anchor_models.fill_set`)."""
+
+    @modal.enter()
+    def load(self) -> None:
+        import traceback
+
+        started = time.time()
+        self.error = ""
+        self.distill = False
+        try:
+            self.am = _anchor_module()
+            self.pipe, self.distill = self.am.load_vace14()
+        except Exception:  # noqa: BLE001
+            self.error = traceback.format_exc()[-3000:]
+        self.load_seconds = round(time.time() - started, 1)
+
+    @modal.method()
+    def fill_set(self, request: dict) -> dict:
+        done = {"loadSeconds": self.load_seconds, "gpu": ANCHOR_GPU, "distillLoaded": self.distill}
+        if self.error:
+            return {
+                "error": f"VACE-14B did not load:\n{self.error[-1400:]}",
+                "seconds": 0.0,
+                **done,
+            }
+        started = time.time()
+        try:
+            return {**self.am.fill_set(self.pipe, request, self.distill), **done}
+        except Exception as error:  # noqa: BLE001
+            with contextlib.suppress(Exception):
+                import torch
+
+                torch.cuda.empty_cache()
+            return {"error": repr(error)[:1500], "seconds": round(time.time() - started, 1), **done}
+
+
+ANCHOR_CLASSES = {"EditQwen": EditQwen, "FillVace14": FillVace14, "InpaintQwen": InpaintQwen}
+#: Each repository the round-2 run reads, and what of it (None: everything).
+ANCHOR_REPOS: dict[str, tuple[str, ...] | None] = {
+    "Qwen/Qwen-Image-Edit-2511": None,
+    "lightx2v/Qwen-Image-Edit-2511-Lightning": (
+        "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+        "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+    ),
+    "Wan-AI/Wan2.1-VACE-14B-diffusers": (
+        "model_index.json",
+        "scheduler/*",
+        "text_encoder/*",
+        "tokenizer/*",
+        "transformer/*",
+        "vae/*",
+    ),
+    "lightx2v/Wan2.1-Distill-Loras": ("wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",),
+    "depth-anything/prompt-depth-anything-vitl-hf": None,
+    "depth-anything/Depth-Anything-V2-Small-hf": None,
+}
+
+
+@app.function(image=anchor_model_image, secrets=[HF_SECRET], timeout=300)
+def anchor_access() -> dict[str, str]:
+    """Whether the workspace's token can read each repository (none of them is gated)."""
+    from huggingface_hub import auth_check
+
+    am_vfm = _anchor_module()  # finds the token into HF_TOKEN
+    del am_vfm
+    out = {}
+    for repo in ANCHOR_REPOS:
+        try:
+            auth_check(repo, token=os.environ.get("HF_TOKEN"))
+            out[repo] = "ok"
+        except Exception as error:  # noqa: BLE001 - reported
+            out[repo] = f"{type(error).__name__}: {str(error).splitlines()[0][:200]}"
+    return out
+
+
+@app.function(
+    image=anchor_model_image,
+    secrets=[HF_SECRET],
+    volumes={"/weights": WEIGHTS},
+    cpu=4.0,
+    memory=16384,
+    timeout=3 * 3600,
+)
+def anchor_prefetch(repos: list[str]) -> dict[str, float]:
+    """Each repository into the weights volume once, on a CPU, before a GPU waits on it."""
+    from huggingface_hub import snapshot_download
+
+    _anchor_module()
+    seconds = {}
+    for repo in repos:
+        started = time.time()
+        patterns = ANCHOR_REPOS.get(repo)
+        snapshot_download(
+            repo,
+            token=os.environ.get("HF_TOKEN"),
+            allow_patterns=list(patterns) if patterns else None,
+            max_workers=16,
+        )
+        WEIGHTS.commit()
+        seconds[repo] = round(time.time() - started, 1)
+    return seconds
+
+
+#: The job's image: the generative fill job's (gsplat on torch 2.4, Python 3.10), plus
+#: transformers for Prompt Depth Anything, LPIPS and DreamSim for the scores (evaluation
+#: only), torchvision for them; torch must stay 2.4.1 (the gsplat wheel's).
+anchorfill_image = (
+    _gsplat_base.apt_install("git")
+    .run_commands(
+        "pip install 'torchvision==0.19.1' --index-url https://download.pytorch.org/whl/cu124",
+        "pip install 'transformers==4.57.1' 'huggingface_hub>=0.34,<1.0' 'boto3' "
+        "'lpips==0.1.4' 'dreamsim==0.2.1' 'open-clip-torch==2.32.0' 'timm==1.0.15' "
+        "'peft==0.15.2' 'ftfy' 'regex'",
+        "python -c \"import torch, numpy; assert torch.__version__.startswith('2.4.1'), "
+        "torch.__version__; assert numpy.__version__.startswith('1.26'), numpy.__version__\"",
+    )
+    .env({"HF_HOME": "/weights/hf", "TORCH_HOME": "/weights/torch"})
+    .add_local_dir(
+        LOCAL_CAPTURES,
+        CAPTURES,
+        ignore=["**/.venv/**", "**/__pycache__/**", "**/*.pyc", "tests/**"],
+    )
+)
+
+#: What each scan's round-2 fill reads: the pipeline run with its photos and COLMAP poses
+#: (private bucket), a plain caption for the prompts (the scene, not a region), and which
+#: cameras its leave-out check holds out (the spool: its highest; the pumpkin: its lowest).
+ANCHOR_SCANS: dict[str, dict] = {
+    "spool": {
+        "job": "8e1cc115-cb80-4af2-81fc-dccaf6b65891",
+        "caption": "a weathered round wooden cable-spool table standing on a lawn",
+        "leave": "high",
+    },
+    "pumpkin": {
+        "job": "430c1932-5b6a-47b1-bb71-bb7fa2fec86b",
+        "caption": "an orange pumpkin and a red pumpkin resting on a bed of dry straw in a garden",
+        "leave": "low",
+    },
+}
+#: anchor_fill options a run may set (`--anchor-options k=v,...`), and their checks.
+ANCHOR_OPTIONS = {
+    "arms": r"(refs|norefs|vace)(\+(refs|norefs|vace))*",
+    "seeds": r"[1-8]",
+    "prop_seeds": r"[1-4]",
+    "anchor_steps": r"[1-9][0-9]?",
+    "prop_steps": r"[1-9][0-9]?",
+    "update_steps": r"[1-9][0-9]?",
+    "update_strengths": r"(0\.[0-9]+)?(\+0\.[0-9]+)*",
+    "set_seeds": r"[1-3]",
+    "set_steps": r"[1-9][0-9]?",
+    "set_distill": r"true|false",
+    "distill": r"[0-9]{1,4}",
+    "update_distill": r"[0-9]{1,4}",
+    "anchors": r"[1-8]\+[1-8]",
+    "propagation": r"[0-9]{1,2}\+[0-9]{1,2}",
+    "leave_share": r"0\.[0-9]+",
+    "lightning": r"true|false",
+    "fallback": r"true|false",
+    "vae_area": r"[0-9]{5,7}",
+}
+
+
+def parse_anchor_options(text: str) -> dict[str, str]:
+    """`k=v,k=v` checked against `ANCHOR_OPTIONS` (lists joined by `+`)."""
+    import re
+
+    out = {}
+    for pair in filter(None, (p.strip() for p in text.split(","))):
+        key, _, value = pair.partition("=")
+        if key not in ANCHOR_OPTIONS or not re.fullmatch(ANCHOR_OPTIONS[key], value):
+            raise SystemExit(f"anchor option {pair!r}: one of {sorted(ANCHOR_OPTIONS)}, checked")
+        out[key] = value
+    return out
+
+
+def anchor_argv(options: dict[str, str]) -> list[str]:
+    argv = []
+    for key, value in options.items():
+        if key == "fallback":
+            if value == "true":
+                argv.append("--fallback")
+            continue
+        value = value.replace("+", ",")
+        argv += [f"--{key.replace('_', '-')}", value]
+    return argv
+
+
+def _spawn_anchor(cls: str, method: str, request: dict) -> object:
+    if cls not in ANCHOR_CLASSES:
+        raise ValueError(f"no class {cls!r}")
+    return getattr(ANCHOR_CLASSES[cls](), method).spawn(request)
+
+
+def _wait_anchor(call: object) -> dict:
+    """A call back within its class's cap (and the queue before it), else cancelled."""
+    try:
+        return call.get(timeout=GEN_CALL_TIMEOUT_S)  # type: ignore[attr-defined]
+    except TimeoutError:
+        call.cancel(terminate_containers=True)  # type: ignore[attr-defined]
+        raise
+
+
+@app.function(
+    image=anchorfill_image,
+    gpu="L4",
+    cpu=8.0,
+    memory=65536,
+    timeout=ANCHOR_JOB_CAP_MIN * 60,
+    volumes={"/weights": WEIGHTS},
+    secrets=[STORAGE_SECRET, HF_SECRET],
+)
+def run_anchorfill(kind: str, scan: str, options: dict) -> dict:
+    """`anchor_fill.py run` on one scan: `anchor` on every camera (the layers to publish),
+    `leaveout` with the scan's leave-out cameras held out (scored, not published). Returns the
+    report, the renders and each arm's layer (`<layer>/inferred.tar.gz`)."""
+    os.chdir(CAPTURES)
+    sys.path.insert(0, CAPTURES)
+    import video_fill_models
+
+    video_fill_models.find_token()
+    import anchor_fill as af
+
+    af.BACKEND = (_spawn_anchor, _wait_anchor)
+    started = time.time()
+    setup = ANCHOR_SCANS[scan]
+    files: dict[str, bytes] = {}
+    timings: dict[str, object] = {}
+    with tempfile.TemporaryDirectory() as work:
+        root = Path(work)
+        tileset = _fetch(SCANS[scan], root / "scan")
+        timings["fetchS"] = round(time.time() - started, 1)
+        run = f"runs/{setup['job']}"
+        t = time.time()
+        counts = {
+            "poses": _fetch_private(f"{run}/pose/poses/", root / "poses"),
+            "frames": _fetch_private(f"{run}/normalize/frames/", root / "frames"),
+            "placement": _fetch_private(f"{run}/place/placement.json", root / "place"),
+        }
+        timings["privateS"] = round(time.time() - t, 1)
+        timings["privateFiles"] = counts
+        placement = next((root / "place").rglob("*.json"), None)
+        argv = ["run", str(tileset), str(root / "out"), "--scan", scan]
+        argv += ["--caption", setup["caption"], "--poses", str(root / "poses")]
+        argv += ["--frames", str(root / "frames"), "--renderer", "gsplat"]
+        if placement is not None:
+            argv += ["--placement", str(placement)]
+        if kind == "leaveout":
+            argv += ["--leave-out", setup["leave"]]
+        argv += anchor_argv(options)
+        t = time.time()
+        code, log = 1, ""
+        try:
+            code = af.main(argv)
+        except (Exception, SystemExit):  # noqa: BLE001 - reported back with what it wrote
+            import traceback
+
+            log = traceback.format_exc()
+            sys.stderr.write(log)
+        timings["fillS"] = round(time.time() - t, 1)
+        out = root / "out"
+        result = (
+            json.loads((out / "report.json").read_text(encoding="utf-8"))
+            if (out / "report.json").exists()
+            else None
+        )
+        if (out / "renders").exists():
+            files.update({f"renders/{k}": v for k, v in _tree(out / "renders").items()})
+        if (out / "report.json").exists():
+            files["report.json"] = (out / "report.json").read_bytes()
+        for layer in sorted(out.glob("*/inferred/tileset.json")):
+            files[f"{layer.parent.parent.name}/inferred.tar.gz"] = _tar(layer.parent)
+        files["measured-tileset.json"] = tileset.read_bytes()
+    timings["totalS"] = round(time.time() - started, 1)
+    return {
+        "kind": kind,
+        "scan": scan,
+        "ok": code == 0 and result is not None,
+        "argv": argv,
+        "result": result,
+        "timings": timings,
+        "files": files,
+        "log": log,
+    }
+
+
+def anchor_counts(options: dict[str, str], worst: bool = False) -> dict[str, int]:
+    """Calls one job makes: editor calls by kind, set calls. `worst`: the selection's
+    maxima (8 anchors, 24 propagation views)."""
+    arms = options.get("arms", "refs+norefs+vace").split("+")
+    anchors = int(options.get("anchors", "4+8").split("+")[1 if worst else 0])
+    props = int(options.get("propagation", "12+24").split("+")[1 if worst else 0])
+    if not worst:
+        anchors = max(anchors, ANCHOR_VIEWS["anchors"])
+        props = max(props, ANCHOR_VIEWS["props"])
+    seeds, prop_seeds = int(options.get("seeds", 4)), int(options.get("prop_seeds", 2))
+    rounds = len([s for s in options.get("update_strengths", "0.4").split("+") if s])
+    refs = any(a in arms for a in ("refs", "vace"))
+    norefs = "norefs" in arms
+    sequential = [a for a in arms if a != "vace"]
+    out = {
+        "anchor": anchors * seeds * int(refs),
+        "anchorNoRefs": anchors * seeds * int(norefs),
+        "prop": props * prop_seeds * int("refs" in sequential),
+        "propNoRefs": props * prop_seeds * int("norefs" in sequential),
+        "update": rounds * (anchors + props) * len(arms),
+        "set": int(options.get("set_seeds", 2)) * int("vace" in arms),
+    }
+    return out
+
+
+def estimate_anchor_cost(jobs: list[tuple[str, str]], options: dict[str, str]) -> dict:
+    """What the round-2 jobs should cost and the worst case the guard holds them to. Per job:
+    its editor calls (`EDIT_CALL_S` each), set calls, two editor starts and one VACE start
+    (loads and idle tails), its L4. The worst case: the selection's maxima, every call and
+    start at `WORST_FACTOR` times, one call per class hung to its cap, every job at its
+    timeout."""
+    rate_gpu, rate_l4 = GPU_RATES[ANCHOR_GPU] / 3600, GPU_RATES["L4"] / 3600
+    usd: dict[str, float] = {}
+    worst: dict[str, float] = {}
+    for kind, scan in jobs:
+        name = f"{kind}:{scan}"
+        for label, table, factor in (("", usd, 1.0), ("", worst, WORST_FACTOR)):
+            n = anchor_counts(options, worst=table is worst)
+            edit_s = sum(n[k] * EDIT_CALL_S[k] for k in EDIT_CALL_S)
+            set_s = n["set"] * SET_CALL_S
+            starts = 2 * (EDIT_LOAD_S + EDIT_IDLE_S) + (SET_LOAD_S + SET_IDLE_S) * int(n["set"] > 0)
+            table[f"{name} editor{label}"] = factor * edit_s * rate_gpu
+            table[f"{name} vace{label}"] = factor * set_s * rate_gpu
+            table[f"{name} starts{label}"] = factor * starts * rate_gpu
+        usd[f"{name} L4"] = ANCHOR_JOB_MIN.get(scan, 60) / 60 * GPU_RATES["L4"]
+        worst[f"{name} L4"] = ANCHOR_JOB_CAP_MIN * 60 * rate_l4
+    worst["hung editor call"] = EDIT_CAP_S * rate_gpu
+    worst["hung VACE call"] = SET_CAP_S * rate_gpu
+    return {
+        "calls": {f"{k}:{s}": anchor_counts(options) for k, s in jobs},
+        "usd": {k: round(v, 3) for k, v in usd.items()},
+        "totalUsd": round(sum(usd.values()), 2),
+        "worstUsd": round(sum(worst.values()), 2),
+    }
+
+
+def actual_anchor_cost(results: list[dict]) -> dict:
+    """What the jobs cost from what they report: per GPU class its calls' seconds plus, per
+    container start (a distinct load time), its load and idle tail; per job its L4 wall
+    time. A floor: Modal also bills image pulls and the CPU side."""
+    seconds = {"EditQwen": 0.0, "FillVace14": 0.0}
+    loads: dict[str, set] = {"EditQwen": set(), "FillVace14": set()}
+    usd: dict[str, float] = {}
+    for r in results:
+        report = (r.get("result") or {}) if isinstance(r, dict) else {}
+        for call in report.get("calls", []) or []:
+            cls = "FillVace14" if str(call.get("key", "")).startswith("set-") else "EditQwen"
+            seconds[cls] += float(call.get("seconds") or 0.0)
+            if call.get("loadSeconds") is not None:
+                loads[cls].add(float(call["loadSeconds"]))
+        if isinstance(r, dict) and r.get("timings", {}).get("totalS"):
+            usd[f"{r['kind']}:{r['scan']} L4"] = r["timings"]["totalS"] / 3600 * GPU_RATES["L4"]
+    idle = {"EditQwen": EDIT_IDLE_S, "FillVace14": SET_IDLE_S}
+    for cls, s in seconds.items():
+        if s or loads[cls]:
+            total = s + sum(loads[cls]) + idle[cls] * max(1, len(loads[cls]))
+            usd[cls] = total / 3600 * GPU_RATES[ANCHOR_GPU]
+    return {
+        "usd": {k: round(v, 3) for k, v in usd.items()},
+        "gpuSeconds": {k: round(v, 1) for k, v in seconds.items()},
+        "starts": {k: sorted(v) for k, v in loads.items()},
+        "totalUsd": round(sum(usd.values()), 2),
+    }
+
+
+def _run_anchor(
+    jobs: list[tuple[str, ...]],
+    options: dict[str, str],
+    out: Path,
+    budget_usd: float,
+    spent_usd: float,
+) -> None:
+    """The round-2 jobs: estimate, refuse past the budget, check access, prefetch, run in
+    parallel, write each job's files and the cost."""
+    for kind, scan in jobs:
+        if scan not in ANCHOR_SCANS:
+            raise SystemExit(
+                f"job {kind}:{scan}: scans are {', '.join(ANCHOR_SCANS)} (camp has no poses)"
+            )
+    out.mkdir(parents=True, exist_ok=True)
+    estimate = estimate_anchor_cost(list(jobs), options)
+    estimate["budgetUsd"], estimate["spentUsd"], estimate["options"] = (
+        budget_usd,
+        spent_usd,
+        options,
+    )
+    (out / "anchor-estimate.json").write_text(json.dumps(estimate, indent=1), encoding="utf-8")
+    sys.stdout.write(f"round 2, estimated: {json.dumps(estimate)}\n")
+    if budget_usd <= 0:
+        raise SystemExit("round 2 runs only with --budget-usd set (the guard)")
+    if estimate["worstUsd"] > budget_usd - spent_usd:
+        raise SystemExit(
+            f"the worst case ${estimate['worstUsd']} (estimated ${estimate['totalUsd']}) is more "
+            f"than the ${budget_usd - spent_usd:.2f} left of the budget: not started"
+        )
+    access = anchor_access.remote()
+    (out / "anchor-access.json").write_text(json.dumps(access, indent=1), encoding="utf-8")
+    sys.stdout.write(f"model access: {json.dumps(access)}\n")
+    refused = [r for r, v in access.items() if v != "ok"]
+    if refused:
+        raise SystemExit(f"the token cannot read {refused}: not started (no workaround)")
+    arms = options.get("arms", "refs+norefs+vace").split("+")
+    repos = [r for r in ANCHOR_REPOS if "Wan" not in r or "vace" in arms]
+    seconds = anchor_prefetch.remote(repos)
+    sys.stdout.write(f"weights fetched: {json.dumps(seconds)}\n")
+    results, failed = [], []
+    calls = [(kind, scan, options) for kind, scan in jobs]
+    for result in run_anchorfill.starmap(calls, return_exceptions=True):
+        if isinstance(result, BaseException):
+            failed.append(repr(result))
+            sys.stdout.write(f"round-2 job raised: {result!r}\n")
+            continue
+        results.append(result)
+        base = f"{result['kind']}-{result['scan']}"
+        folder = out / base
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "log.txt").write_text(result["log"], encoding="utf-8")
+        for name, data in result.get("files", {}).items():
+            if name.endswith("/inferred.tar.gz"):
+                target = out / f"{base}-{name.split('/', 1)[0]}" / "inferred.tar.gz"
+            else:
+                target = folder / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        brief = {k: v for k, v in result.items() if k not in ("files", "log")}
+        (folder / "result.json").write_text(json.dumps(brief, indent=1), encoding="utf-8")
+        report = result.get("result") or {}
+        headline = {
+            "heldOut": (report.get("heldOut") or {}).get("mean"),
+            "arms": {
+                a: (e.get("evidence") or {}).get("gaussians")
+                for a, e in (report.get("candidates") or {}).items()
+            },
+        }
+        sys.stdout.write(f"{base}: ok={result['ok']} {json.dumps(headline)[:3000]}\n")
+        if not result["ok"]:
+            failed.append(base)
+    cost = actual_anchor_cost(results)
+    cost["estimate"] = estimate["totalUsd"]
+    (out / "anchor-cost.json").write_text(json.dumps(cost, indent=1), encoding="utf-8")
+    sys.stdout.write(f"round 2, cost from what the jobs report: {json.dumps(cost)}\n")
+    if failed:
+        raise SystemExit(f"failed: {', '.join(failed)}")
+
+
 @app.local_entrypoint()
 def main(
     jobs: str = "drop:yard,drop:spool",
@@ -1281,6 +1849,7 @@ def main(
     steps: int = 0,
     budget_usd: float = 0.0,
     spent_usd: float = 0.0,
+    anchor_options: str = "",
 ) -> None:
     """Every `kind:scan` in `jobs` with every filler, in parallel containers; each result
     under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`. `selftest`: also Fixer on
@@ -1294,12 +1863,25 @@ def main(
     generative_fill.py takes them. Their estimated cost is written first
     (`out/gen-estimate.json`); with `budget_usd` set, a run whose estimate exceeds what is
     left of it (`budget_usd - spent_usd`) does not start. What they cost, from what they
-    report, is `out/gen-cost.json`."""
+    report, is `out/gen-cost.json`.
+
+    `anchor:<scan>` and `leaveout:<scan>` run round 2 (`run_anchorfill`, anchor then
+    propagate) on the spool or the pumpkin with `anchor_options` (`k=v,...`,
+    `ANCHOR_OPTIONS`); its estimate is `out/anchor-estimate.json`, and it runs only with
+    `budget_usd` set and its worst case within what is left."""
     if renderer not in ("cpu", "gsplat"):
         raise SystemExit(f"renderer {renderer!r}: cpu or gsplat")
     every = [j.strip() for j in jobs.split(",") if j.strip()]
     gen_jobs = [tuple(j.split(":", 1)) for j in every if j.split(":", 1)[0] in ("gen", "holdout")]
-    jobs = ",".join(j for j in every if j.split(":", 1)[0] not in ("gen", "holdout"))
+    anchor_jobs = [
+        tuple(j.split(":", 1)) for j in every if j.split(":", 1)[0] in ("anchor", "leaveout")
+    ]
+    own = ("gen", "holdout", "anchor", "leaveout")
+    jobs = ",".join(j for j in every if j.split(":", 1)[0] not in own)
+    if anchor_jobs:
+        # Round 2 (anchor, then propagate), with `anchor_options` as anchor_fill takes them.
+        options_v2 = parse_anchor_options(anchor_options)
+        _run_anchor(anchor_jobs, options_v2, Path(out), budget_usd, spent_usd)
     if gen_jobs:
         options = {
             "generators": [g.strip() for g in generators.split(",") if g.strip()],

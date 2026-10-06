@@ -23,12 +23,14 @@ name: Publish fill
 #   `[fill|run=<fill.yml run id>|job=<artifact folder>|scan=camp]`, adding `|name=<layer>`
 #   to name the folder (default: the job folder without `fill-<scan>-`) and `|publish` to
 #   publish.
-# * **Bake-off variants** (`variant`): the generative fill's layers (fill.yml `gen:<scan>`
-#   jobs, `gen-<scan>-<layer>` folders; `job` may list several, comma-separated) go to
-#   `variants/fill/<name>/` instead, and are declared in the root's `extras.variants.fill`
-#   (tools/captures/publish_variants.py: the asset's current variants with these added or
-#   put in place by name, every other system's and every other variant kept; re-read just
-#   before the attach). `extras.inferredLayers`, today's fill, is not touched.
+# * **Bake-off variants** (`variant`): the fill bake-offs' layers (fill.yml `gen:<scan>` and
+#   `anchor:<scan>` jobs, `gen-<scan>-<layer>` / `anchor-<scan>-<layer>` folders; `job` may
+#   list several, comma-separated) go to `variants/fill/<name>/` instead, and are registered
+#   in the root's `extras.variants.fill` (tools/captures/publish_variants.py). The request
+#   carries only the entries to register (`register`) or the names to take off (`withdraw`,
+#   which stages no files and needs no `run`); `attach_sidecars.attach` merges them into the
+#   tileset as it is at the request, so every other system's entry and every other variant
+#   stays. `extras.inferredLayers`, today's fill, is not touched.
 #
 # Variables: TWIN_API_URL, SCAN_ASSET_IDS (JSON, {"camp": "<asset id>", ...}). For `publish`
 # only, secrets CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, API_WRITE_TOKEN
@@ -63,6 +65,10 @@ on:
         description: "As bake-off variants (variants/fill/<name>/, extras.variants.fill)"
         type: boolean
         default: false
+      withdraw:
+        description: "Variants only: fill variant names to take off, comma-separated (job: none)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -82,6 +88,7 @@ jobs:
       name: ${{ steps.plan.outputs.name }}
       publish: ${{ steps.plan.outputs.publish }}
       variant: ${{ steps.plan.outputs.variant }}
+      withdraw: ${{ steps.plan.outputs.withdraw }}
     steps:
       # Read as data, validated here, never interpolated into a shell line.
       - id: plan
@@ -94,11 +101,12 @@ jobs:
           NAME: ${{ inputs.name }}
           PUBLISH: ${{ inputs.publish }}
           VARIANT: ${{ inputs.variant }}
+          WITHDRAW: ${{ inputs.withdraw }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
           options = {"run": "", "job": "", "scan": "camp", "name": "", "publish": "false",
-                     "variant": "false"}
+                     "variant": "false", "withdraw": ""}
           if os.environ["EVENT"] == "workflow_dispatch":
               for name in options:
                   options[name] = os.environ.get(name.upper(), "") or options[name]
@@ -114,10 +122,14 @@ jobs:
               job = options["job"]
               options["name"] = job[len(prefix):] if job.startswith(prefix) else job
           job = r"[a-z0-9][a-z0-9-]*"
+          withdrawing = options["variant"] == "true" and options["withdraw"] != ""
+          if withdrawing:
+              # A withdrawal stages nothing: no run, no job.
+              options["run"], options["job"], options["name"] = "0", "none", "none"
           valid = {"run": r"[0-9]+", "job": job if options["variant"] != "true" else
                    rf"{job}(,{job})*", "scan": r"[a-z0-9-]+",
                    "name": r"[a-z0-9][a-z0-9,-]*", "publish": r"true|false",
-                   "variant": r"true|false"}
+                   "variant": r"true|false", "withdraw": rf"({job}(,{job})*)?"}
           for name, pattern in valid.items():
               if not re.fullmatch(pattern, options[name]):
                   raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
@@ -143,6 +155,7 @@ jobs:
         with:
           enable-cache: true
       - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.withdraw == ''
         with:
           name: fill
           path: ${{ runner.temp }}/fill
@@ -151,6 +164,8 @@ jobs:
       - name: The variants checked, the scan's current tileset, and the request
         if: needs.plan.outputs.variant == 'true'
         working-directory: tools/captures
+        env:
+          WITHDRAW: ${{ needs.plan.outputs.withdraw }}
         run: |
           uv sync --frozen
           uv run --with modal==1.5.5 python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
@@ -166,11 +181,17 @@ jobs:
           if scan not in app.SCANS:
               raise SystemExit(f"scan {scan!r} is not one of {sorted(app.SCANS)}")
           temp = Path(os.environ["RUNNER_TEMP"])
-          publish_variants.main([
-              "build", "--scan", scan, "--legacy-url", app.SCANS[scan],
-              "--fill", str(temp / "fill"), "--out", str(temp / "out" / scan),
-              "--jobs", os.environ["JOB"],
-          ])
+          if os.environ.get("WITHDRAW"):
+              publish_variants.main([
+                  "withdraw", "--scan", scan, "--legacy-url", app.SCANS[scan],
+                  "--out", str(temp / "out" / scan), "--names", os.environ["WITHDRAW"],
+              ])
+          else:
+              publish_variants.main([
+                  "build", "--scan", scan, "--legacy-url", app.SCANS[scan],
+                  "--fill", str(temp / "fill"), "--out", str(temp / "out" / scan),
+                  "--jobs", os.environ["JOB"],
+              ])
           PY
       - name: The layer checked, the scan's current tileset, and the request
         if: needs.plan.outputs.variant != 'true'
@@ -299,14 +320,8 @@ jobs:
         with:
           name: inferred-fill
           path: ${{ runner.temp }}/out
-      # A variant's `extras.variants` is sent whole: merged again onto the tileset as it is
-      # now, so a variant another bake-off published since the build is kept.
-      - name: Re-merge the variants onto the current tileset
-        if: needs.plan.outputs.variant == 'true'
-        env:
-          SCAN: ${{ needs.plan.outputs.scan }}
-        working-directory: tools/captures
-        run: uv run --no-project python publish_variants.py refresh "$RUNNER_TEMP/out/$SCAN"
+      # Variants: attach.json names the entries to register or withdraw, never a variants
+      # value; the attach merges them into the tileset as it is at the request.
       - name: Stage the layer, and attach it
         env:
           SCAN: ${{ needs.plan.outputs.scan }}
