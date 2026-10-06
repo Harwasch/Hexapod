@@ -114,6 +114,8 @@ COPY_MIN_CHANGE = 0.04
 REPROJECT_STRENGTH = 0.3
 SURFACE_CLUSTERS = 6
 SURFACE_BUDGET_SHARE = 0.5
+#: Hemisphere views (`hemisphere_targets`) closer than this to a chosen view are not added.
+HEMISPHERE_NMS_DEG = 10.0
 #: A camera does not carve through a pixel where the weak surfaces (alone) cover this much:
 #: a ray through an under-constrained, semi-transparent surface is no proof of free space.
 SOFT_ALPHA = 0.05
@@ -498,13 +500,75 @@ def plan_targets(
                     contexts.get(cluster, {"top": [], "wide": None, "close": None}),
                 )
             )
+    hemisphere = hemisphere_targets(setup, renderer, options, targets, contexts) if targets else []
+    targets += hemisphere
     report = {
         "selection": selection.report,
         "candidates": [c.to_json() for c in candidates],
         "targets": [t.to_json() for t in targets],
+        "hemisphere": [t.key for t in hemisphere],
         "contexts": {str(k): {kk: vv for kk, vv in v.items()} for k, v in contexts.items()},
     }
     return targets, report
+
+
+def hemisphere_targets(
+    setup: Setup,
+    renderer: Any,
+    options: Options,
+    targets: Sequence[Target],
+    contexts: dict[int, dict[str, Any]],
+) -> list[Target]:
+    """Propagation views that make every direction of the largest hole's hemisphere seen
+    (`HEADLINE_VIEWS`: straight above, eight azimuths at 15 and at 45 degrees), aimed at the
+    hole: each one no chosen view is within `HEMISPHERE_NMS_DEG` of, that shows the hole,
+    from an eye in the open (`fill_views.BACK_MAX`), with something to fill or clean. The
+    pass/fail test is see-through from all of them, so each must be filled, not left to
+    whichever views covered the hole once."""
+    if not setup.clusters.info:
+        return []
+    scene = setup.scene()
+    c = setup.shown_classes()
+    known, weak = c == fq.KNOWN, c == fq.WEAK
+    quality = setup.shown_quality()
+    members = setup.measured.positions[setup.clusters.members(0)]
+    centre = np.median(members, axis=0)
+    chosen = [t.direction for t in targets]
+    out: list[Target] = []
+    for elev, az in HEADLINE_VIEWS:
+        d = fv._direction(elev, az)
+        if any(_angle_deg(d, o) < HEMISPHERE_NMS_DEG for o in chosen):
+            continue
+        cam = _headline_camera(
+            centre, setup.focus.distance, setup.focus.hfov_deg, elev, az, options.fill_size
+        )
+        probe = fv.scaled(cam, options.probe_size[0], options.probe_size[1])
+        face = fq.facing(quality, probe.centre, scene.positions)
+        pc = fv.pixel_classes(scene, probe, renderer, known, weak, face)
+        shares = pc.shares()
+        if shares["shown"] < fv.SHOWN_MIN or shares["back"] > fv.BACK_MAX:
+            continue
+        if shares["deficit"] < PROP_MIN_SHARE:
+            continue
+        chosen.append(d)
+        out.append(
+            Target(
+                f"h{len(out)}",
+                "prop",
+                -1,
+                elev,
+                az,
+                d,
+                cam,
+                0,
+                contexts.get(0, {"top": [], "wide": None, "close": None}),
+            )
+        )
+    return out
+
+
+def _angle_deg(a: np.ndarray, b: np.ndarray) -> float:
+    return math.degrees(math.acos(float(np.clip(np.dot(a, b), -1.0, 1.0))))
 
 
 def _quality_on(q: fq.Quality, rows: np.ndarray) -> fq.Quality:
@@ -2604,20 +2668,40 @@ def before_after(run: Run, layers: dict[str, Splats | None], out: Path) -> None:
     Image.fromarray(gf.grid(rows)).save(out / f"before-after-{setup.name}.png")
 
 
-#: The headline test: of a hole's footprint (its gaussians' pixels), the share whose opacity
-#: -- the scan's gaussians in the hole's box, plus the layer's -- is below this is
-#: see-through.
-SEE_THROUGH_ALPHA = 0.8
+#: The headline test (the owner's): the largest hole seen from straight above and from eight
+#: azimuths at 15 and at 45 degrees; of its footprint (its gaussians' pixels), the share whose
+#: opacity -- the gaussians in the hole's box, the measured ones a fill supersedes swapped
+#: for the fill's -- is below `SEE_THROUGH_ALPHA` is see-through. Pass: at most
+#: `SEE_THROUGH_PASS` from every direction, and a mean opacity of `MEAN_ALPHA_PASS`.
+HEADLINE_VIEWS = (
+    [(90.0, 0.0)]
+    + [(15.0, float(a)) for a in range(0, 360, 45)]
+    + [(45.0, float(a)) for a in range(0, 360, 45)]
+)
+SEE_THROUGH_ALPHA = 0.5
+SEE_THROUGH_PASS = 0.05
+MEAN_ALPHA_PASS = 0.95
+
+
+def _known_rows(setup: Setup) -> np.ndarray:
+    """'Before' as shown-gaussian indices: all; in a leave-out, only what the kept cameras
+    know (the withheld and unknown gaussians left out, as `score_held_out` draws it)."""
+    if setup.leave_out == "none":
+        return np.arange(len(setup.shown))
+    c = setup.shown_classes()
+    return np.flatnonzero((c != fq.UNKNOWN) & ~setup.withheld[setup.shown])
 
 
 def _known_scene(setup: Setup) -> Splats:
-    """'Before': the scan as shown; in a leave-out, only what the kept cameras know (the
-    withheld and unknown gaussians left out, as `score_held_out` draws it)."""
-    scene = setup.scene()
-    if setup.leave_out == "none":
-        return scene
-    c = setup.shown_classes()
-    return scene.take(np.flatnonzero((c != fq.UNKNOWN) & ~setup.withheld[setup.shown]))
+    return setup.scene().take(_known_rows(setup))
+
+
+def _headline_camera(centre: np.ndarray, distance: float, fov: float, elev: float, az: float, size):
+    d = fv._direction(elev, az)
+    up = (0.0, 1.0, 0.0) if elev >= 89.0 else (0.0, 0.0, 1.0)
+    return Camera.look_at(
+        centre + distance * d, centre, fov_deg=fov, width=size[0], height=size[1], up=up
+    )
 
 
 def see_through(
@@ -2627,10 +2711,10 @@ def see_through(
     members: np.ndarray,
     box: tuple[np.ndarray, np.ndarray],
     cam: Camera,
-) -> float | None:
-    """The share of the hole's footprint (its gaussians' `members` positions projected,
-    closed) where the gaussians in its `box` -- the scene's and the layer's -- are less
-    opaque than `SEE_THROUGH_ALPHA`."""
+) -> tuple[float, float] | None:
+    """(see-through share, mean opacity) over the hole's footprint (its gaussians' `members`
+    positions projected, closed): of the gaussians in its `box` -- the scene's and the
+    layer's -- the share of pixels less opaque than `SEE_THROUGH_ALPHA`, and the mean."""
     uv, z = cam.project(members)
     u = np.floor(uv[:, 0]).astype(np.int64)
     v = np.floor(uv[:, 1]).astype(np.int64)
@@ -2649,71 +2733,100 @@ def see_through(
     ]
     inside = [q for q in inside if len(q)]
     if not inside:
-        return 1.0
-    alpha = run.renderer(Splats.concat(inside), cam).alpha
-    return float((alpha[foot] < SEE_THROUGH_ALPHA).mean())
+        return 1.0, 0.0
+    alpha = run.renderer(Splats.concat(inside), cam).alpha[foot]
+    return float((alpha < SEE_THROUGH_ALPHA).mean()), float(alpha.mean())
 
 
-def headline(run: Run, layers: dict[str, Splats | None], out: Path) -> dict[str, Any]:
-    """The owner's test: the largest hole from straight above and from the angle it is most
-    see-through before (searched over the 40 and 65 degree rings), before and with each
-    arm's layer, and how much of it is see-through. Saves `headline-<scan>.png`."""
+def headline(
+    run: Run,
+    layers: dict[str, Splats | None],
+    out: Path,
+    hidden: dict[str, np.ndarray | None] | None = None,
+) -> dict[str, Any]:
+    """The owner's test on the largest hole (`HEADLINE_VIEWS`), before and with each arm's
+    layer -- the measured gaussians the arm supersedes (`hidden`, per measured gaussian)
+    swapped out, as the viewer draws the variant. Saves `headline-<scan>.png`: straight
+    above and the two directions most see-through before."""
     from PIL import Image
 
     setup = run.setup
     if not setup.clusters.info:
         return {}
+    hidden = hidden or {}
     members = setup.measured.positions[setup.clusters.members(0)]
     info = setup.clusters.info[0]
     low, high = np.asarray(info["low"], float), np.asarray(info["high"], float)
     pad = 0.05 * (high - low) + 1e-6
     box = (low - pad, high + pad)
-    before = _known_scene(setup)
+    centre = np.median(members, axis=0)
+    rows = _known_rows(setup)
+    scene = setup.scene()
+    before = scene.take(rows)
+    after_base: dict[str, Splats] = {}
+    for arm in layers:
+        mask = hidden.get(arm)
+        if mask is None:
+            after_base[arm] = before
+        else:
+            keep = rows[~np.asarray(mask, bool)[setup.shown][rows]]
+            after_base[arm] = scene.take(keep)
     width = run.options.score_width
-    size = (width, max(1, round(width * 0.575)))
-    probe = (max(32, width // 3), max(18, round(width * 0.575) // 3))
-    worst, worst_pose = -1.0, (40.0, 0.0)
-    for elev in (40.0, 65.0):
-        for k in range(fv.AZIMUTHS):
-            az = 360.0 * k / fv.AZIMUTHS
-            cam = fv.view_camera(setup.focus, fv._direction(elev, az), probe)
-            share = see_through(run, before, None, members, box, cam)
-            if share is not None and share > worst:
-                worst, worst_pose = share, (elev, az)
-    rows, poses = [], []
-    for name, (elev, az) in (("above", (90.0, 0.0)), ("most see-through", worst_pose)):
-        cam = fv.view_camera(setup.focus, fv._direction(elev, az), size)
-        shares = {"before": see_through(run, before, None, members, box, cam)}
-        row = [
+    size = (width, max(1, round(width * 0.75)))
+    distance = setup.focus.distance
+    fov = 40.0
+    table = []
+    for elev, az in HEADLINE_VIEWS:
+        cam = _headline_camera(centre, distance, fov, elev, az, size)
+        row: dict[str, Any] = {"elevation": elev, "azimuth": az}
+        got = see_through(run, before, None, members, box, cam)
+        row["before"] = None if got is None else [round(got[0], 4), round(got[1], 4)]
+        for arm, layer in layers.items():
+            got = see_through(run, after_base[arm], layer, members, box, cam)
+            row[arm] = None if got is None else [round(got[0], 4), round(got[1], 4)]
+        table.append(row)
+    scored = [r for r in table if r["before"] is not None]
+    worst = sorted((r for r in scored if r["elevation"] < 89.0), key=lambda r: -r["before"][0])[:2]
+    shown_views = [r for r in table if r["elevation"] >= 89.0] + worst
+    sheet = []
+    for r in shown_views:
+        cam = _headline_camera(centre, distance, fov, r["elevation"], r["azimuth"], size)
+        st = r["before"]
+        line = [
             gf.label_image(
                 tf.to_u8(run.renderer(before, cam).rgb),
-                f"before {elev:g}/{az:g}: {_pct(shares['before'])} see-through",
+                f"before {r['elevation']:g}/{r['azimuth']:g}: {_pct(st and st[0])} see-through",
             )
         ]
         for arm, layer in layers.items():
-            shares[arm] = see_through(run, before, layer, members, box, cam)
-            both = Splats.concat([before, layer]) if layer is not None and len(layer) else before
-            row.append(
+            base = after_base[arm]
+            both = Splats.concat([base, layer]) if layer is not None and len(layer) else base
+            st = r.get(arm)
+            line.append(
                 gf.label_image(
-                    tf.to_u8(run.renderer(both, cam).rgb),
-                    f"{LAYERS[arm]}: {_pct(shares[arm])}",
+                    tf.to_u8(run.renderer(both, cam).rgb), f"{LAYERS[arm]}: {_pct(st and st[0])}"
                 )
             )
-        if setup.leave_out != "none":
-            row.append(
-                gf.label_image(tf.to_u8(run.renderer(setup.measured, cam).rgb), "all cameras")
-            )
-        rows.append(row)
-        poses.append(
-            {
-                "view": name,
-                "elevation": elev,
-                "azimuth": round(az, 1),
-                "seeThrough": {k: None if v is None else round(v, 4) for k, v in shares.items()},
+        sheet.append(line)
+    if sheet:
+        Image.fromarray(gf.grid(sheet)).save(out / f"headline-{setup.name}.png")
+    verdict = {}
+    for key in ["before", *layers]:
+        values = [r[key] for r in table if r.get(key) is not None]
+        if values:
+            worst_share = max(v[0] for v in values)
+            mean_alpha = float(np.mean([v[1] for v in values]))
+            verdict[key] = {
+                "worstSeeThrough": round(worst_share, 4),
+                "meanAlpha": round(mean_alpha, 4),
+                "pass": worst_share <= SEE_THROUGH_PASS and mean_alpha >= MEAN_ALPHA_PASS,
             }
-        )
-    Image.fromarray(gf.grid(rows)).save(out / f"headline-{setup.name}.png")
-    return {"cluster": 0, "seeThroughAlpha": SEE_THROUGH_ALPHA, "poses": poses}
+    return {
+        "cluster": 0,
+        "seeThroughAlpha": SEE_THROUGH_ALPHA,
+        "views": table,
+        "verdict": verdict,
+    }
 
 
 def _pct(x: float | None) -> str:
@@ -2836,9 +2949,15 @@ def run_arms(
     fused = fuse(run, states, distil)
     report["timings"]["fuseS"] = round(time.time() - t, 1)
     layers: dict[str, Splats | None] = {}
+    hidden: dict[str, np.ndarray | None] = {}
     report["candidates"] = {}
     for arm, state in states.items():
         entry: dict[str, Any] = {**state.report, "fills": [f.to_json() for f in state.fills]}
+        # Swap, don't stack: the measured gaussians the rebuilt surface replaces.
+        hidden[arm] = None
+        if state.surface is not None and len(state.surface) and arm in fused and fused[arm]:
+            hidden[arm] = fs.superseded(setup.measured.positions, state.surface)
+            entry["superseded"] = int(hidden[arm].sum())
         made = fused.get(arm)
         layers[arm] = None if made is None else made[0]
         if made is not None:
@@ -2880,6 +2999,10 @@ def run_arms(
                 },
             )
             entry["layer"] = str(layer_dir)
+            if hidden[arm] is not None:
+                entry["supersedes"] = write_supersedes(
+                    layer_dir, measured_tileset.parent, hidden[arm]
+                )
         report["candidates"][arm] = entry
     report["calls"] = run.calls
     report["editorCalls"] = getattr(editor, "calls", None)
@@ -2888,11 +3011,30 @@ def run_arms(
         report["heldOut"] = score_held_out(run, layers, out / "renders", width=options.score_width)
     anchor_sheet(run, anchors, out / "renders")
     before_after(run, layers, out / "renders")
-    report["headline"] = headline(run, layers, out / "renders")
+    report["headline"] = headline(run, layers, out / "renders", hidden)
     report["timings"]["scoreS"] = round(time.time() - t, 1)
     report["timings"]["totalS"] = round(time.time() - started, 1)
     gf.write_json(out / "report.json", report)
     return report
+
+
+def write_supersedes(layer_dir: Path, tiles_dir: Path, mask: np.ndarray) -> dict[str, Any]:
+    """The measured gaussians a layer's rebuilt surface replaces, beside the layer
+    (`supersedes.json`, `fill_surface.supersede_document`) and named in its root's extras, so
+    the viewer hides them while the layer is shown. Nothing is written when the tiles are not
+    this scan's (a test's stand-in tileset)."""
+    document = fs.supersede_document(tiles_dir, mask)
+    if document is None:
+        return {"written": False, "superseded": int(mask.sum())}
+    (layer_dir / "supersedes.json").write_text(json.dumps(document), encoding="utf-8")
+    path = layer_dir / "tileset.json"
+    tileset = json.loads(path.read_text(encoding="utf-8"))
+    tileset["root"].setdefault("extras", {})["supersedes"] = {
+        "uri": "supersedes.json",
+        "superseded": document["superseded"],
+    }
+    path.write_text(json.dumps(tileset, indent=1), encoding="utf-8")
+    return {"written": True, "superseded": document["superseded"]}
 
 
 def filler_name(arm: str, editor: Editor, set_filler: SetFiller | None) -> str:

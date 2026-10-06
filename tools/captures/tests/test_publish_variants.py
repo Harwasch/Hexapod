@@ -192,3 +192,26 @@ def test_a_layer_in_another_frame_or_a_held_out_run_is_refused(tmp_path: Path) -
         with pytest.raises(SystemExit):
             pv.variant_for(job, "spool")
     assert pv.variant_for("gen-spool-wan2-1-vace-1-3b", "spool")[1]["name"] == "vace-1-3b"
+
+
+def test_a_rebuilt_surface_publishes_what_it_supersedes(tmp_path: Path) -> None:
+    archive = _layer_archive(tmp_path / "make", "anchor-spool-anchor-refs")
+    layer = tmp_path / "layer"
+    with tarfile.open(archive) as tar:
+        tar.extractall(layer, filter="data")
+    folder = layer / "inferred"
+    (folder / "supersedes.json").write_text(json.dumps({"tiles": {"abc": [0, 3, 1, 2]}}))
+    tileset = json.loads((folder / "tileset.json").read_text())
+    tileset["root"]["extras"]["supersedes"] = {"uri": "supersedes.json", "superseded": 2}
+    (folder / "tileset.json").write_text(json.dumps(tileset))
+    job = tmp_path / "fill" / "anchor-spool-anchor-refs"
+    job.mkdir(parents=True)
+    with tarfile.open(job / "inferred.tar.gz", "w:gz") as tar:
+        tar.add(folder, arcname="inferred")
+    out = tmp_path / "out"
+    jobs = ["anchor-spool-anchor-refs"]
+    pv.build("spool", tmp_path / "fill", out, jobs, asset=ASSET, current=_current(OTHERS))
+    on_disk = json.loads((out / attach_sidecars.MANIFEST).read_text())
+    entry = on_disk["register"][0]["entry"]
+    assert entry["supersedes"] == "variants/fill/anchor-refs/supersedes.json"
+    assert "variants/fill/anchor-refs/supersedes.json" in on_disk["files"]

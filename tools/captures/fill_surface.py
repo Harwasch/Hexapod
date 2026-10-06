@@ -221,13 +221,21 @@ def _scaled(camera: Camera, width: int) -> Camera:
 
 
 def _bilinear(image: np.ndarray, uv: np.ndarray) -> np.ndarray:
-    import cv2
-
+    """`image` sampled bilinearly at pixel coordinates `uv` (n, 2), edges clamped. In numpy:
+    OpenCV's `remap` refuses maps longer than 32767 (run 37537234426)."""
     img = np.asarray(image, np.float32)
-    mx = uv[:, 0].astype(np.float32).reshape(-1, 1) - 0.5
-    my = uv[:, 1].astype(np.float32).reshape(-1, 1) - 0.5
-    out = cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    return out.reshape(-1, img.shape[2]) if img.ndim == 3 else out.reshape(-1)
+    h, w = img.shape[:2]
+    x = np.clip(uv[:, 0] - 0.5, 0.0, w - 1.0)
+    y = np.clip(uv[:, 1] - 0.5, 0.0, h - 1.0)
+    x0 = np.floor(x).astype(np.int64)
+    y0 = np.floor(y).astype(np.int64)
+    x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
+    fx, fy = x - x0, y - y0
+    if img.ndim == 3:
+        fx, fy = fx[:, None], fy[:, None]
+    top = img[y0, x0] * (1 - fx) + img[y0, x1] * fx
+    bottom = img[y1, x0] * (1 - fx) + img[y1, x1] * fx
+    return top * (1 - fy) + bottom * fy
 
 
 def colour_surface(
@@ -286,6 +294,69 @@ def colour_surface(
     return colours, best
 
 
+def ewa_alpha(splats: Splats, camera: Camera) -> np.ndarray:
+    """The coverage (alpha) `splats` render to at `camera`, by EWA splatting as 3DGS draws it:
+    each gaussian's projected 2D covariance (plus a 0.3 px low-pass), front to back, alpha
+    capped at 0.99 and dropped below 1/255. Exact where `splat_render.render` samples;
+    numpy, one gaussian at a time: for checks on a few thousand, not for scenes."""
+    w, h = camera.width, camera.height
+    pc = (np.asarray(splats.positions, np.float64) - camera.centre) @ camera.rotation.T
+    z = pc[:, 2]
+    rot = fq._rotation_matrices(np.asarray(splats.rotations, np.float64))
+    sg = rot * np.asarray(splats.scales, np.float64)[:, None, :]
+    cov3 = sg @ sg.transpose(0, 2, 1)
+    covc = camera.rotation[None] @ cov3 @ camera.rotation.T[None]
+    f = camera.focal
+    zs = np.maximum(z, 1e-6)
+    jac = np.zeros((len(z), 2, 3))
+    jac[:, 0, 0] = f / zs
+    jac[:, 0, 2] = -f * pc[:, 0] / zs**2
+    jac[:, 1, 1] = f / zs
+    jac[:, 1, 2] = -f * pc[:, 1] / zs**2
+    cov2 = jac @ covc @ jac.transpose(0, 2, 1)
+    a = cov2[:, 0, 0] + 0.3
+    b = cov2[:, 0, 1]
+    c = cov2[:, 1, 1] + 0.3
+    det = a * c - b * b
+    u = f * pc[:, 0] / zs + w / 2
+    v = f * pc[:, 1] / zs + h / 2
+    mid = 0.5 * (a + c)
+    radius = np.ceil(3 * np.sqrt(mid + np.sqrt(np.maximum(mid * mid - det, 0.1))))
+    keep = (
+        (z > 0.05)
+        & (det > 0)
+        & (u + radius > 0)
+        & (u - radius < w)
+        & (v + radius > 0)
+        & (v - radius < h)
+        & (np.asarray(splats.opacities) > 1 / 255)
+    )
+    rows = np.flatnonzero(keep)
+    rows = rows[np.argsort(z[rows])]
+    transmit = np.ones((h, w))
+    ia, ib, ic = (
+        c / np.where(det > 0, det, 1),
+        -b / np.where(det > 0, det, 1),
+        a / np.where(det > 0, det, 1),
+    )
+    for i in rows:
+        x0, x1 = int(max(0, u[i] - radius[i])), int(min(w, u[i] + radius[i] + 1))
+        y0, y1 = int(max(0, v[i] - radius[i])), int(min(h, v[i] + radius[i] + 1))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        dx = np.arange(x0, x1) + 0.5 - u[i]
+        dy = np.arange(y0, y1) + 0.5 - v[i]
+        q = (
+            ia[i] * dx[None, :] ** 2
+            + 2 * ib[i] * dx[None, :] * dy[:, None]
+            + ic[i] * dy[:, None] ** 2
+        )
+        al = np.minimum(0.99, splats.opacities[i] * np.exp(-0.5 * q))
+        al[al < 1 / 255] = 0
+        transmit[y0:y1, x0:x1] *= 1 - al
+    return 1 - transmit
+
+
 def surface_splats(surface: Surface) -> Splats:
     """One flat, opaque disc per coloured point: facing its normal, `DISC_OPACITY`, the
     photo colour; across `DISC_SCALE` of the spacing, or of the distance to its fourth
@@ -337,3 +408,85 @@ def thin_surface(surface: Surface, limit: int) -> Surface:
         surface.spacing * factor,
         {**surface.report, "thinnedBy": round(factor, 3)},
     )
+
+
+#: A measured gaussian is superseded by the rebuilt surface when it lies on a disc: within
+#: this many of the disc's sizes of its centre in the disc's plane, and this many across it.
+SUPERSEDE_ALONG = 1.5
+SUPERSEDE_ACROSS = 1.0
+
+
+def superseded(positions: np.ndarray, discs: Splats) -> np.ndarray:
+    """Per measured gaussian (`positions`), whether a disc of the rebuilt surface replaces
+    it: it lies on the disc -- in its plane (`SUPERSEDE_ACROSS` sizes off it at most) and
+    over it (`SUPERSEDE_ALONG` sizes from its centre). The measured gaussians a surface
+    patch is rebuilt over, whatever their class; the board's rim below the patch stays."""
+    from scipy.spatial import cKDTree
+
+    out = np.zeros(len(positions), bool)
+    if not len(discs) or not len(positions):
+        return out
+    size = discs.scales[:, :2].max(axis=1)
+    normals = fq.shortest_axes(discs)
+    tree = cKDTree(discs.positions)
+    reach = SUPERSEDE_ALONG * float(size.max())
+    d, j = tree.query(positions, k=1, distance_upper_bound=reach)
+    rows = np.flatnonzero(np.isfinite(d))
+    if not rows.size:
+        return out
+    j = j[rows]
+    offset = positions[rows] - discs.positions[j]
+    across = np.abs(np.einsum("ij,ij->i", offset, normals[j]))
+    along = np.sqrt(np.maximum((offset**2).sum(axis=1) - across**2, 0.0))
+    out[rows] = (across <= SUPERSEDE_ACROSS * size[j]) & (along <= SUPERSEDE_ALONG * size[j])
+    return out
+
+
+SUPERSEDE_ENCODING = (
+    "rle per tile (instances.json's addressing): 1 a measured splat the fill's rebuilt "
+    "surface replaces, 0 one it leaves; a coarse tile's splat takes the plurality of the 8 "
+    "leaf splats nearest to it"
+)
+
+
+def supersede_document(tiles_dir: Any, mask: np.ndarray) -> dict[str, Any] | None:
+    """`mask` (per leaf splat, in `splat_render.load_tileset`'s order) as the viewer reads
+    per-splat ids (`instances.json`'s `tiles`: per tile checksum, run-length ids, coarse tiles
+    by their nearest leaf splats, `rebind_instances`), or None when the tiles do not match
+    the mask (not this scan's package)."""
+    import json
+    from pathlib import Path
+
+    from rebind_instances import encode_runs, rebind
+    from rig_tiles import tile_positions
+    from synthetic_tree import checksum_positions
+
+    tiles_dir = Path(tiles_dir)
+    path = tiles_dir / "tileset.json"
+    if not path.is_file():
+        return None
+    document = json.loads(path.read_text(encoding="utf-8"))
+    leaves: list[str] = []
+    stack = [document["root"]]
+    while stack:
+        tile = stack.pop()
+        if tile.get("children"):
+            stack.extend(tile["children"])
+        elif tile.get("content", {}).get("uri"):
+            leaves.append(tile["content"]["uri"])
+    tiles: dict[str, list[int]] = {}
+    at = 0
+    for uri in sorted(leaves):
+        positions = tile_positions(tiles_dir / uri)
+        part = np.asarray(mask[at : at + len(positions)], np.int64)
+        if part.size != len(positions):
+            return None
+        tiles[checksum_positions(positions)] = encode_runs(part)
+        at += len(positions)
+    if at != len(mask):
+        return None
+    return {
+        "encoding": SUPERSEDE_ENCODING,
+        "superseded": int(np.count_nonzero(mask)),
+        "tiles": rebind(tiles_dir, tiles),
+    }

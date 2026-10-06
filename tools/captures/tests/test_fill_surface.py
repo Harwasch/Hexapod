@@ -56,13 +56,13 @@ def test_the_top_seen_at_grazing_angles_is_found_and_coloured_from_the_photos() 
     # Made solid: from straight above the discs alone cover the top.
     discs = fs.surface_splats(surface)
     assert len(discs) == surface.coloured.sum() and (discs.opacities >= 0.9).all()
-    above = Camera.look_at([0.0, 0.01, 3.0], [0.0, 0.0, 0.7], fov_deg=40, width=96, height=96)
-    alpha = render(discs, above).alpha
-    uv, _ = above.project(
-        scene.positions[m["top"] & (np.linalg.norm(scene.positions[:, :2], axis=1) < 0.3)]
-    )
-    u, v = np.floor(uv).astype(int).T
-    assert (alpha[v, u] > 0.8).mean() > 0.85
+    inner = scene.positions[m["top"] & (np.linalg.norm(scene.positions[:, :2], axis=1) < 0.3)]
+    for eye in ([0.0, 0.01, 3.0], [-2.0, 0.3, 1.25]):  # straight above, and low from the side
+        cam = Camera.look_at(eye, [0.0, 0.0, 0.7], fov_deg=40, width=96, height=96)
+        alpha = fs.ewa_alpha(discs, cam)
+        uv, _ = cam.project(inner)
+        u, v = np.floor(uv).astype(int).T
+        assert (alpha[v, u] >= 0.5).mean() > 0.95, eye
     # Thinned to a limit by coarsening the grid.
     fewer = fs.thin_surface(surface, max(10, int(surface.coloured.sum()) // 3))
     assert fewer.coloured.sum() <= max(10, int(surface.coloured.sum()) // 3)
@@ -143,8 +143,73 @@ def test_the_photo_arm_makes_the_top_solid_and_the_headline_shows_it(tmp_path) -
     # The photo arm's views were drawn with the reprojected surface (cleaned, not made).
     head = report["headline"]
     assert (tmp_path / "out" / "renders" / "headline-table.png").exists()
-    for pose in head["poses"]:
-        st = pose["seeThrough"]
-        assert st["refs"] is not None and st["refs"] <= st["before"]
-    above = head["poses"][0]["seeThrough"]
-    assert above["refs"] < 0.2
+    assert len(head["views"]) == len(af.HEADLINE_VIEWS)
+    above = head["views"][0]
+    # (Opacity itself is checked with the exact EWA alpha below: the CPU renderer samples.)
+    assert above["elevation"] == 90.0 and above["refs"] is not None
+    assert set(head["verdict"]) >= {"before", "refs", "norefs"}
+    # Swap, don't stack: the photo arm names the measured gaussians its surface replaces
+    # (the top's), and the control none.
+    assert refs["superseded"] > 0 and "superseded" not in norefs
+    # The hemisphere views were added where the chosen ones left directions unseen.
+    assert report["plan"]["hemisphere"]
+
+
+def test_superseded_gaussians_lie_on_the_discs_and_round_trip_per_tile(tmp_path) -> None:
+    import splat_tiles
+    from rebind_instances import decode_runs
+    from rig_tiles import tile_positions
+    from splat_render import load_tileset, save_ply
+    from synthetic_tree import checksum_positions
+
+    scene, _ = table_scene()
+    save_ply(tmp_path / "scan.ply", scene)
+    splat_tiles.convert(tmp_path / "scan.ply", tmp_path / "tiles", 0.0, 0.0, 0.0, opacity_min=0.0)
+    measured = load_tileset(tmp_path / "tiles" / "tileset.json")
+    g = np.linspace(-0.35, 0.35, 15)
+    gx, gy = np.meshgrid(g, g)
+    pts = np.column_stack([gx.ravel(), gy.ravel(), np.full(gx.size, 0.7)])
+    pts = pts[np.linalg.norm(pts[:, :2], axis=1) < 0.36]
+    surface = fs.Surface(
+        pts,
+        np.tile([0.0, 0.0, 1.0], (len(pts), 1)),
+        np.full((len(pts), 3), 0.5),
+        np.ones(len(pts)),
+        0.05,
+    )
+    discs = fs.surface_splats(surface)
+    mask = fs.superseded(measured.positions, discs)
+    on_top = np.abs(measured.positions[:, 2] - 0.7) < 0.01
+    inner = on_top & (np.linalg.norm(measured.positions[:, :2], axis=1) < 0.3)
+    assert mask[inner].all()
+    assert not mask[measured.positions[:, 2] < 0.6].any()  # the side and the ground stay
+    doc = fs.supersede_document(tmp_path / "tiles", mask)
+    assert doc is not None and doc["superseded"] == int(mask.sum())
+    # Leaf tiles carry the mask exactly, in load_tileset's order.
+    import json
+
+    tileset = json.loads((tmp_path / "tiles" / "tileset.json").read_text())
+    leaves, stack = [], [tileset["root"]]
+    while stack:
+        tile = stack.pop()
+        if tile.get("children"):
+            stack.extend(tile["children"])
+        else:
+            leaves.append(tile["content"]["uri"])
+    got = np.concatenate(
+        [
+            decode_runs(doc["tiles"][checksum_positions(tile_positions(tmp_path / "tiles" / u))])
+            for u in sorted(leaves)
+        ]
+    )
+    assert (got == mask.astype(int)).all()
+    assert fs.supersede_document(tmp_path / "nowhere", mask) is None
+
+
+def test_bilinear_samples_any_number_of_points() -> None:
+    image = np.arange(4 * 5 * 3, dtype=np.float32).reshape(4, 5, 3)
+    uv = np.tile([[2.5, 1.5]], (40000, 1))  # a pixel centre, many times (past remap's limit)
+    out = fs._bilinear(image, uv)
+    assert out.shape == (40000, 3) and np.allclose(out[0], image[1, 2])
+    mid = fs._bilinear(image, np.array([[3.0, 1.5]]))
+    assert np.allclose(mid[0], (image[1, 2] + image[1, 3]) / 2)

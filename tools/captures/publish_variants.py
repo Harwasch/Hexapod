@@ -144,10 +144,12 @@ def _check_layer(folder: Path) -> dict[str, Any]:
     unnamed = sorted({p.name for p in folder.iterdir()} - {"tileset.json", *uris, *sidecars})
     if unnamed:
         raise SystemExit(f"{folder}: files the layer does not name: {unnamed}")
+    supersedes = extras.get("supersedes")
     return {
         "evidence": evidence,
         "transform": document["root"].get("transform"),
         "tiles": len(uris),
+        "supersedes": supersedes.get("uri") if isinstance(supersedes, dict) else None,
     }
 
 
@@ -181,13 +183,24 @@ def variant_for(job: str, scan: str) -> tuple[str, dict[str, str]]:
     raise SystemExit(f"{job} is not a ({kinds})-{scan}-<layer> folder")
 
 
-def entry_for(meta: Mapping[str, str], scan: str, evidence: Mapping[str, Any]) -> dict[str, Any]:
+def entry_for(
+    meta: Mapping[str, str],
+    scan: str,
+    evidence: Mapping[str, Any],
+    supersedes: str | None = None,
+) -> dict[str, Any]:
+    """A fill variant's entry. `supersedes`: the layer's own `supersedes.json` (relative to
+    the layer), the measured splats its rebuilt surface replaces: published as
+    `variants/fill/<name>/<file>`, so a viewer that reads it hides them while the variant is
+    shown (older viewers ignore the field: `lib/variants.ts` reads only what it knows)."""
     entry: dict[str, Any] = {"name": meta["name"], "label": meta["label"], "about": meta["about"]}
     if scan in LOOK_WHERE and meta["name"].startswith("anchor-"):
         entry["look"] = LOOK.format(where=LOOK_WHERE[scan])
     entry["inferredLayers"] = [
         {"uri": f"variants/{SYSTEM}/{meta['name']}/tileset.json", "evidence": dict(evidence)}
     ]
+    if supersedes:
+        entry["supersedes"] = f"variants/{SYSTEM}/{meta['name']}/{supersedes}"
     return entry
 
 
@@ -239,7 +252,9 @@ def build(
         checked = _check_layer(dest)
         if checked["transform"] != current["root"]["transform"]:
             raise SystemExit(f"{job}: the layer is not in the scan's current tileset's frame")
-        register.append((SYSTEM, entry_for(meta, scan, checked["evidence"])))
+        register.append(
+            (SYSTEM, entry_for(meta, scan, checked["evidence"], checked.get("supersedes")))
+        )
     changes = [("with", s, e) for s, e in register]
     _, summary = preflight(current["root"].get("extras", {}).get("variants"), changes)
     manifest = attach_sidecars.write_manifest(

@@ -1306,9 +1306,13 @@ SET_CAP_S = 900
 #: The job's own L4 (renders, quality, depth, lift, carving, distil, scores), minutes (the
 #: spool's leave-out took 13; the pumpkin has 2.5 times the gaussians).
 ANCHOR_JOB_MIN = {"spool": 20, "pumpkin": 35}
-ANCHOR_JOB_CAP_MIN = 80
+#: The job's timeout: the seven round-2 jobs so far took 11-16 min of L4.
+ANCHOR_JOB_CAP_MIN = 45
 #: Views the estimate assumes (the selection's maxima give the worst case).
 ANCHOR_VIEWS = {"anchors": 6, "props": 16}
+#: The hemisphere views (`anchor_fill.hemisphere_targets`) added to the propagation: at most
+#: one per headline direction (17), about 10 expected (the others already covered).
+HEMISPHERE_VIEWS = {"expected": 10, "worst": 17}
 
 
 def _anchor_module():  # noqa: ANN202 - anchor_models, imported where it was copied
@@ -1676,6 +1680,7 @@ def anchor_counts(options: dict[str, str], worst: bool = False) -> dict[str, int
     arms = options.get("arms", "refs+norefs+vace").split("+")
     anchors = int(options.get("anchors", "4+8").split("+")[1 if worst else 0])
     props = int(options.get("propagation", "12+24").split("+")[1 if worst else 0])
+    props += HEMISPHERE_VIEWS["worst" if worst else "expected"]
     if not worst:
         anchors = max(anchors, ANCHOR_VIEWS["anchors"])
         props = max(props, ANCHOR_VIEWS["props"])
@@ -1717,7 +1722,8 @@ def estimate_anchor_cost(jobs: list[tuple[str, str]], options: dict[str, str]) -
         usd[f"{name} L4"] = ANCHOR_JOB_MIN.get(scan, 60) / 60 * GPU_RATES["L4"]
         worst[f"{name} L4"] = ANCHOR_JOB_CAP_MIN * 60 * rate_l4
     worst["hung editor call"] = EDIT_CAP_S * rate_gpu
-    worst["hung VACE call"] = SET_CAP_S * rate_gpu
+    if "vace" in options.get("arms", "refs+norefs+vace").split("+"):
+        worst["hung VACE call"] = SET_CAP_S * rate_gpu
     return {
         "calls": {f"{k}:{s}": anchor_counts(options) for k, s in jobs},
         "usd": {k: round(v, 3) for k, v in usd.items()},

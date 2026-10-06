@@ -112,7 +112,7 @@ def test_the_estimate_and_its_worst_case_grow_with_the_run(app) -> None:
     calls = app.anchor_counts(base)
     assert calls["anchor"] == calls["anchorNoRefs"] == 6 * 4 and calls["set"] == 2
     worst = app.anchor_counts(base, worst=True)
-    assert worst["anchor"] == 8 * 4 and worst["prop"] == 24 * 2
+    assert worst["anchor"] == 8 * 4 and worst["prop"] == (24 + 17) * 2  # + the hemisphere views
 
 
 def test_the_actual_cost_counts_every_call_and_start(app) -> None:
