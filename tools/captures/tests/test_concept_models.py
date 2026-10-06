@@ -121,9 +121,17 @@ def test_the_models_satisfy_the_protocols() -> None:
     assert "stand-in" in cm.GroundedSam2Concepts().name
 
 
+def test_sam3_is_asked_every_word_of_each_thing() -> None:
+    spool = cs.Concept("cable spool", "thing", "fixtures", ("cable spool", "Wooden spool", "table"))
+    rock = cs.Concept("rock", "thing", "rock", ("rock", "stone", "table"))
+    prompts = cm.thing_prompts([spool, rock])
+    # A word two things share is the first's.
+    assert prompts == {"cable spool": 0, "wooden spool": 0, "table": 0, "rock": 1, "stone": 1}
+
+
 def test_sam3_objects_take_the_concept_of_the_prompt_that_found_them() -> None:
-    prompts = ["cable spool", "rock"]
-    found = {"rock": [3, 5], "cable spool": [1], "a word nobody asked": [9]}
+    prompts = {"cable spool": 0, "table": 0, "rock": 1}
+    found = {"rock": [3, 5], "table": [1], "a word nobody asked": [9]}
     assert cm.prompt_concepts(found, prompts) == {3: 1, 5: 1, 1: 0}
 
 

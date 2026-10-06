@@ -19,6 +19,7 @@ name: Segment scans (Modal GPU)
 # variant (SAM 3's `concept-first`, `SEEDED_VARIANTS`) also needs `seed=<segment.yml run id>`:
 # that run's `segmentation` artifact seeds it (its views, class-free masks and vocabulary),
 # and the Modal secret holding the Hugging Face token is found by its name, as fill.yml does.
+# `check=1` runs only its CPU check (SAM 3 on four of the seed's views, no GPU).
 
 on:
   push:
@@ -51,6 +52,10 @@ on:
         default: ""
       seed:
         description: For a seeded variant, the segment.yml run whose artifact seeds it
+        type: string
+        default: ""
+      check:
+        description: For a seeded variant, "1" runs its CPU check alone (no GPU)
         type: string
         default: ""
 
@@ -90,10 +95,11 @@ jobs:
           VIEWS: ${{ inputs.views || '24' }}
           VARIANT: ${{ inputs.variant || '' }}
           SEED: ${{ inputs.seed || '' }}
+          CHECK: ${{ inputs.check || '' }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
-          options = {k: os.environ[k.upper()] for k in ("names", "views", "variant", "seed")}
+          options = {k: os.environ[k.upper()] for k in ("names", "views", "variant", "seed", "check")}
           if os.environ["EVENT"] == "push":
               found = re.search(r"\[segment([^\]]*)\]", os.environ.get("MESSAGE", ""))
               for part in (found.group(1) if found else "").split("|")[1:]:
@@ -110,6 +116,8 @@ jobs:
               raise SystemExit(f"variant={variant!r} is not a [a-z0-9-] name")
           if not re.fullmatch(r"([0-9]{1,20})?", options["seed"]):
               raise SystemExit(f"seed={options['seed']!r} is not a run id")
+          if not re.fullmatch(r"(1)?", options["check"]):
+              raise SystemExit(f"check={options['check']!r} is not 1")
           for name, value in options.items():
               print(f"{name}={value}")
           PY
@@ -128,6 +136,7 @@ jobs:
           VIEWS: ${{ steps.plan.outputs.views }}
           VARIANT: ${{ steps.plan.outputs.variant }}
           SEED: ${{ steps.plan.outputs.seed }}
+          CHECK: ${{ steps.plan.outputs.check }}
         run: |
           # The Hugging Face secret by its prefix (the workspace's is not named `huggingface`).
           HEXAPOD_HF_SECRET=$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
@@ -144,7 +153,7 @@ jobs:
           echo "Hugging Face secret: $HEXAPOD_HF_SECRET"
           uv run --with modal==1.5.5 modal run infra/modal/segment.py \
             --names "$NAMES" --views "$VIEWS" --variant "$VARIANT" --out segment-out \
-            ${SEED:+--seed segment-seed}
+            ${SEED:+--seed segment-seed} ${CHECK:+--check-only --check-frames 4}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

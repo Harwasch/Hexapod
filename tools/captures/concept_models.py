@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -443,15 +443,27 @@ class GroundedSam2Concepts:
 # --------------------------------------------------------------------- SAM 3 (gated)
 
 
-def prompt_concepts(prompt_to_ids: dict[str, list[int]], prompts: Sequence[str]) -> dict[int, int]:
+def thing_prompts(things: Sequence[Concept]) -> dict[str, int]:
+    """Every word the vocabulary gives each thing (`Concept.queries`: its name and the VLM's
+    other words, as the stand-in's detector is asked), lower-case, -> the thing's index; a
+    word two things share is the first's."""
+    out: dict[str, int] = {}
+    for k, thing in enumerate(things):
+        for word in thing.queries:
+            out.setdefault(word.strip().lower(), k)
+    return out
+
+
+def prompt_concepts(
+    prompt_to_ids: dict[str, list[int]], prompts: Mapping[str, int]
+) -> dict[int, int]:
     """Object id -> concept index, from a SAM 3 video output's `prompt_to_obj_ids` (prompt text
-    -> object ids) and the prompts in concept order. An id under no known prompt is left out."""
-    index = {p: k for k, p in enumerate(prompts)}
+    -> object ids) and each prompt's concept. An id under no known prompt is left out."""
     out: dict[int, int] = {}
     for text, ids in prompt_to_ids.items():
-        if text in index:
+        if text in prompts:
             for i in ids:
-                out[int(i)] = index[text]
+                out[int(i)] = prompts[text]
     return out
 
 
@@ -468,9 +480,13 @@ def cover_from_logits(logits: np.ndarray, region: np.ndarray, threshold: float) 
 @dataclass
 class Sam3Concepts:
     """SAM 3 (`facebook/sam3`; transformers >= 5, torch >= 2.5). Things: one video session
-    per camera path (`Sam3VideoModel`), every thing's name a text prompt in it, so the path's
-    frames are encoded once and each object found is a track along it (its id; which prompt
-    found it, `prompt_to_obj_ids`, is its concept). Stuff: the semantic head (`Sam3Model`)
+    per camera path (`Sam3VideoModel`), every word the vocabulary gives each thing a text
+    prompt in it (`thing_prompts`: on the spool's renders SAM 3 found "cable spool" in 1
+    view of 64; the VLM's "wooden spool" and "table" are what the stand-in's detector was
+    asked too), so the path's frames are encoded once and each object found is a track
+    along it (its id; which prompt found it, `prompt_to_obj_ids`, is its concept). One object
+    found under two words is two masks of one concept, which the lift's votes join.
+    Stuff: the semantic head (`Sam3Model`)
     once per cover class, batched, each pixel of the ground its most probable class over
     `threshold`."""
 
@@ -520,7 +536,7 @@ class Sam3Concepts:
             return out
         processor, model, device = self._load_video()
         h, w = frames[0].shape[:2]
-        prompts = [c.query.lower() for c in things]
+        prompts = thing_prompts(things)
         session = processor.init_video_session(
             video=np.stack([np.ascontiguousarray(f, np.uint8) for f in frames]),
             inference_device=device,
@@ -528,7 +544,7 @@ class Sam3Concepts:
             video_storage_device="cpu",
             dtype=self._dtype(device),
         )
-        session = processor.add_text_prompt(inference_session=session, text=prompts)
+        session = processor.add_text_prompt(inference_session=session, text=list(prompts))
         with torch.inference_mode():
             for step in model.propagate_in_video_iterator(
                 inference_session=session, max_frame_num_to_track=len(frames)
@@ -568,13 +584,24 @@ class Sam3Concepts:
         return cover_from_logits(up[:, 0].cpu().numpy(), region, self.threshold)
 
 
-def smoke_sam3(frames: list[np.ndarray], device: str | None = None) -> dict[str, Any]:
+def smoke_sam3(
+    frames: list[np.ndarray],
+    concepts: Sequence[Concept] | None = None,
+    device: str | None = None,
+) -> dict[str, Any]:
     """SAM 3 on a few frames, things and cover, as a run calls it: what it found (a check
-    that the weights load and the calls work, before a GPU is spent on a whole scan)."""
+    that the weights load and the calls work, before a GPU is spent on a whole scan), with
+    `concepts` (a scan's vocabulary; default a spool's) and per thing the frames it was in."""
     source = Sam3Concepts(device=device)
-    things = [Concept("cable spool", "thing", "other", ("cable spool",)), Concept("rock", "thing")]
+    default = [
+        Concept("cable spool", "thing", "other", ("cable spool", "wooden spool", "table")),
+        Concept("rock", "thing"),
+        Concept("Grass", "stuff", cover="grass"),
+        Concept("Dirt", "stuff", cover="dirt"),
+    ]
+    things = [c for c in (concepts or default) if c.kind == "thing"]
+    stuff = [c for c in (concepts or default) if c.kind == "stuff"] or default[2:]
     found = source.things(frames, things)
-    stuff = [Concept("Grass", "stuff", cover="grass"), Concept("Dirt", "stuff", cover="dirt")]
     region = np.ones(frames[0].shape[:2], bool)
     cover = source.stuff(frames[0], stuff, [], region)
     # What `segment_scene.describe` embeds with, in the same image (transformers 5).
@@ -584,6 +611,10 @@ def smoke_sam3(frames: list[np.ndarray], device: str | None = None) -> dict[str,
     return {
         "embeddings": [list(crops.shape), list(words.shape)],
         "frames": len(frames),
+        "framesWith": {
+            t.name: sum(1 for f in found if any(m.concept == k for m in f))
+            for k, t in enumerate(things)
+        },
         "things": [
             [(m.concept, round(m.score, 3), m.track, int(m.mask.sum())) for m in f] for f in found
         ],

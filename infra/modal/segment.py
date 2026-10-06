@@ -213,13 +213,13 @@ VARIANT_SCRIPTS: dict[str, tuple[str, ...]] = {
 }  # fmt: skip
 VARIANT_TIMEOUT_S = 50 * 60
 #: Variants that run in the SAM 3 image from a seed (`segment_seeded`), each call stopped
-#: after `SEEDED_TIMEOUT_S` (expected ~8 min: the models' load, SAM 3 on 64 views, the
-#: instances' portraits drawn on the CPU). `check_sam3` runs first, on CPU only: the
+#: after `SEEDED_TIMEOUT_S` (run 37537406212: ~4 min a scan, the models' load, SAM 3 on 64
+#: views and the instances' portraits drawn on the CPU). `check_sam3` runs first, on CPU only: the
 #: secret's token can read the gated weights (else nothing on a GPU starts), the weights
 #: into the volume, and SAM 3's calls on two of the seed's views.
 SEEDED_VARIANTS = frozenset({"concept-first"})
-SEEDED_TIMEOUT_S = 20 * 60
-SAM3_CHECK_TIMEOUT_S = 20 * 60
+SEEDED_TIMEOUT_S = 12 * 60
+SAM3_CHECK_TIMEOUT_S = 15 * 60
 SAM3_CHECK_CPU = 4.0
 SAM3_CHECK_MEMORY_MIB = 16 * 1024
 #: What a variant adds to the main process's memory: SAM 2.1 large and Qwen3-VL 4B's host
@@ -714,10 +714,11 @@ def segment_seeded(name: str, url: str, seed: bytes, views: int, plan: dict, var
     secrets=[HF_SECRET],
     timeout=SAM3_CHECK_TIMEOUT_S,
 )
-def check_sam3(frames: list[bytes]) -> dict:
+def check_sam3(frames: list[bytes], vocabulary: bytes | None = None) -> dict:
     """Before any GPU: whose token the secret holds, whether it can read `SAM3_REPO`
     (gated), the weights into the volume, and SAM 3's calls on `frames` (`.npz` images,
-    `rgb`) on the CPU (`concept_models.smoke_sam3`). `ok` only when all of it worked."""
+    `rgb`) on the CPU (`concept_models.smoke_sam3`), asked for `vocabulary`'s things and
+    cover (a seed's `names.json`) when given. `ok` only when all of it worked."""
     import io
     import traceback
 
@@ -745,9 +746,16 @@ def check_sam3(frames: list[bytes]) -> dict:
     try:
         import concept_models
 
+        import concept_scene
+
         images = [np.load(io.BytesIO(b))["rgb"] for b in frames]
+        concepts = None
+        if vocabulary is not None:
+            listed = Path(tempfile.mkdtemp()) / "names.json"
+            listed.write_bytes(vocabulary)
+            concepts = concept_scene.load_concepts(listed)
         started = time.time()
-        out["smoke"] = concept_models.smoke_sam3(images, device="cpu")
+        out["smoke"] = concept_models.smoke_sam3(images, concepts, device="cpu")
         out["smokeS"] = round(time.time() - started, 1)
         out["ok"] = True
     except Exception:  # noqa: BLE001 - the trace is the answer
@@ -923,6 +931,18 @@ def _seeds(folder: Path | None, names: list[str]) -> dict[str, bytes]:
     return seeds
 
 
+def _seed_file(seed: bytes, name: str) -> bytes | None:
+    """One file of a seed (`names.json`: its vocabulary), or None."""
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(seed)) as tar:
+        try:
+            return tar.extractfile(name).read()
+        except KeyError:
+            return None
+
+
 def _seed_frames(seed: bytes, count: int) -> list[bytes]:
     """`count` of a seed's view images (`raster-*.npz`, as stored), for `check_sam3`."""
     import io
@@ -946,13 +966,17 @@ def main(
     coverage_rounds: int = COVERAGE_ROUNDS,
     variant: str = "",
     seed: str = "",
+    check_only: bool = False,
+    check_frames: int = 2,
 ) -> None:
     """Segment the named scans in parallel containers; write each result under `out/`.
     `variant`: a bake-off candidate (`VARIANT_SCRIPTS`) instead of segment_scene, each call
     stopped after `VARIANT_TIMEOUT_S`. A `SEEDED_VARIANTS` one needs `seed`, a folder with an
     earlier run's `<scan>/cache.tar` (its `segmentation` artifact): `check_sam3` runs first,
     on the CPU, and only when it passes does a GPU start (`segment_seeded`, each call stopped
-    after `SEEDED_TIMEOUT_S`); what it found is `out/sam3-check.json`.
+    after `SEEDED_TIMEOUT_S`); what it found is `out/sam3-check.json`. `check_only`: that
+    check alone, SAM 3 asked for the first scan's own vocabulary on `check_frames` of its
+    views, and no GPU (to see what a change to SAM 3's prompts finds before a run).
 
     Each scan's reservation follows its size (`sizing`): its tileset.json is read here
     first -- a few kB, hundreds for the camp -- for its tiles and gaussians, and it is
@@ -970,13 +994,17 @@ def main(
         sys.stdout.write(
             f"check_sam3 (CPU): stopped after {SAM3_CHECK_TIMEOUT_S} s: at most ${rate:.2f}\n"
         )
-        check = check_sam3.remote(_seed_frames(seeds[chosen[0]], 2))
+        first = seeds[chosen[0]]
+        count = check_frames if check_only else 2
+        check = check_sam3.remote(_seed_frames(first, count), _seed_file(first, "names.json"))
         Path(out).mkdir(parents=True, exist_ok=True)
         (Path(out) / "sam3-check.json").write_text(json.dumps(check, indent=1), encoding="utf-8")
         sys.stdout.write(json.dumps(check, indent=1) + "\n")
         if not check.get("ok"):
             why = check.get("error") or check.get("smokeError") or "see sam3-check.json"
             raise SystemExit(f"SAM 3 is not usable here, so no GPU started: {why}")
+        if check_only:
+            return
     for name in chosen:
         url = SCANS[name]
         try:
