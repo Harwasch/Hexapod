@@ -11,8 +11,9 @@ name: Publish skins
 #   infra/modal/segment.py `SCANS`, or the `SCAN_ASSET_IDS` variable; the Minnetonka tree at
 #   its site), fetches its tileset, `instances.json` and the tiles of the bake-off's objects
 #   (`skin_variants.BAKEOFF`), fits every variant (`VARIANTS`: FreeForm by size, FreeForm,
-#   pinned FreeForm and volume FEM by stiffness class), and keeps the files, the request and
-#   the report as an artifact to review. `publish` (only when asked): merges this run's
+#   pinned FreeForm and volume FEM by stiffness class; `limbs-today`, today's plant rig as a
+#   skin, only on a scan with a rig -- the Minnetonka tree -- and skipped, not failed, on the
+#   others), and keeps the files, the request and the report as an artifact to review. `publish` (only when asked): merges this run's
 #   entries into the `extras.variants` the tileset declares at that moment (other systems'
 #   and other variants' entries kept) and
 #     - for a run's scan, attaches through the API (tools/captures/attach_sidecars.py: staged
@@ -139,6 +140,8 @@ jobs:
           print(f"- {plan['kind']} at {plan['url']}" + (f" (asset `{plan['assetId']}`)" if plan.get("assetId") else ""))
           if plan.get("withdraw"):
               print(f"- withdrawn ({report['withdrawn']}): taking off {', '.join(plan['withdraw']['skins'])}")
+          if plan.get("skip"):
+              print(f"- skipped: {plan['skip']}")
           print("\n| variant | skins | handles | skin.bin | fit s |\n|---|---|---|---|---|")
           for entry in plan["variants"]["skins"]:
               r = report[entry["name"]]

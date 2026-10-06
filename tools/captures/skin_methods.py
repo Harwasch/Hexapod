@@ -1069,9 +1069,7 @@ def fit_limbs_from_rig(
     )
 
 
-def limbs_fitter(
-    rig: Mapping, motion: Mapping, instances: Sequence[Mapping]
-) -> skin_scene.Fitter:
+def limbs_fitter(rig: Mapping, motion: Mapping, instances: Sequence[Mapping]) -> skin_scene.Fitter:
     """`skin_scene.build`'s `fit` for a limbs skin: every chosen object is the rig's plant
     (one plant a scan: the Minnetonka tree, whole), its traits and class recorded as the other
     methods record them."""

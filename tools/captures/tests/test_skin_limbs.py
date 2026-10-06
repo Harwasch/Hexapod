@@ -23,6 +23,7 @@ import pytest
 import motion_params
 import skin_methods
 import skin_scene
+import skin_variants
 
 ROOT = Path(__file__).resolve().parents[3]
 MINNETONKA = ROOT / "packages" / "world" / "fixtures" / "minnetonka"
@@ -252,8 +253,76 @@ def test_a_limbs_skin_builds_with_its_block_and_flutter_byte(tmp_path):
     plain = skin_scene.build([tile], instances, owner=skin_scene.owners_of(instances, [1]),
                              fit=skin_methods.fitter("freeform", skin_methods.size_policy(),
                                                      instances))  # fmt: skip
-    plain_rows = np.frombuffer(plain.blob, np.int8).reshape(-1, plain.document["weights"]["rowBytes"])
+    plain_rows = np.frombuffer(plain.blob, np.int8).reshape(
+        -1, plain.document["weights"]["rowBytes"]
+    )
     assert (plain_rows[:, -1] == 0).all()
+
+
+# ------------------------------------------------------------------------------ bake-off
+
+
+def test_limbs_today_is_only_for_a_scan_with_a_rig():
+    names = ["freeform", "limbs-today"]
+    assert skin_variants.variants_for(skin_variants.BAKEOFF["camp"], names) == ["freeform"]
+    tree = skin_variants.BAKEOFF["minnetonka-tree"]
+    assert skin_variants.variants_for(tree, names) == names
+    assert tree["rig"] == "../source/rig.json"
+    assert skin_variants.VARIANTS_BY_NAME["limbs-today"].needs_rig
+
+
+def test_fetch_brings_the_rig_and_the_motion_it_names(tmp_path, monkeypatch):
+    base = "https://example.test/sites/tree"
+    served = {
+        f"{base}/splat/tileset.json": json.dumps({"root": {"children": []}}).encode(),
+        f"{base}/source/rig.json": json.dumps({"nodes": [], "motion": "motion.json"}).encode(),
+        f"{base}/source/motion.json": b'{"format": "hexapod.motion"}',
+    }
+    monkeypatch.setattr(skin_variants, "_get", lambda url: served[url])
+    skin_variants.fetch(f"{base}/splat/tileset.json", tmp_path, rig="../source/rig.json")
+    assert json.loads((tmp_path / "rig.json").read_text())["motion"] == "motion.json"
+    assert json.loads((tmp_path / "motion.json").read_text())["format"] == "hexapod.motion"
+
+
+def test_build_variants_writes_a_limbs_skin_from_the_scans_rig(tmp_path, monkeypatch):
+    rig, motion = minnetonka()
+    (tmp_path / "rig.json").write_text(json.dumps(rig), encoding="utf-8")
+    (tmp_path / "motion.json").write_text(json.dumps(motion), encoding="utf-8")
+    x = probes(rig).astype(np.float32)
+    tile = skin_scene.TileSplats("t.glb", "fnv1a32:t", x, np.ones(len(x), np.int64), True)
+    doc = {"instances": [{"id": 1, "parent": None, "behaviour": "in-place", "category": "trees",
+                          "properties": {"vegetation": 1.0}, "tags": [{"label": "tree"}],
+                          "bounds": {"min": [0, 0, 0], "max": [1, 1, 6]}}]}  # fmt: skip
+    monkeypatch.setattr(skin_variants, "read_scan", lambda *a, **k: ([tile], doc, {}))
+    entries, report = skin_variants.build_variants(tmp_path, ["limbs-today"], whole=True, log=False)
+    assert [e["name"] for e in entries] == ["limbs-today"]
+    written = json.loads(
+        (tmp_path / "variants" / "skins" / "limbs-today" / "skin.json").read_text()
+    )
+    assert written["method"]["name"] == "limbs"
+    assert "limb" in written["method"]["handlePolicy"]
+    row = report["limbs-today"]["skins"][0]
+    assert row["handles"] == 25 and row["limbs"] == 24 and row["class"] == "tree"
+    assert row["lowestHz"][0] == pytest.approx(0.98, abs=0.01)
+
+
+def test_a_scan_none_of_the_asked_variants_fits_is_skipped(tmp_path, monkeypatch):
+    import attach_sidecars
+
+    monkeypatch.setattr(
+        skin_variants,
+        "locate",
+        lambda name: {"kind": "attach", "url": "https://x.test/t.json", "assetId": "a"},
+    )
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("nothing may be attached")
+
+    monkeypatch.setattr(attach_sidecars, "attach", refuse)
+    out = skin_variants.prepare_scan("camp", tmp_path, ["limbs-today"])
+    plan = json.loads((out.parent / "camp.publish.json").read_text())
+    assert plan["variants"] == {"skins": []} and "plant rig" in plan["skip"]
+    assert skin_variants.publish(out)["skipped"] == plan["skip"]
 
 
 # ------------------------------------------------------------------------------ the twin
