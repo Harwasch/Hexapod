@@ -450,5 +450,10 @@ def test_a_scan_seen_everywhere_gets_its_weak_gaussians_refined(tmp_path: Path) 
     assert report.get("heldOut") is None
     for arm in af.ARMS:
         entry = report["candidates"][arm]
-        assert entry["weakCopies"] > 0 and entry["weakCopiesKept"] > 0, entry.get("skipped")
-        assert entry["evidence"]["gaussians"] > 0
+        assert entry["evidence"]["gaussians"] > 0, entry.get("skipped")
+        if af.ANCHOR_ARM[arm] == "refs":
+            # With photos the weak top is reprojected (opaque, never carved): no copies.
+            assert entry["surface"] > 0 and entry["surface"] == report["surface"]["gaussians"]
+        else:
+            assert entry["weakCopies"] > 0 and entry["weakCopiesKept"] > 0
+            assert entry["surface"] == 0

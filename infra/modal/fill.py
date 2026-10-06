@@ -1542,6 +1542,8 @@ ANCHOR_OPTIONS = {
     "vae_area": r"[0-9]{5,7}",
     "placeholder": r"smooth|flat",
     "unknown_strength": r"0\.[0-9]+|1(\.0+)?",
+    "reproject": r"true|false",
+    "reproject_strength": r"0\.[0-9]+",
 }
 
 

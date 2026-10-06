@@ -94,3 +94,35 @@ def test_distill_weighs_views_of_several_sizes() -> None:
     )
     assert len(report["views"]) == 2
     assert out["colours"][:, 2].mean() > out["colours"][:, 0].mean() - 0.05  # the heavy view wins
+
+
+def test_a_rigid_gaussian_keeps_its_shape_and_its_opacity_floor() -> None:
+    pytest.importorskip("torch")
+    w, h = 32, 24
+    measured = _plane(np.linspace(-1.0, -0.1, 6), np.linspace(-0.7, 0.7, 5), [0.8, 0.1, 0.1], 0.1)
+    init = _plane(np.linspace(0.1, 1.0, 6), np.linspace(-0.7, 0.7, 5), [0.5, 0.5, 0.5], 0.1)
+    init["opacities"] = np.full(len(init["positions"]), 0.95)
+    camera = Camera.look_at([0.0, -3.0, 0.2], [0.0, 0.0, 0.0], width=w, height=h)
+    images = np.zeros((1, h, w, 3), np.uint8)
+    masks = np.zeros((1, h, w), bool)
+    masks[:, 3:-3, w // 2 + 2 : -3] = True  # the filler says: nothing there (black)
+    rigid = np.zeros(len(init["positions"]), bool)
+    rigid[::2] = True
+    floor = np.where(rigid, 0.85, 0.0)
+    back_rigid, back_floor = df.unpack_constraints(df.pack_constraints(rigid, floor))
+    assert (back_rigid == rigid).all() and np.allclose(back_floor, floor)
+    out, _ = df.distill(
+        measured,
+        init,
+        [camera.to_json()],
+        images,
+        masks,
+        iterations=80,
+        rigid=back_rigid,
+        opacity_floor=back_floor,
+    )
+    assert np.allclose(out["positions"][rigid], init["positions"][rigid], atol=1e-6)
+    assert np.allclose(out["scales"][rigid], init["scales"][rigid], rtol=1e-4)
+    assert (out["opacities"][rigid] >= 0.85 - 1e-6).all()
+    # The free ones may fade (the view shows nothing there); the rigid ones cannot.
+    assert out["opacities"][~rigid].min() < out["opacities"][rigid].min()

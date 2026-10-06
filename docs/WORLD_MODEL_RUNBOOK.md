@@ -587,3 +587,40 @@ Published (`publish-fill.yml`, `variant`): `anchor-refs`, `anchor-norefs` and
 `lama-baseline` were withdrawn on both scans; `vace-1-3b` stays. Read back after each
 step, every other system's variants (the spool's `objects`, the pumpkin's `skins` and
 `objects`) were identical to before.
+
+### Weak surfaces first (owner feedback, 2026-10-06)
+
+From one angle the spool's top looks normal; from above or the far side the top is
+see-through. Its gaussians were fitted from one side, at grazing angles: semi-transparent and
+strongly view-dependent. What the top looks like is known from those photos, so in the arms
+with photos (`anchor-refs`, and `anchor-vace`, which shares their anchors) the weak regions
+are treated before any generator (`tools/captures/fill_surface.py`):
+
+1. **The surface.** For each of the six largest hole clusters, the eight real views that saw
+   it best (summed quality) render the scan. Their pixels that the scan covers solidly
+   (alpha 0.85 or more), mostly with the cluster's gaussians, are back-projected at the
+   rendered depth. These points and the cluster's own gaussians are fused, one point per
+   voxel (the cluster's median spacing). Each point's normal is the plane of its 16
+   neighbours, turned towards the cameras that saw it.
+2. **Reprojection.** Each point takes the colour the twelve best real photos show there. It
+   is depth-tested against the scan and weighted by (|cos| x footprint) squared. These are
+   true pixels moved onto the surface. Points that no photo saw usefully are left to the
+   generator.
+3. **Opaque gaussians.** One flat disc per coloured point, opacity 0.95, one colour each (no
+   view dependence). A disc spans its fourth neighbour's distance, so no gap opens between
+   them. Together they take at most half of the layer's budget.
+   - These discs are drawn into every view the arm fills. Their pixels are weak and only
+     cleaned, at strength 0.3, with the source photos as context. They are never lifted.
+   - In VACE's set they are shown, not masked.
+   - The distil trains only their colour: shape fixed, opacity held at 0.85 or more.
+   - Weak gaussians they cover get no copies.
+4. **Carving.** A camera does not carve through a pixel where the weak and unknown
+   gaussians, alone, cover 5 % or more. A ray through an under-constrained, semi-transparent
+   surface is no proof of free space. The reprojected discs are never carved.
+5. **Headline test** (`headline-<scan>.png`). The largest hole is shown from straight above,
+   and from the 40 or 65 degree view where it is most see-through before. Each is drawn
+   before and with each arm's layer. Measured: the share of the hole's footprint where the
+   gaussians in its box are less than 0.8 opaque.
+
+`anchor-norefs` stays the no-photo control: no reprojection, the editor sees only the render.
+`reproject=false` turns the treatment off.

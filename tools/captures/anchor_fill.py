@@ -56,6 +56,7 @@ from typing import Any, Protocol
 import numpy as np
 
 import fill_quality as fq
+import fill_surface as fs
 import fill_views as fv
 import generative_fill as gf
 import teacher_fill as tf
@@ -106,6 +107,16 @@ BUDGET_SHARE = gf.BUDGET_SHARE
 MIN_BUDGET = gf.MIN_BUDGET
 #: A refined copy of a weak gaussian is kept only when its colour moved this much.
 COPY_MIN_CHANGE = 0.04
+
+#: Weak surfaces first (`fill_surface`): the reprojected surface's pixels are cleaned at
+#: this strength (the photos' own pixels moved to a new angle: only seams and stretch to
+#: fix); the hole clusters it is built for (largest first); its share of a layer's budget.
+REPROJECT_STRENGTH = 0.3
+SURFACE_CLUSTERS = 6
+SURFACE_BUDGET_SHARE = 0.5
+#: A camera does not carve through a pixel where the weak surfaces (alone) cover this much:
+#: a ray through an under-constrained, semi-transparent surface is no proof of free space.
+SOFT_ALPHA = 0.05
 
 ARMS = ("refs", "norefs", "vace")
 LAYERS = {"refs": "anchor-refs", "norefs": "anchor-norefs", "vace": "anchor-vace"}
@@ -187,6 +198,10 @@ class Options:
     #: (`flat_fill`), still held to the smooth fill.
     placeholder: str = "smooth"
     unknown_strength: float = UNKNOWN_STRENGTH
+    #: Weak surfaces first, in the arms with photos (`build_surface`), and the strength the
+    #: reprojected pixels are cleaned at.
+    reproject: bool = True
+    reproject_strength: float = REPROJECT_STRENGTH
     update_strengths: tuple[float, ...] = (0.4,)
     set_seeds: int = 2
     set_steps: int = 25
@@ -532,6 +547,8 @@ class ViewMasks:
     depth: np.ndarray
     #: What the editor's tokens are held to, when not `condition` (the smooth fill).
     hold: np.ndarray | None = None
+    #: The pixels the reprojected surface draws (among `weak`: cleaned at low strength).
+    surface: np.ndarray | None = None
 
     @property
     def edit(self) -> np.ndarray:
@@ -586,37 +603,55 @@ def view_masks(
     weak_strength: float = WEAK_STRENGTH,
     placeholder: str = "smooth",
     unknown_strength: float = UNKNOWN_STRENGTH,
+    surface: Splats | None = None,
+    surface_strength: float = REPROJECT_STRENGTH,
 ) -> ViewMasks:
+    """The view's pixel classes over the scan, any generated `layer` (as known) and the
+    reprojected weak `surface` (`fill_surface`): where that surface is the front, its
+    pixels -- the photos' own, moved to this angle -- are weak, cleaned at
+    `surface_strength`, and anchor the depth like known ones."""
     scene = setup.scene()
     c = setup.shown_classes()
     known = c == fq.KNOWN
     weak = c == fq.WEAK
     face = fq.facing(setup.shown_quality(), camera.centre, scene.positions)
-    if layer is not None and len(layer):
-        scene = Splats.concat([scene, layer])
-        ones = np.ones(len(layer), bool)
-        known = np.concatenate([known, ones])
-        weak = np.concatenate([weak, ~ones])
-        face = np.concatenate([face, ones])
+    for extra in (layer, surface):
+        if extra is not None and len(extra):
+            scene = Splats.concat([scene, extra])
+            ones = np.ones(len(extra), bool)
+            known = np.concatenate([known, ones])
+            weak = np.concatenate([weak, ~ones])
+            face = np.concatenate([face, ones])
     pc = fv.pixel_classes(scene, camera, renderer, known, weak, face)
+    front = np.zeros_like(pc.known)
+    if surface is not None and len(surface):
+        drawn = renderer(surface, camera)
+        d = np.where(np.isfinite(drawn.depth), drawn.depth, np.inf)
+        front = (
+            pc.known & fv._covered(drawn.alpha) & (d <= pc.depth * (1 + fv.FRONT_TOLERANCE) + 1e-6)
+        )
+    known_px = pc.known & ~front
+    weak_px = pc.weak | front
     render = tf.to_u8(pc.colour)
-    hold = prefill(render, pc.unknown, pc.known | pc.weak)
+    hold = prefill(render, pc.unknown, known_px | weak_px)
     hold[pc.void] = 0
     if placeholder == "flat":
-        condition = flat_fill(render, pc.unknown, pc.known | pc.weak)
+        condition = flat_fill(render, pc.unknown, known_px | weak_px)
         condition[pc.void] = 0
     elif placeholder == "smooth":
         condition = hold
     else:
         raise ValueError(f"placeholder {placeholder!r}: one of {PLACEHOLDERS}")
     strength = np.select(
-        [pc.known, pc.weak, pc.unknown], [0.0, weak_strength, unknown_strength], 1.0
+        [known_px, front, pc.weak, pc.unknown],
+        [0.0, surface_strength, weak_strength, unknown_strength],
+        1.0,
     ).astype(np.float32)
-    depth = np.where((pc.known | pc.weak) & np.isfinite(pc.depth), pc.depth, np.nan)
+    depth = np.where((known_px | weak_px) & np.isfinite(pc.depth), pc.depth, np.nan)
     return ViewMasks(
         camera,
-        pc.known,
-        pc.weak,
+        known_px,
+        weak_px,
         pc.unknown,
         pc.void,
         render,
@@ -624,6 +659,7 @@ def view_masks(
         strength,
         depth,
         None if condition is hold else hold,
+        front if front.any() else None,
     )
 
 
@@ -1426,22 +1462,38 @@ class Carver:
     rendered once: a point some camera saw through (in front of the measured surface around
     its pixel) is removed (`generative_fill.carve`'s test). Where that surface is seen at a
     grazing angle a pixel's depth is the mean over a long stretch of it, so the point must
-    also be in front by the depth's spread there (`fill_quality.depth_spread`)."""
+    also be in front by the depth's spread there (`fill_quality.depth_spread`).
+
+    `soft` (per measured gaussian): the weak and unknown ones. A camera does not carve where
+    they alone cover its pixel (`SOFT_ALPHA`): a ray through an under-constrained,
+    semi-transparent surface (the spool's top, from above) is no proof that the space
+    behind it -- or the surface itself -- is empty."""
 
     def __init__(
-        self, measured: Splats, cameras: Sequence[Camera], renderer: Any, region_size: float
+        self,
+        measured: Splats,
+        cameras: Sequence[Camera],
+        renderer: Any,
+        region_size: float,
+        soft: np.ndarray | None = None,
     ) -> None:
         from scipy.ndimage import maximum_filter, minimum_filter
 
         self.cameras = list(cameras)
         self.margin = gf.CARVE_REGION * region_size
         self.maps = []
+        soft_splats = (
+            measured.take(np.flatnonzero(soft)) if soft is not None and np.any(soft) else None
+        )
         for cam in self.cameras:
             frame = renderer(measured, cam)
             depth = np.where(np.isfinite(frame.depth), frame.depth, np.inf)
             far = minimum_filter(depth, size=3) - fq.depth_spread(frame.depth, cap=0.25)
             covered = maximum_filter(frame.alpha, size=3) >= gf.COVERED
             solid = minimum_filter(covered.astype(np.uint8), size=3) > 0
+            if soft_splats is not None:
+                through_soft = maximum_filter(renderer(soft_splats, cam).alpha, size=3)
+                solid &= through_soft < SOFT_ALPHA
             self.maps.append((far, solid))
 
     def keep(self, positions: np.ndarray) -> np.ndarray:
@@ -1472,6 +1524,9 @@ class ArmState:
     confs: list[np.ndarray] = field(default_factory=list)
     report: dict[str, Any] = field(default_factory=dict)
     carved: int = 0
+    #: The reprojected weak surface (`build_surface`), in the arms with photos: drawn into
+    #: every view as weak, kept whole (never carved, shape fixed) in the layer.
+    surface: Splats | None = None
 
     def layer(self) -> Splats | None:
         parts = [p for p in self.parts if len(p)]
@@ -1487,6 +1542,84 @@ class ArmState:
             splats, conf = splats.take(rows), conf[rows]
         self.parts.append(splats)
         self.confs.append(conf)
+
+
+def soft_gaussians(setup: Setup) -> np.ndarray:
+    """Per measured gaussian: shown and not known (weak, unknown, a leave-out's withheld)."""
+    soft = np.zeros(len(setup.measured), bool)
+    soft[setup.shown] = setup.shown_classes() != fq.KNOWN
+    return soft
+
+
+def build_surface(
+    setup: Setup, renderer: Any, limit: int, log: Callable[[str], None] = print
+) -> tuple[Splats | None, dict[str, Any]]:
+    """The weak surfaces made solid from the photos that saw them (`fill_surface`): per hole
+    cluster (the `SURFACE_CLUSTERS` largest), its gaussians some kept camera saw, their
+    surface estimated from the best views' depth, coloured from the best photos, one opaque
+    disc per coloured point; at most `limit` in all (shared by size). None when nothing
+    could be coloured."""
+    scene = setup.scene()
+    shown = setup.shown
+    labels = setup.clusters.labels[shown]
+    seen = setup.quality.seen[shown] > 0
+    centres = np.array([v.camera.centre for v in setup.views])
+    found: list[tuple[int, fs.Surface]] = []
+    report: dict[str, Any] = {"clusters": []}
+    for k in range(min(SURFACE_CLUSTERS, len(setup.clusters.info))):
+        region = seen & (labels == k)
+        if region.sum() < fq.MIN_CLUSTER:
+            continue
+        cams = fs.best_cameras(
+            setup.quality.per_camera,
+            shown[np.flatnonzero(region)],
+            centres,
+            setup.focus.centre,
+            max(fs.SURFACE_VIEWS, fs.COLOUR_VIEWS),
+        )
+        if not cams:
+            continue
+        positions, normals, spacing, info = fs.estimate_surface(
+            scene,
+            region,
+            [setup.views[c].camera for c in cams[: fs.SURFACE_VIEWS]],
+            renderer,
+            setup.focus,
+            facing=setup.shown_quality().facing,
+        )
+        if not len(positions):
+            report["clusters"].append({"cluster": k, **info})
+            continue
+        views = []
+        for c in cams[: fs.COLOUR_VIEWS]:
+            photo = setup.photo(c, 1024)
+            if photo is not None:
+                views.append(
+                    (fv.scaled(setup.views[c].camera, photo.shape[1], photo.shape[0]), photo)
+                )
+        colours, support = fs.colour_surface(
+            positions, normals, views, scene, renderer, setup.focus.density
+        )
+        surface = fs.Surface(positions, normals, colours, support, spacing, info)
+        info.update(
+            {
+                "cluster": k,
+                "colourViews": [setup.views[c].name for c in cams[: fs.COLOUR_VIEWS]],
+                "coloured": int(surface.coloured.sum()),
+            }
+        )
+        report["clusters"].append(info)
+        found.append((k, surface))
+    total = sum(int(sf.coloured.sum()) for _, sf in found)
+    parts = []
+    for _, surface in found:
+        share = int(limit * surface.coloured.sum() / max(total, 1))
+        thinned = fs.thin_surface(surface, max(share, 1))
+        parts.append(fs.surface_splats(thinned))
+    parts = [p for p in parts if len(p)]
+    report["gaussians"] = int(sum(len(p) for p in parts))
+    log(f"{setup.name}: reprojected weak surface: {report['gaussians']} opaque gaussians")
+    return (Splats.concat(parts) if parts else None), report
 
 
 # --- the joint (set) filler -------------------------------------------------------------------------------------
@@ -1618,6 +1751,7 @@ def build_set(
     renderer: Any,
     options: Options,
     context: dict[str, Any],
+    surface: Splats | None = None,
 ) -> tuple[dict[str, Any], list[tuple[str, Any]]]:
     """The joint arm's clip: two real context photos, then every target view in a
     nearest-neighbour tour from the first anchor -- anchors as filled (nothing masked),
@@ -1663,11 +1797,15 @@ def build_set(
                 options.weak_strength,
                 options.placeholder,
                 options.unknown_strength,
+                surface,
+                options.reproject_strength,
             )
             shown = vm.render.copy()
             shown[vm.unknown] = 127
             frames.append(shown)
-            masks.append(vm.unknown | vm.weak)
+            # The reprojected surface's pixels are the photos' own: shown, not masked.
+            redo = vm.weak if vm.surface is None else vm.weak & ~vm.surface
+            masks.append(vm.unknown | redo)
             voids.append(vm.unknown)
             entries.append(("prop", (item.key, vm)))
     n = len(frames)
@@ -1744,27 +1882,35 @@ def view_hole_members(setup: Setup, masks: ViewMasks, target: Target | None) -> 
     return setup._cache[key]
 
 
-def fill_anchors(run: Run, arms: Sequence[str]) -> dict[str, list[FilledView]]:
+def fill_anchors(
+    run: Run, arms: Sequence[str], surface: Splats | None = None
+) -> dict[str, list[FilledView]]:
     """Every anchor under every anchor arm (`refs`, `norefs`): all seeds sent at once, then
-    best of N with agreement between the anchors, composited."""
+    best of N with agreement between the anchors, composited. The `refs` arm's views carry
+    the reprojected weak `surface` (its pixels cleaned at low strength)."""
     setup, opt = run.setup, run.options
     anchor_arms = sorted({ANCHOR_ARM[a] for a in arms})
     targets = [t for t in run.targets if t.role == "anchor"]
-    masks = {
-        t.key: view_masks(
-            setup,
-            t.camera,
-            run.renderer,
-            None,
-            opt.weak_strength,
-            opt.placeholder,
-            opt.unknown_strength,
-        )
-        for t in targets
-    }
+    per_arm_masks: dict[str, dict[str, ViewMasks]] = {}
+    for arm in anchor_arms:
+        per_arm_masks[arm] = {
+            t.key: view_masks(
+                setup,
+                t.camera,
+                run.renderer,
+                None,
+                opt.weak_strength,
+                opt.placeholder,
+                opt.unknown_strength,
+                surface if arm == "refs" else None,
+                opt.reproject_strength,
+            )
+            for t in targets
+        }
     pending = []
     meta = []
     for arm in anchor_arms:
+        masks = per_arm_masks[arm]
         for t in targets:
             if not masks[t.key].edit.any():
                 continue
@@ -1789,6 +1935,7 @@ def fill_anchors(run: Run, arms: Sequence[str]) -> dict[str, list[FilledView]]:
     scene_sample = _hole_sample(setup)
     out: dict[str, list[FilledView]] = {}
     for arm in anchor_arms:
+        masks = per_arm_masks[arm]
         per_anchor: dict[str, tuple[list[Candidate], tuple[np.ndarray, np.ndarray]]] = {}
         for (a, t, names), res in zip(meta, results, strict=True):
             if a != arm:
@@ -1908,6 +2055,8 @@ def propagate_sequential(run: Run, states: dict[str, ArmState]) -> None:
                 opt.weak_strength,
                 opt.placeholder,
                 opt.unknown_strength,
+                state.surface,
+                opt.reproject_strength,
             )
             if masks.share() < PROP_MIN_SHARE:
                 state.report.setdefault("skipped", []).append(t.key)
@@ -1939,14 +2088,16 @@ def propagate_sequential(run: Run, states: dict[str, ArmState]) -> None:
 
 
 def start_joint(
-    run: Run, anchors: Sequence[FilledView], layer: Splats | None
+    run: Run, anchors: Sequence[FilledView], layer: Splats | None, surface: Splats | None = None
 ) -> tuple[Callable[[], list[EditResult]], list[tuple[str, Any]], dict[str, Any]] | None:
     """6B, sent: the set of views (`build_set`) to the set filler, `set_seeds` seeds."""
     if run.set_filler is None:
         return None
     props = [t for t in run.targets if t.role == "prop"]
     context = run.targets[0].context if run.targets else {}
-    clip, entries = build_set(run.setup, anchors, props, layer, run.renderer, run.options, context)
+    clip, entries = build_set(
+        run.setup, anchors, props, layer, run.renderer, run.options, context, surface
+    )
     seeds = run.seeds(run.options.set_seeds, base=41)
     run.log(f"{run.setup.name}: 6B sent, {len(clip['frames'])} frames x {len(seeds)} seeds")
     return run.set_filler.start(clip, seeds), entries, clip
@@ -2070,17 +2221,28 @@ def _weak_rows(setup: Setup) -> np.ndarray:
     )
 
 
-def weak_count(run: Run) -> int:
-    """How many weak gaussians in the holes could be copied."""
-    return int(_weak_rows(run.setup).size)
+def _uncovered(setup: Setup, rows: np.ndarray, surface: Splats | None) -> np.ndarray:
+    """Of the shown `rows`, those no reprojected surface point lies near (its disc size)."""
+    if surface is None or not len(surface) or not rows.size:
+        return rows
+    from scipy.spatial import cKDTree
+
+    reach = 2.0 * float(np.median(surface.scales[:, 0]))
+    d, _ = cKDTree(surface.positions).query(setup.scene().positions[rows], k=1)
+    return rows[d > reach]
 
 
-def weak_copies(run: Run, limit: int) -> tuple[Splats, np.ndarray]:
+def weak_count(run: Run, surface: Splats | None = None) -> int:
+    """How many weak gaussians in the holes could be copied (none the surface covers)."""
+    return int(_uncovered(run.setup, _weak_rows(run.setup), surface).size)
+
+
+def weak_copies(run: Run, limit: int, surface: Splats | None = None) -> tuple[Splats, np.ndarray]:
     """Trainable copies of the weak gaussians in the holes (the distil refines their look;
-    the originals stay frozen): at most `limit`, the worst seen first. Returns them and
-    their shown indices."""
+    the originals stay frozen) that the reprojected `surface` does not cover: at most
+    `limit`, the worst seen first. Returns them and their shown indices."""
     setup = run.setup
-    rows = _weak_rows(setup)
+    rows = _uncovered(setup, _weak_rows(setup), surface)
     if rows.size > limit:
         best = setup.quality.best[setup.shown][rows]
         rows = np.sort(rows[np.argsort(best, kind="stable")[:limit]])
@@ -2096,45 +2258,57 @@ def fuse(
     states: dict[str, ArmState],
     distil: Callable[[dict], dict] | None,
 ) -> dict[str, tuple[Splats, np.ndarray, list[Camera]] | None]:
-    """Each arm: carve and thin its lifted gaussians, add copies of the weak ones, distil,
-    then the dataset-update rounds (every filled view rendered with the fused layer,
-    refined by the editor at the round's strength, distilled again), a final carve. Returns
-    per arm the layer, its confidence and the cameras that made it."""
+    """Each arm: its reprojected weak surface (if any) whole, its lifted gaussians thinned,
+    copies of the weak gaussians the surface does not cover, distilled together (the
+    surface's shape fixed and its opacity held above `fill_surface.OPACITY_FLOOR`), then the
+    dataset-update rounds (every filled view rendered with the fused layer, refined by the
+    editor at the round's strength, distilled again), a final carve -- of the lifted
+    gaussians only: the surface is where the photos say a surface is. Returns per arm the
+    layer, its confidence and the cameras that made it."""
     import distill_fill as df
 
     setup, opt = run.setup, run.options
     budget = max(MIN_BUDGET, int(BUDGET_SHARE * len(setup.measured)))
     out: dict[str, tuple[Splats, np.ndarray, list[Camera]] | None] = {}
     layers: dict[str, dict[str, Any]] = {}
-    weak = weak_count(run)
     for arm, state in states.items():
+        surface = state.surface if state.surface is not None else _empty_splats()
+        weak = weak_count(run, surface)
         lifted = state.layer()
-        if (lifted is None and not weak) or not state.fills:
-            state.report["skipped"] = "nothing lifted and nothing weak"
+        if (lifted is None and not weak and not len(surface)) or not state.fills:
+            state.report["skipped"] = "nothing lifted, nothing weak, no surface"
             out[arm] = None
             continue
+        room = max(0, budget - len(surface))
         if lifted is None:
             # Only weak gaussians to refine (a scan seen everywhere, if badly somewhere):
-            # the layer is their refined copies alone.
+            # the layer is the surface and their refined copies.
             gen, gen_conf = _empty_splats(), np.zeros(0)
         else:
-            # Up to half the budget is kept for the weak gaussians' copies: run 37508234704
+            # Up to half the room is kept for the weak gaussians' copies: run 37508234704
             # thinned the lifted ones to the whole budget and refined no weak gaussian.
-            reserve = min(weak, budget // 2)
+            reserve = min(weak, room // 2)
             thinned = gf.thin(
-                gf.Lifted(lifted, np.concatenate(state.confs), [], []), budget - reserve
+                gf.Lifted(lifted, np.concatenate(state.confs), [], []), max(room - reserve, 0)
             )
             gen, gen_conf = thinned.splats, thinned.confidence
-        copies, copy_rows = weak_copies(run, max(0, budget - len(gen)))
+        copies, copy_rows = weak_copies(run, max(0, room - len(gen)), surface)
         state.report.update(
             {
                 "lifted": 0 if lifted is None else len(lifted),
                 "carvedOnLift": state.carved,
                 "thinned": len(gen),
                 "weakCopies": len(copies),
+                "surface": len(surface),
             }
         )
-        layers[arm] = {"gen": gen, "conf": gen_conf, "copies": copies, "copyRows": copy_rows}
+        layers[arm] = {
+            "gen": gen,
+            "conf": gen_conf,
+            "copies": copies,
+            "copyRows": copy_rows,
+            "surface": surface,
+        }
     rounds = [(opt.distill, None), *[(opt.update_distill, s) for s in opt.update_strengths]]
     for r, (iterations, strength) in enumerate(rounds):
         if strength is not None:
@@ -2142,18 +2316,25 @@ def fuse(
         if distil is None or iterations <= 0:
             continue
         for arm, layer in layers.items():
+            parts = [layer["gen"], layer["copies"], layer["surface"]]
             init = (
-                Splats.concat([layer["gen"], layer["copies"]])
-                if len(layer["copies"])
-                else layer["gen"]
+                Splats.concat([q for q in parts if len(q)]) if any(len(q) for q in parts) else None
             )
+            if init is None:
+                continue
+            n_gen, n_copies, n_surface = (len(q) for q in parts)
+            rigid = np.r_[np.zeros(n_gen + n_copies, bool), np.ones(n_surface, bool)]
+            floor = np.where(rigid, fs.OPACITY_FLOOR, 0.0)
             t = time.time()
-            response = distil(distil_request(run, states[arm], init, iterations))
+            request = distil_request(run, states[arm], init, iterations)
+            if n_surface:
+                request["constraints"] = df.pack_constraints(rigid, floor)
+            response = distil(request)
             got = df.unpack_scan(response["inferred"])
             fused = Splats(*(got[k] for k in df.KEYS))
-            n = len(layer["gen"])
-            layer["gen"] = fused.take(np.arange(n))
-            layer["copies"] = fused.take(np.arange(n, len(fused)))
+            layer["gen"] = fused.take(np.arange(n_gen))
+            layer["copies"] = fused.take(np.arange(n_gen, n_gen + n_copies))
+            layer["surface"] = fused.take(np.arange(n_gen + n_copies, len(fused)))
             states[arm].report.setdefault("distil", []).append(
                 {
                     "round": r,
@@ -2179,7 +2360,16 @@ def fuse(
             states[arm].report["weakCopiesKept"] = int(keep_c.sum())
             copies = copies.take(np.flatnonzero(keep_c))
             conf = np.concatenate([conf, np.full(len(copies), 0.5)])
-            gen = Splats.concat([gen, copies])
+            gen = Splats.concat([gen, copies]) if len(gen) else copies
+        surface = layer["surface"]
+        if len(surface):
+            if run.carver is not None:
+                # Reported, not applied: the surface is never carved.
+                states[arm].report["surfaceCarvable"] = int(
+                    (~run.carver.keep(surface.positions)).sum()
+                )
+            conf = np.concatenate([conf, np.full(len(surface), 0.9)])
+            gen = Splats.concat([gen, surface]) if len(gen) else surface
         cams = [f.camera for f in states[arm].fills]
         out[arm] = (gen, conf, cams) if len(gen) else None
     return out
@@ -2197,13 +2387,16 @@ def _update_round(
     for arm, state in states.items():
         layer = layers[arm]
         scene = Splats.concat(
-            [frozen, layer["gen"], *([layer["copies"]] if len(layer["copies"]) else [])]
+            [frozen, *(q for q in (layer["gen"], layer["copies"], layer["surface"]) if len(q))]
         )
         for fill in state.fills:
             frame = run.renderer(scene, fill.camera)
             rendered = tf.to_u8(fv.unpremultiply(frame))
             edit = fill.masks.edit
             strength_map = np.where(edit, strength, 0.0).astype(np.float32)
+            if fill.masks.surface is not None:
+                # The reprojected surface's pixels stay the photos': no stronger than before.
+                strength_map[fill.masks.surface] = min(strength, opt.reproject_strength)
             masks = ViewMasks(
                 fill.camera,
                 ~edit & ~fill.masks.void,
@@ -2411,6 +2604,122 @@ def before_after(run: Run, layers: dict[str, Splats | None], out: Path) -> None:
     Image.fromarray(gf.grid(rows)).save(out / f"before-after-{setup.name}.png")
 
 
+#: The headline test: of a hole's footprint (its gaussians' pixels), the share whose opacity
+#: -- the scan's gaussians in the hole's box, plus the layer's -- is below this is
+#: see-through.
+SEE_THROUGH_ALPHA = 0.8
+
+
+def _known_scene(setup: Setup) -> Splats:
+    """'Before': the scan as shown; in a leave-out, only what the kept cameras know (the
+    withheld and unknown gaussians left out, as `score_held_out` draws it)."""
+    scene = setup.scene()
+    if setup.leave_out == "none":
+        return scene
+    c = setup.shown_classes()
+    return scene.take(np.flatnonzero((c != fq.UNKNOWN) & ~setup.withheld[setup.shown]))
+
+
+def see_through(
+    run: Run,
+    scene: Splats,
+    layer: Splats | None,
+    members: np.ndarray,
+    box: tuple[np.ndarray, np.ndarray],
+    cam: Camera,
+) -> float | None:
+    """The share of the hole's footprint (its gaussians' `members` positions projected,
+    closed) where the gaussians in its `box` -- the scene's and the layer's -- are less
+    opaque than `SEE_THROUGH_ALPHA`."""
+    uv, z = cam.project(members)
+    u = np.floor(uv[:, 0]).astype(np.int64)
+    v = np.floor(uv[:, 1]).astype(np.int64)
+    ok = (z > 1e-3) & (u >= 0) & (u < cam.width) & (v >= 0) & (v < cam.height)
+    if ok.sum() < 10:
+        return None
+    foot = np.zeros((cam.height, cam.width), bool)
+    foot[v[ok], u[ok]] = True
+    foot = _close(_dilate(foot, 1), 2)
+    parts = [scene]
+    if layer is not None and len(layer):
+        parts.append(layer)
+    inside = [
+        q.take(np.flatnonzero(np.all((q.positions >= box[0]) & (q.positions <= box[1]), axis=1)))
+        for q in parts
+    ]
+    inside = [q for q in inside if len(q)]
+    if not inside:
+        return 1.0
+    alpha = run.renderer(Splats.concat(inside), cam).alpha
+    return float((alpha[foot] < SEE_THROUGH_ALPHA).mean())
+
+
+def headline(run: Run, layers: dict[str, Splats | None], out: Path) -> dict[str, Any]:
+    """The owner's test: the largest hole from straight above and from the angle it is most
+    see-through before (searched over the 40 and 65 degree rings), before and with each
+    arm's layer, and how much of it is see-through. Saves `headline-<scan>.png`."""
+    from PIL import Image
+
+    setup = run.setup
+    if not setup.clusters.info:
+        return {}
+    members = setup.measured.positions[setup.clusters.members(0)]
+    info = setup.clusters.info[0]
+    low, high = np.asarray(info["low"], float), np.asarray(info["high"], float)
+    pad = 0.05 * (high - low) + 1e-6
+    box = (low - pad, high + pad)
+    before = _known_scene(setup)
+    width = run.options.score_width
+    size = (width, max(1, round(width * 0.575)))
+    probe = (max(32, width // 3), max(18, round(width * 0.575) // 3))
+    worst, worst_pose = -1.0, (40.0, 0.0)
+    for elev in (40.0, 65.0):
+        for k in range(fv.AZIMUTHS):
+            az = 360.0 * k / fv.AZIMUTHS
+            cam = fv.view_camera(setup.focus, fv._direction(elev, az), probe)
+            share = see_through(run, before, None, members, box, cam)
+            if share is not None and share > worst:
+                worst, worst_pose = share, (elev, az)
+    rows, poses = [], []
+    for name, (elev, az) in (("above", (90.0, 0.0)), ("most see-through", worst_pose)):
+        cam = fv.view_camera(setup.focus, fv._direction(elev, az), size)
+        shares = {"before": see_through(run, before, None, members, box, cam)}
+        row = [
+            gf.label_image(
+                tf.to_u8(run.renderer(before, cam).rgb),
+                f"before {elev:g}/{az:g}: {_pct(shares['before'])} see-through",
+            )
+        ]
+        for arm, layer in layers.items():
+            shares[arm] = see_through(run, before, layer, members, box, cam)
+            both = Splats.concat([before, layer]) if layer is not None and len(layer) else before
+            row.append(
+                gf.label_image(
+                    tf.to_u8(run.renderer(both, cam).rgb),
+                    f"{LAYERS[arm]}: {_pct(shares[arm])}",
+                )
+            )
+        if setup.leave_out != "none":
+            row.append(
+                gf.label_image(tf.to_u8(run.renderer(setup.measured, cam).rgb), "all cameras")
+            )
+        rows.append(row)
+        poses.append(
+            {
+                "view": name,
+                "elevation": elev,
+                "azimuth": round(az, 1),
+                "seeThrough": {k: None if v is None else round(v, 4) for k, v in shares.items()},
+            }
+        )
+    Image.fromarray(gf.grid(rows)).save(out / f"headline-{setup.name}.png")
+    return {"cluster": 0, "seeThroughAlpha": SEE_THROUGH_ALPHA, "poses": poses}
+
+
+def _pct(x: float | None) -> str:
+    return "-" if x is None else f"{100 * x:.0f}%"
+
+
 # --- the run -----------------------------------------------------------------------------------------------------------
 
 
@@ -2457,6 +2766,7 @@ def run_arms(
         [fv.scaled(v.camera, options.carve_width) for v in setup.views],
         renderer,
         2 * setup.focus.radius,
+        soft_gaussians(setup),
     )
     run = Run(
         setup,
@@ -2471,13 +2781,23 @@ def run_arms(
         log,
         fallback,
     )
+    # Weak surfaces first, in the arms with photos: the best photos reprojected onto the
+    # surface they saw, as opaque gaussians every later view is drawn with.
+    surface = None
+    if options.reproject and any(ANCHOR_ARM[a] == "refs" for a in options.arms):
+        t = time.time()
+        budget = max(MIN_BUDGET, int(BUDGET_SHARE * len(setup.measured)))
+        surface, report["surface"] = build_surface(
+            setup, renderer, int(SURFACE_BUDGET_SHARE * budget), log
+        )
+        report["timings"]["surfaceS"] = round(time.time() - t, 1)
     t = time.time()
-    anchors = fill_anchors(run, options.arms)
+    anchors = fill_anchors(run, options.arms, surface)
     report["timings"]["anchorsS"] = round(time.time() - t, 1)
     states: dict[str, ArmState] = {}
     lifted: dict[str, ArmState] = {}
     for arm in sorted({ANCHOR_ARM[a] for a in options.arms}):
-        lifted[arm] = ArmState(arm)
+        lifted[arm] = ArmState(arm, surface=surface if arm == "refs" else None)
         lift_fills(run, lifted[arm], anchors.get(arm, []))
     for arm in options.arms:
         # Each arm its own copy of its anchors (the update rounds rewrite their images).
@@ -2489,12 +2809,15 @@ def run_arms(
             list(base.confs),
             {},
             base.carved,
+            base.surface,
         )
     # 6B goes first (it needs only the anchors), so its GPU runs while 6A goes on.
     joint = None
     if "vace" in options.arms:
         try:
-            joint = start_joint(run, anchors.get("refs", []), states["vace"].layer())
+            joint = start_joint(
+                run, anchors.get("refs", []), states["vace"].layer(), states["vace"].surface
+            )
         except Exception as error:  # noqa: BLE001 - the arm fails, the others go on
             states["vace"].report["setFailed"] = repr(error)[:1500]
     t = time.time()
@@ -2534,7 +2857,12 @@ def run_arms(
                 layer_dir,
                 filler_name(arm, editor, set_filler),
                 rule=RULE.format(
-                    refs=" and two retrieved real photos"
+                    refs=(
+                        " and two retrieved real photos, after the weak surfaces were made "
+                        "solid from the best photos reprojected onto them"
+                        if state.surface is not None and len(state.surface)
+                        else " and two retrieved real photos"
+                    )
                     if ANCHOR_ARM[arm] == "refs"
                     else " alone",
                     propagate="the rest sequentially, each view re-rendered with what is filled"
@@ -2544,6 +2872,7 @@ def run_arms(
                 extra={
                     "provenance": "inferred-generated",
                     "arm": arm,
+                    "reprojected": 0 if state.surface is None else len(state.surface),
                     "anchors": sum(f.role == "anchor" for f in state.fills),
                     "propagated": sum(f.role != "anchor" for f in state.fills),
                     "seedAgreement": entry["seedAgreement"],
@@ -2559,6 +2888,7 @@ def run_arms(
         report["heldOut"] = score_held_out(run, layers, out / "renders", width=options.score_width)
     anchor_sheet(run, anchors, out / "renders")
     before_after(run, layers, out / "renders")
+    report["headline"] = headline(run, layers, out / "renders")
     report["timings"]["scoreS"] = round(time.time() - t, 1)
     report["timings"]["totalS"] = round(time.time() - started, 1)
     gf.write_json(out / "report.json", report)

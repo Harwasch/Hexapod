@@ -83,18 +83,20 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
         "name": "anchor-refs",
         "label": "Anchors + photos, then view by view (Qwen-Image-Edit 2511)",
         "about": (
-            "Finds what the photos saw badly or not at all, picks the views that show it, fills "
-            "a few anchor views with an image editor given the masked render and two real "
-            "photos of that spot, then fills each other view with only what is still missing, "
-            "placed in 3D at depth that meets the scan."
+            "Finds what the photos saw badly or not at all. Where they saw a surface from one "
+            "side only (the spool's top), the best photos are first warped onto that surface "
+            "as opaque gaussians, so it is solid from every side. Then a few anchor views are "
+            "filled by an image editor given the render and two real photos of that spot, and "
+            "each other view gets only what is still missing, placed in 3D at depth that meets "
+            "the scan."
         ),
     },
     "anchor-norefs": {
         "name": "anchor-norefs",
         "label": "Anchors without photos, then view by view (Qwen-Image-Edit 2511)",
         "about": (
-            "The same, but the editor sees only the masked render and no real photo: the test "
-            "of what the photos add."
+            "The same, but no real photo anywhere: no surface is warped from the photos, and "
+            "the editor sees only the render. The test of what the photos add."
         ),
     },
     "anchor-vace": {

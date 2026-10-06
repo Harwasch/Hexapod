@@ -93,6 +93,26 @@ def unpack_pixel_weights(blob: bytes) -> np.ndarray | None:
         return z["pixelWeights"].astype(np.float32) / 255.0
 
 
+def pack_constraints(rigid: np.ndarray, opacity_floor: np.ndarray) -> bytes:
+    """Per inferred gaussian: `rigid` (its position, rotation and scale are not trained:
+    only its colour and opacity) and an `opacity_floor` its opacity may not go below -- a
+    reprojected surface stays where the photos put it and stays opaque."""
+    buffer = io.BytesIO()
+    np.savez_compressed(
+        buffer,
+        rigid=np.asarray(rigid, bool),
+        opacityFloor=np.asarray(opacity_floor, np.float32),
+    )
+    return buffer.getvalue()
+
+
+def unpack_constraints(blob: bytes | None) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if blob is None:
+        return None, None
+    with np.load(io.BytesIO(blob)) as z:
+        return z["rigid"].astype(bool), z["opacityFloor"].astype(np.float64)
+
+
 def pack_scan(scan: dict[str, np.ndarray]) -> bytes:
     buffer = io.BytesIO()
     np.savez_compressed(buffer, **pack(scan))
@@ -195,11 +215,14 @@ def distill(
     weights: Sequence[float] | None = None,
     outside: Sequence[float] | None = None,
     pixel_weights: np.ndarray | None = None,
+    rigid: np.ndarray | None = None,
+    opacity_floor: np.ndarray | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     """The inferred gaussians after `iterations` steps of Adam, and a report: the masked
     and outside L1 per view before and after. `weights` and `outside` per view
     (`pack_views`): a real photo at 1 on what it covers, a generated view lower and only on
-    its unknown pixels. Views are visited in turn, each step's loss times its weight."""
+    its unknown pixels. Views are visited in turn, each step's loss times its weight.
+    `rigid` and `opacity_floor` per inferred gaussian (`pack_constraints`)."""
     import torch
 
     torch.manual_seed(seed)
@@ -209,14 +232,21 @@ def distill(
 
     fixed = {k: t(measured[k]) for k in KEYS}
     anchor = t(init["positions"])
+    n_init = len(np.asarray(init["positions"]))
+    floor = t(np.zeros(n_init) if opacity_floor is None else opacity_floor).clamp(0.0, 0.99)
+    frozen_shape = (
+        None
+        if rigid is None or not np.any(rigid)
+        else torch.tensor(np.asarray(rigid, bool), device=device)
+    )
+    # The opacity above its floor: floor + (1 - floor) * sigmoid(logit).
+    above = (t(init["opacities"]) - floor) / (1.0 - floor)
     params = {
         "positions": anchor.clone().requires_grad_(True),
         "rotations": t(init["rotations"]).requires_grad_(True),
         "log_scales": torch.log(t(init["scales"]).clamp(min=1e-6)).requires_grad_(True),
         "colour_logits": torch.logit(t(init["colours"]).clamp(1e-3, 1 - 1e-3)).requires_grad_(True),
-        "opacity_logits": torch.logit(t(init["opacities"]).clamp(1e-3, 1 - 1e-3)).requires_grad_(
-            True
-        ),
+        "opacity_logits": torch.logit(above.clamp(1e-3, 1 - 1e-3)).requires_grad_(True),
     }
     extent = float(np.ptp(np.asarray(init["positions"]), axis=0).max()) if len(anchor) else 1.0
     optimiser = torch.optim.Adam(
@@ -261,7 +291,7 @@ def distill(
             "rotations": params["rotations"],
             "scales": params["log_scales"].exp(),
             "colours": torch.sigmoid(params["colour_logits"]),
-            "opacities": torch.sigmoid(params["opacity_logits"]),
+            "opacities": floor + (1.0 - floor) * torch.sigmoid(params["opacity_logits"]),
         }
 
     empty = {k: v[:0] for k, v in fixed.items()}
@@ -307,6 +337,10 @@ def distill(
         )
         optimiser.zero_grad()
         loss.backward()
+        if frozen_shape is not None:
+            for name in ("positions", "rotations", "log_scales"):
+                if params[name].grad is not None:
+                    params[name].grad[frozen_shape] = 0.0
         optimiser.step()
     final = current()
     after = losses(final)
@@ -341,6 +375,7 @@ def run(request: dict) -> dict:
     "iterations"?}` -> `{"inferred": npz, "report": {...}}`."""
     cameras, images, masks = unpack_views(request["views"])
     weights, outside = unpack_view_weights(request["views"])
+    rigid, floor = unpack_constraints(request.get("constraints"))
     out, report = distill(
         unpack_scan(request["measured"]),
         unpack_scan(request["init"]),
@@ -351,5 +386,7 @@ def run(request: dict) -> dict:
         weights=None if weights is None else weights.tolist(),
         outside=None if outside is None else outside.tolist(),
         pixel_weights=unpack_pixel_weights(request["views"]),
+        rigid=rigid,
+        opacity_floor=floor,
     )
     return {"inferred": pack_scan(out), "report": report}

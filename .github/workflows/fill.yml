@@ -29,6 +29,7 @@ on:
       - tools/captures/anchor_models.py
       - tools/captures/fill_quality.py
       - tools/captures/fill_views.py
+      - tools/captures/fill_surface.py
       - .github/workflows/fill.yml
   workflow_dispatch:
     inputs:
