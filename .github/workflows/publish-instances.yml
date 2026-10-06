@@ -22,7 +22,8 @@ name: Publish instances
 # * **A variant** (`variant=<name>`, the segmentation bake-off): the files go to
 #   `variants/objects/<name>/` instead, and the root's `extras.variants.objects` gets the
 #   entry `{name, label, about, instances}` (label and about from the run's instances.json
-#   `variant` block), every other entry and system kept. The API replaces an extras key
+#   `variant` block, or from `tools/captures/data/object_variants.json` when it describes the
+#   variant, with `look`: what to watch, per scan), every other entry and system kept. The API replaces an extras key
 #   whole, so `attach_sidecars.attach` re-reads the asset's current `extras.variants` right
 #   before its request and merges the entry into it (`with_variant`): a variant another
 #   run attached since the build is kept. Today's `extras.instances` is not touched: it
@@ -154,6 +155,8 @@ jobs:
                   return response.read()
 
           temp = Path(os.environ["RUNNER_TEMP"])
+          registry = Path("data/object_variants.json")
+          described_variants = json.loads(registry.read_text()) if registry.exists() else {}
           print("## Instances\n")
           for name in os.environ["SCANS"].split(","):
               # The asset's CURRENT tileset: once anything was attached it is a generation,
@@ -191,12 +194,24 @@ jobs:
                   own = doc.get("variant") or {}
                   if own.get("name") not in (None, variant):
                       raise SystemExit(f"{name}: the run is variant {own.get('name')!r}, not {variant!r}")
+                  # A description fixed after the run (data/object_variants.json: label, about,
+                  # and `look`, what to watch, one sentence or one per scan) is the one published,
+                  # in the entry and in the file's own `variant` block.
+                  described = described_variants.get(variant) or {}
+                  block = {**own, **{k: described[k] for k in ("label", "about", "look") if k in described}}
+                  look = block.get("look")
+                  look = look.get(name) if isinstance(look, dict) else look
                   entry = {
                       "name": variant,
-                      "label": str(own.get("label") or variant),
-                      "about": str(own.get("about") or ""),
+                      "label": str(block.get("label") or variant),
+                      "about": str(block.get("about") or ""),
                       "instances": folder + "instances.json",
+                      **({"look": str(look)} if look else {}),
                   }
+                  if described:
+                      doc["variant"] = {k: v for k, v in entry.items() if k != "instances"}
+                      (out / folder / "instances.json").write_text(
+                          json.dumps(doc, separators=(",", ":")) + "\n", encoding="utf-8")
                   # For review: the merge as of now. The publish job merges again into the
                   # asset's extras as they are when it attaches (attach_sidecars.attach).
                   current = (published.get("root") or {}).get("extras") or {}
@@ -213,7 +228,7 @@ jobs:
                   variant=register,
               )
               top = sum(1 for r in doc["instances"] if r["level"] == 0)
-              where = f" as variant `{variant}` ({folder})" if variant else ""
+              where = f" as variant `{variant}` ({folder}, \"{entry['label']}\")" if variant else ""
               print(f"- **{name}** (asset `{asset['assetId']}`){where}: {len(uris)} tiles bound, "
                     f"{len(doc['instances']):,} instances ({top:,} top-level); {url}")
           PY

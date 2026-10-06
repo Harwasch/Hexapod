@@ -1,0 +1,14 @@
+{
+  "concept-first": {
+    "label": "C · Concept first",
+    "about": "A vision-language model lists the scene's things and ground cover; SAM 3 finds each of them in every view, the masks are voted onto the splats, and what nobody named comes from a class-free pass."
+  },
+  "concept-first-standin": {
+    "label": "C (stand-in) · Concept first",
+    "about": "A stand-in for C: it uses Grounding DINO + SAM 2 in place of SAM 3, whose weights are gated. A vision-language model lists the scene's things and ground cover, Grounding DINO boxes each thing in every view and SAM 2 cuts its mask, the masks are voted onto the splats, and what nobody named comes from a class-free SAM 2 pass.",
+    "look": {
+      "spool": "Click the spool: one click should pick the whole spool, flange included. Ground types are under Ground & soil.",
+      "pumpkin": "Click a pumpkin: one click should pick the whole pumpkin. Ground types are under Ground & soil; the hay is wrongly called Moss."
+    }
+  }
+}

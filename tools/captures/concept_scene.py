@@ -76,26 +76,15 @@ from splat_render import Camera, SplatIndex, Splats, render
 # ----------------------------------------------------------------------------- constants
 
 #: What a run is published as (`variant` in `instances.json`): SAM 3's run is candidate C;
-#: the stand-in's has a name of its own, so it is never published as C.
+#: the stand-in's has a name of its own, so it is never published as C. Label, about and
+#: `look` (what to watch, per scan) are `data/object_variants.json`'s, which
+#: publish-instances.yml also reads, so a description fixed after a run is the one published.
+_DESCRIBED = json.loads(
+    (Path(__file__).parent / "data" / "object_variants.json").read_text(encoding="utf-8")
+)
 VARIANTS = {
-    "sam3": {
-        "name": "concept-first",
-        "label": "C · Concept first",
-        "about": (
-            "A vision-language model lists the scene's things and ground cover; SAM 3 finds "
-            "each of them in every view, the masks are voted onto the splats, and what nobody "
-            "named comes from a class-free pass."
-        ),
-    },
-    "standin": {
-        "name": "concept-first-standin",
-        "label": "C (stand-in) · Concept first, Grounding DINO + SAM 2",
-        "about": (
-            "Concept first as C, with Grounding DINO and SAM 2 standing in for SAM 3 (whose "
-            "weights are gated): a vision-language model lists the things and ground cover, "
-            "each is found in every view and voted onto the splats."
-        ),
-    },
+    key: {"name": name, **_DESCRIBED[name]}
+    for key, name in (("sam3", "concept-first"), ("standin", "concept-first-standin"))
 }
 #: Overview renders the vocabulary is read from (rings at two scales and elevations).
 OVERVIEW_VIEWS = 12

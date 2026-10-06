@@ -248,7 +248,10 @@ refine pass's box masks, the names) so a run can be re-assembled on a CPU. publi
 publishes a run's artifact as a variant with `variant=<name>` (dispatch input, or
 `[instances|run=<id>|scans=spool,pumpkin|variant=ground-first|publish]` on a `bakeoff-*`
 push): the files go to `variants/objects/<name>/`, and `extras.variants.objects` gets
-`{name, label, about, instances}`. The API replaces an extras key whole, so
+`{name, label, about, instances}`: label and about from the run's `variant` block, or from
+`tools/captures/data/object_variants.json` when it describes the variant (a description
+fixed after the run, with `look`, what to watch, per scan; the published `instances.json`
+says the same). The API replaces an extras key whole, so
 `attach_sidecars.attach` re-reads the asset's current `extras.variants` just before its
 request and merges the entry in by name (`with_variant`), every other system and variant
 kept. Today's `extras.instances` stays the default.
