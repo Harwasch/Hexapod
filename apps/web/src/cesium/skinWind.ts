@@ -59,6 +59,8 @@ export function describeFromStore(assetId: string): DescribeInstance {
 
 interface Driven {
   readonly skin: SkinEntry;
+  /** What the skin itself carries of its object (a variant's skin), when the store has none. */
+  readonly own: InstanceTraits | undefined;
   traits: InstanceTraits | undefined;
   material: SkinMaterial | undefined;
   oscillator: SkinWindOscillator | undefined;
@@ -75,6 +77,20 @@ export interface SkinWindTick {
   readonly driven: number;
   /** Something changed on screen: a render is owed. */
   readonly changed: boolean;
+}
+
+/**
+ * The traits a skin carries itself (`skin.json`'s `traits`, a variant's skin): what the prior
+ * reads when the scan's `instances.json` does not list the instance (the Minnetonka tree has
+ * none). The store's record wins whenever there is one.
+ */
+export function skinTraitsOf(skin: Pick<SkinEntry, "traits">): InstanceTraits | undefined {
+  const t = skin.traits;
+  if (!t) return undefined;
+  return {
+    properties: t.properties ?? {},
+    behaviour: (t.behaviour ?? "in-place") as Instance["behaviour"],
+  };
 }
 
 /** Drives every skin of one scan's skin part. */
@@ -98,6 +114,7 @@ export class SkinWindDriver {
     this.#claimed = claimed;
     this.#skins = target.doc.skins.map((skin) => ({
       skin,
+      own: skin.traits ? skinTraitsOf(skin) : undefined,
       traits: undefined,
       material: undefined,
       oscillator: undefined,
@@ -126,7 +143,7 @@ export class SkinWindDriver {
     let driven = 0;
     let changed = false;
     for (const d of this.#skins) {
-      const traits = this.#describe(d.skin.instance);
+      const traits = this.#describe(d.skin.instance) ?? d.own;
       if (refresh || traits !== d.traits || d.material === undefined) this.#resolve(d, traits);
       if (this.#claimed(d.skin.instance)) {
         // Another driver writes these handles now: drop the state, write nothing.

@@ -54,7 +54,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -244,8 +244,9 @@ def check_name(rel: str) -> str:
     return rel
 
 
-def files_under(directory: Path) -> list[str]:
-    """Every file under `directory` but the manifest, relative and sorted, each checked."""
+def files_under(directory: Path, *, allow_none: bool = False) -> list[str]:
+    """Every file under `directory` but the manifest, relative and sorted, each checked.
+    None is refused unless `allow_none` (only a withdrawal of variants stages nothing)."""
     found = sorted(
         path.relative_to(directory).as_posix()
         for path in directory.rglob("*")
@@ -253,7 +254,7 @@ def files_under(directory: Path) -> list[str]:
     )
     for rel in found:
         check_name(rel)
-    if not found:
+    if not found and not allow_none:
         raise AttachError(f"{directory} holds nothing to attach")
     if len(found) > MAX_SIDECAR_FILES:
         raise AttachError(f"{len(found)} files; one attach may hold {MAX_SIDECAR_FILES}")
@@ -268,6 +269,86 @@ def files_under(directory: Path) -> list[str]:
     return found
 
 
+#: The bake-off's systems (`extras.variants.<system>`) and what a variant's entry points at.
+VARIANT_SYSTEMS = {"objects": "instances", "fill": "inferredLayers", "skins": "skin"}
+VARIANT_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+
+
+def variant_folder(system: str, name: str) -> str:
+    """Where a variant's files sit beside `tileset.json`: `variants/<system>/<name>/`."""
+    if system not in VARIANT_SYSTEMS:
+        raise AttachError(f"{system!r} is not one of {sorted(VARIANT_SYSTEMS)}")
+    if not VARIANT_NAME.fullmatch(name):
+        raise AttachError(f"variant name {name!r} is not lower-case letters, digits and '-'")
+    return f"variants/{system}/{name}/"
+
+
+def with_variant(current: Any, system: str, entry: Mapping[str, Any]) -> dict[str, Any]:
+    """The root's `extras.variants` with `entry` registered under `system`: it replaces the
+    entry of its `name` there, or is added after the others. Every other system's entries,
+    and the other variants of this one, are kept as they are. The API replaces an extras
+    key whole, so the attach sends this whole value, read from the tileset it binds to."""
+    name = str(entry.get("name", ""))
+    variant_folder(system, name)
+    variants = {k: list(v) for k, v in dict(current or {}).items() if isinstance(v, list)}
+    listed = [e for e in variants.get(system, []) if isinstance(e, dict)]
+    found = False
+    for k, other in enumerate(listed):
+        if other.get("name") == name:
+            listed[k] = dict(entry)
+            found = True
+    if not found:
+        listed.append(dict(entry))
+    variants[system] = listed
+    return variants
+
+
+def without_variant(current: Any, system: str, name: str) -> dict[str, Any]:
+    """`with_variant`'s inverse: the root's `extras.variants` without the entry of `name`
+    under `system`. Every other entry of that system and every other system are kept as they
+    are; the system's key goes only when that leaves it empty. An empty result means no
+    variants at all (the attach then removes the key)."""
+    variant_folder(system, name)
+    variants = {k: list(v) for k, v in dict(current or {}).items() if isinstance(v, list)}
+    if system not in variants:
+        return variants
+    kept = [e for e in variants[system] if not (isinstance(e, dict) and e.get("name") == name)]
+    if kept:
+        variants[system] = kept
+    else:
+        del variants[system]
+    return variants
+
+
+def variant_changes(manifest: Mapping[str, Any]) -> list[tuple[str, str, Any]]:
+    """The manifest's changes to `extras.variants`, in order: `("with", system, entry)` for
+    each entry registered (`variant`, `register`), then `("without", system, name)` for each
+    withdrawn (`withdraw`)."""
+    changes: list[tuple[str, str, Any]] = []
+    variant = manifest.get("variant")
+    if variant is not None:
+        changes.append(("with", variant["system"], variant["entry"]))
+    for item in manifest.get("register") or []:
+        changes.append(("with", item["system"], item["entry"]))
+    for item in manifest.get("withdraw") or []:
+        changes.append(("without", item["system"], item["name"]))
+    return changes
+
+
+def changed_variants(
+    current: Any, changes: Sequence[tuple[str, str, Any]]
+) -> dict[str, Any] | None:
+    """`current` (a root's `extras.variants`) with `changes` (`variant_changes`) applied; None
+    when no system is left, so the attach removes the key rather than send an empty one."""
+    variants = {k: list(v) for k, v in dict(current or {}).items() if isinstance(v, list)}
+    for kind, system, value in changes:
+        if kind == "with":
+            variants = with_variant(variants, system, value)
+        else:
+            variants = without_variant(variants, system, value)
+    return variants or None
+
+
 def write_manifest(
     directory: Path,
     *,
@@ -275,8 +356,20 @@ def write_manifest(
     based_on: str,
     extras: Mapping[str, Any] | None = None,
     rig_url: str | None = None,
+    variant: tuple[str, Mapping[str, Any]] | None = None,
+    register: Sequence[tuple[str, Mapping[str, Any]]] = (),
+    withdraw: Sequence[tuple[str, str]] = (),
 ) -> dict[str, Any]:
-    """`attach.json` for the files under `directory`: the request `attach` will send."""
+    """`attach.json` for the files under `directory`: the request `attach` will send.
+
+    `variant` (`(system, entry)`, the bake-offs) and `register` (several): the entries are
+    registered in the root's `extras.variants` (`with_variant`) by `attach`, from the asset's
+    tileset as it is at the moment of the request -- not as it was when this was built -- so
+    a variant attached by another run in between is kept. `withdraw` (`(system, name)`s)
+    takes entries off the same way (`without_variant`); a withdrawal alone stages no files.
+    `extras.variants` here is that merge as of now, for review: `attach` replaces it, and a
+    manifest that sets `extras.variants` without one of these is refused (it would send a
+    stale whole value over every other bake-off's entries)."""
     if not UUID.match(asset_id):
         raise AttachError(f"{asset_id!r} is not an asset id (a UUID)")
     if not based_on.startswith(("https://", "http://")):
@@ -284,13 +377,75 @@ def write_manifest(
     manifest: dict[str, Any] = {
         "assetId": asset_id,
         "basedOn": based_on,
-        "files": files_under(directory),
+        "files": files_under(directory, allow_none=bool(withdraw)),
         "extras": dict(extras or {}),
     }
     if rig_url is not None:
         manifest["rigUrl"] = check_name(rig_url)
+    if variant is not None:
+        system, entry = variant
+        with_variant(None, system, entry)  # checks the system and the name
+        manifest["variant"] = {"system": system, "entry": dict(entry)}
+    if register:
+        for system, entry in register:
+            with_variant(None, system, entry)
+        manifest["register"] = [{"system": s, "entry": dict(e)} for s, e in register]
+    if withdraw:
+        for system, name in withdraw:
+            variant_folder(system, name)
+        manifest["withdraw"] = [{"system": s, "name": n} for s, n in withdraw]
+    _check_variants(manifest, directory / MANIFEST)
     (directory / MANIFEST).write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
     return manifest
+
+
+def _check_variants(manifest: Mapping[str, Any], path: Path) -> None:
+    """A manifest's variant changes are well formed, and `extras.variants` is only ever sent
+    as their merge at the request (never a value computed earlier); an attach that stages
+    nothing is a withdrawal of variants and nothing else."""
+    variant = manifest.get("variant")
+    if variant is not None and (
+        not isinstance(variant, dict)
+        or not isinstance(variant.get("entry"), dict)
+        or variant.get("system") not in VARIANT_SYSTEMS
+    ):
+        raise AttachError(f"{path}'s variant is not {{system, entry}}")
+    register = manifest.get("register")
+    if register is not None and (
+        not isinstance(register, list)
+        or not all(
+            isinstance(r, dict)
+            and r.get("system") in VARIANT_SYSTEMS
+            and isinstance(r.get("entry"), dict)
+            for r in register
+        )
+    ):
+        raise AttachError(f"{path}'s register is not a list of {{system, entry}}")
+    withdraw = manifest.get("withdraw")
+    if withdraw is not None and (
+        not isinstance(withdraw, list)
+        or not withdraw
+        or not all(
+            isinstance(w, dict)
+            and w.get("system") in VARIANT_SYSTEMS
+            and isinstance(w.get("name"), str)
+            for w in withdraw
+        )
+    ):
+        raise AttachError(f"{path}'s withdraw is not a list of {{system, name}}")
+    changes = variant is not None or bool(register) or bool(withdraw)
+    extras = manifest.get("extras") or {}
+    if "variants" in extras and not changes:
+        raise AttachError(
+            f"{path} sets extras.variants without a variant to register or withdraw: the "
+            "attach must merge variants into the tileset as it is at the request"
+        )
+    if not manifest.get("files"):
+        others = [k for k in extras if k != "variants"]
+        if not withdraw or others or "rigUrl" in manifest:
+            raise AttachError(
+                f"{path} stages nothing: only a withdrawal of variants may, and nothing else"
+            )
 
 
 def read_manifest(directory: Path) -> dict[str, Any]:
@@ -304,11 +459,21 @@ def read_manifest(directory: Path) -> dict[str, Any]:
     if not isinstance(manifest.get("basedOn"), str):
         raise AttachError(f"{path} names no basedOn URL")
     files = manifest.get("files")
-    if not isinstance(files, list) or files != files_under(directory):
+    withdrawal = bool(manifest.get("withdraw"))
+    if not isinstance(files, list) or files != files_under(directory, allow_none=withdrawal):
         raise AttachError(f"{path}'s files are not exactly the files beside it")
     if not isinstance(manifest.get("extras", {}), dict):
         raise AttachError(f"{path}'s extras are not an object")
+    _check_variants(manifest, path)
     return manifest
+
+
+def current_variants(asset_id: str, *, api: str | None = None) -> Any:
+    """The asset's current tileset's `extras.variants` (None when it has none)."""
+    tileset = get_json(resolve_asset(asset_id, api=api)["url"])
+    root = tileset.get("root") if isinstance(tileset, dict) else None
+    extras = root.get("extras") if isinstance(root, dict) else None
+    return extras.get("variants") if isinstance(extras, dict) else None
 
 
 # --- staging and the request ------------------------------------------------------------
@@ -430,7 +595,12 @@ def attach(
     if "rigUrl" in manifest:
         body["rigUrl"] = manifest["rigUrl"]
     url = f"{api_url(api)}/api/v1/assets/{asset_id}/sidecars"
+    changes = variant_changes(manifest)
     for attempt in range(1, BUSY_RETRIES + 2):
+        if changes:
+            # The API replaces an extras key whole: merge into what is there now.
+            current = current_variants(asset_id, api=api)
+            body["extras"] = {**body["extras"], "variants": changed_variants(current, changes)}
         status, answer = post(url, body, token)
         if status == 200 and isinstance(answer, dict):
             report(answer)

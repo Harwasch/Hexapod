@@ -17,6 +17,11 @@
  * (`cesium/telemetry.ts`) on a harness clock in milliseconds that moves only when told to
  * (`telemetryAt`): the driver for e2e/telemetry.spec.ts.
  *
+ * `pokeOn` / `pokeAdvance` / `pokeOff` turn on the poke tool (`cesium/skinPoke.ts`) on a harness
+ * clock in seconds that moves only when told to; the spec presses and drags with the real
+ * mouse, so the pointer handling (the press taken from the camera, the camera's inputs held)
+ * is what runs: the driver for e2e/poke.spec.ts.
+ *
  * With `renderer` set to `playcanvas` or `spark`, CesiumJS's splats are hidden and the scan is
  * drawn by that dedicated renderer over the globe (`cesium/scanView`), as the app does: the
  * same drivers move the same objects through `scanView/scanMotion.ts`, split objects declared
@@ -43,6 +48,7 @@ import {
 import { claimsOf } from "@/cesium/motionClaims";
 import { ScanRendererHost, type ScanRendererStatus } from "@/cesium/scanView/ScanRendererHost";
 import type { SplatRendererKind } from "@/cesium/scanView/types";
+import { SkinPokeController } from "@/cesium/skinPoke";
 import { describeFromStore, SkinWindDriver } from "@/cesium/skinWind";
 import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
@@ -57,6 +63,7 @@ import { SkinWindField, WIND_CALM, type WindSettings } from "@twin/world";
 import type { ObjectPose } from "@/lib/sceneObjects";
 import { useInstances, type RendererGap } from "@/state/instances";
 import { useSceneObjects } from "@/state/sceneObjects";
+import { useSkinPoke } from "@/state/skinPoke";
 
 const BACKGROUND = "#10141a";
 const ASSET = "skin-harness";
@@ -77,6 +84,11 @@ export interface HandleMotion {
 export interface SkinHarness {
   /** Points the camera and waits for the tiles, the instances and the skin. */
   view(headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
+  /**
+   * Points the camera at skin `instance`'s middle (its origin, `scale` up) and waits for the
+   * tiles and the skin (and the instances, when the scan declares them): a real scan.
+   */
+  lookAtSkin(instance: number, headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
   /** Every skin: its id, instance, handle count and size. */
   skins(): { id: number; instance: number; handles: number; scale: number }[];
   /** Sets one object's handles (the rest at rest) and waits for the frame. */
@@ -144,6 +156,30 @@ export interface SkinHarness {
   objectPose(instance: number, pose: ObjectPose | null): Promise<void>;
   /** What the store says the renderer cannot move, for the panels. */
   motionGap(): RendererGap | null;
+  /** The poke tool on, its clock at `t0` seconds. */
+  pokeOn(t0?: number): Promise<void>;
+  /** Moves the poke clock `seconds` on in steps of `1/fps`, then renders. */
+  pokeAdvance(seconds: number, fps?: number): Promise<void>;
+  /** The poke tool off (what is held is let go; what rings, rings on). */
+  pokeOff(): Promise<void>;
+  /** Whether something is held, how many objects move, what was grabbed, the camera's inputs. */
+  pokeStatus(): {
+    holding: boolean;
+    active: number;
+    grabbed: { instance: number; label: string; hz: number | null; movable: boolean } | null;
+    cameraInputs: boolean;
+  };
+  /** What the poke lays over a skinned instance's handles now, or null. */
+  pokeOverlay(instance: number): number[] | null;
+  /**
+   * Where to press to poke skin `instance`: its first learned handle's support centre (where
+   * its slowest mode acts; for a rigid skin, its middle), on the page (CSS px), or null.
+   */
+  aimPoint(instance: number): { x: number; y: number } | null;
+  /** Where a point of skin `instance`'s rest frame is on the page (CSS px), or null. */
+  screenPoint(instance: number, local: [number, number, number]): { x: number; y: number } | null;
+  /** The camera's position (Earth-fixed metres) and heading (degrees). */
+  cameraPose(): { position: [number, number, number]; headingDeg: number };
 }
 
 export interface TelemetryStatus {
@@ -248,6 +284,8 @@ export async function startSkinHarness(options: {
   let windSettings: WindSettings = WIND_CALM;
   let windDriver: SkinWindDriver | undefined;
   let windTickOff: (() => void) | undefined;
+  let pokeClock = 0;
+  let poke: SkinPokeController | undefined;
   const windDriverFor = (seed: number): SkinWindDriver => {
     windDriver ??= new SkinWindDriver(
       part(),
@@ -283,6 +321,29 @@ export async function startSkinHarness(options: {
       y1: Math.min(height, Math.ceil(rect ? rect.y + rect.height : height)),
     };
   }
+
+  /** Where a point of skin `instance`'s rest frame is on the page (CSS px), or null. */
+  const screenPointOf = (
+    instance: number,
+    local: [number, number, number],
+  ): { x: number; y: number } | null => {
+    const skin = part().doc.byInstance.get(instance);
+    const root = tileset.root as { computedTransform?: Matrix4 };
+    if (!skin || !root.computedTransform) return null;
+    const point = Matrix4.multiplyByPoint(
+      root.computedTransform,
+      new Cartesian3(
+        skin.origin[0] + local[0],
+        skin.origin[1] + local[1],
+        skin.origin[2] + local[2],
+      ),
+      new Cartesian3(),
+    );
+    const at = SceneTransforms.worldToWindowCoordinates(scene, point, new Cartesian2());
+    if (!at) return null;
+    const rect = scene.canvas.getBoundingClientRect();
+    return { x: rect.left + at.x, y: rect.top + at.y };
+  };
 
   const handlesFor = (instance: number, motions: HandleMotion[]): Float64Array => {
     const skin = part().doc.byInstance.get(instance);
@@ -334,6 +395,34 @@ export async function startSkinHarness(options: {
         }
       }
       part();
+      await settle(30);
+    },
+    async lookAtSkin(instance, headingDeg, pitchDeg, rangeM) {
+      for (let frame = 0; frame < 1200 && !skinningOf(ASSET); frame += 1) await nextFrame(scene);
+      const skin = part().doc.byInstance.get(instance);
+      const root = tileset.root as { computedTransform?: Matrix4 };
+      if (!skin || !root.computedTransform) throw new Error(`no skin for ${String(instance)}`);
+      const middle = Matrix4.multiplyByPoint(
+        root.computedTransform,
+        new Cartesian3(skin.origin[0], skin.origin[1], skin.origin[2] + skin.scale),
+        new Cartesian3(),
+      );
+      scene.camera.lookAt(
+        middle,
+        new HeadingPitchRange(
+          CesiumMath.toRadians(headingDeg),
+          CesiumMath.toRadians(pitchDeg),
+          rangeM,
+        ),
+      );
+      const objects = (tileset.root as { extras?: { instances?: unknown } }).extras?.instances;
+      for (let frame = 0; frame < 1500; frame += 1) {
+        await nextFrame(scene);
+        const loaded = host
+          ? host.status().active && host.status().loading === 0 && host.status().tiles > 0
+          : tileset.tilesLoaded && splatTilesetOf(tileset).gaussianSplatPrimitive !== undefined;
+        if (loaded && (!objects || useInstances.getState().assets[ASSET])) break;
+      }
       await settle(30);
     },
     skins() {
@@ -640,6 +729,66 @@ export async function startSkinHarness(options: {
     skinHandles(instance) {
       const handles = skinningOf(ASSET)?.instanceHandles(instance);
       return handles ? Array.from(handles) : null;
+    },
+    async pokeOn(t0 = 0) {
+      pokeClock = t0;
+      poke ??= new SkinPokeController(
+        { scene, camera: scene.camera, canvas: scene.canvas },
+        { clock: () => pokeClock },
+      );
+      useSkinPoke.getState().setActive(true);
+      await settle(2);
+    },
+    async pokeAdvance(seconds, fps = 60) {
+      const steps = Math.round(seconds * fps);
+      const start = pokeClock;
+      // The poke lives on a fixed grid too: ticking through the steps without drawing each
+      // one lands where drawing them would.
+      for (let k = 1; k <= steps; k += 1) {
+        pokeClock = start + k / fps;
+        poke?.tick();
+      }
+      await settle(2);
+    },
+    async pokeOff() {
+      useSkinPoke.getState().setActive(false);
+      await settle(2);
+    },
+    pokeStatus() {
+      const grabbed = useSkinPoke.getState().grabbed;
+      return {
+        holding: poke?.holding ?? false,
+        active: poke?.active ?? 0,
+        grabbed: grabbed
+          ? {
+              instance: grabbed.instance,
+              label: grabbed.label,
+              hz: grabbed.hz,
+              movable: grabbed.movable,
+            }
+          : null,
+        cameraInputs: scene.screenSpaceCameraController.enableInputs,
+      };
+    },
+    pokeOverlay(instance) {
+      const over = skinningOf(ASSET)?.instanceOverlay(instance);
+      return over ? Array.from(over) : null;
+    },
+    aimPoint(instance) {
+      const skin = part().doc.byInstance.get(instance);
+      if (!skin) return null;
+      const centre = skin.support[0]?.centre ?? [0, 0, 0.5 * skin.scale];
+      return screenPointOf(instance, [centre[0], centre[1], centre[2]]);
+    },
+    screenPoint(instance, local) {
+      return screenPointOf(instance, local);
+    },
+    cameraPose() {
+      const p = scene.camera.positionWC;
+      return {
+        position: [p.x, p.y, p.z],
+        headingDeg: CesiumMath.toDegrees(scene.camera.heading),
+      };
     },
     hooks() {
       const primitive = splatTilesetOf(tileset).gaussianSplatPrimitive;

@@ -57,6 +57,7 @@ import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail"
 import { instancesRefOf } from "@/lib/instances";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import { createLogger, describeError } from "@/lib/log";
+import { variantsOf } from "@/lib/variants";
 import { useSceneObjects } from "@/state/sceneObjects";
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
@@ -221,11 +222,20 @@ function rootTransformArray(tileset: Cesium3DTileset): number[] {
 }
 
 /**
+ * Whether a scan declares objects with ids (`instances.json`, or objects variants to pick from,
+ * lib/variants.ts): what its tiles must carry ids for.
+ */
+export function declaresInstances(extras: unknown): boolean {
+  return instancesRefOf(extras) !== null || variantsOf(extras).objects.length > 0;
+}
+
+/**
  * Whether a scan declares anything only a GLSL modifier draws: objects (`instances.json`,
- * split objects) or motion (a skin, telemetry). The WebGPU trial draws such a scan with WebGL2.
+ * objects variants, split objects) or motion (a skin, skins variants, telemetry). The WebGPU
+ * trial draws such a scan with WebGL2.
  */
 export function declaresObjectsOrMotion(extras: unknown): boolean {
-  return instancesRefOf(extras) !== null || declaresMotion(extras) || declaresObjects(extras);
+  return declaresInstances(extras) || declaresMotion(extras) || declaresObjects(extras);
 }
 
 /**
@@ -1178,7 +1188,7 @@ export class ScanRendererHost {
   ): Promise<SessionCore | null> {
     if (!backend.streamNative) return null;
     const extras = rootExtrasOf(target.tileset);
-    if (!NATIVE_SOG_FOR_SCANS_WITH_OBJECTS && target.assetId && instancesRefOf(extras) !== null) {
+    if (!NATIVE_SOG_FOR_SCANS_WITH_OBJECTS && target.assetId && declaresInstances(extras)) {
       return null;
     }
     const lodUrl = await findNativeLod(tilesetUrl, extras);

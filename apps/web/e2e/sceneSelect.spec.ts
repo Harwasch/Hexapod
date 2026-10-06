@@ -6,7 +6,10 @@
  * (Tab only from the map or the card: from the page's body it moves focus), a second click
  * there selects that part and a double-click only the tree, the brush painted over a shrub
  * lights it up before the stroke ends and selects it when it does, and Hide in the selection
- * card hides it (its pixels change to the lawn behind it). The card is the HUD's
+ * card hides it (its pixels change to the lawn behind it). Then one stroke across two walls of
+ * the shed selects both together (lib/sceneSelect.ts `bestSet`) -- not the shed, whose roof
+ * was not painted, nor one wall -- and the card names the combination and acts on it as one:
+ * Show only leaves both walls (the roof goes), Hide hides both. The card is the HUD's
  * (features/sites/ObjectCard.tsx), mounted by the harness where the app's right dock puts it.
  *
  * `data/tiles/synthetic-yard/instances/` is the yard segmented against its own ground truth;
@@ -30,8 +33,16 @@ interface State {
   chain: number;
   index: number;
   selected: number | null;
+  selectedIds: number[];
+  combination: { ids: number[]; iou: number } | null;
   mode: string;
-  paint: { best: number | null; iou: number; painted: number; live?: boolean } | null;
+  paint: {
+    ids: number[];
+    best: number | null;
+    iou: number;
+    painted: number;
+    live?: boolean;
+  } | null;
   hidden: number[];
   highlighted: number[];
   custom: number;
@@ -40,6 +51,7 @@ interface State {
 interface Harness {
   view(id: number, headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
   screenOf(id: number): { x: number; y: number; rect: Rect; splats: number } | null;
+  visibleOf(id: number): { x: number; y: number; rect: Rect; splats: number } | null;
   instances(): { id: number; parent: number | null; splats: number }[];
   state(): State;
   coverage(rect?: Rect): number;
@@ -55,6 +67,10 @@ const INSTANCES = "../instances/instances.json";
 const TREE = 1;
 const CROWN = 25;
 const SHRUB = 10;
+/** The shed: its roof, and two of its walls (one each side of a corner from where it is seen). */
+const SHED = 8;
+const ROOF = 90;
+const WALLS = [91, 92] as const;
 
 function harnessHtml(renderer: string): string {
   return `<!doctype html>
@@ -148,10 +164,11 @@ function shot(name: string): string {
 }
 
 for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
-  test(`under ${renderer}, a click selects a tree and again its part, [ cycles, the brush selects a shrub and Hide hides it`, async ({
+  test(`under ${renderer}, a click selects a tree and again its part, [ cycles, the brush selects a shrub and Hide hides it, and two walls painted in one stroke are selected together`, async ({
     page,
   }) => {
-    test.setTimeout(900_000);
+    // Four views of the yard on software GL, each waiting for its tiles to settle.
+    test.setTimeout(1_500_000);
     const errors: string[] = [];
     await open(page, renderer, errors);
     const call = caller(page);
@@ -279,9 +296,105 @@ for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
     // The shrub is gone from where it was drawn: the lawn behind it shows instead.
     expect(change).toBeGreaterThan(0.05);
 
+    // ---- One stroke across two walls of the shed: both, together -------------------------
+    await page.keyboard.press("Escape");
+    expect((await call("state")).mode).toBe("pick");
+    await call("view", SHED, 20, -35, 10);
+    // Where the brush meets each: its splats in front, as the brush sees them.
+    const walls = await Promise.all(WALLS.map((wall) => call("visibleOf", wall)));
+    const roof = await call("visibleOf", ROOF);
+    for (const wall of walls) expect(wall?.splats ?? 0, "a wall in sight").toBeGreaterThan(100);
+    expect(roof?.splats ?? 0, "the roof in sight").toBeGreaterThan(100);
+    await page.keyboard.press("b");
+    // Back and forth over the lower part of the first wall (below the roof), then on across to
+    // the second.
+    const none: Rect = { x: 0, y: 0, width: 0, height: 0 };
+    const zigzag = (box: Rect): { x: number; y: number }[] => {
+      const points: { x: number; y: number }[] = [];
+      for (let r = 0; r <= 4; r += 1) {
+        const y = box.y + box.height * (0.45 + 0.1 * r);
+        const [from, to] = r % 2 ? [0.8, 0.2] : [0.2, 0.8];
+        points.push({ x: box.x + box.width * from, y }, { x: box.x + box.width * to, y });
+      }
+      return points;
+    };
+    const path = [...zigzag(walls[0]?.rect ?? none), ...zigzag(walls[1]?.rect ?? none)];
+    await page.mouse.move(path[0]?.x ?? 0, path[0]?.y ?? 0);
+    await page.mouse.down();
+    for (const point of path.slice(1)) await page.mouse.move(point.x, point.y, { steps: 6 });
+    await page.waitForTimeout(300);
+    await call("frames", 2);
+    const both = await call("state");
+    await page.screenshot({ path: shot(`${renderer}-7-painting-walls.png`) });
+    expect(both.paint?.live).toBe(true);
+    expect(both.paint?.ids.length ?? 0).toBeGreaterThan(0);
+    for (const id of both.paint?.ids ?? []) expect(both.highlighted).toContain(id);
+    await page.mouse.up();
+    const together = await call("state");
+    await page.screenshot({ path: shot(`${renderer}-8-painted-walls.png`) });
+    // Both walls, as a combination -- or the shed, were it as good -- never one wall.
+    const ids = together.selectedIds;
+    expect(ids.every((id) => topOf(id) === SHED)).toBe(true);
+    const label = card.getByTestId("object-label");
+    if (together.combination) {
+      for (const wall of WALLS) expect(ids).toContain(wall);
+      expect(ids).not.toContain(SHED);
+      await expect(label).toHaveAttribute("data-ids", ids.join(" "));
+      await expect(label).toHaveText(/ \+ |parts of/);
+      await expect(card).toContainText("overlap with the painted area");
+      await expect(card.getByTestId("object-save-combination")).toBeVisible();
+    } else {
+      expect(ids).toEqual([SHED]);
+    }
+    for (const id of ids) expect(together.highlighted).toContain(id);
+    // Show only leaves the selection, both walls: the roof and the lawn go.
+    const roofTop = roof?.rect ?? none;
+    const roofRect = { ...roofTop, height: roofTop.height * 0.4 };
+    await call("hold", roofRect);
+    await card.getByRole("button", { name: "Show only" }).click();
+    await call("frames", 30);
+    const only = await call("state");
+    const roofChange = await call("changed", roofRect);
+    await page.screenshot({ path: shot(`${renderer}-9-show-only-walls.png`) });
+    for (const id of ids) expect(only.hidden).not.toContain(id);
+    expect(only.hidden).toContain(TREE);
+    if (together.combination) {
+      expect(only.hidden).toContain(ROOF);
+      expect(roofChange).toBeGreaterThan(0.05);
+    }
+    // Hide hides the selection, both walls.
+    const wallBox = walls[0]?.rect ?? none;
+    const wallRect = {
+      x: wallBox.x + wallBox.width * 0.2,
+      y: wallBox.y + wallBox.height * 0.45,
+      width: wallBox.width * 0.6,
+      height: wallBox.height * 0.4,
+    };
+    await call("hold", wallRect);
+    await card.getByRole("button", { name: "Hide" }).click();
+    await call("frames", 30);
+    const gone = await call("state");
+    const wallChange = await call("changed", wallRect);
+    await page.screenshot({ path: shot(`${renderer}-10-hidden-walls.png`) });
+    for (const id of ids) expect(gone.hidden).toContain(id);
+    expect(gone.selectedIds).toEqual([]);
+    expect(wallChange).toBeGreaterThan(0.05);
+
     test.info().annotations.push({
       type: "measures",
-      description: JSON.stringify({ picked, cycled, drilled, live, painted, change, rect }),
+      description: JSON.stringify({
+        picked,
+        cycled,
+        drilled,
+        live,
+        painted,
+        change,
+        rect,
+        both,
+        together,
+        roofChange,
+        wallChange,
+      }),
     });
     expect(errors.filter((e) => /shader|compile|link|webgl/i.test(e))).toEqual([]);
   });

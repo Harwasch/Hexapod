@@ -4,6 +4,7 @@ import { formatArea, formatLength } from "@twin/geo";
 import { Divider, EmptyState, GlassBadge, GlassButton, GlassTooltip, Kbd } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
+import { recordAction } from "@/state/history";
 import { useMeasurements, type Measurement } from "@/state/measurements";
 import { useSettings } from "@/state/settings";
 import { useUi, type MeasureMode } from "@/state/ui";
@@ -42,9 +43,23 @@ export function MeasurePanel() {
   const mode = useUi((s) => s.measureMode);
   const setMeasureMode = useUi((s) => s.setMeasureMode);
   const items = useMeasurements((s) => s.items);
-  const remove = useMeasurements((s) => s.remove);
-  const clear = useMeasurements((s) => s.clear);
   const units = useSettings((s) => s.units);
+
+  /** Takes measurements off the map and the list as one undoable step (`state/history.ts`). */
+  const removeMeasurements = (gone: readonly Measurement[], label: string): void => {
+    let restores: ((() => void) | null | undefined)[] = [];
+    recordAction(
+      label,
+      () => {
+        restores = gone.map((m) => scene?.measurement.remove(m.id));
+        for (const m of gone) useMeasurements.getState().remove(m.id);
+      },
+      () => {
+        for (const restore of restores) restore?.();
+        useMeasurements.getState().restore(gone);
+      },
+    );
+  };
 
   const close = () => {
     setMeasureMode(null);
@@ -100,10 +115,12 @@ export function MeasurePanel() {
                     size="sm"
                     variant="ghost"
                     aria-label="Remove measurement"
-                    onClick={() => {
-                      scene?.measurement.remove(m.id);
-                      remove(m.id);
-                    }}
+                    onClick={() =>
+                      removeMeasurements(
+                        [m],
+                        `Remove ${(MODES.find((x) => x.id === m.mode)?.label ?? "").toLowerCase()} measurement`,
+                      )
+                    }
                   >
                     <Trash2 size={14} aria-hidden="true" />
                   </GlassButton>
@@ -120,10 +137,12 @@ export function MeasurePanel() {
             size="sm"
             variant="ghost"
             leadingIcon={<X size={14} aria-hidden="true" />}
-            onClick={() => {
-              scene?.measurement.clearAll();
-              clear();
-            }}
+            onClick={() =>
+              removeMeasurements(
+                items,
+                items.length === 1 ? "Clear 1 measurement" : `Clear ${items.length} measurements`,
+              )
+            }
           >
             Clear all
           </GlassButton>

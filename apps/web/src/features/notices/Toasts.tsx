@@ -35,6 +35,19 @@ function ToastItem({ toast }: { toast: Toast }) {
           <p className="toast__title">{toast.title}</p>
           {toast.body && <p className="toast__body">{toast.body}</p>}
         </div>
+        {toast.action && (
+          <GlassButton
+            size="sm"
+            variant="ghost"
+            className="toast__action"
+            onClick={() => {
+              dismiss(toast.id);
+              toast.action?.run();
+            }}
+          >
+            {toast.action.label}
+          </GlassButton>
+        )}
         <GlassButton
           iconOnly
           variant="ghost"

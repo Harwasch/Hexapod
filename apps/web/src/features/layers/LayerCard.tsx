@@ -10,7 +10,9 @@ import { useLayers, defaultRuntime } from "@/state/layers";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
 
-export function LayerCard({ layer }: { layer: Layer }) {
+import { setLayerVisible } from "./layerVisibility";
+
+export function LayerCard({ layer, catalog }: { layer: Layer; catalog: readonly Layer[] }) {
   const scene = useScene();
   const runtime = useLayers((s) => s.runtime[layer.id] ?? defaultRuntime);
   const setAboutLayerId = useUi((s) => s.setAboutLayerId);
@@ -20,8 +22,9 @@ export function LayerCard({ layer }: { layer: Layer }) {
   const worldLocked = isWorld && !env.photorealisticEnabled;
   const setSettings = useSettings((s) => s.set);
   const toggle = (checked: boolean) => {
+    // The photorealistic world is a setting, not a layer step: settings are not undone.
     if (isWorld) setSettings({ world: checked ? "photorealistic" : "open" });
-    else void scene?.layers.setVisible(layer.id, checked);
+    else setLayerVisible(scene, layer, checked, catalog);
   };
 
   const flyToExtent = () => {

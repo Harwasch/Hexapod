@@ -3,3 +3,7 @@ packages:
   - packages/*
 patchedDependencies:
   "@cesium/engine@26.3.0": patches/@cesium__engine@26.3.0.patch
+overrides:
+  # GHSA-68fv-2mgg-jv7q (high): source-map-js before 1.2.2, through jsdom > css-tree and
+  # postcss. Drop once both pull 1.2.2 or later on their own.
+  source-map-js: ^1.2.2

@@ -22,6 +22,7 @@ import { useHotkey } from "@/lib/hotkeys";
 import { useLayers } from "@/state/layers";
 import { useMission } from "@/state/mission";
 
+import { setLayerVisible } from "../layers/layerVisibility";
 import { useQuickLayers } from "../mission/quickLayers";
 import { useAgentCommand } from "../mission/useAgentCommand";
 import { useMissionActions } from "../mission/useMissionActions";
@@ -194,7 +195,7 @@ export function CommandBox() {
               label: `${on ? "Hide" : "Show"} ${layer.name}`,
               sub: `Layer · ${layer.category}`,
               keywords: `layer toggle ${layer.slug.replace(/-/g, " ")} ${layer.category}`,
-              run: () => void scene?.layers.setVisible(layer.id, !on),
+              run: () => setLayerVisible(scene, layer, !on, layerCatalog.data ?? []),
             };
           }),
         ]),

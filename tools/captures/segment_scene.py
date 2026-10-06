@@ -120,7 +120,10 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:  # typing.Self is 3.11; the GPU images run 3.10 (gsplat's wheel)
+    from typing import Self
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -1641,16 +1644,24 @@ def lift(
     edge: float,
     levels: int,
     cell_reach: np.ndarray | None = None,
+    exclude: np.ndarray | None = None,
 ) -> Lifted:
     """Instances from the views' votes (module docstring: stages 1-2, fill, hierarchy).
     `cell_reach`: per cell, how far (metres) its unseen splats reach (twice their largest
     scale); an unseen cell takes the nearest seen cell's labels within `FILL_CELLS` edges or
-    that reach, whichever is farther."""
+    that reach, whichever is farther. `exclude` (per cell, bool): cells kept out of
+    everything -- in no mask, no edge of the graph, never absorbed, never filled, never a
+    source of a fill -- so they carry no instance (the ground, `segment_ground_first`)."""
     n_cells = len(centroids)
     a, b = _cell_graph(centroids, edge)
     seen = np.zeros(n_cells, bool)
     for v in votes:
         seen[v.cells] = True
+    out = np.zeros(n_cells, bool) if exclude is None else np.asarray(exclude, bool)
+    if out.any():
+        keep = ~(out[a] | out[b])
+        a, b = a[keep], b[keep]
+        seen &= ~out
     labels = np.zeros((levels, n_cells), np.int64)
     stats: dict[str, object] = {
         "cells": n_cells,
@@ -1661,6 +1672,9 @@ def lift(
     for v in votes:
         for level in range(levels):
             in_mask[level, v.cells[v.masks[level] >= 0]] = True
+    in_mask[:, out] = False
+    if out.any():
+        stats["excludedCells"] = int(out.sum())
     for level in range(levels):
         joined, rounds = _grow(votes, level, in_mask[level], a, b, cell_counts)
         joined = _absorb(joined, a, b, seen)
@@ -1673,7 +1687,7 @@ def lift(
         joined[valid & small[np.maximum(joined, 0)]] = -1
         labels[level] = joined + 1
         stats[f"level{level}Instances"] = int(np.unique(joined[joined >= 0]).size)
-    unseen = np.flatnonzero(~seen)
+    unseen = np.flatnonzero(~seen & ~out)
     if unseen.size and seen.any():
         seen_index = np.flatnonzero(seen)
         bound = np.full(unseen.size, FILL_CELLS * edge)
@@ -2730,6 +2744,8 @@ def segment(
     describe_kinds: Sequence[str] | None = None,
     by_kind: dict[str, np.ndarray] | None = None,
     debug_dir: Path | None = None,
+    exclude: np.ndarray | None = None,
+    refine=None,
 ) -> Segmentation:
     """Cells, views, masks, votes, lifting and meaning, for a scan held in memory.
 
@@ -2754,7 +2770,13 @@ def segment(
     each) aimed at what is still without an instance, each followed by a lift of all the
     votes; a round is not run once less than `COVERAGE_MIN_SHARE` of the splats is left.
     `describe_kinds`, `by_kind`, `debug_dir`: `describe`'s `kinds`, `by_kind` and
-    `debug_dir` (which also gets a sheet of some views, as drawn and as sampled)."""
+    `debug_dir` (which also gets a sheet of some views, as drawn and as sampled).
+
+    `exclude` (per cell of `cells`): kept out of the lift (`lift`'s `exclude`) and of the
+    coverage rounds' targets. `refine(lifted, render) -> (lifted, views)`, when given, is
+    called after the last lift, while the render processes still run: `render(cameras)`
+    yields their views as the lift's were made (the image by `renderer`); the views it
+    returns are kept for `describe` with the others."""
     timings: dict[str, float] = {}
     mark = time.perf_counter()
     cell, centroids, counts, edge = cells or supervoxels(splats.positions)
@@ -2852,11 +2874,12 @@ def segment(
     # views carries the instance of what it hangs over).
     reach = np.zeros(n_cells)
     np.maximum.at(reach, cell, 2.0 * largest)
+    excluded = np.zeros(n_cells, bool) if exclude is None else np.asarray(exclude, bool)
 
     def lift_all() -> tuple[Lifted, int]:
         levels = max((v.masks.shape[0] for v in view_votes), default=1)
         votes = [_pad_levels(v, levels) for v in view_votes]
-        lifted = lift(votes, centroids, counts, edge, levels, cell_reach=reach)
+        lifted = lift(votes, centroids, counts, edge, levels, cell_reach=reach, exclude=exclude)
         lifted.stats["cellEdgeM"] = round(edge, 4)
         lifted.stats["levels"] = levels
         return lifted, levels
@@ -2868,7 +2891,7 @@ def segment(
         lifted, levels = lift_all()
         timings["liftS"] = time.perf_counter() - mark
         for _ in range(coverage_rounds):
-            missing = np.where(lifted.cell_id == 0, counts, 0)
+            missing = np.where((lifted.cell_id == 0) & ~excluded, counts, 0)
             share = float(missing.sum()) / max(float(counts.sum()), 1.0)
             if share < COVERAGE_MIN_SHARE:
                 break
@@ -2882,7 +2905,24 @@ def segment(
             mark = time.perf_counter()
             lifted, levels = lift_all()
             timings["liftS"] += time.perf_counter() - mark
-    final = np.where(lifted.cell_id == 0, counts, 0).sum() / max(float(counts.sum()), 1.0)
+        if refine is not None and pool is not None:
+            mark = time.perf_counter()
+
+            def render(batch: Sequence[Camera]) -> Iterator[View]:
+                for view in pool.views(batch):
+                    if renderer is not None:
+                        image = cached_raster(
+                            cache, renderer, view_splats, view.camera, n_cells, tag, index
+                        )
+                        view = View(view.camera, image, view.cell, view.purity, view.rgb)
+                    yield view
+
+            lifted, extra = refine(lifted, render)
+            views.extend(extra)
+            timings["refineS"] = time.perf_counter() - mark
+    final = np.where((lifted.cell_id == 0) & ~excluded, counts, 0).sum() / max(
+        float(counts[~excluded].sum()), 1.0
+    )
     lifted.stats["coverageRounds"] = coverage
     lifted.stats["unassignedShare"] = round(float(final), 4)
     lifted.stats["views"] = len(views)

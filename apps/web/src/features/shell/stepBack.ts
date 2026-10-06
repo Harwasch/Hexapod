@@ -1,4 +1,5 @@
 import { useMission } from "@/state/mission";
+import { useSkinPoke } from "@/state/skinPoke";
 import { selectedId, useSceneSelect } from "@/state/sceneSelect";
 import { useUi } from "@/state/ui";
 
@@ -18,6 +19,7 @@ export type StepBack =
   | "activity"
   | "write-token"
   | "brush"
+  | "poke"
   | "measure"
   | "switcher"
   | "object"
@@ -33,7 +35,8 @@ export type StepBack =
  *
  * 1. What floats over the HUD: the map's menu (a right-click or long press on the map), the
  *    shortcut sheet, the phone's More sheet, the agent's activity log, the write-token prompt.
- * 2. A mode that holds the pointer: the brush (it holds the camera too), then measuring.
+ * 2. A mode that holds the pointer: the brush (it holds the camera too), the poke tool, then
+ *    measuring.
  * 3. The site switcher, a popover too.
  * 4. What is selected, the latest thing first: an object of a scan; a machine's camera feeds,
  *    the plan composer, then the machine or zone.
@@ -70,6 +73,10 @@ export function stepBack(scene: StepBackScene | null): StepBack | null {
   if (objects.mode === "paint") {
     if (!scene?.sceneSelect.escape()) objects.setMode("pick");
     return "brush";
+  }
+  if (useSkinPoke.getState().active) {
+    useSkinPoke.getState().setActive(false);
+    return "poke";
   }
   if (ui.measureMode) {
     ui.setMeasureMode(null);

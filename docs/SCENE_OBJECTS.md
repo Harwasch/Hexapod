@@ -165,6 +165,128 @@ guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
 | pumpkin | 387,813        | 6 cores (9), 16 GiB (32) | 15 min | 0.30     |
 | camp    | 22,577,243     | 6 cores (9), 22 GiB (44) | 45 min | 0.94     |
 
+## 3b. The ground pass, and bake-off candidate A "ground first"
+
+The segmentation bake-off (2026-10-05) runs three candidates on the same scans and publishes
+each as a variant the owner switches to in the app (`extras.variants.objects`, below). All
+three share the **ground pass** and the **ground schema** of this section.
+
+**Ground pass** (`tools/captures/ground_pass.py`, CPU, NumPy and SciPy; its API is at the
+top of the module and is stable): the terrain under any splat scan, every splat's height
+above it, and a label per splat -- `ground`, `above`, `below` (floaters under the
+surface) and `unknown` (in the ground layer where no ground was seen near it: under a
+canopy, under an object). The method is SMRF (Pingel et al. 2013: openings with growing
+windows; what rises above one by more than slope x radius is an object) on a robust lowest
+surface (transparent splats and blobs left out, a low quantile of each cell's lowest layer,
+cells deep under the low end of their neighbourhood dropped as floaters), and the terrain
+under objects interpolated harmonically, so it is flat under a pumpkin rather than raised.
+The repo's slope filter (`scene_plants.ground_model`) erodes a cone from each cell's lowest
+splat: one floater dents it for metres, and it bulges up under an object by slope x half
+its width. CSF needs PDAL or a compiled binding for nothing SMRF lacks here. The ground
+layer's thickness comes from the scan (what rests on the terrain: median + 3 sigma, within
+a floor from the splats' spacing and the ground's roughness, and 0.3 m). Measured: spool
+39% ground (layer 8 cm), pumpkin 80% (the hay bed, layer capped at 30 cm), ~0.5 s each; the
+camp (22.6 M splats) in ~100 s. What geometry cannot know: a board lying on the ground (the
+spool's bottom flange) is ground to any height filter.
+
+**Candidate A, ground first** (`tools/captures/segment_ground_first.py`, research §1.3):
+
+1. The ground pass; voxel cells cut at the ground surface (`ground_pass.split_cells`).
+2. `segment_scene.segment` with SAM 2.1 **large**, the ground's cells kept out of the object
+   graph, `_absorb` and the fills (`exclude`): an object can never absorb ground.
+3. A **refine pass** (the `refine` hook, while the render processes still run): each
+   top-level object (up to 32) seen from 10 views around its base (5 sides, 10° and 40°
+   up), framed so its box fills 80% of the frame, SAM prompted with its tight box (2nd-98th
+   percentiles, extended down to the terrain). Of SAM's answers (its single one and its
+   three multimask ones) the largest is used that holds 60% of the object's own pixels,
+   at most 15% of other things', 10% outside the box and 12% ground beyond the object's
+   footprint; a view with none does not vote. A ground cell inside the (padded) box that is
+   in its mask in 60% of the views it is seen in is claimed by it (the flange); a cell of
+   it in its mask in at most 10% of 4+ views is let go; a smaller top-level object 80%
+   inside the box and 70% inside its masks becomes a part of it (the flange's rim, the
+   planks). Run 37383770486 framed the views by the box's bounding sphere instead, saw the
+   spool at a third of the frame, and SAM answered about the ground in half its views; the
+   fix was checked on the CPU with SAM tiny on the spool's views: the near-ground splats
+   under the spool in it 3% -> 63%, the ground ring around it taken 2.8%.
+4. A **stuff pass**: low objects (90th percentile under 2 ground layers) that describe as
+   grass, ground or paths are ground cover, not things. Every ground splat is classified
+   into the cover classes of `data/ground_cover.json` (grass, tall grass, moss, dirt, mud,
+   sand, gravel, rock, asphalt, concrete, paving, wooden deck, mulch, leaf litter, forest
+   floor, hay, crops, ploughed field, snow, ice, water, artificial turf, trail; with
+   contrast prompts that soak up things) by SigLIP 2 pooled inside each view's own SAM
+   masks (crops of the gsplat image, the rest black, the mask closed over the holes its
+   sparse pixel ownership leaves; reconstructed from the per-cell votes, so no mask is
+   kept), each crop's vote weighed by how much it reads as ground at all, smoothed among
+   neighbouring ground cells, and cut into connected regions. Run 37383770486 cropped the
+   CPU's point samples without closing: speckle on black, which read the pumpkin's hay as
+   dirt and leaf litter. Closing the masks was not enough: on the gsplat images, masked or
+   not, SigLIP 2 base reads that hay as "brown earth" or "bare dirt" ("hay" and "straw" are
+   not in its top 14 of 25 probes, all cosines 0.06-0.09). So SigLIP groups and the
+   vision-language model names: each of the 8 largest classes is shown to Qwen3-VL (its
+   pixels in the view with the most of them, the rest dimmed, and an undimmed close look
+   where it is densest), which picks one of the same class names (`COVER_PROMPT`); its
+   pick is the class's word (`nameSource: "vlm"`), and classes it gives one word become
+   one class. Checked on the CPU with the 2B model on the pumpkin's views: the code path
+   works, and the 2B answers "moss" for that hay, whether asked an open question or given
+   the list. The runs use the 4B, whose answers are in each run's `coverAsked`. In run
+   37397740104 it kept SigLIP's "hay" class as Hay but called the classes SigLIP read as
+   moss, forest floor and mulch Moss. So the pumpkin's hay bed came out 37% Hay, 58% Moss
+   and 5% Mud (SigLIP's dirt), in patches. The spool's ground came out 58% Moss and 37%
+   Grass. The cover classes are the weakest part of this candidate: SigLIP's grouping of
+   the ground is noisy, and the word the VLM gives a group is only as good as one crop.
+5. **Naming**: Qwen3-VL 4B Instruct (Apache-2.0) shown each top-level thing (and the parts
+   of the six largest) in context and alone, answering JSON; its `name` is the object's.
+   The crops come from the view that shows the thing whole with the most pixels, unless
+   that view has under a quarter of the pixels of the best view overall. Run 37394072441
+   halved the pixels of a view that cuts the thing instead, but tested the cut on a robust
+   box (1st-99th percentiles) that never reaches the frame's edge. So it named the spool
+   "Stone" from a close view of its drum under the cut-off top, and the red pumpkin "Hay"
+   from a view that cut it.
+
+**The ground in `instances.json`** (every candidate writes it so): the Objects panel's top
+level is the scan's categories, so the top-level "Ground" is the category **Ground & soil**
+(`category: "ground"`), and its rows -- clickable, hideable, highlightable like any
+object -- are the cover classes:
+
+```jsonc
+// a cover class: top level, one per class present
+{ "id": 352, "parent": null, "level": 0, "kind": "ground", "category": "ground",
+  "cover": "grass",                         // data/ground_cover.json's class id
+  "name": "Grass", "nameSource": "ground-cover",  // "vlm" when the VLM chose the word
+  "tags": [{ "label": "grass", "score": 0.83 }],   // the class, its mean confidence
+  "behaviour": "static", "splats": 0, ... }       // 0: its splats carry its regions' ids
+// a region of it: connected ground of that class
+{ "id": 353, "parent": 352, "level": 1, "kind": "ground", "category": "ground",
+  "cover": "grass", "name": "Grass", ... }
+// a thing
+{ "id": 2, "parent": null, "kind": "thing", "name": "Cable spool", "nameSource": "vlm",
+  "wholeOrPart": "whole", "material": "wood", "movable": false, "scaleM": 1.31, ... }
+```
+
+There is no Ground root instance: one with `category: "ground"` would make the classes its
+parts, and the panel would list one "Ground" with nothing under it. A class with one region
+has no children (its splats carry its id). A click in the scene selects the class, a second
+click its region. Root `variant: {name, label, about}` and `ground: {method, layerM, cellM,
+seenShare, cover}` say what made the file. Still `hexapod.instances` v1: a reader that
+knows none of `kind`, `cover`, `name` reads it as before. The viewer honours `name` before
+any tag (`lib/categories.ts` object names, `lib/sceneSelect.ts` the selection card,
+`lib/instances.ts` search).
+
+**Running and publishing a variant.** segment.yml runs a candidate on a `seg-*` push whose
+head commit says `[segment|names=spool,pumpkin|variant=ground-first]`
+(`infra/modal/segment.py` `VARIANT_SCRIPTS`; each call stopped after 50 min, so its worst
+cost is known, ~$1 on the L4; `crop=x0,y0,x1,y1` segments a part of a big scan, every tile
+still bound: candidate A on 8.15 M of the camp's splats, `crop=-5,8,30,33`, did not finish
+in the 50 min, run 37398872516, where the spool and the pumpkin take under 4), and keeps `cache.tar` (every view's masks and image, the
+refine pass's box masks, the names) so a run can be re-assembled on a CPU. publish-instances
+publishes a run's artifact as a variant with `variant=<name>` (dispatch input, or
+`[instances|run=<id>|scans=spool,pumpkin|variant=ground-first|publish]` on a `bakeoff-*`
+push): the files go to `variants/objects/<name>/`, and `extras.variants.objects` gets
+`{name, label, about, instances}`. The API replaces an extras key whole, so
+`attach_sidecars.attach` re-reads the asset's current `extras.variants` just before its
+request and merges the entry in by name (`with_variant`), every other system and variant
+kept. Today's `extras.instances` stays the default.
+
 ## 4. Data contract (v1)
 
 Written beside the measured tiles; read by the viewer, the skinning step and the engine.
@@ -220,6 +342,8 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
 
 The measured tileset's `root.extras.instances = { "uri": "instances.json", "count": n }`, so
 the viewer finds it without probing (the same pattern as `viewCones` and `inferredLayers`).
+Other methods' objects, fills and skins for the same scan are declared beside them in
+`extras.variants` ("Variants", below).
 
 **In the viewer**, hide and highlight work under every splat renderer, from the same per-tile
 binding: CesiumJS's own primitive (`cesium/splatInstances.ts`: the visibility chain and the
@@ -256,6 +380,13 @@ the representation switcher:
   "water"); a typed property filter (`vegetation > 0.5`, `behaviour:movable`) still works but
   has no buttons;
 - one "Reset" whenever anything is hidden or highlighted, with what is hidden in words.
+- every change of what is hidden (an eye, Hide all, Show only, Reset, and the selection card's
+  Hide and Show only) is one step of the app's undo (`Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`;
+  `state/history.ts`, docs/MISSION_CONTROL.md "Undo and redo"): undo puts back the scan's
+  hidden set exactly, a category partly hidden included, and says what it took back
+  ("Undid: Hide Pumpkin 3"). The highlight and the search's words are not undone: they are a
+  selection, not a change to the scan. The steps are the site's: they are dropped when another
+  site becomes active, and a step of a scan whose table was loaded again no longer applies.
 - selecting in the scene (a click, the cycle keys or the brush; the HUD's selection card,
   `ObjectCard.tsx`) opens that object's category and marks it; clicking an object in the panel
   selects it in the scene, so the card offers its actions, and flies to it as the card's Fly to
@@ -311,12 +442,23 @@ splat's ancestor chain owns it (a tree, not each branch), so the skin is smooth 
   j acts fully". Signed, never normalised to sum to one.
 - **Handles per object**: `m = clamp(round(8 + 2·log2(d / 2 m)), 8, 16)` for a bounds diagonal
   `d` (8 at 2 m, 12 at 8 m, 16 from 32 m), and at most its node count allows. Nodes: an eighth
-  of its splats, 48 to 600; at most 4000 integration points.
+  of its splats, 48 to 600; at most 4000 integration points, chosen (with the nodes) from at
+  most 120,000 of its splats (`FIT_POOL`: a seeded random subset of a bigger object's; the
+  weights are still evaluated at every splat). A handle policy may choose another `m` (§9:
+  the stiffness-aware rule gives a rigid object 1, a big tree 32).
 - **`skin.bin`**: one 16-byte row per **skinned** splat (unskinned splats take none), in each
   tile's order from `row`, tiles in checksum order. Byte `k` is handle `k + 1`'s weight,
   `int8 = round(127·w)` (weight = byte × `weights.scale`), unused bytes 0. 16 bytes is one
   RGBA32UI texel, the viewer's upload unit. Merged level-of-detail parents are evaluated at
-  their own position (the RKPM basis is defined everywhere), not fitted.
+  their own position (the RKPM basis is defined everywhere), not fitted. A file with any skin
+  of more than 16 handles has `weights.rowBytes` 32: two texels a splat, bytes 16..31 the
+  weights of handles 17..32 (every renderer reads the second texel from a second weight
+  texture or stream). A skin of **one** handle (only the constant field: a rigid object) takes
+  no rows at all; its splats carry its id in `tiles` and nothing in `skin.bin`.
+- **Optional per skin** (written by the bake-off's builder, §9): `traits` (`label`,
+  `category`, `behaviour`, `properties`: the instance's, for a viewer whose
+  `instances.json` does not list it -- the wind's prior and the poke read them) and `class`
+  (the handle policy's stiffness class).
 - **Dense, not top-k** (measured, `skin_scene.sparsity_report`, synthetic tree, 13 handles,
   random handles whose largest displacement is 5% of its half-height; error as a share of the
   rms displacement):
@@ -833,7 +975,10 @@ the tiles the renderer draws now:
   (`features/mission/SelectionCard`) shows an object as it shows a machine or a zone, in the
   right dock (a bottom sheet on a phone): the name (top tag, else the category, never an id)
   and the category, "◀ 1 of 3 ▶", **Hide**, **Show only**, **Fly to**, the brush and **Clear**
-  (its close button). One selection at a time: picking an object clears a machine or zone, and
+  (its close button). A combination is named by its members and what holds them, "Top flange +
+  drum + Bottom flange (of Spool)" (`combinationLabel`; with more than three members, a name
+  said twice or too long a name, "4 parts of Spool" or "4 objects"), says its overlap with the
+  painted area, and offers **Save as object**. One selection at a time: picking an object clears a machine or zone, and
   the reverse (`state/oneSelection.ts`). The selection is the objects store's highlight: the
   controller writes it through `useInstances.highlight`, expanded to descendants. **Fly to**
   goes through the app's camera controller (`CameraController.flyToObject`): the pace and
@@ -846,17 +991,61 @@ the tiles the renderer draws now:
   cell is under a stroke. Shift adds to the painted area, Alt takes away, and a plain stroke
   starts again. A touch screen has none of those keys: there the card offers **New / Add /
   Remove** for what a stroke does, and a brush size in place of Alt+wheel. The match is the
-  instance, at any level, with the best intersection over union. The IoU is weighted by
-  opacity and counts only visible splats, so an object's hidden back does not count against
-  it. While the stroke is painted, its best match so far is highlighted (at most every
-  100 ms) and the card says its overlap, so you can stop once the right object lights up; it
-  is selected when the stroke ends. Matching every visible splat at every move would be too
-  slow (the camp has 22.6 M), so the view is indexed once when it is projected
+  combination of instances, at whatever levels fit, whose union has the best intersection over
+  union with the painted area (see **Combinations** below): one instance, or several. The IoU
+  is weighted by opacity and counts only visible splats, so an object's hidden back does not
+  count against it. While the stroke is painted, its best match so far is highlighted (at most
+  every 100 ms) and the card says its overlap, so you can stop once the right objects light
+  up; it is selected when the stroke ends. Matching every visible splat at every move would be
+  too slow (the camp has 22.6 M), so the view is indexed once when it is projected
   (`paintIndex`): per 3 px cell, the visible splats' leaf ids and weights, and per instance its
-  visible weight rolled up its chain. A match (`bestByIoUIndexed`) then walks only the painted
-  cells and the instances they hold, and gives the same answer as matching every splat.
-- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the card offers
-  **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  visible weight rolled up its chain and its parent. A match then walks only the painted cells
+  and the instances they hold (`paintSumsIndexed`), and gives the same sums, so the same
+  answer, as matching every splat (`paintSums`).
+- **Combinations** (`bestSet`). Painting is for selecting the right combination or level of
+  the hierarchy: painted over a spool's bottom flange and its top flange and drum, it selects
+  both, not one then the other. The members are instances from disjoint subtrees (none holds
+  another), so the union's painted and visible weights are the members' sums and a set's IoU
+  is `Σinter / (painted + Σvisible − Σinter)`, from the per-instance sums a match gathers
+  anyway.
+  - The best set is found exactly, not greedily. A greedy search starts from the best single
+    instance and can never trade a parent for its children (the spool, which also holds ground
+    nobody painted, against the two flanges that were). Dinkelbach's method from the best
+    single instance's IoU λ reads the antichain maximising `Σ (inter − λ·(visible − inter))`
+    off the hierarchy bottom-up (an instance, or the best of its children, whichever is more),
+    takes its IoU as the next λ, and stops when that no longer rises: three or four passes
+    over the instances met.
+  - Then the answer is made simple at little cost. Members that add little go, the least
+    first, while the set's IoU stays within 2% of the best's (`PAINT_SET_GAIN`): a sliver of a
+    neighbour under the brush's edge is not a part. Then members that share an ancestor become
+    that ancestor, the deepest first, while the IoU stays within 3% (`PAINT_PARENT_SLACK`): the
+    whole spool when it is as good as its parts, its parts when the spool also holds unpainted
+    ground. One instance stays one instance. Both are shares of the IoU, not differences: in a
+    loosely painted area (IoU 0.1) a member that is half of it adds only 0.01, and stays.
+  - The members are listed largest on screen first (ascending ids among equals), the same for
+    the same sums, so the same painted area gives the same set however its splats were
+    gathered.
+  - While a stroke is painted, the match shown is kept until another's IoU is better by more
+    than 3% (`PAINT_STEADY`, `steadySet`), so two near-equal answers do not take turns at every
+    preview; the stroke's end goes by the same rule, so what is lit is what is selected.
+  - Cost, on a camp-sized synthetic view (2.16 M visible splats, 48,000 instances, 1440 × 900
+    px): an 18 px stroke across a third of the screen meets 1,003 instances, and the best set
+    takes 1.3–2.4 ms against 0.9–1.1 ms for the best single instance; the largest brush (120 px)
+    scrubbed over half the screen meets 25,488, and takes about 13 ms against 8 ms.
+  - A combination is selected as one (`state/sceneSelect.ts` `selectSet`): its first member is
+    candidate 0 and stands for the combination, and what its members are parts of together
+    (`commonChain`) are the coarser candidates, so `]` goes up to the spool and `[` back.
+    `selectedIds` is what is selected, whichever it is, and the highlight, **Hide**, **Show
+    only** and **Fly to** (the sphere around the members') act on all of it. A click is
+    unchanged: the whole object first, again for its parts; a click from a combination starts
+    at the whole object.
+- **Painted objects** (`lib/customSets.ts`). When the best set's IoU is below 0.5, the card
+  offers **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  - **Save as object** keeps a combination the same way (`setFromInstances`): as every splat
+    its members carry in every tile of the scan, at every level of detail, not only those drawn
+    or painted. It is kept as splats, not as the members' ids: the format draws a set by its
+    splats, and splats stay the same object if the scan is segmented again, where ids would
+    name others.
   - It is stored per scan in this browser (`localStorage`,
     `hexapod.customObjects.<asset>`) as `{ key, name, tiles: { checksum: [start, length, …] },
 splats, bounds }`.
@@ -865,6 +1054,10 @@ splats, bounds }`.
     top-level instance. Every renderer reads ids by checksum from that document
     (`paintedDocOf`, `SplatInstances.setDoc`), so it hides and highlights like any instance.
   - While the set exists, its splats no longer carry their segmented id.
+  - Making one and deleting one are steps of the app's undo (`state/sceneSelect.ts`): undo
+    puts the scan's painted objects back as they were, stored again, so a deleted one returns
+    at its place and the later ones keep their ids; a selection of a painted object is cleared
+    when they change under it.
 
 The controller is `cesium/sceneSelect/SceneSelectController.ts`, and its state is in
 `state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts` and
@@ -876,11 +1069,108 @@ card where the app's dock puts it) under PlayCanvas, Spark and CesiumJS. The e2e
 - `]` goes to the parent and `[` comes back; Tab and Shift+Tab do the same from the map, and
   from the page's body Tab moves focus instead;
 - painting over shrub 10 selects that shrub;
-- **Hide** in the card removes it from the frame.
+- **Hide** in the card removes it from the frame;
+- one stroke across two walls of the shed (8) selects both walls together, not the shed (whose
+  roof was not painted) and not one wall; the card names the combination, **Show only** leaves
+  both walls (the roof goes from the frame) and **Hide** hides both.
 
 In the app, `e2e/app.spec.ts` ("a scan object in the selection card") checks the keys and the
 card around a selection: `B` and `V` once each, one Escape one step, Tab on the body, an object
 replacing a machine's card, and the touch screen's brush.
+
+### Variants: other methods for the same scan (bake-offs)
+
+A bake-off publishes other methods' objects, fills and skins for the **same measured splats**,
+for the owner to switch between in the live app and judge by eye. Labels stay visible: it is
+not blind. Each candidate's output goes beside the measured tiles under
+`variants/<system>/<name>/` (`<system>` is `objects`, `fill` or `skins`), in today's formats --
+an `instances.json` (above), a `skin.json` with its `skin.bin`, an inferred tileset whose root
+carries `extras.evidence` -- and the measured tileset's root declares them all in
+`extras.variants`:
+
+```json
+"variants": {
+  "objects": [{"name": "ground-first", "label": "A · Ground first", "about": "One plain sentence on what this method does.", "instances": "variants/objects/ground-first/instances.json"}],
+  "fill":    [{"name": "vace-14b", "label": "Wan2.1-VACE 14B", "about": "…", "inferredLayers": [{"uri": "variants/fill/vace-14b/tileset.json", "evidence": {"kind": "inferred", "filler": "wan2.1-vace-14b", "views": 0, "gaussians": 0, "meanConfidence": 0.0}}]}],
+  "skins":   [{"name": "freeform", "label": "FreeForm (eigenmodes)", "about": "…", "skin": "variants/skins/freeform/skin.json"}]
+}
+```
+
+- **Paths** are relative to the measured `tileset.json`, as `extras.instances`, `extras.skin`
+  and `extras.inferredLayers` are, and resolve the same way (a signed URL's query is kept).
+- **`name`** is unique within its system (a repeat keeps the first); **`label`** is what the
+  viewer shows (the name when absent); **`about`** is one plain sentence, shown under the pick;
+  **`look`** (optional) is one short line on what to look for to judge the method, shown under
+  `about` in place of its system's default (`LOOK_FOR` in `lib/variants.ts`).
+- **Today stays the default.** The scan's own `extras.instances`, `extras.skin` and
+  `extras.inferredLayers` are "Today": a viewer who never picks a variant sees exactly what it
+  saw before, and a system with no Today (no `extras.skin`, say) is "nothing" until a variant
+  is picked.
+- **Registering** adds or replaces the entry of the same `name` within its system, and never
+  removes another system's entries or other variants.
+- **Read defensively** (`apps/web/src/lib/variants.ts` `variantsOf`): an entry without a name,
+  without its system's file, or with an `inferredLayers` entry that does not read is skipped;
+  the rest of the list stands. An `inferredLayers: []` is a legitimate "no fill" method.
+- **Ids.** A skins variant names instance ids (`skins[].instance`), and the wind reads each
+  skin's object's properties from whichever objects are shown: a skins variant fitted on
+  Today's objects moves the same objects under an objects variant only where the two files
+  agree on those ids. Telemetry and `materials.json` name Today's ids likewise.
+- **The API** (`apps/api/app/services/sidecars.py` `KINDS`) does not know `variants` yet: an
+  attach carries it onto the same tiles as any unrecognised key, and a republish of new tiles
+  drops it and flags the asset ("Unrecognised sidecar extras.variants needs re-attaching").
+
+**In the viewer.** A scan that declares variants gets a **Methods** button beside the
+representation switcher (`features/sites/CompareMethods.tsx`): a panel with one row per system
+it offers -- Objects, Fill, Motion -- each with Today and the variants by label in one radio
+group (side by side while the labels fit one line; otherwise one row a method, the picked
+row lit as a segment is -- the app's segmented control, stacked; never a native select), the
+pick's `about` beneath, and under it what to look for (the variant's `look`, else the
+system's). A pick is
+kept per scan for the session (`state/variants.ts`, `sessionStorage`), and swaps what is drawn
+in place, with no reload and the camera where it is, under every renderer:
+
+- **Objects** (`cesium/splatInstances.ts` `attachInstances`): the variant's `instances.json`
+  is loaded and swapped in where the old one was drawn -- the same hooks, a new table -- the
+  scan's selection cleared (its ids were the old file's) and its painted objects
+  (`lib/customSets.ts`, keyed by splat) drawn over the new file. The objects panel lists the
+  new file's categories; PlayCanvas and Spark rebind their tiles' ids through the store
+  (`scanView/scanInstances.ts`).
+- **Fill** (`cesium/inferredLayers.ts`): the drawn layers are unloaded and the variant's
+  loaded. Inferred layers are CesiumJS's under every renderer (below).
+- **Motion** (`cesium/splatSkin.ts` `attachSkin`): the variant's skin replaces the skin part;
+  the wind makes a driver for the new part and keeps blowing (`LivingSurveyManager`), and the
+  overlay rebinds its tiles' skin weights (`scanView/scanMotion.ts`).
+
+A pick whose files do not load says so in its row ("Did not load: …") and draws nothing for
+that system rather than the previous pick. A scan with objects or skins variants counts as a
+scan with objects or motion: the WebGPU trial draws it with WebGL2, and the overlay streams its
+3D Tiles rather than a native package (`ScanRendererHost.declaresInstances`).
+
+**Inferred style.** How inferred layers are drawn is a viewer's setting
+(`inferredStyle`, kept on the device; hidden until chosen), beside the switcher as
+**Show · Highlight · Hide**, with the one-line legend "Inferred: generated where no camera
+saw. Not measured." while they are drawn. Highlight is the engine patch's colour hook on each
+layer's own splat primitive (never the measured scan's): pulled toward purple
+(`INFERRED_PURPLE`), hatched in 0.35 m bands across the layer, and a little see-through
+(`INFERRED_HIGHLIGHT`). Inferred layers are drawn by CesiumJS whichever renderer draws the
+measured splats: under PlayCanvas or Spark the scan's own tileset is hidden and drawn on the
+overlay, while its layers stay on the globe's canvas under it, so where both cover a pixel the
+measured splats are in front. Picking a fill while the style is Hide switches it to Show.
+
+**Fixture and checks.** The synthetic yard has two variants per system
+(`data/tiles/synthetic-yard/variants/`, written by `tools/captures/yard_variants.py`, declared
+in its `variants.json` with paths relative to `splat/tileset.json`): objects `whole` (the 24
+top-level objects, every part folded in, with categories) and `parts` (all 103, the trees' and
+the shed's parts in categories of their own); fills `hedge` (beyond the west edge) and `mound`
+(beyond the east edge); skins `tree` (the big tree only) and `small` (the snag and two
+shrubs). `e2e/variants.spec.ts` (`src/dev/variantsHarness.ts`, the app's panels mounted beside
+the scan) runs under PlayCanvas, Spark and CesiumJS and checks that picking an objects variant
+changes what the objects panel lists, picking a fill draws its layer and not the other's,
+Highlight turns the layer's pixels purple and changes no other pixel, Hide leaves the frame
+the scan's own, and a skins pick replaces the skin; and that the panel fits a 400 px phone and
+works from the keyboard, with the yard's names and with the spool's long ones (four methods a
+system, listed one a row, no native select). Unit tests: `__tests__/variants.test.ts` (the parser, the store, the
+swaps), `__tests__/inferred.test.ts`, `__tests__/compareMethods.test.tsx`.
 
 ## 5. Storage by behaviour
 
@@ -1065,3 +1355,185 @@ survives new tiles), and is left until something needs a split on the live site.
 tiles into a new generation and never deletes the legacy prefix). Once a scan is republished
 with new tiles, a segmentation of the legacy URL no longer binds the asset's tiles, and
 publish-instances refuses it at the binding check.
+
+## 9. The motion-skins bake-off
+
+The owner's decision (2026-10-05): "We do want to create skins, and should also do a bake-off
+here across methods and scenes (for the skins options, not the hand-tuned rigs or full
+simulation offline)." The owner judges in the app, by watching the wind and by poking objects.
+So every candidate is published beside a scan's tiles as a **variant**, in today's skin format,
+and the viewer can draw any of them under the same wind and the same poke.
+
+### The candidates
+
+Every candidate writes the §4 contract (`skin.json` + `skin.bin`, handle 0 the constant field,
+signed int8 weights), so the viewer, the wind and the poke need nothing per method
+(`tools/captures/skin_methods.py`, `skin_variants.py`). Two axes: **how the weight fields are
+found** and **how many handles** an object gets.
+
+| variant (`extras.variants.skins[].name`) | method                                                                                                                                                                    | handles             | licence                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----------------------------- |
+| `freeform`                               | FreeForm/RKPM skinning eigenmodes over the splat centres (today's method; a shell; free modes, the wind keeps the mixes that leave the base still)                        | size rule (today's) | Kaolin, Apache-2.0 (vendored) |
+| `freeform-stiff`                         | the same                                                                                                                                                                  | stiffness-aware     | Kaolin, Apache-2.0            |
+| `pinned-stiff`                           | FreeForm/RKPM with the base band held by a penalty (`kaolin_rkpm` `pinned`): every learned handle is a bending mode of a rooted object                                    | stiffness-aware     | Kaolin, Apache-2.0 + ours     |
+| `tetfem-stiff`                           | linear FEM (P1) on a Kuhn tetrahedral mesh of the object's filled occupancy, base nodes held, splats embedded barycentrically; mass and anchor integrated over the volume | stiffness-aware     | ours (NumPy/SciPy)            |
+
+The eigenvalues of every method are on one scale (the object in the unit box `fit_skin` uses,
+`E = 1`), so `ω_j = c·√λ_j / scale` and a material's `c` mean the same under each.
+
+**Not candidates, and why.** PhysSkin: no licence (§7). Simplicits' original per-object neural
+weights (Kaolin, Apache-2.0): a per-object MLP trained by stochastic elastic energy; FreeForm's
+own comparison has RKPM 40× faster and closer to converged FEM, and it would bring PyTorch
+training into the capture tools for a field that would draw like `freeform` under small wind --
+left out of this round, the obvious next one if the owner wants a learned field. VR-GS's cage
+and XPBD embedding: no code was released (project page only; the cage needs as many handles as
+cage vertices, which the 16- or 32-handle rows cannot carry, and XPBD in the browser). fTetWild
+(MPL-2.0, `pytetwild`) needs a watertight surface the splats do not give; the voxel mesh here
+needs none. GradRig (2026) needs a hand-made rig; Love Handles (2026) is for tetrahedral meshes
+and has no code.
+
+**The tet mesh, measured** (synthetic tree, 10 handles, random handles at 2% of its size): a
+mesh closed back to the occupancy (dilate, fill, erode) left twigs a voxel thin that hinged
+(kNN stretch p99 1.26, max 8); grown by a voxel and kept, p99 1.02, max 1.04 -- FreeForm's is
+1.02 / 1.08. With free modes the yard's shrubs kept no wind direction at all (every mix moved
+their base), so the volume FEM holds its base as `pinned` does: the two held methods differ
+only in surface against volume.
+
+**Objects in pieces.** Segmentation leaves some objects in pieces: a crown cut from its trunk,
+a shrub's far twigs (camp 16, 56, 91, 148, 276). An RKPM kernel reaches about a node spacing,
+so each piece kept a rigid motion of its own, an eigenvalue of ~0 that the wind and the poke
+drive without bound (lowest wind modes 0.001 to 0.11 Hz in the first publish).
+`kaolin_rkpm.bridged_radii` (ours, on the vendored code) finds the groups of nodes whose
+kernels do not overlap (nodes 1.5 radii apart or more) and, at each gap of the nodes' minimum
+spanning tree between two groups, grows both nodes' radii to ¾ of the gap: the pieces are
+coupled, softly, and a shape in one piece keeps its radii exactly (the yard's committed skins
+are unchanged). Camp's lowest wind modes after, `freeform`: 16 1.73 Hz, 56 2.14, 91 1.42, 148
+0.52, 276 0.61. Both RKPM candidates use it; the tet FEM keeps its mesh's largest piece and
+needs none of it.
+
+### Handle policies
+
+- **Size** (today's, `skin_scene.handle_count`): `m = clamp(round(8 + 2·log2(d / 2 m)), 8, 16)`.
+- **Stiffness-aware** (`skin_methods.stiffness_policy`): a class per object from, in order, a
+  fitted `materials.json` stiffness (`c ≤ 7` m/s plant, `≤ 20` firm, else rigid), its
+  category (shrubs, trees, grass, flowers: plant; produce, animals, clothing: firm; fixtures,
+  furniture, vehicles, equipment, buildings, walls, rock, wood: rigid), its top names
+  (`bush`, `pumpkin`, `rock`...), then its property scores. Rigid things get **1 handle** (no
+  weights: a skin of one handle takes no rows of `skin.bin`; it moves only whole, or not at
+  all), firm compact things **4**, plants the size rule, and plants 6 m tall or more
+  (**trees**) **32**: two 16-byte texels a splat (`weights.rowBytes` 32, §4).
+
+**32 handles in the viewer.** All three renderers carry them: CesiumJS a second weight texture
+(`u_skinWeights2`, only for a file of wide rows), PlayCanvas a second stream
+(`splatWeights2`), Spark a second per-tile texture; the shared GLSL reads weight `k ≥ 16` from
+the second texel, the handle table holds 128 texels a skin (`TEXELS_PER_SKIN`). A file of
+16-byte rows draws as before. Cost: 32 bytes a skinned splat, and twice the multiply-adds in
+the vertex shader for those splats.
+
+### The scans and what is skinned
+
+`skin_variants.BAKEOFF`, the same objects under every variant (the bake-off's choice, whatever
+their segmented behaviour says; `skin_scene.owners_of`):
+
+| scan                   | objects                                                                                                                                | notes                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| spool (run 8e1cc115)   | 1, the spool                                                                                                                           | **withdrawn** (2026-10-06): segmented `static`, `fixtures`, rigid 0.99, so the wind never sways it and the stiffness rule makes it rigid (1 handle); no candidate showed anything, and its entries were taken off. Its bottom flange is **fused with the ground** in this segmentation; not fixed here (the segmentation bake-off's job) |
+| pumpkin (run 430c1932) | 2 and 3, the pumpkins                                                                                                                  | 2 is `movable` (it slides whole when poked), 3 `in-place`; firm: 4 handles                                                                                                                                                                                                                                                               |
+| camp (run 50c25673)    | shrubs and small trees: 26, 56, 67, 122 by the north fort; 93, 103, 148 by the east huts; 16 (a big shrub), 91 (a trunk), 276 (a pine) | the camp's tiles fetched for these objects only; `skin.json` lists only tiles with a skinned splat                                                                                                                                                                                                                                       |
+| Minnetonka tree (site) | the whole scan, as one object (instance 1, made by the builder: the site has no `instances.json`)                                      | its procedural rig stands down while a candidate is drawn (`LivingSurveyManager`), so the comparison is skins against skins                                                                                                                                                                                                              |
+
+**Measured** (publish-skins run 37389830876, 2026-10-05, GitHub-hosted 4-core CPU runners, no
+GPU; the lowest wind mode is at the object's property prior, as the viewer computes it,
+`skin_variants.wind_summary`):
+
+| scan    | variant          | handles           | `skin.bin`     | fit    | lowest wind mode                         |
+| ------- | ---------------- | ----------------- | -------------- | ------ | ---------------------------------------- |
+| spool   | `freeform`       | 11                | 1.15 MB        | 12.0 s | 2.57 Hz (static: only the poke bends it) |
+| spool   | the three stiff  | 1 (rigid)         | 0              | 0.2 s  | does not move                            |
+| pumpkin | `freeform`       | 10, 10            | 1.05 MB        | 7.9 s  | 3: 5.00 Hz                               |
+| pumpkin | `freeform-stiff` | 4, 4              | 1.05 MB        | 7.8 s  | 3: 5.11 Hz (2 keeps no anchored mode)    |
+| pumpkin | `pinned-stiff`   | 4, 4              | 1.05 MB        | 7.9 s  | 3: 2.84 Hz                               |
+| pumpkin | `tetfem-stiff`   | 4, 4              | 1.05 MB        | 1.9 s  | 3: 2.70 Hz                               |
+| camp    | `freeform`       | 8 to 13           | 11.3 MB        | 82.5 s | 0.52 to 6.64 Hz                          |
+| camp    | `freeform-stiff` | 8 to 13; 91 at 32 | 22.6 MB (wide) | 82.7 s | 0.52 to 6.64 Hz                          |
+| camp    | `pinned-stiff`   | 8 to 13; 91 at 32 | 22.6 MB (wide) | 83.2 s | 0.30 to 3.48 Hz                          |
+| camp    | `tetfem-stiff`   | 8 to 13; 91 at 32 | 22.6 MB (wide) | 14.3 s | 0.29 to 3.02 Hz                          |
+| tree    | `freeform`       | 12                | 37.5 MB        | 45.2 s | 0.77 Hz                                  |
+| tree    | `freeform-stiff` | 32                | 75.0 MB        | 46.1 s | 0.78 Hz                                  |
+| tree    | `pinned-stiff`   | 32                | 75.0 MB        | 50.4 s | 0.47 Hz                                  |
+| tree    | `tetfem-stiff`   | 32                | 75.0 MB        | 18.2 s | 0.19 Hz                                  |
+
+The wind sways only `in-place` objects: the spool (`static`) and pumpkin 2 (`movable`, which
+the poke slides) stay still in it under every variant. Rows are per file, so one tree-class
+trunk (camp 91) puts the whole camp file in 32-byte rows, twice the bytes; a 32-handle tree
+costs 75 MB a candidate to download.
+
+### The poke driver
+
+`@twin/world` `skinPoke.ts` (the physics) and `apps/web/src/cesium/skinPoke.ts` (the
+controller), on by **`K`**, Settings' "Poke objects" switch under the wind, and off by `K`,
+Escape or the badge's close button (`state/skinPoke.ts`, `features/living/PokeBadge.tsx`).
+
+- **A press on a skinned object** (the front-most skinned splat under the cursor, by the scene
+  selection's ray cast on the renderer's pick source and the skin's own tile binding, so it
+  works under PlayCanvas, Spark and CesiumJS, with or without `instances.json`) is taken: it
+  never reaches CesiumJS's handlers, and the camera's inputs are held until the release. **A
+  press anywhere else** goes to the camera as always. Nothing is taken while the brush paints,
+  while measuring or exploring.
+- **The spring.** The cursor's point on the plane through the grabbed splat facing the camera
+  pulls that splat with an acceleration `κ (d − u)`, `κ = (2π·3 Hz)²`, `u = Σ_j w_j q_j` its
+  displacement; in the object's modal coordinates the spring is a rank-one term. A soft object
+  (its modes well below 3 Hz) follows the cursor; a stiff one barely gives. The pull is capped
+  at 0.6 of the object's size and every handle at 0.35 of its support radius (as the wind's
+  bound, `tanh`), so nothing folds.
+- **Rooted or movable.** A rooted object (behaviour `in-place`, or anything the wind sways)
+  bends in the wind's anchored modes: its base stays. A `movable` one moves whole as well (its
+  constant handle) and, with no ground or gravity yet (the rigid-body layer, research §3 P4),
+  springs home at 0.8 Hz. A rigid rooted object (one handle) does not move.
+- **Release** lets it ring down at its own frequencies: Newmark's average-acceleration rule on
+  a fixed 1/120 s grid (no numerical damping; frame-rate independent), and once every handle is
+  within 0.1% of the object's size and nearly still, the overlay is dropped: the measured
+  frame, pixel for pixel.
+- **With the wind**: the poke's handles are laid over the driver's (`setInstanceOverlay` in
+  `splatSkin.ts`), so a held branch still sways and calm leaves a ringing object ringing.
+- Material: the wind's (`materialPrior` from the instance's or the skin's own `traits`,
+  `materials.json` over it). Time is the page's clock, not the scene's.
+
+Tests: `packages/world/src/skinPoke.test.ts` (a soft object follows and a stiff one does not;
+released, it rings at its model frequency within 10%; it comes to rest and hands back `null`;
+no handle passes its limit; ten minutes at 60 Hz dragged about stays finite; the state is the
+same at 24, 60 and 144 fps; a movable object slides whole and springs home), and
+`apps/web/e2e/poke.spec.ts` on the yard's 32-handle skin (`synthetic-yard/skin-wide/`) with
+the real mouse, under CesiumJS, PlayCanvas and Spark: the press is taken and the camera holds,
+the tree bends while its base and its neighbour stay, it rings after the release and rests to
+the measured frame exactly, a press on empty space still turns the camera, the movable shrub
+slides whole, and with the tool off the same press turns the camera.
+
+### Publishing and choosing
+
+`.github/workflows/publish-skins.yml` (`[skins]`, `[skins|scans=...|variants=...|publish]`):
+one CPU job a scan runs `skin_variants.py scan` (locate the scan's current tileset, fetch,
+fit, lay out `variants/skins/<name>/`), and `publish` registers this run's entries in
+`extras.variants.skins` (other systems' and variants' entries kept, an entry of the same name
+replaced): through the API for a run's scan, where `attach_sidecars.attach` merges them
+(`with_variant`) into the tileset as it is at the moment of the request, after staging, so a
+variant another bake-off attached meanwhile is kept; or, for the Minnetonka tree, whose
+tileset is a site under `sites/` the attach refuses, by uploading them beside it in the public
+bucket and rewriting its `tileset.json`, read just before, with only `extras.variants`
+changed. `extras.skin` is never touched: "Today" stays the default. Each
+entry carries `look` beside `about`: one plain sentence, per scan, on what to watch (the
+Minnetonka tree: "Turn the wind up and watch the crown: with 12 handles it sways in a few
+broad bends..."), which the Methods panel shows under the pick. A scan where nothing visibly
+moves is `withdrawn` in `BAKEOFF` (the spool): the workflow fits nothing there and takes this
+tool's own entries off, by name (`without_variant`, merged at the request like a
+registration): every other system's and variant's entry stays, the `skins` key goes only if
+nothing is left in it, and `variants` is removed only if no system is left. A withdrawal is
+the one attach that stages no files; `attach_sidecars` refuses any other empty attach, and
+any manifest that sets `extras.variants` without an entry to register or withdraw (a whole
+value read earlier would erase what others attached since).
+
+**Choosing in the viewer.** The **Methods** panel's **Motion** row (§4, "Variants") lists
+Today and the four candidates by label; a pick swaps the skin in place (`attachSkin`), the
+wind and the poke move whichever is drawn, and on the Minnetonka tree the procedural rig
+stands down while a candidate is drawn. A scan republished with new tiles loses
+`extras.variants` (the API does not know it yet, §4): run the workflow again to put them back.
