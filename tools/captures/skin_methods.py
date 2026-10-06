@@ -30,6 +30,18 @@ how the weight fields are found:
   FreeForm's.
 * **rigid** -- one handle, the constant: no weights at all (a skin of one handle takes no rows
   of `skin.bin`); the object moves only as a whole (`Z_0`), or not at all.
+* **limbs** (`fit_limbs_from_rig`) -- not eigenmodes: one handle per **limb** of a plant's
+  rig (`rig.json` + its `motion.json`, the Living Survey's per-tree model, ADR 0008), trunk
+  first, the constant handle still. Each frame the limb-wind driver (`limbWind.ts`) gives limb
+  `j` a rotation `R_j` about its pivot `p_j` (the joint it hangs from), `Z_j = [R_j − I |
+  −(R_j − I)(p_j − o)]`, so a splat moves by `Σ_j w_j (R_j − I)(x − p_j)`: a sparse sum over
+  its own limb and the limbs it hangs from, each a bend about its own joint. The weights are
+  today's rig read through the skin: each splat's four nearest joints with modified Shepard
+  weights (`shepard_binding`, as `skinSplatsToNodes`), each joint's bend spread over the
+  joints of its limb by the sidecar's gains, so the bend profile along a limb is the rig's
+  (uniform curvature: `β(s) ∝ s²`, Habel's `c2·s² + c4·s⁴` with `c4 = 0`) and a joint's
+  neighbourhood blends its limb with its parent's as the rig's skinning does. The last byte
+  of every row is the splat's leaf flutter share (`Skin.flutter`).
 
 The eigenvalues of every method are on one scale -- the object mapped into the unit box
 `skin_scene.fit_skin` uses, `E = 1` -- so the wind's `ω_j = c·√λ_j / scale` and a material's
@@ -61,12 +73,19 @@ from kaolin_rkpm import SimplicitsRKPM, to_lame
 
 __all__ = [
     "FIRM_HANDLES",
+    "LIMBS_METHOD",
     "TREE_HANDLES",
     "HandlePolicy",
+    "LimbRig",
+    "fit_limbs_from_rig",
     "fit_pinned",
     "fit_rigid",
     "fit_tetfem",
     "fitter",
+    "limb_rig",
+    "limb_weights",
+    "limbs_fitter",
+    "shepard_binding",
     "size_policy",
     "stiffness_class",
     "stiffness_policy",
@@ -651,3 +670,419 @@ def traits_of(instance: Mapping) -> dict:
 def _with_extra(skin: skin_scene.Skin, extra: dict | None) -> skin_scene.Skin:
     skin.extra.update(extra or {})
     return skin
+
+
+# ------------------------------------------------------------------------------- limbs
+
+#: `method` of a limbs skin's document.
+LIMBS_METHOD = {
+    "name": "limbs",
+    "source": "tools/captures/skin_methods.py fit_limbs_from_rig: the plant's rig (rig.json) and "
+    "its motion sidecar (motion.json, ADR 0008) read as one handle per limb, trunk first; "
+    "driven by packages/world/src/limbWind.ts",
+}
+#: Joints a splat blends, and the integer its weights sum to (packages/world/src/skin.ts).
+SHEPARD_INFLUENCES = 4
+SHEPARD_TOTAL = 1023
+#: A joint's largest bend by its band, radians (packages/world/src/rig.ts).
+BAND_ANGLE_LIMIT_RAD = {"trunk": 0.1, "branch": 0.25, "leaf": 0.35}
+#: Regularises a splat's weight within about this of its limb's pivot, metres.
+LIMB_PIVOT_EPS_M = 1e-3
+#: Splats evaluated at once (memory: this many × limbs × 3 floats, several times).
+LIMB_CHUNK = 65_536
+
+
+def shepard_binding(nodes: np.ndarray, positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Each splat's four nearest joints and their modified Shepard weights, quantised to
+    1/1023 as packages/world/src/skin.ts `skinSplatsToNodes` and `quantiseSkinWeights` do:
+    `w_k = (1/d_k − 1/R)²`, `R` the fifth-nearest joint's distance, slot 0 the remainder; a
+    splat on a joint is entirely that joint's. Returns (n, 4) joint indices and weights."""
+    nodes = np.asarray(nodes, np.float64)
+    positions = np.asarray(positions, np.float64).reshape(-1, 3)
+    n = len(positions)
+    kept = min(SHEPARD_INFLUENCES + 1, len(nodes))
+    distance, index = cKDTree(nodes).query(positions, k=kept)
+    distance = np.asarray(distance, np.float64).reshape(n, kept)
+    index = np.asarray(index, np.int64).reshape(n, kept)
+    use = min(SHEPARD_INFLUENCES, kept)
+    joints = np.repeat(index[:, :1], SHEPARD_INFLUENCES, axis=1)
+    joints[:, :use] = index[:, :use]
+    radius = distance[:, SHEPARD_INFLUENCES] if kept > SHEPARD_INFLUENCES else np.full(n, np.inf)
+    d = distance[:, :use]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inverse = 1.0 / d - 1.0 / radius[:, None]
+        raw = np.where(inverse > 0, inverse * inverse, 0.0)
+    total = raw.sum(1)
+    valid = (d[:, 0] > 0) & np.isfinite(total) & (total > 0)
+    q = np.zeros((n, SHEPARD_INFLUENCES))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        share = raw[:, 1:use] / total[:, None]
+    q[valid, 1:use] = np.floor(share[valid] * SHEPARD_TOTAL + 0.5)
+    q[:, 0] = SHEPARD_TOTAL - q[:, 1:].sum(1)
+    q[~valid] = 0.0
+    q[~valid, 0] = SHEPARD_TOTAL
+    return joints, q / SHEPARD_TOTAL
+
+
+@dataclass
+class LimbRig:
+    """A plant's rig and motion sidecar read as limbs: what `limb_weights` needs per joint and
+    what `skin.json` records per handle (`handles`, `wind`)."""
+
+    joints: np.ndarray  # (k, 3) rest positions, rig frame (the tileset's local ENU)
+    oscillators: list[int]  # each limb's base joint (its oscillator's key), trunk first
+    gains: np.ndarray  # (k, L): per joint, the bend gains of its chain on each limb
+    pivot_sums: np.ndarray  # (k, L, 3): the same gains times each hinge's pivot
+    flutter: np.ndarray  # (k,) leaf flutter at the reference speed, metres
+    flutter_ref: float  # the largest of it: a flutter share of 1
+    pivots: np.ndarray  # (L, 3) the joint each limb hangs from
+    directions: np.ndarray  # (L, 3) each limb's chord, unit
+    caps: np.ndarray  # (L,) the bend per unit gain at which its first joint saturates
+    handles: list[dict]  # per limb, `skin.json`'s `limbs.handles` (before `gain`, `limitRad`)
+    wind: dict  # `skin.json`'s `limbs` beyond `handles`
+
+
+def limb_rig(rig: Mapping, motion: Mapping) -> LimbRig:
+    """`rig` (rig.json) and `motion` (its motion.json) as limbs: one per oscillator whose
+    joints bend (gain > 0), the trunk first. Per limb, everything the limb-wind driver needs
+    to give it today's sway (living.ts: its key, frequency, damping, where it reads the wind
+    and how big it is), and per joint the gains of every limb on its chain."""
+    import motion_params
+
+    nodes = list(rig["nodes"])
+    count = len(nodes)
+    if motion.get("plants"):
+        raise ValueError("a forest rig (motion.plants) is not a limbs skin yet: one plant a skin")
+    columns = motion["nodes"]
+    branch = [int(b) for b in columns["branch"]]
+    gain = [float(g) for g in columns["gainRad"]]
+    if len(branch) != count or len(gain) != count:
+        raise ValueError(f"motion.json lists {len(branch)} joints, rig.json {count}")
+    joints = np.array([n["position"] for n in nodes], np.float64)
+    parent = [int(n["parent"]) for n in nodes]
+    structure = motion_params.branch_structure(dict(rig))
+    tree = structure["tree_branch"]
+    bases = {branch[i] for i in range(1, count) if parent[i] >= 0 and gain[i] != 0}
+    oscillators = sorted(bases, key=lambda b: (b != tree, b))
+    if len(oscillators) > skin_scene.MAX_WIDE_HANDLES - 1:
+        raise ValueError(
+            f"{len(oscillators)} limbs: a skin carries at most {skin_scene.MAX_WIDE_HANDLES - 1}"
+        )
+    column = {b: j for j, b in enumerate(oscillators)}
+    limbs = len(oscillators)
+    # Per joint, its chain's hinges by limb (living.ts: joint a hinges at its parent).
+    gains = np.zeros((count, limbs))
+    pivot_sums = np.zeros((count, limbs, 3))
+    for i in range(count):
+        a = i
+        while a >= 0 and parent[a] >= 0:
+            j = column.get(branch[a])
+            if gain[a] != 0 and j is not None:
+                gains[i, j] += gain[a]
+                pivot_sums[i, j] += gain[a] * joints[parent[a]]
+            a = parent[a]
+    # Each limb's chord (living.ts limbDirection): the joint it hangs from to its far end.
+    far: dict[int, int] = {}
+    for i in range(1, count):
+        far[structure["limb"][i]] = i
+    pivots = np.array([joints[parent[b]] for b in oscillators])
+    directions = np.zeros((limbs, 3))
+    for j, b in enumerate(oscillators):
+        chord = joints[far.get(b, b)] - pivots[j]
+        length = float(np.linalg.norm(chord))
+        directions[j] = chord / length if length > 0 else (0.0, 0.0, 1.0)
+    geometry = _oscillator_geometry(joints, parent, branch, gain)
+    flutter = np.asarray(columns["flutterM"], np.float64)
+    caps = np.full(limbs, np.inf)
+    for a in range(1, count):
+        j = column.get(branch[a])
+        if j is None or gain[a] == 0:
+            continue
+        band = str(nodes[a].get("band", "branch"))
+        limit = float(nodes[a].get("maxAngleRad") or BAND_ANGLE_LIMIT_RAD.get(band, 0.25))
+        caps[j] = min(caps[j], limit / abs(gain[a]))
+    handles = []
+    for j, b in enumerate(oscillators):
+        attach = parent[b]
+        carried_by = column.get(branch[attach]) if attach > 0 else None
+        g = geometry[b]
+        members = [i for i in range(count) if branch[i] == b]
+        handles.append(
+            {
+                "key": int(b),
+                "pivot": _round6(pivots[j]),
+                "parent": 0 if carried_by is None else carried_by + 1,
+                "level": int(structure["order"][b]),
+                "spanM": round(float(structure["branch_length"][b]), 4),
+                "frequencyHz": float(columns["frequencyHz"][b]),
+                "damping": float(columns["damping"][b]),
+                "tree": int(columns["mode"][b]) == 0,
+                "direction": _round6(directions[j]),
+                "samplePoint": _round6(g["samplePoint"]),
+                "widthM": round(g["widthM"], 6),
+                "heightM": round(g["heightM"], 6),
+                "staticTipM": float(f"{g['staticTipM']:.6g}"),
+                "flutterM": round(float(max((flutter[i] for i in members), default=0.0)), 6),
+            }
+        )
+    height = float(motion["treeHeightM"])
+    sidecar_wind = motion["wind"]
+    length_scale = sidecar_wind.get("lengthScaleM")
+    if length_scale is None:
+        length_scale = motion_params.turbulence_length_scale_m(height)
+    wind = {
+        "rig": {
+            "joints": count,
+            "checksum": rig.get("canonicalChecksum"),
+            "motionEvidence": motion.get("motionEvidence"),
+        },
+        "seed": int(motion["seed"]),
+        "referenceSpeedMps": float(motion["referenceSpeedMps"]),
+        "treeHeightM": height,
+        "leafSizeM": float(motion["leafSizeM"]),
+        "wind": {
+            "turbulence": dict(sidecar_wind["turbulence"]),
+            "lengthScaleM": float(length_scale),
+            "gust": dict(sidecar_wind["gust"]),
+            "canopyAdvection": float(sidecar_wind["canopyAdvection"]),
+        },
+        "seasons": json_copy(motion.get("seasons") or {}),
+        "flutter": {"referenceM": float(flutter.max(initial=0.0))},
+    }
+    return LimbRig(
+        joints=joints,
+        oscillators=oscillators,
+        gains=gains,
+        pivot_sums=pivot_sums,
+        flutter=flutter,
+        flutter_ref=float(flutter.max(initial=0.0)),
+        pivots=pivots,
+        directions=directions,
+        caps=caps,
+        handles=handles,
+        wind=wind,
+    )
+
+
+def json_copy(value: object) -> object:
+    """A plain-JSON deep copy."""
+    import json
+
+    return json.loads(json.dumps(value))
+
+
+def _round6(v: np.ndarray) -> list[float]:
+    return [round(float(x), 6) + 0.0 for x in np.asarray(v).reshape(-1)]
+
+
+def _oscillator_geometry(
+    joints: np.ndarray, parent: Sequence[int], branch: Sequence[int], gain: Sequence[float]
+) -> dict[int, dict]:
+    """Per oscillator, where it reads the wind and how big it is: packages/world/src/living.ts
+    `oscillatorGeometry`, line for line. The centroid of every joint it carries (its own and
+    all that hangs from it), the horizontal and vertical extent of those and their
+    attachments, and the static tip deflection of its own bend."""
+
+    def oscillates(base: int) -> bool:
+        return base > 0 and parent[base] >= 0
+
+    acc: dict[int, dict] = {}
+
+    def grow(base: int, p: np.ndarray, member: int) -> None:
+        a = acc.get(base)
+        if a is None:
+            a = {"sum": np.zeros(3), "count": 0, "min": p.copy(), "max": p.copy(), "members": []}
+            acc[base] = a
+        a["min"] = np.minimum(a["min"], p)
+        a["max"] = np.maximum(a["max"], p)
+        if member >= 0:
+            a["sum"] = a["sum"] + p
+            a["count"] += 1
+            a["members"].append(member)
+
+    for i in range(1, len(joints)):
+        p = joints[i]
+        base = branch[i]
+        while oscillates(base):
+            grow(base, p, i)
+            attach = parent[base]
+            grow(base, joints[attach], -1)
+            base = branch[attach] if attach > 0 else 0
+    out: dict[int, dict] = {}
+    for base, a in acc.items():
+        sample = a["sum"] / a["count"]
+        attach = joints[parent[base]]
+        tip = sample
+        reach = -1.0
+        for m in a["members"]:
+            r = float(np.linalg.norm(joints[m] - attach))
+            if r > reach:
+                reach = r
+                tip = joints[m]
+        static = 0.0
+        for m in a["members"]:
+            if branch[m] != base or gain[m] == 0:
+                continue
+            static += gain[m] * float(np.linalg.norm(tip - joints[parent[m]]))
+        extent = a["max"] - a["min"]
+        out[base] = {
+            "samplePoint": sample,
+            "widthM": float(max(extent[0], extent[1])),
+            "heightM": float(extent[2]),
+            "staticTipM": static,
+        }
+    return out
+
+
+def limb_weights(limbs: LimbRig, positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per splat, its raw weight on every limb (before the per-limb `gain`) and its leaf
+    flutter share.
+
+    Today a splat moves by `Σ_k ω_k (T_k(x) − x)` over its four Shepard joints `k`, `T_k` the
+    joint's chain of hinges, each joint `a` a rotation `g_a θ_b` about its parent `p_a` (`θ_b`
+    its limb's bend per unit gain, shared by the limb's joints). To first order that is
+    `Σ_b θ_b × V_b(x)`, `V_b = Σ_k ω_k Σ_{a∈chain(k)∩b} g_a (x − p_a)`. A limbs skin moves it
+    by `Σ_b w_b θ_b × (x − p_b)` about the limb's own pivot, so `w_b` is the least-squares
+    fit of `w (x − p_b)` to `V_b` in the metric of the bends a limb makes (axes across it):
+    `Q = (I + d dᵀ)/2`, `d` its chord, `w = aᵀQV / aᵀQa`, `a = x − p_b`. Exact along a straight
+    limb; the residual is the part of the effective pivot off the line to the splat (an
+    extracted skeleton zigzags). The flutter share is the Shepard blend of the joints'
+    flutter amplitudes over the largest, as today's per-splat amplitude is."""
+    positions = np.asarray(positions, np.float64).reshape(-1, 3)
+    n = len(positions)
+    count = len(limbs.oscillators)
+    raw = np.zeros((n, count))
+    leaf = np.zeros(n)
+    eps2 = LIMB_PIVOT_EPS_M * LIMB_PIVOT_EPS_M
+    for start in range(0, n, LIMB_CHUNK):
+        x = positions[start : start + LIMB_CHUNK]
+        joints, w = shepard_binding(limbs.joints, x)
+        gains = np.einsum("ns,nsl->nl", w, limbs.gains[joints])
+        sums = np.einsum("ns,nslc->nlc", w, limbs.pivot_sums[joints])
+        v = gains[:, :, None] * x[:, None, :] - sums
+        a = x[:, None, :] - limbs.pivots[None]
+        along = (a * limbs.directions[None]).sum(-1, keepdims=True)
+        qa = 0.5 * (a + along * limbs.directions[None])
+        num = (qa * v).sum(-1)
+        den = (qa * a).sum(-1) + eps2
+        raw[start : start + len(x)] = np.where(gains != 0, num / den, 0.0)
+        if limbs.flutter_ref > 0:
+            leaf[start : start + len(x)] = (w * limbs.flutter[joints]).sum(1) / limbs.flutter_ref
+    return raw, leaf
+
+
+class _Memo:
+    """`limb_weights` of the last positions asked, so `Skin.weights` and `Skin.flutter` on one
+    tile's splats evaluate them once."""
+
+    def __init__(self, limbs: LimbRig) -> None:
+        self.limbs = limbs
+        # The array itself is held, so its identity cannot pass to another while memoised.
+        self.positions: np.ndarray | None = None
+        self.value: tuple[np.ndarray, np.ndarray] | None = None
+
+    def __call__(self, positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if positions is not self.positions or self.value is None:
+            self.value = limb_weights(self.limbs, positions)
+            self.positions = positions
+        return self.value
+
+
+def fit_limbs_from_rig(
+    points: np.ndarray,
+    index: int,
+    instance: int,
+    *,
+    rig: Mapping,
+    motion: Mapping,
+    seed: int = 0,
+    extra: dict | None = None,
+) -> skin_scene.Skin:
+    """A limbs skin of one plant from its rig and motion sidecar (module docstring): handle 0
+    still, handle `j` limb `j` (trunk first), each limb's weights scaled to `max |w| = 1` over
+    the plant's splats with the scale recorded as its `gain`, and `skin.json`'s `limbs` block
+    (what the limb-wind driver reads). For the poke (`skinPoke.ts`), which pulls handles as
+    translations, the skin also carries `dynamics` and an eigenvalue per handle that rings it
+    alone at its limb's frequency under the material prior (`c·√λ / scale = 2π f`)."""
+    import skin_wind
+
+    started = time.perf_counter()
+    points = np.asarray(points, np.float64)
+    limbs = limb_rig(rig, motion)
+    count = len(limbs.oscillators)
+    if count == 0:
+        return fit_rigid(points, index, instance, seed=seed, extra=extra)
+    # The scale over every splat (not the pool), so no weight is clipped.
+    peak = np.zeros(count)
+    peak_value = np.zeros(count)
+    for start in range(0, len(points), LIMB_CHUNK * 4):
+        raw, _ = limb_weights(limbs, points[start : start + LIMB_CHUNK * 4])
+        at = np.abs(raw).argmax(0)
+        value = raw[at, np.arange(count)]
+        better = np.abs(value) > peak
+        peak = np.where(better, np.abs(value), peak)
+        peak_value = np.where(better, value, peak_value)
+    gain = np.where(peak > 0, peak_value, 1.0)
+    norm = 1.0 / gain
+    memo = _Memo(limbs)
+    _, _, origin, half = _frame(points)
+    pool = skin_scene.fit_pool(points, seed)
+    learned = memo(pool)[0] * norm[None, :]
+    w = np.abs(learned)
+    local = pool - origin
+    mass = w.sum(0).clip(1e-12)
+    centres = (w.T @ local) / mass[:, None]
+    radii = np.sqrt((w * ((local[:, None, :] - centres[None]) ** 2).sum(-1)).sum(0) / mass)
+    gram, anchor_gram, anchors, band = skin_scene.modal_grams(pool, learned)
+    traits = (extra or {}).get("traits") or {}
+    material = skin_wind.material_prior(traits.get("properties"), traits.get("behaviour"))
+    frequency = np.array([h["frequencyHz"] for h in limbs.handles])
+    eigenvalues = (2 * np.pi * frequency * half / material.stiffness) ** 2
+    handles = []
+    for j, h in enumerate(limbs.handles):
+        record = {**h, "gain": float(f"{gain[j]:.6g}")}
+        if np.isfinite(limbs.caps[j]):
+            # The bend at which the limb's first joint would reach its own limit today.
+            record["limitRad"] = float(f"{abs(gain[j]) * limbs.caps[j]:.6g}")
+        handles.append(record)
+    return skin_scene.Skin(
+        index=index,
+        instance=instance,
+        origin=origin,
+        scale=half,
+        handles=count + 1,
+        nodes=len(limbs.joints),
+        splats=len(points),
+        model=None,  # type: ignore[arg-type]
+        norm=norm,
+        eigenvalues=eigenvalues,
+        centres=centres,
+        radii=radii,
+        seconds=time.perf_counter() - started,
+        mass=gram,
+        anchor_gram=anchor_gram,
+        anchor_splats=anchors,
+        anchor_band=band,
+        evaluate=lambda positions: memo(positions)[0],
+        extra={"limbs": {**limbs.wind, "handles": handles}, **(extra or {})},
+        flutter=lambda positions: memo(positions)[1],
+    )
+
+
+def limbs_fitter(
+    rig: Mapping, motion: Mapping, instances: Sequence[Mapping]
+) -> skin_scene.Fitter:
+    """`skin_scene.build`'s `fit` for a limbs skin: every chosen object is the rig's plant
+    (one plant a scan: the Minnetonka tree, whole), its traits and class recorded as the other
+    methods record them."""
+    by_id = {int(i["id"]): i for i in instances}
+
+    def run(points: np.ndarray, index: int, instance: int, *, seed: int = 0) -> skin_scene.Skin:
+        record = by_id.get(instance, {"id": instance})
+        cls = stiffness_class(record)
+        extra = {"class": cls, "traits": traits_of(record)}
+        return fit_limbs_from_rig(
+            points, index, instance, rig=rig, motion=motion, seed=seed, extra=extra
+        )
+
+    return run

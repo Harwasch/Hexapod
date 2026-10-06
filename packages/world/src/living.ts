@@ -610,6 +610,21 @@ function rotationFromVector(r: Vec3, limit: number): Quat {
   return [r[0] * s, r[1] * s, r[2] * s, Math.cos(capped / 2)];
 }
 
+/**
+ * @internal What a limbs skin's driver (`limbWind.ts`) shares with this model, so a limb of
+ * the skin sways exactly as the rig's oscillator of the same key does: the trajectory through
+ * its texture, the read along it, the wind's direction, the axes across a limb and the capped
+ * rotation.
+ */
+export {
+  crossAxes as limbCrossAxes,
+  downwindOf as livingDownwind,
+  rotationFromVector as cappedRotation,
+  sampleAt as sampleTrajectory,
+  trajectory as branchTrajectory,
+  type Trajectory as BranchTrajectory,
+};
+
 /** Per-node load factor `q_i(t) = ((U/U_ref)(1 + gust(t − x_i/U)))²`, into `out`. */
 function loadFactors(motion: LivingMotion, t: number, wind: LivingWind, out: Float64Array): void {
   const { rig, sidecar } = motion;
