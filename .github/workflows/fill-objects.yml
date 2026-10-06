@@ -1,0 +1,104 @@
+name: Fill objects (Modal GPU, 3D object completion)
+
+# The inferred fill's object round (infra/modal/fill_objects.py, tools/captures/object_fill.py):
+# the pumpkins' unseen undersides completed by 3D object-completion models, registered to the
+# real scan. Uploads the reports, sheets and inferred layers as the `fill` artifact, laid out
+# as publish-fill.yml takes them (`<job>/inferred.tar.gz`). Nothing is published.
+#
+# Runs on a push to `wm-fill-objects` whose head commit message carries a token, read as data
+# and validated here, never interpolated into a shell line:
+#
+#   [objects|check]                                   which models the token can read (CPU)
+#   [objects|jobs=objects:pumpkin|methods=trellis|budget=7|spent=0.1]
+#
+# GPU jobs refuse to start without `budget`, or when their worst case is past budget - spent
+# (infra/modal/fill_objects.py). Every commit pushed to `wm-*` also carries [skip-fill], so
+# fill.yml (which shares the branch pattern) starts nothing.
+
+on:
+  push:
+    branches: ["wm-fill-objects"]
+
+concurrency:
+  group: fill-objects-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  objects:
+    name: Object completion on Modal
+    if: contains(github.event.head_commit.message, '[objects|')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MESSAGE: ${{ github.event.head_commit.message }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the Modal token is there
+        run: |
+          test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
+            || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
+      - name: The token's options
+        id: plan
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re, shlex
+          found = re.search(r"\[objects\|([^\]]*)\]", os.environ.get("MESSAGE", ""))
+          if not found:
+              raise SystemExit("no [objects|...] token")
+          valid = {
+              "check": r"",
+              "jobs": r"[a-z]+:[a-z]+(,[a-z]+:[a-z]+)*",
+              "methods": r"[a-z0-9]+(\+[a-z0-9]+)*",
+              "budget": r"[0-9]+(\.[0-9]+)?",
+              "spent": r"[0-9]+(\.[0-9]+)?",
+              "options": r"[a-z0-9_]+=[a-z0-9_.+-]+(;[a-z0-9_]+=[a-z0-9_.+-]+)*",
+          }
+          flags = []
+          for part in found.group(1).split("|"):
+              key, _, value = part.strip().partition("=")
+              if key not in valid or not re.fullmatch(valid[key], value):
+                  raise SystemExit(f"[objects] option {part!r} is not one of {sorted(valid)}, checked")
+              if key == "check":
+                  flags.append("--check")
+              elif key == "budget":
+                  flags += ["--budget-usd", value]
+              elif key == "spent":
+                  flags += ["--spent-usd", value]
+              else:
+                  flags += [f"--{key}", value]
+          print("flags=" + " ".join(shlex.quote(f) for f in flags))
+          PY
+          cat "$GITHUB_OUTPUT"
+      - name: modal run infra/modal/fill_objects.py
+        env:
+          FLAGS: ${{ steps.plan.outputs.flags }}
+        run: |
+          # The Hugging Face secret by its prefix (the workspace's is not named `huggingface`).
+          HEXAPOD_HF_SECRET=$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
+          import json, sys
+          def names(x):
+              if isinstance(x, dict):
+                  for v in x.values(): yield from names(v)
+              elif isinstance(x, list):
+                  for v in x: yield from names(v)
+              elif isinstance(x, str) and x.startswith("huggingface"):
+                  yield x
+          print(next(names(json.load(sys.stdin)), "huggingface"))') || HEXAPOD_HF_SECRET=huggingface
+          export HEXAPOD_HF_SECRET
+          echo "Hugging Face secret: $HEXAPOD_HF_SECRET"
+          # FLAGS holds only the validated values above, each shell-quoted.
+          eval "set -- $FLAGS"
+          # `exec`, so a cancelled run's SIGINT reaches modal (and stops the app's GPUs).
+          exec uv run --with modal==1.5.5 modal run infra/modal/fill_objects.py --out fill-out "$@"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fill
+          path: fill-out
+          if-no-files-found: warn
