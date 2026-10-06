@@ -130,8 +130,11 @@ def objects_prefetch(repos: list[str]) -> dict[str, float]:
 #: TRELLIS's own install (its setup.sh `--basic --xformers --spconv`), for gaussians only:
 #: torch 2.4.0 with xformers' wheel for it, spconv, utils3d at TRELLIS's pinned commit, the
 #: repository at a fixed commit with its FlexiCubes submodule; `rembg` is a stub (the masks are
-#: given as alpha, so TRELLIS never removes a background), and so is `open3d` (imported by the
-#: text-to-3D pipeline only).
+#: given as alpha, so TRELLIS never removes a background), and so are `open3d` (imported by the
+#: text-to-3D pipeline only) and kaolin's `check_tensor` (FlexiCubes' debug check). The rest of
+#: what `trellis` imports at load time (crawled from its sources at this commit): torch,
+#: torchvision, PIL, numpy, easydict, tqdm, safetensors, huggingface_hub, transformers,
+#: plyfile, utils3d, spconv, xformers.
 TRELLIS_COMMIT = "442aa1e1afb9014e80681d3bf604e8d728a86ee7"
 UTILS3D = (
     "utils3d @ git+https://github.com/EasternJournalist/utils3d.git"
@@ -143,6 +146,8 @@ REMBG_STUB = (
     'def remove(*a, **k): raise RuntimeError("rembg is not used: masks are given as alpha")',
 )
 #: `trellis.pipelines` imports its text-to-3D pipeline, which imports open3d (unused here).
+#: FlexiCubes (the mesh decoder, built but never run here) imports kaolin's tensor check.
+KAOLIN_STUB = "def check_tensor(*a, **k): return True"
 #: Its class body names `o3d.geometry.TriangleMesh` in annotations, so those names exist.
 OPEN3D_STUB = (
     'geometry = type("geometry", (), {"TriangleMesh": object, "VoxelGrid": object}); '
@@ -179,11 +184,14 @@ trellis_image = (
     .run_commands(
         "git clone https://github.com/microsoft/TRELLIS.git /opt/trellis",
         f"cd /opt/trellis && git checkout {TRELLIS_COMMIT} && git submodule update --init --recursive",
-        "mkdir -p /opt/stubs/rembg /opt/stubs/open3d",
+        "mkdir -p /opt/stubs/rembg /opt/stubs/open3d /opt/stubs/kaolin/utils",
         f"echo '{REMBG_STUB[0]}' > /opt/stubs/rembg/__init__.py",
         f"echo '{REMBG_STUB[1]}' >> /opt/stubs/rembg/__init__.py",
         f"echo '{OPEN3D_STUB}' > /opt/stubs/open3d/__init__.py",
-        "python -c \"import sys; sys.path.insert(0, '/opt/stubs'); import rembg, open3d; open3d.geometry.TriangleMesh\"",
+        "touch /opt/stubs/kaolin/__init__.py /opt/stubs/kaolin/utils/__init__.py",
+        f"echo '{KAOLIN_STUB}' > /opt/stubs/kaolin/utils/testing.py",
+        "python -c \"import sys; sys.path.insert(0, '/opt/stubs'); import rembg, open3d; "
+        'open3d.geometry.TriangleMesh; from kaolin.utils.testing import check_tensor"',
     )
     .env(
         {
