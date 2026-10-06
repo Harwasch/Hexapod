@@ -143,7 +143,11 @@ REMBG_STUB = (
     'def remove(*a, **k): raise RuntimeError("rembg is not used: masks are given as alpha")',
 )
 #: `trellis.pipelines` imports its text-to-3D pipeline, which imports open3d (unused here).
-OPEN3D_STUB = '"""open3d is not used here: only TRELLIS text-to-3D needs it."""'
+#: Its class body names `o3d.geometry.TriangleMesh` in annotations, so those names exist.
+OPEN3D_STUB = (
+    'geometry = type("geometry", (), {"TriangleMesh": object, "VoxelGrid": object}); '
+    'utility = type("utility", (), {"Vector3dVector": list})'
+)
 trellis_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git", "libgl1", "libglib2.0-0")
@@ -179,7 +183,7 @@ trellis_image = (
         f"echo '{REMBG_STUB[0]}' > /opt/stubs/rembg/__init__.py",
         f"echo '{REMBG_STUB[1]}' >> /opt/stubs/rembg/__init__.py",
         f"echo '{OPEN3D_STUB}' > /opt/stubs/open3d/__init__.py",
-        "python -c \"import sys; sys.path.insert(0, '/opt/stubs'); import rembg, open3d\"",
+        "python -c \"import sys; sys.path.insert(0, '/opt/stubs'); import rembg, open3d; open3d.geometry.TriangleMesh\"",
     )
     .env(
         {

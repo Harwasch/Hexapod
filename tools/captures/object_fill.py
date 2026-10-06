@@ -430,39 +430,74 @@ def crop_box(mask: np.ndarray, pad: float = CROP_PAD) -> tuple[int, int, int, in
     return bx, by, bx + s, by + s
 
 
+def pointmap(depth: np.ndarray, alpha: np.ndarray, camera: Camera) -> np.ndarray:
+    """The scan's own points in `camera`'s frame, per pixel (h, w, 3): the rendered depth
+    along the view axis back-projected through each pixel centre, in the PyTorch3D camera
+    convention SAM 3D Objects takes (x left, y up, z forward: OpenCV's x and y negated); NaN
+    where the scan covers less than half the pixel."""
+    h, w = depth.shape
+    v, u = np.mgrid[0:h, 0:w].astype(np.float64)
+    z = np.where(np.isfinite(depth) & (alpha >= 0.5), depth, np.nan)
+    x = (u + 0.5 - camera.width / 2) / camera.focal * z
+    y = (v + 0.5 - camera.height / 2) / camera.focal * z
+    return np.stack([-x, -y, z], axis=-1)
+
+
 def frame_crop(
     view: gf.RealView,
     renderer: Any,
     scene: Splats,
     target: Target,
     width: int | None = None,
+    with_pointmap: bool = False,
 ) -> dict[str, Any] | None:
     """One frame as a model takes it: the photo crop about the object, its mask as alpha
-    (RGBA PNG, at most `CROP_MAX` across), the crop's box and camera in the photo, the mask's
-    share of the crop."""
+    (RGBA PNG, at most `CROP_MAX` across), the crop's box and camera in the photo, its own
+    intrinsics (focal and principal point in crop pixels: a pixel-aligned model's field of
+    view), the mask's share of the crop and, with `with_pointmap`, the scan's points there
+    (`pointmap`, float16, the crop's size)."""
     photo = view.photo(width=width)
     if photo is None:
         return None
     cam = fv.scaled(view.camera, photo.shape[1], photo.shape[0])
-    _, front = front_mask(renderer, scene, target.rows, cam)
+    whole = renderer(scene, cam)
+    _, front = front_mask(renderer, scene, target.rows, cam, whole.depth)
     if front.sum() < 50:
         return None
     x0, y0, x1, y1 = crop_box(front)
     rgb = photo[y0:y1, x0:x1]
     alpha = (front[y0:y1, x0:x1] * 255).astype(np.uint8)
     rgba = np.concatenate([rgb, alpha[..., None]], axis=-1)
+    points = pointmap(whole.depth, whole.alpha, cam)[y0:y1, x0:x1] if with_pointmap else None
+    scale = 1.0
     if rgba.shape[1] > CROP_MAX:
         import cv2
 
+        scale = CROP_MAX / rgba.shape[1]
         rgba = cv2.resize(rgba, (CROP_MAX, CROP_MAX), interpolation=cv2.INTER_AREA)
-    return {
+        if points is not None:
+            points = cv2.resize(
+                points.astype(np.float32), (CROP_MAX, CROP_MAX), interpolation=cv2.INTER_NEAREST
+            )
+    out = {
         "view": view.name,
         "png": _png(rgba),
         "box": [x0, y0, x1, y1],
         "photo": [int(photo.shape[1]), int(photo.shape[0])],
         "camera": cam.to_json(),
+        "intrinsics": {
+            "focal": cam.focal * scale,
+            "cx": (cam.width / 2 - x0) * scale,
+            "cy": (cam.height / 2 - y0) * scale,
+            "size": int(rgba.shape[1]),
+        },
         "maskShare": round(float(front[y0:y1, x0:x1].mean()), 4),
     }
+    if points is not None:
+        import object_models as om
+
+        out["pointmap"] = om.pack_array(points, "float16")
+    return out
 
 
 # --- generators ---------------------------------------------------------------------------------------

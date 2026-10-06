@@ -123,6 +123,24 @@ def test_arrays_survive_the_wire() -> None:
     assert len(s) == 4 and np.allclose(s.colours, a / 12, atol=1e-3)
 
 
+def test_the_pointmap_is_the_scan_in_the_camera_frame() -> None:
+    from splat_render import render
+
+    original, _ = scene()
+    cam = ring_cameras(1, 40.0, 3.2, target=(0.4, 0.25, 0.25), size=(80, 60), fov=55.0)[0]
+    frame = render(original, cam)
+    points = of.pointmap(frame.depth, frame.alpha, cam)
+    ok = np.isfinite(points[..., 2])
+    assert ok.mean() > 0.5
+    # Back to the world (OpenCV camera: x and y negated back), every point is near the scan.
+    p_cv = points[ok] * [-1, -1, 1]
+    world = p_cv @ cam.rotation + cam.centre
+    from scipy.spatial import cKDTree
+
+    d, _ = cKDTree(original.positions).query(world)
+    assert np.median(d) < 0.05
+
+
 def test_the_smoke_request_makes_an_object() -> None:
     (result,) = of.StandInGenerator().start([of.smoke_request()])()
     assert result.key == "smoke" and result.splats is not None and len(result.splats) > 100
