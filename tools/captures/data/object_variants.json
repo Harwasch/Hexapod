@@ -1,7 +1,11 @@
 {
   "concept-first": {
     "label": "C · Concept first (SAM 3)",
-    "about": "Candidate C: a vision-language model lists the scene's things and ground cover; SAM 3 finds every instance of each thing in every view, tracked along the camera's paths, and its semantic head paints the ground's cover; the masks are voted onto the splats, and what nobody named comes from a class-free SAM 2 pass. Same views, vocabulary and class-free masks as the stand-in: only SAM 3 differs."
+    "about": "Candidate C: a vision-language model lists the scene's things and ground cover; SAM 3 finds every instance of each thing in every view, tracked along the camera's paths, and its semantic head paints the ground's cover; the masks are voted onto the splats, and what nobody named comes from a class-free SAM 2 pass. Same views, vocabulary and class-free masks as the stand-in: only SAM 3 differs.",
+    "look": {
+      "spool": "Click the spool: one click picks its top and drum, but here the bottom flange is a second Cable spool (the stand-in keeps it whole). Ground types are under Ground & soil.",
+      "pumpkin": "Click a pumpkin: one click should pick the whole pumpkin. Ground types are under Ground & soil, where the hay is now Hay (the stand-in called it Moss)."
+    }
   },
   "concept-first-standin": {
     "label": "C (stand-in) · Concept first",
