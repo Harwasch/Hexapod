@@ -89,14 +89,104 @@ function harnessHtml(renderer: Renderer): string {
 </html>`;
 }
 
-async function open(page: Page, renderer: Renderer, errors: string[]): Promise<void> {
+interface Entry {
+  name: string;
+  label: string;
+  about: string;
+  [file: string]: unknown;
+}
+
+/**
+ * The yard's variants under the names the real bake-offs publish on the spool (labels and
+ * descriptions as `skin_variants.py`, `publish_variants.py` and the segmentation bake-offs
+ * write them): four methods a system, long names. Their files are the yard fixture's, in turn.
+ */
+function spoolLike(variants: Record<string, Entry[]>): Record<string, Entry[]> {
+  const like = (system: string, names: [string, string, string][]): Entry[] =>
+    names.map(([name, label, about], i) => {
+      const files = variants[system] ?? [];
+      const file = files[i % files.length] ?? files[0];
+      return { ...file, name, label, about };
+    });
+  return {
+    objects: like("objects", [
+      [
+        "ground-first",
+        "A · Ground first",
+        "Takes the ground out first, then splits what stands on it.",
+      ],
+      [
+        "concept-first",
+        "B · Concept first",
+        "Names what is there first, then finds each thing's splats.",
+      ],
+      [
+        "feature-fields",
+        "C · Feature fields",
+        "Groups splats by learned features, coarse to fine.",
+      ],
+    ]),
+    fill: like("fill", [
+      [
+        "vace-1-3b",
+        "Wan2.1-VACE 1.3B",
+        "A video model walks a camera from a real photo towards what the scan missed.",
+      ],
+      [
+        "wan22-5b",
+        "Wan 2.2 TI2V-5B",
+        "The same camera walk with Wan 2.2: the known pixels held fixed.",
+      ],
+      [
+        "cosmos-p2-2b",
+        "Cosmos-Predict2 2B",
+        "The same camera walk with NVIDIA's Cosmos world model.",
+      ],
+      [
+        "lama-baseline",
+        "Per-view LaMa (baseline)",
+        "Each view painted on its own by an image inpainter.",
+      ],
+    ]),
+    skins: like("skins", [
+      [
+        "freeform",
+        "FreeForm · size rule",
+        "Today's method: skinning eigenmodes, 8 to 16 handles by size alone.",
+      ],
+      [
+        "freeform-stiff",
+        "FreeForm · stiffness rule",
+        "The same modes, with handles by stiffness class.",
+      ],
+      [
+        "pinned-stiff",
+        "Pinned FreeForm · stiffness rule",
+        "Modes solved with the base held still; handles by stiffness class.",
+      ],
+      [
+        "tetfem-stiff",
+        "Volume FEM · stiffness rule",
+        "Linear finite elements on tetrahedra filling the object; base held.",
+      ],
+    ]),
+  };
+}
+
+async function open(
+  page: Page,
+  renderer: Renderer,
+  errors: string[],
+  { names = "fixture" }: { names?: "fixture" | "spool" } = {},
+): Promise<void> {
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
   page.on("pageerror", (error) => errors.push(error.message));
   const read = (relative: string): Record<string, unknown> =>
     JSON.parse(readFileSync(resolve(TILES, relative), "utf-8")) as Record<string, unknown>;
-  const { variants } = read("synthetic-yard/variants/variants.json");
+  const fixture = read("synthetic-yard/variants/variants.json").variants as Record<string, Entry[]>;
+  const variants = names === "spool" ? spoolLike(fixture) : fixture;
   const instances = (read("synthetic-yard/instances/instances.json").instances ?? []) as unknown[];
   const skins = (read("synthetic-yard/skin/skin.json").skins ?? []) as unknown[];
   await page.route("**/fixture-tiles/**", (route) => {
@@ -303,6 +393,99 @@ test("the Compare panel fits a phone", async ({ page }) => {
   );
   await expect.poll(() => caller(page)("picks").then((p) => p.picks.objects)).toBe("whole");
   await expect(objects.getByText(/Each thing in the yard is one object/)).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+});
+
+test("long method names list one a row, in the app's own control, on a desktop and a phone", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  // Tall enough that the whole panel is on screen for its picture.
+  await page.setViewportSize({ width: 1280, height: 1500 });
+  const errors: string[] = [];
+  await open(page, "cesium", errors, { names: "spool" });
+  const compare = page.getByTestId("compare-methods");
+  const motion = compare.getByRole("group", { name: "Motion" });
+  await expect(motion).toBeVisible();
+  // No native select anywhere: one radio group a system, a row a method when names are long.
+  await expect(page.locator("#panel select")).toHaveCount(0);
+  await expect(compare.getByRole("combobox")).toHaveCount(0);
+  for (const system of ["Objects", "Fill", "Motion"]) {
+    await expect(compare.getByRole("group", { name: system })).toHaveAttribute(
+      "data-layout",
+      "list",
+    );
+  }
+  const methods = motion.getByRole("radiogroup", { name: "Motion method" });
+  await expect(methods).toHaveAttribute("aria-orientation", "vertical");
+  await expect(methods.getByRole("radio")).toHaveText([
+    "Today",
+    "FreeForm · size rule",
+    "FreeForm · stiffness rule",
+    "Pinned FreeForm · stiffness rule",
+    "Volume FEM · stiffness rule",
+  ]);
+  // Each a row of its own, one under the other, as wide as the list.
+  const boxes = await Promise.all(
+    (await methods.getByRole("radio").all()).map((r) => r.boundingBox()),
+  );
+  for (let i = 1; i < boxes.length; i += 1) {
+    expect(boxes[i]?.y ?? 0).toBeGreaterThanOrEqual((boxes[i - 1]?.y ?? 0) + 1);
+    expect(Math.abs((boxes[i]?.width ?? 0) - (boxes[0]?.width ?? 0))).toBeLessThan(1);
+  }
+  // What to look for, under what the method does.
+  await expect(motion.getByText(/Turn wind up in Settings › Simulated wind/)).toBeVisible();
+  await expect(
+    compare.getByRole("group", { name: "Fill" }).getByText(/Set Inferred to Highlight/),
+  ).toBeVisible();
+  await methods.getByRole("radio", { name: "Pinned FreeForm · stiffness rule" }).click();
+  await expect.poll(() => caller(page)("picks").then((p) => p.picks.skins)).toBe("pinned-stiff");
+  await expect(motion).toHaveAttribute("data-picked", "pinned-stiff");
+  await compare
+    .getByRole("group", { name: "Objects" })
+    .getByRole("radio", { name: "A · Ground first" })
+    .click();
+  // The panel as it looks, glass and all, down to the end of the methods.
+  const panel = await page.locator("#panel").boundingBox();
+  const rows = await compare.boundingBox();
+  if (panel && rows) {
+    await page.screenshot({
+      path: test.info().outputPath("restyle.png"),
+      clip: {
+        x: panel.x,
+        y: panel.y,
+        width: panel.width,
+        height: rows.y + rows.height + 12 - panel.y,
+      },
+    });
+  }
+
+  // On a phone: every row and every method in it on screen, none cut off; and the keyboard.
+  await page.setViewportSize({ width: 400, height: 800 });
+  for (const system of ["Objects", "Fill", "Motion"]) {
+    const row = compare.getByRole("group", { name: system });
+    await row.scrollIntoViewIfNeeded();
+    const box = await row.boundingBox();
+    if (!box) throw new Error(`no ${system} row`);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(400);
+    for (const radio of await row.getByRole("radio").all()) {
+      const r = await radio.boundingBox();
+      expect((r?.x ?? 0) + (r?.width ?? 0)).toBeLessThanOrEqual(box.x + box.width + 0.5);
+    }
+  }
+  await methods.getByRole("radio", { name: "Pinned FreeForm · stiffness rule" }).focus();
+  await page.keyboard.press("ArrowDown");
+  const fem = methods.getByRole("radio", { name: "Volume FEM · stiffness rule" });
+  await expect(fem).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(fem).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => caller(page)("picks").then((p) => p.picks.skins)).toBe("tetfem-stiff");
+  await motion.scrollIntoViewIfNeeded();
+  await motion.screenshot({ path: test.info().outputPath("restyle-phone-motion.png") });
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );

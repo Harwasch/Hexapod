@@ -1818,6 +1818,10 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 /* Compare methods (lib/variants.ts): one row per system, Today and the variants. */
 .compare-popover {
   width: min(22rem, calc(100vw - 2rem));
+  /* Five methods a system and a hint each outgrow a short screen: the panel scrolls. */
+  max-height: min(var(--radix-popover-content-available-height, 80vh), 80vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.7rem;
 }
 
@@ -1875,8 +1879,10 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   white-space: nowrap;
 }
 
-.compare__select {
-  width: 100%;
+/* Long method names: the same radio group, one row a method (packages/ui `--vertical`). */
+.compare__control--list .glass-segment__item {
+  padding: 0.4rem 0.7rem;
+  white-space: normal;
 }
 
 .compare__about {
@@ -1884,6 +1890,31 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--text-secondary);
+}
+
+/* What to look for to judge the system: a hint, in the accent, under what the method does. */
+.compare__look {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.compare__look-icon {
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--accent-strong);
+}
+
+.compare__look-label {
+  font-weight: 600;
+  color: var(--accent-strong);
 }
 
 /* Scene objects (lib/categories.ts): categories to hide and highlight, beside the switcher. */

@@ -1,16 +1,27 @@
-import { GitCompareArrows, Loader2 } from "lucide-react";
+import { clsx } from "clsx";
+import { Eye, GitCompareArrows, Loader2 } from "lucide-react";
 import { useId, useState } from "react";
 
-import { GlassButton, GlassPopover, GlassSegmentedControl, GlassSelect } from "@twin/ui";
+import { GlassButton, GlassPopover, GlassSegmentedControl } from "@twin/ui";
 
-import { findVariant, SYSTEM_LABELS, VARIANT_SYSTEMS, type VariantSystem } from "@/lib/variants";
+import {
+  findVariant,
+  lookFor,
+  SYSTEM_LABELS,
+  VARIANT_SYSTEMS,
+  type VariantSystem,
+} from "@/lib/variants";
 import { useSettings } from "@/state/settings";
 import { useVariants, type OfferedVariants, type VariantStatus } from "@/state/variants";
 
 /** The value that stands for Today in a row's control (a variant's name never starts with ":"). */
 export const TODAY = ":today";
 
-/** A segmented control while the choices fit one line; a list beyond that. */
+/**
+ * Segments side by side while the choices fit one line; beyond that the same radio group as a
+ * list, one row a choice (real bake-offs have five methods with labels like "Pinned FreeForm ·
+ * stiffness rule").
+ */
 const SEGMENTS_MAX = 4;
 const SEGMENT_LABEL_CHARS = 34;
 
@@ -75,9 +86,10 @@ function SystemRow({
     { value: TODAY, label: "Today" },
     ...variants.map((v) => ({ value: v.name, label: v.label })),
   ];
-  const segmented =
+  const oneLine =
     options.length <= SEGMENTS_MAX &&
     options.reduce((n, o) => n + o.label.length, 0) <= SEGMENT_LABEL_CHARS;
+  const look = lookFor(system, variant);
   const name = SYSTEM_LABELS[system];
   const choose = (next: string): void => {
     pick(assetId, system, next === TODAY ? null : next);
@@ -91,9 +103,10 @@ function SystemRow({
       className="compare__row"
       role="group"
       aria-labelledby={`${id}-label`}
-      aria-describedby={`${id}-about`}
+      aria-describedby={`${id}-about ${id}-look`}
       data-testid={`compare-${system}`}
       data-picked={value}
+      data-layout={oneLine ? "segments" : "list"}
     >
       <div className="compare__head">
         <span id={`${id}-label`} className="compare__label">
@@ -101,31 +114,26 @@ function SystemRow({
         </span>
         <StatusNote status={status} />
       </div>
-      {segmented ? (
-        <GlassSegmentedControl
-          aria-label={`${name} method`}
-          block
-          className="compare__control"
-          value={value}
-          onValueChange={choose}
-          options={options}
-        />
-      ) : (
-        <GlassSelect
-          aria-label={`${name} method`}
-          className="compare__select"
-          value={value}
-          onChange={(event) => choose(event.target.value)}
-        >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </GlassSelect>
-      )}
+      {/* One radio group either way: segments while the labels fit a line, else one row each,
+          the picked one lit as the segment is. Arrow keys move, Space or Enter picks. */}
+      <GlassSegmentedControl
+        aria-label={`${name} method`}
+        block
+        orientation={oneLine ? "horizontal" : "vertical"}
+        className={clsx("compare__control", !oneLine && "compare__control--list")}
+        value={value}
+        onValueChange={choose}
+        options={options}
+      />
       <p id={`${id}-about`} className="compare__about" aria-live="polite">
         {about || "No description given."}
+      </p>
+      <p id={`${id}-look`} className="compare__look">
+        <Eye size={12} aria-hidden="true" className="compare__look-icon" />
+        <span>
+          <span className="compare__look-label">What to look for: </span>
+          {look}
+        </span>
       </p>
     </div>
   );
