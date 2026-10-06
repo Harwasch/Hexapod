@@ -159,6 +159,9 @@ export class ExploreController {
     this.active = true;
     this.scene.screenSpaceCameraController.enableInputs = false;
     this.cameraController?.setPassKeyEnabled(false);
+    // The person has the camera: nothing else moves it now (cameraOwnership.ts), the
+    // terrain collision included, which would lift a walker its own ground has put under it.
+    this.cameraController?.takenByUser();
     const camera = this.viewer.camera;
     // The walk has the camera now: a flight under way (a site's glide included) stops here.
     camera.cancelFlight();

@@ -938,6 +938,9 @@ export class SiteManager {
     if (!landed || performance.now() - landed.at > SETTLE_WINDOW_MS) return;
     // Another flight has the camera, though it may not have moved it yet.
     if (flight.cameraFlights !== this.camera.flights) return;
+    // So has a hand on the map, though it may not have moved it either: a press, a wheel
+    // stopped at the floor (cameraOwnership.ts).
+    if (this.camera.userHasCamera) return;
     const camera = this.viewer.camera;
     const untouched =
       Cartesian3.distance(landed.position, camera.positionWC) < 0.01 &&
