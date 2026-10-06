@@ -227,8 +227,13 @@ spool's bottom flange) is ground to any height filter.
    where it is densest), which picks one of the same class names (`COVER_PROMPT`); its
    pick is the class's word (`nameSource: "vlm"`), and classes it gives one word become
    one class. Checked on the CPU with the 2B model on the pumpkin's views: the code path
-   works, and the 2B answers "moss" for that hay, open question or list; the run uses the
-   4B, whose answers are in the run's `coverAsked`.
+   works, and the 2B answers "moss" for that hay, whether asked an open question or given
+   the list. The runs use the 4B, whose answers are in each run's `coverAsked`. In run
+   37397740104 it kept SigLIP's "hay" class as Hay but called the classes SigLIP read as
+   moss, forest floor and mulch Moss. So the pumpkin's hay bed came out 37% Hay, 58% Moss
+   and 5% Mud (SigLIP's dirt), in patches. The spool's ground came out 58% Moss and 37%
+   Grass. The cover classes are the weakest part of this candidate: SigLIP's grouping of
+   the ground is noisy, and the word the VLM gives a group is only as good as one crop.
 5. **Naming**: Qwen3-VL 4B Instruct (Apache-2.0) shown each top-level thing (and the parts
    of the six largest) in context and alone, answering JSON; its `name` is the object's.
    The crops come from the view that shows the thing whole with the most pixels, unless

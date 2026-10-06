@@ -1,7 +1,7 @@
 {
   "format": "hexapod.groundcover",
   "version": 1,
-  "note": "Ground and ground-cover classes for segment_ground_first's stuff pass (docs/SCENE_OBJECTS.md 3b), from the research notes' vocabulary (lawn ... artificial turf, trail). Each class: an id, the name the objects panel shows, prompts for the image-text model (averaged), and whether it is vegetation. `contrast` soaks up what is not ground cover (a thing seen in a tile of ground); it never becomes a class. Data, like categories.json: add a class by adding a line.",
+  "note": "Ground and ground-cover classes for segment_ground_first's stuff pass (docs/SCENE_OBJECTS.md 3b), from the research notes' vocabulary (lawn ... artificial turf, trail). Each class: an id, the name the objects panel shows (and the vision-language model chooses among when it checks a class's word), prompts for the image-text model (averaged), and whether it is vegetation. `contrast` soaks up what is not ground cover (a thing seen in a tile of ground); it never becomes a class. Data, like categories.json: add a class by adding a line.",
   "classes": [
     {
       "id": "grass",
