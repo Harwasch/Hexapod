@@ -296,6 +296,42 @@ def test_the_namer_names_the_cover_classes_and_one_word_makes_one_class() -> Non
     assert context.ndim == 3 and look.ndim == 3 and context.dtype == look.dtype == np.uint8
 
 
+def test_a_thing_is_named_from_a_view_that_shows_it_whole() -> None:
+    from types import SimpleNamespace
+
+    def view(colour, rows, cols) -> ss.View:
+        cell = np.full((40, 40), -1, np.int32)
+        cell[rows, cols] = 0
+        rgb = np.zeros((40, 40, 3), np.uint8)
+        rgb[...] = colour
+        return ss.View(None, rgb, cell, np.ones((40, 40), np.float32))
+
+    class Recorder:
+        name = "recorder"
+
+        def __init__(self) -> None:
+            self.crops: list = []
+
+        def name_objects(self, crops):
+            self.crops += crops
+            return [{"name": "thing"} for _ in crops]
+
+    cut = view((255, 0, 0), slice(5, 35), slice(0, 30))  # 900 pixels, run off the left edge
+    whole = view((0, 0, 255), slice(12, 27), slice(12, 27))  # 225, whole
+    tiny = view((0, 0, 255), slice(15, 23), slice(15, 23))  # 64, whole
+    thing = SimpleNamespace(id=1, parent=None, tags=[{"label": "thing", "score": 1.0}])
+    for views, colour in (([cut, whole], 2), ([cut, tiny], 0)):
+        extra = {1: {"kind": "thing"}}
+        namer = Recorder()
+        named = sgf._name(
+            [thing], extra, np.ones(4, np.int64), np.zeros(4, np.int64), np.array([1]), views,
+            namer, lambda message: None, None,
+        )  # fmt: skip
+        assert named == 1 and extra[1]["name"] == "Thing"
+        black = namer.crops[0][1]  # the thing alone, from the view it was named from
+        assert black.reshape(-1, 3).max(axis=0).argmax() == colour
+
+
 def test_refine_views_frame_the_box() -> None:
     lo, hi = np.array([-1.5, -1.2, 0.0]), np.array([1.5, 1.2, 2.2])
     for camera in sgf.refine_cameras(lo, hi):
