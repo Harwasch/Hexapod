@@ -194,7 +194,9 @@ VARIANT_SCRIPTS: dict[str, tuple[str, ...]] = {
         "--namer", "segment_models:QwenNamer",
     ),
     # Candidate C itself: SAM 3, in its own image, seeded with the stand-in's run
-    # (`SEEDED_VARIANTS`: `[segment|names=spool,pumpkin|variant=concept-first|seed=<run>]`).
+    # (`SEEDED_VARIANTS`: `[segment|names=spool,pumpkin|variant=concept-first|seed=<run>]`):
+    # spool or pumpkin ~4 min on the L4 (run 37537406212), ~$0.10 each, after a CPU check.
+    # A token pushed alone (an empty commit) changes no path segment.yml watches: no run.
     "concept-first": (
         "concept_scene.py",
         "--concepts", "concept_models:Sam3Concepts",
