@@ -2087,6 +2087,10 @@ def weak_copies(run: Run, limit: int) -> tuple[Splats, np.ndarray]:
     return setup.scene().take(rows), rows
 
 
+def _empty_splats() -> Splats:
+    return Splats(*(np.zeros((0, k)) for k in (3, 4, 3, 3)), np.zeros(0))
+
+
 def fuse(
     run: Run,
     states: dict[str, ArmState],
@@ -2102,32 +2106,35 @@ def fuse(
     budget = max(MIN_BUDGET, int(BUDGET_SHARE * len(setup.measured)))
     out: dict[str, tuple[Splats, np.ndarray, list[Camera]] | None] = {}
     layers: dict[str, dict[str, Any]] = {}
+    weak = weak_count(run)
     for arm, state in states.items():
         lifted = state.layer()
-        if lifted is None:
-            state.report["skipped"] = "nothing lifted"
+        if (lifted is None and not weak) or not state.fills:
+            state.report["skipped"] = "nothing lifted and nothing weak"
             out[arm] = None
             continue
-        conf = np.concatenate(state.confs)
-        # Up to half the budget is kept for the weak gaussians' copies: run 37508234704
-        # thinned the lifted ones to the whole budget and refined no weak gaussian at all.
-        reserve = min(weak_count(run), budget // 2)
-        thinned = gf.thin(gf.Lifted(lifted, conf, [], []), budget - reserve)
-        copies, copy_rows = weak_copies(run, max(0, budget - len(thinned.splats)))
+        if lifted is None:
+            # Only weak gaussians to refine (a scan seen everywhere, if badly somewhere):
+            # the layer is their refined copies alone.
+            gen, gen_conf = _empty_splats(), np.zeros(0)
+        else:
+            # Up to half the budget is kept for the weak gaussians' copies: run 37508234704
+            # thinned the lifted ones to the whole budget and refined no weak gaussian.
+            reserve = min(weak, budget // 2)
+            thinned = gf.thin(
+                gf.Lifted(lifted, np.concatenate(state.confs), [], []), budget - reserve
+            )
+            gen, gen_conf = thinned.splats, thinned.confidence
+        copies, copy_rows = weak_copies(run, max(0, budget - len(gen)))
         state.report.update(
             {
-                "lifted": len(lifted),
+                "lifted": 0 if lifted is None else len(lifted),
                 "carvedOnLift": state.carved,
-                "thinned": len(thinned.splats),
+                "thinned": len(gen),
                 "weakCopies": len(copies),
             }
         )
-        layers[arm] = {
-            "gen": thinned.splats,
-            "conf": thinned.confidence,
-            "copies": copies,
-            "copyRows": copy_rows,
-        }
+        layers[arm] = {"gen": gen, "conf": gen_conf, "copies": copies, "copyRows": copy_rows}
     rounds = [(opt.distill, None), *[(opt.update_distill, s) for s in opt.update_strengths]]
     for r, (iterations, strength) in enumerate(rounds):
         if strength is not None:

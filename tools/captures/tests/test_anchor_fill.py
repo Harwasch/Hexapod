@@ -398,3 +398,57 @@ def test_the_whole_run_fills_the_held_out_top(tmp_path: Path) -> None:
     for name in ("held-out-table.png", "anchors-table.png", "before-after-table.png"):
         assert (renders / name).exists(), name
     assert editor.calls > 0 and math.isfinite(report["timings"]["totalS"])
+
+
+def test_a_scan_seen_everywhere_gets_its_weak_gaussians_refined(tmp_path: Path) -> None:
+    # The full-data spool: the top is weak (seen, badly), nothing unknown to lift; the layer
+    # is the weak gaussians' refined copies.
+    import distill_fill as df
+
+    scene, _ = table_scene()
+    cams = spool_cameras()
+    paths = photos(scene, cams, tmp_path / "frames")
+    views = [gf.RealView(p.name, c, None, p) for p, c in zip(paths, cams, strict=True)]
+    setup, _ = af.make_setup(
+        "table", "a round wooden table", scene, views, render, width=96, log=lambda s: None
+    )
+    options = af.Options(
+        fill_size=(96, 56),
+        set_size=(64, 36),
+        probe_size=(64, 36),
+        quality_width=96,
+        azimuths=8,
+        anchors=(2, 3),
+        propagation=(2, 3),
+        seeds=2,
+        prop_seeds=2,
+        set_seeds=2,
+        distill=10,
+        update_distill=10,
+        lift_stride=2,
+        carve_width=96,
+    )
+
+    def distil(request: dict) -> dict:
+        init = df.unpack_scan(request["init"])
+        init["colours"] = np.clip(init["colours"] + 0.1, 0, 1)  # the views moved them
+        return {"inferred": df.pack_scan(init), "report": {"iterations": request["iterations"]}}
+
+    report = af.run_arms(
+        setup,
+        af.StandInEditor(),
+        af.StandInSetFiller(),
+        af.OracleDepth(scene, render),
+        render,
+        af.StandInPerceptual(),
+        options,
+        _measured_tileset(tmp_path / "scan"),
+        tmp_path / "out",
+        distil=distil,
+        log=lambda s: None,
+    )
+    assert report.get("heldOut") is None
+    for arm in af.ARMS:
+        entry = report["candidates"][arm]
+        assert entry["weakCopies"] > 0 and entry["weakCopiesKept"] > 0, entry.get("skipped")
+        assert entry["evidence"]["gaussians"] > 0
