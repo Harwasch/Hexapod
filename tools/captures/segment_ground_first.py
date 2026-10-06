@@ -177,6 +177,14 @@ NAME_PART_OBJECTS = 6
 NAME_PARTS_EACH = 8
 #: ... asked one at a time, for at most this long (seconds) in all.
 NAME_BUDGET_S = 420.0
+#: ... each from the view that shows it whole with the most pixels, unless it has less than
+#: `NAME_WHOLE_SHARE` of the pixels of the view with the most (then that one). The frame
+#: cuts an object when its box (1st-99th percentiles of its pixels) comes `NAME_EDGE_SHARE`
+#: of the frame's side close to an edge: the percentiles stop short of the edge by the 1%
+#: of pixels they leave out, so a margin of 0 never sees a cut (run 37394072441 named the
+#: spool "Stone" from a close view of its drum under the cut-off top).
+NAME_WHOLE_SHARE = 0.25
+NAME_EDGE_SHARE = 0.03
 #: Cover classes the namer checks (the largest; the rest keep the image-text model's word).
 COVER_ASK_MAX = 8
 #: Its close look at a class: a square this share of the view's shorter side, where the
@@ -1170,31 +1178,36 @@ def _name(
     chosen = chosen[:NAME_MAX]
     if not chosen:
         return 0
-    # Per chosen instance, its best view: the most pixels, half for one the frame cuts.
+    # Per chosen instance, its best view: whole and the most pixels (`NAME_WHOLE_SHARE`).
     lookup = np.zeros((len(chosen), len(instances) + 1), bool)
     for j, k in enumerate(chosen):
         lookup[j, subtree[k - 1]] = True
-    best = np.full(len(chosen), -1)
-    best_area = np.zeros(len(chosen))
-    best_box = np.zeros((len(chosen), 4))
+    # [whole, any]: per chosen instance, the view, its pixels, the box.
+    found = np.full((2, len(chosen)), -1)
+    found_area = np.zeros((2, len(chosen)))
+    found_box = np.zeros((2, len(chosen), 4))
     for v, view in enumerate(views):
         owner = view.cell
         h, w = owner.shape
+        mx, my = NAME_EDGE_SHARE * (w - 1), NAME_EDGE_SHARE * (h - 1)
         pid = np.where(owner >= 0, cell_id[np.maximum(owner, 0)], 0)
         for j in range(len(chosen)):
             inside = lookup[j][pid]
             area = float(inside.sum())
-            if area <= max(best_area[j], ss.MIN_VIEW_PX - 1):
+            if area <= max(found_area[:, j].min(), ss.MIN_VIEW_PX - 1):
                 continue
             ys, xs = np.nonzero(inside)
             # A robust box: a few stray splats of it across the view do not widen the crop.
             x0, x1 = np.percentile(xs, [1, 99])
             y0, y1 = np.percentile(ys, [1, 99])
             box = np.array([x0, y0, x1, y1], np.float64)
-            if box[0] <= 0 or box[1] <= 0 or box[2] >= w - 1 or box[3] >= h - 1:
-                area *= ss.TRUNCATED_WEIGHT
-            if area > best_area[j]:
-                best[j], best_area[j], best_box[j] = v, area, box
+            whole = x0 > mx and y0 > my and x1 < w - 1 - mx and y1 < h - 1 - my
+            for slot in (0, 1) if whole else (1,):
+                if area > found_area[slot, j]:
+                    found[slot, j], found_area[slot, j], found_box[slot, j] = v, area, box
+    use_whole = (found[0] >= 0) & (found_area[0] >= NAME_WHOLE_SHARE * found_area[1])
+    best = np.where(use_whole, found[0], found[1])
+    best_box = np.where(use_whole[:, None], found_box[0], found_box[1])
     crops: list[list[np.ndarray]] = []
     for j, k in enumerate(chosen):
         if best[j] < 0:

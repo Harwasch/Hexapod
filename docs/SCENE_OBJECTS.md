@@ -231,6 +231,12 @@ spool's bottom flange) is ground to any height filter.
    4B, whose answers are in the run's `coverAsked`.
 5. **Naming**: Qwen3-VL 4B Instruct (Apache-2.0) shown each top-level thing (and the parts
    of the six largest) in context and alone, answering JSON; its `name` is the object's.
+   The crops come from the view that shows the thing whole with the most pixels, unless
+   that view has under a quarter of the pixels of the best view overall. Run 37394072441
+   halved the pixels of a view that cuts the thing instead, but tested the cut on a robust
+   box (1st-99th percentiles) that never reaches the frame's edge. So it named the spool
+   "Stone" from a close view of its drum under the cut-off top, and the red pumpkin "Hay"
+   from a view that cut it.
 
 **The ground in `instances.json`** (every candidate writes it so): the Objects panel's top
 level is the scan's categories, so the top-level "Ground" is the category **Ground & soil**
