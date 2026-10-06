@@ -3,8 +3,10 @@ import { create } from "zustand";
 import { loadCustomSets, saveCustomSets, withCustomSets, type CustomSet } from "@/lib/customSets";
 import type { InstancesDoc } from "@/lib/instances";
 import { cycleIndex } from "@/lib/sceneSelect";
+import { withSupersedes } from "@/lib/supersedes";
 import { record } from "@/state/history";
 import { useInstances } from "@/state/instances";
+import { activeSupersedes, onSupersedesChange } from "@/state/supersedes";
 
 /** What a painted area matched (lib/sceneSelect.ts `bestSet`). */
 export interface PaintResult {
@@ -254,16 +256,26 @@ export function objectSelected(
 
 /**
  * `base` (a scan's `instances.json`) with the scan's painted objects drawn as instances of
- * their own (lib/customSets.ts `withCustomSets`): what the renderers draw from. The same
- * object while the painted objects do not change.
+ * their own (lib/customSets.ts `withCustomSets`), and the measured splats its chosen fill
+ * supersedes under their reserved id (lib/supersedes.ts, state/supersedes.ts): what the
+ * renderers draw from. The same object while neither changes.
  */
 export function effectiveDoc(assetId: string, base: InstancesDoc): InstancesDoc {
-  return withCustomSets(base, useSceneSelect.getState().customOf(assetId));
+  const painted = withCustomSets(base, useSceneSelect.getState().customOf(assetId));
+  return withSupersedes(painted, activeSupersedes(assetId));
 }
 
-/** Calls `listener` whenever the scan's painted objects change. Returns the unsubscriber. */
+/**
+ * Calls `listener` whenever what `effectiveDoc` draws for the scan changes: its painted
+ * objects, or the splats its fill supersedes. Returns the unsubscriber.
+ */
 export function onCustomSetsChange(assetId: string, listener: () => void): () => void {
-  return useSceneSelect.subscribe((state, previous) => {
+  const offPainted = useSceneSelect.subscribe((state, previous) => {
     if (state.custom[assetId] !== previous.custom[assetId]) listener();
   });
+  const offSuperseded = onSupersedesChange(assetId, listener);
+  return () => {
+    offPainted();
+    offSuperseded();
+  };
 }

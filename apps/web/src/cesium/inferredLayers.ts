@@ -17,7 +17,9 @@
  * (`INFERRED_HIGHLIGHT`). One place draws it, so it reads the same under every renderer.
  *
  * **Which layers** are the pick's (`state/variants.ts`): Today's `extras.inferredLayers`, or a
- * fill variant's. Picking another unloads the drawn layers and loads its own.
+ * fill variant's. Picking another unloads the drawn layers and loads its own. A variant that
+ * names `supersedes` also hides the measured splats it replaces while it is shown
+ * (state/supersedes.ts).
  */
 import { Cartesian4, Cesium3DTileset, Matrix4, type Scene } from "cesium";
 
@@ -32,6 +34,7 @@ import {
 import { inferredLayersFor, variantsOf } from "@/lib/variants";
 import { useInferred } from "@/state/inferred";
 import { useSettings } from "@/state/settings";
+import { followSupersedes } from "@/state/supersedes";
 import { onPickChange, pickedVariant, useVariants, type VariantStatus } from "@/state/variants";
 
 import type { SplatVertexColor } from "./splatInstances";
@@ -241,10 +244,13 @@ export function attachInferredLayers(
     });
   };
   const offVariant = offersVariants ? onPickChange(assetId, "fill", follow) : () => undefined;
+  // The measured splats the picked fill replaces, hidden while it is shown (lib/supersedes.ts).
+  const offSupersedes = offersVariants ? followSupersedes(assetId, variants, url) : () => undefined;
   follow();
   return () => {
     disposed = true;
     offVariant();
+    offSupersedes();
     offUpdate();
     offStyle();
     unload();

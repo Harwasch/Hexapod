@@ -11,7 +11,9 @@
  * - picking a fill variant draws its inferred layer and not the other's;
  * - Highlight changes the inferred layer's pixels -- purple -- and not one measured pixel;
  *   Hide removes the layer;
- * - picking a skins variant replaces the skin the scan's objects move by.
+ * - picking a skins variant replaces the skin the scan's objects move by;
+ * - a fill that supersedes measured splats (lib/supersedes.ts) hides them while it is shown,
+ *   Show or Highlight, and Hide or another method gives back the untouched scan.
  *
  * Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -27,6 +29,9 @@ const TILESET = "synthetic-yard/splat/tileset.json";
 /** The fills' boxes in the yard's frame (tools/captures/yard_variants.py `hedge`, `mound`). */
 const HEDGE = { min: [-3.2, 5.8, -0.2], max: [-1.6, 18.2, 1.8] };
 const MOUND = { min: [32.8, 9.3, -0.4], max: [38.2, 14.7, 1.8] };
+/** The yard's big tree (instance 1 of its instances.json): what the swap test supersedes. */
+const TREE = { id: 1, min: [17.3, 14.6, 0.2], max: [24.0, 23.3, 9.9] };
+const SUPERSEDES = "synthetic-yard/variants/fill/hedge/supersedes.json";
 
 type Renderer = "playcanvas" | "spark" | "cesium";
 
@@ -173,11 +178,48 @@ function spoolLike(variants: Record<string, Entry[]>): Record<string, Entry[]> {
   };
 }
 
+/**
+ * A `supersedes.json` (lib/supersedes.ts) flagging every splat of instance `id` and what is
+ * below it, in instances.json's own tiles: a stand-in for what a rebuilt surface replaces.
+ */
+function supersedesOf(
+  doc: { instances: { id: number; parent?: number | null }[]; tiles: Record<string, number[]> },
+  id: number,
+) {
+  const wanted = new Set([id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const i of doc.instances)
+      if (i.parent != null && wanted.has(i.parent) && !wanted.has(i.id)) {
+        wanted.add(i.id);
+        grew = true;
+      }
+  }
+  let superseded = 0;
+  const tiles: Record<string, number[]> = {};
+  for (const [checksum, runs] of Object.entries(doc.tiles)) {
+    const out: number[] = [];
+    for (let k = 0; k + 1 < runs.length; k += 2) {
+      const flag = wanted.has(runs[k] ?? 0) ? 1 : 0;
+      const count = runs[k + 1] ?? 0;
+      if (flag) superseded += count;
+      const last = out.length - 2;
+      if (last >= 0 && out[last] === flag) out[last + 1] = (out[last + 1] ?? 0) + count;
+      else out.push(flag, count);
+    }
+    tiles[checksum] = out;
+  }
+  return { superseded, tiles };
+}
+
 async function open(
   page: Page,
   renderer: Renderer,
   errors: string[],
-  { names = "fixture" }: { names?: "fixture" | "spool" } = {},
+  {
+    names = "fixture",
+    supersede = false,
+  }: { names?: "fixture" | "spool"; supersede?: boolean } = {},
 ): Promise<void> {
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
@@ -187,7 +229,19 @@ async function open(
     JSON.parse(readFileSync(resolve(TILES, relative), "utf-8")) as Record<string, unknown>;
   const fixture = read("synthetic-yard/variants/variants.json").variants as Record<string, Entry[]>;
   const variants = names === "spool" ? spoolLike(fixture) : fixture;
-  const instances = (read("synthetic-yard/instances/instances.json").instances ?? []) as unknown[];
+  if (supersede) {
+    // The hedge method replaces the big tree's measured splats, as a rebuilt surface would.
+    variants.fill = (variants.fill ?? []).map((entry) =>
+      entry.name === "hedge"
+        ? { ...entry, supersedes: "../variants/fill/hedge/supersedes.json" }
+        : entry,
+    );
+  }
+  const instancesDoc = read("synthetic-yard/instances/instances.json") as {
+    instances: { id: number; parent?: number | null }[];
+    tiles: Record<string, number[]>;
+  };
+  const instances = instancesDoc.instances as unknown[];
   const skins = (read("synthetic-yard/skin/skin.json").skins ?? []) as unknown[];
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
@@ -204,6 +258,9 @@ async function open(
         nativeLod: false,
       };
       return route.fulfill({ status: 200, json: tileset });
+    }
+    if (supersede && relative === SUPERSEDES) {
+      return route.fulfill({ status: 200, json: supersedesOf(instancesDoc, TREE.id) });
     }
     const file = resolve(TILES, relative);
     if (!existsSync(file)) return route.fulfill({ status: 404, body: "" });
@@ -358,6 +415,57 @@ for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
 
     const status = (await call("picks")).status;
     for (const system of ["objects", "fill", "skins"]) expect(status[system]?.state).toBe("ready");
+    expect(shaderErrors(errors)).toEqual([]);
+  });
+}
+
+for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
+  test(`a fill that supersedes measured splats swaps them under ${renderer}; Hide restores them`, async ({
+    page,
+  }) => {
+    test.setTimeout(900_000);
+    const errors: string[] = [];
+    await open(page, renderer, errors, { supersede: true });
+    const call = caller(page);
+    await call("view", 0, -32, 52);
+    if (renderer !== "cesium") expect((await call("scan"))?.active).toBe(true);
+    const tree = await call("rectOfLocal", TREE.min, TREE.max);
+    const mound = await call("rectOfLocal", MOUND.min, MOUND.max);
+    if (!tree || !mound) throw new Error("the tree or the mound is off screen");
+    await call("remember", "untouched");
+    await page.screenshot({ path: test.info().outputPath("1-untouched.png") });
+    const fill = page.getByTestId("compare-methods").getByRole("group", { name: "Fill" });
+
+    // Shown: the tree's measured splats are hidden while the method's layer is drawn.
+    await fill.getByRole("radio", { name: "Hedge" }).click();
+    await expect.poll(async () => (await call("inferred")).fillers).toEqual(["fixture-hedge"]);
+    await call("settle");
+    await page.screenshot({ path: test.info().outputPath("2-hedge-show.png") });
+    const swapped = await call("changed", tree, false, "untouched");
+    expect(swapped).toBeGreaterThan(0.05);
+    expect(await call("changed", mound, false, "untouched")).toBeLessThan(0.002);
+
+    // Highlight keeps the swap.
+    await page.getByRole("radio", { name: "Highlight inferred fill" }).click();
+    await call("settle");
+    expect(await call("changed", tree, false, "untouched")).toBeGreaterThan(0.05);
+
+    // Hide: the untouched scan, every pixel of it.
+    await page.getByRole("radio", { name: "Hide inferred fill" }).click();
+    await call("settle");
+    await page.screenshot({ path: test.info().outputPath("3-hide.png") });
+    expect(await call("changed", undefined, false, "untouched")).toBeLessThan(0.0005);
+
+    // Shown again, swapped again; another method (no supersedes) gives the tree back.
+    await page.getByRole("radio", { name: "Show inferred fill" }).click();
+    await call("settle");
+    expect(await call("changed", tree, false, "untouched")).toBeGreaterThan(0.05);
+    await fill.getByRole("radio", { name: "Mound" }).click();
+    await expect.poll(async () => (await call("inferred")).fillers).toEqual(["fixture-mound"]);
+    await call("settle");
+    await page.screenshot({ path: test.info().outputPath("4-mound.png") });
+    expect(await call("changed", tree, false, "untouched")).toBeLessThan(0.002);
+    expect((await call("picks")).status.fill?.state).toBe("ready");
     expect(shaderErrors(errors)).toEqual([]);
   });
 }

@@ -53,10 +53,12 @@ import {
   isCustomId,
   rangesLength,
   setFromInstances,
+  withCustomSets,
   type CustomSet,
 } from "@/lib/customSets";
 import { tileInstanceIds, withDescendants, type InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
+import { supersededIdOf } from "@/lib/supersedes";
 import {
   buildCandidates,
   chainOf,
@@ -83,6 +85,7 @@ import {
 import { castRay, hitWeights, labelsNear, type PickTile } from "@/lib/splatPick";
 import { useInstances } from "@/state/instances";
 import { chosenCombination, selectedId, selectedIds, useSceneSelect } from "@/state/sceneSelect";
+import { useSupersedes } from "@/state/supersedes";
 
 import { uniformScale } from "../placement";
 import { paintedDocOf } from "../scanView/scanInstances";
@@ -272,6 +275,12 @@ export class SceneSelectController {
     on(window, "pointercancel", () => this.#endStroke(false));
     on(window, "keydown", (e) => this.#onKey(e));
     this.#off.push(useSceneSelect.subscribe((state, previous) => this.#follow(state, previous)));
+    // A fill's swap changes what is drawn (lib/supersedes.ts): the brush projects anew.
+    this.#off.push(
+      useSupersedes.subscribe(() => {
+        this.#paintView = null;
+      }),
+    );
     this.#syncWheel(useSceneSelect.getState());
   }
 
@@ -674,10 +683,12 @@ export class SceneSelectController {
     const state = useSceneSelect.getState();
     const combination = chosenCombination(state);
     const assetId = state.assetId;
-    const doc = assetId ? paintedDocOf(assetId) : undefined;
     const base = assetId ? instancesDocOf(assetId) : undefined;
-    if (!combination || !assetId || !doc || !base) return null;
+    if (!combination || !assetId || !base) return null;
     const existing = state.customOf(assetId);
+    // Not the drawn document: a kept combination holds every splat of its members, whichever
+    // fill is shown and whatever it supersedes now (lib/supersedes.ts).
+    const doc = withCustomSets(base, existing);
     const set = setFromInstances(
       doc,
       combination.ids,
@@ -722,10 +733,16 @@ export class SceneSelectController {
     return (frustum.fovy ?? Math.PI / 3) / Math.max(1, this.#viewer.canvas.clientHeight);
   }
 
-  /** Every instance id not drawn now (the store's hidden set with what it contains). */
+  /**
+   * Every instance id not drawn now (the store's hidden set with what it contains, and the
+   * splats a fill supersedes, lib/supersedes.ts).
+   */
   #hiddenOf(assetId: string, doc: InstancesDoc): Set<number> {
     const hidden = useInstances.getState().assets[assetId]?.hidden;
-    return hidden && hidden.size > 0 ? withDescendants(doc, hidden) : new Set();
+    const out = hidden && hidden.size > 0 ? withDescendants(doc, hidden) : new Set<number>();
+    const superseded = supersededIdOf(doc);
+    if (superseded !== null) out.add(superseded);
+    return out;
   }
 
   #local(e: PointerEvent | WheelEvent): { x: number; y: number } {
