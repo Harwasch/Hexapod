@@ -532,7 +532,8 @@ def segment_argv(
         "--summary",
         str(work / "run.json"),
         *(["--cache", str(cache)] if cache is not None else []),
-        *(["--crop", crop] if variant and crop else []),
+        # One argument: a crop starting "-5," would read as an option of its own.
+        *([f"--crop={crop}"] if variant and crop else []),
     ]
 
 
