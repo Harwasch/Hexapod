@@ -65,6 +65,11 @@ from splat_render import Camera, Splats
 
 #: The strength weak pixels are refined at (0 keeps them, 1 makes them anew).
 WEAK_STRENGTH = 0.45
+#: The strength unknown pixels are made at, from a smooth fill of their surroundings
+#: (`prefill`): held to it only for the first steps, so the editor keeps its colours and
+#: draws the rest. Run 37516117746 gave the editor those pixels in flat magenta (strength
+#: 1) and it drew pink planks on the spool's top, with the photos more than without.
+UNKNOWN_STRENGTH = 0.9
 #: The ring of known pixels around a hole that seeds are scored on, px at a 1248-px width.
 RING_PX = 24
 #: A seed whose registered output keeps the known pixels below this (dB, blurred) drifted.
@@ -107,11 +112,11 @@ LAYERS = {"refs": "anchor-refs", "norefs": "anchor-norefs", "vace": "anchor-vace
 ANCHOR_ARM = {"refs": "refs", "norefs": "norefs", "vace": "refs"}
 
 EDIT_PROMPT = (
-    "Picture 1 is a view of {caption} rendered from a new camera position; the parts of it "
-    "that were never photographed are painted flat magenta. Replace every magenta pixel with "
-    "what the real scene shows there, continuing the surfaces, materials, colours and "
-    "lighting around it, as a sharp real photograph.{refs} Keep the camera, the framing and "
-    "every other pixel of Picture 1 exactly as they are. No magenta may remain."
+    "Picture 1 is a view of {caption} rendered from a new camera position. Where the scene "
+    "was never photographed, Picture 1 is only smeared in from around it: repaint those "
+    "blurred parts as a sharp real photograph would show them, continuing the surfaces, "
+    "materials, colours and lighting around them.{refs} Keep the camera, the framing and "
+    "the sharp parts of Picture 1 exactly as they are."
 )
 REFS_SENTENCE = {
     1: (
@@ -244,23 +249,21 @@ class Setup:
             self._cache[key] = self.views[k].photo(width=min(width, self.views[k].camera.width))
         return self._cache[key]
 
-    def context_photo(self, k: int, cluster: int | None, width: int = 2048) -> np.ndarray | None:
-        """Camera `k`'s photo cropped about hole `cluster` as it sees it: the middle 90 % of
-        the cluster's gaussians in its frame, padded (`CROP_PAD`), at least `CROP_MIN` of
-        the photo across, at the photo's aspect. A whole photo of the object beside the
-        render made the editor paste it in, ghosted (run 37508234704); a close-up of the
-        surface is a reference for its look. The whole photo when the hole is not in it.
-        Cached."""
-        key = f"context{k}-{cluster}-{width}"
+    def context_photo(
+        self, k: int, members: np.ndarray | None, tag: str = "", width: int = 2048
+    ) -> np.ndarray | None:
+        """Camera `k`'s photo cropped about the hole gaussians `members` (measured indices:
+        what a view fills, `view_hole_members`) as it sees them: the middle 90 % of them in
+        its frame, padded (`CROP_PAD`), at least `CROP_MIN` of the photo across, at the
+        photo's aspect. A whole photo of the object beside the render made the editor paste
+        it in, ghosted (run 37508234704); a close-up of the surface is a reference for its
+        look. The whole photo when they are not in it. Cached by `tag`."""
+        key = f"context{k}-{tag}-{width}"
         if key in self._cache:
             return self._cache[key]
         photo = self.photo(k, width)
         out = photo
-        members = (
-            np.flatnonzero(self.clusters.labels == cluster)
-            if cluster is not None and cluster >= 0
-            else np.zeros(0, np.int64)
-        )
+        members = np.zeros(0, np.int64) if members is None else np.asarray(members, np.int64)
         if photo is not None and members.size >= 10:
             h, w = photo.shape[:2]
             cam = fv.scaled(self.views[k].camera, w, h)
@@ -495,9 +498,10 @@ def _quality_on(q: fq.Quality, rows: np.ndarray) -> fq.Quality:
 @dataclass
 class ViewMasks:
     """A view's pixels with the scan (and any generated layer, as known): the classes, the
-    scan's colour (`render`, uint8), what the editor is shown (`condition`: the pixels to
-    make in the key colour), the strength map and the rendered depth of the known and weak
-    pixels (NaN elsewhere: what depth completion is anchored to)."""
+    scan's colour (`render`, uint8), what the editor is shown and held to (`condition`: the
+    pixels to make smoothly filled from around them, `prefill`; the open background black),
+    the strength map and the rendered depth of the known and weak pixels (NaN elsewhere:
+    what depth completion is anchored to)."""
 
     camera: Camera
     known: np.ndarray
@@ -517,6 +521,25 @@ class ViewMasks:
         return float(self.edit.sum() / max(int((~self.void).sum()), 1))
 
 
+def prefill(image: np.ndarray, target: np.ndarray, source: np.ndarray) -> np.ndarray:
+    """`image` with its `target` pixels filled smoothly from its `source` pixels (Telea at a
+    quarter of the size, so a large hole gets its surroundings' colours rather than streaks,
+    then softened): what the editor is given where it has to make the scene."""
+    import cv2
+
+    if not target.any():
+        return image.copy()
+    h, w = target.shape
+    sw, sh = max(8, w // 4), max(8, h // 4)
+    small = cv2.resize(image, (sw, sh), interpolation=cv2.INTER_AREA)
+    known_small = cv2.resize(source.astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA)
+    holes = (known_small < 0.999).astype(np.uint8) * 255
+    filled = cv2.inpaint(small, holes, 5, cv2.INPAINT_TELEA) if source.any() else small
+    big = cv2.resize(filled, (w, h), interpolation=cv2.INTER_LINEAR)
+    big = cv2.GaussianBlur(big, (0, 0), max(1.0, w / 512))
+    return np.where(target[..., None], big, image).astype(np.uint8)
+
+
 def view_masks(
     setup: Setup,
     camera: Camera,
@@ -524,8 +547,6 @@ def view_masks(
     layer: Splats | None = None,
     weak_strength: float = WEAK_STRENGTH,
 ) -> ViewMasks:
-    import anchor_models as am
-
     scene = setup.scene()
     c = setup.shown_classes()
     known = c == fq.KNOWN
@@ -539,10 +560,11 @@ def view_masks(
         face = np.concatenate([face, ones])
     pc = fv.pixel_classes(scene, camera, renderer, known, weak, face)
     render = tf.to_u8(pc.colour)
-    condition = render.copy()
-    condition[pc.unknown] = am.KEY
+    condition = prefill(render, pc.unknown, pc.known | pc.weak)
     condition[pc.void] = 0
-    strength = np.where(pc.known, 0.0, np.where(pc.weak, weak_strength, 1.0)).astype(np.float32)
+    strength = np.select(
+        [pc.known, pc.weak, pc.unknown], [0.0, weak_strength, UNKNOWN_STRENGTH], 1.0
+    ).astype(np.float32)
     depth = np.where((pc.known | pc.weak) & np.isfinite(pc.depth), pc.depth, np.nan)
     return ViewMasks(
         camera, pc.known, pc.weak, pc.unknown, pc.void, render, condition, strength, depth
@@ -624,7 +646,7 @@ class StandInEditor:
             out = []
             for r in requests:
                 self.calls += 1
-                make = r.strength >= 1.0
+                make = r.strength >= UNKNOWN_STRENGTH - 1e-3
                 base = cv2.inpaint(
                     r.render, make.astype(np.uint8) * 255, 5, cv2.INPAINT_TELEA
                 ).astype(np.float64)
@@ -709,7 +731,9 @@ class RemoteFallback:
         for r in requests:
             body = {
                 "image": am.encode_png(r.render),
-                "mask": am.encode_png(((r.strength >= 1.0) * 255).astype(np.uint8)),
+                "mask": am.encode_png(
+                    ((r.strength >= UNKNOWN_STRENGTH - 1e-3) * 255).astype(np.uint8)
+                ),
                 "prompt": r.prompt,
                 "seed": int(r.seed),
             }
@@ -993,24 +1017,27 @@ def edit_requests(
     lightning: bool,
     update: bool = False,
     vae_area: int = 640 * 640,
-    cluster: int | None = None,
+    members: np.ndarray | None = None,
+    tag: str = "",
 ) -> list[tuple[EditRequest, list[str]]]:
     """One request per seed: the condition, the render and strength, and (with `refs`) the
-    seed's pair of context photos, cropped about the view's hole `cluster`."""
+    seed's pair of context photos, cropped about the hole gaussians the view fills
+    (`members`, measured indices; the whole photos without; crops cached by `tag`)."""
     out = []
     for j, seed in enumerate(seeds):
         names: list[str] = []
         photos: list[np.ndarray] = []
         if refs:
             for role, c in fv.context_for_seed(context, j):
-                photo = setup.context_photo(c, cluster)
+                photo = setup.context_photo(c, members, tag)
                 if photo is not None:
                     photos.append(photo)
                     names.append(f"{role}:{setup.views[c].name}")
+        # Held to the condition: known pixels as rendered, the ones to make as prefilled.
         request = EditRequest(
             f"{key}-s{seed}",
             masks.condition,
-            masks.render,
+            masks.condition,
             masks.strength,
             photos,
             prompt_for(setup.caption, len(photos), update),
@@ -1636,6 +1663,20 @@ class Run:
         return out
 
 
+def view_hole_members(setup: Setup, masks: ViewMasks, target: Target | None) -> np.ndarray:
+    """The hole gaussians (measured indices) a view shows in the pixels it fills, else its
+    cluster's: what its context photos are cropped about. Cached by view (the first call's
+    masks decide)."""
+    key = f"members-{target.key if target is not None else id(masks)}"
+    if key not in setup._cache:
+        rows, _ = anchor_points(setup, masks, _hole_sample(setup))
+        members = setup.shown[rows]
+        if members.size < 10 and target is not None and target.cluster >= 0:
+            members = np.flatnonzero(setup.clusters.labels == target.cluster)
+        setup._cache[key] = members
+    return setup._cache[key]
+
+
 def fill_anchors(run: Run, arms: Sequence[str]) -> dict[str, list[FilledView]]:
     """Every anchor under every anchor arm (`refs`, `norefs`): all seeds sent at once, then
     best of N with agreement between the anchors, composited."""
@@ -1661,7 +1702,8 @@ def fill_anchors(run: Run, arms: Sequence[str]) -> dict[str, list[FilledView]]:
                 steps=opt.anchor_steps,
                 lightning=opt.lightning,
                 vae_area=opt.vae_area,
-                cluster=t.cluster,
+                members=view_hole_members(setup, masks[t.key], t),
+                tag=t.key,
             )
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
             meta.append((arm, t, [n for _, n in reqs]))
@@ -1795,7 +1837,8 @@ def propagate_sequential(run: Run, states: dict[str, ArmState]) -> None:
                 steps=opt.prop_steps,
                 lightning=opt.lightning,
                 vae_area=opt.vae_area,
-                cluster=t.cluster,
+                members=view_hole_members(setup, masks, t),
+                tag=t.key,
             )
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
             meta.append((arm, masks, [n for _, n in reqs]))
@@ -2091,7 +2134,8 @@ def _update_round(
                 lightning=opt.lightning,
                 vae_area=opt.vae_area,
                 update=True,
-                cluster=target.cluster if target is not None else None,
+                members=view_hole_members(setup, fill.masks, target),
+                tag=fill.key,
             )
             pending.append((fill.key, run.editor.start([r for r, _ in reqs])))
             meta.append((fill, masks))
@@ -2128,11 +2172,15 @@ def score_held_out(
         if photo is None:
             continue
         cam = fv.scaled(view.camera, photo.shape[1], photo.shape[0])
-        region = (
-            _close(tf._covered(run.renderer(withheld, cam).alpha), 3)
-            if len(withheld)
-            else np.zeros(photo.shape[:2], bool)
-        )
+        region = np.zeros(photo.shape[:2], bool)
+        if len(withheld):
+            # Where a withheld gaussian is the front surface (not behind what is shown).
+            drawn = run.renderer(withheld, cam)
+            front = run.renderer(scene, cam).depth
+            ahead = np.isfinite(drawn.depth) & (
+                drawn.depth <= np.where(np.isfinite(front), front, np.inf) * 1.03 + 1e-6
+            )
+            region = _close(tf._covered(drawn.alpha) & ahead, 3)
         candidates.append((int(region.sum()), view, photo, cam, region))
     candidates.sort(key=lambda x: -x[0])
     for area, view, photo, cam, region in candidates[:max_views]:
@@ -2226,7 +2274,7 @@ def anchor_sheet(run: Run, fills: dict[str, list[FilledView]], out: Path) -> Non
             continue
         row = []
         for role, c in fv.context_roles(t.context).items():
-            photo = setup.context_photo(c, t.cluster)
+            photo = setup.context_photo(c, setup._cache.get(f"members-{t.key}"), t.key)
             if photo is not None:
                 row.append(
                     gf.label_image(_contain(photo, (w, h)), f"{role}: {setup.views[c].name}")
@@ -2236,11 +2284,10 @@ def anchor_sheet(run: Run, fills: dict[str, list[FilledView]], out: Path) -> Non
         any_fill = next((by_key[a][t.key] for a in by_key if t.key in by_key[a]), None)
         if any_fill is None:
             continue
-        row.append(
-            gf.label_image(
-                small(any_fill.masks.condition), f"{t.key} {t.elevation:g}/{t.azimuth:g} given"
-            )
-        )
+        given = any_fill.masks.condition.copy()
+        unknown = any_fill.masks.unknown
+        given[_dilate(unknown, 3) & ~unknown] = (255, 0, 255)  # what it had to make, outlined
+        row.append(gf.label_image(small(given), f"{t.key} {t.elevation:g}/{t.azimuth:g} given"))
         for arm, table in by_key.items():
             f = table.get(t.key)
             row.append(
@@ -2504,19 +2551,25 @@ def options_from(args: Any) -> Options:
 
 
 def smoke_request() -> EditRequest:
-    """A tiny request (a gradient with a magenta box, one reference) that checks the editor
+    """A tiny request (a gradient with a box to make, one reference) that checks the editor
     runs before a job sends it hundreds; sent first, so its load overlaps the setup."""
-    import anchor_models as am
-
     h, w = 144, 256
     yy, xx = np.mgrid[0:h, 0:w]
     render = np.stack([xx * 255 // w, yy * 255 // h, np.full_like(xx, 128)], -1).astype(np.uint8)
-    strength = np.zeros((h, w), np.float32)
-    strength[48:96, 96:160] = 1.0
-    condition = render.copy()
-    condition[strength >= 1.0] = am.KEY
+    make = np.zeros((h, w), bool)
+    make[48:96, 96:160] = True
+    strength = np.where(make, UNKNOWN_STRENGTH, 0.0).astype(np.float32)
+    condition = prefill(render, make, ~make)
     return EditRequest(
-        "smoke-s1", condition, render, strength, [render], prompt_for("a gradient", 1), 1, 4, True
+        "smoke-s1",
+        condition,
+        condition,
+        strength,
+        [render],
+        prompt_for("a gradient", 1),
+        1,
+        4,
+        True,
     )
 
 

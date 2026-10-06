@@ -193,9 +193,25 @@ def test_prompts_name_the_photos_they_show() -> None:
     assert "Picture 2 is a close-up real photograph" in one and "Picture 3" not in one
     assert "do not copy its framing" in one
     assert "Picture 2" not in af.prompt_for("a table", 0)
-    assert "magenta" in af.prompt_for("a table", 0) and "magenta" not in af.prompt_for(
+    assert "smeared" in af.prompt_for("a table", 0) and "smeared" not in af.prompt_for(
         "x", 0, update=True
     )
+    assert "magenta" not in af.prompt_for("a table", 2)
+
+
+def test_what_is_to_make_is_given_smoothly_filled_from_around_it() -> None:
+    render = _texture()
+    render[:, :48] = (40, 170, 40)
+    render[:, 48:] = (210, 190, 60)
+    hole = np.zeros(render.shape[:2], bool)
+    hole[20:50, 30:70] = True
+    painted = render.copy()
+    painted[hole] = (255, 0, 255)
+    out = af.prefill(painted, hole, ~hole)
+    assert (out[~hole] == painted[~hole]).all()
+    assert not af.key_residue(out, hole).any()
+    # Each side of the hole takes its own side's colour.
+    assert out[35, 33, 1] > 130 and out[35, 33, 0] < 90 and out[35, 66, 0] > 160
 
 
 def test_the_leave_out_holds_out_the_highest_or_lowest() -> None:
@@ -305,7 +321,8 @@ def test_the_whole_run_fills_the_held_out_top(tmp_path: Path) -> None:
     # Context photos are cropped about the hole, at the photo's aspect.
     labels = setup.clusters.labels[inner_top]
     top = int(np.bincount(labels[labels >= 0]).argmax())
-    whole, crop = setup.photo(0, 2048), setup.context_photo(0, top)
+    members = np.flatnonzero(setup.clusters.labels == top)
+    whole, crop = setup.photo(0, 2048), setup.context_photo(0, members, "top")
     assert whole is not None and crop is not None
     assert crop.shape[1] < whole.shape[1] and crop.shape[1] >= af.CROP_MIN * whole.shape[1] - 1
     assert abs(crop.shape[1] / crop.shape[0] - whole.shape[1] / whole.shape[0]) < 0.1

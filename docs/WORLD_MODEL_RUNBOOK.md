@@ -461,20 +461,24 @@ fill is `fill_quality.py`, which views and photos `fill_views.py`, the models
    cameras that saw them, by quality: the top two (20 degrees apart), a wide shot (the
    farthest strong voter) and a close-up (the nearest). The editor's optimum is 1-3 images,
    so each seed gets the render and two photos: (top0, top1), (top0, wide), (top1, close),
-   (wide, close). Each photo is cropped about the hole as that camera sees it (the middle
-   90 % of the hole's gaussians, padded by a quarter, at least 45 % of the photo across):
-   given whole photos of the spool, the editor pasted a second spool in, ghosted.
+   (wide, close). Each photo is cropped about what the view fills as that camera sees it
+   (the middle 90 % of the hole gaussians the view shows in its pixels to fill, padded by a
+   quarter, at least 45 % of the photo across): given whole photos of the spool, the editor
+   pasted a second spool in, ghosted.
 4. **Anchors** (`anchor_models.edit`). Qwen-Image-Edit-2511 with its 8-step Lightning LoRA:
-   picture 1 the render with the pixels to make magenta, pictures 2-3 the photos. After every
-   step the output tokens whose strength is at or below the next noise level go back to the
-   render's own latents at that level: known tokens end as rendered, weak ones (0.45) are
-   denoised from 0.45 down, unknown ones from noise. Four seeds; each registered to the
+   picture 1 the render with the pixels to make filled smoothly from around them (Telea at a
+   quarter size, softened), pictures 2-3 the photos. After every step the output tokens
+   whose strength is at or below the next noise level go back to picture 1's own latents at
+   that level: known tokens end as rendered, weak ones (0.45) are denoised from 0.45 down,
+   unknown ones (0.9) keep the smooth fill's colours for the first steps and are drawn
+   after. (Run 37516117746 gave the editor those pixels in flat magenta, never held; it
+   drew pink planks on the spool top, more often with the photos.) Four seeds; each registered to the
    render (ECC affine on the known pixels, kept only when small and better) and colour
    matched near the hole; the choice: LPIPS on a ring of known pixels around the hole, plus
    half of (1 - agreement with the other anchors' choices at the hole gaussians both see),
-   plus twice the share of the pixels to make left magenta, drifted seeds (known pixels
-   below 15 dB) last. Known pixels are composited back exactly; magenta the editor left is
-   painted over from around it, weighted 0 and never lifted. The chosen seed's colour
+   plus twice the share of the pixels to make left magenta (run 37508234704's key colour),
+   drifted seeds (known pixels below 15 dB) last. Known pixels are composited back exactly;
+   any magenta left is painted over from around it, weighted 0 and never lifted. The chosen seed's colour
    agreement with every other seed is each pixel's weight from here on.
 5. **Lift** (`complete_depth`). Prompt Depth Anything (ViT-L) given the scan's own rendered
    depth (holes filled smoothly) as its prompt; fitted to the known and weak pixels' rendered
