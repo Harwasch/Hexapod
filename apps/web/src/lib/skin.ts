@@ -20,6 +20,13 @@
  * is 32 (a skin of more than 16 handles: a big tree, docs/SCENE_OBJECTS.md §9) takes two
  * texels a splat. A skin of one handle (a rigid object: only the constant handle) takes no
  * rows at all.
+ *
+ * A **limbs skin** (`method.name` `limbs`, docs/SCENE_OBJECTS.md §9) is a plant's rig carried
+ * in this format: handle `j` is limb `j`, each skin entry carries a `limbs` block (the plant's
+ * wind and one record per limb, `@twin/world`'s `LimbSkinSource`) for its driver
+ * (`limbWind.ts`), and the last byte of every row -- which no weight uses, a row of `b` bytes
+ * holding at most `b − 1` -- is the splat's leaf flutter share. Its driven handles carry the
+ * frame's flutter after the `12·m` numbers (`skinFloats`).
  */
 
 import {

@@ -459,6 +459,17 @@ splat's ancestor chain owns it (a tree, not each branch), so the skin is smooth 
   `category`, `behaviour`, `properties`: the instance's, for a viewer whose
   `instances.json` does not list it -- the wind's prior and the poke read them) and `class`
   (the handle policy's stiffness class).
+- **A limbs skin** (`method.name` `limbs`, §9 "Limbs"): handle `j` is a plant's limb `j`
+  (trunk first), not an eigenmode. Each entry carries a `limbs` block -- the plant's wind
+  (`seed`, `referenceSpeedMps`, `leafSizeM`, `wind`: `turbulence`, `lengthScaleM`, `gust`,
+  `canopyAdvection`; `seasons`; `flutter.referenceM`) and `handles`, one record a limb (`key`
+  the rig's oscillator, `pivot` the joint it hangs from, `parent` the handle carrying that
+  joint, `level`, `spanM`, `frequencyHz`, `damping`, `tree`, `gain`, `limitRad`, `direction`,
+  `samplePoint`, `widthM`, `heightM`, `staticTipM`, `flutterM`) -- and the **last byte of
+  every row** (no weight uses it: a row of `b` bytes holds at most `b − 1` learned weights) is
+  the splat's leaf flutter share, `byte/127`. A viewer reads the block only under method
+  `limbs` and only whole, and never sways such a skin as eigenmodes; its `dynamics` and
+  `eigenvalues` are the poke's.
 - **Dense, not top-k** (measured, `skin_scene.sparsity_report`, synthetic tree, 13 handles,
   random handles whose largest displacement is 5% of its half-height; error as a share of the
   rms displacement):
@@ -494,9 +505,10 @@ splat primitive's motion chain (`splatMotionChain.ts`; the Living Survey's rig i
 motion composes with the visibility chain (hide, view cones) and the colour hook (highlight),
 which all see the displaced position. Per splat, uploaded per tile as the instance ids are
 (un-bake, checksum, decode): its skin id (RGBA32UI, four a texel) and its row (RGBA32UI, one a
-texel). Per skin, 64 RGBA32F texels: `(moving, m)` then `Z_j`'s rows folded into the baked
-frame (`A_b = L·A·L⁻¹`, `t_b = L·(t − A·o) − A_b·b`), uploaded when a driver sets them, one
-row per 16 skins. A skin at rest costs one fetch; nothing moving costs none. **Covariances**
+texel). Per skin, 128 RGBA32F texels (`TEXELS_PER_SKIN`): `(moving, m)` then `Z_j`'s rows folded into the baked
+frame (`A_b = L·A·L⁻¹`, `t_b = L·(t − A·o) − A_b·b`), uploaded when a driver sets them, eight
+skins a row; texels 97–112 hold a limbs skin's leaf flutter (§9 "Limbs"), zero for every
+other skin. A skin at rest costs one fetch; nothing moving costs none. **Covariances**
 follow `J = I + Σ_j w_j A_j` through the engine patch's optional `splatVertexJacobian`
 (`J·Σ·Jᵀ`); dropped is the weights' gradient term `Σ_j Z_j[x;1]∇w_jᵀ` -- exact for the
 constant handle, 0.14 at most (against 1 on the diagonal) for the tree's 2% random handles.
@@ -1371,12 +1383,13 @@ signed int8 weights), so the viewer, the wind and the poke need nothing per meth
 (`tools/captures/skin_methods.py`, `skin_variants.py`). Two axes: **how the weight fields are
 found** and **how many handles** an object gets.
 
-| variant (`extras.variants.skins[].name`) | method                                                                                                                                                                    | handles             | licence                       |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----------------------------- |
-| `freeform`                               | FreeForm/RKPM skinning eigenmodes over the splat centres (today's method; a shell; free modes, the wind keeps the mixes that leave the base still)                        | size rule (today's) | Kaolin, Apache-2.0 (vendored) |
-| `freeform-stiff`                         | the same                                                                                                                                                                  | stiffness-aware     | Kaolin, Apache-2.0            |
-| `pinned-stiff`                           | FreeForm/RKPM with the base band held by a penalty (`kaolin_rkpm` `pinned`): every learned handle is a bending mode of a rooted object                                    | stiffness-aware     | Kaolin, Apache-2.0 + ours     |
-| `tetfem-stiff`                           | linear FEM (P1) on a Kuhn tetrahedral mesh of the object's filled occupancy, base nodes held, splats embedded barycentrically; mass and anchor integrated over the volume | stiffness-aware     | ours (NumPy/SciPy)            |
+| variant (`extras.variants.skins[].name`) | method                                                                                                                                                                                                                                                                      | handles             | licence                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----------------------------- |
+| `freeform`                               | FreeForm/RKPM skinning eigenmodes over the splat centres (today's method; a shell; free modes, the wind keeps the mixes that leave the base still)                                                                                                                          | size rule (today's) | Kaolin, Apache-2.0 (vendored) |
+| `freeform-stiff`                         | the same                                                                                                                                                                                                                                                                    | stiffness-aware     | Kaolin, Apache-2.0            |
+| `pinned-stiff`                           | FreeForm/RKPM with the base band held by a penalty (`kaolin_rkpm` `pinned`): every learned handle is a bending mode of a rooted object                                                                                                                                      | stiffness-aware     | Kaolin, Apache-2.0 + ours     |
+| `tetfem-stiff`                           | linear FEM (P1) on a Kuhn tetrahedral mesh of the object's filled occupancy, base nodes held, splats embedded barycentrically; mass and anchor integrated over the volume                                                                                                   | stiffness-aware     | ours (NumPy/SciPy)            |
+| `limbs-today`                            | not eigenmodes: today's plant rig (`rig.json` + `motion.json`) carried as a skin, one handle per limb, each a rotation about its own joint swayed by the rig's own per-limb wind, leaf flutter in the shader ("Limbs", below); only a scan with a rig (the Minnetonka tree) | one per limb        | ours                          |
 
 The eigenvalues of every method are on one scale (the object in the unit box `fit_skin` uses,
 `E = 1`), so `ω_j = c·√λ_j / scale` and a material's `c` mean the same under each.
@@ -1509,6 +1522,77 @@ the tree bends while its base and its neighbour stay, it rings after the release
 the measured frame exactly, a press on empty space still turns the camera, the movable shrub
 slides whole, and with the tool off the same press turns the camera.
 
+### Limbs: today's rig as a skin (stage 0)
+
+Compared on the Minnetonka tree and the camp's shrubs, every eigen-skin candidate moved "like
+one big blob of jello" while Today -- the hand-built rig (`rig.json` + `motion.json`, ADR 0008,
+`living.ts`) -- looked real. What the candidates lack is what the rig has: a limb hierarchy, a
+frequency per limb from its length, its own gusts and sway plane per limb, rotation about
+joints, and leaf flutter; their handles are global low modes of one energy, each covering the
+whole tree, translations only, one material and one wind sample per object. Stage 0 asks
+whether the skin format can carry the rig's motion: `limbs-today` is today's rig converted,
+with nothing new learned, to be judged by eye against Today. If it matches, what is left for
+every plant is extracting the skeleton automatically.
+
+- **The skin** (`skin_methods.fit_limbs_from_rig`; `skin_variants.py`'s `limbs-today`, from
+  the scan's rig, `BAKEOFF`'s `rig`). Handle `j` is limb `j` -- each oscillator of the rig
+  whose joints bend, trunk first, 24 on this tree, so 25 handles and two texels a splat --
+  and handle 0 stays still. A splat's weight on a limb is today's rig read through it: its
+  four Shepard joints (`shepard_binding`, as `skinSplatsToNodes`), each joint's chain of
+  hinges grouped by limb with the sidecar's gains, then the least-squares scalar for a
+  rotation about the limb's own pivot (`limb_weights`). So the bend profile along a limb is
+  the rig's (its bend spread by length: uniform curvature, `β(s) ∝ s²`), a splat has weight
+  only on its own limb and the limbs it hangs from, and near a joint it blends its limb with
+  its parent's as the rig's skinning does. Each limb's weights are scaled to `max |w| = 1`
+  over the tree, the scale kept as its `gain`. The last byte of the row is the leaf flutter
+  share (the Shepard blend of its joints' flutter, as today's per-splat amplitude).
+- **The wind** (`packages/world/src/limbWind.ts`). Each frame limb `j` turns by
+  `R_j = R(gain_j·θ_j)` about its pivot, `Z_j = [R_j − I | −(R_j − I)(p_j − o)]`; `θ_j` is the
+  rig's own sway of the oscillator with the same key -- the same seed, textures, trajectories,
+  EN 1991-1-4 frozen field read at the limb's centroid, sway axes across its chord, damping
+  0.045–0.106 -- so a converted skin sways limb for limb as the rig does
+  (`limbWind.test.ts`: every joint's local rotation is its limb's bend times its gain, to
+  1e-12). The wind control means what it means for the rig (`speedFromStrength`, bearing,
+  the sidecar's gusts), on the scene clock, stateless; covariances turn through `J = I + Σ w_j
+A_j` as any skin's.
+- **Leaf flutter**, in the skin shaders of every renderer (CesiumJS's part, and the GLSL
+  PlayCanvas and Spark share): the rig's band -- wavelengths 4–10 leaf sizes, carried
+  downwind at `0.3·U` (2–9 Hz at the default wind), 6 mm at 10 m/s saturating at twice that,
+  following the limbs' gusts -- as four plane waves per component on the rig's three lookup
+  planes (the rig's 1024² texture does not travel to every renderer), written by the driver
+  after the handles and kept in texels 97–112 of the skin's 128 (§4). Same band, advection and
+  amplitude as Today's; not the same pattern.
+- **The poke** works on it through the existing modal poke: the skin carries `dynamics` and an
+  eigenvalue per handle that rings it alone at its limb's frequency, so a grabbed splat pulls
+  its own limb and the limbs it hangs from (its weights are zero elsewhere) and lets go at
+  their frequencies. It pulls the limbs' weight fields as translations, not as rotations about
+  their joints: a rotational chain poke was not built in stage 0.
+- **Older skins** behave as before: the block is read only under `method.name` `limbs`, the
+  flutter texels of every other skin stay zero (one more texel fetch a skinned splat), and
+  their rows' last byte is never read.
+
+**Measured** on the published Minnetonka tiles (2,345,203 splats, 50 tiles), Today (the rig's
+`livingTransforms` through its four-joint skinning) against `limbs-today` (the skin's int8
+rows and the limb driver) and the published `freeform`, under the same wind, flutter off, over
+4,000 random splats above 1 m (1,274 bound to a tip joint), 300 s at 20 Hz (Welch, 25.6 s
+segments):
+
+| wind           | model         | tip RMS | tip std | displacement centroid | coherence, 1–2 m apart, 0.8–3 Hz (along / across) |
+| -------------- | ------------- | ------- | ------- | --------------------- | ------------------------------------------------- |
+| 0.1 (6.3 m/s)  | Today         | 4.57 cm | 2.28 cm | 0.224 Hz              | 0.43 / 0.41                                       |
+|                | `limbs-today` | 4.54 cm | 2.26 cm | 0.223 Hz              | 0.43 / 0.42                                       |
+|                | `freeform`    | 2.38 cm | 1.41 cm | 0.510 Hz              | 0.83 / 0.87                                       |
+| 0.5 (14.1 m/s) | Today         | 22.6 cm | 12.0 cm | 0.267 Hz              | 0.40 / 0.40                                       |
+|                | `limbs-today` | 22.5 cm | 11.9 cm | 0.266 Hz              | 0.40 / 0.40                                       |
+|                | `freeform`    | 10.7 cm | 6.2 cm  | 0.412 Hz              | 0.82 / 0.78                                       |
+
+Every number of `limbs-today` is within 1% of Today's (the target was 10%); `freeform` moves
+its splats a metre or two apart together (coherence 0.8 where the rig's limbs give 0.4). Splat
+for splat the skin is 11–12% (rms) from Today: a scalar weight per limb cannot follow the
+effective hinge of a zigzagging extracted limb off the line to the splat, so a splat's
+direction differs a little while its size, frequency and phase do not. Fit: 34 s on 4 CPUs
+for the 2.2 M leaf splats; `skin.bin` 75 MB (32-byte rows), `skin.json` 18 KB.
+
 ### Publishing and choosing
 
 `.github/workflows/publish-skins.yml` (`[skins]`, `[skins|scans=...|variants=...|publish]`):
@@ -1532,8 +1616,16 @@ the one attach that stages no files; `attach_sidecars` refuses any other empty a
 any manifest that sets `extras.variants` without an entry to register or withdraw (a whole
 value read earlier would erase what others attached since).
 
+**`limbs-today` is not published yet**: the live viewer must ship the `limbs` method first (a
+viewer without it reads the file as an eigen-skin and sways it wrongly). Once it is deployed,
+dispatch the workflow with `scans: minnetonka-tree`, `variants: limbs-today`, `publish: true`:
+the run fetches the tree's tiles and its rig (`sites/minnetonka-tree/source/rig.json` and its
+`motion.json`), fits the one variant, uploads `variants/skins/limbs-today/` and adds its one
+entry with `with_variant` -- the four candidates' entries and files, and any other system's,
+stay as they are. A scan without a rig asked for it is skipped, not failed.
+
 **Choosing in the viewer.** The **Methods** panel's **Motion** row (§4, "Variants") lists
-Today and the four candidates by label; a pick swaps the skin in place (`attachSkin`), the
+Today and the candidates by label; a pick swaps the skin in place (`attachSkin`), the
 wind and the poke move whichever is drawn, and on the Minnetonka tree the procedural rig
 stands down while a candidate is drawn. A scan republished with new tiles loses
 `extras.variants` (the API does not know it yet, §4): run the workflow again to put them back.

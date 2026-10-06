@@ -24,7 +24,10 @@
  *   the baked frame** the shader sees (`foldHandle`): `A_b = L·A·L⁻¹`,
  *   `t_b = L·(t − A·o) − A_b·b` for the bake `B = (L, b)` and the rest origin `o`, so the
  *   shader's whole job is `Σ w_j (A_b x_b + t_b)`. Rewritten when a driver sets handles;
- *   only the rows of the skins that changed are uploaded.
+ *   only the rows of the skins that changed are uploaded. A limbs skin's leaf flutter
+ *   (`limbWind.ts`) takes 16 more texels from `FLUTTER_TEXEL` (97): plane waves folded into
+ *   the baked frame (`foldFlutter`), added per splat by the share in its row's last byte. Every
+ *   other skin's texels there stay zero, and the shader adds nothing for it.
  *
  * **Covariances.** The part also gives the chain its linear part `Σ_j w_j A_b,j`, so each
  * splat's covariance is drawn through `J = I + Σ_j w_j A_j` (the patch's
@@ -568,8 +571,9 @@ export class SplatSkinning implements SplatMotionPart {
 
   /**
    * Sets skin `skinId`'s handles: `handles` holds `Z_j` row-major (12 numbers a handle, rest
-   * frame, about the skin's origin) for `j = 0..m−1`; fewer leave the rest at rest. `null`
-   * puts the skin back at rest. The driver's whole interface (wind, telemetry, a slider).
+   * frame, about the skin's origin) for `j = 0..m−1`, and for a limbs skin its flutter after
+   * them (`skinFloats`); fewer leave the rest at rest. `null` puts the skin back at rest. The
+   * driver's whole interface (wind, telemetry, a slider).
    */
   setHandles(skinId: number, handles: ArrayLike<number> | null): void {
     this.#setLayer(this.#base, skinId, handles);

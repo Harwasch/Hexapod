@@ -157,7 +157,8 @@ describe("a limbs skin sways as today's rig", () => {
       const moved = handleDisplacement(z, j + 1, tip, origin);
       const size = Math.hypot(...moved);
       expect(size).toBeGreaterThan(0);
-      const along = moved[0] * limb.direction[0] + moved[1] * limb.direction[1] + moved[2] * limb.direction[2];
+      const along =
+        moved[0] * limb.direction[0] + moved[1] * limb.direction[1] + moved[2] * limb.direction[2];
       expect(Math.abs(along)).toBeLessThan(0.05 * size);
     });
   });
@@ -190,8 +191,7 @@ describe("a limbs skin sways as today's rig", () => {
     for (let s = 0; s < n; s += 1) {
       const theta = limbBends(model, 300 + s / fs, w).theta;
       picks.forEach((j, p) => {
-        for (let c = 0; c < 3; c += 1)
-          (signals[p]?.[c] as Float64Array)[s] = theta[j * 3 + c] ?? 0;
+        for (let c = 0; c < 3; c += 1) (signals[p]?.[c] as Float64Array)[s] = theta[j * 3 + c] ?? 0;
       });
     }
     const df = fs / n;

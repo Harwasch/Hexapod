@@ -20,6 +20,8 @@
  * - **handles** (RGBA32F, 1024 texels a row, `TEXELS_PER_SKIN` a skin): `(moving, m)`, then
  *   each handle's `[A | t − A·o]` -- `Z_j` folded about the skin's origin `o` into the scan's
  *   frame, the frame both back-ends draw in -- so a splat moves by `Σ_j w_j (A_j x + t_j)`;
+ *   a limbs skin's leaf flutter follows from texel 97 (`splatSkin.ts` `FLUTTER_TEXEL`),
+ *   added per splat by the share in its row's last byte;
  * - **slots** (RGBA32UI, four instance ids a texel): each id's slot, written at a driven
  *   instance and every instance below it (a deeper driven instance keeps its own);
  * - **poses** (RGBA32F, three texels a slot): `[R − I | t]`.
@@ -493,12 +495,21 @@ export function evaluateScanMotion(
           for (let c = 0; c < 3; c += 1) {
             let v = 0;
             for (let w = 0; w < LIMB_FLUTTER_WAVES; w += 1) {
-              const wave = texel(motion.handles, base + FLUTTER_TEXEL + 1 + c * LIMB_FLUTTER_WAVES + w);
+              const wave = texel(
+                motion.handles,
+                base + FLUTTER_TEXEL + 1 + c * LIMB_FLUTTER_WAVES + w,
+              );
               v += Math.cos(
-                (wave[0] ?? 0) * x[0] + (wave[1] ?? 0) * x[1] + (wave[2] ?? 0) * x[2] + (wave[3] ?? 0),
+                (wave[0] ?? 0) * x[0] +
+                  (wave[1] ?? 0) * x[1] +
+                  (wave[2] ?? 0) * x[2] +
+                  (wave[3] ?? 0),
               );
             }
-            const dir = texel(motion.handles, base + FLUTTER_TEXEL + 1 + 3 * LIMB_FLUTTER_WAVES + c);
+            const dir = texel(
+              motion.handles,
+              base + FLUTTER_TEXEL + 1 + 3 * LIMB_FLUTTER_WAVES + c,
+            );
             for (let r = 0; r < 3; r += 1) delta[r] = (delta[r] ?? 0) + share * v * (dir[r] ?? 0);
           }
         }

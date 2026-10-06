@@ -155,7 +155,7 @@ describe("a limbs skin's document", () => {
     expect(limbsDoc({ method: "simplicits-rkpm" }).byInstance.get(1)?.limbs).toBeUndefined();
     const broken = limbsDoc({ broken: true });
     expect(broken.byInstance.get(1)?.limbs).toBeUndefined();
-    expect(broken.issues.some((i) => /limbs are incomplete/.test(i))).toBe(true);
+    expect(broken.issues.some((i) => i.includes("limbs are incomplete"))).toBe(true);
     // An older skin reads as before.
     const yard = yardDoc();
     expect(yard.method).toBe("simplicits-rkpm");
@@ -274,7 +274,11 @@ describe("a limbs skin drawn", () => {
       );
       const share = rowWeight(words, 0, 15, doc.scale);
       expect(share).toBeCloseTo(SHARE / 127, 12);
-      const xc: [number, number, number] = [rest[i * 3] ?? 0, rest[i * 3 + 1] ?? 0, rest[i * 3 + 2] ?? 0];
+      const xc: [number, number, number] = [
+        rest[i * 3] ?? 0,
+        rest[i * 3 + 1] ?? 0,
+        rest[i * 3 + 2] ?? 0,
+      ];
       const moved = skinDisplacement(z, tree.handles, tree.origin, learned, xc);
       const leaves = limbFlutterOffset(z, tree.handles * HANDLE_FLOATS, share, xc);
       const xb: MutableVec3 = [
@@ -314,8 +318,14 @@ describe("a limbs skin drawn", () => {
     if (i === undefined) throw new Error("no snag splat");
     const words = skinning.wordsAt(i);
     const rest = local();
-    const xc: [number, number, number] = [rest[i * 3] ?? 0, rest[i * 3 + 1] ?? 0, rest[i * 3 + 2] ?? 0];
-    const learned = Array.from({ length: skin.handles - 1 }, (_, k) => rowWeight(words, 0, k, doc.scale));
+    const xc: [number, number, number] = [
+      rest[i * 3] ?? 0,
+      rest[i * 3 + 1] ?? 0,
+      rest[i * 3 + 2] ?? 0,
+    ];
+    const learned = Array.from({ length: skin.handles - 1 }, (_, k) =>
+      rowWeight(words, 0, k, doc.scale),
+    );
     const moved = skinDisplacement(z, skin.handles, skin.origin, learned, xc);
     const xb: MutableVec3 = [
       primitive._positions[i * 3] ?? 0,
@@ -366,7 +376,11 @@ describe("a limbs skin drawn", () => {
     for (let i = 0; i < primitive._numSplats; i += 11) {
       if (skinning.skinAt(i) !== tree.id) continue;
       const words = skinning.wordsAt(i);
-      const xc: [number, number, number] = [rest[i * 3] ?? 0, rest[i * 3 + 1] ?? 0, rest[i * 3 + 2] ?? 0];
+      const xc: [number, number, number] = [
+        rest[i * 3] ?? 0,
+        rest[i * 3 + 1] ?? 0,
+        rest[i * 3 + 2] ?? 0,
+      ];
       const learned = Array.from({ length: tree.handles - 1 }, (_, k) =>
         rowWeight(words, 0, k, doc.scale),
       );

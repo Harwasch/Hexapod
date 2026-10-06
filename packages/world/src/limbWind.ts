@@ -201,7 +201,9 @@ const FLUTTER_WAVE_SPREAD = Math.PI / 3;
 export function limbFlutterWavelengths(waves = LIMB_FLUTTER_WAVES): number[] {
   const lo = Math.pow(FLUTTER_MIN_WAVELENGTH_LEAVES, 2 / 3);
   const hi = Math.pow(FLUTTER_MAX_WAVELENGTH_LEAVES, 2 / 3);
-  return Array.from({ length: waves }, (_, k) => Math.pow(lo + ((k + 0.5) / waves) * (hi - lo), 1.5));
+  return Array.from({ length: waves }, (_, k) =>
+    Math.pow(lo + ((k + 0.5) / waves) * (hi - lo), 1.5),
+  );
 }
 
 function flutterWaves(seed: number, leafSizeM: number): FlutterWave[] {
@@ -353,7 +355,8 @@ export function limbBends(model: LimbWindModel, t: number, wind: LivingWind): Li
     const at = phases[j];
     if (at !== undefined) backgroundResponse(at, clock, branch.frequencyHz, background);
     const gusting = source.turbulence.along * b * (background[0] ?? 0);
-    const along = gusting + source.turbulence.along * r * sampleTrajectory(branch.texture, branch.along, time);
+    const along =
+      gusting + source.turbulence.along * r * sampleTrajectory(branch.texture, branch.along, time);
     const across =
       source.turbulence.across *
       (b * (background[1] ?? 0) + r * sampleTrajectory(branch.texture, branch.across, time));
@@ -475,8 +478,7 @@ function writeFlutter(
   const load = bends.load[0] ?? 0;
   // softLimit(ref·q·gust, 2·ref) = 2·ref·tanh(q·gust / 2): linear in the reference, so a
   // splat's share scales it exactly as the rig's per-splat blend of joint amplitudes does.
-  const amplitude =
-    FLUTTER_SATURATION * reference * Math.tanh((load * gust) / FLUTTER_SATURATION);
+  const amplitude = FLUTTER_SATURATION * reference * Math.tanh((load * gust) / FLUTTER_SATURATION);
   if (!(amplitude > 0)) return;
   const w = livingDownwind(wind.bearingDeg);
   const ex = w[0];
