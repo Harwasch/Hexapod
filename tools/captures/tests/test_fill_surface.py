@@ -164,8 +164,10 @@ def test_superseded_gaussians_lie_on_the_discs_and_round_trip_per_tile(tmp_path)
 
     scene, _ = table_scene()
     save_ply(tmp_path / "scan.ply", scene)
-    splat_tiles.convert(tmp_path / "scan.ply", tmp_path / "tiles", 0.0, 0.0, 0.0, opacity_min=0.0)
-    measured = load_tileset(tmp_path / "tiles" / "tileset.json")
+    # Small tiles: leaves under merged parents, as a real scan's.
+    tiles_dir = tmp_path / "tiles"
+    splat_tiles.convert(tmp_path / "scan.ply", tiles_dir, 0.0, 0.0, 0.0, 0.0, 400)
+    measured = load_tileset(tiles_dir / "tileset.json")
     g = np.linspace(-0.35, 0.35, 15)
     gx, gy = np.meshgrid(g, g)
     pts = np.column_stack([gx.ravel(), gy.ravel(), np.full(gx.size, 0.7)])
@@ -183,27 +185,47 @@ def test_superseded_gaussians_lie_on_the_discs_and_round_trip_per_tile(tmp_path)
     inner = on_top & (np.linalg.norm(measured.positions[:, :2], axis=1) < 0.3)
     assert mask[inner].all()
     assert not mask[measured.positions[:, 2] < 0.6].any()  # the side and the ground stay
-    doc = fs.supersede_document(tmp_path / "tiles", mask)
+    doc = fs.supersede_document(tiles_dir, mask)
     assert doc is not None and doc["superseded"] == int(mask.sum())
     # Leaf tiles carry the mask exactly, in load_tileset's order.
     import json
 
-    tileset = json.loads((tmp_path / "tiles" / "tileset.json").read_text())
-    leaves, stack = [], [tileset["root"]]
+    tileset = json.loads((tiles_dir / "tileset.json").read_text())
+    leaves, parents, stack = [], [], [tileset["root"]]
     while stack:
         tile = stack.pop()
         if tile.get("children"):
             stack.extend(tile["children"])
+            parents += [tile["content"]["uri"]] if tile.get("content") else []
         else:
             leaves.append(tile["content"]["uri"])
     got = np.concatenate(
         [
-            decode_runs(doc["tiles"][checksum_positions(tile_positions(tmp_path / "tiles" / u))])
+            decode_runs(doc["tiles"][checksum_positions(tile_positions(tiles_dir / u))])
             for u in sorted(leaves)
         ]
     )
     assert (got == mask.astype(int)).all()
+    # Every merged parent is listed too, so a far view hides the same patch: its flagged
+    # splats are the top's, and some are flagged.
+    assert parents
+    flagged = 0
+    for uri in parents:
+        at = tile_positions(tiles_dir / uri)
+        flags = decode_runs(doc["tiles"][checksum_positions(at)]).astype(bool)
+        assert flags.size == len(at)
+        assert (np.abs(at[flags, 2] - 0.7) < 0.1).all()
+        flagged += int(flags.sum())
+    assert flagged > 0
     assert fs.supersede_document(tmp_path / "nowhere", mask) is None
+    # A parent's file missing (a job that fetched the leaves only) is an error the writer
+    # reports, not a failed run.
+    (tiles_dir / parents[0]).unlink()
+    layer = tmp_path / "layer"
+    layer.mkdir()
+    written = af.write_supersedes(layer, tiles_dir, mask, log=lambda _: None)
+    assert written["written"] is False and "error" in written
+    assert not (layer / "supersedes.json").exists()
 
 
 def test_bilinear_samples_any_number_of_points() -> None:

@@ -3001,7 +3001,7 @@ def run_arms(
             entry["layer"] = str(layer_dir)
             if hidden[arm] is not None:
                 entry["supersedes"] = write_supersedes(
-                    layer_dir, measured_tileset.parent, hidden[arm]
+                    layer_dir, measured_tileset.parent, hidden[arm], log
                 )
         report["candidates"][arm] = entry
     report["calls"] = run.calls
@@ -3018,12 +3018,19 @@ def run_arms(
     return report
 
 
-def write_supersedes(layer_dir: Path, tiles_dir: Path, mask: np.ndarray) -> dict[str, Any]:
+def write_supersedes(
+    layer_dir: Path, tiles_dir: Path, mask: np.ndarray, log: Callable[[str], None] = print
+) -> dict[str, Any]:
     """The measured gaussians a layer's rebuilt surface replaces, beside the layer
     (`supersedes.json`, `fill_surface.supersede_document`) and named in its root's extras, so
     the viewer hides them while the layer is shown. Nothing is written when the tiles are not
-    this scan's (a test's stand-in tileset)."""
-    document = fs.supersede_document(tiles_dir, mask)
+    this scan's (a test's stand-in tileset), or when they cannot be read: the layer, its scores
+    and the headline still come back, and the report says why."""
+    try:
+        document = fs.supersede_document(tiles_dir, mask)
+    except (OSError, ValueError, KeyError) as error:
+        log(f"supersedes not written: {error}")
+        return {"written": False, "superseded": int(mask.sum()), "error": str(error)}
     if document is None:
         return {"written": False, "superseded": int(mask.sum())}
     (layer_dir / "supersedes.json").write_text(json.dumps(document), encoding="utf-8")

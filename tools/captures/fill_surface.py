@@ -467,13 +467,17 @@ def supersede_document(tiles_dir: Any, mask: np.ndarray) -> dict[str, Any] | Non
         return None
     document = json.loads(path.read_text(encoding="utf-8"))
     leaves: list[str] = []
+    parents: list[str] = []
     stack = [document["root"]]
     while stack:
         tile = stack.pop()
+        uri = tile.get("content", {}).get("uri")
         if tile.get("children"):
             stack.extend(tile["children"])
-        elif tile.get("content", {}).get("uri"):
-            leaves.append(tile["content"]["uri"])
+            if uri:
+                parents.append(uri)
+        elif uri:
+            leaves.append(uri)
     tiles: dict[str, list[int]] = {}
     at = 0
     for uri in sorted(leaves):
@@ -485,6 +489,13 @@ def supersede_document(tiles_dir: Any, mask: np.ndarray) -> dict[str, Any] | Non
         at += len(positions)
     if at != len(mask):
         return None
+    # Every merged parent listed (nothing superseded yet), so that `rebind` gives each of its
+    # splats the plurality of its nearest leaf splats: far off, the coarse tiles hide the same
+    # patch. Their files must be here (the job fetches the parents too).
+    for uri in parents:
+        positions = tile_positions(tiles_dir / uri)
+        if len(positions):
+            tiles.setdefault(checksum_positions(positions), [0, len(positions)])
     return {
         "encoding": SUPERSEDE_ENCODING,
         "superseded": int(np.count_nonzero(mask)),

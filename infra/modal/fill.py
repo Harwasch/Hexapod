@@ -1618,7 +1618,9 @@ def run_anchorfill(kind: str, scan: str, options: dict) -> dict:
     timings: dict[str, object] = {}
     with tempfile.TemporaryDirectory() as work:
         root = Path(work)
-        tileset = _fetch(SCANS[scan], root / "scan")
+        # The merged parents too: what a rebuilt surface supersedes is listed for every level
+        # of detail (fill_surface.supersede_document).
+        tileset = _fetch(SCANS[scan], root / "scan", every=True)
         timings["fetchS"] = round(time.time() - started, 1)
         run = f"runs/{setup['job']}"
         t = time.time()
