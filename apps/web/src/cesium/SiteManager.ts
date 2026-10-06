@@ -32,6 +32,8 @@ import { prefetchScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
+import { spzPickData } from "@/lib/spzPositions";
+import { spzFromGlb } from "@/view/glb";
 import { withRetry } from "@/lib/retry";
 import { throttleProgress } from "@/lib/throttle";
 import { withTimeout } from "@/lib/timeout";
@@ -57,6 +59,13 @@ import {
   type MeasuredGround,
 } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
+import {
+  canopyOutlines,
+  groundOf,
+  outlinesOnGlobe,
+  withOutlines,
+  type Outline,
+} from "./scanFootprint";
 import { setSeenFromAfar } from "./sceneSelect/cesiumPickSource";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import { splatTilesetOf } from "./splatInternals";
@@ -184,6 +193,12 @@ interface AssetHandle {
   splats?: SplatCount;
   /** How the tileset is placed: its runtime scale and the lift it rests at (`placeTileset`). */
   placement?: TilesetPlacement;
+  /**
+   * A splat scan's tall things (scanFootprint.ts), in its own frame, at the height of the ground
+   * it rests on: the clip under it covers them too. Undefined until asked for, null while being
+   * read or when its root tile could not be (`loadCanopy`).
+   */
+  canopy?: { outlines: Outline[]; groundZ: number } | null;
 }
 
 /** A tileset's placement: the frame it was registered in, the scale drawn, the lift. */
@@ -1890,8 +1905,20 @@ export class SiteManager {
       // is cut, so buildings from OSM or Google do not poke through the model. The authored
       // footprint comes first: a splat's root box spans every outlier splat (the demo's is
       // 1.7 × 2.8 km around a campus) and would blank the photorealistic world for blocks.
-      const footprint = this.authoredFootprint(active, asset) ?? footprintFromTileset(tileset);
+      // Its tall things too (scanFootprint.ts): the world's own copy of a scanned tree stood
+      // beside it where its crown reached past the catalog's footprint.
+      const authored = this.authoredFootprint(active, asset) ?? footprintFromTileset(tileset);
+      const handle = active.handles.get(asset.id);
+      const canopy = handle?.canopy;
+      const footprint = canopy?.outlines.length
+        ? withOutlines(
+            authored,
+            outlinesOnGlobe(canopy.outlines, tileset.root.computedTransform, canopy.groundZ),
+          )
+        : authored;
       this.clipping.setFootprint(active.site.id, footprint, { globe: false, world: true });
+      if (handle && handle.canopy === undefined && asset.representation === "gaussian-splat")
+        void this.loadCanopy(active, handle, tileset);
       return;
     }
     let footprint: Footprint | null = null;
@@ -1939,6 +1966,64 @@ export class SiteManager {
       off();
       if (timer !== null) clearTimeout(timer);
     });
+  }
+
+  /**
+   * Reads a splat scan's tall things from its root tile (the whole scan, merged: a few thousand
+   * splats, fetched once, from the cache when a renderer has it already) once the scan rests
+   * where it is placed, and clips the world under them as well (`applyClip`). A scan of open
+   * ground has none, and its clip stays as it was.
+   */
+  private async loadCanopy(
+    entry: ActiveSite,
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+  ): Promise<void> {
+    handle.canopy = null;
+    try {
+      await handle.placed;
+      if (tileset.isDestroyed()) return;
+      const json = (await tileset.resource.fetchJson()) as
+        { root?: { content?: { uri?: string; url?: string } } } | undefined;
+      const uri = json?.root?.content?.uri ?? json?.root?.content?.url;
+      if (!uri || tileset.isDestroyed()) return;
+      const glb = await tileset.resource.getDerivedResource({ url: uri }).fetchArrayBuffer();
+      if (!glb || tileset.isDestroyed()) return;
+      const points = await spzPickData(spzFromGlb(glb));
+      if (!points || tileset.isDestroyed()) return;
+      const groundZ = this.restingGroundZ(handle, tileset) ?? groundOf(points) ?? 0;
+      handle.canopy = { outlines: canopyOutlines(points, groundZ), groundZ };
+      log.info("scan's tall things outlined for the clip", {
+        asset: handle.asset.id,
+        outlines: handle.canopy.outlines.length,
+      });
+    } catch (error) {
+      log.warn("could not outline the scan's tall things; the clip is the footprint alone", {
+        asset: handle.asset.id,
+        error: describeError(error),
+      });
+      return;
+    }
+    if (handle.canopy.outlines.length === 0) return;
+    if (this.loaded.get(entry.site.id) !== entry || !drawn(entry) || tileset.isDestroyed()) return;
+    if (this.pickAsset(entry, entry.representation)?.id !== handle.asset.id) return;
+    this.applyClip(entry, handle.asset, tileset);
+    this.scene.requestRender();
+  }
+
+  /**
+   * The height, in the scan's own frame, of the ground its clamp rested it on (the ground
+   * sampled under its centre), or null for a scan that was not clamped.
+   */
+  private restingGroundZ(handle: AssetHandle, tileset: Cesium3DTileset): number | null {
+    const under = handle.placement?.sampled?.under;
+    if (under === undefined || !Number.isFinite(under)) return null;
+    const centre = Cartographic.fromCartesian(tileset.boundingSphere.center) as
+      Cartographic | undefined;
+    if (!centre) return null;
+    const toLocal = Matrix4.inverse(tileset.root.computedTransform, new Matrix4());
+    const ground = Cartesian3.fromRadians(centre.longitude, centre.latitude, under);
+    return Matrix4.multiplyByPoint(toLocal, ground, new Cartesian3()).z;
   }
 
   private applyScreenSpaceError(sse: number, pixelRatio: number): void {

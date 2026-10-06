@@ -201,7 +201,9 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
   const box = await page.locator("canvas").first().boundingBox();
   if (!box) throw new Error("no canvas");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  const before = await page.evaluate<number>(`window.__twin.viewer.camera.positionCartographic.height`);
+  const before = await page.evaluate<number>(
+    `window.__twin.viewer.camera.positionCartographic.height`,
+  );
   for (let notch = 0; notch < 6; notch++) {
     await page.mouse.wheel(0, -200);
     await page.waitForTimeout(300);
@@ -225,7 +227,9 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
     undefined,
     { timeout: 120_000, polling: 200 },
   );
-  const zoomed = await page.evaluate<number>(`window.__twin.viewer.camera.positionCartographic.height`);
+  const zoomed = await page.evaluate<number>(
+    `window.__twin.viewer.camera.positionCartographic.height`,
+  );
   expect(zoomed).toBeLessThan(before);
 
   // Now everything that used to move a resting close-up happens to it, and frames are drawn.
