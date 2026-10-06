@@ -12,7 +12,8 @@ name: Segment scans (Modal GPU)
 # repository's.
 #
 # A push chooses what it runs with a token in its head commit's message,
-# `[segment|names=spool,pumpkin|variant=ground-first|views=24]` (every part optional);
+# `[segment|names=spool,pumpkin|variant=ground-first|views=24|crop=x0,y0,x1,y1]` (every part
+# optional; `crop`, a variant only: segment that part of each scan);
 # without one it runs the defaults below. `variant` runs a segmentation bake-off candidate
 # (infra/modal/segment.py `VARIANT_SCRIPTS`) instead of segment_scene, each scan's call
 # stopped after `VARIANT_TIMEOUT_S` so a run that hangs has a known worst cost.
@@ -74,10 +75,11 @@ jobs:
           NAMES: ${{ inputs.names || 'spool,pumpkin,camp' }}
           VIEWS: ${{ inputs.views || '24' }}
           VARIANT: ${{ inputs.variant || '' }}
+          CROP: ""
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
-          options = {k: os.environ[k.upper()] for k in ("names", "views", "variant")}
+          options = {k: os.environ[k.upper()] for k in ("names", "views", "variant", "crop")}
           if os.environ["EVENT"] == "push":
               found = re.search(r"\[segment([^\]]*)\]", os.environ.get("MESSAGE", ""))
               for part in (found.group(1) if found else "").split("|")[1:]:
@@ -85,13 +87,16 @@ jobs:
                   if name not in options:
                       raise SystemExit(f"unknown option {name!r} in the [segment] token")
                   options[name] = value
-          names, views, variant = options["names"], options["views"], options["variant"]
+          names, views, variant, crop = (options[k] for k in ("names", "views", "variant", "crop"))
           if not re.fullmatch(r"[a-z0-9-]+(,[a-z0-9-]+)*", names):
               raise SystemExit(f"names={names!r} is not a comma-separated list of [a-z0-9-] names")
           if not re.fullmatch(r"[0-9]{1,3}", views) or not 1 <= int(views) <= 480:
               raise SystemExit(f"views={views!r} is not a whole number from 1 to 480")
           if not re.fullmatch(r"([a-z0-9-]+)?", variant):
               raise SystemExit(f"variant={variant!r} is not a [a-z0-9-] name")
+          number = r"-?[0-9]{1,4}(\.[0-9]{1,3})?"
+          if crop and not (variant and re.fullmatch(rf"{number}(,{number}){{3}}", crop)):
+              raise SystemExit(f"crop={crop!r} is not x0,y0,x1,y1 (and needs a variant)")
           for name, value in options.items():
               print(f"{name}={value}")
           PY
@@ -101,9 +106,10 @@ jobs:
           NAMES: ${{ steps.plan.outputs.names }}
           VIEWS: ${{ steps.plan.outputs.views }}
           VARIANT: ${{ steps.plan.outputs.variant }}
+          CROP: ${{ steps.plan.outputs.crop }}
         run: |
           uv run --with modal==1.5.5 modal run infra/modal/segment.py \
-            --names "$NAMES" --views "$VIEWS" --variant "$VARIANT" --out segment-out
+            --names "$NAMES" --views "$VIEWS" --variant "$VARIANT" --crop "$CROP" --out segment-out
       - uses: actions/upload-artifact@v4
         if: always()
         with:

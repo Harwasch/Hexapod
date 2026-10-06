@@ -487,6 +487,7 @@ def segment_argv(
     coverage_rounds: int = COVERAGE_ROUNDS,
     cache: Path | None = None,
     variant: str = "",
+    crop: str = "",
 ) -> list[str]:
     """`segment_scene.py`'s command line for one scan in `work` (the call's scratch
     directory: variants, debug sheets and the run's summary, `run.json`, go there): the
@@ -531,6 +532,7 @@ def segment_argv(
         "--summary",
         str(work / "run.json"),
         *(["--cache", str(cache)] if cache is not None else []),
+        *(["--crop", crop] if variant and crop else []),
     ]
 
 
@@ -599,6 +601,7 @@ def segment_scan(
     coverage_rounds: int = COVERAGE_ROUNDS,
     plan: dict | None = None,
     variant: str = "",
+    crop: str = "",
 ) -> dict:
     """Segment one published scan; returns the files (bytes) and the run's summary.
     `keep_masks`: also return `masks.tar` (every view's masks and the cameras, the
@@ -635,6 +638,7 @@ def segment_scan(
                     coverage_rounds=coverage_rounds,
                     cache=cache if keep_masks or variant else None,
                     variant=variant,
+                    crop=crop,
                 ),
                 cwd=CAPTURES,
                 capture_output=True,
@@ -659,28 +663,32 @@ def segment_scan(
             if (written / k).exists()
         }
         # The new run against the published one: coverage, categories and a contact sheet.
+        # (Not for a variant: it brings its own check sheet, and the report would spend its
+        # timeout drawing the whole scan.)
         new = Path(work) / "new" / "instances.json"
         new.parent.mkdir()
         new.write_bytes(files["instances.json"])
-        report = subprocess.run(  # noqa: S603 - fixed argv; only paths we made vary
-            [
-                sys.executable,
-                "instances_report.py",
-                str(tiles),
-                *([str(before)] if before else []),
-                str(new),
-                "--sheet",
-                str(Path(work) / "compare.png"),
-                "--max-scale-m",
-                str(MAX_SCALE_M),
-                *(["--gsplat"] if renderer == "gsplat" else []),
-                "--out",
-                str(Path(work) / "report.json"),
-            ],
-            cwd=CAPTURES,
-            capture_output=True,
-            text=True,
-        )
+        report = subprocess.CompletedProcess([], 0, "variant: no report", "")
+        if not variant:
+            report = subprocess.run(  # noqa: S603 - fixed argv; only paths we made vary
+                [
+                    sys.executable,
+                    "instances_report.py",
+                    str(tiles),
+                    *([str(before)] if before else []),
+                    str(new),
+                    "--sheet",
+                    str(Path(work) / "compare.png"),
+                    "--max-scale-m",
+                    str(MAX_SCALE_M),
+                    *(["--gsplat"] if renderer == "gsplat" else []),
+                    "--out",
+                    str(Path(work) / "report.json"),
+                ],
+                cwd=CAPTURES,
+                capture_output=True,
+                text=True,
+            )
         log += "\n--- report\n" + report.stdout[-20000:] + report.stderr[-20000:]
         for k in (
             "compare.png",
@@ -731,10 +739,12 @@ def main(
     renderer: str = "gsplat",
     coverage_rounds: int = COVERAGE_ROUNDS,
     variant: str = "",
+    crop: str = "",
 ) -> None:
     """Segment the named scans in parallel containers; write each result under `out/`.
     `variant`: a bake-off candidate (`VARIANT_SCRIPTS`) instead of segment_scene, each call
-    stopped after `VARIANT_TIMEOUT_S`.
+    stopped after `VARIANT_TIMEOUT_S`. `crop` (`x0,y0,x1,y1`, metres in the tileset's
+    frame; a variant only): segment that part of each scan, every tile still bound.
 
     Each scan's reservation follows its size (`sizing`): its tileset.json is read here
     first -- a few kB, hundreds for the camp -- for its tiles and gaussians, and it is
@@ -773,7 +783,7 @@ def main(
                 name,
                 plan,
                 segment_scan.with_options(**chosen_options).spawn(
-                    name, url, views, keep_masks, renderer, coverage_rounds, plan, variant
+                    name, url, views, keep_masks, renderer, coverage_rounds, plan, variant, crop
                 ),
             )
         )
