@@ -9,7 +9,11 @@ name: Fill objects (Modal GPU, 3D object completion)
 # and validated here, never interpolated into a shell line:
 #
 #   [objects|check]                                   which models the token can read (CPU)
-#   [objects|jobs=objects:pumpkin|methods=trellis|budget=7|spent=0.1]
+#   [objects|jobs=objects:pumpkin|methods=trellis|budget=7|spent=0.1|compare=<run id>]
+#
+# `compare`: a fill.yml run whose `fill` artifact holds round 2's leave-out layers
+# (`leaveout-<scan>-anchor-*`), scored on the same held-out photos alone and with the object
+# layer on top. `options`: object_fill options, `k=v;...` (seeds=1,2;leave_out=low).
 #
 # GPU jobs refuse to start without `budget`, or when their worst case is past budget - spent
 # (infra/modal/fill_objects.py). Every commit pushed to `wm-*` also carries [skip-fill], so
@@ -25,6 +29,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   objects:
@@ -57,9 +62,10 @@ jobs:
               "methods": r"[a-z0-9]+(\+[a-z0-9]+)*",
               "budget": r"[0-9]+(\.[0-9]+)?",
               "spent": r"[0-9]+(\.[0-9]+)?",
-              "options": r"[a-z0-9_]+=[a-z0-9_.+-]+(;[a-z0-9_]+=[a-z0-9_.+-]+)*",
+              "options": r"[a-z0-9_]+=[a-z0-9_.,+-]+(;[a-z0-9_]+=[a-z0-9_.,+-]+)*",
+              "compare": r"[0-9]+",
           }
-          flags = []
+          flags, compare = [], ""
           for part in found.group(1).split("|"):
               key, _, value = part.strip().partition("=")
               if key not in valid or not re.fullmatch(valid[key], value):
@@ -70,11 +76,24 @@ jobs:
                   flags += ["--budget-usd", value]
               elif key == "spent":
                   flags += ["--spent-usd", value]
+              elif key == "compare":
+                  compare = value
+                  flags += ["--compare-dir", "compare"]
               else:
                   flags += [f"--{key}", value]
           print("flags=" + " ".join(shlex.quote(f) for f in flags))
+          print(f"compare={compare}")
           PY
           cat "$GITHUB_OUTPUT"
+      # Round 2's leave-out layers (a fill.yml run's `fill` artifact), scored beside the
+      # object layers.
+      - uses: actions/download-artifact@v4
+        if: steps.plan.outputs.compare != ''
+        with:
+          name: fill
+          path: compare
+          run-id: ${{ steps.plan.outputs.compare }}
+          github-token: ${{ github.token }}
       - name: modal run infra/modal/fill_objects.py
         env:
           FLAGS: ${{ steps.plan.outputs.flags }}

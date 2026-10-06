@@ -109,7 +109,9 @@ def access(token: str | None, methods: list[str] | None = None) -> dict[str, Any
                     entry["gated"] = getattr(info, "gated", None)
                     card = getattr(info, "card_data", None) or {}
                     entry["hubLicence"] = (
-                        card.get("license") if isinstance(card, dict) else getattr(card, "license", None)
+                        card.get("license")
+                        if isinstance(card, dict)
+                        else getattr(card, "license", None)
                     )
                 except Exception as error:  # noqa: BLE001
                     entry["infoError"] = f"{type(error).__name__}: {str(error)[:200]}"
@@ -121,3 +123,107 @@ def access(token: str | None, methods: list[str] | None = None) -> dict[str, Any
             "gates": GATES.get(method, []) if not readable else [],
         }
     return out
+
+
+# --- arrays over the wire --------------------------------------------------------------------------
+
+#: A model's gaussians: positions (n, 3), unit quaternions (w, x, y, z), scales, colours in
+#: [0, 1], opacities in [0, 1].
+GAUSSIAN_FIELDS = ("positions", "rotations", "scales", "colours", "opacities")
+
+
+def pack_array(a: Any, dtype: str = "float32") -> dict[str, Any]:
+    """An array as plain bytes (no numpy pickle across numpy versions)."""
+    import numpy as np
+
+    arr = np.ascontiguousarray(np.asarray(a, dtype=dtype))
+    return {"dtype": dtype, "shape": list(arr.shape), "data": arr.tobytes()}
+
+
+def unpack_array(d: dict[str, Any]) -> Any:
+    import numpy as np
+
+    return np.frombuffer(d["data"], dtype=d["dtype"]).reshape(d["shape"]).copy()
+
+
+def pack_gaussians(
+    positions: Any, rotations: Any, scales: Any, colours: Any, opacities: Any
+) -> dict[str, Any]:
+    return {
+        "positions": pack_array(positions),
+        "rotations": pack_array(rotations),
+        "scales": pack_array(scales),
+        "colours": pack_array(colours, "float16"),
+        "opacities": pack_array(opacities, "float16"),
+    }
+
+
+# --- TRELLIS (v1), the stand-in: microsoft/TRELLIS-image-large ---------------------------------------
+
+TRELLIS_MODEL = "microsoft/TRELLIS-image-large"
+#: The sampler settings of TRELLIS's own example (12 steps each; guidance 7.5 and 3).
+TRELLIS_SS = {"steps": 12, "cfg_strength": 7.5}
+TRELLIS_SLAT = {"steps": 12, "cfg_strength": 3.0}
+_SH_C0 = 0.28209479177387814
+
+
+def load_trellis() -> Any:
+    """The image-to-3D pipeline on the GPU (its DINOv2 encoder through torch.hub)."""
+    from trellis.pipelines import TrellisImageTo3DPipeline
+
+    pipe = TrellisImageTo3DPipeline.from_pretrained(TRELLIS_MODEL)
+    pipe.cuda()
+    return pipe
+
+
+def generate_trellis(pipe: Any, request: dict[str, Any]) -> dict[str, Any]:
+    """One object from the request's frames (RGBA crops, the mask as alpha): one frame with
+    `run`, several with `run_multi_image` (stochastic: each step conditioned on one of
+    them). Gaussians only, in TRELLIS's object frame (z up, within [-0.5, 0.5])."""
+    import io
+    import time
+
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    started = time.time()
+    images = [Image.open(io.BytesIO(f["png"])).convert("RGBA") for f in request["frames"]]
+    seed = int(request.get("seed", 1))
+    ss = {**TRELLIS_SS, **(request.get("ss") or {})}
+    slat = {**TRELLIS_SLAT, **(request.get("slat") or {})}
+    with torch.no_grad():
+        if len(images) == 1:
+            out = pipe.run(
+                images[0],
+                seed=seed,
+                formats=["gaussian"],
+                sparse_structure_sampler_params=ss,
+                slat_sampler_params=slat,
+            )
+        else:
+            out = pipe.run_multi_image(
+                images,
+                seed=seed,
+                formats=["gaussian"],
+                sparse_structure_sampler_params=ss,
+                slat_sampler_params=slat,
+                mode="stochastic",
+            )
+    g = out["gaussian"][0]
+    xyz = g.get_xyz.detach().float().cpu().numpy()
+    rot = g.get_rotation.detach().float().cpu().numpy()
+    scale = g.get_scaling.detach().float().cpu().numpy()
+    opacity = g.get_opacity.detach().float().cpu().numpy().reshape(-1)
+    dc = g._features_dc.detach().float().cpu().numpy().reshape(len(xyz), -1)[:, :3]
+    colour = np.clip(0.5 + _SH_C0 * dc, 0.0, 1.0)
+    torch.cuda.empty_cache()
+    return {
+        "key": request["key"],
+        "frame": "z-up",
+        "model": TRELLIS_MODEL,
+        "views": [f["view"] for f in request["frames"]],
+        "count": int(len(xyz)),
+        "seconds": round(time.time() - started, 1),
+        "gaussians": pack_gaussians(xyz, rot, scale, colour, opacity),
+    }
