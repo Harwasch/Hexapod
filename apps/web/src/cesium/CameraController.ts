@@ -279,8 +279,10 @@ export class CameraController {
     container.addEventListener("wheel", this.onSurfaceWheel, { capture: true, passive: false });
     // CesiumJS's terrain collision acts only on the person's own motion once they have the
     // camera, never on it at rest (`collide`).
-    const update = controller.update.bind(controller);
-    controller.update = () => this.collide(update);
+    // `update` is CesiumJS's own (private in its typings): called once a frame by the scene.
+    const internal = controller as unknown as { update: () => void };
+    const update = internal.update.bind(controller);
+    internal.update = () => this.collide(update);
     window.addEventListener("keydown", this.onPassKey);
     window.addEventListener("keyup", this.onPassKey);
     window.addEventListener("blur", this.onPassBlur);

@@ -102,6 +102,12 @@ const MAX_STREAMED = 10_000_000;
 /** How long after the camera last moved it counts as resting: the frame drawn then is the
  *  full-resolution one (quality.ts cuts resolution while it moves). */
 const MOTION_SETTLE_MS = 200;
+/**
+ * How long the camera must be still (ms) before the cut may refine past the motion budget, to
+ * the device's ceiling: long enough that a pause inside a gesture does not fetch a still
+ * view's detail only to drop it again.
+ */
+export const REST_AFTER_MS = 600;
 /** Most gaussians put on screen per re-plan (~4M a second at REPLAN_MS): tiles that land
  *  together go up over a few frames instead of all in one. */
 const MAX_SHOWN_PER_UPDATE = 600_000;
@@ -856,8 +862,22 @@ export class ScanRendererHost {
      *  (A far view draws too little for its frame times to move the adaptive budget.) */
     const drawBudget = (): number =>
       far ? Math.round(adaptive.budget * FAR_BUDGET_SHARE) : adaptive.budget;
-    /** Tiles kept: the full budget's share whether near or far, so zooming in finds them. */
-    const cacheBudget = (): number => streamedFor(adaptive.budget) * CACHE_FACTOR;
+    /** The camera has been still for `REST_AFTER_MS`: the view may refine to `restBudget`. */
+    let resting = false;
+    /**
+     * What the cut may hold now: the motion budget, or at rest the device's ceiling
+     * (lib/detail.ts `deviceSplatCeiling`; a phone's is its budget). A still overlay draws
+     * nothing, so what a still view holds costs memory and one sort, not frame time; the next
+     * move plans with the motion budget again and swaps back to the ancestors kept loaded.
+     * Not the renderer's own budget: PlayCanvas re-copies and re-sorts every splat when that
+     * changes, and the tile cut is what decides what it draws.
+     */
+    const restBudget = (): number => Math.max(adaptive.budget, adaptive.ceiling);
+    const planBudget = (): number => (resting && !far ? restBudget() : drawBudget());
+    /** Tiles kept: the full budget's share whether near or far, so zooming in finds them, and
+     *  at least what a still view refines to. */
+    const cacheBudget = (): number =>
+      Math.max(streamedFor(adaptive.budget) * CACHE_FACTOR, streamedFor(restBudget()));
     if (far) backend.setBudget(drawBudget());
     const handover = new Handover<unknown>({
       add: (mesh) => backend.add(mesh),
@@ -889,10 +909,17 @@ export class ScanRendererHost {
       },
     );
     let arrived = true;
-    /** Hands the renderer and the streamer what may be drawn now (`drawBudget`). */
+    /** Hands the renderer and the streamer what may be drawn now (`drawBudget`, `planBudget`). */
     const applyBudget = (): void => {
       backend.setBudget(drawBudget());
-      streamer.setBudget(streamedFor(drawBudget()), cacheBudget());
+      streamer.setBudget(streamedFor(planBudget()), cacheBudget());
+      arrived = true;
+    };
+    /** The camera came to rest, or moved again: the cut is planned again under its budget. */
+    const rest = (next: boolean): void => {
+      if (next === resting) return;
+      resting = next;
+      streamer.setBudget(streamedFor(planBudget()), cacheBudget());
       arrived = true;
     };
     // A tile arrived or failed, a deferred swap is due, a failed tile may be tried again.
@@ -923,6 +950,7 @@ export class ScanRendererHost {
     const lastEye = new Cartesian3(Number.NaN, 0, 0);
     const lastDirection = new Cartesian3();
     const scratchCentre = new Cartesian3();
+    const scratchForward = new Cartesian3();
     const scratchSphere = new BoundingSphere();
     let lastPlan = 0;
     // Motion frames, for the adaptive budget and the resolution: the camera moved since the
@@ -952,9 +980,17 @@ export class ScanRendererHost {
       const camera = viewer.camera;
       const culling = camera.frustum.computeCullingVolume(position, direction, up);
       const fovy = (camera.frustum as { fovy?: number }).fovy ?? Math.PI / 3;
+      // The middle of the view, in the scan's frame: its finest tiles go there first.
+      const forward = Matrix4.multiplyByPointAsVector(toLocal, direction, scratchForward);
+      Cartesian3.normalize(forward, forward);
+      const aspect = viewer.canvas.clientWidth / Math.max(1, height);
       return {
         eye,
         projection: height / (2 * Math.tan(fovy / 2)),
+        centre: {
+          forward: [forward.x, forward.y, forward.z],
+          halfDiagonal: Math.atan(Math.tan(fovy / 2) * Math.hypot(1, aspect)),
+        },
         visible: (bounds) => {
           Matrix4.multiplyByPoint(
             toWorld,
@@ -989,6 +1025,9 @@ export class ScanRendererHost {
       // globe's, at most (quality.ts).
       const moving = now - lastMotionAt < MOTION_SETTLE_MS;
       work.moving = moving;
+      // Still long enough: the cut may refine to the rest budget. Moving: back to the motion
+      // budget at once, so the first re-plan of a gesture swaps the surplus out.
+      rest(now - lastMotionAt >= REST_AFTER_MS);
       const size = inputSize();
       const pose = {
         ...scanPose(viewer.camera, toLocal, {
@@ -1002,7 +1041,12 @@ export class ScanRendererHost {
       // Frames while tiles arrive are slowed by their uploads, not by what is drawn: only a
       // steady view's motion frames say what the GPU can sort and blend -- and only one that
       // follows another motion frame, now that a resting overlay draws nothing in between.
-      const steady = motion && streamer.loading === 0 && lastMotionFrameAt > 0;
+      // Nor one still drawing a still view's surplus, which the first re-plan takes away.
+      const steady =
+        motion &&
+        streamer.loading === 0 &&
+        lastMotionFrameAt > 0 &&
+        streamer.drawnGaussians <= adaptive.budget;
       let budgetMoved = false;
       if (steady && adaptive.frame(now - lastMotionFrameAt, drawn)) {
         applyBudget();
@@ -1036,6 +1080,9 @@ export class ScanRendererHost {
       frames += 1;
       const deadlines = [
         moving ? lastMotionAt + MOTION_SETTLE_MS : null,
+        // The view the budget held back is refined once the camera has been still a moment;
+        // one the budget did not hold back has nothing more to show.
+        !resting && streamer.limited ? lastMotionAt + REST_AFTER_MS : null,
         replanAt,
         step.nextAt,
         // Work the renderer held back (a moving object's throttled re-sort): its last pose is
