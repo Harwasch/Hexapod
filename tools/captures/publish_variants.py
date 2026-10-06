@@ -109,8 +109,43 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
         ),
     },
 }
+#: The object round (`object_fill.LAYERS`, fill_objects.yml `objects-<scan>-<layer>` folders):
+#: whole objects completed by a 3D model, only their unseen side kept. Each says where to look.
+OBJECT_LOOK = (
+    "Set Inferred to Highlight; orbit low and look under the pumpkins (below the straw, "
+    "looking up): purple is the generated underside."
+)
+OBJECT_ABOUT = (
+    "Each pumpkin the segmentation found is rebuilt whole by a 3D object model from the "
+    "photos that see it best, fitted onto the scan (scale, turn, position), and only what "
+    "no camera saw is kept: the undersides on the straw. Anything a real camera saw through "
+    "or that would show outside the pumpkin in a real photo is removed; its colours are "
+    "matched to the scan just above."
+)
+FILL_VARIANTS.update(
+    {
+        "objects-trellis": {
+            "name": "objects-trellis",
+            "label": "Whole objects: TRELLIS image-large (stand-in for SAM 3D / Pixal3D)",
+            "about": OBJECT_ABOUT,
+            "look": OBJECT_LOOK,
+        },
+        "objects-sam3d": {
+            "name": "objects-sam3d",
+            "label": "Whole objects: SAM 3D Objects",
+            "about": OBJECT_ABOUT,
+            "look": OBJECT_LOOK,
+        },
+        "objects-pixal3d": {
+            "name": "objects-pixal3d",
+            "label": "Whole objects: Pixal3D",
+            "about": OBJECT_ABOUT,
+            "look": OBJECT_LOOK,
+        },
+    }
+)
 #: Job kinds whose folders hold layers to publish; the others are checks.
-PUBLISHED_KINDS = ("gen", "anchor")
+PUBLISHED_KINDS = ("gen", "anchor", "objects")
 CHECK_KINDS = ("holdout", "leaveout")
 USER_AGENT = "curl/8.5.0 (hexapod-publish-variants)"
 
@@ -196,6 +231,8 @@ def entry_for(
     entry: dict[str, Any] = {"name": meta["name"], "label": meta["label"], "about": meta["about"]}
     if scan in LOOK_WHERE and meta["name"].startswith("anchor-"):
         entry["look"] = LOOK.format(where=LOOK_WHERE[scan])
+    elif meta.get("look"):
+        entry["look"] = meta["look"]
     entry["inferredLayers"] = [
         {"uri": f"variants/{SYSTEM}/{meta['name']}/tileset.json", "evidence": dict(evidence)}
     ]

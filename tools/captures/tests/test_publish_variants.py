@@ -215,3 +215,23 @@ def test_a_rebuilt_surface_publishes_what_it_supersedes(tmp_path: Path) -> None:
     entry = on_disk["register"][0]["entry"]
     assert entry["supersedes"] == "variants/fill/anchor-refs/supersedes.json"
     assert "variants/fill/anchor-refs/supersedes.json" in on_disk["files"]
+
+
+def test_object_layers_register_with_where_to_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs = ["objects-pumpkin-objects-trellis"]
+    fill = _fill(tmp_path, jobs)
+    out = tmp_path / "out" / "pumpkin"
+    v2 = [{"name": n} for n in ("vace-1-3b", "anchor-refs", "anchor-norefs", "anchor-vace")]
+    pv.build("pumpkin", fill, out, jobs, asset=ASSET, current=_current({**OTHERS, "fill": v2}))
+    on_disk = json.loads((out / attach_sidecars.MANIFEST).read_text())
+    assert "variants" not in on_disk["extras"]
+    (item,) = on_disk["register"]
+    assert item["entry"]["name"] == "objects-trellis"
+    assert "under the pumpkins" in item["entry"]["look"]
+    assert item["entry"]["inferredLayers"][0]["uri"] == "variants/fill/objects-trellis/tileset.json"
+    body = _attach(out, _current({**OTHERS, "fill": v2}), monkeypatch)
+    variants = body["extras"]["variants"]
+    assert variants["objects"] == OTHERS["objects"] and variants["skins"] == OTHERS["skins"]
+    assert [e["name"] for e in variants["fill"]] == [*(e["name"] for e in v2), "objects-trellis"]

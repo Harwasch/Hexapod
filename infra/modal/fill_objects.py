@@ -75,10 +75,14 @@ OBJECT_SCANS: dict[str, dict[str, str]] = {
 # --- the access check ------------------------------------------------------------------------------
 
 #: The access check and the weights prefetch: the Hub client alone, on a CPU.
-access_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install("huggingface_hub>=0.34,<1.0")
-    .add_local_file(LOCAL_CAPTURES / "object_models.py", "/root/object_models.py")
+_hub_image = modal.Image.debian_slim(python_version="3.11").pip_install(
+    "huggingface_hub>=0.34,<1.0"
+)
+access_image = _hub_image.add_local_file(
+    LOCAL_CAPTURES / "object_models.py", "/root/object_models.py"
+)
+prefetch_image = _hub_image.env({"HF_HOME": "/weights/hf"}).add_local_file(
+    LOCAL_CAPTURES / "object_models.py", "/root/object_models.py"
 )
 
 
@@ -98,7 +102,7 @@ def objects_access(methods: list[str]) -> dict:
 
 
 @app.function(
-    image=access_image.env({"HF_HOME": "/weights/hf"}),
+    image=prefetch_image,
     secrets=[HF_SECRET],
     volumes={"/weights": WEIGHTS},
     cpu=4.0,
