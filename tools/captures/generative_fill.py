@@ -2237,9 +2237,11 @@ def pick_roi(
     """The region to fill among the instances tagged `keyword` (a roof): the one the scan
     most missed from above, weighted by its size. Missed is unseen (its gaussians' `known`
     from a point over its centre) or, with a `renderer`, empty (the share of its footprint a
-    view from straight above finds nothing in: the camp's view cones call every roof seen,
-    run 37390698492's dry run, but a roof seen only from the ground has holes on top).
-    Segmentation only says where to look; the fill does not use its shape."""
+    view from straight above finds nothing in within a metre: the camp's view cones call
+    every roof seen, but a roof seen only from the ground has holes on top). Only a pick:
+    through such a hole the full scene shows what is below (run 37395213267, the camp: no
+    viewpoint then has anything unknown or empty to fill there). Segmentation only says
+    where to look; the fill does not use its shape."""
     rng = np.random.default_rng(0)
     scored = []
     for inst in instances:

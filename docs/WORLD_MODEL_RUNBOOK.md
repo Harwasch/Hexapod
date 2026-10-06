@@ -346,12 +346,18 @@ and the GPU side is in `infra/modal/fill.py` (`gen:<scan>` and `holdout:<scan>` 
 6. **Round 2** renders new paths with round 1's layer as known content, so the model
    continues it rather than inventing it again.
 
-Run (fill.yml, dispatched on a `wm-*` branch; the estimate is written before anything
-starts, and a run past `budget_usd - spent_usd` does not start):
+The held-out check (`holdout:spool`) holds out the frames that see the spool from highest.
+The top's look is never known (its shape is): it is drawn mid grey into every frame and
+left out of the distil's frozen scan.
+
+Run (fill.yml, dispatched on a `wm-*` branch). The estimate and a worst case are written
+before anything starts; a run whose worst case is past `budget_usd - spent_usd` does not
+start. The worst case is every clip and start at 1.5 times its estimate, plus one clip per
+generator hung to its cap (the class's timeout), plus every job at its 75 min timeout.
 
 ```sh
-modal run infra/modal/fill.py --jobs holdout:spool,gen:spool,gen:pumpkin,gen:camp \
-  --generators vace,wan22,cosmos,lama --paths 1 --seeds 1 --rounds 2 \
+modal run infra/modal/fill.py --jobs holdout:spool,gen:spool \
+  --generators vace,wan22,cosmos,lama --paths 1 --seeds 2 --rounds 2 \
   --budget-usd 12 --spent-usd 0
 ```
 
@@ -360,3 +366,59 @@ Publish (publish-fill.yml with `variant`): `job` lists the run's
 `extras.variants.fill` (`tools/captures/publish_variants.py`). The asset's current variants
 are re-read just before the attach, so another bake-off's entries stay. Today's
 `extras.inferredLayers` is not touched.
+
+### Results (2026-10-06)
+
+Runs 37383986439 (held-out, before the fixes below), 37390698492 (held-out and spool),
+37393225461 (pumpkin) and 37395213267 (camp). In all: about $7.05 of the $12 cap, the
+ledger in the bake-off notes. An L40S clip costs about $0.06 with VACE or Wan2.2 (115 s) and
+$0.16 with Cosmos (295 s).
+
+**Spool top, held out.** PSNR inside the region against the real held-out frames:
+
+| view           | before | VACE 1.3B | Wan2.2 5B | Cosmos-P2 2B | LaMa (baseline) |
+| -------------- | -----: | --------: | --------: | -----------: | --------------: |
+| frame_0178.jpg |    6.5 |      10.5 |      10.1 |          9.9 |             8.2 |
+| frame_0016.jpg |    7.4 |      11.1 |      10.5 |         10.1 |             8.9 |
+| frame_0015.jpg |    7.3 |      11.1 |      10.5 |         10.1 |             8.9 |
+| frame_0177.jpg |    5.5 |      10.0 |       9.8 |          9.0 |             7.3 |
+
+Frames that passed the gate: VACE 147 of 147, Wan2.2 18 of 147, Cosmos 107 of 147.
+
+None of them draws the real top (light grey planks):
+
+- VACE draws white radial slats with a dark centre.
+- Wan2.2 draws a cable-spool top with a centre hole, but too small, and it repaints the lawn.
+- Cosmos draws a flat grey disc. Its frame 0 was pinned, which is fixed since.
+- LaMa leaves a dark smear.
+
+VACE's clips are the most consistent, and it ranks first in every view.
+
+**Spool, full scan.** The top is mostly known from 20° up (55° rule), so the layers are
+small: VACE 1,382 gaussians, Wan2.2 338, Cosmos 2,948 and LaMa 6,244. Cosmos and LaMa
+leave floaters past the top's rim. The scan is cropped, so no measured surface stands
+behind them for the carving to test against.
+
+**Pumpkin ground.** Frames that passed the gate: VACE 98 of 98, Wan2.2 6 of 98, Cosmos
+24 of 98. Segmentation leaves orange pumpkin fragments inside the hidden object's place,
+and they are known pixels. VACE and LaMa read them as a pumpkin and paint one back. Cosmos
+(frame 0 no longer pinned) paints straw, the nearest to the ground that is really there.
+
+**Camp roof.** The camp has no cameras, and its view cones are omnidirectional over the
+roofs. A roof was picked by the share of its footprint that is empty from straight above
+(instance 6904, 31 %). Through those holes the full scene shows the cabin below, so from
+every viewpoint the planner probed, nothing in the region is unknown or empty. No clip was
+made ($0.06). With this data the method finds nothing to fill there. Forcing the roof's
+look unknown, as the held-out check does, is the option left.
+
+Defects the runs found, all fixed before the runs after them:
+
+- A latent cell counted as generated when any one of its pixels was. With the scan's
+  scattered unknown specks, Wan2.2 and Cosmos were given almost nothing, and their known
+  pixels came back at 13-20 dB. Cells are now judged by share, and only solid holes grow.
+- Thinning kept one frame's colour per voxel, which speckled the layer. It now fuses every
+  frame's colour there.
+- VACE was shown the held-out top's real colours as a hint. Withheld gaussians are now drawn
+  mid grey.
+- Cosmos pinned a frame 0 that had a hole in it.
+- Failed GPU calls were not costed.
