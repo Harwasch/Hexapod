@@ -9,10 +9,11 @@ finds each of them in a view.
   classes the ground shows.
 * `Sam3Concepts` -- the segmenter the method is built for: SAM 3 (`facebook/sam3`, Meta's
   custom "SAM License"; the weights are gated on Hugging Face). Things by its video model
-  along each camera path, one track per object; stuff by its semantic head. It needs
-  transformers 5 (and a newer torch than `infra/modal/segment.py`'s gsplat image has) and
-  the gated weights; **written against the documented API and not yet run** -- the account
-  the Modal `huggingface` secret belongs to has no access to `facebook/sam3` (2026-10-05).
+  along each camera path, every thing's name a prompt, one track per object; stuff by its
+  semantic head. It needs transformers 5 and torch >= 2.5, so it runs in
+  `infra/modal/segment.py`'s SAM 3 image, which has no gsplat: a run there is seeded with
+  an earlier run's gsplat views and class-free masks (`concept_scene.py --seeded`).
+  `smoke_sam3` checks the calls on a few frames first.
 * `GroundedSam2Concepts` -- a **stand-in** for SAM 3 while its weights are gated: Grounding
   DINO (`IDEA-Research/grounding-dino-base`, Apache-2.0) boxes each thing -- asked one
   thing at a time, since asked several at once it mislabels (on the spool's renders the
@@ -23,6 +24,14 @@ finds each of them in a view.
   prompts and `data/ground_cover.json`'s contrast prompts ("mask pooling", research notes
   §1.2.5). Runs on transformers 4.57 and torch 2.4, the segmentation image. A run made with
   it is `concept-first-standin` (`concept_scene.VARIANTS`), never C.
+
+transformers 5's SAM 3 API, as these classes call it (5.19.0's source and the model card):
+`Sam3VideoProcessor.init_video_session(video=, inference_device=, processing_device=,
+video_storage_device=, dtype=)`, `add_text_prompt(inference_session=, text=[...])`,
+`Sam3VideoModel.propagate_in_video_iterator(inference_session=, max_frame_num_to_track=)`
+yielding outputs with `frame_idx`, and `postprocess_outputs(session, output)` ->
+`{object_ids, scores, boxes, masks, prompt_to_obj_ids}`; `Sam3Model(**Sam3Processor(images=,
+text=))` -> `semantic_seg` (batch, 1, h, w) logits.
 
 Torch and transformers are imported only when a model is first used (as `segment_models`),
 so the pure helpers here are tested without them.
@@ -434,17 +443,43 @@ class GroundedSam2Concepts:
 # --------------------------------------------------------------------- SAM 3 (gated)
 
 
+def prompt_concepts(prompt_to_ids: dict[str, list[int]], prompts: Sequence[str]) -> dict[int, int]:
+    """Object id -> concept index, from a SAM 3 video output's `prompt_to_obj_ids` (prompt text
+    -> object ids) and the prompts in concept order. An id under no known prompt is left out."""
+    index = {p: k for k, p in enumerate(prompts)}
+    out: dict[int, int] = {}
+    for text, ids in prompt_to_ids.items():
+        if text in index:
+            for i in ids:
+                out[int(i)] = index[text]
+    return out
+
+
+def cover_from_logits(logits: np.ndarray, region: np.ndarray, threshold: float) -> StuffMap:
+    """A cover map from SAM 3's semantic logits, one row per cover class (k, h, w): each
+    pixel of `region` takes its most probable class when that is at least `threshold`."""
+    probs = 1.0 / (1.0 + np.exp(-np.asarray(logits, np.float64)))
+    best = probs.argmax(axis=0)
+    score = probs.max(axis=0)
+    label = np.where((score >= threshold) & region, best, -1).astype(np.int16)
+    return StuffMap(label, np.where(label >= 0, score, 0).astype(np.float32))
+
+
 @dataclass
 class Sam3Concepts:
-    """SAM 3 (module docstring): **not yet run** -- the weights are gated and the account has
-    no access. Things: one video session per camera path and thing (`Sam3VideoModel`), each
-    object a track along it; stuff: the semantic head per cover class (`Sam3Model`), the
-    most probable class over 0.5 per pixel."""
+    """SAM 3 (`facebook/sam3`; transformers >= 5, torch >= 2.5). Things: one video session
+    per camera path (`Sam3VideoModel`), every thing's name a text prompt in it, so the path's
+    frames are encoded once and each object found is a track along it (its id; which prompt
+    found it, `prompt_to_obj_ids`, is its concept). Stuff: the semantic head (`Sam3Model`)
+    once per cover class, batched, each pixel of the ground its most probable class over
+    `threshold`."""
 
     model: str = SAM3_MODEL
     threshold: float = 0.5
     min_area: float = 0.0005
     device: str | None = None
+    #: bfloat16 on a GPU (as the model card runs the video model), float32 on a CPU.
+    half: bool = True
     _video: Any = field(default=None, init=False, repr=False)
     _image: Any = field(default=None, init=False, repr=False)
 
@@ -452,19 +487,23 @@ class Sam3Concepts:
     def name(self) -> str:
         return f"sam3:{self.model}"
 
+    def _dtype(self, device: str) -> Any:
+        import torch
+
+        return torch.bfloat16 if self.half and device.startswith("cuda") else torch.float32
+
     def _load_video(self) -> tuple[Any, Any, str]:
         if self._video is None:
-            import torch
-            from transformers import Sam3VideoModel, Sam3VideoProcessor  # transformers >= 5
+            from transformers import Sam3VideoModel, Sam3VideoProcessor
 
             device = sm._device(self.device)
-            model = Sam3VideoModel.from_pretrained(self.model).to(device, dtype=torch.bfloat16)
+            model = Sam3VideoModel.from_pretrained(self.model).to(device, dtype=self._dtype(device))
             self._video = (Sam3VideoProcessor.from_pretrained(self.model), model.eval(), device)
         return self._video
 
     def _load_image(self) -> tuple[Any, Any, str]:
         if self._image is None:
-            from transformers import Sam3Model, Sam3Processor  # transformers >= 5
+            from transformers import Sam3Model, Sam3Processor
 
             device = sm._device(self.device)
             model = Sam3Model.from_pretrained(self.model).to(device).eval()
@@ -476,31 +515,34 @@ class Sam3Concepts:
     ) -> list[list[ConceptMask]]:
         import torch
 
-        processor, model, device = self._load_video()
         out: list[list[ConceptMask]] = [[] for _ in frames]
+        if not frames or not things:
+            return out
+        processor, model, device = self._load_video()
         h, w = frames[0].shape[:2]
-        for c, concept in enumerate(things):
-            session = processor.init_video_session(
-                video=[np.ascontiguousarray(f, np.uint8) for f in frames],
-                inference_device=device,
-                processing_device="cpu",
-                video_storage_device="cpu",
-                dtype=torch.bfloat16,
-            )
-            session = processor.add_text_prompt(inference_session=session, text=concept.query)
-            with torch.inference_mode():
-                for step in model.propagate_in_video_iterator(
-                    inference_session=session, max_frame_num_to_track=len(frames)
-                ):
-                    done = processor.postprocess_outputs(session, step)
-                    masks = np.asarray(done["masks"].cpu().numpy(), bool).reshape(-1, h, w)
-                    scores = done["scores"].float().cpu().numpy().reshape(-1)
-                    ids = done["object_ids"].cpu().numpy().reshape(-1)
-                    for m, s, i in zip(masks, scores, ids, strict=True):
-                        if s >= self.threshold and m.sum() >= self.min_area * h * w:
-                            # Tracks are per concept: a concept's ids in the high digits.
-                            track = c * 100_000 + int(i)
-                            out[int(step.frame_idx)].append(ConceptMask(m, c, float(s), track))
+        prompts = [c.query.lower() for c in things]
+        session = processor.init_video_session(
+            video=np.stack([np.ascontiguousarray(f, np.uint8) for f in frames]),
+            inference_device=device,
+            processing_device="cpu",
+            video_storage_device="cpu",
+            dtype=self._dtype(device),
+        )
+        session = processor.add_text_prompt(inference_session=session, text=prompts)
+        with torch.inference_mode():
+            for step in model.propagate_in_video_iterator(
+                inference_session=session, max_frame_num_to_track=len(frames)
+            ):
+                done = processor.postprocess_outputs(session, step)
+                concept_of = prompt_concepts(done.get("prompt_to_obj_ids") or {}, prompts)
+                masks = np.asarray(done["masks"].cpu().numpy(), bool).reshape(-1, h, w)
+                scores = done["scores"].float().cpu().numpy().reshape(-1)
+                ids = done["object_ids"].cpu().numpy().reshape(-1)
+                for m, s, i in zip(masks, scores, ids, strict=True):
+                    c = concept_of.get(int(i))
+                    if c is None or s < self.threshold or m.sum() < self.min_area * h * w:
+                        continue
+                    out[int(step.frame_idx)].append(ConceptMask(m, c, float(s), int(i)))
         return out
 
     def stuff(
@@ -512,18 +554,38 @@ class Sam3Concepts:
     ) -> StuffMap:
         import torch
 
-        processor, model, device = self._load_image()
         h, w = rgb.shape[:2]
-        probs = np.zeros((len(stuff), h, w), np.float32)
-        for s, concept in enumerate(stuff):
-            text = concept.name.lower()
-            inputs = processor(images=rgb, text=text, return_tensors="pt").to(device)
-            with torch.inference_mode():
-                outputs = model(**inputs)
-            logits = outputs.semantic_seg.float()  # (1, 1, h', w')
-            up = torch.nn.functional.interpolate(logits, size=(h, w), mode="bilinear")
-            probs[s] = torch.sigmoid(up)[0, 0].cpu().numpy()
-        best = probs.argmax(axis=0)
-        score = probs.max(axis=0)
-        label = np.where((score >= self.threshold) & region, best, -1).astype(np.int16)
-        return StuffMap(label, np.where(label >= 0, score, 0).astype(np.float32))
+        if not stuff or not region.any():
+            return StuffMap(np.full((h, w), -1, np.int16), np.zeros((h, w), np.float32))
+        processor, model, device = self._load_image()
+        texts = [c.name.lower() for c in stuff]
+        image = np.ascontiguousarray(rgb, np.uint8)
+        inputs = processor(images=[image] * len(texts), text=texts, return_tensors="pt").to(device)
+        with torch.inference_mode():
+            outputs = model(**inputs)
+        logits = outputs.semantic_seg.float()  # (k, 1, h', w')
+        up = torch.nn.functional.interpolate(logits, size=(h, w), mode="bilinear")
+        return cover_from_logits(up[:, 0].cpu().numpy(), region, self.threshold)
+
+
+def smoke_sam3(frames: list[np.ndarray], device: str | None = None) -> dict[str, Any]:
+    """SAM 3 on a few frames, things and cover, as a run calls it: what it found (a check
+    that the weights load and the calls work, before a GPU is spent on a whole scan)."""
+    source = Sam3Concepts(device=device)
+    things = [Concept("cable spool", "thing", "other", ("cable spool",)), Concept("rock", "thing")]
+    found = source.things(frames, things)
+    stuff = [Concept("Grass", "stuff", cover="grass"), Concept("Dirt", "stuff", cover="dirt")]
+    region = np.ones(frames[0].shape[:2], bool)
+    cover = source.stuff(frames[0], stuff, [], region)
+    # What `segment_scene.describe` embeds with, in the same image (transformers 5).
+    embedder = sm.SiglipEmbedder(device=device)
+    crops = embedder.embed_images([f[: f.shape[0] // 2, : f.shape[1] // 2] for f in frames])
+    words = embedder.embed_texts(["a cable spool", "grass"])
+    return {
+        "embeddings": [list(crops.shape), list(words.shape)],
+        "frames": len(frames),
+        "things": [
+            [(m.concept, round(m.score, 3), m.track, int(m.mask.sum())) for m in f] for f in found
+        ],
+        "coverShare": [round(float((cover.label == k).mean()), 3) for k in range(len(stuff))],
+    }

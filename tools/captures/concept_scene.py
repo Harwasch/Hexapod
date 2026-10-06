@@ -242,13 +242,17 @@ def split_concepts(concepts: Sequence[Concept]) -> tuple[list[Concept], list[Con
 
 def load_concepts(path: Path) -> list[Concept]:
     """A vocabulary file: `{"things": [{"name", "category"?, "prompts"?}, ...], "cover":
-    ["grass", ...]}` (a run's `concepts` block; entries of `stuff` are read as cover too)."""
+    ["grass", ...]}` (a run's `concepts` block; entries of `stuff` are read as cover too),
+    or a run's `names.json` (`{"vocabulary": [{..., "kind"}, ...]}`, what its VLM chose)."""
     data = json.loads(path.read_text(encoding="utf-8"))
+    listed = data.get("vocabulary", [])
+    things = [*data.get("things", []), *(r for r in listed if r.get("kind") == "thing")]
     out = [
         Concept(str(r["name"]), "thing", str(r.get("category", "")), tuple(r.get("prompts", ())))
-        for r in data.get("things", [])
+        for r in things
     ]
-    for entry in [*data.get("cover", []), *data.get("stuff", [])]:
+    stuff = [r for r in listed if r.get("kind") == "stuff"]
+    for entry in [*data.get("cover", []), *data.get("stuff", []), *stuff]:
         word = (entry.get("cover") or entry.get("name")) if isinstance(entry, dict) else entry
         out.append(Concept(str(word), "stuff"))
     return clean_concepts(out)
@@ -1061,6 +1065,40 @@ class ConceptSegmentation:
     extra: list[dict[str, object]] = field(default_factory=list)
 
 
+def _require_seed(
+    cache: Path | None,
+    view: ss.View,
+    n_cells: int,
+    tag: str,
+    renderer: ss.SplatRenderer | None,
+    free: ss.MaskSource | None,
+) -> None:
+    """A seeded run's view: its image and class-free masks must be in `cache` already
+    (`segment_scene.cached_raster` and `cached_masks`' names)."""
+    if cache is None or renderer is None or free is None:
+        raise ValueError("a seeded run needs its cache, a renderer and a class-free source")
+    key = ss._cache_key(view.camera, n_cells, tag)
+    drawn = ss._cache_key(view.camera, n_cells, tag + renderer.name)
+    source = hashlib.sha1(str(getattr(free, "name", "")).encode()).hexdigest()[:8]
+    for path in (
+        cache / f"raster-{key}-{renderer.name}.npz",
+        cache / f"masks-{drawn}-{source}.npz",
+    ):
+        if not path.exists():
+            raise FileNotFoundError(f"seeded run: {path.name} is not in the seed (other views?)")
+
+
+class SeededRenderer:
+    """The renderer of a seeded run (`segment_concepts(seeded=True)`): named as the gsplat
+    renderer whose images the seed holds, so every view's image is the seed's; what is not
+    in the seed (the instances' portraits, `segment_scene.describe`) is drawn by the CPU."""
+
+    name = "gsplat"
+
+    def __call__(self, splats, camera, *, background=(0.0, 0.0, 0.0), rows=None):
+        return render(splats if rows is None else splats.take(rows), camera, background=background)
+
+
 def segment_concepts(
     splats: Splats,
     vocabulary: Vocabulary,
@@ -1082,12 +1120,16 @@ def segment_concepts(
     progress: Callable[[str], None] | None = None,
     free_factory: Callable[[list[Camera]], ss.MaskSource] | None = None,
     cache: Path | None = None,
+    seeded: bool = False,
 ) -> ConceptSegmentation:
     """Ground, cells, views, vocabulary, concept and class-free masks, the lift and
     meaning, for a scan held in memory. `free_factory(cameras)` builds the class-free mask
     source that needs the cameras (`segment_scene.OracleMasks` in tests). `cache`: every
     view's image and class-free masks are kept there (`segment_scene.cached_raster`,
-    `cached_masks`), and the VLM's answer (`names.json`), so a run can be re-assembled."""
+    `cached_masks`), and the VLM's answer (`names.json`), so a run can be re-assembled.
+    `seeded`: every view's image and class-free masks must already be in `cache` (an
+    earlier run's, with its `cameras`), so only the concept masks are new: a view missing
+    there is an error, never drawn or masked again."""
     say = progress or (lambda message: None)
     timings: dict[str, float] = {}
     mark = time.perf_counter()
@@ -1134,7 +1176,9 @@ def segment_concepts(
         if cache is not None:
             cache.mkdir(parents=True, exist_ok=True)
         for camera in overview_cameras(splats.positions, overview_count):
-            if renderer is not None:
+            if renderer is not None and not seeded:
+                # (A seeded run's renderer draws on the CPU what the seed lacks: an overview
+                # is not cached under the seed's renderer's name.)
                 overviews.append(
                     ss.cached_raster(cache, renderer, view_splats, camera, n_cells, tag, index)
                 )
@@ -1169,6 +1213,8 @@ def segment_concepts(
         for k, view in enumerate(pool.views(cameras)):
             now = time.perf_counter()
             clock["renderS"] += now - mark
+            if seeded:
+                _require_seed(cache, view, n_cells, tag, renderer, free)
             if renderer is not None:
                 image = ss.cached_raster(
                     cache, renderer, view_splats, view.camera, n_cells, tag, index
@@ -1526,7 +1572,10 @@ def yard_truth(labels: dict, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray, 
 def _load_vocabulary(spec: str) -> Vocabulary:
     """`module:Class`, or a vocabulary JSON file (`FixedVocabulary`)."""
     if spec.endswith(".json"):
-        return FixedVocabulary(load_concepts(Path(spec)), name=f"fixed:{Path(spec).name}")
+        data = json.loads(Path(spec).read_text(encoding="utf-8"))
+        # A run's names.json: what that run's vision-language model answered, reused.
+        whose = " (an earlier run's VLM answer)" if "vocabulary" in data else ""
+        return FixedVocabulary(load_concepts(Path(spec)), name=f"fixed:{Path(spec).name}{whose}")
     vocabulary = ss._load(spec)
     if not isinstance(vocabulary, Vocabulary):
         raise TypeError(f"{spec} is not a Vocabulary (name, concepts(images))")
@@ -1570,6 +1619,13 @@ def main() -> None:
     parser.add_argument("--memory-gb", type=float, default=None)
     parser.add_argument("--cache", type=Path, default=None, help="views, masks, the answer")
     parser.add_argument("--stand-in", action="store_true", help="a run of the stand-in")
+    parser.add_argument("--cameras", type=Path, default=None, help="cameras.json: these views")
+    parser.add_argument(
+        "--seeded",
+        action="store_true",
+        help="every view's image and class-free masks are in --cache already (an earlier "
+        "run's, with its --cameras); only the concept masks are new (no gsplat needed)",
+    )
     parser.add_argument("--check", type=Path, default=None, help="a PNG: by object, by cover")
     parser.add_argument("--summary", type=Path, default=None)
     parser.add_argument("--opacity-min", type=float, default=scene_plants.PACKAGE_OPACITY_MIN)
@@ -1619,13 +1675,20 @@ def main() -> None:
         vocabulary = _load_vocabulary(args.vlm)
         source = _load_source(args.concepts)
         free = ss.load_masks(args.masks) if args.masks else None
+    if args.cameras:
+        listed = json.loads(args.cameras.read_text(encoding="utf-8"))
+        cameras = [Camera.from_json(c) for c in listed]
+    if args.seeded and (args.cache is None or cameras is None):
+        parser.error("--seeded needs --cache (the seed) and --cameras (its views)")
+    renderer = SeededRenderer() if args.seeded else ss.make_renderer(args.renderer)
     result = segment_concepts(
         splats, vocabulary, source, free, embedder, words,
         cameras=cameras, view_count=args.views, max_views=args.max_views,
-        overview_count=args.overview_views, renderer=ss.make_renderer(args.renderer),
+        overview_count=args.overview_views, renderer=renderer,
         max_scale_m=args.max_scale_m, workers=args.workers, cpus=args.cpus,
         memory_bytes=None if args.memory_gb is None else args.memory_gb * float(1 << 30),
         ground=ground, progress=say, free_factory=free_factory, cache=args.cache,
+        seeded=args.seeded,
     )  # fmt: skip
     if from_tiles:
         tiles = ss.tile_binding_by_position(args.tiles, splats.positions, result.splat_id)

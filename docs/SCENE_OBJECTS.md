@@ -268,11 +268,18 @@ the scene and then looks for each named thing, so objects are born with names.
    visible weight in two views; 35% in one where the pass saw no ground near it): the
    spool's bottom flange, the bottom of a pumpkin in the hay.
 3. **Concepts in every view.** SAM 3 (the method; its weights are gated) finds every
-   instance of each thing, tracked along camera paths, and its semantic head gives the
-   ground's cover per pixel. Until access is granted a **stand-in** runs: Grounding DINO
-   boxes each thing, SAM 2.1 cuts its mask, and SigLIP 2 classifies each class-free mask
-   over the ground against the chosen cover classes' prompts. A stand-in run is its own
-   variant (`concept-first-standin`, `concepts.standIn` in the file), never published as C.
+   instance of each thing, every thing's name a prompt in one video session per camera
+   path, and its semantic head gives the ground's cover per pixel. SAM 3 needs transformers
+   5 and so torch >= 2.5, for which gsplat has no prebuilt wheel: its run
+   (`concept-first`) has an image of its own and is **seeded** with the stand-in run's
+   cache (`[segment|names=spool,pumpkin|variant=concept-first|seed=<run id>]`): the same
+   gsplat views, class-free masks and vocabulary, so the two differ only in the segmenter
+   (the instances' portraits are drawn on the CPU). A CPU check runs first: the Modal
+   secret's token must read `facebook/sam3`, and SAM 3's calls work on two views, before
+   any GPU starts. The **stand-in**: Grounding DINO boxes each thing, SAM 2.1 cuts its
+   mask, and SigLIP 2 classifies each class-free mask over the ground against the chosen
+   cover classes' prompts. A stand-in run is its own variant (`concept-first-standin`,
+   `concepts.standIn` in the file), never published as C.
 4. **Lift** by §3's voting: a cell is a thing's when that thing's masks hold it in at
    least half the views where the detector found that thing at all (a view where it missed
    the spool says nothing); thing masks join cells into objects, each named by the concept

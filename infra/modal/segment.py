@@ -47,6 +47,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -118,6 +119,58 @@ image = (
 )
 
 
+#: **SAM 3** (candidate C's own segmenter, `facebook/sam3`, gated) needs transformers 5, so
+#: torch >= 2.5, for which gsplat has no prebuilt wheel (its wheels stop at torch 2.4). Its
+#: runs (`SEEDED_VARIANTS`) have an image of their own without gsplat, and are seeded with
+#: an earlier run's `cache.tar` (`--seed`): that run's gsplat views, class-free masks and
+#: cameras, and its VLM's vocabulary, so only SAM 3's masks are new (and the two candidates
+#: differ in nothing else). The Hugging Face token is the Modal secret's (`HF_SECRET`, by
+#: the name `.github/workflows/segment.yml` finds, as fill.yml does).
+HF_SECRET = modal.Secret.from_name(os.environ.get("HEXAPOD_HF_SECRET", "huggingface"))
+#: The keys a token may sit under in that secret (`_hf_token` copies it to HF_TOKEN).
+HF_TOKEN_KEYS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN", "HF_API_TOKEN")
+SAM3_REPO = "facebook/sam3"
+sam3_image = (
+    modal.Image.debian_slim(python_version="3.10")
+    .pip_install(
+        "torch==2.7.1+cu126",
+        "torchvision==0.22.1+cu126",
+        index_url="https://download.pytorch.org/whl/cu126",
+    )
+    .pip_install(
+        "numpy==1.26.4",
+        "packaging",
+        "rich",
+        # SAM 3 (Sam3VideoModel, Sam3Model), SigLIP 2 and SAM 2; 5.x needs torch >= 2.5.
+        "transformers==5.19.0",
+        "huggingface_hub>=1.31,<3",
+        "sentencepiece",
+        "accelerate>=1.1,<2",
+        "pillow>=10",
+        "laspy[lazrs]>=2.5",
+        "pyproj>=3.6",
+        "scipy>=1.11,<1.16",
+        "opencv-python-headless==4.10.0.84",
+    )
+    .env({"HF_HOME": HF_HOME})
+    .add_local_dir(
+        LOCAL_CAPTURES,
+        CAPTURES,
+        ignore=["**/.venv/**", "**/__pycache__/**", "tests/**", "**/*.pyc"],
+    )
+)
+
+
+def _hf_token() -> list[str]:
+    """HF_TOKEN set from whichever key the secret uses; the keys present (names only)."""
+    present = sorted(k for k in os.environ if "HF" in k.upper() or "HUGGING" in k.upper())
+    keys = [k for k in HF_TOKEN_KEYS if os.environ.get(k)]
+    keys += sorted(k for k, v in os.environ.items() if v.startswith("hf_"))
+    if keys:
+        os.environ["HF_TOKEN"] = os.environ[keys[0]]
+    return present
+
+
 #: Gaussians larger than this (largest axis, metres) are left out of the views: the camp's
 #: floaters (0.4% of it), which gsplat draws as blobs over a view from outside.
 MAX_SCALE_M = 0.5
@@ -140,10 +193,16 @@ VARIANT_SCRIPTS: dict[str, tuple[str, ...]] = {
         "--boxes", "segment_models:Sam2BoxMasks",
         "--namer", "segment_models:QwenNamer",
     ),
-    # Candidate C with Grounding DINO + SAM 2 standing in for SAM 3 (gated): never C itself.
-    # SAM 3's own variant, "concept-first", needs transformers 5 (and so a newer torch and
-    # gsplat build than this image has) and access to facebook/sam3. Run it with
-    # `views=64` (no coverage rounds): spool or pumpkin ~15-20 min, ~$0.35 each (est.).
+    # Candidate C itself: SAM 3, in its own image, seeded with the stand-in's run
+    # (`SEEDED_VARIANTS`: `[segment|names=spool,pumpkin|variant=concept-first|seed=<run>]`).
+    "concept-first": (
+        "concept_scene.py",
+        "--concepts", "concept_models:Sam3Concepts",
+        "--masks", "segment_models:Sam2LargeMasks",
+        "--seeded",
+    ),
+    # Candidate C with Grounding DINO + SAM 2 standing in for SAM 3: never C itself. Run it
+    # with `views=64` (no coverage rounds): spool or pumpkin ~7 min, ~$0.13 each.
     "concept-first-standin": (
         "concept_scene.py",
         "--vlm", "concept_models:QwenVocabulary",
@@ -153,6 +212,16 @@ VARIANT_SCRIPTS: dict[str, tuple[str, ...]] = {
     ),
 }  # fmt: skip
 VARIANT_TIMEOUT_S = 50 * 60
+#: Variants that run in the SAM 3 image from a seed (`segment_seeded`), each call stopped
+#: after `SEEDED_TIMEOUT_S` (expected ~8 min: the models' load, SAM 3 on 64 views, the
+#: instances' portraits drawn on the CPU). `check_sam3` runs first, on CPU only: the
+#: secret's token can read the gated weights (else nothing on a GPU starts), the weights
+#: into the volume, and SAM 3's calls on two of the seed's views.
+SEEDED_VARIANTS = frozenset({"concept-first"})
+SEEDED_TIMEOUT_S = 20 * 60
+SAM3_CHECK_TIMEOUT_S = 20 * 60
+SAM3_CHECK_CPU = 4.0
+SAM3_CHECK_MEMORY_MIB = 16 * 1024
 #: What a variant adds to the main process's memory: SAM 2.1 large and Qwen3-VL 4B's host
 #: side (their weights go to the GPU), and the refine pass's views.
 VARIANT_BYTES = 4 * (1 << 30)
@@ -617,6 +686,93 @@ def segment_scan(
     `plan` is the `sizing` this call was spawned on (default `DEFAULT_SIZING`, the
     decorator's), which the container cannot see for itself: its request goes to
     segment_scene, and the summary keeps it beside what the run used (`usage`)."""
+    return _segment(name, url, views, keep_masks, renderer, coverage_rounds, plan, variant)
+
+
+@app.function(
+    image=sam3_image,
+    gpu=GPU,
+    cpu=options(DEFAULT_SIZING)["cpu"],
+    memory=options(DEFAULT_SIZING)["memory"],
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    timeout=SEEDED_TIMEOUT_S,
+)
+def segment_seeded(name: str, url: str, seed: bytes, views: int, plan: dict, variant: str) -> dict:
+    """A `SEEDED_VARIANTS` run of one scan in the SAM 3 image: `seed` is an earlier run's
+    `cache.tar` for it (its views' gsplat images, class-free masks and cameras, its VLM's
+    vocabulary), so only the concept masks are new; the rest as `segment_scan`."""
+    _hf_token()
+    return _segment(name, url, views, False, "gsplat", 0, plan, variant, seed=seed)
+
+
+@app.function(
+    image=sam3_image,
+    cpu=SAM3_CHECK_CPU,
+    memory=SAM3_CHECK_MEMORY_MIB,
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    timeout=SAM3_CHECK_TIMEOUT_S,
+)
+def check_sam3(frames: list[bytes]) -> dict:
+    """Before any GPU: whose token the secret holds, whether it can read `SAM3_REPO`
+    (gated), the weights into the volume, and SAM 3's calls on `frames` (`.npz` images,
+    `rgb`) on the CPU (`concept_models.smoke_sam3`). `ok` only when all of it worked."""
+    import io
+    import traceback
+
+    import numpy as np
+    from huggingface_hub import HfApi, auth_check, snapshot_download
+
+    out: dict = {"repo": SAM3_REPO, "secretKeys": _hf_token(), "ok": False}
+    try:
+        out["user"] = HfApi().whoami().get("name")
+    except Exception as error:  # noqa: BLE001 - reported, the check goes on
+        out["whoamiError"] = f"{type(error).__name__}: {error}"[:1000]
+    try:
+        auth_check(SAM3_REPO)
+        out["access"] = True
+    except Exception as error:  # noqa: BLE001 - this is the answer
+        out["access"] = False
+        out["error"] = f"{type(error).__name__}: {error}"[:2000]
+        return out
+    started = time.time()
+    snapshot_download(SAM3_REPO, allow_patterns=["*.json", "*.txt", "model.safetensors"])
+    WEIGHTS.commit()
+    out["downloadS"] = round(time.time() - started, 1)
+    sys.path.insert(0, CAPTURES)
+    os.chdir(CAPTURES)
+    try:
+        import concept_models
+
+        images = [np.load(io.BytesIO(b))["rgb"] for b in frames]
+        started = time.time()
+        out["smoke"] = concept_models.smoke_sam3(images, device="cpu")
+        out["smokeS"] = round(time.time() - started, 1)
+        out["ok"] = True
+    except Exception:  # noqa: BLE001 - the trace is the answer
+        out["smokeError"] = traceback.format_exc()[-6000:]
+    return out
+
+
+#: What of an earlier run's `cache.tar` seeds a `SEEDED_VARIANTS` run: never its concept
+#: masks (`boxmask-*`, named by the things alone), which the new segmenter makes again.
+SEED_FILES = ("raster-", "masks-", "cameras.json", "names.json")
+
+
+def _segment(
+    name: str,
+    url: str,
+    views: int,
+    keep_masks: bool,
+    renderer: str,
+    coverage_rounds: int,
+    plan: dict | None,
+    variant: str,
+    seed: bytes | None = None,
+) -> dict:
+    """`segment_scan`'s and `segment_seeded`'s call: fetch, segment, report, return."""
+    import io
     import tarfile
 
     plan = plan or DEFAULT_SIZING
@@ -624,6 +780,15 @@ def segment_scan(
     with tempfile.TemporaryDirectory() as work:
         tiles = Path(work) / "tiles"
         cache = Path(work) / "cache"
+        seeded: list[str] = []
+        if seed is not None:
+            cache.mkdir()
+            with tarfile.open(fileobj=io.BytesIO(seed)) as tar:
+                for member in tar.getmembers():
+                    plain = member.isfile() and "/" not in member.name and ".." not in member.name
+                    if plain and member.name.startswith(SEED_FILES):
+                        (cache / member.name).write_bytes(tar.extractfile(member).read())
+                        seeded.append(member.name)
         count = _fetch(url, tiles)
         fetched = time.time() - started
         # What is published now, to compare against (none before a first publish).
@@ -646,6 +811,11 @@ def segment_scan(
                     coverage_rounds=coverage_rounds,
                     cache=cache if keep_masks or variant else None,
                     variant=variant,
+                )
+                + (
+                    ["--cameras", str(cache / "cameras.json"), "--vlm", str(cache / "names.json")]
+                    if seed is not None
+                    else []
                 ),
                 cwd=CAPTURES,
                 capture_output=True,
@@ -684,7 +854,7 @@ def segment_scan(
                 str(Path(work) / "compare.png"),
                 "--max-scale-m",
                 str(MAX_SCALE_M),
-                *(["--gsplat"] if renderer == "gsplat" else []),
+                *(["--gsplat"] if renderer == "gsplat" and seed is None else []),
                 "--out",
                 str(Path(work) / "report.json"),
             ],
@@ -720,6 +890,7 @@ def segment_scan(
             "name": name,
             "ok": True,
             "variant": variant,
+            **({"seededFiles": len(seeded)} if seed is not None else {}),
             "tiles": count,
             "sizing": plan,
             "fetchS": round(fetched, 1),
@@ -733,6 +904,38 @@ def segment_scan(
         }
 
 
+#: `check_sam3`'s rate: its cores and memory at Modal's prices (no GPU).
+CHECK_DOLLARS_PER_HOUR = (
+    SAM3_CHECK_CPU * CORE_PER_HOUR + SAM3_CHECK_MEMORY_MIB / 1024 * GIB_PER_HOUR
+)
+
+
+def _seeds(folder: Path | None, names: list[str]) -> dict[str, bytes]:
+    """Each scan's seed: `<folder>/<scan>/cache.tar`, an earlier run's (its artifact)."""
+    if folder is None:
+        raise SystemExit("a seeded variant needs --seed: a folder of an earlier run's caches")
+    seeds = {}
+    for name in names:
+        path = folder / name / "cache.tar"
+        if not path.exists():
+            raise SystemExit(f"{name}: no seed at {path}")
+        seeds[name] = path.read_bytes()
+    return seeds
+
+
+def _seed_frames(seed: bytes, count: int) -> list[bytes]:
+    """`count` of a seed's view images (`raster-*.npz`, as stored), for `check_sam3`."""
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(seed)) as tar:
+        members = sorted(
+            (m for m in tar.getmembers() if m.isfile() and m.name.startswith("raster-")),
+            key=lambda m: m.name,
+        )
+        return [tar.extractfile(m).read() for m in members[:count]]
+
+
 @app.local_entrypoint()
 def main(
     names: str = ",".join(SCANS),
@@ -742,10 +945,14 @@ def main(
     renderer: str = "gsplat",
     coverage_rounds: int = COVERAGE_ROUNDS,
     variant: str = "",
+    seed: str = "",
 ) -> None:
     """Segment the named scans in parallel containers; write each result under `out/`.
     `variant`: a bake-off candidate (`VARIANT_SCRIPTS`) instead of segment_scene, each call
-    stopped after `VARIANT_TIMEOUT_S`.
+    stopped after `VARIANT_TIMEOUT_S`. A `SEEDED_VARIANTS` one needs `seed`, a folder with an
+    earlier run's `<scan>/cache.tar` (its `segmentation` artifact): `check_sam3` runs first,
+    on the CPU, and only when it passes does a GPU start (`segment_seeded`, each call stopped
+    after `SEEDED_TIMEOUT_S`); what it found is `out/sam3-check.json`.
 
     Each scan's reservation follows its size (`sizing`): its tileset.json is read here
     first -- a few kB, hundreds for the camp -- for its tiles and gaussians, and it is
@@ -756,6 +963,20 @@ def main(
     chosen = [n.strip() for n in names.split(",") if n.strip()]
     failed = []
     calls = []
+    seeds: dict[str, bytes] = {}
+    if variant in SEEDED_VARIANTS:
+        seeds = _seeds(Path(seed) if seed else None, chosen)
+        rate = CHECK_DOLLARS_PER_HOUR * SAM3_CHECK_TIMEOUT_S / 3600
+        sys.stdout.write(
+            f"check_sam3 (CPU): stopped after {SAM3_CHECK_TIMEOUT_S} s: at most ${rate:.2f}\n"
+        )
+        check = check_sam3.remote(_seed_frames(seeds[chosen[0]], 2))
+        Path(out).mkdir(parents=True, exist_ok=True)
+        (Path(out) / "sam3-check.json").write_text(json.dumps(check, indent=1), encoding="utf-8")
+        sys.stdout.write(json.dumps(check, indent=1) + "\n")
+        if not check.get("ok"):
+            why = check.get("error") or check.get("smokeError") or "see sam3-check.json"
+            raise SystemExit(f"SAM 3 is not usable here, so no GPU started: {why}")
     for name in chosen:
         url = SCANS[name]
         try:
@@ -773,6 +994,17 @@ def main(
         )  # fmt: skip
         sys.stdout.write(sizing_line(name, size, plan) + "\n")
         chosen_options = options(plan)
+        if variant in SEEDED_VARIANTS:
+            chosen_options["timeout"] = SEEDED_TIMEOUT_S
+            worst = plan["dollarsPerHour"] * SEEDED_TIMEOUT_S / 3600
+            sys.stdout.write(
+                f"{name}: {variant}, seeded, stopped after {SEEDED_TIMEOUT_S} s: at most ${worst:.2f}\n"
+            )
+            call = segment_seeded.with_options(**chosen_options).spawn(
+                name, url, seeds[name], views, plan, variant
+            )
+            calls.append((name, plan, call))
+            continue
         if variant:
             chosen_options["timeout"] = VARIANT_TIMEOUT_S
             worst = plan["dollarsPerHour"] * VARIANT_TIMEOUT_S / 3600

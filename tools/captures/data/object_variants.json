@@ -1,7 +1,7 @@
 {
   "concept-first": {
-    "label": "C · Concept first",
-    "about": "A vision-language model lists the scene's things and ground cover; SAM 3 finds each of them in every view, the masks are voted onto the splats, and what nobody named comes from a class-free pass."
+    "label": "C · Concept first (SAM 3)",
+    "about": "Candidate C: a vision-language model lists the scene's things and ground cover; SAM 3 finds every instance of each thing in every view, tracked along the camera's paths, and its semantic head paints the ground's cover; the masks are voted onto the splats, and what nobody named comes from a class-free SAM 2 pass. Same views, vocabulary and class-free masks as the stand-in: only SAM 3 differs."
   },
   "concept-first-standin": {
     "label": "C (stand-in) · Concept first",

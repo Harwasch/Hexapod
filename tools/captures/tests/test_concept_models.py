@@ -119,3 +119,18 @@ def test_the_models_satisfy_the_protocols() -> None:
     assert isinstance(cm.GroundedSam2Concepts(), cs.ConceptSource)
     assert isinstance(cm.Sam3Concepts(), cs.ConceptSource)
     assert "stand-in" in cm.GroundedSam2Concepts().name
+
+
+def test_sam3_objects_take_the_concept_of_the_prompt_that_found_them() -> None:
+    prompts = ["cable spool", "rock"]
+    found = {"rock": [3, 5], "cable spool": [1], "a word nobody asked": [9]}
+    assert cm.prompt_concepts(found, prompts) == {3: 1, 5: 1, 1: 0}
+
+
+def test_sam3_cover_is_the_most_probable_class_on_the_ground_only() -> None:
+    logits = np.array([[[4.0, -4.0], [0.2, -4.0]], [[-4.0, 4.0], [0.1, -4.0]]])
+    region = np.array([[True, True], [True, False]])
+    cover = cm.cover_from_logits(logits, region, threshold=0.5)
+    # (1, 0): both classes near 0.5, the first above; (1, 1): off the ground.
+    assert cover.label.tolist() == [[0, 1], [0, -1]]
+    assert cover.score[0, 0] > 0.98 and cover.score[1, 1] == 0

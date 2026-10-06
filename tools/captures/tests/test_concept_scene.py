@@ -152,6 +152,44 @@ def test_load_concepts_reads_a_runs_concepts_block(tmp_path: Path) -> None:
     assert [c.cover for c in stuff] == ["gravel"]
 
 
+def test_load_concepts_reads_a_runs_names_json(tmp_path: Path) -> None:
+    path = tmp_path / "names.json"
+    vocabulary = [
+        {
+            "name": "cable spool",
+            "category": "fixtures",
+            "prompts": ["cable spool"],
+            "kind": "thing",
+        },
+        {"name": "Grass", "category": "ground", "cover": "grass", "kind": "stuff"},
+    ]
+    path.write_text(json.dumps({"vocabulary": vocabulary, "answer": "{}"}), encoding="utf-8")
+    things, stuff = cs.split_concepts(cs.load_concepts(path))
+    assert [(c.name, c.category) for c in things] == [("cable spool", "fixtures")]
+    assert [(c.name, c.cover) for c in stuff] == [("Grass", "grass")]
+
+
+def test_a_seeded_view_missing_from_the_seed_is_an_error(tmp_path: Path) -> None:
+    camera = cs.overview_cameras(np.random.default_rng(0).normal(size=(200, 3)), 1)[0]
+    view = ss.View(
+        camera, np.zeros((2, 2, 3), np.uint8), np.zeros((2, 2), np.int32), np.ones((2, 2))
+    )
+
+    class Free:
+        name = "sam2:facebook/sam2.1-hiera-large"
+
+    renderer = cs.SeededRenderer()
+    with pytest.raises(FileNotFoundError, match="raster-"):
+        cs._require_seed(tmp_path, view, 10, "max0.5", renderer, Free())
+    key = ss._cache_key(camera, 10, "max0.5")
+    (tmp_path / f"raster-{key}-gsplat.npz").write_bytes(b"")
+    with pytest.raises(FileNotFoundError, match="masks-"):
+        cs._require_seed(tmp_path, view, 10, "max0.5", renderer, Free())
+    drawn = ss._cache_key(camera, 10, "max0.5gsplat")
+    (tmp_path / f"masks-{drawn}-e79b9534.npz").write_bytes(b"")  # that source's name
+    cs._require_seed(tmp_path, view, 10, "max0.5", renderer, Free())
+
+
 def test_camera_paths_cut_where_the_camera_jumps() -> None:
     def cam(x: float, yaw: float) -> Camera:
         eye = np.array([x, 0.0, 1.0])
