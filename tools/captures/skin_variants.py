@@ -3,8 +3,10 @@ as variants beside its tiles (docs/SCENE_OBJECTS.md §9).
 
 Each variant is a `skin.json` + `skin.bin` in today's format (hexapod.skin v1, `skin_scene.py`)
 under `variants/skins/<name>/`, declared on the measured tileset's root as one entry of
-`extras.variants.skins` (`{name, label, about, skin}`, the path relative to `tileset.json`).
-Today's `extras.skin` is left alone: a viewer that never picks a variant sees what it saw.
+`extras.variants.skins` (`{name, label, about, look, skin}`, the path relative to
+`tileset.json`; `look` is one plain sentence on what to watch on that scan, per scan in
+`BAKEOFF`). Today's `extras.skin` is left alone: a viewer that never picks a variant sees what
+it saw.
 
 Subcommands::
 
@@ -33,6 +35,10 @@ sit beside `tileset.json` (`variants/skins/<name>/skin.json`, `skin.bin`), with 
 (where it goes) and the report. `publish` merges this run's entries into the
 `extras.variants` the tileset declares **now** (re-read at publish time, so a variant another
 bake-off registered meanwhile is kept) and:
+
+* a scan `BAKEOFF` marks `withdrawn` (nothing on it visibly moves under any candidate) is not
+  fitted: `publish` takes this tool's own entries (by name) off its `extras.variants.skins`,
+  and every other system's and variant's entry stays;
 
 * a run's scan: writes `attach.json` and attaches through the API (`attach_sidecars.attach`:
   the files staged in the private bucket, a new generation cut, nothing written to the public
@@ -410,15 +416,59 @@ def build_variants(
 
 # ------------------------------------------------------------------------------ the scans
 
-#: The bake-off's scans and the objects skinned in each: the spool (1); both pumpkins (2, 3);
-#: the camp's vegetation -- shrubs and small trees in two clusters (26, 56, 67, 122 at the
-#: north fort; 93, 103, 148 by the east huts), a big shrub (16), a trunk (91) and a pine (276);
-#: the Minnetonka tree whole (its scan is the one tree, and has no instances.json).
+#: The bake-off's scans and the objects skinned in each: both pumpkins (2, 3); the camp's
+#: vegetation -- shrubs and small trees in two clusters (26, 56, 67, 122 at the north fort;
+#: 93, 103, 148 by the east huts), a big shrub (16), a trunk (91) and a pine (276); the
+#: Minnetonka tree whole (its scan is the one tree, and has no instances.json). Per scan,
+#: `look`: per variant, the one sentence on what to watch there (`extras.variants.skins[].look`).
+#: The spool is `withdrawn`: its one object is `static` (the wind never sways it) and rigid
+#: under the stiffness rule, so no candidate showed anything; its entries are taken off.
 BAKEOFF: dict[str, dict] = {
-    "spool": {"only": (1,)},
-    "pumpkin": {"only": (2, 3)},
-    "camp": {"only": (16, 26, 56, 67, 93, 103, 122, 148, 276, 91)},
-    "minnetonka-tree": {"whole": True, "site": "minnetonka-tree"},
+    "spool": {
+        "only": (1,),
+        "withdrawn": "a static fixture: nothing moves in the wind, and it is rigid (1 handle) "
+        "under the stiffness rule",
+    },
+    "pumpkin": {
+        "only": (2, 3),
+        "look": {
+            "freeform": "Press K, then press on a pumpkin and drag: with 10 handles its shell "
+            "dents and wobbles before it rings down, and the one you can move also slides whole.",
+            "freeform-stiff": "Press K and drag a pumpkin: with 4 handles it gives as one firm, "
+            "simple shape, without the size rule's local dents.",
+            "pinned-stiff": "Press K and drag a pumpkin: 4 handles with its base held, so it "
+            "leans and squashes over its base instead of denting.",
+            "tetfem-stiff": "Press K and drag a pumpkin: 4 modes of a solid with its base held, "
+            "so it squashes through its whole body; compare how far it gives.",
+        },
+    },
+    "camp": {
+        "only": (16, 26, 56, 67, 93, 103, 122, 148, 276, 91),
+        "look": {
+            "freeform": "Turn the wind up and watch the shrubs by the north fort and the east "
+            "huts: each sways in a few broad bends with its base still; press K and drag one.",
+            "freeform-stiff": "As the size rule, except the tall trunk among the huts gets 32 "
+            "handles: watch it bend in more places, its top apart from its middle.",
+            "pinned-stiff": "Bases held: watch the shrubs bend from the ground up, several "
+            "slower than under the size rule; press K and drag one to feel how far it gives.",
+            "tetfem-stiff": "Watch for a slower, heavier sway than FreeForm's (some shrubs "
+            "below 0.5 Hz); press K and drag one to see it bend through the whole bush.",
+        },
+    },
+    "minnetonka-tree": {
+        "whole": True,
+        "site": "minnetonka-tree",
+        "look": {
+            "freeform": "Turn the wind up and watch the crown: with 12 handles it sways in a "
+            "few broad bends, about 0.8 Hz, the trunk's base still.",
+            "freeform-stiff": "The same method with 32 handles: watch the limbs and the top of "
+            "the crown sway apart from each other rather than as one block.",
+            "pinned-stiff": "The base is held: watch the trunk bend from the ground up and the "
+            "crown swing slower (about 0.5 Hz) than with FreeForm.",
+            "tetfem-stiff": "The whole volume bends: watch a slow, heavy sway of the crown "
+            "(about 0.2 Hz), the slowest of the four; press K and drag a limb.",
+        },
+    },
 }
 #: The public bucket's base (infra/modal/segment.py `PUBLIC` without `/runs`).
 PUBLIC_BASE = "https://pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev"
@@ -473,13 +523,33 @@ def prepare_scan(name: str, work: Path, names: Sequence[str]) -> Path:
 
     spec = BAKEOFF[name]
     where = locate(name)
+    out = work / "out" / name
+    if spec.get("withdrawn"):
+        # Nothing to fit: the plan takes this tool's entries off the scan.
+        if out.exists():
+            shutil.rmtree(out)
+        out.mkdir(parents=True)
+        plan = {
+            **where,
+            "scan": name,
+            "variants": {"skins": []},
+            "withdraw": {"skins": [v.name for v in VARIANTS]},
+        }
+        (out.parent / f"{name}.publish.json").write_text(
+            json.dumps(plan, indent=1) + "\n", encoding="utf-8"
+        )
+        (out.parent / f"{name}.report.json").write_text(
+            json.dumps({"withdrawn": spec["withdrawn"]}, indent=1) + "\n", encoding="utf-8"
+        )
+        return out
     scan_dir = work / "scan" / name
     whole = bool(spec.get("whole"))
     fetch(where["url"], scan_dir, instances=not whole, only=None if whole else spec["only"])
     entries, report = build_variants(
         scan_dir, names, only=None if whole else spec["only"], whole=whole
     )
-    out = work / "out" / name
+    looks = spec.get("look", {})
+    entries = [{**e, "look": looks[e["name"]]} if e["name"] in looks else e for e in entries]
     if out.exists():
         shutil.rmtree(out)
     for entry in entries:
@@ -504,20 +574,31 @@ def publish(out: Path) -> dict:
 
     plan = json.loads((out.parent / f"{out.name}.publish.json").read_text(encoding="utf-8"))
     entries = plan["variants"]
+    withdraw = plan.get("withdraw") or {}
+    out.mkdir(parents=True, exist_ok=True)  # a withdrawal stages no files
     if plan["kind"] == "attach":
         now = attach_sidecars.resolve_asset(plan["assetId"])
         current = json.loads(_get(now["url"]))
-        variants = merged_variants(current["root"].get("extras") or {}, entries)
+        variants = merged_variants(current["root"].get("extras") or {}, entries, withdraw)
         # basedOn: the tiles the skins were bound to; the API accepts it while the asset's
-        # tiles are those (another attach since only copied them).
+        # tiles are those (another attach since only copied them). No variants left: the key
+        # is removed (null).
         attach_sidecars.write_manifest(
-            out, asset_id=plan["assetId"], based_on=plan["url"], extras={"variants": variants}
+            out,
+            asset_id=plan["assetId"],
+            based_on=plan["url"],
+            extras={"variants": variants or None},
         )
         return attach_sidecars.attach(out)
-    return publish_site(out, plan["url"], entries)
+    return publish_site(out, plan["url"], entries, withdraw)
 
 
-def publish_site(out: Path, url: str, entries: Mapping[str, Sequence[Mapping]]) -> dict:
+def publish_site(
+    out: Path,
+    url: str,
+    entries: Mapping[str, Sequence[Mapping]],
+    withdraw: Mapping[str, Sequence[str]] | None = None,
+) -> dict:
     """The files beside a site's `tileset.json` in the public bucket, and that `tileset.json`
     rewritten with the merged `extras.variants` (nothing else of it changed)."""
     import os
@@ -551,7 +632,11 @@ def publish_site(out: Path, url: str, entries: Mapping[str, Sequence[Mapping]]) 
     key = prefix + "tileset.json"
     tileset = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
     extras = tileset["root"].setdefault("extras", {})
-    extras["variants"] = merged_variants(extras, entries)
+    variants = merged_variants(extras, entries, withdraw)
+    if variants:
+        extras["variants"] = variants
+    else:
+        extras.pop("variants", None)
     s3.put_object(
         Bucket=bucket,
         Key=key,
@@ -559,18 +644,25 @@ def publish_site(out: Path, url: str, entries: Mapping[str, Sequence[Mapping]]) 
         ContentType="application/json",
     )
     print(f"declared {len(entries.get('skins', []))} skin variants in {bucket}/{key}")
-    return {"url": url, "files": len(files), "variants": extras["variants"]}
+    return {"url": url, "files": len(files), "variants": variants}
 
 
 # -------------------------------------------------------------------------------- register
 
 
-def merged_variants(extras: Mapping, entries: Mapping[str, Sequence[Mapping]]) -> dict:
-    """`extras.variants` with `entries` (by system) added, each replacing the entry of its name;
-    every other system and variant kept, in order."""
+def merged_variants(
+    extras: Mapping,
+    entries: Mapping[str, Sequence[Mapping]],
+    withdraw: Mapping[str, Sequence[str]] | None = None,
+) -> dict:
+    """`extras.variants` with `entries` (by system) added, each replacing the entry of its name,
+    and the entries `withdraw` names (by system) taken off; every other system and variant
+    kept, in order. A system left with no entries is dropped."""
     current = extras.get("variants")
     out: dict = {k: list(v) for k, v in current.items()} if isinstance(current, dict) else {}
     for system, mine in entries.items():
+        if not mine:
+            continue
         kept = [e for e in out.get(system, []) if isinstance(e, dict)]
         names = {e["name"] for e in mine}
         replaced = [
@@ -579,6 +671,14 @@ def merged_variants(extras: Mapping, entries: Mapping[str, Sequence[Mapping]]) -
         ]
         seen = {e.get("name") for e in replaced}
         out[system] = replaced + [dict(m) for m in mine if m["name"] not in seen]
+    for system, gone in (withdraw or {}).items():
+        if system not in out:
+            continue
+        out[system] = [
+            e for e in out[system] if not isinstance(e, dict) or e.get("name") not in set(gone)
+        ]
+        if not out[system]:
+            del out[system]
     return out
 
 

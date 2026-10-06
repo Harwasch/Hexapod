@@ -245,7 +245,8 @@ def check_name(rel: str) -> str:
 
 
 def files_under(directory: Path) -> list[str]:
-    """Every file under `directory` but the manifest, relative and sorted, each checked."""
+    """Every file under `directory` but the manifest, relative and sorted, each checked (none
+    is an attach of `extras` alone)."""
     found = sorted(
         path.relative_to(directory).as_posix()
         for path in directory.rglob("*")
@@ -253,8 +254,6 @@ def files_under(directory: Path) -> list[str]:
     )
     for rel in found:
         check_name(rel)
-    if not found:
-        raise AttachError(f"{directory} holds nothing to attach")
     if len(found) > MAX_SIDECAR_FILES:
         raise AttachError(f"{len(found)} files; one attach may hold {MAX_SIDECAR_FILES}")
     total = 0
@@ -287,6 +286,8 @@ def write_manifest(
         "files": files_under(directory),
         "extras": dict(extras or {}),
     }
+    if not manifest["files"] and not manifest["extras"] and rig_url is None:
+        raise AttachError(f"{directory} holds nothing to attach and no extras were given")
     if rig_url is not None:
         manifest["rigUrl"] = check_name(rig_url)
     (directory / MANIFEST).write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
@@ -308,6 +309,8 @@ def read_manifest(directory: Path) -> dict[str, Any]:
         raise AttachError(f"{path}'s files are not exactly the files beside it")
     if not isinstance(manifest.get("extras", {}), dict):
         raise AttachError(f"{path}'s extras are not an object")
+    if not files and not manifest.get("extras") and manifest.get("rigUrl") is None:
+        raise AttachError(f"{path} attaches nothing: no files and no extras")
     return manifest
 
 

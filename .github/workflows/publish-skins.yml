@@ -137,6 +137,8 @@ jobs:
           report = json.load(open(os.path.join(root, f"{scan}.report.json")))
           print(f"## Skins: {scan}\n")
           print(f"- {plan['kind']} at {plan['url']}" + (f" (asset `{plan['assetId']}`)" if plan.get("assetId") else ""))
+          if plan.get("withdraw"):
+              print(f"- withdrawn ({report['withdrawn']}): taking off {', '.join(plan['withdraw']['skins'])}")
           print("\n| variant | skins | handles | skin.bin | fit s |\n|---|---|---|---|---|")
           for entry in plan["variants"]["skins"]:
               r = report[entry["name"]]

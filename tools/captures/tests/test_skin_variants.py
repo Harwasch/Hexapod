@@ -278,6 +278,27 @@ def test_registering_replaces_by_name_and_keeps_every_other_system():
     assert merged["skins"][0]["label"] == "new"
     # Nothing there before: just mine.
     assert skin_variants.merged_variants({}, mine) == {"skins": mine["skins"]}
+    # Withdrawn: only the named entries go; a system left empty goes with them.
+    mine_names = {"skins": ["freeform", "tetfem-stiff"]}
+    left = skin_variants.merged_variants(extras, {"skins": []}, mine_names)
+    assert left == {
+        "objects": extras["variants"]["objects"],
+        "skins": [{"name": "someone-else", "skin": "x.json"}],
+    }
+    only_mine = {"variants": {"skins": [{"name": "freeform", "skin": "a.json"}]}}
+    assert skin_variants.merged_variants(only_mine, {"skins": []}, mine_names) == {}
+
+
+def test_every_scan_kept_says_what_to_look_at_and_the_spool_is_withdrawn():
+    names = [v.name for v in skin_variants.VARIANTS]
+    for scan, spec in skin_variants.BAKEOFF.items():
+        if spec.get("withdrawn"):
+            assert "look" not in spec
+            continue
+        assert sorted(spec["look"]) == sorted(names), scan
+        for sentence in spec["look"].values():
+            assert sentence.endswith(".") and sentence.count(". ") == 0, sentence
+    assert skin_variants.BAKEOFF["spool"]["withdrawn"]
 
 
 # ------------------------------------------------------------------------------- publish
@@ -387,3 +408,30 @@ def test_a_run_scan_attaches_with_the_variants_merged_at_publish_time(tmp_path, 
         for v in ("freeform", "tetfem-stiff")
         for x in ("bin", "json")
     )
+
+
+def test_a_withdrawn_scan_is_not_fitted_and_its_entries_are_taken_off(tmp_path, monkeypatch):
+    import attach_sidecars
+
+    asset = "29ad7e37-9ad1-42a8-a61d-a39e08ac6710"
+    built_on = "https://pub.example/runs/8e1c/package/splat/tileset.json"
+    where = {"kind": "attach", "url": built_on, "assetId": asset}
+    monkeypatch.setattr(skin_variants, "locate", lambda name: where)
+    monkeypatch.setattr(skin_variants, "fetch", lambda *a, **k: pytest.fail("fetched"))
+    names = [v.name for v in skin_variants.VARIANTS]
+    out = skin_variants.prepare_scan("spool", tmp_path, names)
+    assert out.is_dir() and not any(out.iterdir())
+    plan = json.loads((out.parent / "spool.publish.json").read_text(encoding="utf-8"))
+    assert plan["variants"] == {"skins": []}
+    assert plan["withdraw"]["skins"] == names
+    # The workflow's artifact holds no empty folder: publish makes it again.
+    out.rmdir()
+    mine = [{"name": n, "skin": f"variants/skins/{n}/skin.json"} for n in names]
+    current = {"root": {"extras": {"instances": {"uri": "i.json"}, "variants": {"skins": mine}}}}
+    monkeypatch.setattr(attach_sidecars, "resolve_asset", lambda a: {"assetId": a, "url": "u"})
+    monkeypatch.setattr(skin_variants, "_get", lambda u: json.dumps(current).encode())
+    monkeypatch.setattr(attach_sidecars, "attach", lambda directory: {})
+    skin_variants.publish(out)
+    manifest = json.loads((out / "attach.json").read_text(encoding="utf-8"))
+    # Nothing staged; extras.variants removed (only this tool's entries were there).
+    assert manifest["files"] == [] and manifest["extras"] == {"variants": None}

@@ -267,6 +267,20 @@ def test_a_manifest_that_does_not_match_its_directory_is_refused(tmp_path: Path)
         attach.read_manifest(out)
 
 
+def test_an_attach_of_extras_alone_stages_nothing_and_an_empty_one_is_refused(
+    tmp_path: Path,
+) -> None:
+    # Taking a key off (null) stages no files: the API accepts it as an extras-only attach.
+    written = attach.write_manifest(
+        tmp_path, asset_id=ASSET, based_on=CURRENT, extras={"variants": None}
+    )
+    assert written["files"] == [] and attach.read_manifest(tmp_path) == written
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(attach.AttachError, match="nothing to attach"):
+        attach.write_manifest(empty, asset_id=ASSET, based_on=CURRENT)
+
+
 def test_the_rules_are_the_apis() -> None:
     """The API decides; these only fail earlier. Read from its source, so they cannot drift."""
     source = API_SIDECARS.read_text()
