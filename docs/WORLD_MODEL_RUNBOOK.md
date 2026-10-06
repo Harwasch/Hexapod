@@ -531,3 +531,59 @@ Apache-2.0 (not gated); Wan2.1-VACE-14B Apache-2.0 (the lightx2v 4-step distill 
 Apache-2.0, is loaded but off by default); Prompt Depth Anything ViT-L and Depth Anything V2
 Small Apache-2.0; the fallback Qwen-Image + InstantX inpainting ControlNet Apache-2.0; gsplat
 Apache-2.0. Scores only (nothing shipped): LPIPS BSD-2-Clause, DreamSim MIT.
+
+`placeholder` (`smooth`, the default, or `flat`) and `unknown_strength` (0.9) are anchor
+options too: how the editor is shown the pixels to make, and how long they are held.
+
+### Results (2026-10-06)
+
+Runs (fill.yml on `wm-fill-v2`), about $8.33 of the $15 cap:
+
+| run         | jobs                         | what changed                                            |   cost |
+| ----------- | ---------------------------- | ------------------------------------------------------- | -----: |
+| 37508234704 | leaveout:spool               | first run                                               | ~$1.35 |
+| 37516117746 | leaveout:spool               | the leave-out, normals, burial, crops, residue, weights | ~$1.23 |
+| 37518566607 | leaveout:spool               | a smooth fill instead of magenta                        | ~$1.18 |
+| 37521742955 | leaveout:spool               | `placeholder=flat` (the ablation)                       | ~$1.23 |
+| 37524204337 | anchor:spool, anchor:pumpkin | the published layers                                    | ~$1.99 |
+| 37526640744 | leaveout:pumpkin             | the pumpkin's leave-out                                 | ~$1.35 |
+
+**Leave-out**, mean over the six held-out photos with the most withheld pixels, inside the
+region where a withheld gaussian is the front surface (PSNR dB; LPIPS and DreamSim, lower is
+better):
+
+| scan (run)          | before             | anchor-refs        | anchor-norefs      | anchor-vace        |
+| ------------------- | ------------------ | ------------------ | ------------------ | ------------------ |
+| spool (37518566607) | 10.9 / 0.47 / 0.30 | 15.8 / 0.46 / 0.24 | 15.9 / 0.46 / 0.24 | 15.7 / 0.51 / 0.27 |
+| spool, flat         | 10.9 / 0.47 / 0.30 | 15.6 / 0.47 / 0.24 | 15.6 / 0.45 / 0.25 | 15.7 / 0.52 / 0.25 |
+| pumpkin             | 12.2 / 0.29 / 0.13 | 14.1 / 0.33 / 0.11 | 14.3 / 0.31 / 0.10 | 14.1 / 0.32 / 0.10 |
+
+Round 1's best on the spool top was VACE 1.3B at 10.0-11.1 dB, against 5.5-7.4 dB before
+(+4.0 dB on average). Its region was a box about the top, and the top was withheld whole.
+Here the gain is +5.0 dB with photos or without, and +4.9 dB with VACE-14B. Run 37516117746
+showed the editor flat magenta: 14.7 / 16.1 / 15.1 dB, but it drew pink planks, more often
+with the photos. The pumpkin's leave-out holds out its lowest cameras, at 38-40 degrees; the
+withheld region is small (5-7k pixels at 480 wide), the pumpkins' lower edges where they meet
+the straw. There the fills beat before in PSNR and DreamSim, but not in LPIPS (they are
+smoother than the straw).
+
+What they look like (`renders/` in each run's artifact):
+
+- The fills are plausible and in the scene's colours, but soft. The editor keeps whatever
+  picture 1 shows where it has to make the scene: magenta, a smooth fill, or flat patches.
+- With and without photos the anchors come out nearly the same. The photos, cropped about
+  the hole, no longer ghost; the refs arm's pumpkin layer still has one reddish smear on the
+  straw (65/30).
+- VACE-14B over the set of views agrees least between seeds (0.57-0.68 against 0.76-0.88)
+  and leaves the occasional dark blotch (the spool top at 15/270).
+- On the full scans, the weak gaussians' refined copies make up half of each spool layer
+  and a third of each pumpkin layer: the spool top loses its streaks, the pumpkins' smudges
+  are cleaned. The views chosen are
+  the spool's 40-65 degree ring and the pumpkin's 15 degree ring.
+
+Published (`publish-fill.yml`, `variant`): `anchor-refs`, `anchor-norefs` and
+`anchor-vace` on the spool (21.8k / 21.7k / 21.5k gaussians) and the pumpkin
+(35.2k / 35.0k / 33.4k), from run 37524204337. Round 1's `wan22-5b`, `cosmos-p2-2b` and
+`lama-baseline` were withdrawn on both scans; `vace-1-3b` stays. Read back after each
+step, every other system's variants (the spool's `objects`, the pumpkin's `skins` and
+`objects`) were identical to before.
