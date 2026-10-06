@@ -108,6 +108,13 @@ const MOTION_SETTLE_MS = 200;
  * view's detail only to drop it again.
  */
 export const REST_AFTER_MS = 600;
+/**
+ * How many times its motion budget a still view may hold (within the device's ceiling): 4.5M
+ * on a desktop at its 3M budget. On the Camp scan's arrival views 3M left tiles in view at 16
+ * px; 6M, the desktop's ceiling, brought the worst to 7 px but took a software-GL page past
+ * what it could hold.
+ */
+export const REST_GROWTH = 1.5;
 /** Most gaussians put on screen per re-plan (~4M a second at REPLAN_MS): tiles that land
  *  together go up over a few frames instead of all in one. */
 const MAX_SHOWN_PER_UPDATE = 600_000;
@@ -865,14 +872,17 @@ export class ScanRendererHost {
     /** The camera has been still for `REST_AFTER_MS`: the view may refine to `restBudget`. */
     let resting = false;
     /**
-     * What the cut may hold now: the motion budget, or at rest the device's ceiling
-     * (lib/detail.ts `deviceSplatCeiling`; a phone's is its budget). A still overlay draws
-     * nothing, so what a still view holds costs memory and one sort, not frame time; the next
-     * move plans with the motion budget again and swaps back to the ancestors kept loaded.
-     * Not the renderer's own budget: PlayCanvas re-copies and re-sorts every splat when that
-     * changes, and the tile cut is what decides what it draws.
+     * What the cut may hold now: the motion budget, or at rest `REST_GROWTH` times it, within
+     * the device's ceiling (lib/detail.ts `deviceSplatCeiling`; a phone's is its budget). A
+     * still overlay draws nothing, so what a still view holds costs memory and one sort, not
+     * frame time; the next move plans with the motion budget again and swaps back to the
+     * ancestors kept loaded. A step on the motion budget rather than the ceiling, so it scales
+     * with what this device's frames have shown it can draw. Not the renderer's own budget:
+     * PlayCanvas re-copies and re-sorts every splat when that changes, and the tile cut is
+     * what decides what it draws.
      */
-    const restBudget = (): number => Math.max(adaptive.budget, adaptive.ceiling);
+    const restBudget = (): number =>
+      Math.max(adaptive.budget, Math.min(adaptive.ceiling, adaptive.budget * REST_GROWTH));
     const planBudget = (): number => (resting && !far ? restBudget() : drawBudget());
     /** Tiles kept: the full budget's share whether near or far, so zooming in finds them, and
      *  at least what a still view refines to. */
