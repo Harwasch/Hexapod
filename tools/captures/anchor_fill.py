@@ -111,13 +111,26 @@ ARMS = ("refs", "norefs", "vace")
 LAYERS = {"refs": "anchor-refs", "norefs": "anchor-norefs", "vace": "anchor-vace"}
 ANCHOR_ARM = {"refs": "refs", "norefs": "norefs", "vace": "refs"}
 
-EDIT_PROMPT = (
-    "Picture 1 is a view of {caption} rendered from a new camera position. Where the scene "
-    "was never photographed, Picture 1 is only smeared in from around it: repaint those "
-    "blurred parts as a sharp real photograph would show them, continuing the surfaces, "
-    "materials, colours and lighting around them.{refs} Keep the camera, the framing and "
-    "the sharp parts of Picture 1 exactly as they are."
-)
+#: The editor's prompt by placeholder (`Options.placeholder`: how the pixels to make are
+#: shown to it).
+EDIT_PROMPTS = {
+    "smooth": (
+        "Picture 1 is a view of {caption} rendered from a new camera position. Where the "
+        "scene was never photographed, Picture 1 is only smeared in from around it: repaint "
+        "those blurred parts as a sharp real photograph would show them, continuing the "
+        "surfaces, materials, colours and lighting around them.{refs} Keep the camera, the "
+        "framing and the sharp parts of Picture 1 exactly as they are."
+    ),
+    "flat": (
+        "Picture 1 is a view of {caption} rendered from a new camera position. Where the "
+        "scene was never photographed, Picture 1 is painted in flat patches of colour: paint "
+        "those flat patches as a sharp real photograph would show the scene there, "
+        "continuing the surfaces, materials, colours and lighting around them.{refs} Keep "
+        "the camera, the framing and every other part of Picture 1 exactly as it is."
+    ),
+}
+EDIT_PROMPT = EDIT_PROMPTS["smooth"]
+PLACEHOLDERS = tuple(EDIT_PROMPTS)
 REFS_SENTENCE = {
     1: (
         " Picture 2 is a close-up real photograph of the same scene taken from another "
@@ -169,6 +182,11 @@ class Options:
     update_steps: int = 4
     lightning: bool = True
     weak_strength: float = WEAK_STRENGTH
+    #: How the editor is shown the pixels to make (`PLACEHOLDERS`): `smooth`, the smooth
+    #: fill it is held to (`prefill`); `flat`, each hole one flat colour from around it
+    #: (`flat_fill`), still held to the smooth fill.
+    placeholder: str = "smooth"
+    unknown_strength: float = UNKNOWN_STRENGTH
     update_strengths: tuple[float, ...] = (0.4,)
     set_seeds: int = 2
     set_steps: int = 25
@@ -512,6 +530,8 @@ class ViewMasks:
     condition: np.ndarray
     strength: np.ndarray
     depth: np.ndarray
+    #: What the editor's tokens are held to, when not `condition` (the smooth fill).
+    hold: np.ndarray | None = None
 
     @property
     def edit(self) -> np.ndarray:
@@ -540,12 +560,32 @@ def prefill(image: np.ndarray, target: np.ndarray, source: np.ndarray) -> np.nda
     return np.where(target[..., None], big, image).astype(np.uint8)
 
 
+def flat_fill(image: np.ndarray, target: np.ndarray, source: np.ndarray) -> np.ndarray:
+    """`image` with each connected piece of `target` one flat colour: the median of the
+    `source` pixels in a ring around it (of all of them when none is near)."""
+    import cv2
+
+    out = image.copy()
+    if not target.any():
+        return out
+    fallback = np.median(image[source], axis=0) if source.any() else np.full(3, 127.0)
+    count, labels = cv2.connectedComponents(target.astype(np.uint8), connectivity=8)
+    for k in range(1, count):
+        piece = labels == k
+        ring = _dilate(piece, max(4, target.shape[1] // 80)) & source
+        colour = np.median(image[ring], axis=0) if ring.sum() >= 5 else fallback
+        out[piece] = np.round(colour).astype(np.uint8)
+    return out
+
+
 def view_masks(
     setup: Setup,
     camera: Camera,
     renderer: Any,
     layer: Splats | None = None,
     weak_strength: float = WEAK_STRENGTH,
+    placeholder: str = "smooth",
+    unknown_strength: float = UNKNOWN_STRENGTH,
 ) -> ViewMasks:
     scene = setup.scene()
     c = setup.shown_classes()
@@ -560,14 +600,30 @@ def view_masks(
         face = np.concatenate([face, ones])
     pc = fv.pixel_classes(scene, camera, renderer, known, weak, face)
     render = tf.to_u8(pc.colour)
-    condition = prefill(render, pc.unknown, pc.known | pc.weak)
-    condition[pc.void] = 0
+    hold = prefill(render, pc.unknown, pc.known | pc.weak)
+    hold[pc.void] = 0
+    if placeholder == "flat":
+        condition = flat_fill(render, pc.unknown, pc.known | pc.weak)
+        condition[pc.void] = 0
+    elif placeholder == "smooth":
+        condition = hold
+    else:
+        raise ValueError(f"placeholder {placeholder!r}: one of {PLACEHOLDERS}")
     strength = np.select(
-        [pc.known, pc.weak, pc.unknown], [0.0, weak_strength, UNKNOWN_STRENGTH], 1.0
+        [pc.known, pc.weak, pc.unknown], [0.0, weak_strength, unknown_strength], 1.0
     ).astype(np.float32)
     depth = np.where((pc.known | pc.weak) & np.isfinite(pc.depth), pc.depth, np.nan)
     return ViewMasks(
-        camera, pc.known, pc.weak, pc.unknown, pc.void, render, condition, strength, depth
+        camera,
+        pc.known,
+        pc.weak,
+        pc.unknown,
+        pc.void,
+        render,
+        condition,
+        strength,
+        depth,
+        None if condition is hold else hold,
     )
 
 
@@ -999,9 +1055,11 @@ class FilledView:
         }
 
 
-def prompt_for(caption: str, references: int, update: bool = False) -> str:
+def prompt_for(
+    caption: str, references: int, update: bool = False, placeholder: str = "smooth"
+) -> str:
     refs = REFS_SENTENCE[min(references, 2)] if references else ""
-    template = UPDATE_PROMPT if update else EDIT_PROMPT
+    template = UPDATE_PROMPT if update else EDIT_PROMPTS[placeholder]
     return template.format(caption=caption, refs=refs)
 
 
@@ -1019,6 +1077,7 @@ def edit_requests(
     vae_area: int = 640 * 640,
     members: np.ndarray | None = None,
     tag: str = "",
+    placeholder: str = "smooth",
 ) -> list[tuple[EditRequest, list[str]]]:
     """One request per seed: the condition, the render and strength, and (with `refs`) the
     seed's pair of context photos, cropped about the hole gaussians the view fills
@@ -1037,10 +1096,10 @@ def edit_requests(
         request = EditRequest(
             f"{key}-s{seed}",
             masks.condition,
-            masks.condition,
+            masks.condition if masks.hold is None else masks.hold,
             masks.strength,
             photos,
-            prompt_for(setup.caption, len(photos), update),
+            prompt_for(setup.caption, len(photos), update, placeholder),
             int(seed),
             steps,
             lightning,
@@ -1596,7 +1655,15 @@ def build_set(
             entries.append(("anchor", item.key))
         else:
             cam = fv.scaled(item.camera, size[0], size[1])
-            vm = view_masks(setup, cam, renderer, layer, options.weak_strength)
+            vm = view_masks(
+                setup,
+                cam,
+                renderer,
+                layer,
+                options.weak_strength,
+                options.placeholder,
+                options.unknown_strength,
+            )
             shown = vm.render.copy()
             shown[vm.unknown] = 127
             frames.append(shown)
@@ -1684,7 +1751,16 @@ def fill_anchors(run: Run, arms: Sequence[str]) -> dict[str, list[FilledView]]:
     anchor_arms = sorted({ANCHOR_ARM[a] for a in arms})
     targets = [t for t in run.targets if t.role == "anchor"]
     masks = {
-        t.key: view_masks(setup, t.camera, run.renderer, None, opt.weak_strength) for t in targets
+        t.key: view_masks(
+            setup,
+            t.camera,
+            run.renderer,
+            None,
+            opt.weak_strength,
+            opt.placeholder,
+            opt.unknown_strength,
+        )
+        for t in targets
     }
     pending = []
     meta = []
@@ -1704,6 +1780,7 @@ def fill_anchors(run: Run, arms: Sequence[str]) -> dict[str, list[FilledView]]:
                 vae_area=opt.vae_area,
                 members=view_hole_members(setup, masks[t.key], t),
                 tag=t.key,
+                placeholder=opt.placeholder,
             )
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
             meta.append((arm, t, [n for _, n in reqs]))
@@ -1823,7 +1900,15 @@ def propagate_sequential(run: Run, states: dict[str, ArmState]) -> None:
     for t in props:
         pending, meta = [], []
         for arm, state in states.items():
-            masks = view_masks(setup, t.camera, run.renderer, state.layer(), opt.weak_strength)
+            masks = view_masks(
+                setup,
+                t.camera,
+                run.renderer,
+                state.layer(),
+                opt.weak_strength,
+                opt.placeholder,
+                opt.unknown_strength,
+            )
             if masks.share() < PROP_MIN_SHARE:
                 state.report.setdefault("skipped", []).append(t.key)
                 continue
@@ -1839,6 +1924,7 @@ def propagate_sequential(run: Run, states: dict[str, ArmState]) -> None:
                 vae_area=opt.vae_area,
                 members=view_hole_members(setup, masks, t),
                 tag=t.key,
+                placeholder=opt.placeholder,
             )
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
             meta.append((arm, masks, [n for _, n in reqs]))
@@ -2547,6 +2633,8 @@ def options_from(args: Any) -> Options:
             kind = type(default[0]) if default else float
             value = tuple(kind(x) for x in str(value).split(",") if x != "")
         setattr(o, name, value)
+    if o.placeholder not in PLACEHOLDERS:
+        raise SystemExit(f"placeholder {o.placeholder!r}: one of {PLACEHOLDERS}")
     return o
 
 

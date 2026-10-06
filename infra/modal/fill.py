@@ -1540,6 +1540,8 @@ ANCHOR_OPTIONS = {
     "lightning": r"true|false",
     "fallback": r"true|false",
     "vae_area": r"[0-9]{5,7}",
+    "placeholder": r"smooth|flat",
+    "unknown_strength": r"0\.[0-9]+|1(\.0+)?",
 }
 
 

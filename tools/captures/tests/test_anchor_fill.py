@@ -210,6 +210,13 @@ def test_what_is_to_make_is_given_smoothly_filled_from_around_it() -> None:
     out = af.prefill(painted, hole, ~hole)
     assert (out[~hole] == painted[~hole]).all()
     assert not af.key_residue(out, hole).any()
+    # The flat placeholder: one colour per hole, from around it.
+    two = hole.copy()
+    two[60:66, 5:12] = True
+    flat = af.flat_fill(painted, two, ~two)
+    assert len(np.unique(flat[hole].reshape(-1, 3), axis=0)) == 1
+    assert (flat[62, 8] == (40, 170, 40)).all()
+    assert "flat patches" in af.prompt_for("a table", 0, placeholder="flat")
     # Each side of the hole takes its own side's colour.
     assert out[35, 33, 1] > 130 and out[35, 33, 0] < 90 and out[35, 66, 0] > 160
 
@@ -288,12 +295,13 @@ def test_the_command_line_runs_a_leave_out_from_poses_and_tiles(tmp_path: Path) 
         "--quality-width", "96", "--azimuths", "8", "--anchors", "2,3",
         "--propagation", "2,3", "--seeds", "2", "--prop-seeds", "2", "--set-seeds", "2",
         "--lift-stride", "2", "--score-width", "96", "--carve-width", "96",
-        "--update-strengths", "0.4",
+        "--update-strengths", "0.4", "--placeholder", "flat",
     ]  # fmt: skip
     assert af.main(argv) == 0
     report = json.loads((tmp_path / "out" / "report.json").read_text())
     assert report["setup"]["kept"] == len(cams) - 5 and report["setup"]["withheld"] > 0
     assert report["options"]["fill_size"] == [96, 56] and report["options"]["anchors"] == [2, 3]
+    assert report["options"]["placeholder"] == "flat"
     for arm in af.ARMS:
         assert report["candidates"][arm]["evidence"]["gaussians"] > 0
     assert report["heldOut"]["views"]
