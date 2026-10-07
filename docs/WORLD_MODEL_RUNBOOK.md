@@ -624,3 +624,70 @@ are treated before any generator (`tools/captures/fill_surface.py`):
 
 `anchor-norefs` stays the no-photo control: no reprojection, the editor sees only the render.
 `reproject=false` turns the treatment off.
+
+### Swap, don't stack, and where the spool is still see-through (2026-10-06)
+
+The photo arm writes `supersedes.json`: the measured gaussians its rebuilt surface replaces.
+The viewer hides them while that fill is shown (`apps/web/src/lib/supersedes.ts`).
+
+Measured with exact EWA coverage from straight above and from 8 azimuths at 15 and 45
+degrees, the top face itself passes once swapped (run 37541017400):
+
+- the footprint is the 0.9 R disc on the fitted plane, which is tilted 10.7 degrees;
+- `anchor-refs` is at most 2.1 % see-through, mean alpha 0.98 or more;
+- the stacked layer it replaced was at most 3.8 % see-through, mean alpha down to 0.91;
+- the scan alone was at most 6.4 %, mean alpha down to 0.81.
+
+The low views are still see-through for a different reason. Under the flange, the scan holds
+almost nothing between 0.2 and 0.4 m under the top: the drum's top section and the flange's
+underside were never seen. Beside the drum is real open air. So the pass test is split:
+
+- the top face, from the 17 directions;
+- the pocket (the continued drum band and the underside), from low views at -5 to 15
+  degrees, all azimuths;
+- the open air beside the drum, which must not get less see-through.
+
+### Experiments on the spool (2026-10-07, $18)
+
+One dispatch, `anchor:spool` + `leaveout:spool`, with `arms=refs+norefs+splash`,
+`solidity=alpha+full`, `shape=true`:
+
+1. **Shape first under the flange** (`fill_pockets.py`, `--shape`).
+   - The free space: each kept camera's rays run up to the first measured gaussian.
+   - The pockets: unseen voxels next to a surface that a line of sight joins to free space.
+   - The fitted overhang: the top's plane, the drum's cylinder from circle fits in bands,
+     where the measured drum stops, the flange's underside, and its own circle.
+   - The shape: the drum continued up to the underside, and the underside out to the rim, as
+     opaque discs. None go where a gaussian is already measured, none in free space.
+   - Colour: the measured wood at the same azimuth, darkened for shade.
+   - It is its own layer (`anchor-shape`), published with the top's as `refs-shape`.
+   - Sheets: `pockets-<scan>.png` (a slice: free, front, surface, pockets) and
+     `shape-<scan>.png` (low views, the shape purple).
+2. **Solidity in the distil** (`--solidity alpha,full`, `distill_fill.SOLIDITY_PRESETS`). The
+   refs and norefs arms are cloned after propagation and distilled with extra terms:
+   - coverage 1 inside the fitted surface's projection from the 17 directions;
+   - the expected depth there;
+   - lying along the surface;
+   - an effective-rank penalty against needles;
+   - DropGaussian-style dropout.
+
+   The 2D-gaussian rasteriser is not used: it would need a second rasteriser composited with
+   the 3D one, and the rebuilt discs are already flat.
+
+3. **Splash anchors** (`arms=...splash`). A third-party editor LoRA trained to repair splat
+   renders makes the anchors (`anchor_models.SPLASH_REPO`).
+   - Picture 1: the render with the unknown, see-through and pocket pixels black.
+   - Picture 2: the retrieved real photo.
+   - The LoRA's own prompt, 8 Lightning steps, CFG 1, 4 seeds. Nothing is held; the result
+     is composited inside the mask only.
+   - Each seed is kept only if its known pixels are within LPIPS 0.3 of the render and its
+     camera, re-estimated against the render, is within 2 degrees.
+   - After the distil, each anchor is re-rendered at its pose (20 dB on what it made).
+   - The rejected share is in the report (`splashGate`), and the strip is
+     `splash-<scan>.png`.
+   - Then view by view with photos, as `anchor-refs`.
+
+   **Legal question, open.** The LoRA's card states Apache-2.0. Its card's workflow renders
+   splats with Apple's SHARP, so its training pairs are likely SHARP renders, and SHARP's own
+   licence terms may bind what was trained on its outputs. Its training data is not
+   published. Ask before shipping anything made with it; the variant is for judging by eye.

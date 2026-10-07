@@ -215,3 +215,42 @@ def test_a_rebuilt_surface_publishes_what_it_supersedes(tmp_path: Path) -> None:
     entry = on_disk["register"][0]["entry"]
     assert entry["supersedes"] == "variants/fill/anchor-refs/supersedes.json"
     assert "variants/fill/anchor-refs/supersedes.json" in on_disk["files"]
+
+
+def test_a_variant_of_two_layers_and_the_solidity_variants(tmp_path: Path) -> None:
+    fill = _fill(
+        tmp_path,
+        ["anchor-spool-anchor-refs", "anchor-spool-anchor-shape", "anchor-spool-anchor-refs-full"],
+    )
+    # The top's layer supersedes measured splats; the shape's does not.
+    top = tmp_path / "top"
+    with tarfile.open(fill / "anchor-spool-anchor-refs" / "inferred.tar.gz") as tar:
+        tar.extractall(top, filter="data")
+    folder = top / "inferred"
+    (folder / "supersedes.json").write_text(json.dumps({"tiles": {}}))
+    tileset = json.loads((folder / "tileset.json").read_text())
+    tileset["root"]["extras"]["supersedes"] = {"uri": "supersedes.json", "superseded": 0}
+    (folder / "tileset.json").write_text(json.dumps(tileset))
+    with tarfile.open(fill / "anchor-spool-anchor-refs" / "inferred.tar.gz", "w:gz") as tar:
+        tar.add(folder, arcname="inferred")
+    out = tmp_path / "out"
+    jobs = ["anchor-spool-anchor-refs+anchor-spool-anchor-shape", "anchor-spool-anchor-refs-full"]
+    pv.build("spool", fill, out, jobs, asset=ASSET, current=_current(OTHERS))
+    on_disk = json.loads((out / attach_sidecars.MANIFEST).read_text())
+    both, solid = (r["entry"] for r in on_disk["register"])
+    assert both["name"] == "refs-shape" and "under the spool's top flange" in both["look"]
+    assert [layer["uri"] for layer in both["inferredLayers"]] == [
+        "variants/fill/refs-shape/top/tileset.json",
+        "variants/fill/refs-shape/shape/tileset.json",
+    ]
+    assert both["supersedes"] == "variants/fill/refs-shape/top/supersedes.json"
+    assert {
+        "variants/fill/refs-shape/top/supersedes.json",
+        "variants/fill/refs-shape/shape/tileset.json",
+    } <= set(on_disk["files"])
+    assert solid["name"] == "anchor-refs-solid" and "supersedes" not in solid
+    # A layer that only goes with another is not a variant of its own.
+    with pytest.raises(SystemExit):
+        pv.variant_for("anchor-spool-anchor-shape", "spool")
+    with pytest.raises(SystemExit):
+        pv.variant_for("anchor-spool-anchor-norefs+anchor-spool-anchor-shape", "spool")

@@ -6,6 +6,7 @@ side of `anchor_fill`'s editor and set filler, run on Modal H100s by `infra/moda
 | ------------------------ | ------------------------------------------------------------ | ---------- |
 | anchor and residual fill | Qwen/Qwen-Image-Edit-2511                                    | Apache-2.0 |
 | ...its 4/8-step LoRA     | lightx2v/Qwen-Image-Edit-2511-Lightning                      | Apache-2.0 |
+| ...splash arm's LoRA     | dx8152/Qwen-Image-Edit-2511-Gaussian-Splash                  | Apache-2.0 |
 | joint fill of all views  | Wan-AI/Wan2.1-VACE-14B-diffusers                             | Apache-2.0 |
 | ...its optional 4-step   | lightx2v/Wan2.1-Distill-Loras (T2V-14B, rank 64)             | Apache-2.0 |
 | depth, anchored          | depth-anything/prompt-depth-anything-vitl-hf                 | Apache-2.0 |
@@ -50,6 +51,11 @@ LIGHTNING_FILES = {
     4: "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
     8: "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
 }
+#: The splash arm's LoRA: trained to repair a splat render's perspective and fill its blank
+#: areas from a reference photo. Its training data's provenance is an open question
+#: (docs/WORLD_MODEL_RUNBOOK.md).
+SPLASH_REPO = "dx8152/Qwen-Image-Edit-2511-Gaussian-Splash"
+SPLASH_FILE = "高斯泼溅-Sharp.safetensors"
 VACE14_MODEL = "Wan-AI/Wan2.1-VACE-14B-diffusers"
 WAN_DISTILL_REPO = "lightx2v/Wan2.1-Distill-Loras"
 WAN_DISTILL_FILE = "wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors"
@@ -58,6 +64,7 @@ MONO_DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Small-hf"
 LICENCES = {
     EDIT_MODEL: "Apache-2.0",
     LIGHTNING_REPO: "Apache-2.0",
+    SPLASH_REPO: "Apache-2.0",
     VACE14_MODEL: "Apache-2.0",
     WAN_DISTILL_REPO: "Apache-2.0",
     PROMPT_DEPTH_MODEL: "Apache-2.0",
@@ -159,6 +166,8 @@ class Editor:
     lightning_scheduler: Any
     lightning: dict[int, str]
     model: str = EDIT_MODEL
+    #: The splash LoRA's adapter, once a request asked for it (`load_splash`).
+    splash: str | None = None
 
 
 def load_editor(device: str = "cuda", lightning: tuple[int, ...] = (4, 8)) -> Editor:
@@ -180,14 +189,41 @@ def load_editor(device: str = "cuda", lightning: tuple[int, ...] = (4, 8)) -> Ed
     return Editor(pipe, default, fast, names)
 
 
+def splash_state_dict(raw: dict[str, Any]) -> dict[str, Any]:
+    """The splash LoRA's tensors as diffusers loads a transformer's LoRA: its keys are
+    saved with PEFT's adapter name (`...lora_A.default.weight`) and no `transformer.` prefix,
+    which the loader would otherwise skip without a word."""
+    out = {}
+    for key, value in raw.items():
+        key = key.replace(".default.", ".")
+        out[key if key.startswith("transformer.") else f"transformer.{key}"] = value
+    return out
+
+
+def load_splash(editor: Editor) -> str:
+    """The splash LoRA as an adapter of the editor (once); its name."""
+    if editor.splash is None:
+        from huggingface_hub import hf_hub_download
+        from safetensors.torch import load_file
+
+        raw = load_file(hf_hub_download(SPLASH_REPO, SPLASH_FILE))
+        editor.pipe.load_lora_weights(splash_state_dict(raw), adapter_name="splash")
+        editor.splash = "splash"
+    return editor.splash
+
+
 @contextlib.contextmanager
-def _adapters(editor: Editor, steps: int, lightning: bool) -> Iterator[int]:
+def _adapters(editor: Editor, steps: int, lightning: bool, splash: bool = False) -> Iterator[int]:
     """The pipeline set for a request: the Lightning adapter of `steps` (else the nearest
-    one there is) and its scheduler, or neither. Yields the steps to run."""
+    one there is) and its scheduler, or neither; with `splash`, the splash LoRA beside the
+    Lightning adapter. Yields the steps to run."""
     pipe = editor.pipe
     if lightning and editor.lightning:
         have = min(editor.lightning, key=lambda k: abs(k - steps))
-        pipe.set_adapters([editor.lightning[have]], [1.0])
+        if splash:
+            pipe.set_adapters([editor.lightning[have], load_splash(editor)], [1.0, 1.0])
+        else:
+            pipe.set_adapters([editor.lightning[have]], [1.0])
         pipe.scheduler = editor.lightning_scheduler
         try:
             yield have
@@ -273,7 +309,10 @@ def edit(editor: Editor, request: dict) -> dict:
     device = pipe._execution_device
     kwargs: dict[str, Any] = {}
     with _adapters(
-        editor, int(request.get("steps", 8)), bool(request.get("lightning", True))
+        editor,
+        int(request.get("steps", 8)),
+        bool(request.get("lightning", True)),
+        bool(request.get("splash", False)),
     ) as steps:
         cfg = 1.0 if request.get("lightning", True) else float(request.get("cfg", 4.0))
         if cfg > 1.0:
@@ -317,6 +356,7 @@ def edit(editor: Editor, request: dict) -> dict:
         "model": editor.model,
         "steps": steps,
         "lightning": bool(request.get("lightning", True)),
+        "splash": bool(request.get("splash", False)),
         "size": [w0, h0],
     }
 

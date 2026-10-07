@@ -30,6 +30,7 @@ on:
       - tools/captures/fill_quality.py
       - tools/captures/fill_views.py
       - tools/captures/fill_surface.py
+      - tools/captures/fill_pockets.py
       - .github/workflows/fill.yml
   workflow_dispatch:
     inputs:

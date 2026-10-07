@@ -121,8 +121,25 @@ HEMISPHERE_NMS_DEG = 10.0
 SOFT_ALPHA = 0.05
 
 ARMS = ("refs", "norefs", "vace")
-LAYERS = {"refs": "anchor-refs", "norefs": "anchor-norefs", "vace": "anchor-vace"}
-ANCHOR_ARM = {"refs": "refs", "norefs": "norefs", "vace": "refs"}
+#: Arms a run may also name: `splash`, anchors by the splash LoRA (`splash_requests`), then
+#: view by view with photos as `refs`.
+KNOWN_ARMS = (*ARMS, "splash")
+LAYERS = {
+    "refs": "anchor-refs",
+    "norefs": "anchor-norefs",
+    "vace": "anchor-vace",
+    "splash": "anchor-splash",
+}
+ANCHOR_ARM = {"refs": "refs", "norefs": "norefs", "vace": "refs", "splash": "refs"}
+#: The splash arm: the LoRA's own prompt (its card's), its steps, and the gate a seed must
+#: pass to be an anchor: LPIPS on the known pixels against the render, the camera's
+#: rotation re-estimated against the render (`pose_offset_deg`), and after the distil the
+#: anchor re-rendered at its pose (reported).
+SPLASH_PROMPT = "高斯泼溅,参考图2的场景图，修复图1的场景图透视并修复空白区域"
+SPLASH_STEPS = 8
+SPLASH_KNOWN_LPIPS = 0.3
+SPLASH_POSE_DEG = 2.0
+SPLASH_RERENDER_DB = 20.0
 
 #: The editor's prompt by placeholder (`Options.placeholder`: how the pixels to make are
 #: shown to it).
@@ -222,6 +239,12 @@ class Options:
     score_width: int = 480
     #: The real cameras carve at this width.
     carve_width: int = 320
+    #: Solidity presets (`distill_fill.SOLIDITY_PRESETS`) to ablate: each clones every
+    #: sequential arm after propagation (`<arm>-<preset>`), distilled with those terms.
+    solidity: tuple[str, ...] = ()
+    #: Shape first under an overhang (`fill_pockets`): the free space, the pockets, and the
+    #: continued cylinder and underside as a layer of their own (`anchor-shape`).
+    shape: bool = False
 
 
 @dataclass
@@ -743,6 +766,8 @@ class EditRequest:
     lightning: bool = True
     hold: bool = True
     vae_area: int = 640 * 640
+    #: With the splash LoRA (and the 8-step Lightning adapter).
+    splash: bool = False
 
     def wire(self) -> dict[str, Any]:
         import anchor_models as am
@@ -760,6 +785,7 @@ class EditRequest:
             "hold": bool(self.hold),
             "size": [w, h],
             "vae_area": int(self.vae_area),
+            "splash": bool(self.splash),
         }
 
 
@@ -992,6 +1018,13 @@ def _dilate(mask: np.ndarray, px: int) -> np.ndarray:
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * px + 1, 2 * px + 1))
     return cv2.dilate(mask.astype(np.uint8), kernel) > 0
+
+
+def _erode(mask: np.ndarray, px: int) -> np.ndarray:
+    import cv2
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * px + 1, 2 * px + 1))
+    return cv2.erode(mask.astype(np.uint8), kernel) > 0
 
 
 def _close(mask: np.ndarray, px: int) -> np.ndarray:
@@ -1591,6 +1624,8 @@ class ArmState:
     #: The reprojected weak surface (`build_surface`), in the arms with photos: drawn into
     #: every view as weak, kept whole (never carved, shape fixed) in the layer.
     surface: Splats | None = None
+    #: The solidity preset its distil adds (`distill_fill.SOLIDITY_PRESETS`), or none.
+    solidity: str | None = None
 
     def layer(self) -> Splats | None:
         parts = [p for p in self.parts if len(p)]
@@ -1909,6 +1944,16 @@ class Run:
     log: Callable[[str], None] = print
     fallback: Editor | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
+    #: The reprojected weak surface (`build_surface`), when one was built: what the solidity
+    #: terms hold every arm's layer to (`solid_data`).
+    surface: Splats | None = None
+    _solid: bytes | None = None
+    #: The free space and its pockets (`free_space_stage`): voxels, labels, clusters.
+    pockets: tuple[Any, np.ndarray, list] | None = None
+    #: Per splash seed, what its gate found (`splash_gate`).
+    splash_gate: list[dict[str, Any]] = field(default_factory=list)
+    #: Per splash anchor view: its picture 1, its photo, each seed's raw output.
+    splash_frames: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def seeds(self, n: int, base: int = 17) -> list[int]:
         return [base + 1000 * k for k in range(n)]
@@ -1953,7 +1998,7 @@ def fill_anchors(
     best of N with agreement between the anchors, composited. The `refs` arm's views carry
     the reprojected weak `surface` (its pixels cleaned at low strength)."""
     setup, opt = run.setup, run.options
-    anchor_arms = sorted({ANCHOR_ARM[a] for a in arms})
+    anchor_arms = sorted({ANCHOR_ARM[a] for a in arms if a != "splash"})
     targets = [t for t in run.targets if t.role == "anchor"]
     per_arm_masks: dict[str, dict[str, ViewMasks]] = {}
     for arm in anchor_arms:
@@ -1994,6 +2039,36 @@ def fill_anchors(
             )
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
             meta.append((arm, t, [n for _, n in reqs]))
+    splash_meta = []
+    if "splash" in arms:
+        per_arm_masks["splash"] = {}
+        for t in targets:
+            base = per_arm_masks.get("refs", {}).get(t.key) or view_masks(
+                setup,
+                t.camera,
+                run.renderer,
+                None,
+                opt.weak_strength,
+                opt.placeholder,
+                opt.unknown_strength,
+                surface,
+                opt.reproject_strength,
+            )
+            masks, black = splash_masks(run, base)
+            per_arm_masks["splash"][t.key] = masks
+            if not masks.edit.any():
+                continue
+            reqs = splash_requests(run, t, masks, black)
+            run.splash_frames[t.key] = {
+                "picture": black,
+                "photo": reqs[0][0].references[0] if reqs and reqs[0][0].references else None,
+                "edit": int(masks.edit.sum()),
+                "raw": {},
+            }
+            pending.append((t.key, run.editor.start([r for r, _ in reqs])))
+            meta.append(("splash", t, [n for _, n in reqs]))
+            splash_meta.append(t.key)
+        anchor_arms = [*anchor_arms, "splash"]
     run.log(f"{setup.name}: {sum(len(m[2]) for m in meta)} anchor fills sent")
     results = run.wait(pending)
     scene_sample = _hole_sample(setup)
@@ -2005,6 +2080,13 @@ def fill_anchors(
             if a != arm:
                 continue
             cands = score_candidates(masks[t.key], res, names, run.perceptual)
+            if arm == "splash":
+                cands = splash_gate(run, masks[t.key], t.key, res, cands)
+                frames = run.splash_frames.get(t.key)
+                if frames is not None:
+                    for r in res:
+                        if r.image is not None:
+                            frames["raw"][int(r.key.rsplit("-s", 1)[-1])] = r.image
             per_anchor[t.key] = (cands, anchor_points(setup, masks[t.key], scene_sample))
         # First by each seed alone (agreement 1), then twice with the other anchors' choices.
         chosen = {
@@ -2029,6 +2111,286 @@ def fill_anchors(
                 fills.append(fill)
         out[arm] = fills
     return out
+
+
+def free_space_stage(run: Run) -> None:
+    """The free space the kept cameras saw through and its pockets (`fill_pockets`), for the
+    splash arm's black pixels and the shape stage (`Run.pockets`)."""
+    import fill_pockets as fp
+
+    setup = run.setup
+    shown = setup.measured.take(setup.shown)
+    lo, hi = setup.region()
+    vox = fp.free_space(shown, [v.camera for v in setup.views], lo, hi, log=run.log)
+    labels, found = fp.pockets(vox)
+    run.pockets = (vox, labels, found)
+    run.log(f"{setup.name}: {len(found)} pockets; largest {[p.voxels for p in found[:3]]} voxels")
+
+
+def pocket_pixels(run: Run, camera: Camera, depth: np.ndarray) -> np.ndarray:
+    """The pixels of `camera` whose ray meets a pocket voxel before the scan's surface
+    (`depth`, NaN or inf where it shows none): unobserved space in front of what is drawn."""
+    import fill_pockets as fp
+
+    h, w = camera.height, camera.width
+    if run.pockets is None:
+        return np.zeros((h, w), bool)
+    vox, labels, _ = run.pockets
+    cells = np.argwhere(labels > 0)
+    if not len(cells):
+        return np.zeros((h, w), bool)
+    pts = vox.centres(cells)
+    n = len(pts)
+    dots = Splats(
+        pts,
+        np.tile([1.0, 0.0, 0.0, 0.0], (n, 1)),
+        np.full((n, 3), 0.5 * vox.size),
+        np.zeros((n, 3)),
+        np.ones(n),
+    )
+    pocket = fp.first_hits(dots, camera)
+    scene = np.where(np.isfinite(depth), depth, np.inf)
+    return np.isfinite(pocket) & (pocket < scene)
+
+
+def splash_masks(run: Run, masks: ViewMasks) -> tuple[ViewMasks, np.ndarray]:
+    """A view's masks for the splash arm, and its picture 1: the render with every pixel the
+    scan does not know black -- unknown, seen through (weak, but not the reprojected
+    surface's photo pixels, which stay as known), and pocket pixels (`pocket_pixels`). Those
+    are what is made (strength 1) and composited; the rest is known."""
+    import dataclasses
+
+    surface = masks.surface if masks.surface is not None else np.zeros_like(masks.known)
+    pockets = pocket_pixels(run, masks.camera, masks.depth) & ~masks.void
+    black = masks.unknown | (masks.weak & ~surface) | pockets
+    known = (masks.known | (masks.weak & surface)) & ~black
+    condition = masks.render.copy()
+    condition[black | masks.void] = 0
+    out = dataclasses.replace(
+        masks,
+        known=known,
+        weak=np.zeros_like(masks.weak),
+        unknown=black,
+        strength=np.where(black, 1.0, 0.0).astype(np.float32),
+        condition=condition,
+        hold=None,
+    )
+    return out, condition
+
+
+def splash_requests(
+    run: Run, target: Target, masks: ViewMasks, picture: np.ndarray
+) -> list[tuple[EditRequest, list[str]]]:
+    """One request per seed for the splash LoRA: picture 1 the render with what is to make
+    black, picture 2 the seed's first retrieved real photo (cropped about the hole, as the
+    photo arm's), the LoRA's own prompt, the 8-step Lightning adapter, CFG 1, nothing held
+    (the result is registered and composited inside the mask only)."""
+    setup, opt = run.setup, run.options
+    members = view_hole_members(setup, masks, target)
+    out = []
+    for j, seed in enumerate(run.seeds(opt.seeds)):
+        names: list[str] = []
+        photos: list[np.ndarray] = []
+        for role, c in list(fv.context_for_seed(target.context, j))[:1]:
+            photo = setup.context_photo(c, members, target.key)
+            if photo is not None:
+                photos.append(photo)
+                names.append(f"{role}:{setup.views[c].name}")
+        request = EditRequest(
+            f"splash/{target.key}-s{seed}",
+            picture,
+            masks.render,
+            masks.strength,
+            photos,
+            SPLASH_PROMPT,
+            int(seed),
+            SPLASH_STEPS,
+            True,
+            hold=False,
+            vae_area=opt.vae_area,
+            splash=True,
+        )
+        out.append((request, names))
+    return out
+
+
+def pose_offset_deg(
+    image: np.ndarray, render: np.ndarray, known: np.ndarray, camera: Camera
+) -> float | None:
+    """How far, in degrees, the camera that would see `image` is turned from the render's:
+    features matched on the known pixels, a homography (a turn about the camera's centre is
+    one), and the rotation nearest `K^-1 H K`. None when too few features match to tell."""
+    import cv2
+
+    h, w = render.shape[:2]
+    if image.shape[:2] != (h, w):
+        image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)
+    mask = (np.asarray(known, bool) * 255).astype(np.uint8)
+    gray = [cv2.cvtColor(np.asarray(x, np.uint8), cv2.COLOR_RGB2GRAY) for x in (image, render)]
+    try:
+        detector = cv2.SIFT_create(4000)
+        norm = cv2.NORM_L2
+    except AttributeError:
+        detector = cv2.ORB_create(4000)
+        norm = cv2.NORM_HAMMING
+    k1, d1 = detector.detectAndCompute(gray[0], mask)
+    k2, d2 = detector.detectAndCompute(gray[1], mask)
+    if d1 is None or d2 is None or len(k1) < 8 or len(k2) < 8:
+        return None
+    pairs = cv2.BFMatcher(norm).knnMatch(d1, d2, k=2)
+    good = [m for m, *rest in pairs if rest and m.distance < 0.75 * rest[0].distance]
+    if len(good) < 15:
+        return None
+    p1 = np.float32([k1[m.queryIdx].pt for m in good])
+    p2 = np.float32([k2[m.trainIdx].pt for m in good])
+    hom, inliers = cv2.findHomography(p1, p2, cv2.RANSAC, 3.0)
+    if hom is None or int(inliers.sum()) < 12:
+        return None
+    f = camera.focal * w / camera.width
+    k = np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1.0]])
+    m = np.linalg.inv(k) @ hom @ k
+    u, _, vt = np.linalg.svd(m)
+    rot = u @ vt
+    if np.linalg.det(rot) < 0:
+        rot = -rot
+    return round(float(np.degrees(np.arccos(np.clip((np.trace(rot) - 1) / 2, -1, 1)))), 3)
+
+
+def splash_gate(
+    run: Run,
+    masks: ViewMasks,
+    key: str,
+    results: Sequence[EditResult],
+    cands: Sequence[Candidate],
+) -> list[Candidate]:
+    """The seeds of one splash anchor that may be anchors: LPIPS on the known pixels against
+    the render under `SPLASH_KNOWN_LPIPS`, and the camera re-estimated within
+    `SPLASH_POSE_DEG` of the render's (`pose_offset_deg`). Each verdict is kept
+    (`Run.splash_gate`); a seed that returned nothing counts as rejected."""
+    import cv2
+
+    raw = {}
+    for r in results:
+        seed = int(r.key.rsplit("-s", 1)[-1])
+        if r.image is None:
+            run.splash_gate.append(
+                {"view": key, "seed": seed, "kept": False, "error": str(r.info.get("error"))[:300]}
+            )
+        else:
+            raw[seed] = r.image
+    h, w = masks.render.shape[:2]
+    kept = []
+    for c in cands:
+        image = raw.get(c.seed)
+        if image is None:
+            continue
+        if image.shape[:2] != (h, w):
+            image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)
+        lp = run.perceptual.lpips(image, masks.render, masks.known) if masks.known.any() else None
+        pose = pose_offset_deg(image, masks.render, masks.known, masks.camera)
+        ok_lpips = lp is not None and lp < SPLASH_KNOWN_LPIPS
+        ok_pose = pose is not None and pose <= SPLASH_POSE_DEG
+        run.splash_gate.append(
+            {
+                "view": key,
+                "seed": c.seed,
+                "knownLpips": None if lp is None else round(float(lp), 4),
+                "poseDeg": pose,
+                "lpipsOk": ok_lpips,
+                "poseOk": ok_pose,
+                "kept": ok_lpips and ok_pose,
+            }
+        )
+        if ok_lpips and ok_pose:
+            kept.append(c)
+    return kept
+
+
+def splash_sheet(run: Run, fills: Sequence[FilledView], out: Path, views: int = 3) -> None:
+    """For the splash anchor views with the most to make (up to `views`), a row each:
+    - picture 1, the render with what the scan does not know black;
+    - picture 2, the real photo;
+    - each seed's raw output, with its gate verdict;
+    - what was composited: the chosen seed, inside the mask only."""
+    import cv2
+    from PIL import Image
+
+    chosen = {f.key: f for f in fills}
+    keys = sorted(run.splash_frames, key=lambda k: -run.splash_frames[k]["edit"])[:views]
+    verdicts = {(g["view"], g["seed"]): g for g in run.splash_gate}
+    rows = []
+    for key in keys:
+        frame = run.splash_frames[key]
+        h, w = frame["picture"].shape[:2]
+
+        def fit(image: np.ndarray, w: int = w, h: int = h) -> np.ndarray:
+            return cv2.resize(np.asarray(image, np.uint8), (w, h), interpolation=cv2.INTER_AREA)
+
+        blank = np.zeros((h, w, 3), np.uint8)
+        photo = frame["photo"]
+        row = [
+            gf.label_image(frame["picture"], f"{key}: picture 1, black is to make"),
+            gf.label_image(fit(photo) if photo is not None else blank, "picture 2: real photo"),
+        ]
+        for seed, raw in sorted(frame["raw"].items()):
+            g = verdicts.get((key, seed), {})
+            lp = g.get("knownLpips")
+            pose = g.get("poseDeg")
+            text = (
+                f"raw s{seed}: {'kept' if g.get('kept') else 'rejected'}, "
+                f"LPIPS {'-' if lp is None else lp}, {'?' if pose is None else pose} deg"
+            )
+            row.append(gf.label_image(fit(raw), text))
+        fill = chosen.get(key)
+        made = fit(fill.image) if fill is not None else blank
+        label = f"composited (s{fill.chosen})" if fill is not None else "no seed kept"
+        row.append(gf.label_image(made, label))
+        rows.append(row)
+    if rows:
+        Image.fromarray(_ragged_grid(rows)).save(out / f"splash-{run.setup.name}.png")
+
+
+def splash_summary(gate: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    n = len(gate)
+    rejected = [g for g in gate if not g["kept"]]
+    return {
+        "frames": n,
+        "kept": n - len(rejected),
+        "rejected": len(rejected),
+        "rejectedShare": round(len(rejected) / n, 3) if n else None,
+        "failedLpips": sum(1 for g in gate if g.get("lpipsOk") is False),
+        "failedPose": sum(1 for g in gate if g.get("poseOk") is False),
+        "errors": sum(1 for g in gate if "error" in g),
+        "thresholds": {"knownLpips": SPLASH_KNOWN_LPIPS, "poseDeg": SPLASH_POSE_DEG},
+        "seeds": list(gate),
+    }
+
+
+def anchor_rerender(run: Run, state: ArmState, layer: Splats) -> dict[str, Any]:
+    """The splash gate's last test, after compositing inside the mask and the distil: each
+    anchor view of the arm re-rendered at its pose against its anchor, PSNR on what it made;
+    an anchor passes at `SPLASH_RERENDER_DB` or more."""
+    scene = Splats.concat([run.setup.scene().take(run.setup.frozen_index()), layer])
+    views = []
+    for fill in state.fills:
+        if fill.role != "anchor" or fill.masks.edit.sum() < 50:
+            continue
+        cam, image, (mm,) = _resize_view(fill.camera, fill.image, [fill.masks.edit], 480)
+        frame = tf.to_u8(fv.unpremultiply(run.renderer(scene, cam)))
+        db = tf.psnr(frame, image, mm > 0.5)
+        views.append(
+            {"view": fill.key, "psnr": round(float(db), 2), "passed": db >= SPLASH_RERENDER_DB}
+        )
+    passed = sum(v["passed"] for v in views)
+    return {
+        "views": views,
+        "summary": {
+            "anchors": len(views),
+            "passed": passed,
+            "failedShare": round(1 - passed / len(views), 3) if views else None,
+            "thresholdDb": SPLASH_RERENDER_DB,
+        },
+    }
 
 
 def copy_fill(fill: FilledView) -> FilledView:
@@ -2130,7 +2492,7 @@ def propagate_sequential(run: Run, states: dict[str, ArmState]) -> None:
                 f"{arm}/{t.key}",
                 masks,
                 t.context,
-                refs=arm == "refs",
+                refs=ANCHOR_ARM[arm] == "refs",
                 seeds=run.seeds(opt.prop_seeds, base=29),
                 steps=opt.prop_steps,
                 lightning=opt.lightning,
@@ -2268,7 +2630,7 @@ def distil_request(run: Run, state: ArmState, init: Splats, iterations: int) -> 
     low, high = init.positions.min(axis=0), init.positions.max(axis=0)
     pad = 0.25 * float(np.max(high - low)) + 1e-6
     near = np.all((frozen.positions >= low - pad) & (frozen.positions <= high + pad), axis=1)
-    return {
+    request: dict[str, Any] = {
         "measured": df.pack_scan(tf._arrays(frozen.take(np.flatnonzero(near)))),
         "init": df.pack_scan(tf._arrays(init)),
         "views": df.pack_views(
@@ -2276,6 +2638,64 @@ def distil_request(run: Run, state: ArmState, init: Splats, iterations: int) -> 
         ),
         "iterations": iterations,
     }
+    if state.solidity:
+        request["solidity"] = dict(df.SOLIDITY_PRESETS[state.solidity])
+        solid = solid_data(run, init)
+        if solid is not None:
+            request["solid"] = solid
+    return request
+
+
+#: The solidity terms' views of the fitted surface: the headline directions, this size, at
+#: this many of its radii.
+SOLID_SIZE = (160, 120)
+SOLID_DISTANCE = 2.6
+
+
+def _thinnest_axes(splats: Splats) -> np.ndarray:
+    rot = fq._rotation_matrices(np.asarray(splats.rotations, np.float64))
+    k = np.argmin(np.asarray(splats.scales), axis=1)
+    return rot[np.arange(len(k)), :, k]
+
+
+def solid_data(run: Run, init: Splats) -> bytes | None:
+    """The solidity terms' data (`distill_fill.pack_solid`) from the reprojected surface
+    (`Run.surface`), or None without one: its largest connected part seen from the 17
+    headline directions (where it covers, at what depth), and per gaussian of `init` the
+    normal of the surface disc within two spacings of it (0 for none). The views are made
+    once a run."""
+    from scipy.spatial import cKDTree
+
+    import distill_fill as df
+
+    surface = run.surface
+    if surface is None or len(surface) < 20:
+        return None
+    spacing = float(np.median(np.asarray(surface.scales).max(axis=1))) / fs.DISC_SCALE
+    tree = cKDTree(surface.positions)
+    if run._solid is None:
+        part = _main_part(surface)
+        centre = part.positions.mean(axis=0)
+        radius = float(np.quantile(np.linalg.norm(part.positions - centre, axis=1), 0.95))
+        cams, masks, depths = [], [], []
+        for elev, az in HEADLINE_VIEWS:
+            cam = _headline_camera(centre, SOLID_DISTANCE * radius, 40.0, elev, az, SOLID_SIZE)
+            frame = run.renderer(part, cam)
+            covers = _erode(frame.alpha > 0.5, 1)
+            cams.append(cam.to_json())
+            masks.append(covers)
+            depths.append(np.where(covers & np.isfinite(frame.depth), frame.depth, 0.0))
+        run._solid = df.pack_solid(cams, np.array(masks), np.array(depths))
+        run.log(
+            f"{run.setup.name}: solidity views of {len(part)} surface discs, radius {radius:.2f} m"
+        )
+    solid = df.unpack_solid(run._solid)
+    assert solid is not None
+    dist, idx = tree.query(init.positions, k=1, distance_upper_bound=2 * spacing)
+    normals = np.zeros((len(init), 3))
+    found = np.isfinite(dist)
+    normals[found] = _thinnest_axes(surface)[idx[found]]
+    return df.pack_solid(solid["cameras"], solid["masks"], solid["depths"], normals)
 
 
 def _weak_rows(setup: Setup) -> np.ndarray:
@@ -2904,17 +3324,28 @@ def run_arms(
             setup, renderer, int(SURFACE_BUDGET_SHARE * budget), log
         )
         report["timings"]["surfaceS"] = round(time.time() - t, 1)
+    run.surface = surface
+    if options.shape or "splash" in options.arms:
+        # The free space and its pockets: the splash arm blacks out the pocket pixels, the
+        # shape stage fills under an overhang.
+        t = time.time()
+        free_space_stage(run)
+        report["timings"]["freeSpaceS"] = round(time.time() - t, 1)
     t = time.time()
     anchors = fill_anchors(run, options.arms, surface)
     report["timings"]["anchorsS"] = round(time.time() - t, 1)
+    if run.splash_gate:
+        report["splashGate"] = splash_summary(run.splash_gate)
+        splash_sheet(run, anchors.get("splash", []), out / "renders")
     states: dict[str, ArmState] = {}
     lifted: dict[str, ArmState] = {}
-    for arm in sorted({ANCHOR_ARM[a] for a in options.arms}):
-        lifted[arm] = ArmState(arm, surface=surface if arm == "refs" else None)
+    anchor_sets = {ANCHOR_ARM[a] for a in options.arms if a != "splash"}
+    for arm in sorted(anchor_sets | ({"splash"} & set(options.arms))):
+        lifted[arm] = ArmState(arm, surface=surface if arm in ("refs", "splash") else None)
         lift_fills(run, lifted[arm], anchors.get(arm, []))
     for arm in options.arms:
         # Each arm its own copy of its anchors (the update rounds rewrite their images).
-        base = lifted[ANCHOR_ARM[arm]]
+        base = lifted["splash" if arm == "splash" else ANCHOR_ARM[arm]]
         states[arm] = ArmState(
             arm,
             [copy_fill(f) for f in base.fills],
@@ -2945,6 +3376,24 @@ def run_arms(
         except Exception as error:  # noqa: BLE001
             states["vace"].report["setFailed"] = repr(error)[:1500]
         report["timings"]["jointS"] = round(time.time() - t, 1)
+    # The solidity ablation: every sequential arm again from the same fills, distilled with
+    # each preset's terms (`distill_fill.SOLIDITY_PRESETS`).
+    for preset in options.solidity:
+        for arm in [a for a in options.arms if a in ("refs", "norefs")]:
+            clone = f"{arm}-{preset}"
+            ANCHOR_ARM[clone] = ANCHOR_ARM[arm]
+            LAYERS[clone] = f"{LAYERS[arm]}-{preset}"
+            base = states[arm]
+            states[clone] = ArmState(
+                clone,
+                [copy_fill(f) for f in base.fills],
+                list(base.parts),
+                list(base.confs),
+                {"solidity": preset},
+                base.carved,
+                base.surface,
+                preset,
+            )
     t = time.time()
     fused = fuse(run, states, distil)
     report["timings"]["fuseS"] = round(time.time() - t, 1)
@@ -2963,6 +3412,10 @@ def run_arms(
         if made is not None:
             splats, conf, cams = made
             entry["reRender"] = rerender_consistency(run, state, splats)
+            if arm == "splash":
+                entry["anchorReRender"] = anchor_rerender(run, state, splats)
+                if "splashGate" in report:
+                    report["splashGate"]["afterDistil"] = entry["anchorReRender"]["summary"]
             agreement = [
                 float(f.weight[f.masks.edit].mean()) for f in state.fills if f.masks.edit.any()
             ]
@@ -3006,6 +3459,19 @@ def run_arms(
         report["candidates"][arm] = entry
     report["calls"] = run.calls
     report["editorCalls"] = getattr(editor, "calls", None)
+    if options.shape:
+        t = time.time()
+        try:
+            shape_stage(run, layers, hidden, out, measured_tileset, report)
+        except Exception as error:  # noqa: BLE001 - reported; the arms' layers stand
+            import traceback
+
+            report["shape"] = {
+                "failed": repr(error)[:1500],
+                "trace": traceback.format_exc()[-3000:],
+            }
+            log(f"{setup.name}: shape stage failed: {error!r}")
+        report["timings"]["shapeS"] = round(time.time() - t, 1)
     t = time.time()
     if setup.held_out:
         report["heldOut"] = score_held_out(run, layers, out / "renders", width=options.score_width)
@@ -3016,6 +3482,317 @@ def run_arms(
     report["timings"]["totalS"] = round(time.time() - started, 1)
     gf.write_json(out / "report.json", report)
     return report
+
+
+#: Shape first under an overhang (`Options.shape`, `fill_pockets`): its layer's folder, its
+#: filler and the rule its evidence states.
+SHAPE_LAYER = "anchor-shape"
+SHAPE_FILLER = "shape-first"
+SHAPE_RULE = (
+    "inferred where no camera saw: the cylinder under an overhang continued up to the "
+    "overhang's underside, and the underside out to its rim, from the measured surfaces; "
+    "nothing where a camera saw through; coloured from the nearest measured wood at the same "
+    "azimuth, darkened for shade"
+)
+#: Highlight's purple, for the sheets (the viewer's `INFERRED_HIGHLIGHT` tint).
+PURPLE = np.array([0.62, 0.25, 0.92])
+
+
+def _main_part(splats: Splats) -> Splats:
+    """The largest connected part of a reprojected surface (its discs within three spacings
+    of each other): the spool's top."""
+    from scipy.sparse.csgraph import connected_components
+    from scipy.spatial import cKDTree
+
+    spacing = float(np.median(np.asarray(splats.scales).max(axis=1))) / fs.DISC_SCALE
+    tree = cKDTree(splats.positions)
+    graph = tree.sparse_distance_matrix(tree, 3 * spacing, output_type="coo_matrix")
+    _, labels = connected_components(graph, directed=False)
+    return splats.take(np.flatnonzero(labels == np.bincount(labels).argmax()))
+
+
+def _overhang_top(run: Run, shown: Splats, pocket: Any) -> np.ndarray:
+    """What to fit an overhang's plane to: the reprojected surface's largest part when there
+    is one (the weak surface that was rebuilt is the overhang's top), else the opaque measured
+    gaussians just over the pocket."""
+    if run.surface is not None and len(run.surface) >= 50:
+        return _main_part(run.surface).positions
+    reach = 1.0 + float(np.max(pocket.high[:2] - pocket.low[:2]))
+    src = shown.positions[shown.opacities >= 0.3]
+    near = np.all(np.abs(src[:, :2] - pocket.centre[:2]) <= reach, axis=1)
+    above = (src[:, 2] > pocket.high[2] - 0.1) & (src[:, 2] < pocket.high[2] + 0.8)
+    return src[near & above]
+
+
+def shape_stage(
+    run: Run,
+    layers: dict[str, Splats | None],
+    hidden: dict[str, np.ndarray | None],
+    out: Path,
+    measured_tileset: Path,
+    report: dict[str, Any],
+) -> None:
+    """The free space (the kept cameras), its pockets (with the views that see into them),
+    and shape first under the overhang over the largest pocket under one: its own layer
+    (`SHAPE_LAYER`), never in carved space. Then the split pass tests for every layer (the top
+    face from the 17 headline directions; the pocket and the open air beside it from low
+    views), the sheets, and in a leave-out the flange edge scored at the held-out photos."""
+    import fill_pockets as fp
+
+    setup = run.setup
+    shown = setup.measured.take(setup.shown)
+    t = time.time()
+    if run.pockets is None:
+        free_space_stage(run)
+    assert run.pockets is not None
+    vox, labels, found = run.pockets
+    counts = np.bincount(vox.state.ravel(), minlength=4)
+    rep: dict[str, Any] = {
+        "voxelM": round(vox.size, 4),
+        "dims": list(vox.dims),
+        "cells": {
+            name: int(counts[k])
+            for name, k in (
+                ("free", fp.FREE),
+                ("surface", fp.SURFACE),
+                ("front", fp.FRONT),
+                ("unseen", fp.UNSEEN),
+            )
+        },
+        "freeSpaceS": round(time.time() - t, 1),
+    }
+    report["shape"] = rep
+    for p in found[:6]:
+        p.views = fp.pocket_views(vox, labels, p)
+    rep["pockets"] = [p.json() for p in found[:12]]
+    fit, pocket = None, None
+    under = [q for q in found if q.under >= 0.5]
+    for p in sorted(under, key=lambda q: q.edge)[:3]:
+        fit = fp.fit_overhang(shown, p, _overhang_top(run, shown, p))
+        if fit is not None:
+            pocket = p
+            break
+    pocket_sheet(run, vox, labels, found, fit, out / "renders")
+    if fit is None or pocket is None:
+        rep["overhang"] = None
+        run.log(f"{setup.name}: no overhang over a pocket: no shape")
+        return
+    spacing = float(np.clip(vox.size / 2, 0.012, 0.03))
+    discs, srep = fp.shape_under_overhang(fit, shown, vox, spacing)
+    srep["pocket"] = pocket.cluster
+    srep["inFreeSpace"] = fp.in_free_space(vox, discs)
+    rep["overhang"] = srep
+    run.log(f"{setup.name}: shape under the overhang: {json.dumps(srep)}")
+    if not len(discs):
+        return
+    mid = fit.axis_point + 0.5 * (fit.drum_top + fit.underside) * fit.normal
+    cams = [fp._view(fit, mid, e, a) for e, a in fp.LOW_VIEWS]
+    rep["evidence"] = tf.package_inferred(
+        discs,
+        np.full(len(discs), 0.5),
+        cams,
+        measured_tileset,
+        out / SHAPE_LAYER / "inferred",
+        SHAPE_FILLER,
+        rule=SHAPE_RULE,
+        extra={"provenance": "inferred-shape", "pocket": pocket.cluster, "fit": fit.report},
+    )
+    # The split pass tests: the scene as each layer would be drawn (swapped where it says).
+    states: dict[str, Splats] = {"before": shown}
+    for arm, layer in layers.items():
+        if layer is None or not len(layer):
+            continue
+        gone = hidden.get(arm)
+        base = shown if gone is None else shown.take(np.flatnonzero(~gone[setup.shown]))
+        states[arm] = Splats.concat([base, layer])
+    if "refs" in states:
+        states["refs+shape"] = Splats.concat([states["refs"], discs])
+    states["shape"] = Splats.concat([shown, discs])
+    t = time.time()
+    # The pocket's low views for the scan, the top's layer and the shape (the solidity
+    # clones change the top, which the 17 directions test).
+    low = [k for k in ("before", "refs", "refs+shape", "shape") if k in states]
+    rep["tests"] = fp.overhang_tests(fit, states, vox, spacing, low_states=low)
+    rep["testsS"] = round(time.time() - t, 1)
+    layers["shape"] = discs
+    hidden["shape"] = None
+    LAYERS["shape"] = SHAPE_LAYER
+    shape_sheet(run, fit, states, discs, out / "renders")
+    if setup.held_out:
+        rep["edge"] = score_edge(run, fit, states, out / "renders")
+
+
+def _ragged_grid(rows: list[list[np.ndarray]]) -> np.ndarray:
+    """Rows of images of any size, each row left-aligned on a dark ground."""
+    lines = [
+        np.concatenate([_pad_to(im, max(i.shape[0] for i in r), im.shape[1]) for im in r], axis=1)
+        for r in rows
+    ]
+    width = max(line.shape[1] for line in lines)
+    return np.concatenate([_pad_to(line, line.shape[0], width) for line in lines], axis=0)
+
+
+def _pad_to(image: np.ndarray, h: int, w: int) -> np.ndarray:
+    out = np.full((h, w, 3), 24, np.uint8)
+    out[: image.shape[0], : image.shape[1]] = image[:h, :w]
+    return out
+
+
+def _tinted(splats: Splats, rows: np.ndarray) -> Splats:
+    colours = np.asarray(splats.colours, np.float64).copy()
+    colours[rows] = 0.35 * colours[rows] + 0.65 * PURPLE
+    return Splats(splats.positions, splats.rotations, splats.scales, colours, splats.opacities)
+
+
+def pocket_sheet(run: Run, vox: Any, labels: np.ndarray, found: list, fit: Any, out: Path) -> None:
+    """The pockets: a vertical slice through the overhang's axis (or the largest pocket):
+    free blue, surface white, seen fronts grey, pockets purple; and the scan from three low
+    views around the largest pocket, its voxels drawn as purple dots."""
+    from PIL import Image
+
+    import fill_pockets as fp
+
+    if not found:
+        return
+    setup = run.setup
+    centre = fit.axis_point if fit is not None else found[0].centre
+    j = int(np.clip(np.floor((centre[1] - vox.origin[1]) / vox.size), 0, vox.dims[1] - 1))
+    state = vox.state[:, j, :].T[::-1]
+    lab = labels[:, j, :].T[::-1]
+    img = np.zeros((*state.shape, 3), np.uint8)
+    img[state == fp.FREE] = (40, 50, 120)
+    img[state == fp.FRONT] = (90, 90, 90)
+    img[state == fp.SURFACE] = (235, 235, 235)
+    img[lab > 0] = (200, 60, 240)
+    scale = max(1, 480 // max(img.shape[:2]))
+    slice_img = np.kron(img, np.ones((scale, scale, 1), np.uint8))
+    rows = [[gf.label_image(slice_img, "slice: free, front, surface, pockets (purple)")]]
+    biggest = found[0] if fit is None else next((p for p in found if p.under >= 0.5), found[0])
+    cells = np.argwhere(labels == biggest.cluster)
+    pts = vox.centres(cells)
+    n = len(pts)
+    dots = Splats(
+        pts,
+        np.tile([1.0, 0.0, 0.0, 0.0], (n, 1)),
+        np.full((n, 3), 0.3 * vox.size),
+        np.tile(PURPLE, (n, 1)),
+        np.full(n, 0.9),
+    )
+    shown = setup.measured.take(setup.shown)
+    both = Splats.concat([shown, dots])
+    span = float(np.max(biggest.high - biggest.low)) + 0.5
+    row = []
+    for view in (biggest.views or [{"azimuthDeg": 0.0, "elevationDeg": 5.0}])[:3]:
+        cam = _headline_camera(
+            biggest.centre, 2.5 * span, 50.0, view["elevationDeg"], view["azimuthDeg"], (320, 240)
+        )
+        row.append(
+            gf.label_image(
+                tf.to_u8(run.renderer(both, cam).rgb),
+                f"pocket {biggest.cluster}: az {view['azimuthDeg']:.0f} el {view['elevationDeg']:.0f}",
+            )
+        )
+    rows.append(row)
+    Image.fromarray(_ragged_grid(rows)).save(out / f"pockets-{setup.name}.png")
+
+
+def shape_sheet(run: Run, fit: Any, states: dict[str, Splats], discs: Splats, out: Path) -> None:
+    """Low views around the overhang (elevation 5, four azimuths): the scan before, with the
+    top's layer, and with the shape too (as drawn, then with the shape purple as Highlight
+    shows it)."""
+    from PIL import Image
+
+    import fill_pockets as fp
+
+    mid = fit.axis_point + 0.5 * (fit.drum_top + fit.underside) * fit.normal
+    columns = [k for k in ("before", "refs", "refs+shape") if k in states]
+    if "refs+shape" not in states:
+        columns.append("shape")
+    last = columns[-1]
+    n_shape = len(discs)
+    rows = []
+    for az in (0.0, 90.0, 180.0, 270.0):
+        cam = fp._view(fit, mid, 5.0, az, (320, 240))
+        row = []
+        for name in columns:
+            row.append(
+                gf.label_image(
+                    tf.to_u8(run.renderer(states[name], cam).rgb), f"{name}, az {az:.0f}"
+                )
+            )
+        tinted = _tinted(states[last], np.arange(len(states[last]) - n_shape, len(states[last])))
+        row.append(gf.label_image(tf.to_u8(run.renderer(tinted, cam).rgb), "shape purple"))
+        rows.append(row)
+    Image.fromarray(gf.grid(rows)).save(out / f"shape-{run.setup.name}.png")
+
+
+def score_edge(
+    run: Run, fit: Any, states: dict[str, Splats], out: Path, width: int = 480
+) -> dict[str, Any]:
+    """The leave-out at the overhang's edge: per held-out photo, in the band its rim and the
+    gap under it project to, the photo against the scan with the top's layer and with the
+    shape too (PSNR, LPIPS). The shape must not make it worse."""
+    from PIL import Image
+
+    base_key = "refs" if "refs" in states else "before"
+    with_key = "refs+shape" if "refs+shape" in states else "shape"
+    u, v = fit.frame()
+    a = np.linspace(0, 2 * math.pi, 720, endpoint=False)
+    ring = []
+    for h in np.linspace(fit.drum_top, 0.0, 8):
+        for r in (fit.radius, fit.rim):
+            ring.append(
+                fit.axis_point
+                + h * fit.normal
+                + r * (np.cos(a)[:, None] * u + np.sin(a)[:, None] * v)
+            )
+    ring_pts = np.concatenate(ring)
+    rows, numbers = [], []
+    for view in run.setup.held_out:
+        photo = view.photo(width=width)
+        if photo is None:
+            continue
+        cam = fv.scaled(view.camera, photo.shape[1], photo.shape[0])
+        uv, z = cam.project(ring_pts)
+        ok = (
+            (z > 0)
+            & (uv[:, 0] >= 0)
+            & (uv[:, 0] < cam.width)
+            & (uv[:, 1] >= 0)
+            & (uv[:, 1] < cam.height)
+        )
+        region = np.zeros(photo.shape[:2], bool)
+        region[uv[ok, 1].astype(int), uv[ok, 0].astype(int)] = True
+        region = _dilate(region, 4)
+        if region.sum() < 50:
+            continue
+        a_img = tf.to_u8(run.renderer(states[base_key], cam).rgb)
+        b_img = tf.to_u8(run.renderer(states[with_key], cam).rgb)
+        numbers.append(
+            {
+                "view": view.name,
+                "regionPx": int(region.sum()),
+                base_key: _metrics(run, a_img, photo, region),
+                with_key: _metrics(run, b_img, photo, region),
+            }
+        )
+        if len(rows) < 4:
+            outlined = photo.copy()
+            outlined[_dilate(region, 1) & ~region] = (255, 0, 255)
+            rows.append(
+                [
+                    gf.label_image(outlined, f"held out: {view.name}"),
+                    gf.label_image(a_img, base_key),
+                    gf.label_image(b_img, with_key),
+                ]
+            )
+    if rows:
+        Image.fromarray(gf.grid(rows)).save(out / f"edge-{run.setup.name}.png")
+    means = {
+        key: {m: _mean([n[key].get(m) for n in numbers]) for m in ("psnr", "lpips")}
+        for key in (base_key, with_key)
+    }
+    return {"views": numbers, "mean": means}
 
 
 def write_supersedes(
@@ -3046,10 +3823,14 @@ def write_supersedes(
 
 def filler_name(arm: str, editor: Editor, set_filler: SetFiller | None) -> str:
     base = getattr(editor, "name", "editor")
-    if arm == "refs":
-        return f"{base}+photos+6a"
-    if arm == "norefs":
-        return f"{base}+6a"
+    kind, _, preset = arm.partition("-")
+    solid = f"+solid-{preset}" if preset else ""
+    if kind == "splash":
+        return f"{base}+splash+photos+6a"
+    if kind == "refs":
+        return f"{base}+photos+6a{solid}"
+    if kind == "norefs":
+        return f"{base}+6a{solid}"
     return f"{base}+photos+{getattr(set_filler, 'name', 'set')}"
 
 
@@ -3107,12 +3888,22 @@ def options_from(args: Any) -> Options:
     for name, default in Options().__dict__.items():
         if name == "arms":
             o.arms = tuple(a for a in args.arms.split(",") if a)
-            unknown = set(o.arms) - set(ARMS)
+            unknown = set(o.arms) - set(KNOWN_ARMS)
             if unknown:
-                raise SystemExit(f"arms {sorted(unknown)}: one of {ARMS}")
+                raise SystemExit(f"arms {sorted(unknown)}: one of {KNOWN_ARMS}")
             continue
         if name == "fallback":
             o.fallback = bool(args.fallback)
+            continue
+        if name == "solidity":
+            import distill_fill as df
+
+            o.solidity = tuple(x for x in str(args.solidity).split(",") if x)
+            unknown = set(o.solidity) - set(df.SOLIDITY_PRESETS)
+            if unknown:
+                raise SystemExit(
+                    f"solidity {sorted(unknown)}: one of {sorted(df.SOLIDITY_PRESETS)}"
+                )
             continue
         value = getattr(args, name)
         if isinstance(default, tuple):

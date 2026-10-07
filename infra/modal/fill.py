@@ -1306,8 +1306,13 @@ SET_CAP_S = 900
 #: The job's own L4 (renders, quality, depth, lift, carving, distil, scores), minutes (the
 #: spool's leave-out took 13; the pumpkin has 2.5 times the gaussians).
 ANCHOR_JOB_MIN = {"spool": 20, "pumpkin": 35}
-#: The job's timeout: the seven round-2 jobs so far took 11-16 min of L4.
-ANCHOR_JOB_CAP_MIN = 45
+#: What the options add to it, minutes: the free space, pockets, shape and its split tests
+#: (`shape`); per solidity preset, a distil per sequential arm and their headline renders.
+SHAPE_JOB_MIN = 15
+SOLIDITY_JOB_MIN = 6
+#: The job's timeout: the eight round-2 jobs so far took 11-16 min of L4 (without the shape
+#: and the solidity clones).
+ANCHOR_JOB_CAP_MIN = 90
 #: Views the estimate assumes (the selection's maxima give the worst case).
 ANCHOR_VIEWS = {"anchors": 6, "props": 16}
 #: The hemisphere views (`anchor_fill.hemisphere_targets`) added to the propagation: at most
@@ -1438,20 +1443,22 @@ ANCHOR_REPOS: dict[str, tuple[str, ...] | None] = {
         "vae/*",
     ),
     "lightx2v/Wan2.1-Distill-Loras": ("wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",),
+    # The splash arm's editor LoRA (Apache-2.0), read only when that arm runs.
+    "dx8152/Qwen-Image-Edit-2511-Gaussian-Splash": ("高斯泼溅-Sharp.safetensors",),
     "depth-anything/prompt-depth-anything-vitl-hf": None,
     "depth-anything/Depth-Anything-V2-Small-hf": None,
 }
 
 
 @app.function(image=anchor_model_image, secrets=[HF_SECRET], timeout=300)
-def anchor_access() -> dict[str, str]:
+def anchor_access(repos: list[str]) -> dict[str, str]:
     """Whether the workspace's token can read each repository (none of them is gated)."""
     from huggingface_hub import auth_check
 
     am_vfm = _anchor_module()  # finds the token into HF_TOKEN
     del am_vfm
     out = {}
-    for repo in ANCHOR_REPOS:
+    for repo in repos:
         try:
             auth_check(repo, token=os.environ.get("HF_TOKEN"))
             out[repo] = "ok"
@@ -1526,7 +1533,7 @@ ANCHOR_SCANS: dict[str, dict] = {
 }
 #: anchor_fill options a run may set (`--anchor-options k=v,...`), and their checks.
 ANCHOR_OPTIONS = {
-    "arms": r"(refs|norefs|vace)(\+(refs|norefs|vace))*",
+    "arms": r"(refs|norefs|vace|splash)(\+(refs|norefs|vace|splash))*",
     "seeds": r"[1-8]",
     "prop_seeds": r"[1-4]",
     "anchor_steps": r"[1-9][0-9]?",
@@ -1548,6 +1555,8 @@ ANCHOR_OPTIONS = {
     "unknown_strength": r"0\.[0-9]+|1(\.0+)?",
     "reproject": r"true|false",
     "reproject_strength": r"0\.[0-9]+",
+    "solidity": r"(alpha|full)(\+(alpha|full))*",
+    "shape": r"true|false",
 }
 
 
@@ -1691,12 +1700,17 @@ def anchor_counts(options: dict[str, str], worst: bool = False) -> dict[str, int
     refs = any(a in arms for a in ("refs", "vace"))
     norefs = "norefs" in arms
     sequential = [a for a in arms if a != "vace"]
+    # Each solidity preset clones the refs and norefs arms after propagation: own updates.
+    presets = [p for p in options.get("solidity", "").split("+") if p]
+    cloned = [a for a in sequential if a in ("refs", "norefs")]
+    # The splash arm: its own anchors (a photo each, the same calls) and its own propagation.
+    photo_props = len([a for a in sequential if a in ("refs", "splash")])
     out = {
-        "anchor": anchors * seeds * int(refs),
+        "anchor": anchors * seeds * (int(refs) + int("splash" in arms)),
         "anchorNoRefs": anchors * seeds * int(norefs),
-        "prop": props * prop_seeds * int("refs" in sequential),
+        "prop": props * prop_seeds * photo_props,
         "propNoRefs": props * prop_seeds * int("norefs" in sequential),
-        "update": rounds * (anchors + props) * len(arms),
+        "update": rounds * (anchors + props) * (len(arms) + len(presets) * len(cloned)),
         "set": int(options.get("set_seeds", 2)) * int("vace" in arms),
     }
     return out
@@ -1721,7 +1735,10 @@ def estimate_anchor_cost(jobs: list[tuple[str, str]], options: dict[str, str]) -
             table[f"{name} editor{label}"] = factor * edit_s * rate_gpu
             table[f"{name} vace{label}"] = factor * set_s * rate_gpu
             table[f"{name} starts{label}"] = factor * starts * rate_gpu
-        usd[f"{name} L4"] = ANCHOR_JOB_MIN.get(scan, 60) / 60 * GPU_RATES["L4"]
+        presets = [p for p in options.get("solidity", "").split("+") if p]
+        minutes = ANCHOR_JOB_MIN.get(scan, 60) + SOLIDITY_JOB_MIN * len(presets)
+        minutes += SHAPE_JOB_MIN * int(options.get("shape") == "true")
+        usd[f"{name} L4"] = minutes / 60 * GPU_RATES["L4"]
         worst[f"{name} L4"] = ANCHOR_JOB_CAP_MIN * 60 * rate_l4
     worst["hung editor call"] = EDIT_CAP_S * rate_gpu
     if "vace" in options.get("arms", "refs+norefs+vace").split("+"):
@@ -1793,14 +1810,18 @@ def _run_anchor(
             f"the worst case ${estimate['worstUsd']} (estimated ${estimate['totalUsd']}) is more "
             f"than the ${budget_usd - spent_usd:.2f} left of the budget: not started"
         )
-    access = anchor_access.remote()
+    arms = options.get("arms", "refs+norefs+vace").split("+")
+    repos = [
+        r
+        for r in ANCHOR_REPOS
+        if ("Wan" not in r or "vace" in arms) and ("Splash" not in r or "splash" in arms)
+    ]
+    access = anchor_access.remote(repos)
     (out / "anchor-access.json").write_text(json.dumps(access, indent=1), encoding="utf-8")
     sys.stdout.write(f"model access: {json.dumps(access)}\n")
     refused = [r for r, v in access.items() if v != "ok"]
     if refused:
         raise SystemExit(f"the token cannot read {refused}: not started (no workaround)")
-    arms = options.get("arms", "refs+norefs+vace").split("+")
-    repos = [r for r in ANCHOR_REPOS if "Wan" not in r or "vace" in arms]
     seconds = anchor_prefetch.remote(repos)
     sys.stdout.write(f"weights fetched: {json.dumps(seconds)}\n")
     results, failed = [], []
