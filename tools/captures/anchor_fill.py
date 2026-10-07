@@ -2825,7 +2825,7 @@ def fuse(
                     "seconds": round(time.time() - t, 1),
                     **{
                         k: response["report"].get(k)
-                        for k in ("iterations", "meanDriftM", "gaussians")
+                        for k in ("iterations", "meanDriftM", "gaussians", "solidity")
                     },
                 }
             )

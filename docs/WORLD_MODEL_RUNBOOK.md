@@ -691,3 +691,73 @@ One dispatch, `anchor:spool` + `leaveout:spool`, with `arms=refs+norefs+splash`,
    splats with Apple's SHARP, so its training pairs are likely SHARP renders, and SHARP's own
    licence terms may bind what was trained on its outputs. Its training data is not
    published. Ask before shipping anything made with it; the variant is for judging by eye.
+
+#### Results (run 37551303121, about $4.90)
+
+**Shape under the flange: passes.**
+
+- The fit:
+  - the drum is 0.855 m in radius (3 mm residual), along the top's 10.8 degree tilt;
+  - the measured drum stops 0.37 m under the top;
+  - the underside is 0.094 m under the top;
+  - the flange is 1.568 m in radius.
+- 14,825 discs: 3,251 on the drum, 11,574 on the underside. 506 were skipped as already
+  measured, 45 were carved away by free space, and none are in free space.
+- Top face, from the 17 directions: `refs` alone is 0.0 % see-through (mean alpha 0.9987),
+  and `refs` with the shape is 0.0 % (0.9997). The scan alone is 1.7 % (0.887).
+- The pocket opacity test does not tell the states apart. The scan alone is already at most
+  4.6 % see-through there, because each ray ends on something else: the top's own gaussians
+  seen from below, or the drum's far side.
+- What tells them apart is where each ray first becomes opaque. This was measured offline
+  over 24 low views, with a 5 cm tolerance, as the share of pocket pixels that see behind
+  where the surface should be:
+
+  | state         | el -5 | el 5  | el 15 |
+  | ------------- | ----- | ----- | ----- |
+  | scan alone    | 64 %  | 36 %  | 9 %   |
+  | `refs`        | 29 %  | 14 %  | 0.6 % |
+  | `refs`, shape | 0.1 % | 0.3 % | 0.3 % |
+
+- The open air beside the drum: the shape leaves it as it was (mean see-through 0.535).
+  `refs` lowers it to 0.484 with or without the shape, because its fuzzy rim hangs into the
+  air.
+- The flange edge in the held-out photos: `refs` scores 16.797 dB and LPIPS 0.5879, and
+  `refs` with the shape 16.797 dB and 0.5876.
+- Over the whole held-out region, the scan plus the shape alone scores 11.85 dB and
+  LPIPS 0.454, against the scan's 10.89 dB and 0.471.
+
+**Solidity in the distil.**
+
+Top face from the 17 directions (worst see-through, lowest mean alpha), and the leave-out
+means over the held-out photos:
+
+| arm            | top face      | PSNR   | LPIPS | DreamSim |
+| -------------- | ------------- | ------ | ----- | -------- |
+| scan alone     | 1.7 %, 0.887  | 10.886 | 0.471 | 0.295    |
+| `refs`         | 0.0 %, 0.9987 | 15.879 | 0.625 | 0.268    |
+| `refs-alpha`   | 0.0 %, 0.9991 | 15.878 | 0.627 | 0.266    |
+| `refs-full`    | 0.0 %, 0.9990 | 15.871 | 0.613 | 0.266    |
+| `norefs`       | 0.15 %, 0.948 | 15.781 | 0.446 | 0.228    |
+| `norefs-alpha` | 0.03 %, 0.975 | 15.750 | 0.488 | 0.266    |
+| `norefs-full`  | 0.0 %, 0.994  | 15.723 | 0.560 | 0.284    |
+
+- `refs` was already solid, so the terms change little. `refs-full` passes (-0.008 dB,
+  -0.012 LPIPS).
+- The terms help the no-photo arm most. It stacks on the sharp measured top, and `alpha` or
+  `full` lift it over 0.95 mean alpha.
+- The same terms cost the no-photo arm LPIPS against itself: +0.043 with `alpha`, +0.114
+  with `full`. Both stay better than `refs` on LPIPS.
+- The swapped `refs` top is solid but soft. Its LPIPS on the held-out photos is worse than
+  the scan's.
+- In the coordinator's slab protocol, the far side at 15 degrees improves from 40.6 % (scan
+  alone) to 24-32 %. It cannot reach 5 %: that footprint includes the real air under the
+  flange.
+
+**Splash anchors: the gate kept none of the 32 frames (16 per job).**
+
+- The adapter redraws the whole frame as a new photo of a spool. It keeps neither the
+  render's camera nor its known pixels.
+- Known-pixel LPIPS was 0.77-0.98, against a limit of 0.3.
+- The homography found no camera in 21 frames, and the other 11 were 70-180 degrees off.
+- With no anchors, the arm is the photo propagation alone, so it was not published as the
+  adapter's variant.
