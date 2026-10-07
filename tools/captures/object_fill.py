@@ -121,13 +121,13 @@ BAND_BINS = 2
 BAND_MIN = 50
 #: The object's well-seen shell, by direction from the completed object's centre: bins this
 #: many degrees square, covered with at least this many of its known gaussians.
-SHELL_BIN_DEG = 5
+SHELL_BIN_DEG = 4
 SHELL_MIN = 2
 #: The silhouette: a generated gaussian a real camera would see (no farther than the scan's
 #: surface at its pixel) outside the object's mask there, grown by this many pixels at
 #: `MASK_WIDTH`, is removed: the object must not grow past the real silhouette.
-SILHOUETTE_GROW_PX = 1
-SILHOUETTE_SIGMAS = 1.5
+SILHOUETTE_GROW_PX = 0
+SILHOUETTE_SIGMAS = 2.0
 #: Strict free-space test: in front of the measured surface by more than this share of the
 #: depth (and the gaussian's own size) where the scan covers the pixel solidly.
 STRICT_SHARE = 0.02
@@ -162,6 +162,14 @@ LAYERS = {
     "trellis2": "objects-trellis2",
     "trellis": "objects-trellis",
     "standin": "objects-standin",
+}
+#: The model each method's evidence names.
+MODELS = {
+    "sam3d": "sam-3d-objects",
+    "pixal3d": "pixal3d",
+    "trellis2": "trellis.2-4b",
+    "trellis": "trellis-image-large",
+    "standin": "standin-ellipsoid",
 }
 RULE = (
     "objects the segmentation names ({concept}) completed by a 3D object-completion model "
@@ -603,7 +611,7 @@ class StandInGenerator:
             splats = Splats(
                 p,
                 np.tile([1.0, 0, 0, 0], (n, 1)),
-                np.full((n, 3), 0.02),
+                np.full((n, 3), 0.006),
                 np.tile(colour, (n, 1)),
                 np.full(n, 0.9),
             )
@@ -888,15 +896,18 @@ def silhouette_keep(
     camera's pixel is outside the mask (grown by `SILHOUETTE_GROW_PX`), a point no farther than
     the scan's rendered surface there (or where the scan shows nothing) would grow the object
     past its real silhouette, and goes. A point behind the surface (under the straw) stays.
+    Holes inside the mask (a renderer's gap, the stem's pit) count as inside.
     The test is made at the centre and `SILHOUETTE_SIGMAS` of its largest scale (`sigma`) to
     either side, each sample against the depth at its own pixel, so a kept gaussian's core does
     not spill past the mask (a point just behind the object's edge shows beside it)."""
+    from scipy.ndimage import binary_fill_holes
+
     width = width or MASK_WIDTH
     keep = np.ones(len(positions), bool)
     for m in masks:
         view = views[m.view]
         cam = fv.scaled(view.camera, width)
-        allowed = af._dilate(m.front, SILHOUETTE_GROW_PX)
+        allowed = af._dilate(binary_fill_holes(m.front), SILHOUETTE_GROW_PX)
         depth = depths.get(view.name)
         if depth is None:
             continue
@@ -1230,11 +1241,14 @@ def silhouettes(
     views: Sequence[gf.RealView],
     width: int | None = None,
 ) -> dict[str, Any]:
-    """Per object, over every real frame: the completed object's mask (its gaussians and its
-    part of the layer, drawn and in front of everything else: the rest of the scan and the
-    other objects' fills) against the segmentation's (its gaussians, drawn and in front of the
-    rest of the scan): IoU, and growth (the completed mask's pixels outside the real one, over
-    the real one's), also past a one-pixel edge."""
+    """Per object, over every real frame: the completed object's mask against the
+    segmentation's (its gaussians, drawn and in front of the rest of the scan). The measured
+    gaussians are untouched, so the completed mask is the segmentation's plus where the
+    object's fill is drawn in front of everything that is not the object (the rest of the
+    scan and the other objects' fills): IoU, and growth (its pixels outside the real mask,
+    over the real mask's outline, its holes filled), also past a one-pixel edge."""
+    from scipy.ndimage import binary_fill_holes
+
     if layer is None or not len(layer):
         return {}
     width = width or MASK_WIDTH
@@ -1260,13 +1274,18 @@ def silhouettes(
             )
             if real.sum() < 20:
                 continue
-            _, done = front_mask(
-                renderer, scene, mine, cam, draw(renderer, scene, cam, rest_c).depth
-            )
+            fill = offsets[part.target.instance]
+            shows = np.zeros_like(real)
+            if fill.size:
+                _, shows = front_mask(
+                    renderer, scene, fill, cam, draw(renderer, scene, cam, rest_c).depth
+                )
+            done = real | shows
             inter = float((real & done).sum())
             union = float((real | done).sum())
-            grow = float((done & ~real).sum()) / float(real.sum())
-            past = float((done & ~af._dilate(real, 1)).sum()) / float(real.sum())
+            outline = binary_fill_holes(real)
+            grow = float((done & ~outline).sum()) / float(real.sum())
+            past = float((done & ~af._dilate(outline, 1)).sum()) / float(real.sum())
             stats[part.target.instance].append(
                 (inter / max(union, 1.0), grow, int(real.sum()), past)
             )
@@ -1800,8 +1819,12 @@ def run(
             cams,
             tileset,
             layer_dir,
-            generator.name,
-            rule=RULE.format(concept=concept, model=generator.name, frames=f"1-{FRAMES}"),
+            f"{MODELS.get(generator.name, generator.name)}+registered",
+            rule=RULE.format(
+                concept=concept,
+                model=MODELS.get(generator.name, generator.name),
+                frames=f"1-{FRAMES}",
+            ),
             extra={
                 "provenance": "inferred-generated",
                 "method": generator.name,

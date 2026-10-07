@@ -1,6 +1,7 @@
 """The object round of the inferred fill (`object_fill`) on a synthetic scan, on the CPU: two
-squashed balls on a ground, their bottoms never captured, filmed from 40 and 60 degrees; the
-stand-in generator returns an ellipsoid in its own frame, turned and at unit size."""
+squashed balls sunk a little into the ground, their bottoms (below the ground) never captured,
+filmed from 40 and 60 degrees; the stand-in generator returns an ellipsoid in its own frame,
+turned and at unit size."""
 
 from __future__ import annotations
 
@@ -21,14 +22,19 @@ BALLS = [((0.0, 0.0), 0.5), ((1.15, 0.7), 0.3)]
 SQUASH = 0.6
 
 
+#: How far the balls' centres are above the ground, over their vertical radius: the lower
+#: part is in the ground (the straw), hidden from every camera.
+SINK = 0.5
+
+
 def _ball(centre: tuple[float, float], radius: float, n: int, seed: int) -> np.ndarray:
     k = np.arange(n) + 0.5
     phi = np.arccos(1 - 2 * k / n)
     theta = math.pi * (1 + 5**0.5) * k + seed
     unit = np.column_stack([np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)])
-    p = unit * [radius, radius, radius * SQUASH] + [centre[0], centre[1], radius * SQUASH]
-    # The bottom was never captured: nothing below a fifth of the height.
-    return p[p[:, 2] > 0.2 * radius * SQUASH * 2]
+    p = unit * [radius, radius, radius * SQUASH] + [centre[0], centre[1], SINK * radius * SQUASH]
+    # The bottom was never captured: nothing in the ground.
+    return p[p[:, 2] > 0.02]
 
 
 def scene() -> tuple[Splats, np.ndarray]:
@@ -37,12 +43,14 @@ def scene() -> tuple[Splats, np.ndarray]:
     gx, gy = np.meshgrid(g, g)
     ground = np.column_stack([gx.ravel(), gy.ravel(), np.zeros(gx.size)])
     for (cx, cy), r in BALLS:
-        ground = ground[np.hypot(ground[:, 0] - cx, ground[:, 1] - cy) > 0.8 * r]
+        # The ground stops where the ball comes out of it.
+        inside = r * math.sqrt(1 - SINK**2)
+        ground = ground[np.hypot(ground[:, 0] - cx, ground[:, 1] - cy) > 0.97 * inside]
     parts = [splats(ground, [0.75, 0.68, 0.4], size=0.05, seed=1)]
     ids = [np.ones(len(ground), np.int64)]
     for k, ((cx, cy), r) in enumerate(BALLS):
         p = _ball((cx, cy), r, int(2400 * r / 0.5), k)
-        shade = 0.6 + 0.4 * (p[:, 2] / (2 * r * SQUASH))
+        shade = 0.6 + 0.4 * (p[:, 2] / ((1 + SINK) * r * SQUASH))
         colour = np.column_stack([0.95 * shade, 0.5 * shade, 0.1 * shade])
         parts.append(splats(p, colour, size=0.025, seed=2 + k))
         ids.append(np.full(len(p), 2 + k, np.int64))
@@ -184,15 +192,14 @@ def test_the_whole_run_completes_the_undersides(tmp_path: Path, monkeypatch) -> 
     assert report["freeSpace"]["violations"] == 0
     layer = load_tileset(tmp_path / "out" / "objects-standin" / "inferred" / "tileset.json")
     assert len(layer) == report["evidence"]["gaussians"] > 0
-    # What is kept is the underside: below the lowest measured point of each ball, mostly.
-    low = layer.positions[:, 2] < 0.25
-    assert low.mean() > 0.6
+    # What is kept is the underside: in the ground, mostly.
+    assert (layer.positions[:, 2] < 0.05).mean() > 0.6
     for sil in report["silhouette"].values():
         # The edge pixels the scan half covers turn covered with the fill behind them; past
         # them the object does not grow.
         assert sil["meanIoU"] > 0.9 and sil["maxGrowthPastEdge"] < 0.01
     for part in report["parts"]["full"]:
         # (The stand-in is 4000 points: a 5-degree bin of its underside is often empty.)
-        assert part["underside"]["kept"] > 0.25 > 0.05 > part["underside"]["measured"]
+        assert part["underside"]["kept"] > 0.15 > 0.05 > part["underside"]["measured"]
     assert "mean" in report["heldOut"]
     assert (tmp_path / "out" / "renders" / "sheet-objects-standin.png").exists()
