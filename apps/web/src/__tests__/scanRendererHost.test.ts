@@ -10,6 +10,7 @@ import type { RigidMotion } from "@twin/world";
 
 import {
   FAR_BUDGET_SHARE,
+  REST_AFTER_MS,
   ScanRendererHost,
   prefetchScanDestination,
   type BackendModule,
@@ -548,6 +549,82 @@ describe("a scan seen from afar", () => {
     expect(r.renders.length).toBeGreaterThan(0);
     expect(r.renders.every((pose) => pose.farView === true)).toBe(true);
     expect(r.host.status().far).toBe(true);
+    r.host.destroy();
+  });
+});
+
+describe("a still view the budget held back", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(served), { status: 200 }))),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    served = TILESET;
+  });
+
+  it("refines past the motion budget once the camera is still, and swaps back when it moves", async () => {
+    // Two regions of 2M gaussians under a coarse root: 4M, past the desktop's 3M budget and
+    // within the 4.5M a still view may hold (REST_GROWTH). On the Camp scan the budget left
+    // tiles in view at 16 to 31 px for as long as the camera stayed still.
+    const heavy = {
+      ...TILESET,
+      root: {
+        ...TILESET.root,
+        extras: { gaussians: 100_000 },
+        children: TILESET.root.children.map((child) => ({
+          ...child,
+          extras: { gaussians: 2_000_000 },
+          children: [],
+        })),
+      },
+    };
+    const r = await rig({ tileset: heavy });
+    // Moving: the budget holds the cut at the root.
+    for (let i = 0; i < 20; i++) {
+      r.camera.positionWC = new Cartesian3(-20, -60 + i * 0.01, 10);
+      r.globe();
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    expect(r.host.status().tiles).toBe(1);
+    const budgets = r.budgets.length;
+    // Still for a moment: the regions are fetched and drawn, though nothing else wakes it.
+    await r.run(REST_AFTER_MS + 300);
+    await settle(r);
+    expect(r.host.status()).toMatchObject({ tiles: 2, gaussians: 4_000_000 });
+    // Moving again: the motion budget at the first re-plan, the root (kept loaded) back in.
+    r.camera.positionWC = new Cartesian3(-20, -59, 10);
+    await r.run(400, true);
+    expect(r.host.status().tiles).toBe(1);
+    // The renderer's own budget is left alone: PlayCanvas re-sorts every splat when it moves.
+    expect(r.budgets.length).toBe(budgets);
+    r.host.destroy();
+  });
+
+  it("a view the budget did not hold back draws nothing more once it is still", async () => {
+    const r = await rig();
+    await settle(r);
+    const before = r.renders.length;
+    r.camera.positionWC = new Cartesian3(-20, -59.5, 10);
+    await r.run(400, true);
+    const moved = r.renders.length;
+    expect(moved).toBeGreaterThan(before);
+    // Past the rest delay: no frame for a rest budget it has no use for.
+    await r.run(REST_AFTER_MS + 2000);
+    expect(r.renders.length).toBe(moved);
     r.host.destroy();
   });
 });

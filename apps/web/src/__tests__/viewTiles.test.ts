@@ -22,6 +22,7 @@ import {
 import {
   RETRY_FAILED_MS,
   TileStreamer,
+  centreWeight,
   chooseCut,
   type StreamHost,
   type View,
@@ -208,6 +209,35 @@ describe("the cut the scan viewer draws (REPLACE, merged parents)", () => {
         expect(gaussians).toBeLessThanOrEqual(Math.max(budget, 40_000));
       }
     }
+  });
+
+  it("refines what is in the middle of the view before the same at its edge", () => {
+    // Two equal regions, the same distance from the camera: one straight ahead, one off to
+    // the side near the frame's corner. Room for one refinement.
+    const region = (uri: string, x: number, y: number): TileNode => ({
+      ...tile(uri, 10_000, 1, [tile(`${uri}-a`, 50_000, 0), tile(`${uri}-b`, 50_000, 0)]),
+      bounds: { center: [x, y, 0], radius: 2 },
+    });
+    const ahead = region("ahead", 0, 40);
+    const aside = region("aside", 40 * Math.sin(0.55), 40 * Math.cos(0.55));
+    const tree: TileTree = {
+      refine: "REPLACE",
+      root: { ...tile("root", 1_000, 4, [aside, ahead]), bounds: null },
+    };
+    const view: View = {
+      ...viewFrom([0, 0, 0]),
+      centre: { forward: [0, 1, 0], halfDiagonal: 0.6 },
+    };
+    expect(cutOf(tree, view, 115_000)).toEqual(["ahead-a", "ahead-b", "aside"]);
+    expect(centreWeight({ center: [0, 40, 0], radius: 2 }, view)).toBe(1);
+    expect(
+      centreWeight({ center: aside.bounds?.center ?? [0, 0, 0], radius: 2 }, view),
+    ).toBeLessThan(1);
+    // Without a middle every tile in view counts alike.
+    expect(centreWeight({ center: [40, 0, 0], radius: 2 }, viewFrom([0, 0, 0]))).toBe(1);
+    // And the cut says the budget held it back.
+    expect(chooseCut(tree, view, 115_000).limited).toBe(true);
+    expect(chooseCut(tree, view, 1e9).limited).toBe(false);
   });
 
   it("never swaps in a tile with no count", () => {

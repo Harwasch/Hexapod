@@ -12,9 +12,12 @@
  * maximum), with two differences a phone needs:
  *
  * - **A gaussian budget, spent on the largest error first.** The same greedy as the static
- *   plan, ordered by *screen* error instead of geometric error, so the budget goes where the
- *   camera is looking and close by; refinement stops early once every tile is under
- *   `TARGET_ERROR_PX`, since there is nothing left to see.
+ *   plan, ordered by *screen* error instead of geometric error, and weighted towards the
+ *   middle of the view (`centreWeight`), so the budget goes where the camera is looking and
+ *   close by; refinement stops early once every tile is under `TARGET_ERROR_PX`, since there
+ *   is nothing left to see. When the budget stops it short (`limited`), a still view is given
+ *   more (ScanRendererHost's rest budget), so a coarse tile left beside fine ones while the
+ *   camera moves does not stay coarse once it stops.
  * - **Full coverage, coarse where unseen.** Cesium draws only tiles in the frustum; turning
  *   the camera then shows a hole until the new tiles arrive. Here a tile out of view stays
  *   in the cut at a coarse level (its error weighted down by `OFFSCREEN_WEIGHT`, not
@@ -37,10 +40,22 @@ export interface View {
   projection: number;
   /** Whether a tile's sphere is at least partly inside the view frustum. */
   visible(bounds: Sphere): boolean;
+  /**
+   * Where the middle of the view is: the camera's unit forward direction, and the angle from
+   * it to a corner of the frame (radians). Without it every tile in view counts alike.
+   */
+  centre?: { forward: [number, number, number]; halfDiagonal: number };
 }
 
 /** Refinement stops once every tile's error on screen is under this many CSS pixels. */
 export const TARGET_ERROR_PX = 2;
+/**
+ * A tile in view at a corner of the frame refines as if its error were this fraction of what
+ * it is, one across the middle as it is, smoothly between: under a tight budget the middle of
+ * the view, where the person looks, is the last to coarsen. Above `OFFSCREEN_WEIGHT`, so the
+ * weighting runs on down past the frame's edge.
+ */
+export const EDGE_WEIGHT = 0.75;
 /** A tile out of view refines as if its error were this fraction of what it is: the view
  *  gets the budget first, but what is around the camera stays close to as sharp, so turning
  *  round finds it loaded. At 0.15 every turn in place re-fetched what the last turn had just
@@ -85,27 +100,60 @@ export function screenError(tile: TileNode, view: View): number {
   return (tile.geometricError * view.projection) / Math.max(outside, floor);
 }
 
-/** How much refining `tile` is worth now: its screen error, weighted down when unseen. */
+/**
+ * How much refining `tile` is worth now: its screen error, weighted down when unseen, and
+ * towards the edge of the frame (`EDGE_WEIGHT`) when the view says where its middle is.
+ */
 export function priority(tile: TileNode, view: View): number {
   const error = screenError(tile, view);
-  return !tile.bounds || view.visible(tile.bounds) ? error : error * OFFSCREEN_WEIGHT;
+  if (!tile.bounds) return error;
+  if (!view.visible(tile.bounds)) return error * OFFSCREEN_WEIGHT;
+  return error * centreWeight(tile.bounds, view);
+}
+
+/** 1 for a tile across the middle of the view, falling to `EDGE_WEIGHT` at a frame corner. */
+export function centreWeight(bounds: Sphere, view: View): number {
+  const centre = view.centre;
+  if (!centre || !(centre.halfDiagonal > 0)) return 1;
+  const [ex, ey, ez] = view.eye;
+  const dx = bounds.center[0] - ex;
+  const dy = bounds.center[1] - ey;
+  const dz = bounds.center[2] - ez;
+  const distance = Math.hypot(dx, dy, dz);
+  if (distance <= bounds.radius) return 1;
+  const [fx, fy, fz] = centre.forward;
+  const cos = (dx * fx + dy * fy + dz * fz) / distance;
+  // The angle from the middle of the view to the nearest side of the tile's sphere.
+  const off = Math.acos(Math.max(-1, Math.min(1, cos))) - Math.asin(bounds.radius / distance);
+  const t = Math.max(0, Math.min(1, off / centre.halfDiagonal));
+  return 1 - (1 - EDGE_WEIGHT) * t * t;
 }
 
 /**
  * The cut to draw from `view`: the root, then repeatedly the tile with the largest priority
  * swapped for its children while that keeps the cut within `budget` gaussians (a swap that
  * does not fit is skipped, and smaller ones may still), until every tile left is under
- * `targetErrorPx`. The root is in it whatever it holds.
+ * `targetErrorPx`. The root is in it whatever it holds. `limited` says the budget held a swap
+ * back: the view would refine further with more (the overlay gives a still view more,
+ * ScanRendererHost's `REST_AFTER_MS`).
+ *
+ * Measured on the Camp scan (22.6M gaussians) from production's own views, this order is not
+ * what leaves a coarse tile beside fine ones: a cut refining everything above one error, the
+ * lowest that fits, comes out the same, because everything nearer and finer than the coarse
+ * tile already fills the budget. What does is the budget itself -- 3M at the arrival pose 30 m
+ * up left tiles at 16 px in view, 6M brings the worst to 7 px -- hence a still view's larger
+ * budget, not another order.
  */
 export function chooseCut(
   tree: TileTree,
   view: View,
   budget: number,
   targetErrorPx = TARGET_ERROR_PX,
-): { tiles: Set<TileNode>; gaussians: number } {
+): { tiles: Set<TileNode>; gaussians: number; limited: boolean } {
   const { root } = tree;
   const cut = new Set<TileNode>([root]);
   let spent = Number.isFinite(root.gaussians) ? root.gaussians : 0;
+  let limited = false;
   const open: { tile: TileNode; value: number }[] = [{ tile: root, value: priority(root, view) }];
   while (open.length > 0) {
     let best = 0;
@@ -119,7 +167,11 @@ export function chooseCut(
     if (tile.children.length === 0) continue;
     const children = tile.children.reduce((sum, child) => sum + child.gaussians, 0);
     const own = Number.isFinite(tile.gaussians) ? tile.gaussians : 0;
-    if (!Number.isFinite(children) || spent - own + children > budget) continue;
+    if (!Number.isFinite(children)) continue;
+    if (spent - own + children > budget) {
+      limited = true;
+      continue;
+    }
     spent += children - own;
     cut.delete(tile);
     for (const child of tile.children) {
@@ -127,7 +179,7 @@ export function chooseCut(
       open.push({ tile: child, value: priority(child, view) });
     }
   }
-  return { tiles: cut, gaussians: spent };
+  return { tiles: cut, gaussians: spent, limited };
 }
 
 /** One change to what is drawn: `add` goes on screen in the same frame `remove` comes off. */
@@ -264,6 +316,7 @@ export class TileStreamer<M> {
   private readonly broken = new Map<TileNode, { failures: number; retryAt: number }>();
   private readonly shown = new Set<TileNode>();
   private desired = new Set<TileNode>();
+  private budgetLimited = false;
   private destination: Destination | null = null;
   private clock = 0;
   /** Where the camera was at the last update, for eviction: what is near stays. */
@@ -321,6 +374,11 @@ export class TileStreamer<M> {
   /** Whether anything is still to fetch for the last view. */
   get busy(): boolean {
     return this.inFlight.size > 0;
+  }
+
+  /** Whether the budget held the last view's cut back from the target error (`chooseCut`). */
+  get limited(): boolean {
+    return this.budgetLimited;
   }
 
   /** Whether a flight's destination is being fetched ahead (`prefetchView`). */
@@ -386,7 +444,9 @@ export class TileStreamer<M> {
     ) {
       this.destination = null;
     }
-    this.desired = chooseCut(this.tree, view, budget, targetErrorPx).tiles;
+    const cut = chooseCut(this.tree, view, budget, targetErrorPx);
+    this.desired = cut.tiles;
+    this.budgetLimited = cut.limited;
     const isLoaded = (tile: TileNode): boolean => this.loaded.has(tile);
     let changed = false;
     let missing: TileNode[] = [];

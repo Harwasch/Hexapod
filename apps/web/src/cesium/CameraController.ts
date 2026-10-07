@@ -26,6 +26,7 @@ import type { Emitter } from "@/lib/emitter";
 import { isTyping } from "@/lib/hotkeys";
 import { throttle } from "@/lib/throttle";
 
+import { CameraOwnership } from "./cameraOwnership";
 import type { ArrivalPose } from "./flightRetarget";
 import { Glide, type GlideCarry, type GlidePose } from "./glide";
 import { plausibleGround } from "./placement";
@@ -165,6 +166,8 @@ function horizontal(vector: Cartesian3, up: Cartesian3, result: Cartesian3): Car
   return Cartesian3.normalize(result, result);
 }
 const scratchFrame = new Matrix4();
+const scratchBefore = new Cartesian3();
+const scratchBeforeDirection = new Cartesian3();
 const scratchCenter = new Cartesian2();
 const scratchGrabRay = new Ray();
 const scratchGrabHit = new Cartesian3();
@@ -222,6 +225,8 @@ export class CameraController {
   private current: ActiveGlide | null = null;
   /** The clock glides run on (ms; `setGlideClock`). */
   private glideClock: () => number = () => performance.now();
+  /** Who may move the camera: the person once they have touched it (cameraOwnership.ts). */
+  private readonly ownership = new CameraOwnership();
 
   constructor(
     private readonly viewer: CesiumWidget,
@@ -251,6 +256,11 @@ export class CameraController {
     controller.lookEventTypes = [];
     controller.zoomEventTypes = [CameraEventType.WHEEL, CameraEventType.PINCH];
     const canvas = viewer.canvas;
+    // The person's hand on the map, first of all: it takes the camera (cameraOwnership.ts).
+    // In the capture phase on the canvas's container, so it sees every wheel notch, including
+    // the ones the splat zoom below takes for itself.
+    const container = viewer.container as HTMLElement;
+    container.addEventListener("wheel", this.onUserWheel, { capture: true, passive: true });
     canvas.addEventListener("pointerdown", this.onPointerHeld);
     window.addEventListener("pointerup", this.onPointerReleased);
     window.addEventListener("pointercancel", this.onPointerReleased);
@@ -263,10 +273,16 @@ export class CameraController {
     window.addEventListener("pointerup", this.onPanEnd);
     window.addEventListener("pointercancel", this.onPanEnd);
     canvas.addEventListener("wheel", this.stopPanInertia, { passive: true });
+    window.addEventListener("pointermove", this.onUserDrag);
     // Capture, on the canvas's container: a wheel over a splat is handled here before
     // Cesium's own zoom (which listens on the canvas) ever sees it.
-    const container = viewer.container as HTMLElement;
     container.addEventListener("wheel", this.onSurfaceWheel, { capture: true, passive: false });
+    // CesiumJS's terrain collision acts only on the person's own motion once they have the
+    // camera, never on it at rest (`collide`).
+    // `update` is CesiumJS's own (private in its typings): called once a frame by the scene.
+    const internal = controller as unknown as { update: () => void };
+    const update = internal.update.bind(controller);
+    internal.update = () => this.collide(update);
     window.addEventListener("keydown", this.onPassKey);
     window.addEventListener("keyup", this.onPassKey);
     window.addEventListener("blur", this.onPassBlur);
@@ -278,6 +294,10 @@ export class CameraController {
     canvas.addEventListener("wheel", this.interruptGlide, { passive: true });
     this.unsubscribe.push(
       () => {
+        // The prototype's update again.
+        delete (controller as { update?: unknown }).update;
+        container.removeEventListener("wheel", this.onUserWheel, { capture: true });
+        window.removeEventListener("pointermove", this.onUserDrag);
         container.removeEventListener("wheel", this.onSurfaceWheel, { capture: true });
         window.removeEventListener("keydown", this.onPassKey);
         window.removeEventListener("keyup", this.onPassKey);
@@ -529,12 +549,17 @@ export class CameraController {
   /**
    * Camera floor for meshes: Cesium's own collision against 3D Tiles ray-casts every loaded
    * tile's triangles on the CPU each frame (hundreds of milliseconds on a city mesh), so the
-   * tilesets never enable it. Instead, once the camera has come to rest, the drawn surface
-   * straight below it is read from the depth buffer (one pick pass), and a camera that ended
-   * up under it or too close is eased back up. Wheel zoom already stops at the surface under
-   * the cursor, so this only catches a pan or orbit that dipped below the ground.
+   * tilesets never enable it. Instead, once a camera the app put somewhere (a fly-to) has
+   * come to rest, the drawn surface straight below it is read from the depth buffer (one pick
+   * pass), and a camera that ended up under it or too close is eased back up.
+   *
+   * Never once the person has the camera (cameraOwnership.ts): it used to run after every
+   * gesture too, and lifted a close-up the wheel had just made -- up to 40 m, onto whatever
+   * the pick pass found above the camera (on production, 19.5 m onto a coarse world tile
+   * beside the Pumpkin scan, 3 s after the wheel stopped).
    */
   private keepAboveDrawnSurface(): void {
+    if (!this.ownership.mayCorrect) return;
     if (!this.scene.sampleHeightSupported) return;
     // A height sample is a pick pass plus a GPU read-back (measured as a third of a slow
     // drag's main-thread time when it fired between the mouse events of one gesture).
@@ -623,11 +648,66 @@ export class CameraController {
    */
   private readonly onPointerHeld = (): void => {
     this.pointerHeld = true;
+    this.ownership.hold(true, performance.now());
   };
 
   private readonly onPointerReleased = (): void => {
+    if (this.pointerHeld) this.ownership.hold(false, performance.now());
     this.pointerHeld = false;
   };
+
+  /** A wheel notch over the map: the person has the camera. */
+  private readonly onUserWheel = (): void => {
+    this.ownership.input(performance.now());
+  };
+
+  /** A drag on the map (or a pinch) is still moving the camera while the pointer moves. */
+  private readonly onUserDrag = (): void => {
+    if (this.pointerHeld) this.ownership.input(performance.now());
+  };
+
+  /**
+   * CesiumJS's controller update (`ScreenSpaceCameraController.update`), once a frame: the
+   * person's gestures and their inertia, and the terrain collision. On a camera the person
+   * has and is not moving, the collision is left out for the frame: it would lift the camera
+   * when a finer terrain tile lands under a close-up after the wheel has stopped -- the
+   * camera moving by itself a moment after the person stopped it (cameraOwnership.ts).
+   */
+  private collide(update: () => void): void {
+    const controller = this.scene.screenSpaceCameraController;
+    const camera = this.viewer.camera;
+    const collide = controller.enableCollisionDetection;
+    if (collide && !this.ownership.collisionAllowed(performance.now()))
+      controller.enableCollisionDetection = false;
+    const before = Cartesian3.clone(camera.positionWC, scratchBefore);
+    const direction = Cartesian3.clone(camera.directionWC, scratchBeforeDirection);
+    try {
+      update();
+    } finally {
+      controller.enableCollisionDetection = collide;
+    }
+    // Coasting on the gesture's inertia is still the person moving it.
+    this.ownership.controllerMoved(
+      !Cartesian3.equalsEpsilon(before, camera.positionWC, 0, 1e-6) ||
+        !Cartesian3.equalsEpsilon(direction, camera.directionWC, 1e-9),
+    );
+  }
+
+  /**
+   * Whether the person has touched the camera since the app last flew it: from then nothing
+   * but they move it (cameraOwnership.ts). A fly-to's settle on a better pose asks first.
+   */
+  get userHasCamera(): boolean {
+    return this.ownership.userHasCamera;
+  }
+
+  /**
+   * The person takes the camera without a gesture on the map: walking or flying in explore
+   * mode, whose own physics moves it each frame.
+   */
+  takenByUser(): void {
+    this.ownership.input(performance.now());
+  }
 
   private readonly onOrbitStart = (event: PointerEvent): void => {
     if (!this.scene.screenSpaceCameraController.enableInputs) return;
@@ -768,6 +848,7 @@ export class CameraController {
    * negative towards straight down) and stops at both.
    */
   orbit(pivot: Cartesian3, headingRad: number, pitchDeltaRad: number): void {
+    this.ownership.input(performance.now());
     this.endGlide("cancel");
     const camera = this.viewer.camera;
     const pitch = CesiumMath.toDegrees(camera.pitch);
@@ -860,6 +941,7 @@ export class CameraController {
 
   /** Slides the camera parallel to the ground by a screen-space amount (pixels at the view centre). */
   pan(dxPx: number, dyPx: number): void {
+    this.ownership.input(performance.now());
     this.endGlide("cancel");
     const camera = this.viewer.camera;
     const pivot = this.pivotAtCenter();
@@ -883,6 +965,7 @@ export class CameraController {
 
   /** Moves toward (factor < 1) or away from (factor > 1) the view centre, keeping it centred. */
   zoomToward(pivot: Cartesian3, factor: number): void {
+    this.ownership.input(performance.now());
     this.endGlide("cancel");
     const camera = this.viewer.camera;
     const toPivot = Cartesian3.subtract(pivot, camera.positionWC, scratchDirection);
@@ -1007,6 +1090,7 @@ export class CameraController {
 
   /** Instant view without animation (used for the initial Earth view). */
   setView(longitude: number, latitude: number, height: number, heading = 0, pitch = -90): void {
+    this.ownership.appFlew();
     this.viewer.camera.setView({
       destination: Cartesian3.fromDegrees(longitude, latitude, height),
       orientation: {
@@ -1034,6 +1118,7 @@ export class CameraController {
   }
 
   flyTo(longitude: number, latitude: number, height: number, options: FlyOptions = {}): void {
+    this.ownership.appFlew();
     this.flightCount += 1;
     const pose = this.pose();
     const heading = options.heading ?? pose.heading;
@@ -1066,6 +1151,7 @@ export class CameraController {
    * flights (`preloadFlightDestinations`): the glide stands in for one on the camera.
    */
   glide(pose: GlidePose, options: GlideOptions = {}): GlideHandle {
+    this.ownership.appFlew();
     this.flightCount += 1;
     // A glide that replaces one under way takes its motion over rather than stopping dead.
     const carry = this.motion();
@@ -1236,7 +1322,8 @@ export class CameraController {
       return;
     }
     const height = surfacedHeight(at.height, terrain);
-    if (height === null || this.current) return;
+    // A hand on the map since the landing has the camera, moved or not.
+    if (height === null || this.current || !this.ownership.mayCorrect) return;
     const untouched =
       Cartesian3.distance(position, camera.positionWC) < 0.01 && camera.heading === heading;
     if (!untouched) return;
@@ -1272,6 +1359,7 @@ export class CameraController {
     north: number,
     options: FlyOptions = {},
   ): void {
+    this.ownership.appFlew();
     this.flightCount += 1;
     this.viewer.camera.flyTo({
       destination: Rectangle.fromDegrees(west, south, east, north),
@@ -1337,6 +1425,7 @@ export class CameraController {
     sphere: BoundingSphere,
     options: FlyOptions & { rangeMultiplier?: number } = {},
   ): void {
+    this.ownership.appFlew();
     this.flightCount += 1;
     const range = this.arrivalRange(sphere, options.rangeMultiplier);
     const pitch = CesiumMath.toRadians(options.pitch ?? DEFAULT_ARRIVAL_PITCH);
@@ -1376,6 +1465,7 @@ export class CameraController {
 
   /** Rotates the view so north is up while keeping the position and tilt. */
   resetNorth(): void {
+    this.ownership.appFlew();
     this.flightCount += 1;
     const camera = this.viewer.camera;
     camera.flyTo({
@@ -1388,6 +1478,7 @@ export class CameraController {
 
   /** Looks straight down from the current position (feels like a 2D map). */
   topDown(): void {
+    this.ownership.appFlew();
     this.flightCount += 1;
     const camera = this.viewer.camera;
     const target = this.distanceToSurfaceAtCenter();
@@ -1415,6 +1506,7 @@ export class CameraController {
   }
 
   zoomBy(factor: number): void {
+    this.ownership.input(performance.now());
     const distance = this.distanceToSurfaceAtCenter() ?? this.pose().altitude;
     const amount = distance * factor;
     if (amount > 0) this.viewer.camera.zoomIn(amount);
@@ -1423,6 +1515,7 @@ export class CameraController {
 
   /** Home: the whole planet, oriented towards the given longitude. */
   flyHome(longitude = -110, latitude = 30): void {
+    this.ownership.appFlew();
     this.flightCount += 1;
     this.viewer.camera.flyTo({
       destination: Cartesian3.fromDegrees(longitude, latitude, 18_000_000),

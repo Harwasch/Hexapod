@@ -68,15 +68,26 @@ What gets cut depends on the representation:
   over the opaque globe with a depth test, so the ground layer simply covers the imagery and
   nothing fights. Cutting the terrain was tried first and leaves a see-through hole to space
   wherever the capture is sparse: tile bounding boxes include outlier splats, so no
-  tile-derived footprint is tight enough to avoid it.
+  tile-derived footprint is tight enough to avoid it. The cut is the catalog footprint plus
+  an outline round each of the scan's tall things (`scanFootprint.ts`: what stands more than
+  1.5 m over the ground the scan rests on, from its root tile, widened by 0.5 m and a fifth
+  of its height), so the world's own copy of a scanned tree does not stand beside it. A scan
+  of open ground has none, and cuts only its footprint.
 
 Tilesets never set `enableCollision`: Cesium then ray-casts every loaded tile's triangles on
 the CPU every frame to find the height under the camera (measured 130 ms per frame on the
 Google world and 400 ms beside the AGI drone mesh). The camera floor over meshes is
-`CameraController.keepAboveDrawnSurface`: 250 ms after a gesture ends, one depth sample
-(`scene.sampleHeight`) under the camera, and a 0.35 s ease back up when the camera ended up
-below the surface plus the zoom floor. Wheel zoom already stops at the surface under the
-cursor. Terrain collision stays on for the globe (cheap, CPU heightmap).
+`CameraController.keepAboveDrawnSurface`: 250 ms after a flight the app made comes to rest,
+one depth sample (`scene.sampleHeight`) under the camera, and an eased lift when the camera
+ended up below the surface plus the zoom floor. Wheel zoom already stops at the surface under
+the cursor. Terrain collision stays on for the globe (cheap, CPU heightmap).
+
+Once the person has touched the camera (a wheel, press, drag, pinch, key or walk), nothing but
+they move it until the app flies it again (`cameraOwnership.ts`): no floor lift, no surfacing,
+no settle on a fly-to's better pose, and CesiumJS's terrain collision only while they are
+moving it (the gesture and its inertia), where it stops the camera at the ground. Left on at
+rest, it lifted a close-up onto each finer terrain tile that landed under it after the wheel
+had stopped.
 
 ## Placing a site's model: clamp and runtime scale
 
@@ -269,6 +280,13 @@ tileset hidden for its frame and solids. The overlay is held to the globe's rule
   where that is lower. A 2× display on the performance preset used to blend every splat over
   four times the globe's pixels. PlayCanvas's smallest kept splat stays half a CSS pixel, and
   none is culled for size in a scan seen from afar (a quarter of the budget instead).
+- **A still view refines past the motion budget.** The tile cut (`view/stream.ts`) refines by
+  screen error, weighted towards the middle of the view, within the adaptive budget; when
+  that budget stops it short, 600 ms of stillness lets it grow to 1.5 times the budget,
+  within the device's ceiling (4.5M on a desktop), and the next gesture swaps back. On the
+  Camp scan (22.6M gaussians) the 3M budget left tiles in view at 16 to 31 px beside
+  full-detail neighbours for as long as the camera stayed still; refining in another order
+  picks the same tiles, the budget is what binds.
 - **Tile work is budgeted.** Decoding happens in workers (PlayCanvas's Morton reorder too);
   what must run on the main thread (building a PlayCanvas resource, digesting a Spark tile)
   runs within 4 ms a frame while the camera moves, 12 ms at rest (`tileWork.ts`). A phone keeps

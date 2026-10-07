@@ -183,6 +183,8 @@ function harness() {
     /** Every flight started, as CameraController counts them; a test adds another's. */
     flights: 0,
     isMoving: false,
+    /** A hand on the map since the app last flew it (CameraController.userHasCamera). */
+    userHasCamera: false,
     refreshPose: vi.fn(),
     setObjectScale: vi.fn(),
     durationFor: () => 4,
@@ -708,7 +710,7 @@ describe("SiteManager.flyTo without a bookmark", () => {
     expect(flights).toHaveLength(1);
   });
 
-  it("never moves a camera somebody has moved since it landed, or another flight has", async () => {
+  it("never moves a camera somebody has touched since it landed, or another flight has", async () => {
     const touched = async (take: (h: ReturnType<typeof harness>) => void) => {
       const h = harness();
       const late = deferred<number>();
@@ -742,6 +744,11 @@ describe("SiteManager.flyTo without a bookmark", () => {
       camera.flights += 1;
     });
     expect(taken).toBe(1);
+    // A hand on the map that has not moved it: a press, or a wheel notch the floor stopped.
+    const held = await touched(({ camera }) => {
+      camera.userHasCamera = true;
+    });
+    expect(held).toBe(1);
   });
 
   it("frames a placed scan at its placement origin, at the size of its ground, not its floaters", async () => {
