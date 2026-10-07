@@ -94,9 +94,16 @@ FRAME_SEPARATION_DEG = 50.0
 #: A frame whose mask touches the photo's edge over more than this share of its border
 #: pixels is cut off and not used.
 EDGE_SHARE = 0.02
+#: The mask sent is opened by a disc this share of the mask's size across (`clean_mask`).
+MASK_OPEN_SHARE = 0.03
 #: The photo crop sent: the mask's box padded by this share of its size, at most this wide.
 CROP_PAD = 0.2
 CROP_MAX = 1024
+#: A candidate fitting within this factor of the best one's error may be chosen for being
+#: more complete underneath (`underside_share`).
+FIT_SLACK = 1.3
+#: The underside: directions more than this far below the horizontal from the object's centre.
+UNDERSIDE_DEG = 45.0
 #: Registration: yaw steps, ICP iterations, the share of correspondences kept; an object
 #: whose best candidate fits worse than `MAX_ERROR` (trimmed mean distance over its size) is
 #: left unfilled.
@@ -452,6 +459,27 @@ def pointmap(depth: np.ndarray, alpha: np.ndarray, camera: Camera) -> np.ndarray
     return np.stack([-x, -y, z], axis=-1)
 
 
+def clean_mask(mask: np.ndarray) -> np.ndarray:
+    """A model's mask: opened by a disc `MASK_OPEN_SHARE` of the mask's size across (thin
+    straw the segmentation gave the object goes, or the model makes it part of the object),
+    its largest piece, holes filled."""
+    import cv2
+    from scipy.ndimage import binary_fill_holes, label
+
+    ys, xs = np.nonzero(mask)
+    if ys.size < 50:
+        return mask
+    size = max(ys.max() - ys.min(), xs.max() - xs.min()) + 1
+    k = max(3, int(round(MASK_OPEN_SHARE * size)) | 1)
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    opened = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, disc) > 0
+    labels, n = label(opened)
+    if n == 0:
+        return mask
+    biggest = 1 + int(np.argmax(np.bincount(labels.reshape(-1))[1:]))
+    return binary_fill_holes(labels == biggest)
+
+
 def frame_crop(
     view: gf.RealView,
     renderer: Any,
@@ -473,6 +501,7 @@ def frame_crop(
     _, front = front_mask(renderer, scene, target.rows, cam, whole.depth)
     if front.sum() < 50:
         return None
+    front = clean_mask(front)
     x0, y0, x1, y1 = crop_box(front)
     rgb = photo[y0:y1, x0:x1]
     alpha = (front[y0:y1, x0:x1] * 255).astype(np.uint8)
@@ -901,6 +930,17 @@ def _direction_bins(d: np.ndarray) -> np.ndarray:
     return i * n_az + j
 
 
+def underside_share(points: np.ndarray, centre: np.ndarray) -> float:
+    """The share of the underside's direction bins (more than `UNDERSIDE_DEG` below the
+    horizontal from `centre`) that hold points: how complete an object is underneath."""
+    n_el, n_az = 180 // SHELL_BIN_DEG, 360 // SHELL_BIN_DEG
+    rows = int((90 - UNDERSIDE_DEG) // SHELL_BIN_DEG)
+    held = np.zeros(n_el * n_az, bool)
+    if len(points):
+        held[np.unique(_direction_bins(np.asarray(points) - centre))] = True
+    return float(held.reshape(n_el, n_az)[:rows].mean())
+
+
 def shell_coverage(centre: np.ndarray, shell: np.ndarray) -> np.ndarray:
     """Per direction bin from `centre` (`_direction_bins`), whether the object's well-seen
     measured surface (`shell`) is there: `SHELL_MIN` points or more, closed over single-bin
@@ -942,10 +982,10 @@ def unseen(
 
 def colour_transfer(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Per channel a gain and offset taking `src`'s mean and spread to `dst`'s (the gain
-    within 0.5-2): a regression would shrink a texture that correlates little with the
+    within 0.67-1.5): a regression would shrink a texture that correlates little with the
     scan's to its mean."""
     sx, sy = src.std(axis=0), dst.std(axis=0)
-    gain = np.clip(np.where(sx > 1e-6, sy / np.maximum(sx, 1e-6), 1.0), 0.5, 2.0)
+    gain = np.clip(np.where(sx > 1e-6, sy / np.maximum(sx, 1e-6), 1.0), 0.67, 1.5)
     return gain, dst.mean(axis=0) - gain * src.mean(axis=0)
 
 
@@ -1053,7 +1093,7 @@ def complete_target(
     if body.size < 30:
         body = rows
     info: dict[str, Any] = {"target": target.to_json(), "candidates": []}
-    best: tuple[float, Generated, Similarity, dict] | None = None
+    fitted: list[tuple[float, float, Generated, Similarity, dict]] = []
     for cand in candidates:
         entry: dict[str, Any] = {"key": cand.key, **{k: v for k, v in cand.info.items()}}
         if cand.splats is None or len(cand.splats) < 50:
@@ -1071,13 +1111,18 @@ def complete_target(
             info["candidates"].append(entry)
             continue
         entry["registration"] = reg
+        moved = t.apply(g.positions)
+        lo, hi = np.percentile(moved, 1, axis=0), np.percentile(moved, 99, axis=0)
+        entry["underside"] = round(underside_share(moved, (lo + hi) / 2), 4)
         info["candidates"].append(entry)
-        if best is None or reg["error"] < best[0]:
-            best = (reg["error"], cand, t, reg)
-    if best is None:
+        fitted.append((reg["error"], entry["underside"], cand, t, reg))
+    if not fitted:
         info["skipped"] = "no candidate registered"
         return Part(target, None, np.zeros(0), info)
-    err, cand, t, reg = best
+    # Among the candidates that fit nearly as well as the best, the most complete underneath.
+    floor = min(f[0] for f in fitted)
+    good = [f for f in fitted if f[0] <= max(FIT_SLACK * floor, floor + 0.003)]
+    err, _, cand, t, reg = max(good, key=lambda f: (f[1], -f[0]))
     info["chosen"] = cand.key
     if err > MAX_ERROR:
         info["skipped"] = (
@@ -1130,6 +1175,11 @@ def complete_target(
     }
     info["seenSide"] = int(seen_side.sum())
     info["kept"] = int(kept.sum())
+    info["underside"] = {
+        "generated": round(underside_share(world.positions, centre), 4),
+        "kept": round(underside_share(world.positions[kept], centre), 4),
+        "measured": round(underside_share(measured.positions[known_body], centre), 4),
+    }
     # Colour: matched on the band where the kept part begins: the covered directions next to
     # an uncovered one, against the scan's colour in the same direction.
     colours, cinfo = colour_band(world, kept, covered, bins, centre, measured, known_body)
@@ -1181,10 +1231,10 @@ def silhouettes(
     width: int | None = None,
 ) -> dict[str, Any]:
     """Per object, over every real frame: the completed object's mask (its gaussians and its
-    part of the layer, where they are the front surface of the scan with the layer) against
-    the segmentation's (its gaussians, the front surface of the scan): IoU, and growth (the
-    completed mask's pixels outside the real one, over the real one's), also past a one-pixel
-    edge (where a half-covered edge pixel of the scan turns covered with the layer behind it)."""
+    part of the layer, drawn and in front of everything else: the rest of the scan and the
+    other objects' fills) against the segmentation's (its gaussians, drawn and in front of the
+    rest of the scan): IoU, and growth (the completed mask's pixels outside the real one, over
+    the real one's), also past a one-pixel edge."""
     if layer is None or not len(layer):
         return {}
     width = width or MASK_WIDTH
@@ -1197,17 +1247,22 @@ def silhouettes(
         start += size
     out: dict[str, Any] = {}
     stats: dict[int, list[tuple[float, float, int, float]]] = {p.target.instance: [] for p in parts}
+    everything = np.arange(len(scene))
     for view in views:
         cam = fv.scaled(view.camera, width)
-        whole_m = renderer(measured, cam).depth
-        whole_c = renderer(scene, cam).depth
         for part in parts:
             rows = part.target.rows
-            _, real = front_mask(renderer, measured, rows, cam, whole_m)
+            mine = np.concatenate([rows, offsets[part.target.instance]])
+            rest_m = np.setdiff1d(np.arange(n), rows, assume_unique=True)
+            rest_c = np.setdiff1d(everything, mine, assume_unique=True)
+            _, real = front_mask(
+                renderer, measured, rows, cam, draw(renderer, measured, cam, rest_m).depth
+            )
             if real.sum() < 20:
                 continue
-            both = np.concatenate([rows, offsets[part.target.instance]])
-            _, done = front_mask(renderer, scene, both, cam, whole_c)
+            _, done = front_mask(
+                renderer, scene, mine, cam, draw(renderer, scene, cam, rest_c).depth
+            )
             inter = float((real & done).sum())
             union = float((real | done).sum())
             grow = float((done & ~real).sum()) / float(real.sum())
@@ -1383,11 +1438,14 @@ def sheet(
     parts: Sequence[Part],
     title: str,
     path: Path,
+    around: np.ndarray | None = None,
 ) -> None:
     """Per object, from low side views, a 45-degree view and straight below (looking up):
     the measured scan, the completed scan, the measured object alone, the completed object
     alone with the inferred part highlighted (purple, as the viewer's Highlight shows it), and
-    the inferred part alone in its own colours."""
+    the inferred part alone in its own colours. The views' azimuths are counted from the
+    object's outward direction from `around` (the capture's focus): the first looks at the
+    side facing away from the capture, the one its cameras saw least."""
     from PIL import Image
 
     rows = []
@@ -1409,7 +1467,11 @@ def sheet(
             )
         obj_lit = obj if lit is None else Splats.concat([obj, lit])
         for label, el, az in SHEET_VIEWS:
-            cam = _view_camera(t, el, az)
+            out_az = 0.0
+            if around is not None:
+                d = t.centre - np.asarray(around, np.float64)
+                out_az = math.degrees(math.atan2(d[1], d[0]))
+            cam = _view_camera(t, el, (out_az + az) % 360)
             tiles = []
             for name, splats in (
                 ("scan", measured),
@@ -1550,7 +1612,9 @@ def requests_for(
         if not crops:
             log(f"object {target.instance}: no usable frame")
             continue
-        groups = [[c] for c in crops] if per_frame else [crops]
+        groups = [[c] for c in crops]
+        if not per_frame and len(crops) > 1:
+            groups = [crops, *groups]
         for group in groups:
             for seed in seeds:
                 key = f"o{target.instance}-{'+'.join(c['view'] for c in group)}-s{seed}"
@@ -1773,6 +1837,7 @@ def run(
         arm.parts,
         f"{scan}: {layer_name} ({generator.name})",
         out / "renders" / f"sheet-{layer_name}.png",
+        around=full.focus.centre,
     )
     timings["sheetS"] = round(time.time() - t0, 1)
     timings["totalS"] = round(time.time() - started, 1)

@@ -207,10 +207,11 @@ trellis_image = (
     .add_local_file(LOCAL_CAPTURES / "object_models.py", "/root/object_models.py")
 )
 #: What the guard plans with: a TRELLIS call (one to three 518-px frames, 12 + 12 steps) on an
-#: L4, its load (weights from the volume, DINOv2 through torch.hub), the idle tail and the cap.
+#: L4 (run 37550643965: 6-7 s each), its load (weights from the volume, DINOv2 through
+#: torch.hub; 54-74 s), the idle tail and the cap.
 GEN_GPU = {"trellis": "L4"}
-GEN_CALL_S = {"trellis": 60.0}
-GEN_LOAD_S = 300.0
+GEN_CALL_S = {"trellis": 15.0}
+GEN_LOAD_S = 180.0
 GEN_IDLE_S = 60
 GEN_CAP_S = 900
 GEN_CONTAINERS = 1
@@ -331,9 +332,11 @@ objects_job_image = (
 JOB_MIN = 12
 JOB_CAP_MIN = 75
 #: Objects and setups the estimate plans for: 4 objects (two large, two small), two setups
-#: (every camera; the leave-out's), the frames shared in about a third of them.
+#: (every camera; the leave-out's), the frames shared in about a third of them; per object
+#: and seed, all its frames together and each alone (up to 1 + 3 requests).
 PLAN_OBJECTS = 4
 PLAN_SETUPS = 1.7
+PLAN_GROUPS = 4
 WORST_FACTOR = 1.5
 
 
@@ -576,8 +579,8 @@ def estimate_cost(jobs: list[str], method: str, options: dict) -> dict:
     rate_l4 = GPU_RATES["L4"] / 3600
     usd, worst = {}, {}
     for job in jobs:
-        calls = PLAN_OBJECTS * PLAN_SETUPS * seeds
-        worst_calls = 5 * 2 * seeds
+        calls = PLAN_OBJECTS * PLAN_SETUPS * seeds * PLAN_GROUPS
+        worst_calls = 5 * 2 * seeds * PLAN_GROUPS
         start = GEN_CONTAINERS * (GEN_LOAD_S + GEN_IDLE_S)
         usd[f"{job} {method} calls"] = calls * GEN_CALL_S[method] * rate
         usd[f"{job} {method} starts"] = start * rate

@@ -188,6 +188,11 @@ def test_the_whole_run_completes_the_undersides(tmp_path: Path, monkeypatch) -> 
     low = layer.positions[:, 2] < 0.25
     assert low.mean() > 0.6
     for sil in report["silhouette"].values():
-        assert sil["meanIoU"] > 0.9 and sil["maxGrowth"] < 0.05
+        # The edge pixels the scan half covers turn covered with the fill behind them; past
+        # them the object does not grow.
+        assert sil["meanIoU"] > 0.9 and sil["maxGrowthPastEdge"] < 0.01
+    for part in report["parts"]["full"]:
+        # (The stand-in is 4000 points: a 5-degree bin of its underside is often empty.)
+        assert part["underside"]["kept"] > 0.25 > 0.05 > part["underside"]["measured"]
     assert "mean" in report["heldOut"]
     assert (tmp_path / "out" / "renders" / "sheet-objects-standin.png").exists()
