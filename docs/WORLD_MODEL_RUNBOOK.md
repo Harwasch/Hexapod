@@ -836,3 +836,28 @@ The gate:
   10 CIE Lab units of the photos' own (`colour_offset`);
 - after the distil, each kept anchor re-rendered at 20 dB or more;
 - then the top-face test and the leave-out against the same run's `refs`.
+
+**Results (run 37566525560, about $2.17): no frame kept, nothing published.**
+
+| step (32 frames, both jobs) | count |
+| --------------------------- | ----- |
+| returned                    | 32    |
+| camera found                | 23    |
+| within 2 degrees            | 18    |
+| colour within 10 Lab units  | 21    |
+| camera and colour both pass | 17    |
+| known-pixel LPIPS under 0.3 | 0     |
+| kept                        | 0     |
+
+- The repaint is the best yet:
+  - one coherent, photographic top in each frame at the render's own camera (0.02-3.3
+    degrees off);
+  - sharp planks, the bolts and the big holes where the photo has them;
+  - mostly the measured top's tone (colour 4.2-13.1 Lab units off).
+- In these close anchor views the top fills most of the frame, so the region, its weak
+  fringe and the two-token feather took most of it. 55-69 % of the drawn pixels changed by
+  more than 20 levels. Only the black background stayed exactly as rendered.
+- Known pixels were therefore few, and all near the region's edge, where LPIPS's receptive
+  field sees the repaint. Their LPIPS was 0.35-0.49, so every seed failed.
+- Leave-out against `refs` (no anchor kept, so photo propagation only): +0.05 dB, -0.003
+  LPIPS. Top face: 0.07 % worst, mean alpha 0.9991.
