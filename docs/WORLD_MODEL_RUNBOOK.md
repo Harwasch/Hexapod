@@ -817,3 +817,22 @@ own adaptation. Two arms (`anchor_fill.SPLASH_ARMS`), beside `refs` as the basel
   - Leave-out against the same run's `refs`: -0.14 dB (15.843 against 15.988) and -0.005
     LPIPS (0.631 against 0.636).
   - With one kept anchor in the published job, it passes every gate.
+
+#### `splash-region` (S3)
+
+The lock holds the camera. The patchwork came from a scattered made region, so S3 makes the
+whole weak surface of each hole at once (`hole_region`):
+
+- the rebuilt top surface's footprint in the view;
+- the weak, unknown and pocket pixels joined to it within 32 pixels;
+- closed, with its holes filled;
+- everything outside it locked, feathered over two tokens.
+
+The gate:
+
+- known-pixel LPIPS under 0.3, now measured outside the region only;
+- the camera within 2 degrees;
+- the repaint keeps the measured top's tone: its mean colour over the surface's pixels within
+  10 CIE Lab units of the photos' own (`colour_offset`);
+- after the distil, each kept anchor re-rendered at 20 dB or more;
+- then the top-face test and the leave-out against the same run's `refs`.

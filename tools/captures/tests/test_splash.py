@@ -330,3 +330,58 @@ def test_the_asis_gate_reports_and_keeps_an_aligned_seed() -> None:
         1,
         1,
     )
+
+
+def _region_masks(h: int = 120, w: int = 160) -> af.ViewMasks:
+    render = np.full((h, w, 3), 150, np.uint8)
+    render[30:80, 40:120] = (170, 150, 120)  # the measured top's tone
+    surface = np.zeros((h, w), bool)
+    surface[30:80, 40:120] = True  # the rebuilt top's footprint
+    surface[50:55, 70:75] = False  # a gap in it
+    weak = surface.copy()
+    weak[80:84, 50:110] = True  # its soft rim, joined to it
+    weak[100:110, 5:20] = True  # a soft patch far away
+    known = ~weak
+    void = np.zeros((h, w), bool)
+    void[:, 150:] = True
+    known &= ~void
+    cam = Camera.look_at([0.0, -3.0, 0.0], [0.0, 0.0, 0.0], width=w, height=h)
+    return af.ViewMasks(
+        cam,
+        known,
+        weak,
+        np.zeros((h, w), bool),
+        void,
+        render,
+        render.copy(),
+        np.where(weak, 0.4, 0.0).astype(np.float32),
+        np.full((h, w), 3.0),
+        surface=surface,
+        drawn=render.copy(),
+    )
+
+
+def test_the_region_arm_makes_the_whole_top_as_one_region() -> None:
+    class _Run:
+        pockets = None
+
+    masks = _region_masks()
+    out, picture = af.splash_masks(_Run(), masks, af.SPLASH_ARMS["splash-region"])  # type: ignore[arg-type]
+    assert (picture == masks.drawn).all()  # nothing painted
+    assert out.unknown[30:80, 40:120].all()  # the top and the gap in it
+    assert out.unknown[80:84, 50:110].all()  # its soft rim
+    assert not out.unknown[100:110, 5:20].any()  # a soft patch away from the top stays
+    assert not out.unknown[:, 150:].any() and not out.unknown[:20].any()
+    assert (out.known == (~out.unknown & ~masks.void)).all()
+
+
+def test_the_region_gate_drops_a_repaint_that_changes_the_woods_tone() -> None:
+    class _Run:
+        pockets = None
+
+    masks, _ = af.splash_masks(_Run(), _region_masks(), af.SPLASH_ARMS["splash-region"])  # type: ignore[arg-type]
+    same = masks.render.copy()
+    assert af.colour_offset(same, masks) < 1.0
+    darker = same.copy()
+    darker[masks.unknown] = (110, 90, 60)
+    assert af.colour_offset(darker, masks) > af.SPLASH_COLOUR_DE

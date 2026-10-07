@@ -150,6 +150,21 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
             "round its rim. Purple is generated."
         ),
     },
+    "anchor-splash-region": {
+        "name": "splash-region",
+        "label": "Splat-repair anchors repainting the whole top, camera locked, + photos",
+        "about": (
+            "The splat-repair adapter given the plain render, with the whole soft top of the "
+            "spool to repaint at once and everything else locked to the render, so the camera "
+            "holds and the top is painted coherently from a real photo of it. Seeds that move "
+            "the camera, change the scan around the top or change the wood's tone are dropped. "
+            "Then view by view with photos."
+        ),
+        "look": (
+            "Set Inferred to Highlight; look down on the spool's top: sharper wood grain, bolts "
+            "and holes painted by the adapter where the scan was soft. Purple is generated."
+        ),
+    },
     "anchor-splash-voids": {
         "name": "splash-voids",
         "label": "Splat-repair anchors on the true holes, + photos (Gaussian-Splash LoRA)",

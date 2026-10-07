@@ -143,7 +143,11 @@ class SplashArm:
     - `align`: `gate`, a seed is kept only within `SPLASH_KNOWN_LPIPS` and
       `SPLASH_POSE_DEG`; `flow`, its LPIPS and camera are reported, and a seed within
       `SPLASH_ALIGN_DEG` is aligned to the render (homography, then dense flow:
-      `flow_align`) and kept."""
+      `flow_align`) and kept.
+    - `region`: what is made is one smooth region per hole (`hole_region`): the rebuilt
+      weak surface's whole footprint and the weak and unknown pixels joined to it, so the
+      LoRA repaints the whole surface coherently; a seed must also keep the measured
+      surface's colour (`SPLASH_COLOUR_DE`)."""
 
     picture: str = "painted"
     lock: bool = False
@@ -154,6 +158,7 @@ class SplashArm:
     area: int | None = None
     whole: bool = False
     align: str = "gate"
+    region: bool = False
 
 
 #: Arms a run may also name: anchors by the splash LoRA, then view by view with photos as
@@ -164,6 +169,9 @@ class SplashArm:
 #:   photo, the 4-step adapter at 10 steps, CFG 1, about 1 MP, no mask. Then aligned.
 #: - `splash-locked`: the plain render, the camera locked outside what is made.
 #: - `splash-voids`: the true holes only, locked outside them.
+#: - `splash-region`: the whole weak surface of each hole (the spool's top) made at once,
+#:   locked outside it (run 37562977111: `splash-locked`'s scattered region made a
+#:   patchwork).
 SPLASH_ARMS = {
     "splash": SplashArm(),
     "splash-asis": SplashArm(
@@ -171,7 +179,16 @@ SPLASH_ARMS = {
     ),
     "splash-locked": SplashArm(picture="render", lock=True),
     "splash-voids": SplashArm(picture="voids", lock=True, dilate=24),
+    "splash-region": SplashArm(picture="render", lock=True, region=True),
 }
+#: `hole_region`: the weak and unknown pixels joined to the surface's footprint are taken
+#: within this reach of it; the region is closed with a disc of this radius and its holes
+#: filled (pixels at a 1024-wide view).
+REGION_REACH_PX = 32
+REGION_CLOSE_PX = 15
+#: A `region` arm's seed keeps the measured surface's tone: its mean colour over the
+#: surface's pixels within this CIE Lab distance of the render's (the photos' own colours).
+SPLASH_COLOUR_DE = 10.0
 #: A `flow` arm's seed is aligned when its re-estimated camera is within this.
 SPLASH_ALIGN_DEG = 5.0
 KNOWN_ARMS = (*ARMS, *SPLASH_ARMS)
@@ -2251,6 +2268,29 @@ def smooth_voids(mask: np.ndarray, width: int) -> np.ndarray:
     return keep[labels]
 
 
+def hole_region(masks: ViewMasks, made: np.ndarray) -> np.ndarray:
+    """One smooth region per hole: the rebuilt weak surface's footprint (`masks.surface`;
+    without one in view, `made` itself), the weak, unknown and pocket pixels of `made` joined
+    to it within `REGION_REACH_PX`, closed (`REGION_CLOSE_PX`) and its holes filled."""
+    import cv2
+    from scipy.ndimage import binary_fill_holes
+
+    scale = masks.camera.width / 1024
+    surface = masks.surface if masks.surface is not None else np.zeros_like(made)
+    seed = surface if surface.any() else made
+    if not seed.any():
+        return np.zeros_like(made)
+    near = _dilate(seed, max(1, round(REGION_REACH_PX * scale)))
+    joined = (made & near) | seed
+    _, labels = cv2.connectedComponents(joined.astype(np.uint8), connectivity=8)
+    touching = np.unique(labels[seed])
+    region = np.isin(labels, touching[touching > 0])
+    r = max(1, round(REGION_CLOSE_PX * scale))
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    region = cv2.morphologyEx(region.astype(np.uint8), cv2.MORPH_CLOSE, disc) > 0
+    return binary_fill_holes(region) & ~masks.void
+
+
 def splash_masks(
     run: Run, masks: ViewMasks, arm: SplashArm = SPLASH_ARMS["splash"]
 ) -> tuple[ViewMasks, np.ndarray]:
@@ -2276,6 +2316,8 @@ def splash_masks(
         made = (_dilate(black, reach) if reach else black) & ~masks.void
     elif arm.picture in ("painted", "render"):
         made = masks.unknown | (masks.weak & ~surface) | pockets
+        if arm.region:
+            made = hole_region(masks, made | (masks.weak & surface))
         black = made if arm.picture == "painted" else np.zeros_like(made)
     else:
         raise ValueError(f"splash picture {arm.picture!r}: painted, render or voids")
@@ -2519,11 +2561,40 @@ def splash_gate(
         else:
             ok_lpips = lp is not None and lp < SPLASH_KNOWN_LPIPS
             ok_pose = pose is not None and pose <= SPLASH_POSE_DEG
-            verdict.update(lpipsOk=ok_lpips, poseOk=ok_pose, kept=ok_lpips and ok_pose)
+            ok = ok_lpips and ok_pose
+            if spec.region:
+                de = colour_offset(c.aligned, masks)
+                verdict.update(colourDE=None if de is None else round(de, 2))
+                verdict["colourOk"] = de is not None and de <= SPLASH_COLOUR_DE
+                ok = ok and verdict["colourOk"]
+            verdict.update(lpipsOk=ok_lpips, poseOk=ok_pose, kept=ok)
         run.splash_gate.append(verdict)
         if verdict["kept"]:
             kept.append(c)
     return kept
+
+
+def colour_offset(image: np.ndarray, masks: ViewMasks) -> float | None:
+    """How far, in CIE Lab, `image`'s mean colour over the measured surface's pixels in
+    what is made (the photos' own colours moved to this view; all of what is made without a
+    surface) is from the render's there. None with nothing to compare."""
+    import cv2
+
+    surface = masks.surface if masks.surface is not None else np.zeros_like(masks.unknown)
+    where = surface & masks.unknown
+    if where.sum() < 50:
+        where = masks.unknown
+    if where.sum() < 50:
+        return None
+    h, w = masks.render.shape[:2]
+    if image.shape[:2] != (h, w):
+        image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)
+
+    def lab(x: np.ndarray) -> np.ndarray:
+        f = np.asarray(x, np.float32) / 255.0
+        return cv2.cvtColor(f, cv2.COLOR_RGB2LAB)[where].mean(axis=0)
+
+    return float(np.linalg.norm(lab(image) - lab(masks.render)))
 
 
 def splash_sheet(
@@ -2540,7 +2611,8 @@ def splash_sheet(
 
     chosen = {f.key: f for f in fills}
     frames = run.splash_frames.get(arm, {})
-    keys = sorted(frames, key=lambda k: -frames[k]["edit"])[:views]
+    kept = {g["view"] for g in run.splash_gate if g.get("arm", "splash") == arm and g["kept"]}
+    keys = sorted(frames, key=lambda k: (k not in kept, -frames[k]["edit"]))[:views]
     verdicts = {(g["view"], g["seed"]): g for g in run.splash_gate if g.get("arm", "splash") == arm}
     rows = []
     for key in keys:
@@ -2553,7 +2625,7 @@ def splash_sheet(
         blank = np.zeros((h, w, 3), np.uint8)
         photo = frame["photo"]
         row = [
-            gf.label_image(frame["picture"], f"{key}: picture 1, black is to make"),
+            gf.label_image(frame["picture"], f"{key}: picture 1"),
             gf.label_image(fit(photo) if photo is not None else blank, "picture 2: real photo"),
         ]
         for seed, raw in sorted(frame["raw"].items()):

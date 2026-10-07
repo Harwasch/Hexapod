@@ -1533,8 +1533,8 @@ ANCHOR_SCANS: dict[str, dict] = {
 }
 #: anchor_fill options a run may set (`--anchor-options k=v,...`), and their checks.
 ANCHOR_OPTIONS = {
-    "arms": r"(refs|norefs|vace|splash(-asis|-locked|-voids)?)"
-    r"(\+(refs|norefs|vace|splash(-asis|-locked|-voids)?))*",
+    "arms": r"(refs|norefs|vace|splash(-asis|-locked|-voids|-region)?)"
+    r"(\+(refs|norefs|vace|splash(-asis|-locked|-voids|-region)?))*",
     "seeds": r"[1-8]",
     "prop_seeds": r"[1-4]",
     "anchor_steps": r"[1-9][0-9]?",
