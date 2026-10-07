@@ -237,6 +237,11 @@ class Skin:
     #: What `skin.json` records of the skin beyond the contract's fields (its method's own
     #: numbers, the handle policy's class), merged into its entry.
     extra: dict = field(default_factory=dict)
+    #: A limbs skin's leaf flutter weight (skin_methods.fit_limbs_from_rig): positions to a
+    #: share in [0, 1], written into the last byte of the splat's row (`FLUTTER_BYTE`), which
+    #: no weight uses (a row of `b` bytes holds at most `b − 1` learned weights). None: no
+    #: flutter, the byte stays 0.
+    flutter: Callable[[np.ndarray], np.ndarray] | None = None
 
     def weights(self, positions: np.ndarray) -> np.ndarray:
         """Learned weights at `positions` (tileset frame), (n, handles − 1), normalised."""
@@ -662,9 +667,13 @@ def build(
             if skin.handles <= 1:
                 continue
             at = which == s
-            w = skin.weights(tile.positions[at].astype(np.float64))
+            positions = tile.positions[at].astype(np.float64)
+            w = skin.weights(positions)
             clipped += int((np.abs(w) > 1.0 + 0.5 / QUANT).sum())
             block[at] = quantise(w, row_bytes)
+            if skin.flutter is not None:
+                share = np.clip(np.asarray(skin.flutter(positions), np.float64), 0.0, 1.0)
+                block[at, row_bytes - 1] = np.round(share * QUANT).astype(np.int8)
         tile_rows = block[takes_rows[which]]
         tile_doc[tile.checksum] = {"skins": _rle(which), "row": row}
         rows.append(tile_rows)

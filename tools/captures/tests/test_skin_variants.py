@@ -192,6 +192,8 @@ def test_every_variant_builds_on_the_yard_and_reads_back(tmp_path):
     doc = yard_instances()
     by_id = {int(i["id"]): i for i in doc["instances"]}
     for variant in skin_variants.VARIANTS:
+        if variant.needs_rig:
+            continue  # the yard has no plant rig to read (test_skin_limbs.py)
         policy = skin_variants.policy_of(variant.policy, yard_materials(), wide=True)
         built = skin_scene.build(
             tiles,
@@ -295,7 +297,7 @@ def test_every_scan_kept_says_what_to_look_at_and_the_spool_is_withdrawn():
         if spec.get("withdrawn"):
             assert "look" not in spec
             continue
-        assert sorted(spec["look"]) == sorted(names), scan
+        assert sorted(spec["look"]) == sorted(skin_variants.variants_for(spec, names)), scan
         for sentence in spec["look"].values():
             assert sentence.endswith(".") and sentence.count(". ") == 0, sentence
     assert skin_variants.BAKEOFF["spool"]["withdrawn"]

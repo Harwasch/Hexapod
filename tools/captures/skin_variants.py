@@ -56,6 +56,11 @@ The variants (`VARIANTS`):
 | `freeform-stiff`   | FreeForm/RKPM over the splats  | stiffness-aware                  |
 | `pinned-stiff`     | FreeForm/RKPM, base pinned     | stiffness-aware                  |
 | `tetfem-stiff`     | linear FEM, filled volume, base held | stiffness-aware            |
+| `limbs-today`      | today's plant rig as a skin (`fit_limbs_from_rig`) | one per limb  |
+
+`limbs-today` needs the scan's plant rig (`BAKEOFF`'s `rig`: `rig.json` and the
+`motion.json` it names, fetched beside the tiles), so only the Minnetonka tree has it; a scan
+none of the asked variants applies to is skipped (its plan says so and publishes nothing).
 """
 
 from __future__ import annotations
@@ -85,9 +90,12 @@ VARIANT_ROOT = "variants/skins"
 class Variant:
     name: str
     method: str
-    policy: str  # "size" | "stiffness"
+    policy: str  # "size" | "stiffness" | "rig" (one handle per limb of the scan's rig)
     label: str
     about: str
+    #: Fitted from the scan's plant rig (`rig.json` + `motion.json`): only a scan `BAKEOFF`
+    #: gives a `rig` gets it.
+    needs_rig: bool = False
 
 
 VARIANTS: tuple[Variant, ...] = (
@@ -124,8 +132,25 @@ VARIANTS: tuple[Variant, ...] = (
         "taken as solid), base held, splats embedded barycentrically; handles by stiffness "
         "class.",
     ),
+    Variant(
+        "limbs-today",
+        "limbs",
+        "rig",
+        "Limbs · today's rig",
+        "Today's hand-built rig carried as a skin: one handle per limb, trunk first, each "
+        "bending about its own joint at its own frequency in its own gusts, with leaf flutter; "
+        "what an automatic skeleton would fill in.",
+        needs_rig=True,
+    ),
 )
 VARIANTS_BY_NAME = {v.name: v for v in VARIANTS}
+
+
+def variants_for(spec: Mapping, names: Sequence[str]) -> list[str]:
+    """`names` without the variants a bake-off scan cannot have: one fitted from a plant rig
+    where `BAKEOFF` gives the scan none."""
+    return [n for n in names if not VARIANTS_BY_NAME[n].needs_rig or spec.get("rig")]
+
 
 METHOD_DOCS = {
     "freeform": skin_scene.DEFAULT_METHOD,
@@ -141,7 +166,10 @@ METHOD_DOCS = {
         "voxelised, closed and filled splat occupancy; SciPy eigsh",
         "material": {"uniform": True, "poisson": skin_scene.POISSON},
     },
+    "limbs": skin_methods.LIMBS_METHOD,
 }
+#: The handle policy a limbs skin records (it has no choice: its rig's limbs).
+RIG_POLICY = "one handle per limb of the plant's rig (rig.json + motion.json), the trunk first"
 
 
 # ----------------------------------------------------------------------------------- fetch
@@ -181,12 +209,25 @@ def fetch(
     instances: bool = False,
     only: Sequence[int] | None = None,
     margin: float = 0.5,
+    rig: str | None = None,
 ) -> list[str]:
-    """`tileset.json` and its tiles (only those meeting `only`'s bounds, when given) into `out`."""
+    """`tileset.json` and its tiles (only those meeting `only`'s bounds, when given) into `out`;
+    with `rig` (a path relative to the tileset), the plant's `rig.json` and the motion sidecar
+    it names, as `rig.json` and `motion.json`."""
     out.mkdir(parents=True, exist_ok=True)
     base = url.rsplit("/", 1)[0]
     tileset = json.loads(_get(url))
     (out / "tileset.json").write_text(json.dumps(tileset), encoding="utf-8")
+    if rig:
+        from urllib.parse import urljoin
+
+        rig_url = urljoin(url, rig)
+        raw = _get(rig_url)
+        motion = json.loads(raw).get("motion")
+        if not isinstance(motion, str) or not motion:
+            raise SystemExit(f"{rig_url} names no motion sidecar")
+        (out / "rig.json").write_bytes(raw)
+        (out / "motion.json").write_bytes(_get(urljoin(rig_url, motion)))
     doc = None
     if instances:
         raw = _get(f"{base}/instances.json")
@@ -305,12 +346,27 @@ def policy_of(
     raise ValueError(f"unknown handle policy {name!r}")
 
 
+def read_rig(directory: Path) -> tuple[dict, dict]:
+    """The plant rig `fetch` saved beside the tiles (`rig.json`, `motion.json`)."""
+    rig, motion = directory / "rig.json", directory / "motion.json"
+    if not rig.exists() or not motion.exists():
+        raise SystemExit(f"a limbs skin needs the scan's rig.json and motion.json in {directory}")
+    return (
+        json.loads(rig.read_text(encoding="utf-8")),
+        json.loads(motion.read_text(encoding="utf-8")),
+    )
+
+
 def wind_summary(entry: dict, traits: Mapping | None) -> dict:
     """What the wind makes of a skin at its property prior: how many anchored modes it keeps
-    and the lowest ones' frequencies (Hz)."""
+    and the lowest ones' frequencies (Hz). A limbs skin: its limbs and theirs (the rig's)."""
     m = int(entry["handles"])
     if m <= 1:
         return {"anchoredModes": 0, "lowestHz": []}
+    limbs = entry.get("limbs")
+    if limbs:
+        hz = sorted(float(h["frequencyHz"]) for h in limbs["handles"])
+        return {"limbs": len(hz), "lowestHz": [round(f, 3) for f in hz[:3]]}
     dynamics = sw.SkinDynamics.from_skin(entry)
     material = sw.material_prior((traits or {}).get("properties"), "in-place")
     model = sw.skin_wind_model(dynamics, material)
@@ -347,13 +403,20 @@ def build_variants(
     for name in names:
         variant = VARIANTS_BY_NAME[name]
         started = time.perf_counter()
-        policy = policy_of(variant.policy, table, wide=wide)
+        if variant.method == "limbs":
+            rig_doc, motion_doc = read_rig(directory)
+            fit = skin_methods.limbs_fitter(rig_doc, motion_doc, doc["instances"])
+            about = RIG_POLICY
+        else:
+            policy = policy_of(variant.policy, table, wide=wide)
+            fit = skin_methods.fitter(variant.method, policy, doc["instances"])
+            about = policy.about
         built = skin_scene.build(
             tiles,
             doc["instances"],
             owner=owner,
-            fit=skin_methods.fitter(variant.method, policy, doc["instances"]),
-            method={**METHOD_DOCS[variant.method], "handlePolicy": policy.about},
+            fit=fit,
+            method={**METHOD_DOCS[variant.method], "handlePolicy": about},
             listed="skinned",
             log=log,
         )
@@ -458,7 +521,12 @@ BAKEOFF: dict[str, dict] = {
     "minnetonka-tree": {
         "whole": True,
         "site": "minnetonka-tree",
+        # Its plant rig (site.json's `rig`, relative to the tileset): what limbs-today reads.
+        "rig": "../source/rig.json",
         "look": {
+            "limbs-today": "Turn the wind up and compare it with Today, which it should match: "
+            "limbs swaying out of step about their own joints, the trunk slow (about 1 Hz), "
+            "the leaves at the tips shimmering; press K and drag a limb.",
             "freeform": "Turn the wind up and watch the crown: with 12 handles it sways in a "
             "few broad bends, about 0.8 Hz, the trunk's base still.",
             "freeform-stiff": "The same method with 32 handles: watch the limbs and the top of "
@@ -544,7 +612,33 @@ def prepare_scan(name: str, work: Path, names: Sequence[str]) -> Path:
         return out
     scan_dir = work / "scan" / name
     whole = bool(spec.get("whole"))
-    fetch(where["url"], scan_dir, instances=not whole, only=None if whole else spec["only"])
+    # A variant fitted from a plant rig only where the scan has one. A scan none of the asked
+    # variants applies to is skipped (fitted and published as nothing), not failed: a failed
+    # leg would hold back every other scan's publish.
+    asked = list(names)
+    names = variants_for(spec, asked)
+    if not names:
+        if out.exists():
+            shutil.rmtree(out)
+        out.mkdir(parents=True)
+        reason = f"none of {', '.join(asked)} applies: it has no plant rig"
+        (out.parent / f"{name}.publish.json").write_text(
+            json.dumps({**where, "scan": name, "variants": {"skins": []}, "skip": reason}, indent=1)
+            + "\n",
+            encoding="utf-8",
+        )
+        (out.parent / f"{name}.report.json").write_text(
+            json.dumps({"skipped": reason}, indent=1) + "\n", encoding="utf-8"
+        )
+        return out
+    rig = spec.get("rig") if any(VARIANTS_BY_NAME[n].needs_rig for n in names) else None
+    fetch(
+        where["url"],
+        scan_dir,
+        instances=not whole,
+        only=None if whole else spec["only"],
+        rig=rig,
+    )
     entries, report = build_variants(
         scan_dir, names, only=None if whole else spec["only"], whole=whole
     )
@@ -573,6 +667,9 @@ def publish(out: Path) -> dict:
     import attach_sidecars
 
     plan = json.loads((out.parent / f"{out.name}.publish.json").read_text(encoding="utf-8"))
+    if plan.get("skip"):
+        print(f"{plan['scan']}: nothing to publish ({plan['skip']})")
+        return {"url": plan["url"], "skipped": plan["skip"]}
     entries = plan["variants"]
     withdraw = plan.get("withdraw") or {}
     out.mkdir(parents=True, exist_ok=True)  # a withdrawal stages no files

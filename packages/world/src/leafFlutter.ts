@@ -57,7 +57,7 @@ export function isAdvectedFlutter(field: FlutterField): field is AdvectedFlutter
  * a little downwind, and no two alike — so no displacement component is constant along the
  * crosswind axis, the vertical, or the wind.
  */
-const PLANE_NORMALS: readonly (readonly [number, number, number])[] = [
+export const FLUTTER_PLANE_NORMALS: readonly (readonly [number, number, number])[] = [
   [0.2, 0.62, 0.76],
   [-0.15, 0.79, -0.6],
   [0.25, -0.35, 0.9],
@@ -84,7 +84,7 @@ export function flutterLookups(
   wavelengthTexels: number,
 ): Float64Array {
   const out = new Float64Array(24);
-  PLANE_NORMALS.forEach((raw, j) => {
+  FLUTTER_PLANE_NORMALS.forEach((raw, j) => {
     const length = Math.hypot(raw[0], raw[1], raw[2]);
     const n = [raw[0] / length, raw[1] / length, raw[2] / length] as const;
     // u: the downwind axis projected into the plane; w = n × u.
