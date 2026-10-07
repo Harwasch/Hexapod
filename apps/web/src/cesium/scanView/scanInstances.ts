@@ -18,6 +18,7 @@
  */
 
 import type { InstancesDoc } from "@/lib/instances";
+import { withSuperseded } from "@/lib/supersedes";
 import { useInstances } from "@/state/instances";
 import { effectiveDoc, onCustomSetsChange } from "@/state/sceneSelect";
 
@@ -49,16 +50,18 @@ export interface InstanceStyle {
 }
 
 /**
- * The style for `doc` with `hidden` and `highlighted`: the store's exact sets (a category's or
- * an object's members, `state/instances.ts`), applied id for id.
+ * The style for `doc` with `stored` hidden and `highlighted`: the store's exact sets (a
+ * category's or an object's members, `state/instances.ts`), applied id for id; and the splats a
+ * fill supersedes hidden too, when `doc` carries them (lib/supersedes.ts).
  */
 export function instanceStyle(
   doc: InstancesDoc,
-  hidden: ReadonlySet<number>,
+  stored: ReadonlySet<number>,
   highlighted: ReadonlySet<number>,
   dimOthers: boolean,
   style: HighlightStyle = HIGHLIGHT_STYLE,
 ): InstanceStyle {
+  const hidden = withSuperseded(doc, stored);
   const rows = stateTextureRows(doc.maxId);
   const state = new Uint8Array(INSTANCE_TEXTURE_WIDTH * rows * 4);
   writeStateTexels(state, doc.maxId, hidden, highlighted);

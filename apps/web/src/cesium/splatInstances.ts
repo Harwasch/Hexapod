@@ -56,6 +56,7 @@ import {
   type InstancesRef,
 } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
+import { withSuperseded } from "@/lib/supersedes";
 import { instancesRefFor, NO_VARIANTS, variantsOf } from "@/lib/variants";
 import { useInstances } from "@/state/instances";
 import { effectiveDoc, onCustomSetsChange, useSceneSelect } from "@/state/sceneSelect";
@@ -463,13 +464,15 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
 
   /**
    * What is hidden and highlighted, as the store has it: exact id sets (a category's or an
-   * object's members, `state/instances.ts`), applied id for id.
+   * object's members, `state/instances.ts`), applied id for id; and the splats a fill
+   * supersedes, when the document carries them (lib/supersedes.ts).
    */
   setState(
-    hidden: ReadonlySet<number>,
+    stored: ReadonlySet<number>,
     highlighted: ReadonlySet<number>,
     dimOthers: boolean,
   ): void {
+    const hidden = withSuperseded(this.doc, stored);
     writeStateTexels(this.#state, this.doc.maxId, hidden, highlighted);
     this.#anyHidden = hidden.size > 0;
     this.#anyHighlighted = highlighted.size > 0;
