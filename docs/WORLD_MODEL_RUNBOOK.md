@@ -791,3 +791,29 @@ own adaptation. Two arms (`anchor_fill.SPLASH_ARMS`), beside `refs` as the basel
    feathered over two tokens. The lock, not painted black, says where to generate.
 
 `splash-voids` (only the true holes black, as smooth shapes) is implemented but was not run.
+
+**Results (run 37562977111, about $3.24).** Counts are over both jobs, 32 frames per arm.
+
+| step                             | `splash-asis` | `splash-locked`        |
+| -------------------------------- | ------------- | ---------------------- |
+| returned                         | 32            | 32                     |
+| camera found by the homography   | 9             | 20                     |
+| within 5 degrees (asis) or 2     | 0 (85-172)    | 20 (0.05-0.67)         |
+| aligned (asis)                   | 0             | --                     |
+| known-pixel LPIPS under 0.3      | (not gated)   | 2                      |
+| kept                             | 0             | 2                      |
+| anchor re-render (20 dB or more) | --            | 2 of 2 (30.0, 31.6 dB) |
+
+- **`splash-asis`.** Even given its own inputs and settings, the adapter draws a new photo
+  of a spool: zoomed out, recentred, with ground and chairs the render does not have.
+  Known-pixel LPIPS was 0.64-0.86. No camera came within 5 degrees, so there was nothing to
+  align.
+- **`splash-locked`.** The lock holds the camera. Inside what is made, it paints sharp
+  planks, bolts and holes in the photo's style, beside the soft render in the locked
+  tokens: a patchwork.
+  - The made region is scattered (every seen-through pixel), so many known pixels fall in
+    free or feathered tokens. Their LPIPS is 0.29-0.62, and only 2 seeds passed 0.3.
+  - Top face (the headline test): 0.05 % worst, mean alpha 0.9992 in the published job.
+  - Leave-out against the same run's `refs`: -0.14 dB (15.843 against 15.988) and -0.005
+    LPIPS (0.631 against 0.636).
+  - With one kept anchor in the published job, it passes every gate.
