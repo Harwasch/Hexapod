@@ -167,18 +167,19 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
     },
     "anchor-splash-footprint": {
         "name": "splash-footprint",
-        "label": "Splat-repair anchors repainting the top inside its outline, + photos",
+        "label": "Splash LoRA top (detail invented)",
         "about": (
-            "The splat-repair adapter given the plain render, with only the top face's own "
-            "footprint to repaint and its outline and everything outside locked to the render, "
-            "so the camera and the top's shape hold. Seeds whose top outline, surroundings, "
-            "camera or wood tone differ from the scan's are dropped. Then view by view with "
-            "photos."
+            "The top's wood detail is painted by an image model (a splat-repair LoRA), not "
+            "measured. Only the top face's own footprint was repainted, with its outline and "
+            "everything outside locked to the scan, so the camera and the top's shape hold. "
+            "But the positions of its bolts, planks and holes are invented and do not match "
+            "the real spool: against held-out real photos it scores worse than the photo-only "
+            "fill (-0.63 dB, +0.027 LPIPS). Published for judging by eye."
         ),
         "look": (
-            "Set Inferred to Highlight; look down on the spool's top: sharper wood grain, bolts "
-            "and holes painted by the adapter where the scan was soft, inside the scan's own "
-            "outline. Purple is generated."
+            "Look down on the top: sharp wood painted by an image model. Bolt and plank "
+            "positions are made up and differ from the real spool; compare with "
+            "'Anchors + photos'."
         ),
     },
     "anchor-splash-voids": {
