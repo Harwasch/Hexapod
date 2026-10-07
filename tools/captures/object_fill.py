@@ -22,9 +22,12 @@ see each object best.
    a yaw search, then trimmed ICP with scale: the measured points onto the generated surface,
    and the generated surface above the lowest measured point onto the measured points (what
    lies below that, the underside, has nothing to match). The best of the candidates.
-5. **Free space and silhouettes** (`anchor_fill.Carver`, `strict_keep`, `silhouette_keep`):
-   anything generated that a real camera saw through is removed, and anything a real camera
-   would see outside the object's mask in its photo (the object must not grow).
+5. **Free space and silhouettes**: anything generated that a real camera saw through is
+   removed -- round 2's free-space voxels (`fill_pockets.free_space`, `free_voxels`), round
+   2's carver (`anchor_fill.Carver`) and a strict per-pixel test with no weak-surface
+   exemption (`strict_keep`) -- and anything a real camera would see outside the object's mask
+   in its photo, in front of the rest of the scan (`silhouette_keep`: the object must not
+   grow).
 6. **The unseen side only** (`shell_coverage`, `unseen`): a generated gaussian stays only in
    directions (from the completed object's centre) where the object's well-seen (`fill_quality`
    known) surface is not, and where no well-seen measured gaussian is within
@@ -38,7 +41,8 @@ see each object best.
 
 Grading (no new photos): silhouette agreement in every real frame (`silhouettes`: the completed
 object against the segmentation's mask; it must not grow past it), free-space violations at a
-grading width and a finer one (`free_space`), the round-2 leave-out (`leave_out_scores`: the lowest
+grading width and a finer one (`free_space`) and in round 2's voxels on a finer grid
+(`free_space_voxels`), the round-2 leave-out (`leave_out_scores`: the lowest
 cameras held out, their look withheld; the object pipeline run on the kept cameras and scored
 on the held-out photos in round 2's region and on the objects' lower edges there), and a sheet
 per method (`sheet`).
@@ -128,6 +132,11 @@ SHELL_MIN = 2
 #: `MASK_WIDTH`, is removed: the object must not grow past the real silhouette.
 SILHOUETTE_GROW_PX = 0
 SILHOUETTE_SIGMAS = 2.0
+#: Round 2's free-space grid (`fill_pockets`) spans the object's box padded by this share of
+#: its size; the grade's own grid is finer (`FREE_GRADE_DIVISIONS` voxels across).
+FREE_PAD = 0.15
+FREE_STATE = 1  # fill_pockets.FREE
+FREE_GRADE_DIVISIONS = 160
 #: Strict free-space test: in front of the measured surface by more than this share of the
 #: depth (and the gaussian's own size) where the scan covers the pixel solidly.
 STRICT_SHARE = 0.02
@@ -978,6 +987,31 @@ def shell_colours(centre: np.ndarray, shell: np.ndarray, colours: np.ndarray) ->
     return out
 
 
+def free_voxels(
+    positions: np.ndarray,
+    measured: Splats,
+    cameras: Sequence[Camera],
+    divisions: int | None = None,
+) -> np.ndarray:
+    """Per point, its state in round 2's free-space grid (`fill_pockets.free_space`) over the
+    points' box padded by `FREE_PAD` of its size: `FREE_STATE` where a real camera's ray
+    crossed before meeting a measured gaussian."""
+    import fill_pockets as fp
+
+    if len(positions) == 0:
+        return np.zeros(0, np.uint8)
+    lo, hi = np.percentile(positions, 0.5, axis=0), np.percentile(positions, 99.5, axis=0)
+    pad = FREE_PAD * float(np.max(hi - lo))
+    vox = fp.free_space(
+        measured,
+        list(cameras),
+        lo - pad,
+        hi + pad,
+        divisions=divisions or fp.DIVISIONS,
+    )
+    return vox.at(positions)
+
+
 def unseen(
     positions: np.ndarray, known: np.ndarray, radius: float
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -1156,9 +1190,22 @@ def complete_target(
     keep = ~carved & ~strict
     info["carved"] = int((~keep).sum())
     outside = np.zeros(len(world), bool)
-    if masks and depths is not None:
+    # Round 2's free-space voxels (`fill_pockets.free_space`): what a camera's ray crossed
+    # before meeting a measured gaussian.
+    in_free = free_voxels(world.positions, measured, cameras) == FREE_STATE
+    info["freeVoxel"] = int((keep & in_free).sum())
+    keep &= ~in_free
+    outside = np.zeros(len(world), bool)
+    if masks:
+        # Each camera's depth of the scan without the object: a fill behind the object's own
+        # half-transparent fringe would show through it, so only the rest hides it.
+        rest = np.setdiff1d(np.arange(len(measured)), target.rows, assume_unique=True)
+        rest_depths = {
+            v.name: draw(renderer, measured, fv.scaled(v.camera, MASK_WIDTH), rest).depth
+            for v in setup.views
+        }
         outside = ~silhouette_keep(
-            world.positions, world.scales.max(axis=1), masks, depths, setup.views
+            world.positions, world.scales.max(axis=1), masks, rest_depths, setup.views
         )
         info["outsideSilhouette"] = int((keep & outside).sum())
         keep &= ~outside
@@ -1203,6 +1250,7 @@ def complete_target(
             colours=np.round(np.clip(world.colours, 0, 1) * 255).astype(np.uint8),
             carved=carved,
             strict=strict,
+            free_voxel=in_free,
             outside=outside,
             near_known=~away,
             covered=covered,
@@ -1262,6 +1310,7 @@ def silhouettes(
     out: dict[str, Any] = {}
     stats: dict[int, list[tuple[float, float, int, float]]] = {p.target.instance: [] for p in parts}
     everything = np.arange(len(scene))
+    names: dict[int, list[str]] = {}
     for view in views:
         cam = fv.scaled(view.camera, width)
         for part in parts:
@@ -1289,6 +1338,7 @@ def silhouettes(
             stats[part.target.instance].append(
                 (inter / max(union, 1.0), grow, int(real.sum()), past)
             )
+            names.setdefault(part.target.instance, []).append(view.name)
     for inst, rows in stats.items():
         if not rows:
             continue
@@ -1302,6 +1352,11 @@ def silhouettes(
             "framesGrowingOverHalfPercent": int((a[:, 1] > 0.005).sum()),
             "meanGrowthPastEdge": round(float(a[:, 3].mean()), 5),
             "maxGrowthPastEdge": round(float(a[:, 3].max()), 5),
+            "worstFrames": [
+                {"view": names[inst][k], "growthPastEdge": round(float(a[k, 3]), 5)}
+                for k in np.argsort(-a[:, 3])[:5]
+                if a[k, 3] > 0
+            ],
         }
     return out
 
@@ -1330,6 +1385,24 @@ def free_space(
         "fineWidth": FINE_WIDTH,
         "cameras": len(cameras),
     }
+
+
+def free_space_voxels(
+    parts: Sequence[Part], measured: Splats, cameras: Sequence[Camera]
+) -> dict[str, Any]:
+    """Each object's fill in round 2's free-space voxels, on a finer grid than the carve's
+    (`FREE_GRADE_DIVISIONS`): how many of its gaussians a real camera's ray crossed."""
+    out: dict[str, Any] = {"divisions": FREE_GRADE_DIVISIONS, "objects": {}}
+    total = 0
+    for part in parts:
+        if part.splats is None or not len(part.splats):
+            continue
+        state = free_voxels(part.splats.positions, measured, cameras, FREE_GRADE_DIVISIONS)
+        n = int((state == FREE_STATE).sum())
+        out["objects"][str(part.target.instance)] = {"gaussians": len(part.splats), "inFree": n}
+        total += n
+    out["violations"] = total
+    return out
 
 
 def leave_out_scores(
@@ -1839,10 +1912,16 @@ def run(
     t0 = time.time()
     report["silhouette"] = silhouettes(renderer, measured, arm.parts, arm.layer, full.views)
     report["freeSpace"] = free_space(arm.layer, measured, [v.camera for v in full.views], renderer)
+    report["freeSpace"]["voxels"] = free_space_voxels(
+        arm.parts, measured, [v.camera for v in full.views]
+    )
     if leave is not None:
         lo = results["leaveout"]
         report["freeSpaceLeaveOut"] = free_space(
             lo.layer, measured, [v.camera for v in leave.views], renderer
+        )
+        report["freeSpaceLeaveOut"]["voxels"] = free_space_voxels(
+            lo.parts, measured, [v.camera for v in leave.views]
         )
         layers: dict[str, Splats | None] = {layer_name: lo.layer}
         for name, extra in (extra_layers or {}).items():

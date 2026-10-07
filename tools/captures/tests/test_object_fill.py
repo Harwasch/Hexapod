@@ -190,6 +190,7 @@ def test_the_whole_run_completes_the_undersides(tmp_path: Path, monkeypatch) -> 
         chosen = [c for c in part["candidates"] if c["key"] == part["chosen"]][0]
         assert chosen["registration"]["error"] < 0.03
     assert report["freeSpace"]["violations"] == 0
+    assert report["freeSpace"]["voxels"]["violations"] == 0
     layer = load_tileset(tmp_path / "out" / "objects-standin" / "inferred" / "tileset.json")
     assert len(layer) == report["evidence"]["gaussians"] > 0
     # What is kept is the underside: in the ground, mostly.

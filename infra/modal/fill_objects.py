@@ -327,9 +327,9 @@ objects_job_image = (
         ignore=["**/.venv/**", "**/__pycache__/**", "**/*.pyc", "tests/**"],
     )
 )
-#: The job's L4: expected minutes (run 37549327512 took 7.5 with its fetches; the finer
-#: free-space tests add a few) and its timeout.
-JOB_MIN = 12
+#: The job's L4: expected minutes (run 37553626539 took 9 with its fetches; round 2's
+#: free-space voxels add about a minute per object and setup) and its timeout.
+JOB_MIN = 18
 JOB_CAP_MIN = 75
 #: Objects and setups the estimate plans for: 4 objects (two large, two small), two setups
 #: (every camera; the leave-out's), the frames shared in about a third of them; per object
