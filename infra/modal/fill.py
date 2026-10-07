@@ -1533,7 +1533,8 @@ ANCHOR_SCANS: dict[str, dict] = {
 }
 #: anchor_fill options a run may set (`--anchor-options k=v,...`), and their checks.
 ANCHOR_OPTIONS = {
-    "arms": r"(refs|norefs|vace|splash)(\+(refs|norefs|vace|splash))*",
+    "arms": r"(refs|norefs|vace|splash(-asis|-locked|-voids)?)"
+    r"(\+(refs|norefs|vace|splash(-asis|-locked|-voids)?))*",
     "seeds": r"[1-8]",
     "prop_seeds": r"[1-4]",
     "anchor_steps": r"[1-9][0-9]?",
@@ -1703,10 +1704,14 @@ def anchor_counts(options: dict[str, str], worst: bool = False) -> dict[str, int
     # Each solidity preset clones the refs and norefs arms after propagation: own updates.
     presets = [p for p in options.get("solidity", "").split("+") if p]
     cloned = [a for a in sequential if a in ("refs", "norefs")]
-    # The splash arm: its own anchors (a photo each, the same calls) and its own propagation.
-    photo_props = len([a for a in sequential if a in ("refs", "splash")])
+    # Each splash arm: its own anchors (a photo each, the same calls) and its own propagation.
+    splashes = len([a for a in arms if a.startswith("splash")])
+    photo_props = len([a for a in sequential if a == "refs" or a.startswith("splash")])
+    # `splash-asis` generates at about 1 MP for 10 steps, references encoded at 1 MP: about
+    # three anchor calls' time each.
+    asis = 2 * int("splash-asis" in arms)
     out = {
-        "anchor": anchors * seeds * (int(refs) + int("splash" in arms)),
+        "anchor": anchors * seeds * (int(refs) + splashes + asis),
         "anchorNoRefs": anchors * seeds * int(norefs),
         "prop": props * prop_seeds * photo_props,
         "propNoRefs": props * prop_seeds * int("norefs" in sequential),
@@ -1814,7 +1819,8 @@ def _run_anchor(
     repos = [
         r
         for r in ANCHOR_REPOS
-        if ("Wan" not in r or "vace" in arms) and ("Splash" not in r or "splash" in arms)
+        if ("Wan" not in r or "vace" in arms)
+        and ("Splash" not in r or any(a.startswith("splash") for a in arms))
     ]
     access = anchor_access.remote(repos)
     (out / "anchor-access.json").write_text(json.dumps(access, indent=1), encoding="utf-8")

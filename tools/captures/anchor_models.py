@@ -130,6 +130,18 @@ def fit_size(width: int, height: int, multiple: int = TOKEN_PX) -> tuple[int, in
     return max(multiple, width // multiple * multiple), max(multiple, height // multiple * multiple)
 
 
+def generation_size(
+    size: tuple[int, int] | list[int], area: int | None, multiple: int = TOKEN_PX
+) -> tuple[int, int]:
+    """The size to generate at: `size` [w, h], or scaled to about `area` pixels at its
+    aspect; whole tokens."""
+    w, h = int(size[0]), int(size[1])
+    if area:
+        scale = math.sqrt(float(area) / (w * h))
+        w, h = round(w * scale), round(h * scale)
+    return fit_size(w, h, multiple)
+
+
 def token_strength(
     strength: np.ndarray, width: int, height: int, token_px: int = TOKEN_PX
 ) -> np.ndarray:
@@ -151,6 +163,23 @@ def held(tokens: np.ndarray, sigma: float) -> np.ndarray:
     """The tokens held to the render at noise level `sigma`: those whose strength is at or
     below it (a strength of 1 or more is never held)."""
     return (tokens <= sigma) & (tokens < 1.0)
+
+
+def token_lock(
+    strength: np.ndarray, width: int, height: int, feather: int, token_px: int = TOKEN_PX
+) -> np.ndarray:
+    """Per output token, how much it is locked to the render at every step (1 locked, 0
+    free): a token with any pixel to make (strength 1) is free, and the lock rises to 1 over
+    `feather` tokens from the nearest free one, so the seam blends (a token is 2x2 latent
+    pixels). Nothing to make: everything locked."""
+    import cv2
+
+    th, tw = height // token_px, width // token_px
+    free = (token_strength(strength, width, height, token_px) >= 1.0).reshape(th, tw)
+    if not free.any():
+        return np.ones(th * tw, np.float32)
+    dist = cv2.distanceTransform((~free).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    return np.clip(dist / (max(0, int(feather)) + 1), 0.0, 1.0).astype(np.float32).reshape(-1)
 
 
 # --- the editor (GPU) --------------------------------------------------------------------------------
@@ -213,20 +242,27 @@ def load_splash(editor: Editor) -> str:
 
 
 @contextlib.contextmanager
-def _adapters(editor: Editor, steps: int, lightning: bool, splash: bool = False) -> Iterator[int]:
-    """The pipeline set for a request: the Lightning adapter of `steps` (else the nearest
-    one there is) and its scheduler, or neither; with `splash`, the splash LoRA beside the
-    Lightning adapter. Yields the steps to run."""
+def _adapters(
+    editor: Editor, steps: int, lightning: bool, splash: bool = False, adapter: int | None = None
+) -> Iterator[int]:
+    """The pipeline set for a request: the Lightning adapter of `adapter` steps (else the
+    one nearest `steps`) and its scheduler, or neither; with `splash`, the splash LoRA beside
+    the Lightning adapter. Yields the steps to run: `steps` with `adapter`, else the
+    adapter's own."""
     pipe = editor.pipe
     if lightning and editor.lightning:
-        have = min(editor.lightning, key=lambda k: abs(k - steps))
-        if splash:
-            pipe.set_adapters([editor.lightning[have], load_splash(editor)], [1.0, 1.0])
+        if adapter in editor.lightning:
+            name, run = editor.lightning[adapter], steps
         else:
-            pipe.set_adapters([editor.lightning[have]], [1.0])
+            have = min(editor.lightning, key=lambda k: abs(k - steps))
+            name, run = editor.lightning[have], have
+        if splash:
+            pipe.set_adapters([name, load_splash(editor)], [1.0, 1.0])
+        else:
+            pipe.set_adapters([name], [1.0])
         pipe.scheduler = editor.lightning_scheduler
         try:
-            yield have
+            yield run
         finally:
             pipe.scheduler = editor.default_scheduler
     else:
@@ -273,6 +309,26 @@ def hold_callback(x0: Any, eps: Any, tokens: np.ndarray) -> Any:
     return callback
 
 
+def lock_callback(x0: Any, eps: Any, lock: np.ndarray) -> Any:
+    """The step-end callback of masked latent blending (RePaint, as diffusers' inpainting
+    pipelines blend): each token becomes `lock` parts the render's latents noised to the next
+    level and the rest what the model made, so locked tokens end exactly as rendered and the
+    camera cannot move."""
+    import torch
+
+    weight = torch.as_tensor(lock, device=x0.device, dtype=torch.float32)[None, :, None]
+
+    def callback(pipe: Any, i: int, t: Any, kwargs: dict) -> dict:
+        latents = kwargs["latents"]
+        sigmas = pipe.scheduler.sigmas
+        sigma = float(sigmas[min(i + 1, len(sigmas) - 1)])
+        noised = (1.0 - sigma) * x0.float() + sigma * eps.float()
+        mixed = weight * noised + (1.0 - weight) * latents.float()
+        return {"latents": mixed.to(latents.dtype)}
+
+    return callback
+
+
 @contextlib.contextmanager
 def _vae_area(area: int | None) -> Iterator[None]:
     """The pipeline encodes every input image at about `area` pixels (its module constant,
@@ -293,14 +349,16 @@ def edit(editor: Editor, request: dict) -> dict:
     `render` (the scan's own render, what known tokens are held to), `strength` (8-bit
     map), `references` (pictures 2-3), `prompt`, `negative`?, `seed`, `steps`, `lightning`,
     `hold`, `size` [w, h], `cfg` (true CFG without Lightning), `vae_area` (pixels each
-    input image is encoded at). Returns `image` (PNG at `size`), `seconds`, and what ran."""
+    input image is encoded at), `lock` (feather in tokens: instead of `hold`, every token
+    without a pixel to make is blended to the render at each step, `token_lock`). Returns
+    `image` (PNG at `size`), `seconds`, and what ran."""
     import torch
     from PIL import Image
 
     started = time.time()
     pipe = editor.pipe
     token_px = 2 * int(pipe.vae_scale_factor)
-    width, height = fit_size(*request["size"], token_px)
+    width, height = generation_size(request["size"], request.get("area"), token_px)
     condition = decode_png(request["image"])
     images = [Image.fromarray(condition)] + [
         Image.fromarray(decode_png(r)) for r in request.get("references", [])
@@ -313,6 +371,7 @@ def edit(editor: Editor, request: dict) -> dict:
         int(request.get("steps", 8)),
         bool(request.get("lightning", True)),
         bool(request.get("splash", False)),
+        request.get("adapter"),
     ) as steps:
         cfg = 1.0 if request.get("lightning", True) else float(request.get("cfg", 4.0))
         if cfg > 1.0:
@@ -320,7 +379,25 @@ def edit(editor: Editor, request: dict) -> dict:
         else:
             kwargs.update(true_cfg_scale=1.0)
         generator = torch.Generator(device=device).manual_seed(seed)
-        if request.get("hold", True) and "strength" in request and "render" in request:
+        locked = request.get("lock") is not None and "strength" in request and "render" in request
+        if locked:
+            render = decode_png(request["render"])
+            x0 = render_latents(pipe, render, width, height)
+            g = torch.Generator(device=device).manual_seed(seed + 7919)
+            eps = torch.randn(x0.shape, generator=g, device=device, dtype=torch.float32).to(
+                x0.dtype
+            )
+            lock = token_lock(
+                decode_strength(request["strength"]), width, height, int(request["lock"]), token_px
+            )
+            if lock.size != x0.shape[1]:
+                raise RuntimeError(f"{lock.size} token locks for {x0.shape[1]} tokens")
+            kwargs.update(
+                latents=eps,
+                callback_on_step_end=lock_callback(x0, eps, lock),
+                callback_on_step_end_tensor_inputs=["latents"],
+            )
+        elif request.get("hold", True) and "strength" in request and "render" in request:
             render = decode_png(request["render"])
             x0 = render_latents(pipe, render, width, height)
             g = torch.Generator(device=device).manual_seed(seed + 7919)
@@ -357,6 +434,9 @@ def edit(editor: Editor, request: dict) -> dict:
         "steps": steps,
         "lightning": bool(request.get("lightning", True)),
         "splash": bool(request.get("splash", False)),
+        "lock": request.get("lock"),
+        "adapter": request.get("adapter"),
+        "generated": [width, height],
         "size": [w0, h0],
     }
 

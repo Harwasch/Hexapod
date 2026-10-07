@@ -761,3 +761,33 @@ means over the held-out photos:
 - The homography found no camera in 21 frames, and the other 11 were 70-180 degrees off.
 - With no anchors, the arm is the photo propagation alone, so it was not published as the
   adapter's variant.
+
+#### The splash retry (S2)
+
+The LoRA's shipped ComfyUI workflow (`New node.json` in its repository) uses no mask and
+composites nothing:
+
+- picture 1 is a plain render of the splat from the chosen camera, empty space black;
+- picture 2 is the original photo;
+- the 2511 4-step Lightning adapter, 10 steps, CFG 1, euler, simple, about 1 MP, from noise.
+
+Run 37551303121's painted picture 1, with its blocky black squares of weak pixels, was our
+own adaptation. Two arms (`anchor_fill.SPLASH_ARMS`), beside `refs` as the baseline:
+
+1. **`splash-asis`**, the workflow as shipped: the plain render (`ViewMasks.drawn`) and the
+   whole photo. Its output is a new image, so its camera offset and known-pixel LPIPS are
+   reported, not gated. A seed within 5 degrees is then aligned to the render and kept:
+   - first the homography of matched features;
+   - then dense optical flow, OpenCV's DIS (no learned weights).
+
+   torchvision's RAFT code is BSD, but every one of its pretrained weights starts from
+   FlyingChairs, whose terms forbid commercial use.
+
+   Only the hole pixels are composited. The report counts the frames that survive each
+   step (`splashGate.<arm>`: returned, camera found, within 5 degrees, aligned).
+
+2. **`splash-locked`**: the plain render too, but every token with nothing to make is blended
+   to the render's latents, noised to each step (masked latent blending, as in RePaint),
+   feathered over two tokens. The lock, not painted black, says where to generate.
+
+`splash-voids` (only the true holes black, as smooth shapes) is implemented but was not run.

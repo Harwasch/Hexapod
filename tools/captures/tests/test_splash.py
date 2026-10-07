@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 
 import anchor_fill as af
 import anchor_models as am
@@ -104,3 +105,228 @@ def test_the_gate_summary_counts_each_verdict() -> None:
     s = af.splash_summary(gate)
     assert (s["frames"], s["kept"], s["rejected"], s["rejectedShare"]) == (4, 1, 3, 0.75)
     assert (s["failedLpips"], s["failedPose"], s["errors"]) == (1, 1, 1)
+
+
+def test_the_lock_frees_tokens_to_make_and_feathers_the_seam() -> None:
+    w, h = 8 * am.TOKEN_PX, 4 * am.TOKEN_PX
+    strength = np.zeros((h, w), np.float32)
+    strength[: am.TOKEN_PX, : am.TOKEN_PX] = 1.0  # one token's worth to make, top left
+    strength[3 * am.TOKEN_PX + 3, 7 * am.TOKEN_PX + 5] = 0.4  # weak: still locked
+    lock = am.token_lock(strength, w, h, feather=2).reshape(4, 8)
+    assert lock[0, 0] == 0.0  # free
+    assert 0.0 < lock[0, 1] < lock[0, 2] < 1.0  # the seam blends over two tokens
+    assert lock[0, 3:].min() == 1.0 and lock[3, 7] == 1.0
+    assert (am.token_lock(np.zeros((h, w)), w, h, 2) == 1.0).all()  # nothing to make
+
+
+def test_the_lock_callback_ends_locked_tokens_as_rendered() -> None:
+    torch = pytest.importorskip("torch")
+    x0 = torch.full((1, 3, 2), 5.0)
+    eps = torch.zeros((1, 3, 2))
+    lock = np.array([1.0, 0.5, 0.0], np.float32)
+
+    class _Scheduler:
+        sigmas = torch.tensor([1.0, 0.5, 0.0])
+
+    class _Pipe:
+        scheduler = _Scheduler()
+
+    callback = am.lock_callback(x0, eps, lock)
+    made = torch.full((1, 3, 2), -1.0)
+    last = callback(_Pipe(), 1, None, {"latents": made})["latents"]  # next sigma 0
+    assert torch.allclose(last[0, 0], torch.tensor([5.0, 5.0]))  # locked: the render
+    assert torch.allclose(last[0, 1], torch.tensor([2.0, 2.0]))  # feathered: half each
+    assert torch.allclose(last[0, 2], torch.tensor([-1.0, -1.0]))  # free: what was made
+
+
+def _void_masks(h: int = 120, w: int = 160) -> af.ViewMasks:
+    render = np.full((h, w, 3), 180, np.uint8)
+    alpha = np.ones((h, w), np.float32)
+    alpha[40:70, 50:90] = 0.05  # a true hole
+    alpha[100, 10] = 0.0  # a speck
+    weak = np.zeros((h, w), bool)
+    weak[20:30, 100:150] = True  # seen through but drawn: left for the model to repair
+    void = np.zeros((h, w), bool)
+    void[:, 155:] = True
+    alpha[void] = 0.0
+    unknown = (alpha < 0.3) & ~void
+    known = ~weak & ~unknown & ~void
+    cam = Camera.look_at([0.0, -3.0, 0.0], [0.0, 0.0, 0.0], width=w, height=h)
+    return af.ViewMasks(
+        cam,
+        known,
+        weak,
+        unknown,
+        void,
+        render,
+        render.copy(),
+        np.where(unknown, 1.0, np.where(weak, 0.4, 0.0)).astype(np.float32),
+        np.full((h, w), 3.0),
+        alpha=alpha,
+    )
+
+
+def test_the_voids_picture_blacks_only_true_holes_and_makes_a_little_round_them() -> None:
+    class _Run:
+        pockets = None
+
+    masks = _void_masks()
+    arm = af.SPLASH_ARMS["splash-voids"]
+    out, picture = af.splash_masks(_Run(), masks, arm)  # type: ignore[arg-type]
+    black = (picture == 0).all(axis=-1)
+    assert black[45:65, 55:85].all()  # the hole
+    assert not black[100, 10]  # the speck is not a hole worth making
+    assert not black[20:30, 100:150].any()  # the seen-through pixels stay visible
+    assert black[:, 155:].all() and not out.unknown[:, 155:].any()  # the open background
+    # What is made reaches past the hole (the smears beside it), and nothing else.
+    assert out.unknown[38:72, 48:92].all() and not out.unknown[100:, :40].any()
+    assert (out.known == (~out.unknown & ~masks.void)).all() and not out.weak.any()
+    assert (out.strength[out.unknown] == 1.0).all() and (out.strength[out.known] == 0.0).all()
+
+
+def test_only_the_locking_arms_send_a_lock() -> None:
+    def request(arm: str) -> dict:
+        spec = af.SPLASH_ARMS[arm]
+        r = af.EditRequest(
+            f"{arm}/a0-s17",
+            np.zeros((32, 32, 3), np.uint8),
+            np.zeros((32, 32, 3), np.uint8),
+            np.zeros((32, 32), np.float32),
+            [],
+            af.SPLASH_PROMPT,
+            17,
+            af.SPLASH_STEPS,
+            hold=False,
+            splash=True,
+            lock=spec.feather if spec.lock else None,
+        )
+        return r.wire()
+
+    assert "lock" not in request("splash")
+    assert request("splash-locked")["lock"] == 2 and request("splash-voids")["lock"] == 2
+    assert af.LAYERS["splash-voids"] == "anchor-splash-voids"
+    assert af.ANCHOR_ARM["splash-locked"] == "refs"
+
+
+def test_the_asis_arm_generates_at_about_a_megapixel_with_the_four_step_adapter() -> None:
+    assert am.generation_size([1024, 592], None) == (1024, 592)
+    assert am.generation_size([1024, 592], 1024 * 1024) == (1344, 768)
+    spec = af.SPLASH_ARMS["splash-asis"]
+    assert (spec.picture, spec.steps, spec.adapter, spec.lock, spec.whole, spec.align) == (
+        "render",
+        10,
+        4,
+        False,
+        True,
+        "flow",
+    )
+
+
+def test_the_locked_arm_shows_the_plain_render_and_makes_what_the_scan_does_not_know() -> None:
+    h, w = 20, 30
+    render = np.full((h, w, 3), 200, np.uint8)
+    drawn = np.full((h, w, 3), 120, np.uint8)  # as drawn over black: see-through is darker
+    known = np.zeros((h, w), bool)
+    known[:, :10] = True
+    weak = np.zeros((h, w), bool)
+    weak[:, 10:20] = True
+    unknown = np.zeros((h, w), bool)
+    unknown[:, 20:28] = True
+    void = np.zeros((h, w), bool)
+    void[:, 28:] = True
+    cam = Camera.look_at([0.0, -3.0, 0.0], [0.0, 0.0, 0.0], width=w, height=h)
+    masks = af.ViewMasks(
+        cam,
+        known,
+        weak,
+        unknown,
+        void,
+        render,
+        render.copy(),
+        np.zeros((h, w), np.float32),
+        np.full((h, w), 3.0),
+        drawn=drawn,
+    )
+
+    class _Run:
+        pockets = None
+
+    out, picture = af.splash_masks(_Run(), masks, af.SPLASH_ARMS["splash-locked"])  # type: ignore[arg-type]
+    assert (picture == drawn).all()  # nothing painted
+    assert (out.unknown == ((weak | unknown) & ~void)).all()
+    assert (out.known == known).all() and (out.strength[out.unknown] == 1.0).all()
+
+
+def _turned(image: np.ndarray, deg: float, shift: float) -> np.ndarray:
+    import cv2
+
+    h, w = image.shape[:2]
+    m = cv2.getRotationMatrix2D((w / 2, h / 2), deg, 1.0)
+    m[0, 2] += shift
+    return cv2.warpAffine(image, m, (w, h), borderMode=cv2.BORDER_REFLECT)
+
+
+def test_flow_alignment_puts_a_turned_output_back_on_the_render() -> None:
+    render = _texture()
+    known = np.ones(render.shape[:2], bool)
+    known[90:150, 120:200] = False  # a hole: what the output makes
+    out = _turned(render, 1.5, 4.0)
+    hom = af.match_homography(out, render, known)
+    aligned = af.flow_align(out, render, known, hom)
+    assert aligned is not None
+    inner = known.copy()
+    inner[:12], inner[-12:], inner[:, :12], inner[:, -12:] = False, False, False, False
+
+    def err(x: np.ndarray) -> float:
+        return float(np.abs(x.astype(float) - render.astype(float)).mean(axis=-1)[inner].mean())
+
+    assert err(aligned) < 0.35 * err(out)
+    assert af.flow_align(out, render, known, None) is None
+
+
+def test_the_asis_gate_reports_and_keeps_an_aligned_seed() -> None:
+    render = _texture()
+    h, w = render.shape[:2]
+    known = np.ones((h, w), bool)
+    known[90:150, 120:200] = False
+    cam = Camera.look_at([0.0, -3.0, 0.0], [0.0, 0.0, 0.0], fov_deg=50, width=w, height=h)
+    masks = af.ViewMasks(
+        cam,
+        known,
+        np.zeros((h, w), bool),
+        ~known,
+        np.zeros((h, w), bool),
+        render,
+        render.copy(),
+        np.where(known, 0.0, 1.0).astype(np.float32),
+        np.full((h, w), 3.0),
+    )
+    near = _turned(render, 1.0, 3.0)
+    far = np.zeros_like(render)  # nothing to match: no camera
+    results = [
+        af.EditResult("splash-asis/a0-s17", near),
+        af.EditResult("splash-asis/a0-s1017", far),
+    ]
+    perceptual = af.StandInPerceptual()
+    cands = af.score_candidates(masks, results, [[], []], perceptual)
+
+    from types import SimpleNamespace
+
+    run = SimpleNamespace(
+        splash_gate=[], splash_frames={"splash-asis": {"a0": {"raw": {}}}}, perceptual=perceptual
+    )
+    kept = af.splash_gate(run, masks, "a0", results, cands, "splash-asis")  # type: ignore[arg-type]
+    assert [c.seed for c in kept] == [17]
+    verdicts = {g["seed"]: g for g in run.splash_gate}
+    assert verdicts[17]["aligned"] and verdicts[17]["poseDeg"] < af.SPLASH_ALIGN_DEG
+    assert verdicts[17]["alignedLpips"] <= verdicts[17]["knownLpips"]
+    assert not verdicts[1017]["kept"] and verdicts[1017]["poseDeg"] is None
+    assert 17 in run.splash_frames["splash-asis"]["a0"]["aligned"]
+    s = af.splash_summary(run.splash_gate)
+    assert (s["returned"], s["poseFound"], s["poseWithin"], s["aligned"], s["kept"]) == (
+        2,
+        1,
+        1,
+        1,
+        1,
+    )

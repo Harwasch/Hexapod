@@ -75,7 +75,7 @@ def test_a_whole_run_ablates_solidity_and_adds_the_shape_layer(tmp_path, monkeyp
         "spool", "a cable spool", scene, views, render, width=96, log=lambda s: None
     )
     options = af.Options(
-        arms=("refs", "norefs", "splash"),
+        arms=("refs", "norefs", "splash-asis"),
         fill_size=(96, 56),
         set_size=(64, 36),
         probe_size=(64, 36),
@@ -109,10 +109,10 @@ def test_a_whole_run_ablates_solidity_and_adds_the_shape_layer(tmp_path, monkeyp
         log=lambda s: None,
     )
     cands = report["candidates"]
-    assert {"refs", "norefs", "splash", "refs-full", "norefs-full"} <= set(cands)
-    assert "splash-full" not in cands  # the solidity clones are of refs and norefs only
+    assert {"refs", "norefs", "splash-asis", "refs-full", "norefs-full"} <= set(cands)
+    assert "splash-asis-full" not in cands  # solidity clones: of refs and norefs only
     # The splash arm's anchors went through its gate, every seed with a verdict.
-    gate = report["splashGate"]
+    gate = report["splashGate"]["splash-asis"]
     assert gate["frames"] >= 1 and gate["kept"] + gate["rejected"] == gate["frames"]
     assert all({"view", "seed", "kept"} <= set(g) for g in gate["seeds"])
     assert all(d.get("iterations") == 2 for d in cands["refs-full"]["distil"])
@@ -126,7 +126,7 @@ def test_a_whole_run_ablates_solidity_and_adds_the_shape_layer(tmp_path, monkeyp
     out = tmp_path / "out"
     assert (out / "anchor-shape" / "inferred" / "tileset.json").exists()
     assert (out / "anchor-refs-full" / "inferred" / "tileset.json").exists()
-    for sheet in ("pockets-spool.png", "shape-spool.png", "splash-spool.png"):
+    for sheet in ("pockets-spool.png", "shape-spool.png", "splash-asis-spool.png"):
         assert (out / "renders" / sheet).exists()
 
 

@@ -121,16 +121,78 @@ HEMISPHERE_NMS_DEG = 10.0
 SOFT_ALPHA = 0.05
 
 ARMS = ("refs", "norefs", "vace")
-#: Arms a run may also name: `splash`, anchors by the splash LoRA (`splash_requests`), then
-#: view by view with photos as `refs`.
-KNOWN_ARMS = (*ARMS, "splash")
+
+
+@dataclass(frozen=True)
+class SplashArm:
+    """How a splash arm makes its anchors (`splash_masks`, `splash_requests`, `splash_gate`):
+    - `picture`, picture 1:
+      - `painted`: every pixel the scan does not know painted black (unknown, seen through,
+        pocket pixels);
+      - `render`: the plain render as drawn, empty space black as the renderer leaves it,
+        nothing painted (what the LoRA's own workflow gives it);
+      - `voids`: only the true holes black (coverage under `VOID_ALPHA`, and pocket pixels)
+        as smooth closed shapes.
+    - What is made and composited is the scan's unknown, seen-through and pocket pixels;
+      with `voids`, the voids reached `dilate` pixels (at a 1024-wide view) past them.
+    - `lock`: the tokens with nothing to make are blended to the render at every step
+      (`anchor_models.lock_callback`), feathered over `feather` tokens: the camera holds.
+    - `steps`, `adapter` (the Lightning adapter's own steps; else the nearest to `steps`),
+      `area` (pixels generated and each input encoded at; else the view's size), `whole`
+      (picture 2 the whole photo, not cropped about the hole).
+    - `align`: `gate`, a seed is kept only within `SPLASH_KNOWN_LPIPS` and
+      `SPLASH_POSE_DEG`; `flow`, its LPIPS and camera are reported, and a seed within
+      `SPLASH_ALIGN_DEG` is aligned to the render (homography, then dense flow:
+      `flow_align`) and kept."""
+
+    picture: str = "painted"
+    lock: bool = False
+    feather: int = 2
+    dilate: int = 0
+    steps: int = 8
+    adapter: int | None = None
+    area: int | None = None
+    whole: bool = False
+    align: str = "gate"
+
+
+#: Arms a run may also name: anchors by the splash LoRA, then view by view with photos as
+#: `refs`.
+#: - `splash`: run 37551303121's, the painted picture, free; it redrew every frame and the
+#:   gate kept none.
+#: - `splash-asis`: as the LoRA's shipped workflow runs it: the plain render and the whole
+#:   photo, the 4-step adapter at 10 steps, CFG 1, about 1 MP, no mask. Then aligned.
+#: - `splash-locked`: the plain render, the camera locked outside what is made.
+#: - `splash-voids`: the true holes only, locked outside them.
+SPLASH_ARMS = {
+    "splash": SplashArm(),
+    "splash-asis": SplashArm(
+        picture="render", steps=10, adapter=4, area=1024 * 1024, whole=True, align="flow"
+    ),
+    "splash-locked": SplashArm(picture="render", lock=True),
+    "splash-voids": SplashArm(picture="voids", lock=True, dilate=24),
+}
+#: A `flow` arm's seed is aligned when its re-estimated camera is within this.
+SPLASH_ALIGN_DEG = 5.0
+KNOWN_ARMS = (*ARMS, *SPLASH_ARMS)
 LAYERS = {
     "refs": "anchor-refs",
     "norefs": "anchor-norefs",
     "vace": "anchor-vace",
-    "splash": "anchor-splash",
+    **{arm: f"anchor-{arm}" for arm in SPLASH_ARMS},
 }
-ANCHOR_ARM = {"refs": "refs", "norefs": "norefs", "vace": "refs", "splash": "refs"}
+ANCHOR_ARM = {
+    "refs": "refs",
+    "norefs": "norefs",
+    "vace": "refs",
+    **dict.fromkeys(SPLASH_ARMS, "refs"),
+}
+#: The `voids` mask: a pixel is a hole under this coverage; closed and opened with discs of
+#: these radii (at a 1024-wide view), and parts smaller than `VOID_MIN_PX` dropped.
+VOID_ALPHA = 0.3
+VOID_CLOSE_PX = 9
+VOID_OPEN_PX = 3
+VOID_MIN_PX = 150
 #: The splash arm: the LoRA's own prompt (its card's), its steps, and the gate a seed must
 #: pass to be an anchor: LPIPS on the known pixels against the render, the camera's
 #: rotation re-estimated against the render (`pose_offset_deg`), and after the distil the
@@ -636,6 +698,10 @@ class ViewMasks:
     hold: np.ndarray | None = None
     #: The pixels the reprojected surface draws (among `weak`: cleaned at low strength).
     surface: np.ndarray | None = None
+    #: The coverage of everything drawn (the splash `voids` mask's holes).
+    alpha: np.ndarray | None = None
+    #: Everything drawn as the renderer gives it, over black (uint8): the plain render.
+    drawn: np.ndarray | None = None
 
     @property
     def edit(self) -> np.ndarray:
@@ -747,6 +813,8 @@ def view_masks(
         depth,
         None if condition is hold else hold,
         front if front.any() else None,
+        np.asarray(pc.full.alpha, np.float32),
+        tf.to_u8(pc.full.rgb),
     )
 
 
@@ -768,12 +836,22 @@ class EditRequest:
     vae_area: int = 640 * 640
     #: With the splash LoRA (and the 8-step Lightning adapter).
     splash: bool = False
+    #: Lock the tokens with nothing to make (strength under 1) to `render` at every step,
+    #: feathered over this many tokens (`anchor_models.token_lock`); instead of `hold`.
+    lock: int | None = None
+    #: The Lightning adapter by its own steps (else the nearest to `steps`).
+    adapter: int | None = None
+    #: Pixels to generate at (the view's aspect; the result comes back at its size).
+    area: int | None = None
 
     def wire(self) -> dict[str, Any]:
         import anchor_models as am
 
         h, w = self.condition.shape[:2]
+        optional = {"lock": self.lock, "adapter": self.adapter, "area": self.area}
+        extra = {k: int(v) for k, v in optional.items() if v is not None}
         return {
+            **extra,
             "image": am.encode_png(self.condition),
             "render": am.encode_png(self.render),
             "strength": am.encode_strength(self.strength),
@@ -1950,10 +2028,10 @@ class Run:
     _solid: bytes | None = None
     #: The free space and its pockets (`free_space_stage`): voxels, labels, clusters.
     pockets: tuple[Any, np.ndarray, list] | None = None
-    #: Per splash seed, what its gate found (`splash_gate`).
+    #: Per splash seed, what its gate found (`splash_gate`), with its arm.
     splash_gate: list[dict[str, Any]] = field(default_factory=list)
-    #: Per splash anchor view: its picture 1, its photo, each seed's raw output.
-    splash_frames: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Per splash arm, per anchor view: its picture 1, its photo, each seed's raw output.
+    splash_frames: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
 
     def seeds(self, n: int, base: int = 17) -> list[int]:
         return [base + 1000 * k for k in range(n)]
@@ -1998,7 +2076,7 @@ def fill_anchors(
     best of N with agreement between the anchors, composited. The `refs` arm's views carry
     the reprojected weak `surface` (its pixels cleaned at low strength)."""
     setup, opt = run.setup, run.options
-    anchor_arms = sorted({ANCHOR_ARM[a] for a in arms if a != "splash"})
+    anchor_arms = sorted({ANCHOR_ARM[a] for a in arms if a not in SPLASH_ARMS})
     targets = [t for t in run.targets if t.role == "anchor"]
     per_arm_masks: dict[str, dict[str, ViewMasks]] = {}
     for arm in anchor_arms:
@@ -2039,36 +2117,37 @@ def fill_anchors(
             )
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
             meta.append((arm, t, [n for _, n in reqs]))
-    splash_meta = []
-    if "splash" in arms:
-        per_arm_masks["splash"] = {}
+    bases: dict[str, ViewMasks] = {}
+    for splash in [a for a in arms if a in SPLASH_ARMS]:
+        per_arm_masks[splash] = {}
+        run.splash_frames[splash] = {}
         for t in targets:
-            base = per_arm_masks.get("refs", {}).get(t.key) or view_masks(
-                setup,
-                t.camera,
-                run.renderer,
-                None,
-                opt.weak_strength,
-                opt.placeholder,
-                opt.unknown_strength,
-                surface,
-                opt.reproject_strength,
-            )
-            masks, black = splash_masks(run, base)
-            per_arm_masks["splash"][t.key] = masks
+            if t.key not in bases:
+                bases[t.key] = per_arm_masks.get("refs", {}).get(t.key) or view_masks(
+                    setup,
+                    t.camera,
+                    run.renderer,
+                    None,
+                    opt.weak_strength,
+                    opt.placeholder,
+                    opt.unknown_strength,
+                    surface,
+                    opt.reproject_strength,
+                )
+            masks, black = splash_masks(run, bases[t.key], SPLASH_ARMS[splash])
+            per_arm_masks[splash][t.key] = masks
             if not masks.edit.any():
                 continue
-            reqs = splash_requests(run, t, masks, black)
-            run.splash_frames[t.key] = {
+            reqs = splash_requests(run, t, masks, black, splash)
+            run.splash_frames[splash][t.key] = {
                 "picture": black,
                 "photo": reqs[0][0].references[0] if reqs and reqs[0][0].references else None,
                 "edit": int(masks.edit.sum()),
                 "raw": {},
             }
             pending.append((t.key, run.editor.start([r for r, _ in reqs])))
-            meta.append(("splash", t, [n for _, n in reqs]))
-            splash_meta.append(t.key)
-        anchor_arms = [*anchor_arms, "splash"]
+            meta.append((splash, t, [n for _, n in reqs]))
+        anchor_arms = [*anchor_arms, splash]
     run.log(f"{setup.name}: {sum(len(m[2]) for m in meta)} anchor fills sent")
     results = run.wait(pending)
     scene_sample = _hole_sample(setup)
@@ -2080,9 +2159,9 @@ def fill_anchors(
             if a != arm:
                 continue
             cands = score_candidates(masks[t.key], res, names, run.perceptual)
-            if arm == "splash":
-                cands = splash_gate(run, masks[t.key], t.key, res, cands)
-                frames = run.splash_frames.get(t.key)
+            if arm in SPLASH_ARMS:
+                cands = splash_gate(run, masks[t.key], t.key, res, cands, arm)
+                frames = run.splash_frames.get(arm, {}).get(t.key)
                 if frames is not None:
                     for r in res:
                         if r.image is not None:
@@ -2153,25 +2232,65 @@ def pocket_pixels(run: Run, camera: Camera, depth: np.ndarray) -> np.ndarray:
     return np.isfinite(pocket) & (pocket < scene)
 
 
-def splash_masks(run: Run, masks: ViewMasks) -> tuple[ViewMasks, np.ndarray]:
-    """A view's masks for the splash arm, and its picture 1: the render with every pixel the
-    scan does not know black -- unknown, seen through (weak, but not the reprojected
-    surface's photo pixels, which stay as known), and pocket pixels (`pocket_pixels`). Those
-    are what is made (strength 1) and composited; the rest is known."""
+def smooth_voids(mask: np.ndarray, width: int) -> np.ndarray:
+    """`mask` as smooth closed shapes: closed and opened with discs (`VOID_CLOSE_PX`,
+    `VOID_OPEN_PX` at a 1024-wide view), parts under `VOID_MIN_PX` dropped."""
+    import cv2
+
+    scale = width / 1024
+
+    def disc(r: float) -> np.ndarray:
+        k = max(1, round(r * scale))
+        return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
+
+    m = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, disc(VOID_CLOSE_PX))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, disc(VOID_OPEN_PX))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    keep = np.zeros(n, bool)
+    keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= VOID_MIN_PX * scale * scale
+    return keep[labels]
+
+
+def splash_masks(
+    run: Run, masks: ViewMasks, arm: SplashArm = SPLASH_ARMS["splash"]
+) -> tuple[ViewMasks, np.ndarray]:
+    """A view's masks for a splash arm, and its picture 1 (`SplashArm.picture`):
+    - made (strength 1) and composited: every pixel the scan does not know -- unknown, seen
+      through (weak, but not the reprojected surface's photo pixels, which stay as known),
+      and pocket pixels (`pocket_pixels`); the rest is known;
+    - `painted`: those black in the render, and the open background;
+    - `render`: the plain render, nothing painted (`ViewMasks.drawn`);
+    - `voids`: only the true holes black, coverage under `VOID_ALPHA` and pocket pixels, as
+      smooth closed shapes (`smooth_voids`); the seen-through and weak pixels stay visible.
+      What is made reaches `arm.dilate` past them, so the smears beside a hole may be
+      repaired."""
     import dataclasses
 
     surface = masks.surface if masks.surface is not None else np.zeros_like(masks.known)
     pockets = pocket_pixels(run, masks.camera, masks.depth) & ~masks.void
-    black = masks.unknown | (masks.weak & ~surface) | pockets
-    known = (masks.known | (masks.weak & surface)) & ~black
-    condition = masks.render.copy()
-    condition[black | masks.void] = 0
+    if arm.picture == "voids":
+        alpha = masks.alpha if masks.alpha is not None else np.where(masks.unknown, 0.0, 1.0)
+        holes = ((alpha < VOID_ALPHA) & ~masks.void) | pockets
+        black = smooth_voids(holes, masks.camera.width) & ~masks.void
+        reach = max(1, round(arm.dilate * masks.camera.width / 1024)) if arm.dilate else 0
+        made = (_dilate(black, reach) if reach else black) & ~masks.void
+    elif arm.picture in ("painted", "render"):
+        made = masks.unknown | (masks.weak & ~surface) | pockets
+        black = made if arm.picture == "painted" else np.zeros_like(made)
+    else:
+        raise ValueError(f"splash picture {arm.picture!r}: painted, render or voids")
+    known = ~made & ~masks.void
+    if arm.picture == "render" and masks.drawn is not None:
+        condition = masks.drawn.copy()
+    else:
+        condition = masks.render.copy()
+        condition[black | masks.void] = 0
     out = dataclasses.replace(
         masks,
         known=known,
         weak=np.zeros_like(masks.weak),
-        unknown=black,
-        strength=np.where(black, 1.0, 0.0).astype(np.float32),
+        unknown=made,
+        strength=np.where(made, 1.0, 0.0).astype(np.float32),
         condition=condition,
         hold=None,
     )
@@ -2179,36 +2298,44 @@ def splash_masks(run: Run, masks: ViewMasks) -> tuple[ViewMasks, np.ndarray]:
 
 
 def splash_requests(
-    run: Run, target: Target, masks: ViewMasks, picture: np.ndarray
+    run: Run, target: Target, masks: ViewMasks, picture: np.ndarray, arm: str = "splash"
 ) -> list[tuple[EditRequest, list[str]]]:
-    """One request per seed for the splash LoRA: picture 1 the render with what is to make
-    black, picture 2 the seed's first retrieved real photo (cropped about the hole, as the
-    photo arm's), the LoRA's own prompt, the 8-step Lightning adapter, CFG 1, nothing held
-    (the result is registered and composited inside the mask only)."""
+    """One request per seed for the splash LoRA: picture 1 as the arm draws it, picture 2
+    the seed's first retrieved real photo (cropped about the hole, as the photo arm's, or
+    whole), the LoRA's own prompt, the Lightning adapter, CFG 1. Nothing is held, or with a
+    locking arm every token with nothing to make is locked to picture 1 (feathered); the
+    result is registered and composited inside what is made only."""
     setup, opt = run.setup, run.options
+    spec = SPLASH_ARMS[arm]
     members = view_hole_members(setup, masks, target)
     out = []
     for j, seed in enumerate(run.seeds(opt.seeds)):
         names: list[str] = []
         photos: list[np.ndarray] = []
         for role, c in list(fv.context_for_seed(target.context, j))[:1]:
-            photo = setup.context_photo(c, members, target.key)
+            if spec.whole:
+                photo = setup.context_photo(c, None, f"{target.key}-whole")
+            else:
+                photo = setup.context_photo(c, members, target.key)
             if photo is not None:
                 photos.append(photo)
                 names.append(f"{role}:{setup.views[c].name}")
         request = EditRequest(
-            f"splash/{target.key}-s{seed}",
+            f"{arm}/{target.key}-s{seed}",
             picture,
-            masks.render,
+            picture,
             masks.strength,
             photos,
             SPLASH_PROMPT,
             int(seed),
-            SPLASH_STEPS,
+            spec.steps,
             True,
             hold=False,
-            vae_area=opt.vae_area,
+            vae_area=spec.area or opt.vae_area,
             splash=True,
+            lock=spec.feather if spec.lock else None,
+            adapter=spec.adapter,
+            area=spec.area,
         )
         out.append((request, names))
     return out
@@ -2220,6 +2347,23 @@ def pose_offset_deg(
     """How far, in degrees, the camera that would see `image` is turned from the render's:
     features matched on the known pixels, a homography (a turn about the camera's centre is
     one), and the rotation nearest `K^-1 H K`. None when too few features match to tell."""
+    hom = match_homography(image, render, known)
+    if hom is None:
+        return None
+    h, w = render.shape[:2]
+    f = camera.focal * w / camera.width
+    k = np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1.0]])
+    m = np.linalg.inv(k) @ hom @ k
+    u, _, vt = np.linalg.svd(m)
+    rot = u @ vt
+    if np.linalg.det(rot) < 0:
+        rot = -rot
+    return round(float(np.degrees(np.arccos(np.clip((np.trace(rot) - 1) / 2, -1, 1)))), 3)
+
+
+def match_homography(image: np.ndarray, render: np.ndarray, known: np.ndarray) -> Any:
+    """The homography taking `image` (resized to the render) onto `render`: SIFT (ORB
+    without it) on the known pixels, ratio test, RANSAC. None when too few match."""
     import cv2
 
     h, w = render.shape[:2]
@@ -2246,14 +2390,51 @@ def pose_offset_deg(
     hom, inliers = cv2.findHomography(p1, p2, cv2.RANSAC, 3.0)
     if hom is None or int(inliers.sum()) < 12:
         return None
-    f = camera.focal * w / camera.width
-    k = np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1.0]])
-    m = np.linalg.inv(k) @ hom @ k
-    u, _, vt = np.linalg.svd(m)
-    rot = u @ vt
-    if np.linalg.det(rot) < 0:
-        rot = -rot
-    return round(float(np.degrees(np.arccos(np.clip((np.trace(rot) - 1) / 2, -1, 1)))), 3)
+    return hom
+
+
+#: Dense flow refinement: flow is kept to this share of the width, and carried into the
+#: pixels the render does not know by a normalised blur of this share of the width.
+FLOW_MAX_SHARE = 0.03
+FLOW_FILL_SHARE = 0.02
+
+
+def flow_align(
+    image: np.ndarray, render: np.ndarray, known: np.ndarray, hom: Any
+) -> np.ndarray | None:
+    """`image` aligned to `render`: warped by the homography `hom` (`match_homography`),
+    then by dense optical flow (OpenCV's DIS, no learned weights) measured on the known
+    pixels and carried smoothly into the rest. None without a homography."""
+    import cv2
+
+    if hom is None:
+        return None
+    h, w = render.shape[:2]
+    if image.shape[:2] != (h, w):
+        image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)
+    warped = cv2.warpPerspective(image, hom, (w, h), borderMode=cv2.BORDER_REFLECT)
+    dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    grey = [cv2.cvtColor(np.asarray(x, np.uint8), cv2.COLOR_RGB2GRAY) for x in (render, warped)]
+    flow = dis.calc(grey[0], grey[1], None)
+    k = np.asarray(known, np.float32)
+    sigma = max(2.0, FLOW_FILL_SHARE * w)
+    weight = cv2.GaussianBlur(k, (0, 0), sigma)
+    smooth = (
+        np.stack([cv2.GaussianBlur(flow[..., i] * k, (0, 0), sigma) for i in range(2)], -1)
+        / np.maximum(weight, 1e-4)[..., None]
+    )
+    flow = np.where(known[..., None], flow, np.where(weight[..., None] > 1e-3, smooth, 0.0))
+    limit = FLOW_MAX_SHARE * w
+    size = np.linalg.norm(flow, axis=-1, keepdims=True)
+    flow = flow * np.minimum(1.0, limit / np.maximum(size, 1e-6))
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    return cv2.remap(
+        warped,
+        gx + flow[..., 0].astype(np.float32),
+        gy + flow[..., 1].astype(np.float32),
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT,
+    )
 
 
 def splash_gate(
@@ -2262,19 +2443,32 @@ def splash_gate(
     key: str,
     results: Sequence[EditResult],
     cands: Sequence[Candidate],
+    arm: str = "splash",
 ) -> list[Candidate]:
-    """The seeds of one splash anchor that may be anchors: LPIPS on the known pixels against
-    the render under `SPLASH_KNOWN_LPIPS`, and the camera re-estimated within
-    `SPLASH_POSE_DEG` of the render's (`pose_offset_deg`). Each verdict is kept
-    (`Run.splash_gate`); a seed that returned nothing counts as rejected."""
+    """The seeds of one splash anchor that may be anchors. A `gate` arm: LPIPS on the known
+    pixels against the render under `SPLASH_KNOWN_LPIPS`, and the camera re-estimated within
+    `SPLASH_POSE_DEG` of the render's (`pose_offset_deg`). A `flow` arm: both reported, and a
+    seed within `SPLASH_ALIGN_DEG` aligned to the render (`flow_align`), re-registered and
+    re-scored, and kept. Each verdict is kept (`Run.splash_gate`); a seed that returned
+    nothing counts as rejected."""
+    import dataclasses
+
     import cv2
+
+    spec = SPLASH_ARMS[arm]
 
     raw = {}
     for r in results:
         seed = int(r.key.rsplit("-s", 1)[-1])
         if r.image is None:
             run.splash_gate.append(
-                {"view": key, "seed": seed, "kept": False, "error": str(r.info.get("error"))[:300]}
+                {
+                    "arm": arm,
+                    "view": key,
+                    "seed": seed,
+                    "kept": False,
+                    "error": str(r.info.get("error"))[:300],
+                }
             )
         else:
             raw[seed] = r.image
@@ -2288,39 +2482,69 @@ def splash_gate(
             image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)
         lp = run.perceptual.lpips(image, masks.render, masks.known) if masks.known.any() else None
         pose = pose_offset_deg(image, masks.render, masks.known, masks.camera)
-        ok_lpips = lp is not None and lp < SPLASH_KNOWN_LPIPS
-        ok_pose = pose is not None and pose <= SPLASH_POSE_DEG
-        run.splash_gate.append(
-            {
-                "view": key,
-                "seed": c.seed,
-                "knownLpips": None if lp is None else round(float(lp), 4),
-                "poseDeg": pose,
-                "lpipsOk": ok_lpips,
-                "poseOk": ok_pose,
-                "kept": ok_lpips and ok_pose,
-            }
-        )
-        if ok_lpips and ok_pose:
+        verdict: dict[str, Any] = {
+            "arm": arm,
+            "view": key,
+            "seed": c.seed,
+            "knownLpips": None if lp is None else round(float(lp), 4),
+            "poseDeg": pose,
+        }
+        if spec.align == "flow":
+            ok_pose = pose is not None and pose <= SPLASH_ALIGN_DEG
+            moved = None
+            if ok_pose:
+                moved = flow_align(
+                    image,
+                    masks.render,
+                    masks.known,
+                    match_homography(image, masks.render, masks.known),
+                )
+            if moved is not None:
+                aligned, info = register(moved, masks.render, masks.known)
+                ring = ring_mask(masks)
+                lp2 = run.perceptual.lpips(aligned, masks.render, ring) if ring.any() else None
+                c = dataclasses.replace(
+                    c,
+                    aligned=aligned,
+                    ring=1.0 if lp2 is None else lp2,
+                    drift=known_psnr(aligned, masks),
+                    info={**c.info, **info, "flow": True},
+                )
+                after = run.perceptual.lpips(aligned, masks.render, masks.known)
+                verdict["alignedLpips"] = None if after is None else round(float(after), 4)
+                frames = run.splash_frames.get(arm, {}).get(key)
+                if frames is not None:
+                    frames.setdefault("aligned", {})[c.seed] = aligned
+            verdict.update(poseOk=ok_pose, aligned=moved is not None, kept=moved is not None)
+        else:
+            ok_lpips = lp is not None and lp < SPLASH_KNOWN_LPIPS
+            ok_pose = pose is not None and pose <= SPLASH_POSE_DEG
+            verdict.update(lpipsOk=ok_lpips, poseOk=ok_pose, kept=ok_lpips and ok_pose)
+        run.splash_gate.append(verdict)
+        if verdict["kept"]:
             kept.append(c)
     return kept
 
 
-def splash_sheet(run: Run, fills: Sequence[FilledView], out: Path, views: int = 3) -> None:
-    """For the splash anchor views with the most to make (up to `views`), a row each:
+def splash_sheet(
+    run: Run, arm: str, fills: Sequence[FilledView], out: Path, views: int = 3
+) -> None:
+    """For one splash arm's anchor views with the most to make (up to `views`), a row each
+    (`<arm>-<scan>.png`):
     - picture 1, the render with what the scan does not know black;
     - picture 2, the real photo;
     - each seed's raw output, with its gate verdict;
-    - what was composited: the chosen seed, inside the mask only."""
+    - what was composited: the chosen seed, inside what is made only."""
     import cv2
     from PIL import Image
 
     chosen = {f.key: f for f in fills}
-    keys = sorted(run.splash_frames, key=lambda k: -run.splash_frames[k]["edit"])[:views]
-    verdicts = {(g["view"], g["seed"]): g for g in run.splash_gate}
+    frames = run.splash_frames.get(arm, {})
+    keys = sorted(frames, key=lambda k: -frames[k]["edit"])[:views]
+    verdicts = {(g["view"], g["seed"]): g for g in run.splash_gate if g.get("arm", "splash") == arm}
     rows = []
     for key in keys:
-        frame = run.splash_frames[key]
+        frame = frames[key]
         h, w = frame["picture"].shape[:2]
 
         def fit(image: np.ndarray, w: int = w, h: int = h) -> np.ndarray:
@@ -2342,12 +2566,20 @@ def splash_sheet(run: Run, fills: Sequence[FilledView], out: Path, views: int = 
             )
             row.append(gf.label_image(fit(raw), text))
         fill = chosen.get(key)
+        if SPLASH_ARMS[arm].align == "flow":
+            aligned = frame.get("aligned", {})
+            seed = fill.chosen if fill is not None and fill.chosen in aligned else None
+            seed = seed if seed is not None else next(iter(sorted(aligned)), None)
+            image = fit(aligned[seed]) if seed is not None else blank
+            row.append(
+                gf.label_image(image, f"aligned s{seed}" if seed is not None else "none aligned")
+            )
         made = fit(fill.image) if fill is not None else blank
         label = f"composited (s{fill.chosen})" if fill is not None else "no seed kept"
         row.append(gf.label_image(made, label))
         rows.append(row)
     if rows:
-        Image.fromarray(_ragged_grid(rows)).save(out / f"splash-{run.setup.name}.png")
+        Image.fromarray(_ragged_grid(rows)).save(out / f"{arm}-{run.setup.name}.png")
 
 
 def splash_summary(gate: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -2361,7 +2593,16 @@ def splash_summary(gate: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "failedLpips": sum(1 for g in gate if g.get("lpipsOk") is False),
         "failedPose": sum(1 for g in gate if g.get("poseOk") is False),
         "errors": sum(1 for g in gate if "error" in g),
-        "thresholds": {"knownLpips": SPLASH_KNOWN_LPIPS, "poseDeg": SPLASH_POSE_DEG},
+        # A flow arm's steps: returned, a camera found, within SPLASH_ALIGN_DEG, aligned.
+        "returned": sum(1 for g in gate if "error" not in g),
+        "poseFound": sum(1 for g in gate if g.get("poseDeg") is not None),
+        "poseWithin": sum(1 for g in gate if g.get("poseOk")),
+        "aligned": sum(1 for g in gate if g.get("aligned")),
+        "thresholds": {
+            "knownLpips": SPLASH_KNOWN_LPIPS,
+            "poseDeg": SPLASH_POSE_DEG,
+            "alignDeg": SPLASH_ALIGN_DEG,
+        },
         "seeds": list(gate),
     }
 
@@ -3325,7 +3566,7 @@ def run_arms(
         )
         report["timings"]["surfaceS"] = round(time.time() - t, 1)
     run.surface = surface
-    if options.shape or "splash" in options.arms:
+    if options.shape or set(SPLASH_ARMS) & set(options.arms):
         # The free space and its pockets: the splash arm blacks out the pocket pixels, the
         # shape stage fills under an overhang.
         t = time.time()
@@ -3334,18 +3575,25 @@ def run_arms(
     t = time.time()
     anchors = fill_anchors(run, options.arms, surface)
     report["timings"]["anchorsS"] = round(time.time() - t, 1)
+    splashes = [a for a in options.arms if a in SPLASH_ARMS]
     if run.splash_gate:
-        report["splashGate"] = splash_summary(run.splash_gate)
-        splash_sheet(run, anchors.get("splash", []), out / "renders")
+        # Per splash arm: its gate's verdicts and its strip.
+        report["splashGate"] = {
+            arm: splash_summary([g for g in run.splash_gate if g.get("arm", "splash") == arm])
+            for arm in splashes
+        }
+        for arm in splashes:
+            splash_sheet(run, arm, anchors.get(arm, []), out / "renders")
     states: dict[str, ArmState] = {}
     lifted: dict[str, ArmState] = {}
-    anchor_sets = {ANCHOR_ARM[a] for a in options.arms if a != "splash"}
-    for arm in sorted(anchor_sets | ({"splash"} & set(options.arms))):
-        lifted[arm] = ArmState(arm, surface=surface if arm in ("refs", "splash") else None)
+    anchor_sets = {ANCHOR_ARM[a] for a in options.arms if a not in SPLASH_ARMS}
+    for arm in sorted(anchor_sets | set(splashes)):
+        photos = arm == "refs" or arm in SPLASH_ARMS
+        lifted[arm] = ArmState(arm, surface=surface if photos else None)
         lift_fills(run, lifted[arm], anchors.get(arm, []))
     for arm in options.arms:
         # Each arm its own copy of its anchors (the update rounds rewrite their images).
-        base = lifted["splash" if arm == "splash" else ANCHOR_ARM[arm]]
+        base = lifted[arm if arm in SPLASH_ARMS else ANCHOR_ARM[arm]]
         states[arm] = ArmState(
             arm,
             [copy_fill(f) for f in base.fills],
@@ -3412,10 +3660,10 @@ def run_arms(
         if made is not None:
             splats, conf, cams = made
             entry["reRender"] = rerender_consistency(run, state, splats)
-            if arm == "splash":
+            if arm in SPLASH_ARMS:
                 entry["anchorReRender"] = anchor_rerender(run, state, splats)
-                if "splashGate" in report:
-                    report["splashGate"]["afterDistil"] = entry["anchorReRender"]["summary"]
+                if arm in report.get("splashGate", {}):
+                    report["splashGate"][arm]["afterDistil"] = entry["anchorReRender"]["summary"]
             agreement = [
                 float(f.weight[f.masks.edit].mean()) for f in state.fills if f.masks.edit.any()
             ]
@@ -3823,10 +4071,10 @@ def write_supersedes(
 
 def filler_name(arm: str, editor: Editor, set_filler: SetFiller | None) -> str:
     base = getattr(editor, "name", "editor")
+    if arm in SPLASH_ARMS:
+        return f"{base}+{arm}+photos+6a"
     kind, _, preset = arm.partition("-")
     solid = f"+solid-{preset}" if preset else ""
-    if kind == "splash":
-        return f"{base}+splash+photos+6a"
     if kind == "refs":
         return f"{base}+photos+6a{solid}"
     if kind == "norefs":

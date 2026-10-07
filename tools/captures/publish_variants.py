@@ -122,6 +122,48 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
             "its flange. Purple is generated."
         ),
     },
+    "anchor-splash-asis": {
+        "name": "splash-asis",
+        "label": "Splat-repair anchors as designed, aligned, + photos (Gaussian-Splash LoRA)",
+        "about": (
+            "The splat-repair adapter run as its own workflow runs it: the plain render and "
+            "the whole real photo, no mask. It redraws the whole frame, so each output whose "
+            "camera is within 5 degrees is aligned back onto the render (homography, then "
+            "dense flow) and only the holes are taken from it. Then view by view with photos."
+        ),
+        "look": (
+            "Set Inferred to Highlight; orbit to look down on the spool's top, then low "
+            "round its rim. Purple is generated."
+        ),
+    },
+    "anchor-splash-locked": {
+        "name": "splash-locked",
+        "label": "Splat-repair anchors, camera locked, + photos (Gaussian-Splash LoRA)",
+        "about": (
+            "The splat-repair adapter given the plain render, but every pixel the scan knows "
+            "is locked to the render at each denoising step, so the camera cannot move and "
+            "only the holes and see-through parts are made, from a real photo of the spot. "
+            "Then view by view with photos."
+        ),
+        "look": (
+            "Set Inferred to Highlight; orbit to look down on the spool's top, then low "
+            "round its rim. Purple is generated."
+        ),
+    },
+    "anchor-splash-voids": {
+        "name": "splash-voids",
+        "label": "Splat-repair anchors on the true holes, + photos (Gaussian-Splash LoRA)",
+        "about": (
+            "The splat-repair adapter shown the render as it was trained on: only the true "
+            "holes blacked out as smooth shapes, the smeared and see-through parts left for it "
+            "to repair. Everything away from the holes is locked to the render, so the camera "
+            "holds. Then view by view with photos."
+        ),
+        "look": (
+            "Set Inferred to Highlight; orbit to look down on the spool's top, then low "
+            "round its rim. Purple is generated."
+        ),
+    },
     "anchor-refs-alpha": {
         "name": "anchor-refs-alpha",
         "label": "Anchors + photos, distilled to be solid (coverage term)",
