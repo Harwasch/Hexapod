@@ -326,8 +326,9 @@ objects_job_image = (
         ignore=["**/.venv/**", "**/__pycache__/**", "**/*.pyc", "tests/**"],
     )
 )
-#: The job's L4: expected minutes (round 2's pumpkin jobs took 11-16) and its timeout.
-JOB_MIN = 35
+#: The job's L4: expected minutes (run 37549327512 took 7.5 with its fetches; the finer
+#: free-space tests add a few) and its timeout.
+JOB_MIN = 12
 JOB_CAP_MIN = 75
 #: Objects and setups the estimate plans for: 4 objects (two large, two small), two setups
 #: (every camera; the leave-out's), the frames shared in about a third of them.
@@ -539,6 +540,9 @@ def run_objects(
         )
         if (out / "renders").exists():
             files.update({f"renders/{k}": v for k, v in _tree(out / "renders").items()})
+        if (out / "debug").exists():
+            # Each object's registered model and what each test removed (object_fill).
+            files.update({f"debug/{k}": v for k, v in _tree(out / "debug").items()})
         if report_path.exists():
             files["report.json"] = report_path.read_bytes()
         for layer in sorted(out.glob("*/inferred/tileset.json")):

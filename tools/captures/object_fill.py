@@ -22,19 +22,23 @@ see each object best.
    a yaw search, then trimmed ICP with scale: the measured points onto the generated surface,
    and the generated surface above the lowest measured point onto the measured points (what
    lies below that, the underside, has nothing to match). The best of the candidates.
-5. **Free space** (`anchor_fill.Carver` and `strict_keep`): anything generated that a real
-   camera saw through is removed.
-6. **The unseen side only** (`unseen`): a generated gaussian stays only where no well-seen
-   (`fill_quality` known) measured gaussian is within `UNSEEN_SPACINGS` of the object's spacing.
-7. **Colour** (`colour_match`): a gain and offset per channel, fitted on the generated surface
-   the scan did see near where the kept part begins (the band above the silhouette), against
-   the measured colours there.
+5. **Free space and silhouettes** (`anchor_fill.Carver`, `strict_keep`, `silhouette_keep`):
+   anything generated that a real camera saw through is removed, and anything a real camera
+   would see outside the object's mask in its photo (the object must not grow).
+6. **The unseen side only** (`shell_coverage`, `unseen`): a generated gaussian stays only in
+   directions (from the completed object's centre) where the object's well-seen (`fill_quality`
+   known) surface is not, and where no well-seen measured gaussian is within
+   `UNSEEN_SPACINGS` of the object's spacing (the straw it rests on): a generated side that
+   lies a little inside or outside the measured one is not kept for being displaced.
+7. **Colour** (`colour_band`): a gain and offset per channel taking the generated colours'
+   mean and spread to the scan's, fitted on the band where the kept part begins (covered
+   directions next to uncovered ones) against the scan's colour in the same direction.
 8. **Layer**: the kept gaussians of every object, one inferred layer (`teacher_fill.
    package_inferred`), shown purple in the viewer's Highlight style like round 2's.
 
 Grading (no new photos): silhouette agreement in every real frame (`silhouettes`: the completed
 object against the segmentation's mask; it must not grow past it), free-space violations at a
-finer width than the carve (`free_space`), the round-2 leave-out (`leave_out_scores`: the lowest
+grading width and a finer one (`free_space`), the round-2 leave-out (`leave_out_scores`: the lowest
 cameras held out, their look withheld; the object pipeline run on the kept cameras and scored
 on the held-out photos in round 2's region and on the objects' lower edges there), and a sheet
 per method (`sheet`).
@@ -104,10 +108,14 @@ MAX_ERROR = 0.05
 #: A generated gaussian is on the seen side when a known measured gaussian is within this many
 #: of the object's median spacings.
 UNSEEN_SPACINGS = 3.0
-#: The colour band: generated gaussians on the seen side within this share of the object's
-#: size of a kept one.
-BAND_SHARE = 0.12
+#: The colour band: generated gaussians in covered directions within this many direction
+#: bins of a direction holding kept ones (`colour_band`).
+BAND_BINS = 2
 BAND_MIN = 50
+#: The object's well-seen shell, by direction from the completed object's centre: bins this
+#: many degrees square, covered with at least this many of its known gaussians.
+SHELL_BIN_DEG = 5
+SHELL_MIN = 2
 #: The silhouette: a generated gaussian a real camera would see (no farther than the scan's
 #: surface at its pixel) outside the object's mask there, grown by this many pixels at
 #: `MASK_WIDTH`, is removed: the object must not grow past the real silhouette.
@@ -118,6 +126,7 @@ SILHOUETTE_SIGMAS = 1.5
 STRICT_SHARE = 0.02
 STRICT_WIDTH = 480
 GRADE_WIDTH = 640
+FINE_WIDTH = 960
 #: Round 2's carver works at this width.
 CARVE_WIDTH = 320
 #: The layer's budget (round 1 and 2's): this share of the measured gaussians, at least
@@ -851,7 +860,8 @@ def silhouette_keep(
     the scan's rendered surface there (or where the scan shows nothing) would grow the object
     past its real silhouette, and goes. A point behind the surface (under the straw) stays.
     The test is made at the centre and `SILHOUETTE_SIGMAS` of its largest scale (`sigma`) to
-    either side, so a kept gaussian's core does not spill past the mask."""
+    either side, each sample against the depth at its own pixel, so a kept gaussian's core does
+    not spill past the mask (a point just behind the object's edge shows beside it)."""
     width = width or MASK_WIDTH
     keep = np.ones(len(positions), bool)
     for m in masks:
@@ -868,17 +878,53 @@ def silhouette_keep(
         rows = np.flatnonzero(inside)
         if rows.size == 0:
             continue
-        s = depth[v[rows], u[rows]]
-        s = np.where(np.isfinite(s), s, np.inf)
-        seen = z[rows] <= s * (1 + FRONT_SHARE)
         r = SILHOUETTE_SIGMAS * cam.focal * sigma[rows] / np.maximum(z[rows], 1e-6)
-        outside = np.zeros(rows.size, bool)
+        spills = np.zeros(rows.size, bool)
         for du, dv in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
             uu = np.clip(np.floor(uv[rows, 0] + du * r).astype(np.int64), 0, cam.width - 1)
             vv = np.clip(np.floor(uv[rows, 1] + dv * r).astype(np.int64), 0, cam.height - 1)
-            outside |= ~allowed[vv, uu]
-        keep[rows[seen & outside]] = False
+            s = depth[vv, uu]
+            s = np.where(np.isfinite(s), s, np.inf)
+            spills |= ~allowed[vv, uu] & (z[rows] <= s * (1 + FRONT_SHARE))
+        keep[rows[spills]] = False
     return keep
+
+
+def _direction_bins(d: np.ndarray) -> np.ndarray:
+    """Each direction's (elevation, azimuth) bin, `SHELL_BIN_DEG` square."""
+    r = np.maximum(np.linalg.norm(d, axis=1), 1e-12)
+    el = np.degrees(np.arcsin(np.clip(d[:, 2] / r, -1, 1)))
+    az = np.degrees(np.arctan2(d[:, 1], d[:, 0])) % 360
+    n_el, n_az = 180 // SHELL_BIN_DEG, 360 // SHELL_BIN_DEG
+    i = np.clip(((el + 90) / SHELL_BIN_DEG).astype(np.int64), 0, n_el - 1)
+    j = np.clip((az / SHELL_BIN_DEG).astype(np.int64), 0, n_az - 1)
+    return i * n_az + j
+
+
+def shell_coverage(centre: np.ndarray, shell: np.ndarray) -> np.ndarray:
+    """Per direction bin from `centre` (`_direction_bins`), whether the object's well-seen
+    measured surface (`shell`) is there: `SHELL_MIN` points or more, closed over single-bin
+    gaps (azimuth wraps)."""
+    from scipy.ndimage import binary_closing
+
+    n_el, n_az = 180 // SHELL_BIN_DEG, 360 // SHELL_BIN_DEG
+    counts = np.bincount(_direction_bins(shell - centre), minlength=n_el * n_az)
+    grid = (counts >= SHELL_MIN).reshape(n_el, n_az)
+    padded = np.concatenate([grid[:, -2:], grid, grid[:, :2]], axis=1)
+    closed = binary_closing(padded, structure=np.ones((3, 3), bool))[:, 2:-2]
+    return (closed | grid).reshape(-1)
+
+
+def shell_colours(centre: np.ndarray, shell: np.ndarray, colours: np.ndarray) -> np.ndarray:
+    """Per direction bin, the mean colour of the shell there (NaN where none)."""
+    bins = _direction_bins(shell - centre)
+    n = (180 // SHELL_BIN_DEG) * (360 // SHELL_BIN_DEG)
+    count = np.bincount(bins, minlength=n).astype(np.float64)
+    out = np.full((n, 3), np.nan)
+    for ch in range(3):
+        total = np.bincount(bins, weights=colours[:, ch], minlength=n)
+        out[:, ch] = np.where(count > 0, total / np.maximum(count, 1), np.nan)
+    return out
 
 
 def unseen(
@@ -894,64 +940,63 @@ def unseen(
     return d > radius, d
 
 
-def colour_match(
-    gen: Splats,
-    kept: np.ndarray,
-    seen_side: np.ndarray,
-    measured_pos: np.ndarray,
-    measured_col: np.ndarray,
-    radius: float,
-    size: float,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    """The kept gaussians' colours matched to the scan: per channel a gain and offset, fitted
-    on the generated gaussians of the seen side within `BAND_SHARE` of the size of a kept one
-    (the band where the kept part begins) against the mean measured colour within `radius`
-    of each. Falls back to the whole seen side, then to no change."""
-    from scipy.spatial import cKDTree
+def colour_transfer(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per channel a gain and offset taking `src`'s mean and spread to `dst`'s (the gain
+    within 0.5-2): a regression would shrink a texture that correlates little with the
+    scan's to its mean."""
+    sx, sy = src.std(axis=0), dst.std(axis=0)
+    gain = np.clip(np.where(sx > 1e-6, sy / np.maximum(sx, 1e-6), 1.0), 0.5, 2.0)
+    return gain, dst.mean(axis=0) - gain * src.mean(axis=0)
 
-    out = gen.colours.copy()
+
+def colour_band(
+    world: Splats,
+    kept: np.ndarray,
+    covered: np.ndarray,
+    bins: np.ndarray,
+    centre: np.ndarray,
+    measured: Splats,
+    shell_rows: np.ndarray,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """The kept gaussians' colours matched to the scan (`colour_transfer`), fitted on the band
+    where the kept part begins: generated gaussians in covered directions within
+    `BAND_BINS` bins of an uncovered direction holding kept ones, against the mean colour of
+    the object's well-seen surface in their own direction."""
+    from scipy.ndimage import binary_dilation
+
+    out = world.colours.copy()
     info: dict[str, Any] = {"applied": False}
-    if not kept.any() or not seen_side.any() or len(measured_pos) == 0:
+    if not kept.any() or shell_rows.size == 0:
         return out, info
-    kept_tree = cKDTree(gen.positions[kept])
-    side = np.flatnonzero(seen_side)
-    d_kept, _ = kept_tree.query(gen.positions[side])
-    band = side[d_kept <= BAND_SHARE * size]
-    which = "band"
-    if band.size < BAND_MIN:
-        band, which = side, "seen side"
-    tree = cKDTree(measured_pos)
-    near = tree.query_ball_point(gen.positions[band], r=radius)
-    src, dst = [], []
-    for i, idx in zip(band, near, strict=True):
-        if idx:
-            src.append(gen.colours[i])
-            dst.append(measured_col[idx].mean(axis=0))
-    if len(src) < BAND_MIN:
-        info["pairs"] = len(src)
+    n_el, n_az = 180 // SHELL_BIN_DEG, 360 // SHELL_BIN_DEG
+    holds = np.zeros(n_el * n_az, bool)
+    holds[np.unique(bins[kept])] = True
+    grid = holds.reshape(n_el, n_az)
+    padded = np.concatenate([grid[:, -BAND_BINS:], grid, grid[:, :BAND_BINS]], axis=1)
+    near = binary_dilation(padded, iterations=BAND_BINS)[:, BAND_BINS:-BAND_BINS].reshape(-1)
+    target_colour = shell_colours(
+        centre, measured.positions[shell_rows], measured.colours[shell_rows]
+    )
+    band = covered & near[bins] & np.isfinite(target_colour[bins, 0])
+    if band.sum() < BAND_MIN:
+        info["pairs"] = int(band.sum())
         return out, info
-    src_a, dst_a = np.asarray(src), np.asarray(dst)
-    gains, offsets = [], []
-    for ch in range(3):
-        x, y = src_a[:, ch], dst_a[:, ch]
-        vx = float(x.var())
-        g = float(((x - x.mean()) * (y - y.mean())).mean() / vx) if vx > 1e-6 else 1.0
-        g = float(np.clip(g, 0.5, 2.0))
-        o = float(y.mean() - g * x.mean())
-        gains.append(g)
-        offsets.append(o)
-    gains_a, offsets_a = np.asarray(gains), np.asarray(offsets)
-    out[kept] = np.clip(gen.colours[kept] * gains_a + offsets_a, 0, 1)
-    before = float(np.abs(src_a - dst_a).mean())
-    after = float(np.abs(np.clip(src_a * gains_a + offsets_a, 0, 1) - dst_a).mean())
+    src = world.colours[band]
+    dst = target_colour[bins[band]]
+    gain, offset = colour_transfer(src, dst)
+    out[kept] = np.clip(world.colours[kept] * gain + offset, 0, 1)
     info = {
         "applied": True,
-        "on": which,
-        "pairs": len(src),
-        "gain": np.round(gains_a, 4).tolist(),
-        "offset": np.round(offsets_a, 4).tolist(),
-        "meanAbsErrorBefore": round(before, 4),
-        "meanAbsErrorAfter": round(after, 4),
+        "on": "band",
+        "pairs": int(band.sum()),
+        "gain": np.round(gain, 4).tolist(),
+        "offset": np.round(offset, 4).tolist(),
+        "bandMean": np.round(dst.mean(axis=0), 4).tolist(),
+        "generatedMean": np.round(src.mean(axis=0), 4).tolist(),
+        "meanAbsErrorBefore": round(float(np.abs(src - dst).mean()), 4),
+        "meanAbsErrorAfter": round(
+            float(np.abs(np.clip(src * gain + offset, 0, 1) - dst).mean()), 4
+        ),
     }
     return out, info
 
@@ -994,6 +1039,8 @@ def complete_target(
     masks: Sequence[ViewMask] = (),
     depths: dict[str, np.ndarray] | None = None,
     up_known: bool = True,
+    grade_cache: dict[int, tuple[np.ndarray, np.ndarray]] | None = None,
+    debug: Path | None = None,
     log: Callable[[str], None] = print,
 ) -> Part:
     """The best registered candidate, carved, kept inside the real silhouettes and to the
@@ -1042,39 +1089,67 @@ def complete_target(
     g = cand.splats.take(np.flatnonzero(cand.splats.opacities >= MIN_OPACITY))
     world = t.splats(g)
     info["generated"] = len(world)
-    # Free space: round 2's carver, then the strict test (no weak-surface exemption).
-    keep = carver.keep(world.positions)
+    # Free space: round 2's carver, then the strict test (no weak-surface exemption) at the
+    # carve's width and at the grading's, so the grade finds nothing the carve let through.
+    carved = ~carver.keep(world.positions)
     reach = 2.0 * world.scales.max(axis=1)
-    keep &= strict_keep(world.positions, reach, measured, cameras, renderer, depths=strict_cache)
+    strict = ~strict_keep(world.positions, reach, measured, cameras, renderer, depths=strict_cache)
+    strict |= ~strict_keep(
+        world.positions, reach, measured, cameras, renderer, GRADE_WIDTH, grade_cache
+    )
+    keep = ~carved & ~strict
     info["carved"] = int((~keep).sum())
+    outside = np.zeros(len(world), bool)
     if masks and depths is not None:
-        inside = silhouette_keep(
+        outside = ~silhouette_keep(
             world.positions, world.scales.max(axis=1), masks, depths, setup.views
         )
-        info["outsideSilhouette"] = int((keep & ~inside).sum())
-        keep &= inside
-    # The unseen side: no well-seen measured gaussian near.
+        info["outsideSilhouette"] = int((keep & outside).sum())
+        keep &= ~outside
+    # The unseen side: in no direction (from the completed object's centre) the object's
+    # well-seen surface covers, and no well-seen measured gaussian near (the straw it rests
+    # on included).
     classes = np.full(len(measured), fq.UNKNOWN, np.int8)
     classes[setup.shown] = setup.shown_classes()
     known = measured.positions[classes == fq.KNOWN]
     radius = UNSEEN_SPACINGS * target.spacing
-    away, dist = unseen(world.positions, known, radius)
-    kept = keep & away
-    seen_side = keep & ~away
+    away, _ = unseen(world.positions, known, radius)
+    known_body = body[classes[body] == fq.KNOWN]
+    lo, hi = np.percentile(world.positions, 1, axis=0), np.percentile(world.positions, 99, axis=0)
+    centre = (lo + hi) / 2
+    covered_bins = shell_coverage(centre, measured.positions[known_body])
+    bins = _direction_bins(world.positions - centre)
+    covered = covered_bins[bins]
+    kept = keep & away & ~covered
+    seen_side = keep & ~kept
+    info["shell"] = {
+        "centre": np.round(centre, 4).tolist(),
+        "coveredBins": int(covered_bins.sum()),
+        "covered": int((keep & covered).sum()),
+        "nearKnown": int((keep & ~away).sum()),
+    }
     info["seenSide"] = int(seen_side.sum())
     info["kept"] = int(kept.sum())
-    # Colour: matched on the band of the seen side where the kept part begins.
-    known_body = body[classes[body] == fq.KNOWN]
-    colours, cinfo = colour_match(
-        world,
-        kept,
-        seen_side,
-        measured.positions[known_body],
-        measured.colours[known_body],
-        radius,
-        2 * target.radius,
-    )
+    # Colour: matched on the band where the kept part begins: the covered directions next to
+    # an uncovered one, against the scan's colour in the same direction.
+    colours, cinfo = colour_band(world, kept, covered, bins, centre, measured, known_body)
     info["colour"] = cinfo
+    if debug is not None:
+        debug.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            debug,
+            positions=world.positions.astype(np.float32),
+            colours=np.round(np.clip(world.colours, 0, 1) * 255).astype(np.uint8),
+            carved=carved,
+            strict=strict,
+            outside=outside,
+            near_known=~away,
+            covered=covered,
+            kept=kept,
+            centre=centre,
+            body=body,
+            body_classes=classes[body],
+        )
     world = Splats(world.positions, world.rotations, world.scales, colours, world.opacities)
     out = world.take(np.flatnonzero(kept))
     # Confidence: the registration's fit, fading with distance from the seen band.
@@ -1164,17 +1239,21 @@ def free_space(
     renderer: Any,
     width: int | None = None,
 ) -> dict[str, Any]:
-    """Generated gaussians a real camera saw through, tested at a finer width than the
-    carve: the strict test, and how many cameras each was seen through by."""
+    """Generated gaussians a real camera saw through (the strict test, no weak-surface
+    exemption), at the grading width (`GRADE_WIDTH`, which the carve also tests) and, as a
+    check the carve never made, at `FINE_WIDTH`."""
     if layer is None or not len(layer):
-        return {"gaussians": 0, "violations": 0}
+        return {"gaussians": 0, "violations": 0, "violationsFine": 0}
     width = width or GRADE_WIDTH
     reach = 2.0 * layer.scales.max(axis=1)
     keep = strict_keep(layer.positions, reach, measured, cameras, renderer, width=width)
+    fine = strict_keep(layer.positions, reach, measured, cameras, renderer, width=FINE_WIDTH)
     return {
         "gaussians": len(layer),
         "violations": int((~keep).sum()),
         "width": width,
+        "violationsFine": int((~fine).sum()),
+        "fineWidth": FINE_WIDTH,
         "cameras": len(cameras),
     }
 
@@ -1489,6 +1568,7 @@ def run_arm(
     renderer: Any,
     *,
     up_known: bool,
+    debug: Path | None = None,
     log: Callable[[str], None] = print,
 ) -> ArmResult:
     """Every object of one setup completed from its candidates."""
@@ -1501,6 +1581,7 @@ def run_arm(
     )
     cameras = [v.camera for v in setup.views]
     strict_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    grade_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     parts = []
     for target in targets:
         keys = [r["key"] for r in plan.requests if r["target"] == target.instance]
@@ -1517,6 +1598,8 @@ def run_arm(
                 masks=plan.masks.get(target.instance, []),
                 depths=plan.depths,
                 up_known=up_known,
+                grade_cache=grade_cache,
+                debug=None if debug is None else debug / f"{setup.leave_out}-{target.instance}.npz",
                 log=log,
             )  # fmt: skip
         )
@@ -1631,7 +1714,10 @@ def run(
     results: dict[str, ArmResult] = {}
     for name, setup in setups:
         t0 = time.time()
-        arm = run_arm(setup, targets, generated, plans[name], renderer, up_known=up_known, log=log)
+        arm = run_arm(
+            setup, targets, generated, plans[name], renderer, up_known=up_known,
+            debug=out / "debug", log=log,
+        )  # fmt: skip
         results[name] = arm
         timings[f"{name}CompleteS"] = round(time.time() - t0, 1)
         report.setdefault("parts", {})[name] = [p.info for p in arm.parts]

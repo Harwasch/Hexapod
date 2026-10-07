@@ -152,7 +152,7 @@ def test_the_whole_run_completes_the_undersides(tmp_path: Path, monkeypatch) -> 
     from splat_render import save_ply
 
     for name, value in (("MASK_WIDTH", 160), ("STRICT_WIDTH", 160), ("GRADE_WIDTH", 200),
-                        ("CARVE_WIDTH", 96), ("TILE", (96, 72)), ("SMALL_MIN", 20)):  # fmt: skip
+                        ("CARVE_WIDTH", 96), ("TILE", (96, 72)), ("SMALL_MIN", 20), ("FINE_WIDTH", 240)):  # fmt: skip
         monkeypatch.setattr(of, name, value)
     original, ids = scene()
     ply = tmp_path / "scan.ply"
