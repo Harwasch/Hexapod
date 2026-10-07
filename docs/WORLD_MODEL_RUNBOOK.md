@@ -902,3 +902,23 @@ leave-out failed, so the anchor job was not run and nothing was published.**
   But the planks, bolts and holes they draw are not where the real spool's are, so the real
   held-out photos agree with them less than with the photo-only arm. The detail is made up,
   and it costs fidelity.
+
+**Published anyway, by the owner's decision.** The owner wanted to judge `splash-footprint`
+by eye, so the leave-out gate was waived for it alone. The anchor job (run 37637300421,
+about $0.95) was gated on everything else:
+
+- 9 of 16 frames kept. Failures: outline 2 (IoU 0.924 and 0.946), known pixels 0,
+  homography 0, colour 5 (10.2-13.7 Lab units).
+- Outline IoU 0.924-0.996; known pixels 32.5-33.7 dB.
+- The 3 kept anchors re-render at 34.4-35.9 dB. Top face: 0.01 % worst, mean alpha 0.9993.
+
+It is published as `splash-footprint`, labelled "Splash LoRA top (detail invented)". Its
+description and look line say plainly that an image model painted the top's wood, that the
+bolts, planks and holes are invented and do not match the real spool, and point to the
+photo-only variant for comparison.
+
+The anchor job showed two more things:
+
+- In one view the footprint, every pixel of the rebuilt surface, also held a patch on the
+  drum. The adapter painted a garbled stencil-like lettering there.
+- A stencilled drum is plausible for a cable spool, but the text is illegible and made up.
