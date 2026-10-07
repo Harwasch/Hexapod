@@ -147,7 +147,11 @@ class SplashArm:
     - `region`: what is made is one smooth region per hole (`hole_region`): the rebuilt
       weak surface's whole footprint and the weak and unknown pixels joined to it, so the
       LoRA repaints the whole surface coherently; a seed must also keep the measured
-      surface's colour (`SPLASH_COLOUR_DE`)."""
+      surface's colour (`SPLASH_COLOUR_DE`).
+    - `footprint`: what is made is exactly the rebuilt surface's footprint (`footprint_mask`),
+      the lock feathered `inward` so the outline itself stays the render's; `align`
+      `outline` gates on the outline, the known pixels' PSNR, the full homography and the
+      colour (`outline_verdict`)."""
 
     picture: str = "painted"
     lock: bool = False
@@ -159,6 +163,8 @@ class SplashArm:
     whole: bool = False
     align: str = "gate"
     region: bool = False
+    footprint: bool = False
+    inward: bool = False
 
 
 #: Arms a run may also name: anchors by the splash LoRA, then view by view with photos as
@@ -180,7 +186,23 @@ SPLASH_ARMS = {
     "splash-locked": SplashArm(picture="render", lock=True),
     "splash-voids": SplashArm(picture="voids", lock=True, dilate=24),
     "splash-region": SplashArm(picture="render", lock=True, region=True),
+    "splash-footprint": SplashArm(
+        picture="render", lock=True, feather=1, inward=True, footprint=True, align="outline"
+    ),
 }
+#: `splash-footprint`'s gate (run 37566525560: `splash-region`'s repaints drew the top
+#: smaller than the scan's). Its outline (`top_segment`, within `OUTLINE_BAND_PX` of the
+#: footprint's edge) must overlap the render's at `OUTLINE_IOU`; the known pixels
+#: `KNOWN_FAR_PX` or more from what is made at `KNOWN_PSNR_DB`; the homography over the
+#: drawn pixels within `HOM_SCALE` of unit scale and `HOM_SHIFT` of the width in shift, and
+#: `SPLASH_POSE_DEG` in rotation; the colour within `SPLASH_COLOUR_DE`. Pixels at a
+#: 1024-wide view.
+OUTLINE_BAND_PX = 24
+OUTLINE_IOU = 0.95
+KNOWN_FAR_PX = 16
+KNOWN_PSNR_DB = 25.0
+HOM_SCALE = 0.02
+HOM_SHIFT = 0.01
 #: `hole_region`: the weak and unknown pixels joined to the surface's footprint are taken
 #: within this reach of it; the region is closed with a disc of this radius and its holes
 #: filled (pixels at a 1024-wide view).
@@ -860,6 +882,8 @@ class EditRequest:
     adapter: int | None = None
     #: Pixels to generate at (the view's aspect; the result comes back at its size).
     area: int | None = None
+    #: Feather the lock inward: tokens across the edge of what is made stay locked.
+    inward: bool = False
 
     def wire(self) -> dict[str, Any]:
         import anchor_models as am
@@ -867,6 +891,8 @@ class EditRequest:
         h, w = self.condition.shape[:2]
         optional = {"lock": self.lock, "adapter": self.adapter, "area": self.area}
         extra = {k: int(v) for k, v in optional.items() if v is not None}
+        if self.inward:
+            extra["lockInward"] = 1
         return {
             **extra,
             "image": am.encode_png(self.condition),
@@ -2268,6 +2294,20 @@ def smooth_voids(mask: np.ndarray, width: int) -> np.ndarray:
     return keep[labels]
 
 
+def footprint_mask(masks: ViewMasks) -> np.ndarray:
+    """The rebuilt weak surface's own footprint in the view (`masks.surface`), its sampling
+    gaps closed and its holes filled; nothing without one."""
+    import cv2
+    from scipy.ndimage import binary_fill_holes
+
+    if masks.surface is None or not masks.surface.any():
+        return np.zeros_like(masks.known)
+    r = max(1, round(5 * masks.camera.width / 1024))
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    m = cv2.morphologyEx(masks.surface.astype(np.uint8), cv2.MORPH_CLOSE, disc) > 0
+    return binary_fill_holes(m) & ~masks.void
+
+
 def hole_region(masks: ViewMasks, made: np.ndarray) -> np.ndarray:
     """One smooth region per hole: the rebuilt weak surface's footprint (`masks.surface`;
     without one in view, `made` itself), the weak, unknown and pocket pixels of `made` joined
@@ -2318,6 +2358,8 @@ def splash_masks(
         made = masks.unknown | (masks.weak & ~surface) | pockets
         if arm.region:
             made = hole_region(masks, made | (masks.weak & surface))
+        if arm.footprint:
+            made = footprint_mask(masks)
         black = made if arm.picture == "painted" else np.zeros_like(made)
     else:
         raise ValueError(f"splash picture {arm.picture!r}: painted, render or voids")
@@ -2378,6 +2420,7 @@ def splash_requests(
             lock=spec.feather if spec.lock else None,
             adapter=spec.adapter,
             area=spec.area,
+            inward=spec.inward,
         )
         out.append((request, names))
     return out
@@ -2558,6 +2601,14 @@ def splash_gate(
                 if frames is not None:
                     frames.setdefault("aligned", {})[c.seed] = aligned
             verdict.update(poseOk=ok_pose, aligned=moved is not None, kept=moved is not None)
+        elif spec.align == "outline":
+            ok_pose = pose is not None and pose <= SPLASH_POSE_DEG
+            verdict.update(outline_verdict(image, masks, run.perceptual))
+            de = colour_offset(c.aligned, masks)
+            verdict.update(colourDE=None if de is None else round(de, 2), poseOk=ok_pose)
+            verdict["colourOk"] = de is not None and de <= SPLASH_COLOUR_DE
+            checks = ("outlineOk", "knownOk", "homOk", "poseOk", "colourOk")
+            verdict["kept"] = all(verdict[k] for k in checks)
         else:
             ok_lpips = lp is not None and lp < SPLASH_KNOWN_LPIPS
             ok_pose = pose is not None and pose <= SPLASH_POSE_DEG
@@ -2572,6 +2623,83 @@ def splash_gate(
         if verdict["kept"]:
             kept.append(c)
     return kept
+
+
+def top_segment(image: np.ndarray, footprint: np.ndarray, band: int) -> np.ndarray | None:
+    """The top as `image` draws it near `footprint`: its inside (the footprint eroded by
+    `band`), and the pixels within `band` of the footprint's edge whose colour (CIE Lab,
+    softened) is nearer the inside's mean than the mean of the ring just outside; the part
+    joined to the inside, its holes filled. None without both to compare."""
+    import cv2
+    from scipy.ndimage import binary_fill_holes
+
+    inner = _erode(footprint, band)
+    outer = _dilate(footprint, 2 * band) & ~_dilate(footprint, band)
+    if inner.sum() < 50 or outer.sum() < 50:
+        return None
+    f = cv2.GaussianBlur(np.asarray(image, np.float32) / 255.0, (0, 0), 2.0)
+    lab = cv2.cvtColor(f, cv2.COLOR_RGB2LAB)
+    mu_in, mu_out = lab[inner].mean(axis=0), lab[outer].mean(axis=0)
+    zone = _dilate(footprint, band) & ~inner
+    near = np.linalg.norm(lab - mu_in, axis=-1) < np.linalg.norm(lab - mu_out, axis=-1)
+    top = inner | (zone & near)
+    _, labels = cv2.connectedComponents(top.astype(np.uint8), connectivity=8)
+    keep = np.unique(labels[inner])
+    return binary_fill_holes(np.isin(labels, keep[keep > 0]))
+
+
+def _iou(a: np.ndarray, b: np.ndarray) -> float:
+    union = int((a | b).sum())
+    return float((a & b).sum() / union) if union else 1.0
+
+
+def homography_scale_shift(hom: Any, width: int, height: int) -> tuple[float, float] | None:
+    """A homography's scale (the root of its linear part's determinant) and how far it moves
+    the image's centre, as a share of the width."""
+    if hom is None:
+        return None
+    h = np.asarray(hom, np.float64) / hom[2, 2]
+    scale = float(np.sqrt(abs(np.linalg.det(h[:2, :2]))))
+    c = np.array([width / 2, height / 2, 1.0])
+    moved = h @ c
+    shift = float(np.linalg.norm(moved[:2] / moved[2] - c[:2]) / width)
+    return scale, shift
+
+
+def outline_verdict(image: np.ndarray, masks: ViewMasks, perceptual: Perceptual) -> dict[str, Any]:
+    """`splash-footprint`'s checks of one output against picture 1 (`masks.condition`,
+    what it was locked to): the top's outline (`top_segment` of each, IoU at
+    `OUTLINE_IOU`), the known pixels `KNOWN_FAR_PX` or more from what is made (PSNR at
+    `KNOWN_PSNR_DB`; LPIPS reported), and the homography over the drawn pixels (scale,
+    shift; the rotation is `pose_offset_deg`)."""
+    import cv2
+
+    picture = masks.condition
+    h, w = picture.shape[:2]
+    if image.shape[:2] != (h, w):
+        image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)
+    scale = w / 1024
+    band = max(2, round(OUTLINE_BAND_PX * scale))
+    out_top = top_segment(image, masks.unknown, band)
+    ref_top = top_segment(picture, masks.unknown, band)
+    iou = None if out_top is None or ref_top is None else round(_iou(out_top, ref_top), 4)
+    far = masks.known & ~_dilate(masks.unknown, max(1, round(KNOWN_FAR_PX * scale)))
+    db = float(tf.psnr(image, picture, far)) if far.sum() >= 50 else None
+    lp = perceptual.lpips(image, picture, far) if far.sum() >= 50 else None
+    hom = match_homography(image, picture, ~masks.void)
+    moved = homography_scale_shift(hom, w, h)
+    v: dict[str, Any] = {
+        "outlineIou": iou,
+        "renderOutlineIou": None if ref_top is None else round(_iou(ref_top, masks.unknown), 4),
+        "knownPsnr": None if db is None else round(db, 2),
+        "knownFarLpips": None if lp is None else round(float(lp), 4),
+        "homScale": None if moved is None else round(moved[0], 4),
+        "homShift": None if moved is None else round(moved[1], 4),
+    }
+    v["outlineOk"] = iou is not None and iou >= OUTLINE_IOU
+    v["knownOk"] = db is not None and db >= KNOWN_PSNR_DB
+    v["homOk"] = moved is not None and abs(moved[0] - 1) <= HOM_SCALE and moved[1] <= HOM_SHIFT
+    return v
 
 
 def colour_offset(image: np.ndarray, masks: ViewMasks) -> float | None:
@@ -2670,6 +2798,11 @@ def splash_summary(gate: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "poseFound": sum(1 for g in gate if g.get("poseDeg") is not None),
         "poseWithin": sum(1 for g in gate if g.get("poseOk")),
         "aligned": sum(1 for g in gate if g.get("aligned")),
+        # An outline arm's checks, each counted where it failed.
+        **{
+            f"failed{k[0].upper()}{k[1:-2]}": sum(1 for g in gate if g.get(k) is False)
+            for k in ("outlineOk", "knownOk", "homOk", "colourOk")
+        },
         "thresholds": {
             "knownLpips": SPLASH_KNOWN_LPIPS,
             "poseDeg": SPLASH_POSE_DEG,

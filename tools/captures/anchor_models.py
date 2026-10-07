@@ -166,15 +166,34 @@ def held(tokens: np.ndarray, sigma: float) -> np.ndarray:
 
 
 def token_lock(
-    strength: np.ndarray, width: int, height: int, feather: int, token_px: int = TOKEN_PX
+    strength: np.ndarray,
+    width: int,
+    height: int,
+    feather: int,
+    token_px: int = TOKEN_PX,
+    inward: bool = False,
 ) -> np.ndarray:
     """Per output token, how much it is locked to the render at every step (1 locked, 0
-    free): a token with any pixel to make (strength 1) is free, and the lock rises to 1 over
-    `feather` tokens from the nearest free one, so the seam blends (a token is 2x2 latent
-    pixels). Nothing to make: everything locked."""
+    free; a token is 2x2 latent pixels). Outward (default): a token with any pixel to make
+    (strength 1) is free, and the lock rises to 1 over `feather` tokens from the nearest
+    free one, so the seam blends. `inward`: only a token wholly to make is free, the tokens
+    across the edge stay locked (the outline is the render's), and the lock falls to 0 over
+    `feather` tokens inside. Nothing to make: everything locked."""
     import cv2
 
     th, tw = height // token_px, width // token_px
+    if inward:
+        s = cv2.resize(
+            np.asarray(strength, np.float32), (width, height), interpolation=cv2.INTER_NEAREST
+        )
+        blocks = s[: th * token_px, : tw * token_px].reshape(th, token_px, tw, token_px)
+        inside = blocks.min(axis=(1, 3)) >= 1.0
+        if not inside.any():
+            return np.ones(th * tw, np.float32)
+        dist = cv2.distanceTransform(inside.astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+        f = max(0, int(feather)) + 1
+        lock = np.where(inside, np.clip((f - dist) / f, 0.0, 1.0), 1.0)
+        return lock.astype(np.float32).reshape(-1)
     free = (token_strength(strength, width, height, token_px) >= 1.0).reshape(th, tw)
     if not free.any():
         return np.ones(th * tw, np.float32)
@@ -388,7 +407,12 @@ def edit(editor: Editor, request: dict) -> dict:
                 x0.dtype
             )
             lock = token_lock(
-                decode_strength(request["strength"]), width, height, int(request["lock"]), token_px
+                decode_strength(request["strength"]),
+                width,
+                height,
+                int(request["lock"]),
+                token_px,
+                inward=bool(request.get("lockInward")),
             )
             if lock.size != x0.shape[1]:
                 raise RuntimeError(f"{lock.size} token locks for {x0.shape[1]} tokens")

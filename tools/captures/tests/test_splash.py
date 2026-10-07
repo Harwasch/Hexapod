@@ -385,3 +385,73 @@ def test_the_region_gate_drops_a_repaint_that_changes_the_woods_tone() -> None:
     darker = same.copy()
     darker[masks.unknown] = (110, 90, 60)
     assert af.colour_offset(darker, masks) > af.SPLASH_COLOUR_DE
+
+
+def test_the_inward_lock_keeps_the_outline_locked() -> None:
+    w, h = 8 * am.TOKEN_PX, 8 * am.TOKEN_PX
+    strength = np.zeros((h, w), np.float32)
+    strength[8 : 7 * am.TOKEN_PX + 8, 8 : 7 * am.TOKEN_PX + 8] = 1.0  # off the token grid
+    lock = am.token_lock(strength, w, h, feather=1, inward=True).reshape(8, 8)
+    assert lock[0].min() == 1.0 and lock[:, 0].min() == 1.0  # across the edge: locked
+    assert lock[1, 3] == 0.5 and lock[3, 3] == 0.0  # one token inside: half; deeper: free
+    assert (am.token_lock(np.zeros((h, w)), w, h, 1, inward=True) == 1.0).all()
+
+
+def _footprint_masks(h: int = 160, w: int = 200) -> af.ViewMasks:
+    import cv2
+
+    render = np.full((h, w, 3), (90, 110, 60), np.uint8)  # ground
+    top = np.zeros((h, w), np.uint8)
+    cv2.ellipse(top, (100, 80), (70, 45), 0, 0, 360, 1, -1)
+    surface = top > 0
+    render[surface] = (190, 185, 175)  # the top's grey wood
+    weak = surface.copy()
+    weak[125:132, 40:160] = True  # a soft fringe below it: not part of the footprint
+    cam = Camera.look_at([0.0, -3.0, 0.0], [0.0, 0.0, 0.0], width=w, height=h)
+    return af.ViewMasks(
+        cam,
+        ~weak,
+        weak,
+        np.zeros((h, w), bool),
+        np.zeros((h, w), bool),
+        render,
+        render.copy(),
+        np.where(weak, 0.4, 0.0).astype(np.float32),
+        np.full((h, w), 3.0),
+        surface=surface,
+        drawn=render.copy(),
+    )
+
+
+def test_the_footprint_arm_makes_exactly_the_top_and_gates_its_outline() -> None:
+    import cv2
+
+    class _Run:
+        pockets = None
+
+    base = _footprint_masks()
+    masks, picture = af.splash_masks(_Run(), base, af.SPLASH_ARMS["splash-footprint"])  # type: ignore[arg-type]
+    assert (masks.unknown == base.surface).all()  # the top only, no fringe
+    perceptual = af.StandInPerceptual()
+    # A repaint inside the outline: the same shape, its wood textured.
+    same = picture.copy()
+    rng = np.random.default_rng(1)
+    noise = rng.integers(-12, 12, same.shape)
+    same[masks.unknown] = np.clip(same.astype(int) + noise, 0, 255).astype(np.uint8)[masks.unknown]
+    v = af.outline_verdict(same, masks, perceptual)
+    assert v["outlineOk"] and v["knownOk"], v
+    # The top drawn smaller: ground colour in a ring inside the scan's outline.
+    small = picture.copy()
+    smaller = np.zeros(small.shape[:2], np.uint8)
+    cv2.ellipse(smaller, (100, 80), (60, 37), 0, 0, 360, 1, -1)
+    small[masks.unknown & (smaller == 0)] = (90, 110, 60)
+    v = af.outline_verdict(small, masks, perceptual)
+    assert not v["outlineOk"] and v["outlineIou"] < af.OUTLINE_IOU, v
+
+
+def test_the_homography_check_measures_scale_and_shift() -> None:
+    hom = np.array([[1.03, 0.0, -2.0], [0.0, 1.03, 1.0], [0.0, 0.0, 1.0]])
+    scale, shift = af.homography_scale_shift(hom, 200, 100)
+    assert abs(scale - 1.03) < 1e-6 and shift > 0.01
+    assert af.homography_scale_shift(None, 200, 100) is None
+    assert af.homography_scale_shift(np.eye(3), 200, 100) == (1.0, 0.0)

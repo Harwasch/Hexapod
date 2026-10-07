@@ -165,6 +165,22 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
             "and holes painted by the adapter where the scan was soft. Purple is generated."
         ),
     },
+    "anchor-splash-footprint": {
+        "name": "splash-footprint",
+        "label": "Splat-repair anchors repainting the top inside its outline, + photos",
+        "about": (
+            "The splat-repair adapter given the plain render, with only the top face's own "
+            "footprint to repaint and its outline and everything outside locked to the render, "
+            "so the camera and the top's shape hold. Seeds whose top outline, surroundings, "
+            "camera or wood tone differ from the scan's are dropped. Then view by view with "
+            "photos."
+        ),
+        "look": (
+            "Set Inferred to Highlight; look down on the spool's top: sharper wood grain, bolts "
+            "and holes painted by the adapter where the scan was soft, inside the scan's own "
+            "outline. Purple is generated."
+        ),
+    },
     "anchor-splash-voids": {
         "name": "splash-voids",
         "label": "Splat-repair anchors on the true holes, + photos (Gaussian-Splash LoRA)",

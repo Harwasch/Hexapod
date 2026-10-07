@@ -861,3 +861,24 @@ The gate:
   field sees the repaint. Their LPIPS was 0.35-0.49, so every seed failed.
 - Leave-out against `refs` (no anchor kept, so photo propagation only): +0.05 dB, -0.003
   LPIPS. Top face: 0.07 % worst, mean alpha 0.9991.
+- The strip shows more: the repaint draws the top smaller, its edge inside the scan's. The
+  camera check measured rotation only and missed this.
+
+#### `splash-footprint` (S4)
+
+- **Region:** exactly the rebuilt top's own footprint (`footprint_mask`), with no fringe.
+- **Lock:** feathered inward (`token_lock(inward=True)`). The tokens across the outline stay
+  locked, so the outline is the render's, and the first ring inside is half locked.
+- **Gate** (`outline_verdict`), against picture 1, what it was locked to:
+  - **The outline.** The top as each image draws it (`top_segment`): within 24 pixels of the
+    footprint's edge, the pixels nearer in colour to the inside than to the ring outside,
+    joined to the inside. The output's must overlap the render's at IoU 0.95 or more.
+  - **The known pixels 16 pixels or more from the region:** PSNR 25 dB or more. LPIPS there
+    is reported.
+  - **The homography over the drawn pixels:** scale within 2 %, centre shift within 1 % of
+    the width, rotation within 2 degrees.
+  - **The colour:** within 10 Lab units.
+  - **After the distil:** the re-render, the top-face test and the leave-out.
+- **Two runs.** One run of both jobs would have a worst case of $8.43, more than the ~$7.69
+  left. So the leave-out job runs first (`refs` + `splash-footprint`), and the anchor job
+  (`splash-footprint`) runs only if the first keeps frames and passes.
