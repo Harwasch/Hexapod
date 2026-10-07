@@ -106,6 +106,8 @@ CROP_MAX = 1024
 #: A candidate fitting within this factor of the best one's error may be chosen for being
 #: more complete underneath (`underside_share`).
 FIT_SLACK = 1.3
+#: ...unless a candidate from all the frames is at least this share as complete.
+MULTI_UNDERSIDE = 0.9
 #: The underside: directions more than this far below the horizontal from the object's centre.
 UNDERSIDE_DEG = 45.0
 #: Registration: yaw steps, ICP iterations, the share of correspondences kept; an object
@@ -132,17 +134,22 @@ SHELL_MIN = 2
 #: `MASK_WIDTH`, is removed: the object must not grow past the real silhouette.
 SILHOUETTE_GROW_PX = 0
 SILHOUETTE_SIGMAS = 2.0
-#: Round 2's free-space grid (`fill_pockets`) spans the object's box padded by this share of
-#: its size; the grade's own grid is finer (`FREE_GRADE_DIVISIONS` voxels across).
-FREE_PAD = 0.15
+#: Round 2's free-space grid (`fill_pockets`) spans `object_box`; the carve uses it at these
+#: divisions, the grade at `FREE_GRADE_DIVISIONS` (one of them) and checks again at a finer
+#: `FREE_CHECK_DIVISIONS` the carve never used.
+FREE_BOX = 1.3
 FREE_STATE = 1  # fill_pockets.FREE
+FREE_CARVE_DIVISIONS = (128, 160)
 FREE_GRADE_DIVISIONS = 160
+FREE_CHECK_DIVISIONS = 192
 #: Strict free-space test: in front of the measured surface by more than this share of the
 #: depth (and the gaussian's own size) where the scan covers the pixel solidly.
 STRICT_SHARE = 0.02
 STRICT_WIDTH = 480
 GRADE_WIDTH = 640
 FINE_WIDTH = 960
+#: The grade's own check at a width the carve never used.
+CHECK_WIDTH = 1280
 #: Round 2's carver works at this width.
 CARVE_WIDTH = 320
 #: The layer's budget (round 1 and 2's): this share of the measured gaussians, at least
@@ -987,29 +994,33 @@ def shell_colours(centre: np.ndarray, shell: np.ndarray, colours: np.ndarray) ->
     return out
 
 
+def object_box(target: Target) -> tuple[np.ndarray, np.ndarray]:
+    """The box round 2's free-space grid spans for an object: its centre, `FREE_BOX` of its
+    radius (half its diagonal) each way, so the whole completed object is inside."""
+    half = FREE_BOX * target.radius
+    return target.centre - half, target.centre + half
+
+
 def free_voxels(
     positions: np.ndarray,
     measured: Splats,
     cameras: Sequence[Camera],
-    divisions: int | None = None,
+    divisions: int,
+    box: tuple[np.ndarray, np.ndarray],
 ) -> np.ndarray:
-    """Per point, its state in round 2's free-space grid (`fill_pockets.free_space`) over the
-    points' box padded by `FREE_PAD` of its size: `FREE_STATE` where a real camera's ray
-    crossed before meeting a measured gaussian."""
+    """Per point, its state in round 2's free-space grid (`fill_pockets.free_space`) over `box`
+    at `divisions`: `FREE_STATE` where a real camera's ray crossed before meeting a measured
+    gaussian. A point outside the box counts as free (it is nowhere the object can be)."""
     import fill_pockets as fp
 
     if len(positions) == 0:
         return np.zeros(0, np.uint8)
-    lo, hi = np.percentile(positions, 0.5, axis=0), np.percentile(positions, 99.5, axis=0)
-    pad = FREE_PAD * float(np.max(hi - lo))
-    vox = fp.free_space(
-        measured,
-        list(cameras),
-        lo - pad,
-        hi + pad,
-        divisions=divisions or fp.DIVISIONS,
-    )
-    return vox.at(positions)
+    lo, hi = box
+    vox = fp.free_space(measured, list(cameras), lo, hi, divisions=divisions)
+    state = vox.at(positions)
+    outside = np.any((positions < lo) | (positions > hi), axis=1)
+    state[outside] = FREE_STATE
+    return state
 
 
 def unseen(
@@ -1125,6 +1136,7 @@ def complete_target(
     depths: dict[str, np.ndarray] | None = None,
     up_known: bool = True,
     grade_cache: dict[int, tuple[np.ndarray, np.ndarray]] | None = None,
+    fine_cache: dict[int, tuple[np.ndarray, np.ndarray]] | None = None,
     debug: Path | None = None,
     log: Callable[[str], None] = print,
 ) -> Part:
@@ -1165,9 +1177,17 @@ def complete_target(
         info["skipped"] = "no candidate registered"
         return Part(target, None, np.zeros(0), info)
     # Among the candidates that fit nearly as well as the best, the most complete underneath.
+    # A candidate made from all the frames is preferred when it is about as complete
+    # (`MULTI_UNDERSIDE` of the best): its texture agrees with every photo it was given.
     floor = min(f[0] for f in fitted)
     good = [f for f in fitted if f[0] <= max(FIT_SLACK * floor, floor + 0.003)]
-    err, _, cand, t, reg = max(good, key=lambda f: (f[1], -f[0]))
+    best_under = max(f[1] for f in good)
+    multi = [
+        f
+        for f in good
+        if len(f[2].info.get("views") or []) > 1 and f[1] >= MULTI_UNDERSIDE * best_under
+    ]
+    err, _, cand, t, reg = max(multi or good, key=lambda f: (f[1], -f[0]))
     info["chosen"] = cand.key
     if err > MAX_ERROR:
         info["skipped"] = (
@@ -1187,12 +1207,18 @@ def complete_target(
     strict |= ~strict_keep(
         world.positions, reach, measured, cameras, renderer, GRADE_WIDTH, grade_cache
     )
+    strict |= ~strict_keep(
+        world.positions, reach, measured, cameras, renderer, FINE_WIDTH, fine_cache
+    )
     keep = ~carved & ~strict
     info["carved"] = int((~keep).sum())
     outside = np.zeros(len(world), bool)
     # Round 2's free-space voxels (`fill_pockets.free_space`): what a camera's ray crossed
     # before meeting a measured gaussian.
-    in_free = free_voxels(world.positions, measured, cameras) == FREE_STATE
+    box = object_box(target)
+    in_free = np.zeros(len(world), bool)
+    for divisions in FREE_CARVE_DIVISIONS:
+        in_free |= free_voxels(world.positions, measured, cameras, divisions, box) == FREE_STATE
     info["freeVoxel"] = int((keep & in_free).sum())
     keep &= ~in_free
     outside = np.zeros(len(world), bool)
@@ -1370,19 +1396,19 @@ def free_space(
 ) -> dict[str, Any]:
     """Generated gaussians a real camera saw through (the strict test, no weak-surface
     exemption), at the grading width (`GRADE_WIDTH`, which the carve also tests) and, as a
-    check the carve never made, at `FINE_WIDTH`."""
+    check the carve never made, at `CHECK_WIDTH`."""
     if layer is None or not len(layer):
-        return {"gaussians": 0, "violations": 0, "violationsFine": 0}
+        return {"gaussians": 0, "violations": 0, "violationsCheck": 0}
     width = width or GRADE_WIDTH
     reach = 2.0 * layer.scales.max(axis=1)
     keep = strict_keep(layer.positions, reach, measured, cameras, renderer, width=width)
-    fine = strict_keep(layer.positions, reach, measured, cameras, renderer, width=FINE_WIDTH)
+    check = strict_keep(layer.positions, reach, measured, cameras, renderer, width=CHECK_WIDTH)
     return {
         "gaussians": len(layer),
         "violations": int((~keep).sum()),
         "width": width,
-        "violationsFine": int((~fine).sum()),
-        "fineWidth": FINE_WIDTH,
+        "violationsCheck": int((~check).sum()),
+        "checkWidth": CHECK_WIDTH,
         "cameras": len(cameras),
     }
 
@@ -1390,18 +1416,31 @@ def free_space(
 def free_space_voxels(
     parts: Sequence[Part], measured: Splats, cameras: Sequence[Camera]
 ) -> dict[str, Any]:
-    """Each object's fill in round 2's free-space voxels, on a finer grid than the carve's
-    (`FREE_GRADE_DIVISIONS`): how many of its gaussians a real camera's ray crossed."""
-    out: dict[str, Any] = {"divisions": FREE_GRADE_DIVISIONS, "objects": {}}
-    total = 0
+    """Each object's fill in round 2's free-space voxels (its `object_box`): how many of its
+    gaussians a real camera's ray crossed, on the grid the carve also used
+    (`FREE_GRADE_DIVISIONS`) and on a finer one it never did (`FREE_CHECK_DIVISIONS`)."""
+    out: dict[str, Any] = {
+        "divisions": FREE_GRADE_DIVISIONS,
+        "checkDivisions": FREE_CHECK_DIVISIONS,
+        "objects": {},
+    }
+    total, total_check = 0, 0
     for part in parts:
         if part.splats is None or not len(part.splats):
             continue
-        state = free_voxels(part.splats.positions, measured, cameras, FREE_GRADE_DIVISIONS)
-        n = int((state == FREE_STATE).sum())
-        out["objects"][str(part.target.instance)] = {"gaussians": len(part.splats), "inFree": n}
+        box = object_box(part.target)
+        pos = part.splats.positions
+        n = int((free_voxels(pos, measured, cameras, FREE_GRADE_DIVISIONS, box) == 1).sum())
+        c = int((free_voxels(pos, measured, cameras, FREE_CHECK_DIVISIONS, box) == 1).sum())
+        out["objects"][str(part.target.instance)] = {
+            "gaussians": len(part.splats),
+            "inFree": n,
+            "inFreeCheck": c,
+        }
         total += n
+        total_check += c
     out["violations"] = total
+    out["violationsCheck"] = total_check
     return out
 
 
@@ -1738,6 +1777,7 @@ def run_arm(
     cameras = [v.camera for v in setup.views]
     strict_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     grade_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    fine_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     parts = []
     for target in targets:
         keys = [r["key"] for r in plan.requests if r["target"] == target.instance]
@@ -1755,6 +1795,7 @@ def run_arm(
                 depths=plan.depths,
                 up_known=up_known,
                 grade_cache=grade_cache,
+                fine_cache=fine_cache,
                 debug=None if debug is None else debug / f"{setup.leave_out}-{target.instance}.npz",
                 log=log,
             )  # fmt: skip
