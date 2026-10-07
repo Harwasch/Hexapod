@@ -882,3 +882,23 @@ The gate:
 - **Two runs.** One run of both jobs would have a worst case of $8.43, more than the ~$7.69
   left. So the leave-out job runs first (`refs` + `splash-footprint`), and the anchor job
   (`splash-footprint`) runs only if the first keeps frames and passes.
+
+**Results (run 37569429589, the leave-out job, about $1.28): 12 of 16 frames kept, but the
+leave-out failed, so the anchor job was not run and nothing was published.**
+
+- Failures per check, over 16 seeds: outline 0, known pixels 0, homography 0, colour 4 (all
+  four of one view, 10.2-12.2 Lab units).
+- Outline IoU, output against render: 0.967-0.996. The render's own top against the
+  footprint disc is 0.81-0.97, which is why the outline is gated against the render's
+  segment and not the disc.
+- Known pixels 16 pixels or more from the region: 31.7-32.9 dB, LPIPS 0.03-0.06.
+- Homography: scale within 0.07 % of 1, centre shift 0.02 % of the width at most, rotation
+  0.02-0.93 degrees.
+- After the distil, all 3 kept anchors re-render at 20 dB or more. Top face: 0.01 % worst,
+  mean alpha 0.9993.
+- Leave-out against the same run's `refs`: 15.323 against 15.951 dB (-0.63), LPIPS 0.654
+  against 0.626 (+0.027), DreamSim 0.295 against 0.264.
+- So the repaints keep the scan's camera and outline, and are photographic and coherent.
+  But the planks, bolts and holes they draw are not where the real spool's are, so the real
+  held-out photos agree with them less than with the photo-only arm. The detail is made up,
+  and it costs fidelity.
