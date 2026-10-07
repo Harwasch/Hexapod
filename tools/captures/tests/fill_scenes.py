@@ -66,6 +66,47 @@ def table_scene() -> tuple[Splats, dict[str, np.ndarray]]:
     return Splats.concat(parts), masks
 
 
+def flanged_spool_scene() -> tuple[Splats, dict[str, np.ndarray]]:
+    """A cable spool on a lawn: a bottom flange (0.6 m radius, its top at z = 0.06), a drum
+    (0.3 m radius) and a top flange (0.6 m radius, 0.02 m thick, its top at z = 0.6). As the
+    capture from above left it, the drum's top band (z 0.4 to 0.58) and the top flange's
+    underside are missing. Masks: `ground`, `drum`, `top`."""
+    g = np.linspace(-1.2, 1.2, 49)
+    gx, gy = np.meshgrid(g, g)
+    ground = np.column_stack([gx.ravel(), gy.ravel(), np.zeros(gx.size)])
+    xs = np.linspace(-0.6, 0.6, 25)
+    fx, fy = np.meshgrid(xs, xs)
+    disc = np.column_stack([fx.ravel(), fy.ravel()])
+    disc = disc[np.linalg.norm(disc, axis=1) <= 0.6]
+    bottom = np.column_stack([disc, np.full(len(disc), 0.06)])
+    top = np.column_stack([disc, np.full(len(disc), 0.6)])
+    a = np.linspace(0, 2 * math.pi, 64, endpoint=False)
+    rim = np.concatenate(
+        [
+            np.column_stack([0.6 * np.cos(a), 0.6 * np.sin(a), np.full(a.size, z)])
+            for z in (0.58, 0.59)
+        ]
+    )
+    a2 = np.linspace(0, 2 * math.pi, 40, endpoint=False)
+    zs = np.arange(0.08, 0.401, 0.02)
+    aa, zz = np.meshgrid(a2, zs)
+    drum = np.column_stack([0.3 * np.cos(aa.ravel()), 0.3 * np.sin(aa.ravel()), zz.ravel()])
+    parts = [
+        splats(ground, [0.2, 0.5, 0.2], size=0.04, seed=6),
+        splats(bottom, [0.55, 0.45, 0.3], size=0.035, seed=7),
+        splats(drum, [0.5, 0.35, 0.2], size=0.02, seed=8),
+        splats(np.concatenate([top, rim]), [0.6, 0.5, 0.35], size=0.025, seed=9),
+    ]
+    n = [len(p) for p in parts]
+    ends = np.cumsum([0, *n])
+    masks = {}
+    for name, k in (("ground", 0), ("drum", 2), ("top", 3)):
+        m = np.zeros(ends[-1], bool)
+        m[ends[k] : ends[k + 1]] = True
+        masks[name] = m
+    return Splats.concat(parts), masks
+
+
 def ring_cameras(
     n: int,
     elevation_deg: float,

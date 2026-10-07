@@ -126,9 +126,11 @@ jobs:
           if withdrawing:
               # A withdrawal stages nothing: no run, no job.
               options["run"], options["job"], options["name"] = "0", "none", "none"
+          # A variant of several layers joins its jobs with `+` (publish_variants.variant_for).
+          several = rf"{job}(\+{job})*"
           valid = {"run": r"[0-9]+", "job": job if options["variant"] != "true" else
-                   rf"{job}(,{job})*", "scan": r"[a-z0-9-]+",
-                   "name": r"[a-z0-9][a-z0-9,-]*", "publish": r"true|false",
+                   rf"{several}(,{several})*", "scan": r"[a-z0-9-]+",
+                   "name": r"[a-z0-9][a-z0-9,+-]*", "publish": r"true|false",
                    "variant": r"true|false", "withdraw": rf"({job}(,{job})*)?"}
           for name, pattern in valid.items():
               if not re.fullmatch(pattern, options[name]):

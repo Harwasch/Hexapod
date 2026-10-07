@@ -113,6 +113,103 @@ def unpack_constraints(blob: bytes | None) -> tuple[np.ndarray | None, np.ndarra
         return z["rigid"].astype(bool), z["opacityFloor"].astype(np.float64)
 
 
+#: Solidity terms (`distill(solidity=...)`), each a weight (0: off); `dropout` a probability.
+#: - `alpha`: in the solid views, coverage 1 inside the fitted surface's projection;
+#: - `depth`: there, the expected depth at the fitted surface's (relative L1);
+#: - `normal`: an inferred gaussian near the surface lies flat along it (its thinnest axis
+#:   along the surface normal);
+#: - `erank`: no needles (effective rank of the scales, arXiv 2406.11672);
+#: - `dropout`: each step drops inferred gaussians at random, the rest's opacity scaled up
+#:   (DropGaussian), so no one gaussian carries a pixel alone.
+SOLIDITY_TERMS = ("alpha", "depth", "normal", "erank", "dropout")
+#: The presets a run names (`anchor_fill --solidity`).
+SOLIDITY_PRESETS: dict[str, dict[str, float]] = {
+    "alpha": {"alpha": 1.0},
+    "full": {"alpha": 1.0, "depth": 0.5, "normal": 0.2, "erank": 0.01, "dropout": 0.1},
+}
+ERANK_EPS = 1e-2
+
+
+def pack_solid(
+    cameras: Sequence[dict],
+    masks: np.ndarray,
+    depths: np.ndarray,
+    normal_targets: np.ndarray | None = None,
+) -> bytes:
+    """The solidity terms' data: views of the fitted surface (`cameras`, `masks` where it
+    covers, `depths` there, 0 elsewhere) and, per inferred gaussian, the surface normal it
+    should lie along (0 for none)."""
+    buffer = io.BytesIO()
+    arrays = {
+        "cameras": np.array(json.dumps(list(cameras))),
+        "masks": np.asarray(masks, bool),
+        "depths": np.asarray(depths, np.float32),
+    }
+    if normal_targets is not None:
+        arrays["normals"] = np.asarray(normal_targets, np.float32)
+    np.savez_compressed(buffer, **arrays)
+    return buffer.getvalue()
+
+
+def unpack_solid(blob: bytes | None) -> dict[str, object] | None:
+    if blob is None:
+        return None
+    with np.load(io.BytesIO(blob)) as z:
+        return {
+            "cameras": json.loads(str(z["cameras"])),
+            "masks": z["masks"].astype(bool),
+            "depths": z["depths"].astype(np.float64),
+            "normals": z["normals"].astype(np.float64) if "normals" in z.files else None,
+        }
+
+
+def effective_rank(scales):
+    """Per gaussian, exp of the entropy of its normalised squared scales: 1 for a needle, 2
+    for a disc, 3 for a ball (torch)."""
+    import torch
+
+    q = scales**2
+    q = q / q.sum(dim=1, keepdim=True).clamp(min=1e-12)
+    return torch.exp(-(q * torch.log(q.clamp(min=1e-12))).sum(dim=1))
+
+
+def thinnest_axis(quats, scales):
+    """Per gaussian, its rotation's column along its smallest scale (torch, wxyz quats)."""
+    import torch
+
+    q = quats / quats.norm(dim=1, keepdim=True).clamp(min=1e-12)
+    w, x, y, z = q.unbind(1)
+    rot = torch.stack(
+        [
+            torch.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], 1),
+            torch.stack([2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], 1),
+            torch.stack([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], 1),
+        ],
+        1,
+    )
+    k = torch.argmin(scales, dim=1)
+    return rot[torch.arange(len(k)), :, k]
+
+
+def gsplat_depth_rasterize(means, quats, scales, opacities, colours, viewmat, K, width, height):
+    """`gsplat_rasterize` with the expected depth: `(rgb, alpha, depth)`."""
+    rgb, alpha, depth = gsplat_frame(
+        means, quats, scales, opacities, colours, viewmat, K, width, height, near=0.01, far=1e4
+    )
+    return rgb, alpha, depth
+
+
+def torch_depth_rasterize(means, quats, scales, opacities, colours, viewmat, K, width, height):
+    """`torch_rasterize` with the expected depth (coverage-normalised camera z)."""
+    import torch
+
+    z = (means @ viewmat[:3, :3].T + viewmat[:3, 3])[:, 2:3].clamp(min=1e-3)
+    rgb, alpha = torch_rasterize(
+        means, quats, scales, opacities, torch.cat([colours, z], 1), viewmat, K, width, height
+    )
+    return rgb[..., :3], alpha, rgb[..., 3] / alpha.clamp(min=1e-6)
+
+
 def pack_scan(scan: dict[str, np.ndarray]) -> bytes:
     buffer = io.BytesIO()
     np.savez_compressed(buffer, **pack(scan))
@@ -217,17 +314,25 @@ def distill(
     pixel_weights: np.ndarray | None = None,
     rigid: np.ndarray | None = None,
     opacity_floor: np.ndarray | None = None,
+    solidity: dict[str, float] | None = None,
+    solid: dict[str, object] | None = None,
+    depth_rasterize: Rasterize | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     """The inferred gaussians after `iterations` steps of Adam, and a report: the masked
     and outside L1 per view before and after. `weights` and `outside` per view
     (`pack_views`): a real photo at 1 on what it covers, a generated view lower and only on
     its unknown pixels. Views are visited in turn, each step's loss times its weight.
-    `rigid` and `opacity_floor` per inferred gaussian (`pack_constraints`)."""
+    `rigid` and `opacity_floor` per inferred gaussian (`pack_constraints`). `solidity`
+    weights `SOLIDITY_TERMS`; `solid` is their data (`unpack_solid`)."""
     import torch
 
     torch.manual_seed(seed)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     rasterize = rasterize or (gsplat_rasterize if device == "cuda" else torch_rasterize)
+    depth_rasterize = depth_rasterize or (
+        gsplat_depth_rasterize if device == "cuda" else torch_depth_rasterize
+    )
+    terms = {k: float(v) for k, v in (solidity or {}).items() if k in SOLIDITY_TERMS and v}
     t = lambda a: torch.tensor(np.asarray(a), dtype=torch.float32, device=device)
 
     fixed = {k: t(measured[k]) for k in KEYS}
@@ -318,10 +423,87 @@ def distill(
                 )
         return out
 
+    # The solidity terms' data: the fitted surface's views, and per gaussian its normal.
+    solid_views, solid_masks, solid_depths = [], [], []
+    normal_target = normal_on = None
+    if terms and solid is not None:
+        for cam, m, d in zip(solid["cameras"], solid["masks"], solid["depths"], strict=True):
+            v = camera_tensors(cam, torch, device)
+            solid_views.append(v)
+            solid_masks.append(
+                torch.tensor(np.asarray(m)[: v[3], : v[2]], dtype=torch.bool, device=device)
+            )
+            solid_depths.append(t(np.asarray(d)[: v[3], : v[2]]))
+        if solid.get("normals") is not None:
+            normal_target = t(solid["normals"])
+            normal_on = normal_target.norm(dim=1) > 0.5
+    free_shape = (
+        torch.ones(n_init, dtype=torch.bool, device=device)
+        if frozen_shape is None
+        else ~frozen_shape
+    )
+    term_log = {k: [] for k in terms}
+
+    def solidity_loss(step: int, extra: dict):
+        total = extra["positions"].sum() * 0
+        if solid_views and ("alpha" in terms or "depth" in terms):
+            j = step % len(solid_views)
+            viewmat, K, w, h = solid_views[j]
+            m = solid_masks[j]
+            if m.any():
+                means = torch.cat([fixed["positions"], extra["positions"]])
+                quats = torch.cat([fixed["rotations"], extra["rotations"]])
+                quats = quats / quats.norm(dim=1, keepdim=True).clamp(min=1e-12)
+                _, alpha, depth = depth_rasterize(
+                    means,
+                    quats,
+                    torch.cat([fixed["scales"], extra["scales"]]),
+                    torch.cat([fixed["opacities"], extra["opacities"]]),
+                    torch.cat([fixed["colours"], extra["colours"]]),
+                    viewmat,
+                    K,
+                    w,
+                    h,
+                )
+                if "alpha" in terms:
+                    a = (1.0 - alpha[m]).mean()
+                    term_log["alpha"].append(float(a.detach()))
+                    total = total + terms["alpha"] * a
+                if "depth" in terms:
+                    target = solid_depths[j][m]
+                    d = ((depth[m] - target).abs() / target.clamp(min=1e-3)).mean()
+                    term_log["depth"].append(float(d.detach()))
+                    total = total + terms["depth"] * d
+        if "erank" in terms and free_shape.any():
+            er = effective_rank(extra["scales"][free_shape])
+            e = torch.clamp(-torch.log(er - 1.0 + ERANK_EPS), min=0.0).mean()
+            term_log["erank"].append(float(e.detach()))
+            total = total + terms["erank"] * e
+        if "normal" in terms and normal_on is not None and (normal_on & free_shape).any():
+            sel = normal_on & free_shape
+            axis = thinnest_axis(extra["rotations"][sel], extra["scales"][sel])
+            nl = (1.0 - (axis * normal_target[sel]).sum(dim=1).abs()).mean()
+            term_log["normal"].append(float(nl.detach()))
+            total = total + terms["normal"] * nl
+        return total
+
+    def dropped(extra: dict) -> dict:
+        """DropGaussian: a random share of the inferred gaussians gone this step, the rest's
+        opacity scaled up to keep the expected coverage (a rigid surface is never dropped)."""
+        p = terms.get("dropout", 0.0)
+        if p <= 0:
+            return extra
+        keep = (torch.rand(n_init, device=device) >= p) | ~free_shape
+        scale = torch.where(
+            free_shape, torch.full_like(floor, 1.0 / (1.0 - p)), torch.ones_like(floor)
+        )
+        return {**extra, "opacities": (extra["opacities"] * keep * scale).clamp(max=0.99)}
+
     before = losses(current())
     for step in range(iterations):
         k = step % len(views)
-        rgb, _ = render(views[k], current())
+        now = current()
+        rgb, _ = render(views[k], dropped(now))
         err = (rgb - targets[k]).abs().mean(dim=-1)
         m = inside[k]
         if per_pixel is not None and m.any():
@@ -335,6 +517,8 @@ def distill(
             view_weight[k] * loss
             + ANCHOR_WEIGHT * ((params["positions"] - anchor) ** 2).sum(dim=1).mean()
         )
+        if terms:
+            loss = loss + solidity_loss(step, now)
         optimiser.zero_grad()
         loss.backward()
         if frozen_shape is not None:
@@ -367,7 +551,23 @@ def distill(
             6,
         ),
     }
+    if terms:
+        report["solidity"] = {
+            "terms": terms,
+            "solidViews": len(solid_views),
+            # Each term's mean over the first and the last tenth of the steps it ran.
+            "first": {k: _tenth(v, 0) for k, v in term_log.items()},
+            "last": {k: _tenth(v, -1) for k, v in term_log.items()},
+        }
     return out, report
+
+
+def _tenth(values: list[float], end: int) -> float | None:
+    if not values:
+        return None
+    n = max(1, len(values) // 10)
+    part = values[:n] if end == 0 else values[-n:]
+    return round(float(np.mean(part)), 5)
 
 
 def run(request: dict) -> dict:
@@ -388,5 +588,7 @@ def run(request: dict) -> dict:
         pixel_weights=unpack_pixel_weights(request["views"]),
         rigid=rigid,
         opacity_floor=floor,
+        solidity=request.get("solidity"),
+        solid=unpack_solid(request.get("solid")),
     )
     return {"inferred": pack_scan(out), "report": report}

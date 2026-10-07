@@ -115,6 +115,25 @@ def test_the_estimate_and_its_worst_case_grow_with_the_run(app) -> None:
     assert worst["anchor"] == 8 * 4 and worst["prop"] == (24 + 17) * 2  # + the hemisphere views
 
 
+def test_solidity_clones_and_the_shape_cost_their_updates_and_minutes(app) -> None:
+    import anchor_fill as af
+
+    plain = {"arms": "refs+norefs"}
+    both = {**plain, "solidity": "alpha+full", "shape": "true"}
+    opts = app.parse_anchor_options("arms=refs+norefs,solidity=alpha+full,shape=true")
+    argv = app.anchor_argv(opts)
+    parsed = af.parser().parse_args(["run", "t", "o", "--caption", "c", "--poses", "p", *argv])
+    o = af.options_from(parsed)
+    assert o.solidity == ("alpha", "full") and o.shape is True
+    with pytest.raises(SystemExit):
+        app.parse_anchor_options("solidity=everything")
+    # Two presets clone both sequential arms: three times the update calls.
+    assert app.anchor_counts(both)["update"] == 3 * app.anchor_counts(plain)["update"]
+    one, more = (app.estimate_anchor_cost([("anchor", "spool")], x) for x in (plain, both))
+    assert more["usd"]["anchor:spool L4"] > one["usd"]["anchor:spool L4"]
+    assert more["totalUsd"] > one["totalUsd"] and more["worstUsd"] > one["worstUsd"]
+
+
 def test_the_actual_cost_counts_every_call_and_start(app) -> None:
     results = [
         {

@@ -108,6 +108,63 @@ FILL_VARIANTS: dict[str, dict[str, str]] = {
             "they agree with each other."
         ),
     },
+    "anchor-splash": {
+        "name": "splash-refs",
+        "label": "Splat-repair anchors + photos, then view by view (Gaussian-Splash LoRA)",
+        "about": (
+            "The photo arm with other anchors: an editor adapter trained to repair splat "
+            "renders is given the render with everything the scan does not know blacked "
+            "out and a real photo of the spot, and repaints the blanks. Only seeds whose "
+            "known pixels and camera still match the render are kept."
+        ),
+        "look": (
+            "Set Inferred to Highlight; orbit to look down on the spool's top and low under "
+            "its flange. Purple is generated."
+        ),
+    },
+    "anchor-refs-alpha": {
+        "name": "anchor-refs-alpha",
+        "label": "Anchors + photos, distilled to be solid (coverage term)",
+        "about": (
+            "The photo arm, with its gaussians also trained to cover the rebuilt surface fully "
+            "from 17 directions around it, so it is not see-through from any side."
+        ),
+    },
+    "anchor-refs-full": {
+        "name": "anchor-refs-solid",
+        "label": "Anchors + photos, distilled to be solid (all terms)",
+        "about": (
+            "The photo arm, trained to cover the rebuilt surface from 17 directions, to sit at "
+            "its depth and lie along it, with no needle-shaped gaussians, and with random "
+            "gaussians dropped while training so no single one carries a pixel."
+        ),
+    },
+    "anchor-norefs-alpha": {
+        "name": "anchor-norefs-alpha",
+        "label": "Anchors without photos, distilled to be solid (coverage term)",
+        "about": "The no-photo control, trained to cover the fitted surface from 17 directions.",
+    },
+    "anchor-norefs-full": {
+        "name": "anchor-norefs-solid",
+        "label": "Anchors without photos, distilled to be solid (all terms)",
+        "about": (
+            "The no-photo control, with all the solidity terms: coverage, depth, lying along "
+            "the surface, no needles, random dropout."
+        ),
+    },
+    "anchor-refs+anchor-shape": {
+        "name": "refs-shape",
+        "label": "Anchors + photos, and the shape under the flange",
+        "about": (
+            "The photo arm's top, and under the top flange, which no camera saw, the drum and "
+            "the flange's underside continued from the measured surfaces: never where a camera "
+            "saw through, coloured from the nearest wood in shade. Two layers."
+        ),
+        "look": (
+            "Set Inferred to Highlight; orbit low, under the spool's top flange. "
+            "Purple is generated."
+        ),
+    },
 }
 #: The object round (`object_fill.LAYERS`, fill_objects.yml `objects-<scan>-<layer>` folders):
 #: whole objects completed by a 3D model, only their unseen side kept. Each says where to look.
@@ -144,6 +201,8 @@ FILL_VARIANTS.update(
         },
     }
 )
+#: Where each layer of a variant of several goes, under the variant's folder.
+LAYER_DIRS = {"anchor-refs": "top", "anchor-shape": "shape"}
 #: Job kinds whose folders hold layers to publish; the others are checks.
 PUBLISHED_KINDS = ("gen", "anchor", "objects")
 CHECK_KINDS = ("holdout", "leaveout")
@@ -204,16 +263,28 @@ def _extract(archive: Path, dest: Path) -> None:
 
 
 def variant_for(job: str, scan: str) -> tuple[str, dict[str, str]]:
-    """The variant a fill.yml job folder (`<kind>-<scan>-<layer>`) publishes as."""
+    """The variant a fill.yml job folder (`<kind>-<scan>-<layer>`) publishes as; several
+    folders joined by `+` publish as one variant of several layers."""
+    slugs = [variant_for_layer(part, scan) for part in job.split("+")]
+    key = "+".join(slugs)
+    if key not in FILL_VARIANTS:
+        raise SystemExit(f"{job}: no variant for {key!r} ({sorted(FILL_VARIANTS)})")
+    return key, FILL_VARIANTS[key]
+
+
+def variant_for_layer(job: str, scan: str) -> str:
+    """The layer of one job folder (`<kind>-<scan>-<layer>`): a variant's, or one layer of a
+    variant of several (`LAYER_DIRS`)."""
     for kind in (*PUBLISHED_KINDS, *CHECK_KINDS):
         prefix = f"{kind}-{scan}-"
         if job.startswith(prefix):
             slug = job[len(prefix) :]
             if kind in CHECK_KINDS:
                 raise SystemExit(f"{job}: a held-out run is a check, not a layer to publish")
-            if slug not in FILL_VARIANTS:
-                raise SystemExit(f"{job}: no variant for layer {slug!r} ({sorted(FILL_VARIANTS)})")
-            return slug, FILL_VARIANTS[slug]
+            known = {*FILL_VARIANTS, *LAYER_DIRS}
+            if slug not in known:
+                raise SystemExit(f"{job}: no variant for layer {slug!r} ({sorted(known)})")
+            return slug
     kinds = "|".join(PUBLISHED_KINDS)
     raise SystemExit(f"{job} is not a ({kinds})-{scan}-<layer> folder")
 
@@ -223,19 +294,23 @@ def entry_for(
     scan: str,
     evidence: Mapping[str, Any],
     supersedes: str | None = None,
+    layers: Sequence[tuple[str, Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """A fill variant's entry. `supersedes`: the layer's own `supersedes.json` (relative to
     the layer), the measured splats its rebuilt surface replaces: published as
     `variants/fill/<name>/<file>`, so a viewer that reads it hides them while the variant is
     shown (older viewers ignore the field: `lib/variants.ts` reads only what it knows)."""
     entry: dict[str, Any] = {"name": meta["name"], "label": meta["label"], "about": meta["about"]}
-    if scan in LOOK_WHERE and meta["name"].startswith("anchor-"):
-        entry["look"] = LOOK.format(where=LOOK_WHERE[scan])
-    elif meta.get("look"):
+    if meta.get("look"):
         entry["look"] = meta["look"]
-    entry["inferredLayers"] = [
-        {"uri": f"variants/{SYSTEM}/{meta['name']}/tileset.json", "evidence": dict(evidence)}
-    ]
+    elif scan in LOOK_WHERE and meta["name"].startswith("anchor-"):
+        entry["look"] = LOOK.format(where=LOOK_WHERE[scan])
+    base = f"variants/{SYSTEM}/{meta['name']}"
+    entry["inferredLayers"] = (
+        [{"uri": f"{base}/{sub}/tileset.json", "evidence": dict(ev)} for sub, ev in layers]
+        if layers
+        else [{"uri": f"{base}/tileset.json", "evidence": dict(evidence)}]
+    )
     if supersedes:
         entry["supersedes"] = f"variants/{SYSTEM}/{meta['name']}/{supersedes}"
     return entry
@@ -285,13 +360,21 @@ def build(
     for job in jobs:
         _, meta = variant_for(job, scan)
         dest = out / "variants" / SYSTEM / meta["name"]
-        _extract(fill / job / "inferred.tar.gz", dest)
-        checked = _check_layer(dest)
-        if checked["transform"] != current["root"]["transform"]:
-            raise SystemExit(f"{job}: the layer is not in the scan's current tileset's frame")
-        register.append(
-            (SYSTEM, entry_for(meta, scan, checked["evidence"], checked.get("supersedes")))
-        )
+        parts = job.split("+")
+        layers: list[tuple[str, Any]] = []
+        supersedes = None
+        for part in parts:
+            sub = LAYER_DIRS[variant_for_layer(part, scan)] if len(parts) > 1 else ""
+            folder = dest / sub if sub else dest
+            _extract(fill / part / "inferred.tar.gz", folder)
+            checked = _check_layer(folder)
+            if checked["transform"] != current["root"]["transform"]:
+                raise SystemExit(f"{part}: the layer is not in the scan's current tileset's frame")
+            layers.append((sub, checked["evidence"]))
+            if checked.get("supersedes") and supersedes is None:
+                supersedes = f"{sub}/{checked['supersedes']}" if sub else checked["supersedes"]
+        entry = entry_for(meta, scan, layers[0][1], supersedes, layers if len(parts) > 1 else None)
+        register.append((SYSTEM, entry))
     changes = [("with", s, e) for s, e in register]
     _, summary = preflight(current["root"].get("extras", {}).get("variants"), changes)
     manifest = attach_sidecars.write_manifest(
