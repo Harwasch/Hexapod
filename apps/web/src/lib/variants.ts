@@ -71,6 +71,8 @@ export interface ObjectsVariant extends VariantBase {
 export interface FillVariant extends VariantBase {
   /** Its inferred layers, as `extras.inferredLayers` lists them. Empty: a "no fill" method. */
   inferredLayers: InferredLayerRef[];
+  /** The measured splats it replaces while drawn (lib/supersedes.ts), relative to the tileset. */
+  supersedes?: string;
 }
 
 export interface SkinsVariant extends VariantBase {
@@ -157,7 +159,8 @@ export function variantsOf(extras: unknown): ScanVariants {
     const inferredLayers = inferredLayersOf({ inferredLayers: e.inferredLayers });
     // A list with an entry that does not read is malformed: half a method is not the method.
     if (inferredLayers.length !== e.inferredLayers.length) return null;
-    return { ...base, inferredLayers };
+    const supersedes = pathOf(e.supersedes);
+    return { ...base, inferredLayers, ...(supersedes === null ? {} : { supersedes }) };
   });
   const skins = listOf<SkinsVariant>(v.skins, (e, base) => {
     const skin = pathOf(e.skin);

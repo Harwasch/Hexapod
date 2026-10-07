@@ -1137,6 +1137,19 @@ in place, with no reload and the camera where it is, under every renderer:
   (`scanView/scanInstances.ts`).
 - **Fill** (`cesium/inferredLayers.ts`): the drawn layers are unloaded and the variant's
   loaded. Inferred layers are CesiumJS's under every renderer (below).
+  - A fill entry may also name **`supersedes`**: a path to the measured splats its layer
+    replaces (swap, don't stack). For example, a thin, see-through patch of the scan with an
+    opaque surface rebuilt over it.
+  - The file is `{"superseded": n, "tiles": {"<checksum>": [flag, count, …]}}`. It uses
+    `instances.json`'s addressing, with flag 1 for a superseded splat. Coarse tiles carry
+    their own runs.
+  - The listed splats are hidden only while that variant is picked and Inferred is Show or
+    Highlight. Hide, Today and other methods draw the untouched scan.
+  - They are drawn under one reserved id past every other (`lib/supersedes.ts`, through
+    `effectiveDoc`), which every renderer, picking and the brush treat as hidden. The person's
+    own hidden set and undo are not touched.
+  - A scan without object ids (no `instances.json` nor an objects variant) has no path for
+    it, so the swap does nothing there. Viewers older than the field ignore it.
 - **Motion** (`cesium/splatSkin.ts` `attachSkin`): the variant's skin replaces the skin part;
   the wind makes a driver for the new part and keeps blowing (`LivingSurveyManager`), and the
   overlay rebinds its tiles' skin weights (`scanView/scanMotion.ts`).
