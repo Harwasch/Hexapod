@@ -15,6 +15,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import type { Page } from "@playwright/test";
+
 import { expect, mockApi, test } from "./fixtures";
 
 const TILES = resolve(process.cwd(), "../../data/tiles");
@@ -105,9 +107,8 @@ interface Pose {
   heading: number;
 }
 
-test("zoom close and stay still: the camera does not move", async ({ page }) => {
-  test.setTimeout(420_000);
-  await page.setViewportSize({ width: 960, height: 600 });
+/** The catalog with the placed tree scan in it, and the scan's tiles from `data/tiles`. */
+async function serveTreeScan(page: Page): Promise<void> {
   await mockApi(page);
   await page.route("**/api/v1/sites", (route) =>
     route.request().method() === "GET"
@@ -128,14 +129,38 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
       body: readFileSync(file),
     });
   });
+}
 
+/** What the test has done to the page that outlives a reload (the welcome card's dismissal). */
+interface Visit {
+  explored: boolean;
+}
+
+/** Opens the app, flies to the tree scan, and waits until it lands and the scan is drawn. */
+async function arrive(page: Page, visit: Visit): Promise<void> {
   // The default renderer: the scan is drawn over the globe and CesiumJS's own wheel zoom and
   // terrain collision move the camera, as on production.
   await page.goto("/?renderer=playcanvas");
+  // Marks this document: a reload replaces it (`zoomCloseAndStayStill`'s caller).
+  await page.evaluate(`window.__cameraRestPage = true`);
   await page.waitForFunction(() => "__twin" in window && Boolean(window.__twin), undefined, {
     timeout: 120_000,
   });
-  await page.getByTestId("onboarding-explore").click();
+  // A frame drawn by the app this page loaded.
+  await page.waitForFunction(
+    `(() => {
+      const scene = window.__twin.scene;
+      scene.requestRender();
+      return scene.frameState.frameNumber > 0;
+    })()`,
+    undefined,
+    { timeout: 60_000, polling: 250 },
+  );
+  // The welcome card, the first time: its dismissal is remembered across a reload.
+  if (!visit.explored) {
+    await page.getByTestId("onboarding-explore").click();
+    visit.explored = true;
+  }
   await page.waitForFunction(
     `window.__twin.sites.summaries.length === 1 && !window.__twin.camera.isMoving`,
     undefined,
@@ -149,6 +174,51 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
     undefined,
     { timeout: 300_000 },
   );
+  // The scan drawn, its tiles in: by then the renderer, its tile worker and the decoder have
+  // all loaded, and starting them (seconds of main thread on software GL) is behind us.
+  await page.waitForFunction(
+    `(() => {
+      const twin = window.__twin;
+      twin.scene.requestRender();
+      const scan = twin.scanRendererStatus;
+      return scan.active && scan.tiles > 0 && scan.frames > 0 && scan.loading === 0;
+    })()`,
+    undefined,
+    { timeout: 120_000, polling: 250 },
+  );
+}
+
+/**
+ * Waits until the camera has held still for `ms` while frames are drawn (CesiumJS raises
+ * `moveEnd`, and with it the floor check, only from a drawn frame).
+ */
+async function waitForStill(page: Page, ms: number): Promise<void> {
+  await page.evaluate(`window.__still = undefined`);
+  await page.waitForFunction(
+    `(() => {
+      const twin = window.__twin;
+      const p = twin.viewer.camera.positionWC;
+      const now = performance.now();
+      twin.scene.requestRender();
+      const last = (window.__still ??= { x: p.x, y: p.y, z: p.z, since: now });
+      if (
+        twin.camera.isMoving ||
+        twin.camera.gliding ||
+        Math.hypot(p.x - last.x, p.y - last.y, p.z - last.z) > 1e-4
+      ) {
+        window.__still = { x: p.x, y: p.y, z: p.z, since: now };
+        return false;
+      }
+      return now - last.since > ${ms};
+    })()`,
+    undefined,
+    { timeout: 120_000, polling: 200 },
+  );
+}
+
+/** The whole scenario, on a freshly opened page. */
+async function zoomCloseAndStayStill(page: Page, visit: Visit): Promise<void> {
+  await arrive(page, visit);
   expect(await page.evaluate(`window.__twin.camera.userHasCamera`)).toBe(false);
 
   // What the camera does at rest, and what happens to a resting camera after a zoom on
@@ -158,6 +228,11 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
     const twin = window.__twin;
     const scene = twin.scene;
     const camera = twin.viewer.camera;
+    const real = {
+      sampleHeight: scene.sampleHeight,
+      supported: Object.getOwnPropertyDescriptor(scene, "sampleHeightSupported"),
+      raycast: twin.collider.raycast,
+    };
     window.__rest = {
       frames: [],
       record() {
@@ -172,7 +247,22 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
       surfaceAbove(metres) {
         const at = camera.positionCartographic.height + metres;
         scene.sampleHeight = () => at;
-        scene.sampleHeightSupported = true;
+        // CesiumJS's is a getter (whether the GPU has depth textures); this sample always works.
+        Object.defineProperty(scene, "sampleHeightSupported", { value: true, configurable: true });
+      },
+      /**
+       * No scanned solids straight under the camera, as for a scan packaged without them (the
+       * Pumpkin's): the floor check reads the drawn surface instead.
+       */
+      noSolidsBelow() {
+        twin.collider.raycast = () => null;
+      },
+      /** The real drawn surface and solids again. */
+      restore() {
+        scene.sampleHeight = real.sampleHeight;
+        if (real.supported) Object.defineProperty(scene, "sampleHeightSupported", real.supported);
+        else delete scene.sampleHeightSupported;
+        twin.collider.raycast = real.raycast;
       },
       /**
        * A finer terrain tile under the camera, its top this far below the camera, there long
@@ -185,22 +275,47 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
         scene._globeHeightDirty = true;
         scene.screenSpaceCameraController._lastGlobeHeight = top;
       },
+      /**
+       * Ends a move every two seconds, as the camera's own moveEnd would, until 'stop'. The
+       * floor check runs at most once in 1.5 s, so a single moveEnd can land inside that
+       * window -- behind the landing's own check, when a stall on software GL delayed that one
+       * by seconds -- and be ignored; the next one is not.
+       */
+      endMoves() {
+        camera.moveEnd.raiseEvent();
+        this.mover = setInterval(() => camera.moveEnd.raiseEvent(), 2000);
+      },
+      stop() {
+        clearInterval(this.mover);
+      },
     };
     scene.postRender.addEventListener(() => window.__rest.record());
   })()`);
 
   // Control: the app's own landing, untouched, is still eased off a surface above it.
+  await waitForStill(page, 1_000);
   const landedHeight = await page.evaluate<number>(`(() => {
-    const twin = window.__twin;
-    window.__rest.surfaceAbove(0.3);
-    twin.viewer.camera.moveEnd.raiseEvent();
-    return twin.viewer.camera.positionCartographic.height;
+    const rest = window.__rest;
+    rest.noSolidsBelow();
+    rest.surfaceAbove(1);
+    rest.endMoves();
+    return window.__twin.viewer.camera.positionCartographic.height;
   })()`);
   await page.waitForFunction(
-    `window.__twin.viewer.camera.positionCartographic.height > ${landedHeight + 0.5} && !window.__twin.camera.gliding`,
+    `(() => {
+      const twin = window.__twin;
+      twin.scene.requestRender();
+      return twin.viewer.camera.positionCartographic.height > ${landedHeight + 1} &&
+        !twin.camera.gliding;
+    })()`,
     undefined,
     { timeout: 60_000, polling: 250 },
   );
+  await page.evaluate(`(() => {
+    window.__rest.stop();
+    window.__rest.restore();
+  })()`);
+  await waitForStill(page, 1_000);
 
   // The person zooms in with the wheel over the scan, and lets go.
   const box = await page.locator("canvas").first().boundingBox();
@@ -223,23 +338,7 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
   }
   expect(await page.evaluate(`window.__twin.camera.userHasCamera`)).toBe(true);
   // At rest: the gesture and its inertia are over, nothing moved for two seconds.
-  await page.waitForFunction(
-    `(() => {
-      const twin = window.__twin;
-      const p = twin.viewer.camera.positionWC;
-      const now = performance.now();
-      const last = (window.__still ??= { x: p.x, y: p.y, z: p.z, since: now });
-      if (Math.hypot(p.x - last.x, p.y - last.y, p.z - last.z) > 1e-4) {
-        window.__still = { x: p.x, y: p.y, z: p.z, since: now };
-        twin.scene.requestRender();
-        return false;
-      }
-      twin.scene.requestRender();
-      return now - last.since > 2000;
-    })()`,
-    undefined,
-    { timeout: 120_000, polling: 200 },
-  );
+  await waitForStill(page, 2_000);
   const zoomed = await page.evaluate<number>(
     `window.__twin.viewer.camera.positionCartographic.height`,
   );
@@ -251,15 +350,15 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
     const rest = window.__rest;
     rest.frames.length = 0;
     rest.record();
-    // No scanned solids straight under the camera, as for a scan packaged without them (the
-    // Pumpkin's): the floor check reads the drawn surface instead.
-    twin.collider.raycast = () => null;
+    rest.noSolidsBelow();
     // A finer terrain tile under the close-up, 0.2 m below it: within the 0.6 m zoom floor.
     rest.terrainBelow(0.2);
     // The floor check, as after any move: a drawn surface 2 m above the camera.
     rest.surfaceAbove(2);
-    twin.viewer.camera.moveEnd.raiseEvent();
-    // The model's late clamp: a better arrival pose, 5 m east.
+    rest.endMoves();
+    // The model's late clamp: a better arrival pose, 5 m east. Its own guard refuses it here
+    // too, since the zoom moved the camera from where it landed; a hand that has not moved it
+    // yet is siteFlight.test.ts's case.
     const flight = twin.sites.flight;
     const pose = flight.pose;
     twin.sites.steer(flight.serial, {
@@ -269,7 +368,8 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
     window.__ticker = setInterval(() => twin.scene.requestRender(), 100);
     return rest.frames[0];
   })()`);
-  // Six seconds and at least ten frames drawn, however slowly software GL draws them.
+  // Six seconds (three moves ended) and at least ten frames drawn, however slowly software GL
+  // draws them.
   await page.waitForTimeout(6_000);
   await page.waitForFunction(`window.__rest.frames.length >= 10`, undefined, {
     timeout: 120_000,
@@ -277,6 +377,7 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
   });
   const frames = await page.evaluate<Pose[]>(`(() => {
     clearInterval(window.__ticker);
+    window.__rest.stop();
     return window.__rest.frames;
   })()`);
 
@@ -290,4 +391,29 @@ test("zoom close and stay still: the camera does not move", async ({ page }) => 
   expect(drift).toBeLessThan(0.001);
   expect(turn).toBeLessThan(1e-6);
   expect(await page.evaluate(`window.__twin.camera.gliding`)).toBe(false);
+}
+
+test("zoom close and stay still: the camera does not move", async ({ page }) => {
+  test.setTimeout(600_000);
+  await page.setViewportSize({ width: 960, height: 600 });
+  await serveTreeScan(page);
+
+  // A reload under the test resets the app and everything the test set up in it. The dev
+  // server used to do that once on a cold start, when the scan's tile worker first imported a
+  // package it had not bundled (vite.config.ts, `optimizeDeps`); should anything like it
+  // happen again, the scenario starts over on a fresh page instead of failing on a page that
+  // no longer has the app in it. Any other failure is the test's verdict.
+  const visit: Visit = { explored: false };
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await zoomCloseAndStayStill(page, visit);
+      return;
+    } catch (error) {
+      const samePage = await page
+        .evaluate<boolean>(`window.__cameraRestPage === true`)
+        .catch(() => false);
+      if (samePage || attempt >= 2) throw error;
+      console.warn(`cameraRest: the page reloaded under attempt ${attempt}; starting over`);
+    }
+  }
 });

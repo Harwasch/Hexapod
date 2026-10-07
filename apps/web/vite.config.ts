@@ -179,6 +179,11 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ["cesium"],
+    // The dev server's dependency scan follows imports from the HTML entries, dynamic imports
+    // included, but not into module workers (`new Worker(new URL(...))`). A package only a
+    // worker imports is found on the worker's first load instead, re-bundled, and the open
+    // page reloaded: on a cold server, the first scan drawn under PlayCanvas reloaded the
+    // app mid-test (e2e cameraRest.spec.ts in CI). Listed here, they are bundled at start.
+    include: ["cesium", "@spz-loader/core"],
   },
 });
