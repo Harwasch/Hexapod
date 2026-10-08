@@ -311,20 +311,21 @@ def block_sparse_attn_func(
 def flashvsr(request: dict) -> dict:
     """Every clip in the results volume (`/data/clips/<arm>/<start>.mp4`; only `request["arms"]`
     if given, or exactly `request["clips"]`) through FlashVSR v1.1 (tiny), as its own v1.1 tiny
-    script runs it, to the render's size.
+    script runs it, to the render's size or `outSize`; or each of `request["jobs"]` (the same
+    keys per job) in turn. A clip that fails is reported in `failed` and the rest go on.
     The clip is padded (reflected) so the upscaled size is a multiple of 128, its frame count
     padded to FlashVSR's 8n+1 with the last frame repeated, and both trimmed back after."""
     started = time.time()
     weights = Path(f"/lv/{FVSR_REPO}")
     _need([str(weights / "diffusion_pytorch_model_streaming_dmd.safetensors")])
     RESULTS.reload()
-    names = _clip_names(request)
     code = Path("/opt/flashvsr/examples/WanVSR")
     link = code / "FlashVSR-v1.1"
     if not link.exists():
         link.symlink_to(weights)
     os.chdir(code)
     sys.path.insert(0, str(code))
+    import math
     import types
 
     import imageio.v2 as imageio
@@ -363,16 +364,9 @@ def flashvsr(request: dict) -> dict:
     pipe.load_models_to_device(["dit", "vae"])
     load = time.time() - started
     width, height = request.get("renderSize", START_SIZE)
-    target = request.get("outSize")  # kept at this size (letterboxed), not resized back
-    label = request.get("label", "flashvsr")
     wall = float(request.get("wallS", FVSR_WALL_S))
-    skipped: list[str] = []
-    out: dict = {}
-    encoder = _Encoder()
-    for name in names:
-        if time.time() - started > wall:  # the rest next time rather than all lost to a timeout
-            skipped.append(name)
-            continue
+
+    def upscale_clip(name: str, target: list | None) -> tuple:
         reader = imageio.get_reader(f"/data/clips/{name}.mp4")
         fps = float(reader.get_meta_data().get("fps", 24.0))
         frames = np.stack([np.asarray(f)[..., :3] for f in reader])
@@ -383,7 +377,8 @@ def flashvsr(request: dict) -> dict:
             scale = next((k for k in (2, 3, 4) if w * k >= fw and h * k >= fh), 4)
         else:
             scale = 2 if 2 * w >= width and 2 * h >= height else 4
-        unit = 128 // scale
+        # The upscaled size must be a multiple of 128: at x3 that takes a multiple of 128 in.
+        unit = 128 // math.gcd(128, scale)
         pad_h, pad_w = (-h) % unit, (-w) % unit
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
@@ -430,8 +425,7 @@ def flashvsr(request: dict) -> dict:
         del lq, video, big
         if target:
             result = _letterbox(result, *target)
-        encoder.submit(name, result, fps, target)
-        out[name] = {
+        info = {
             "fps": fps,
             "frames": int(n),
             "scale": scale,
@@ -443,27 +437,71 @@ def flashvsr(request: dict) -> dict:
             "peakMemoryGB": round(torch.cuda.max_memory_allocated() / 2**30, 1),
             "attention": attention,
         }
-        torch.cuda.empty_cache()
-    encoder.finish(out)
-    RESULTS.reload()
-    for name, clip in out.items():
-        path = Path("/data/upscaled") / label / f"{name}.mp4"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(clip["mp4"])
-    RESULTS.commit()
-    return {
-        "upscaler": "flashvsr",
-        "model": UPSCALERS["flashvsr"]["model"],
-        "code": f"{FVSR_CODE}@{FVSR_COMMIT}",
-        "attention": attention,
-        "bsaBuild": _bsa_status(),
-        "label": label,
-        "loadSeconds": round(load, 1),
-        "wallS": wall,
-        "skipped": skipped,
-        "clips": out,
-        "containerSeconds": round(time.time() - started, 1),
-    }
+        return result, fps, info
+
+    # One job, or several (each its clips at its own output size), one after another in this
+    # container, the wall counted over all of them.
+    jobs = request.get("jobs") or [request]
+    results = []
+    for job in jobs:
+        target = job.get("outSize")  # kept at this size (letterboxed), not resized back
+        label = job.get("label", "flashvsr")
+        skipped: list[str] = []
+        failed: dict = {}
+        out: dict = {}
+        encoder = _Encoder()
+        arms = list(job.get("arms") or [])
+
+        def order(name: str, arms: list = arms) -> tuple:
+            arm, _, start = name.partition("/")
+            view = start.partition("~")[0]
+            return (
+                SVR_STARTS.index(view) if view in SVR_STARTS else len(SVR_STARTS),
+                arms.index(arm) if arm in arms else len(arms),
+                name,
+            )
+
+        # Start by start (every arm of a start before the next), so a wall that stops the job
+        # early still leaves whole starts to compare.
+        for name in sorted(_clip_names(job), key=order):
+            if time.time() - started > wall:  # the rest next time, not all lost to a timeout
+                skipped.append(name)
+                continue
+            try:
+                result, fps, info = upscale_clip(name, target)
+            except Exception as error:  # noqa: BLE001 - this clip fails, the others go on
+                failed[name] = f"{type(error).__name__}: {str(error)[:300]}"
+                torch.cuda.empty_cache()
+                continue
+            encoder.submit(name, result, fps, target)
+            out[name] = info
+            torch.cuda.empty_cache()
+        encoder.finish(out)
+        RESULTS.reload()
+        for name, clip in out.items():
+            path = Path("/data/upscaled") / label / f"{name}.mp4"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(clip["mp4"])
+        RESULTS.commit()
+        results.append(
+            {
+                "upscaler": "flashvsr",
+                "model": UPSCALERS["flashvsr"]["model"],
+                "code": f"{FVSR_CODE}@{FVSR_COMMIT}",
+                "attention": attention,
+                "bsaBuild": _bsa_status(),
+                "label": label,
+                "loadSeconds": round(load, 1),
+                "wallS": wall,
+                "skipped": skipped,
+                "failed": failed,
+                "clips": out,
+            }
+        )
+    done = round(time.time() - started, 1)
+    if "jobs" not in request:
+        return results[0] | {"containerSeconds": done}
+    return {"results": results, "containerSeconds": done}
 
 
 # --- upscaler: SeedVR2-3B ----------------------------------------------------------------------
@@ -989,6 +1027,7 @@ def main(
     sv_wall_s: float = SVR_WALL_S,
     vsr_size: str = "",
     sv_size: str = "",
+    vsr_jobs: str = "",
 ) -> None:
     """The steps (upscale: the clips of `arms`, comma-separated, or of every arm; seedvr: of
     `sv_arms`, within `sv_wall_s` seconds of its container); the
@@ -1034,9 +1073,20 @@ def main(
         width, height = (int(v) for v in size.lower().split("x"))
         return {"outSize": [width, height], "label": f"{upscaler}-{width}x{height}"}
 
+    def jobs(spec: str) -> dict:
+        """`WxH:arm+arm/WxH:arm`: FlashVSR jobs, one output size each, in this order."""
+        if not spec:
+            return {}
+        out = []
+        for part in spec.split("/"):
+            size, _, names = part.partition(":")
+            out.append({"arms": [a for a in names.split("+") if a]} | sized(size, "flashvsr"))
+        return {"jobs": out}
+
     requests = {
         "flashvsr": ({"arms": [a for a in arms.split(",") if a]} if arms else {})
-        | sized(vsr_size, "flashvsr"),
+        | sized(vsr_size, "flashvsr")
+        | jobs(vsr_jobs),
         "seedvr2": ({"arms": [a for a in sv_arms.split(",") if a]} if sv_arms else {})
         | {"wallS": sv_wall_s}
         | sized(sv_size, "seedvr2"),
@@ -1061,12 +1111,19 @@ def main(
         result = step(f"upscale {upscaler}", function, reservation, requests[upscaler])
         if result is None:
             return
-        label = result.get("label", upscaler)
-        for name, clip in result["clips"].items():
-            target = folder / "upscaled" / label / f"{name}.mp4"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(clip.pop("mp4"))
-        summary.setdefault("upscaled", {})[label] = result | {"licence": reservation["licence"]}
+        for each in result.get("results") or [result]:
+            label = each.get("label", upscaler)
+            for name, clip in each["clips"].items():
+                target = folder / "upscaled" / label / f"{name}.mp4"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(clip.pop("mp4"))
+            done = summary.setdefault("upscaled", {}).get(label)
+            if done:  # a later job at the same size: one entry per output size
+                done["clips"].update(each["clips"])
+                done["skipped"] = done.get("skipped", []) + each.get("skipped", [])
+                done["failed"] = done.get("failed", {}) | each.get("failed", {})
+            else:
+                summary["upscaled"][label] = each | {"licence": reservation["licence"]}
         summary["costs"][-1]["containerSeconds"] = result.get("containerSeconds")
         dump()
 

@@ -102,8 +102,84 @@ LICENCES = {
     "mg3": "Apache-2.0 (weights and code)",
     "yume": "Apache-2.0 (weights and code)",
 }
-#: Filled in by hand after looking at the clips frame by frame.
-EYE: dict[str, str] = {}
+#: Filled in by hand after looking at the clips frame by frame (contact sheets of frames 0,
+#: 1/3, 2/3 and the end with the mean change, and full-size crops around seams and wraps).
+EYE: dict[str, str] = {
+    "ltx-base": (
+        "The researched generic prompt (ltx-p1) at round 1's recipe. It looks like round 1's "
+        "scene-prompted clip. The near foliage still swings visibly (20-57 px p95), while trunks, "
+        "the sign, the path and the sky stay put (creep at most 0.7 px). Fast fronds smear (the "
+        "model's own motion blur), the rest is sharp. FlashVSR at 2560 sharpens the still parts "
+        "well and keeps the smear."
+    ),
+    "ltx-s1": (
+        "Stage 1 alone at 640x352 runs faster than real time (3.7 s for 4 s of video) but is "
+        "soft: the big fern motion on camp-1 turns to mush. The still parts hold. FlashVSR's 4x "
+        "adds invented detail, and it stays visibly softer than ltx-base."
+    ),
+    "ltx-chunk": (
+        "Two 2 s chunks, the second continued from the first's last 9 frames: first motion "
+        "after 6.1 s instead of 10.7 s. The seam (frame 49) is a small visible step: texture "
+        "and brightness shift, and the motion jumps 1.6-2x the median. camp-2's camera creeps "
+        "5 px across it. Each chunk sways less than one 4 s clip."
+    ),
+    "ltx-loop": (
+        "The render as both end keyframes. This is the gentlest arm (2-4 px p95): the leaves "
+        "breathe rather than swing, and the last frame wraps back onto the first with no "
+        "visible jump. The closest to the owner's 'slight', at the same 10.7 s per 4 s clip."
+    ),
+    "ltx-p2": (
+        "The coordinator's simple prompt. At a glance it is the same as ltx-p1: a little less "
+        "swing on camp-2's near conifer, a little more on the trees and camp-1's ferns, and "
+        "more creep on camp-2 (2.1 px against 0.7)."
+    ),
+    "ltx-p3": (
+        "Auto-captioned by the pipeline's own enhancer: no better and slower. The captions "
+        "misdescribe views (tree-1's crown as 'high-angle, looking down'). camp-1's left tree "
+        "stirs, and tree-1's sky drifts 9.5 dB by the end."
+    ),
+    "ltx-p4": (
+        "ltx-p1 at LoRA 0.6. More motion everywhere, and camp-2's camera creeps 8 px. Worse."
+    ),
+    "ltx-p5": (
+        "ltx-p1 at LoRA 1.4. About a quarter less swing than ltx-p1 (mean p95 24 against "
+        "32 px) with the same stillness elsewhere; otherwise it looks the same. The better of "
+        "the two LoRA strengths tried."
+    ),
+    "mg3-idle": (
+        "Frozen. With no action the plants do not move at all (0.5 px p95); the frame is only "
+        "re-rendered through its VAE (a little sharper, the trees' colour shifted). A still, "
+        "not a living view. 0.23x real time on an H100 with PyTorch attention."
+    ),
+    "mg3-pan": (
+        "A slow yaw (0.45 degrees a frame) with consistent geometry for most of the clip. The "
+        "plants still do not sway, and new content smears in at the edge."
+    ),
+    "waypoint-idle": (
+        "Real time on an H100 (first frame 0.4-1.0 s, 21-47 fps, after a 5-minute compile), "
+        "but the world wanders. tree-1 holds (frozen). The camp views switch to a darker, "
+        "flatter look of its own from the first generated frame, then creep 6-7 px. "
+        "tree-2 turns into a different scene within 4 s: a yellowed tree, scattered leaves and "
+        "a wall. It only sees a 2:1 crop at 1024x512."
+    ),
+    "waypoint-pan": (
+        "Mouse x 0.1 is a fast pan, and it invents a blank grey wall to the right of camp-1. "
+        "Not usable."
+    ),
+    "yume-idle": (
+        "Not idle. The camera drifts (16-20 px), the whole frame is re-rendered and smeared, "
+        "the plants churn (27-71 px p95), and by the end it sits 15-20 dB away from the "
+        "render. 0.13x real time."
+    ),
+    "yume-pan": (
+        "Pans right and invents plausible, smeary foliage. The camera control works; the "
+        "stillness does not."
+    ),
+    "ltx-r1": (
+        "Round 1's LTX clip (scene prompts), upscaled again to 2560 with FlashVSR's real "
+        "kernels (and SeedVR2)."
+    ),
+}
 
 
 def licence(arm: str) -> str:
