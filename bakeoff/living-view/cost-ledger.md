@@ -41,4 +41,5 @@ krea/krea-realtime-video (the Hub card says Apache-2.0, its GitHub repository sa
 | 5 | 37800517764 | arm causal failed: Wan's cross-attention calls flash-attn directly (`assert FLASH_ATTN_2_AVAILABLE`); container time not measured (it failed on its first clip, after the model load), booked at 5 min | L40S | 5.0 | 0.21 | 2.82 |
 | 3b, 6 | 37799382669, 37802115592 | FlashVSR image builds on Modal's builders: Block-Sparse-Attention's kernels compiled (28 min) but its link step called clang++, absent from the image; replaced by the same block-sparse attention in PyTorch (checked against dense masked attention) | builder | | 0.00 | 2.82 |
 | 7 | (pending) | arm causal again, with flash-attn 2.7.4. Estimate $0.20 (worst $0.63) | L40S | | | |
-| 8 | (pending) | FlashVSR weights (CPU) and its image check (CPU), no kernels to compile | CPU | | | |
+| 8 | 37806924930 | FlashVSR weights (7 GB, 31 s) and the image check on CPU: diffsynth needs `modelscope`, not in FlashVSR's requirements (caught before any GPU) | CPU | 0.7 | 0.00 | 2.82 |
+| 9 | (pending) | FlashVSR image check again (CPU) | CPU | | | |

@@ -121,6 +121,8 @@ vsr_image = (
         f"git clone {FVSR_CODE} /opt/flashvsr && git -C /opt/flashvsr checkout {FVSR_COMMIT}",
         "pip install --no-deps -e /opt/flashvsr",
     )
+    # diffsynth's downloader imports it (not in FlashVSR's requirements.txt).
+    .pip_install("modelscope")
 )
 
 #: Key blocks gathered per pass of `block_sparse_attn_func`, in bytes (each of K and V).

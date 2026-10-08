@@ -485,13 +485,18 @@ class MotionReport:
 
 
 def motion_stats(
-    flows: Sequence[np.ndarray], mask: np.ndarray, scale: tuple[float, float]
+    flows: Sequence[np.ndarray],
+    mask: np.ndarray,
+    scale: tuple[float, float],
+    outside: np.ndarray | None = None,
 ) -> tuple[float, float, float, float]:
     """(inside mean, inside p95, outside mean, outside p95) of the flow magnitudes over every
     frame, in render pixels (`scale`: render size over flow size, x and y). Inside is mask >=
-    0.5, outside mask < `NOT_PLANT_SHARE`; `mask` is on the flows' grid."""
+    0.5; outside is `outside` (bool) or else mask < `NOT_PLANT_SHARE` -- `motion_only` passes
+    the textured not-plant pixels, since flow in flat sky is whatever DIS spreads into it;
+    both on the flows' grid. No outside pixels: 0, 0."""
     inside = mask >= 0.5
-    outside = mask < NOT_PLANT_SHARE
+    outside = mask < NOT_PLANT_SHARE if outside is None else outside
     sx, sy = scale
     ins, outs = [], []
     for f in flows:
@@ -584,7 +589,9 @@ def motion_only(
                 magnitude = np.hypot(full[..., 0], full[..., 1])
                 halo[mode].append(float(magnitude[ring].mean()) if ring.any() else 0.0)
                 applied[mode].append(float(magnitude[plant].mean()) if plant.any() else 0.0)
-    inside_mean, inside_p95, outside_mean, outside_p95 = motion_stats(raw[1:], mask_small, scale)
+    inside_mean, inside_p95, outside_mean, outside_p95 = motion_stats(
+        raw[1:], mask_small, scale, outside=background
+    )
     report = MotionReport(
         frames=len(frames),
         inside_mean_px=inside_mean,
