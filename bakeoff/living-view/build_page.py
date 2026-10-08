@@ -42,6 +42,9 @@ LICENCES = {
     "flf": "Apache-2.0",
     "wan": "Apache-2.0",
 }
+#: The upscalers of A-up: the file suffix of each one's clips under OUT/clips, and its name.
+UPSCALER_SUFFIX = {"flashvsr": "u", "seedvr2": "s"}
+UPSCALER_TITLES = {"flashvsr": "FlashVSR v1.1", "seedvr2": "SeedVR2-3B"}
 CAP_DOLLARS = 10.0
 PAGE_CRF = 26
 LEDGER = HERE / "cost-ledger.md"
@@ -150,7 +153,8 @@ def process_all(merged: dict, out: Path, crf: int) -> dict:
         for upscaler, data in merged["upscaled"].items():
             up = data["clips"].get(f"{arm}/{name}")
             if up and Path(up["path"]).exists():
-                reencode(Path(up["path"]), clips / f"{key}-u.mp4", crf)
+                suffix = UPSCALER_SUFFIX[upscaler]
+                reencode(Path(up["path"]), clips / f"{key}-{suffix}.mp4", crf)
                 frames, _fps = lv.read_clip(Path(up["path"]))
                 render = lv.read_png(base / f"{start}.png")
                 soft = lv.read_mask(base / f"{start}-mask.png")
@@ -267,6 +271,7 @@ SCRIPT = """
   videos.forEach((v) => seen.observe(v));
   const toggle = (id, apply) => {
     const b = document.getElementById(id);
+    if (!b) { return; }
     b.addEventListener('click', () => {
       const on = b.getAttribute('aria-pressed') !== 'true';
       b.setAttribute('aria-pressed', String(on));
@@ -281,6 +286,18 @@ SCRIPT = """
     });
     document.querySelectorAll('.b-name').forEach((s) => {
       s.textContent = on ? 'B · motion only, bilinear flow' : 'B · motion only, edge-aware flow';
+    });
+  });
+  toggle('u-seedvr', (on) => {
+    document.querySelectorAll('video[data-seedvr2]').forEach((v) => {
+      const next = on ? v.dataset.seedvr2 : (v.dataset.flashvsr || v.dataset.seedvr2);
+      v.dataset.src = next;
+      if (v.src) { v.src = next; v.play().catch(() => {}); }
+      const tag = v.closest('.cell').querySelector('.u-name');
+      if (tag) {
+        tag.textContent = on || !v.dataset.flashvsr
+          ? 'A↑ · upscaled by SeedVR2' : 'A↑ · upscaled by FlashVSR';
+      }
     });
   });
   toggle('show-mask', (on) => root.classList.toggle('show-mask', on));
@@ -309,6 +326,7 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
     rows = [a for a in ARM_ORDER if a in results]
     extra = sorted({row for (_s, row) in numbers if "~" in row})
     upscale = merged["upscaled"].get("flashvsr", {})
+    second = merged["upscaled"].get("seedvr2", {})
     booked, total = ledger(LEDGER)
 
     def cost(call: str) -> float:
@@ -316,6 +334,8 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
 
     up_cost = cost("upscale flashvsr")
     up_count = max(1, len(upscale.get("clips", {})))
+    sv_cost = cost("upscale seedvr2")
+    sv_count = max(1, len(second.get("clips", {})))
     spent = total if total is not None else sum(r["dollars"] for r in merged["costs"])
 
     def arm_cost(arm: str) -> float:
@@ -334,6 +354,7 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
         ups = [
             c["seconds"] for k, c in upscale.get("clips", {}).items() if k.startswith(f"{base}/")
         ]
+        svs = [c["seconds"] for k, c in second.get("clips", {}).items() if k.startswith(f"{base}/")]
         status = (
             '<span class="chip">ran</span>'
             if clips
@@ -349,12 +370,21 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
             f"<td class='num'>{fmt(result.get('loadSeconds'), ' s', 0)}</td>"
             f"<td class='num'>${arm_cost(arm):.2f} · ${arm_cost(arm) / n:.2f}/clip</td>"
             f"<td class='num'>{fmt(statistics.median(ups) if ups else None, ' s')}</td>"
-            "</tr>"
+            + (
+                f"<td class='num'>{fmt(statistics.median(svs) if svs else None, ' s')}</td>"
+                if second
+                else ""
+            )
+            + "</tr>"
         )
     table = (
         "<div class='tablewrap'><table><thead><tr><th>arm</th><th>model · licence</th>"
         "<th>first motion</th><th>generation</th><th>cold load</th><th>GPU $</th>"
-        "<th>upscale (A↑)</th></tr></thead><tbody>" + "".join(lines) + "</tbody></table></div>"
+        "<th>FlashVSR (A↑)</th>"
+        + ("<th>SeedVR2 (A↑)</th>" if second else "")
+        + "</tr></thead><tbody>"
+        + "".join(lines)
+        + "</tbody></table></div>"
     )
 
     sections = []
@@ -390,6 +420,7 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
                 continue
             m = numbers[key]
             up = upscale.get("clips", {}).get(f"{arm.split('~')[0]}/{clip_name}")
+            sv = second.get("clips", {}).get(f"{arm.split('~')[0]}/{clip_name}")
             label = (
                 f"<div class='label'><h3>{esc(ARM_TITLES.get(arm, arm))}</h3><dl>"
                 f"<dt>first motion</dt><dd>{fmt(clip['firstMotionSeconds'], ' s')}</dd>"
@@ -406,12 +437,18 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
                     "<dt>camera creep</dt><dd>– (not removable: no background)</dd>"
                 )
                 + f"<dt>PSNR not-plant</dt><dd>A {fmt(m.get('psnrOutsideDb'), ' dB')}"
-                + (f" · A↑ {fmt(m.get('flashvsrPsnrOutsideDb'), ' dB')}" if up else "")
+                + (f" · FlashVSR {fmt(m.get('flashvsrPsnrOutsideDb'), ' dB')}" if up else "")
+                + (f" · SeedVR2 {fmt(m.get('seedvr2PsnrOutsideDb'), ' dB')}" if sv else "")
                 + "</dd>"
                 f"<dt>sky halo (B)</dt><dd>{fmt(m['haloPx']['guided'], '', 2)} edge-aware · {fmt(m['haloPx']['bilinear'], '', 2)} bilinear px</dd>"
                 + (
-                    f"<dt>upscale</dt><dd>{fmt(up['seconds'], ' s')} · {fmt(up['framesPerSecond'], ' fps')} · ×{up['scale']} · ${up_cost / up_count:.3f}</dd>"
+                    f"<dt>FlashVSR</dt><dd>{fmt(up['seconds'], ' s')} · {fmt(up['framesPerSecond'], ' fps')} · ×{up['scale']} · ${up_cost / up_count:.3f}</dd>"
                     if up
+                    else ""
+                )
+                + (
+                    f"<dt>SeedVR2</dt><dd>{fmt(sv['seconds'], ' s')} · {fmt(sv['framesPerSecond'], ' fps')} · ${sv_cost / sv_count:.3f}</dd>"
+                    if sv
                     else ""
                 )
                 + "</dl></div>"
@@ -424,9 +461,18 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
                     f" aria-label='{esc(where)} {esc(tag)}'></video></div></div>"
                 )
 
+            has_u = (out / f"{stem}-u.mp4").exists()
+            has_s = (out / f"{stem}-s.mp4").exists()
+            first_up = f"{stem}-u.mp4" if has_u else f"{stem}-s.mp4"
             up_cell = (
-                cell("A↑", f"{stem}-u.mp4", name="A↑ · upscaled by FlashVSR")
-                if (out / f"{stem}-u.mp4").exists()
+                "<div class='cell'><span class='tag u-name'>"
+                + ("A↑ · upscaled by FlashVSR" if has_u else "A↑ · upscaled by SeedVR2")
+                + "</span><div class='frame'>"
+                f"<video muted loop playsinline preload='none' data-src='{first_up}'"
+                + (f" data-flashvsr='{stem}-u.mp4'" if has_u else "")
+                + (f" data-seedvr2='{stem}-s.mp4'" if has_s else "")
+                + f" aria-label='{esc(start)} {esc(arm)} A↑'></video></div></div>"
+                if has_u or has_s
                 else "<div class='cell'><span class='tag'>A↑</span><div class='missing'>not upscaled</div></div>"
             )
             b_cell = (
@@ -473,13 +519,15 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
     <div><b>A</b>The model's own frames, resized to our 1280 × 704 render with plain bicubic.
     Everything you see is the model's drawing, including what it redrew around the plants.</div>
     <div><b>A↑</b>The same frames upscaled to 1280 × 704 by a video super-resolution model
-    (FlashVSR v1.1): sharper pixels, still the model's drawing.</div>
+    (FlashVSR v1.1{"; SeedVR2-3B with the toggle" if second else ""}): sharper pixels, still the
+    model's drawing.</div>
     <div><b>B</b>Motion only: our own render, warped by the plant motion measured in the model's
     clip (OpenCV DIS optical flow, camera creep removed, outside the plants zeroed, eased to rest
     at the loop). Every pixel is the measured scan; only the movement is generated.</div>
   </div>
   <div class="controls" role="group" aria-label="Display">
     <button id="b-bilinear" type="button" aria-pressed="false">B with bilinear flow</button>
+    {'<button id="u-seedvr" type="button" aria-pressed="false">A↑ by SeedVR2-3B</button>' if second else ""}
     <button id="show-mask" type="button" aria-pressed="false">Show plant mask</button>
     <button id="zoom" type="button" aria-pressed="false">Zoom 2×</button>
     <button id="pause" type="button" aria-pressed="false">Pause all</button>

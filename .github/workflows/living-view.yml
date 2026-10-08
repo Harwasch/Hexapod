@@ -17,6 +17,10 @@ name: Living view bake-off (Modal GPUs)
 #   may spend at
 #   worst (timeout x rate; an arm that does not fit is refused) and upbudget the same for the
 #   upscaler. `starts=` and `contexts=` pass through. A push without a token runs nothing.
+#   The step `meter` starts no container: it saves Modal's billing report for today (per app,
+#   per hour, per resource: what was really metered) and, for each app id in `logs=`, that
+#   app's last log lines, as the `living-meter` artifact -- for the ledger, and for a call
+#   whose result never came back.
 #   `workflow_dispatch` works once this file is on the default branch.
 # * **What it spends**: Modal GPU time at list price, estimated per call in the summaries and
 #   kept in bakeoff/living-view/cost-ledger.md. Downloads run on CPU containers; every GPU
@@ -63,6 +67,8 @@ jobs:
       upbudget: ${{ steps.plan.outputs.upbudget }}
       starts: ${{ steps.plan.outputs.starts }}
       contexts: ${{ steps.plan.outputs.contexts }}
+      meter: ${{ steps.plan.outputs.meter }}
+      logs: ${{ steps.plan.outputs.logs }}
     steps:
       # Read as data, validated here, never interpolated into a shell line.
       - id: plan
@@ -77,7 +83,8 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
           options = {"steps": "access", "arms": "wan,flf,causal,ltx", "budget": "0",
-                     "upbudget": "0", "starts": "tree-1,tree-2,camp-1,camp-2", "contexts": "1,3"}
+                     "upbudget": "0", "starts": "tree-1,tree-2,camp-1,camp-2", "contexts": "1,3",
+                     "logs": "none"}
           if os.environ["EVENT"] == "workflow_dispatch":
               for name in ("steps", "arms", "budget", "upbudget"):
                   options[name] = os.environ.get(name.upper(), "") or options[name]
@@ -92,7 +99,7 @@ jobs:
                       raise SystemExit(f"unknown option {name!r} in the [lv:] token")
                   options[name] = value
           step = (r"(access|download|starts|arms|vsr-download|vsr-check|upscale"
-                  r"|sv-download|sv-check|sv-upscale)")
+                  r"|sv-download|sv-check|sv-upscale|meter)")
           valid = {
               "steps": rf"{step}(,{step})*",
               "arms": r"(ltx|causal|flf|wan)(,(ltx|causal|flf|wan))*",
@@ -100,6 +107,7 @@ jobs:
               "upbudget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
               "starts": r"(tree|camp)-[1-9](,(tree|camp)-[1-9])*",
               "contexts": r"[1-5](,[1-5])*",
+              "logs": r"none|ap-[A-Za-z0-9]{6,40}(,ap-[A-Za-z0-9]{6,40})*",
           }
           for name, pattern in valid.items():
               if not re.fullmatch(pattern, options[name]):
@@ -110,6 +118,8 @@ jobs:
                      "sv-upscale": "seedvr"}
           options["bakeoff"] = ",".join(s for s in steps if s not in upscale)
           options["upscale"] = ",".join(upscale[s] for s in steps if s in upscale)
+          options["meter"] = "meter" if "meter" in steps else ""
+          options["bakeoff"] = ",".join(s for s in options["bakeoff"].split(",") if s != "meter")
           for name, value in options.items():
               print(f"{name}={value}")
           PY
@@ -247,4 +257,37 @@ jobs:
         with:
           name: living-upscale
           path: lv-out
+          if-no-files-found: warn
+
+  meter:
+    name: Modal billing and logs
+    needs: plan
+    if: needs.plan.outputs.meter != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      LOGS: ${{ needs.plan.outputs.logs }}
+    steps:
+      - uses: astral-sh/setup-uv@v6
+      - name: Billing report and app logs
+        run: |
+          mkdir -p meter
+          modal() { uv run --no-project --with modal==1.5.5 modal "$@"; }
+          modal billing report --for today -r h --show-resources --json > meter/billing-today.json \
+            || echo "billing report failed" > meter/billing-today.err
+          modal app list --json > meter/apps.json || true
+          if [ "$LOGS" != "none" ]; then
+            for app in ${LOGS//,/ }; do
+              modal app logs "$app" --tail 1000 --timestamps --show-container-id \
+                > "meter/$app.log" 2>&1 || true
+            done
+          fi
+          ls -la meter
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: living-meter
+          path: meter
           if-no-files-found: warn
