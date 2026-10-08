@@ -39,6 +39,7 @@ import {
 } from "@twin/world";
 
 import { resolveBeside, type Vec3 } from "./instances";
+import { jsonBytes, scanPayloads } from "./payloadCache";
 
 export const SKIN_FORMAT = "hexapod.skin";
 export const SKIN_VERSION = 1;
@@ -490,18 +491,25 @@ export function rowWeight(
   return (byte >= 128 ? byte - 256 : byte) * scale;
 }
 
-/** Fetches and reads a scan's `skin.json` and its weights. Throws when either is missing. */
-export async function loadSkin(tilesetUrl: string, ref: SkinRef): Promise<SkinDoc> {
+/**
+ * Fetches and reads a scan's `skin.json` and its weights. Throws when either is missing. Kept
+ * in memory once read (lib/payloadCache.ts): picking a motion method again is instant.
+ */
+export function loadSkin(tilesetUrl: string, ref: SkinRef): Promise<SkinDoc> {
   const url = resolveBeside(tilesetUrl, ref.uri);
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`skin answered ${String(response.status)}`);
-  const raw = (await response.json()) as { weights?: { file?: unknown } };
-  const file = typeof raw.weights?.file === "string" ? raw.weights.file : "skin.bin";
-  const binary = await fetch(resolveBeside(url, file));
-  if (!binary.ok) throw new Error(`skin weights answered ${String(binary.status)}`);
-  const doc = parseSkin(raw, await binary.arrayBuffer());
-  if (!doc) throw new Error("skin: not a hexapod.skin v1 document");
-  return doc;
+  return scanPayloads.get(url, async () => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`skin answered ${String(response.status)}`);
+    const text = await response.text();
+    const raw = JSON.parse(text) as { weights?: { file?: unknown } };
+    const file = typeof raw.weights?.file === "string" ? raw.weights.file : "skin.bin";
+    const binary = await fetch(resolveBeside(url, file));
+    if (!binary.ok) throw new Error(`skin weights answered ${String(binary.status)}`);
+    const weights = await binary.arrayBuffer();
+    const doc = parseSkin(raw, weights);
+    if (!doc) throw new Error("skin: not a hexapod.skin v1 document");
+    return { value: doc, bytes: weights.byteLength + jsonBytes(text) };
+  });
 }
 
 // ---- Handles -----------------------------------------------------------------------------

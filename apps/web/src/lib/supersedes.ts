@@ -20,6 +20,7 @@
 import { runsLength, tileRunsIssue } from "@twin/world";
 
 import { resolveBeside, type InstancesDoc } from "./instances";
+import { jsonBytes, scanPayloads } from "./payloadCache";
 
 export interface SupersedesDoc {
   /** Splats flagged, as the file says (for logs). */
@@ -54,13 +55,20 @@ export function parseSupersedes(raw: unknown): SupersedesDoc | null {
   return { superseded, tiles, issues };
 }
 
-/** Fetches and reads a fill's `supersedes.json` beside the measured tileset. */
-export async function loadSupersedes(tilesetUrl: string, uri: string): Promise<SupersedesDoc> {
-  const response = await fetch(resolveBeside(tilesetUrl, uri));
-  if (!response.ok) throw new Error(`supersedes answered ${String(response.status)}`);
-  const doc = parseSupersedes(await response.json());
-  if (!doc) throw new Error("supersedes: no tiles");
-  return doc;
+/**
+ * Fetches and reads a fill's `supersedes.json` beside the measured tileset. Kept in memory once
+ * read (lib/payloadCache.ts), as the scan is opened again or its fill picked again.
+ */
+export function loadSupersedes(tilesetUrl: string, uri: string): Promise<SupersedesDoc> {
+  const url = resolveBeside(tilesetUrl, uri);
+  return scanPayloads.get(url, async () => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`supersedes answered ${String(response.status)}`);
+    const text = await response.text();
+    const doc = parseSupersedes(JSON.parse(text));
+    if (!doc) throw new Error("supersedes: no tiles");
+    return { value: doc, bytes: jsonBytes(text) };
+  });
 }
 
 /** Documents from `withSupersedes`, and the id their superseded splats carry. */

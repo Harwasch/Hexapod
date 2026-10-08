@@ -20,6 +20,8 @@
 
 import { decodeRuns, runsLength, tileRunsIssue } from "@twin/world";
 
+import { jsonBytes, scanPayloads } from "./payloadCache";
+
 export type Vec3 = readonly [number, number, number];
 
 export const INSTANCES_FORMAT = "hexapod.instances";
@@ -237,13 +239,20 @@ export function resolveBeside(tilesetUrl: string, uri: string): string {
   return resolved.href;
 }
 
-/** Fetches and reads a scan's `instances.json`. Throws when it is missing or not one. */
-export async function loadInstances(tilesetUrl: string, ref: InstancesRef): Promise<InstancesDoc> {
-  const response = await fetch(resolveBeside(tilesetUrl, ref.uri));
-  if (!response.ok) throw new Error(`instances answered ${String(response.status)}`);
-  const doc = parseInstances(await response.json());
-  if (!doc) throw new Error("instances: not a hexapod.instances v1 document");
-  return doc;
+/**
+ * Fetches and reads a scan's `instances.json`. Throws when it is missing or not one. Kept in
+ * memory once read (lib/payloadCache.ts): picking an objects method again is instant.
+ */
+export function loadInstances(tilesetUrl: string, ref: InstancesRef): Promise<InstancesDoc> {
+  const url = resolveBeside(tilesetUrl, ref.uri);
+  return scanPayloads.get(url, async () => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`instances answered ${String(response.status)}`);
+    const text = await response.text();
+    const doc = parseInstances(JSON.parse(text));
+    if (!doc) throw new Error("instances: not a hexapod.instances v1 document");
+    return { value: doc, bytes: jsonBytes(text) };
+  });
 }
 
 // ---- Hierarchy ---------------------------------------------------------------------------

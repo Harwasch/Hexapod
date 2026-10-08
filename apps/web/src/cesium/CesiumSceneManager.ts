@@ -215,7 +215,9 @@ export class CesiumSceneManager {
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
     // A popover over the map, or a control in use, holds the redraws nobody on screen asked
     // for -- the globe's and the splat overlay's -- while the camera is still (uiActivity.ts).
-    const holding = (): boolean => this.uiActivity.holding;
+    // Never an animation: the wind keeps its every frame (the Methods panel is open while the
+    // motion methods are compared).
+    const holding = (): boolean => this.uiActivity.holding && !this.performance.isAnimating;
     this.unsubscribe.push(holdGlobeRenders(scene, holding));
     this.scanRenderer = new ScanRendererHost(this.viewer, { holding });
     // A dedicated splat renderer that throws while drawing is retired on the spot, and the
