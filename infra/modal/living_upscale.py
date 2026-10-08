@@ -103,9 +103,13 @@ vsr_image = (
         "sed -i 's/run_mha_bwd_block_<elem_type, kHeadDim, Is_causal>(params, stream);"
         '/TORCH_CHECK(false, "block-sparse backward not built");/\''
         " /opt/bsa/csrc/block_sparse_attn/flash_api.cpp",
+        # The build's own errors, not pip's summary of them, when it fails; two jobs, as each
+        # nvcc of these kernels can take 8-9 GB.
         "cd /opt/bsa && BLOCK_SPARSE_ATTN_CUDA_ARCHS=80 BLOCK_SPARSE_ATTN_FORCE_BUILD=TRUE"
-        " TORCH_CUDA_ARCH_LIST=8.0 MAX_JOBS=4 NVCC_THREADS=2"
-        " pip install --no-build-isolation -v . 2>&1 | tail -40",
+        " TORCH_CUDA_ARCH_LIST=8.0 MAX_JOBS=2 NVCC_THREADS=2"
+        " pip install --no-build-isolation -v . > /tmp/bsa.log 2>&1"
+        " || { grep -n -i -E 'error|killed|fatal' /tmp/bsa.log | head -60; tail -60 /tmp/bsa.log;"
+        " exit 1; }",
     )
     # A layer of its own, so a failed check does not throw the compiled kernels away. Installed,
     # not imported: the builder has no GPU driver.

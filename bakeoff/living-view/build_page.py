@@ -34,6 +34,13 @@ ARM_TITLES = {
     "wan": "Wan 2.2 TI2V-5B (control)",
 }
 SCENE_TITLES = {"tree": "Minnetonka tree", "camp": "Camp shrubs"}
+#: As in infra/modal/living_bakeoff.py ARMS, also for rows whose arm did not run.
+LICENCES = {
+    "ltx": "LTX-2.x Community License (commercial use free under $10M revenue)",
+    "causal": "Apache-2.0",
+    "flf": "Apache-2.0",
+    "wan": "Apache-2.0",
+}
 CAP_DOLLARS = 10.0
 PAGE_CRF = 26
 
@@ -305,7 +312,8 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
         lines.append(
             "<tr>"
             f"<td><b>{esc(ARM_TITLES.get(arm, arm))}</b><br>{status}</td>"
-            f"<td>{esc(result.get('model', ''))}<br><span class='eyebrow'>{esc(result.get('licence', ''))}</span></td>"
+            f"<td>{esc(result.get('model', ''))}<br>"
+            f"<span class='eyebrow'>{esc(result.get('licence', LICENCES.get(base, '')))}</span></td>"
             f"<td class='num'>{fmt(statistics.median(first) if first else None, ' s')}</td>"
             f"<td class='num'>{fmt(statistics.median(gen) if gen else None, ' s')}</td>"
             f"<td class='num'>{fmt(result.get('loadSeconds'), ' s', 0)}</td>"
@@ -358,7 +366,7 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
                 f"<dt>generation</dt><dd>{fmt(clip['seconds'], ' s')} · {clip['frames']} f @ {clip['fps']:g} fps</dd>"
                 f"<dt>model size</dt><dd>{clip['size'][0]} × {clip['size'][1]}</dd>"
                 f"<dt>$ (arm/clips)</dt><dd>${arm_cost(arm) / max(1, len(result.get('clips', {}))):.2f}</dd>"
-                f"<dt>licence</dt><dd>{esc(result.get('licence', '').split(' (')[0])}</dd>"
+                f"<dt>licence</dt><dd>{esc(LICENCES.get(arm.split('~')[0], '').split(' (')[0])}</dd>"
                 f"<dt>plant motion</dt><dd>{fmt(m['insideMeanPx'], '', 2)} mean · {fmt(m['insideP95Px'], '', 2)} p95 px</dd>"
                 f"<dt>elsewhere</dt><dd>{fmt(m['outsideMeanPx'], '', 2)} mean · {fmt(m['outsideP95Px'], '', 2)} p95 px</dd>"
                 f"<dt>camera creep</dt><dd>{fmt(m['cameraCreepPx'], ' px', 2)}{'' if m['backgroundPx'] else ' (no background to fit)'}</dd>"
