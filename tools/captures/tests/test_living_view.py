@@ -119,6 +119,7 @@ def test_motion_only_moves_only_the_plant_and_returns_to_the_render() -> None:
     render = frames[0].copy()
     soft = lv.feather(disc)
     moved, report = lv.motion_only(render, frames, soft, ramp=0.25)
+    moved = moved["bilinear"]
     assert len(moved) == len(frames)
     assert np.array_equal(moved[0], render)
     assert np.array_equal(moved[-1], render)  # eased back onto the render: it loops
@@ -139,6 +140,7 @@ def test_motion_only_scales_the_flow_to_the_render() -> None:
     big_render = cv2.resize(frames[0], (2 * W, 2 * H), interpolation=cv2.INTER_CUBIC)
     soft = lv.feather(cv2.resize(disc, (2 * W, 2 * H), interpolation=cv2.INTER_NEAREST))
     moved, report = lv.motion_only(big_render, frames, soft, ramp=0.0)
+    moved = moved["bilinear"]
     assert moved[3].shape == big_render.shape
     assert report.inside_p95_px == pytest.approx(4.0, abs=0.8)  # 2 px at the model's size
 

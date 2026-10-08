@@ -30,3 +30,4 @@ krea/krea-realtime-video (the Hub card says Apache-2.0, its GitHub repository sa
 
 | # | GitHub run | what | GPU | minutes | $ | running total |
 | --- | --- | --- | --- | ---: | ---: | ---: |
+| 1 | (pending) | access check (CPU); weights for ltx, causal, flf into the volume (CPU only, ~195 GB); starts: 2 views x 2 scenes (L4). Estimate $0.30, worst case (every timeout) $3.1 | CPU, L4 | | | |

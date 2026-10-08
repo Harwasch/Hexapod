@@ -775,6 +775,8 @@ def starts(scene: str, keep: int = 2) -> dict:
         )
         files[f"{name}.png"] = encode_png(u8)
         files[f"{name}-mask.png"] = encode_png(np.repeat(mask_u8[..., None], 3, axis=2))
+        share_u8 = np.clip(np.round(share * 255), 0, 255).astype(np.uint8)
+        files[f"{name}-share.png"] = encode_png(np.repeat(share_u8[..., None], 3, axis=2))
         files[f"{name}-overlay.png"] = encode_png(np.clip(tint, 0, 255).astype(np.uint8))
         view = {
             **s,

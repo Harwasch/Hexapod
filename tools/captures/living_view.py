@@ -23,13 +23,20 @@ over the clips that come back:
   (`loop_window`, a Tukey window) so the clip returns to the render and loops; and **our
   render** backward-warped by it. The appearance stays the measured scan's; only the motion
   is the model's.
-* **Numbers** (`motion_stats`, `psnr_outside`): how far pixels move inside and outside the
-  plants before the camera is taken out (camera creep and things that should not move show
-  up outside), how far the fitted camera crept, and how much of what is not a plant the model
-  redrew (PSNR against our render).
+* **Edge-aware** (`MODES`): the model's flow is coarser than our render (848 or 832 px wide
+  against 1280) and DIS blurs it across edges anyway, so scaling it up bilinearly and fading
+  it with a feathered mask drags a ring of sky with every twig. The `guided` mode scales it up
+  with a guided filter (`GuidedFilter`, He et al. 2010) whose guide is our full-size render and
+  its plant share -- a normalised convolution in which only plant pixels vote -- and keeps a
+  pixel's motion only where it reads plant (`source_masked`). Both are made, side by side.
+* **Numbers** (`motion_stats`, `psnr_outside`, `MotionReport`): how far pixels move inside and
+  outside the plants before the camera is taken out (camera creep and things that should not
+  move show up outside), how far the fitted camera crept, how much of what is not a plant the
+  model redrew (PSNR against our render), and per mode the motion left on the ring of sky
+  round the plants (`haloPx`).
 
-    living_view.py process --render camp-a.png --mask camp-a-mask.png \\
-        --clip clips/ltx/camp-a.mp4 --out site/clips --name camp-a-ltx
+    living_view.py process --render camp-1.png --mask camp-1-mask.png \\
+        --share camp-1-share.png --clip clips/ltx/camp-1.mp4 --out site/clips --name camp-1-ltx
 """
 
 from __future__ import annotations
@@ -45,10 +52,14 @@ from pathlib import Path
 import numpy as np
 
 __all__ = [
+    "MODES",
     "PLANT_CATEGORIES",
     "PLANT_TAGS",
+    "GuidedFilter",
     "MotionReport",
     "dis_flow",
+    "edge_guide",
+    "edge_ring",
     "feather",
     "global_motion",
     "loop_window",
@@ -58,7 +69,9 @@ __all__ = [
     "plant_instances",
     "psnr_outside",
     "resize_frames",
+    "source_masked",
     "upsample_flow",
+    "upsample_flow_guided",
     "warp",
 ]
 
@@ -309,7 +322,126 @@ def resize_frames(frames: Iterable[np.ndarray], width: int, height: int) -> list
     return out
 
 
+# --- edge-aware upsampling ---------------------------------------------------------------------
+
+
+class GuidedFilter:
+    """He, Sun and Tang's guided filter (ECCV 2010, Algorithm 2) with a multi-channel guide.
+
+    The output is locally a linear function of the guide, so it steps where the guide steps:
+    a smooth low-resolution flow filtered with our full-resolution render (and its plant
+    share) as the guide takes the render's edges. The guide's statistics -- its box means and
+    the inverse of its regularised local covariance -- are computed once, since the render is
+    the guide for every frame of a clip; each input then costs a handful of box filters."""
+
+    def __init__(self, guide: np.ndarray, radius: int, eps: float) -> None:
+        g = np.asarray(guide, np.float32)
+        if g.ndim == 2:
+            g = g[..., None]
+        self.guide = g
+        self.radius = int(radius)
+        self.eps = float(eps)
+        self.height, self.width, channels = g.shape
+        size = (2 * self.radius + 1, 2 * self.radius + 1)
+        self._size = size
+        self.mean = np.stack([self._box(g[..., c]) for c in range(channels)], axis=-1)
+        cov = np.empty((self.height, self.width, channels, channels), np.float32)
+        for i in range(channels):
+            for j in range(i, channels):
+                v = self._box(g[..., i] * g[..., j]) - self.mean[..., i] * self.mean[..., j]
+                cov[..., i, j] = v
+                cov[..., j, i] = v
+        cov += self.eps * np.eye(channels, dtype=np.float32)
+        self.inverse = np.linalg.inv(cov).astype(np.float32)
+
+    def _box(self, x: np.ndarray) -> np.ndarray:
+        import cv2
+
+        return cv2.boxFilter(
+            np.asarray(x, np.float32), -1, self._size, borderType=cv2.BORDER_REFLECT
+        )
+
+    def __call__(self, p: np.ndarray) -> np.ndarray:
+        p = np.asarray(p, np.float32)
+        g, channels = self.guide, self.guide.shape[-1]
+        mean_p = self._box(p)
+        cov_gp = np.stack(
+            [self._box(g[..., c] * p) - self.mean[..., c] * mean_p for c in range(channels)],
+            axis=-1,
+        )
+        a = np.einsum("hwij,hwj->hwi", self.inverse, cov_gp)
+        b = mean_p - np.einsum("hwi,hwi->hw", a, self.mean)
+        mean_a = np.stack([self._box(a[..., c]) for c in range(channels)], axis=-1)
+        return np.einsum("hwi,hwi->hw", mean_a, g) + self._box(b)
+
+
+#: Edge-aware flow: the guided filter's radius (render pixels) and regularisation (the guide
+#: in [0, 1]), and how much the plant share weighs in the guide beside the colour.
+GUIDED_RADIUS = 6
+GUIDED_EPS = 1e-3
+GUIDE_SHARE_WEIGHT = 0.5
+
+
+def edge_guide(render: np.ndarray, share: np.ndarray) -> GuidedFilter:
+    """The guided filter for a start: our render's colour (0-1) and its plant share."""
+    rgb = np.asarray(render, np.float32) / 255.0
+    weight = GUIDE_SHARE_WEIGHT * np.asarray(share, np.float32)[..., None]
+    return GuidedFilter(np.concatenate([rgb, weight], axis=2), GUIDED_RADIUS, GUIDED_EPS)
+
+
+def upsample_flow_guided(flow: np.ndarray, guide: GuidedFilter, weight: np.ndarray) -> np.ndarray:
+    """A low-resolution flow to the guide's size, edge-aware: bilinear first, then each
+    component guided-filtered as a normalised convolution weighted by `weight` (the plant
+    share at full size) -- only plant pixels vote for a plant's motion, so the sky between two
+    branches does not average the branches' motion with its own zero, and the flow steps
+    where the render steps rather than where the coarse flow happened to blur."""
+    up = upsample_flow(flow, guide.width, guide.height)
+    weight = np.asarray(weight, np.float32)
+    den = guide(weight)
+    out = np.zeros_like(up)
+    valid = den > 0.05
+    for c in range(2):
+        num = guide(up[..., c] * weight)
+        out[..., c] = np.where(valid, num / np.maximum(den, 0.05), 0.0)
+    return out
+
+
+def source_masked(flow: np.ndarray, share: np.ndarray) -> np.ndarray:
+    """`flow` kept only where it comes from a plant: a backward flow at `x` reads the render at
+    `x + f(x)`, so a pixel moves when what it shows is plant. A sky pixel next to a branch
+    that the branch sways over reads the branch and moves; one that only caught the coarse
+    flow's blur reads sky and stays -- no halo of dragged sky."""
+    import cv2
+
+    h, w = flow.shape[:2]
+    x, y = _grid(h, w)
+    source = cv2.remap(
+        np.asarray(share, np.float32),
+        x + flow[..., 0],
+        y + flow[..., 1],
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT101,
+    )
+    return flow * np.clip(source, 0.0, 1.0)[..., None]
+
+
+def edge_ring(share: np.ndarray, width_px: int = 6) -> np.ndarray:
+    """Not-plant pixels within `width_px` of a plant: where a halo would show."""
+    import cv2
+
+    hard = (np.asarray(share) >= PLANT_SHARE).astype(np.uint8)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * width_px + 1, 2 * width_px + 1))
+    return (cv2.dilate(hard, k) > 0) & (np.asarray(share) < NOT_PLANT_SHARE)
+
+
 # --- motion only and the numbers -------------------------------------------------------------
+
+#: The ways a clip's motion reaches our render (`motion_only`'s `modes`):
+#: `bilinear` -- the flow zeroed outside the feathered plant mask at the model's size, then
+#: scaled up bilinearly (the plain recipe); `guided` -- scaled up edge-aware
+#: (`upsample_flow_guided`, our render and its plant share as the guide) and kept only where
+#: it reads plant (`source_masked`).
+MODES = ("bilinear", "guided")
 
 
 @dataclass
@@ -327,6 +459,11 @@ class MotionReport:
     background_px: int
     #: PSNR of the not-plant pixels of the model's own frames against our render (dB).
     psnr_outside_db: float | None = None
+    #: Per mode: the mean applied motion on the not-plant ring round the plants (`edge_ring`),
+    #: render pixels, mean over frames -- what drags sky at branch edges.
+    halo_px: dict[str, float] | None = None
+    #: Per mode: the mean applied motion on the plants, render pixels, mean over frames.
+    applied_px: dict[str, float] | None = None
 
     def to_json(self) -> dict[str, object]:
         out: dict[str, object] = {
@@ -340,6 +477,10 @@ class MotionReport:
         }
         if self.psnr_outside_db is not None:
             out["psnrOutsideDb"] = round(self.psnr_outside_db, 2)
+        if self.halo_px is not None:
+            out["haloPx"] = {k: round(v, 3) for k, v in self.halo_px.items()}
+        if self.applied_px is not None:
+            out["appliedPx"] = {k: round(v, 3) for k, v in self.applied_px.items()}
         return out
 
 
@@ -385,23 +526,39 @@ def motion_only(
     frames: Sequence[np.ndarray],
     soft_mask: np.ndarray,
     *,
+    share: np.ndarray | None = None,
+    modes: Sequence[str] = ("bilinear",),
     ramp: float = LOOP_RAMP,
     preset: str = "medium",
-) -> tuple[list[np.ndarray], MotionReport]:
+) -> tuple[dict[str, list[np.ndarray]], MotionReport]:
     """Our render moved by the plant motion of a generated clip (frames at the model's size,
-    frame 0 being the model's copy of the render), and the clip's numbers. `soft_mask` is
-    the feathered plant mask at the render's size."""
+    frame 0 being the model's copy of the render), once per mode in `modes` (`MODES`), and
+    the clip's numbers. `soft_mask` is the feathered plant mask and `share` the plant share
+    (unfeathered; `soft_mask >= 0.5` when not given), both at the render's size."""
     import cv2
 
+    for mode in modes:
+        if mode not in MODES:
+            raise ValueError(f"unknown mode {mode!r}")
     H_r, W_r = render.shape[:2]
     h, w = frames[0].shape[:2]
-    mask_small = cv2.resize(np.asarray(soft_mask, np.float32), (w, h), interpolation=cv2.INTER_AREA)
+    soft_mask = np.asarray(soft_mask, np.float32)
+    if share is None:
+        share = (soft_mask >= 0.5).astype(np.float32)
+    share = np.asarray(share, np.float32)
+    mask_small = cv2.resize(soft_mask, (w, h), interpolation=cv2.INTER_AREA)
     grey0 = _grey(frames[0])
     gradient = np.hypot(cv2.Sobel(grey0, cv2.CV_32F, 1, 0), cv2.Sobel(grey0, cv2.CV_32F, 0, 1))
     background = (mask_small < NOT_PLANT_SHARE) & (gradient / 4.0 >= MIN_GRADIENT)
     window = loop_window(len(frames), ramp)
     scale = (W_r / w, H_r / h)
-    raw, out = [], []
+    guide = edge_guide(render, share) if "guided" in modes else None
+    ring = edge_ring(share)
+    plant = share >= PLANT_SHARE
+    out: dict[str, list[np.ndarray]] = {m: [] for m in modes}
+    halo: dict[str, list[float]] = {m: [] for m in modes}
+    applied: dict[str, list[float]] = {m: [] for m in modes}
+    raw = []
     creep, offered = 0.0, 0
     for k, frame in enumerate(frames):
         if k == 0:
@@ -415,8 +572,18 @@ def motion_only(
         creep = max(
             creep, float(np.hypot(camera[..., 0] * scale[0], camera[..., 1] * scale[1]).mean())
         )
-        local = (flow - camera) * mask_small[..., None] * float(window[k])
-        out.append(warp(render, upsample_flow(local, W_r, H_r)))
+        local = (flow - camera) * float(window[k])
+        for mode in modes:
+            if mode == "bilinear":
+                full = upsample_flow(local * mask_small[..., None], W_r, H_r)
+            else:
+                assert guide is not None
+                full = source_masked(upsample_flow_guided(local, guide, share), share)
+            out[mode].append(warp(render, full))
+            if k:
+                magnitude = np.hypot(full[..., 0], full[..., 1])
+                halo[mode].append(float(magnitude[ring].mean()) if ring.any() else 0.0)
+                applied[mode].append(float(magnitude[plant].mean()) if plant.any() else 0.0)
     inside_mean, inside_p95, outside_mean, outside_p95 = motion_stats(raw[1:], mask_small, scale)
     report = MotionReport(
         frames=len(frames),
@@ -426,6 +593,8 @@ def motion_only(
         outside_p95_px=outside_p95,
         camera_creep_px=creep,
         background_px=offered,
+        halo_px={m: float(np.mean(v)) if v else 0.0 for m, v in halo.items()},
+        applied_px={m: float(np.mean(v)) if v else 0.0 for m, v in applied.items()},
     )
     return out, report
 
@@ -478,21 +647,35 @@ def write_mp4(path: Path, frames: Sequence[np.ndarray], fps: float, crf: int = 2
     )
 
 
+#: The clips `process` writes per mode, beside `<name>-a.mp4` (the model's pixels).
+MODE_SUFFIX = {"bilinear": "b", "guided": "g"}
+
+
 def process(
-    render_path: Path, mask_path: Path, clip_path: Path, out: Path, name: str, crf: int = 24
+    render_path: Path,
+    mask_path: Path,
+    clip_path: Path,
+    out: Path,
+    name: str,
+    *,
+    share_path: Path | None = None,
+    modes: Sequence[str] = MODES,
+    crf: int = 24,
 ) -> dict:
-    """One clip into the two the page shows -- `<name>-a.mp4` (the model's pixels at the
-    render's size) and `<name>-b.mp4` (our render, moved by the model's plant motion) -- and
-    its numbers."""
+    """One clip into what the page shows -- `<name>-a.mp4` (the model's pixels at the render's
+    size) and per mode `<name>-b.mp4` / `<name>-g.mp4` (our render moved by the model's plant
+    motion, bilinear / edge-aware) -- and its numbers."""
     render = read_png(render_path)
     soft = read_mask(mask_path)
+    share = read_mask(share_path) if share_path is not None else None
     frames, fps = read_clip(clip_path)
     H, W = render.shape[:2]
     pixels = resize_frames(frames, W, H)
-    moved, report = motion_only(render, frames, soft)
+    moved, report = motion_only(render, frames, soft, share=share, modes=modes)
     report.psnr_outside_db = psnr_outside(pixels, render, soft)
     write_mp4(out / f"{name}-a.mp4", pixels, fps, crf)
-    write_mp4(out / f"{name}-b.mp4", moved, fps, crf)
+    for mode, clip in moved.items():
+        write_mp4(out / f"{name}-{MODE_SUFFIX[mode]}.mp4", clip, fps, crf)
     return {"name": name, "fps": fps, "modelSize": [frames[0].shape[1], frames[0].shape[0]]} | (
         report.to_json()
     )
@@ -504,12 +687,23 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("process", help="a clip into its pixels (A) and motion-only (B) clips")
     run.add_argument("--render", type=Path, required=True)
     run.add_argument("--mask", type=Path, required=True, help="the feathered plant mask (PNG)")
+    run.add_argument("--share", type=Path, help="the unfeathered plant share (PNG)")
     run.add_argument("--clip", type=Path, required=True)
     run.add_argument("--out", type=Path, required=True)
     run.add_argument("--name", required=True)
+    run.add_argument("--modes", default=",".join(MODES), help=f"of {', '.join(MODES)}")
     run.add_argument("--crf", type=int, default=24)
     args = parser.parse_args(argv)
-    result = process(args.render, args.mask, args.clip, args.out, args.name, args.crf)
+    result = process(
+        args.render,
+        args.mask,
+        args.clip,
+        args.out,
+        args.name,
+        share_path=args.share,
+        modes=[m for m in args.modes.split(",") if m],
+        crf=args.crf,
+    )
     print(json.dumps(result))
     return 0
 
