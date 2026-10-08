@@ -137,7 +137,8 @@ def run(request: dict) -> dict:
     and resized to its 1024x512. Compiled as the card runs it (`apply_inference_patches`,
     `torch.compile` max-autotune) after a warm-up rollout; first frame and sustained frames per
     second are timed warm."""
-    os.environ["HF_HUB_OFFLINE"] = "1"
+    # Not offline: diffusers' remote-code loader asks the Hub for the commit (`model_info`)
+    # even when every file is in the cache on the volume.
     started = time.time()
     import numpy as np
     import torch

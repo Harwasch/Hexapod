@@ -51,7 +51,7 @@ HF_TOKEN_KEYS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN", "HF_
 START_SIZE = (1280, 704)
 
 #: Modal list prices, $/s (modal.com/pricing, read 2026-10-08).
-GPU_PER_S = {"A100-80GB": 0.000694, "H100": 0.001097, "": 0.0}
+GPU_PER_S = {"A100-80GB": 0.000694, "H100": 0.001097, "H200": 0.001261, "": 0.0}
 CPU_CORE_PER_S = 0.0000131
 MEMORY_GIB_PER_S = 0.00000222
 DOWNLOAD_RESERVATION = {"gpu": "", "cpu": 2.0, "memoryGiB": 8, "timeoutS": 3600}
@@ -94,6 +94,8 @@ UPSCALERS: dict[str, dict] = {
 #: are installed now, and it builds (5 minutes, forward kernels only). Its import check needs
 #: torch imported first (libc10). Should the build fail, the image builds without it and
 #: `flashvsr` runs `block_sparse_attn_func` below (PyTorch, the same masks) and says so.
+#: No clip starts after this many seconds of the container (its timeout is 1200 s).
+FVSR_WALL_S = 1000.0
 BSA_CODE = "https://github.com/mit-han-lab/Block-Sparse-Attention.git"
 BSA_COMMIT = "49d6c39e4dc0303442cda3bb758b3925d4399c49"
 BSA_BUILD = (
@@ -169,8 +171,13 @@ SVR_SPACE_COMMIT = "1c8f9fbafac52f6fd2f9b42c869ba27262c52c0a"
 SVR_SEED = 666
 SVR_ORDER = ("ltx", "causal~ctx3", "flf", "causal", "wan")
 SVR_WALL_S = 600.0
+#: Round 2 restores at 2560x1408 and 3840x2112, four and nine times round 1's pixels (whose
+#: 97 frames peaked at 57 GB on the H100): an H200, and when a whole clip still runs out of
+#: memory, overlapping chunks of `SVR_CHUNK` frames cross-faded over `SVR_OVERLAP`.
+SVR_CHUNK = 33
+SVR_OVERLAP = 8
 UPSCALERS["seedvr2"] = {
-    "gpu": "H100",
+    "gpu": "H200",
     "cpu": 8.0,
     "memoryGiB": 64,
     "timeoutS": 1200,
@@ -354,8 +361,13 @@ def flashvsr(request: dict) -> dict:
     width, height = request.get("renderSize", START_SIZE)
     target = request.get("outSize")  # kept at this size (letterboxed), not resized back
     label = request.get("label", "flashvsr")
+    wall = float(request.get("wallS", FVSR_WALL_S))
+    skipped: list[str] = []
     out: dict = {}
     for name in names:
+        if time.time() - started > wall:  # the rest next time rather than all lost to a timeout
+            skipped.append(name)
+            continue
         reader = imageio.get_reader(f"/data/clips/{name}.mp4")
         fps = float(reader.get_meta_data().get("fps", 24.0))
         frames = np.stack([np.asarray(f)[..., :3] for f in reader])
@@ -374,10 +386,14 @@ def flashvsr(request: dict) -> dict:
         padded = np.pad(frames, ((0, 0), (0, pad_h), (0, pad_w), (0, 0)), mode="reflect")
         total = ((n + 3 + 7) // 8) * 8 + 1  # FlashVSR keeps total - 4 frames: at least n
         padded = np.concatenate([padded, np.repeat(padded[-1:], total - n, axis=0)])
-        lq = torch.from_numpy(padded).to("cuda").permute(3, 0, 1, 2).float() / 127.5 - 1.0
         H4, W4 = (h + pad_h) * scale, (w + pad_w) * scale
-        lq = F.interpolate(lq, size=(H4, W4), mode="bicubic", align_corners=False)
-        lq = lq.clamp(-1, 1).to(torch.bfloat16)[None]  # (1, C, F, H, W)
+        small = torch.from_numpy(padded).to("cuda").permute(3, 0, 1, 2)  # (C, F, h, w) uint8
+        lq = torch.empty((1, 3, total, H4, W4), device="cuda", dtype=torch.bfloat16)
+        for k in range(0, total, 16):  # in slices: a 4K clip in float32 is 10 GB
+            part = small[:, k : k + 16].float() / 127.5 - 1.0
+            part = F.interpolate(part, size=(H4, W4), mode="bicubic", align_corners=False)
+            lq[0, :, k : k + 16] = part.clamp(-1, 1).to(torch.bfloat16)
+        del small, part
         video = pipe(
             prompt="",
             negative_prompt="",
@@ -397,17 +413,21 @@ def flashvsr(request: dict) -> dict:
         )
         torch.cuda.synchronize()
         seconds = time.time() - t0
-        big = ((video.float() + 1) * 127.5).clamp(0, 255)  # (C, T, H, W)
-        big = big[:, :n, : h * scale, : w * scale]
+        size = (fh, fw) if target else (height, width)
+        parts = []
+        for k in range(0, n, 8):  # (C, T, H, W) to uint8 frames on the CPU, in slices
+            big = video[:, k : min(n, k + 8), : h * scale, : w * scale].float()
+            big = ((big + 1) * 127.5).clamp(0, 255).permute(1, 0, 2, 3)
+            if tuple(big.shape[-2:]) != size:
+                big = F.interpolate(big, size=size, mode="area")
+            parts.append(big.round().byte().permute(0, 2, 3, 1).cpu().numpy())
+        result = np.concatenate(parts)
+        del lq, video, big
         if target:
-            fit = F.interpolate(big.permute(1, 0, 2, 3), size=(fh, fw), mode="area")
-            result = _letterbox(fit.round().byte().permute(0, 2, 3, 1).cpu().numpy(), *target)
+            result = _letterbox(result, *target)
             mp4, crf = _deliver(result, fps, *target)
         else:
-            small = F.interpolate(big.permute(1, 0, 2, 3), size=(height, width), mode="area")
-            result = small.round().byte().permute(0, 2, 3, 1).cpu().numpy()
             mp4, crf = _mp4(result, fps), 14
-        del lq, video, big
         out[name] = {
             "mp4": mp4,
             "crf": crf,
@@ -437,6 +457,8 @@ def flashvsr(request: dict) -> dict:
         "bsaBuild": _bsa_status(),
         "label": label,
         "loadSeconds": round(load, 1),
+        "wallS": wall,
+        "skipped": skipped,
         "clips": out,
         "containerSeconds": round(time.time() - started, 1),
     }
@@ -565,6 +587,52 @@ def seedvr2(request: dict) -> dict:
     target = request.get("outSize")
     label = request.get("label", "seedvr2")
     out: dict = {}
+    failed: dict = {}
+    chunked = False  # once a whole clip runs out of memory, every later one goes in chunks
+
+    def restore(clip: torch.Tensor) -> torch.Tensor:
+        """(T, C, H, W) in -1..1, padded to 4n+1 with its last frame: one DiT step."""
+        t = clip.shape[0]
+        cond = rearrange(clip, "t c h w -> c t h w")
+        pad = (-(t - 1)) % 4
+        if pad:
+            cond = torch.cat([cond, cond[:, -1:].repeat(1, pad, 1, 1)], dim=1)
+        latent = runner.vae_encode([cond])[0]
+        noise = torch.randn_like(latent)
+        condition = runner.get_condition(noise, task="sr", latent_blur=latent)
+        with torch.autocast("cuda", torch.bfloat16, enabled=True):
+            sample = runner.inference(
+                noises=[noise],
+                conditions=[condition],
+                texts_pos=[positive],
+                texts_neg=[negative],
+                dit_offload=False,
+            )[0]
+        return rearrange(sample, "c t h w -> t c h w")[:t]
+
+    def restore_chunks(clip: torch.Tensor) -> torch.Tensor:
+        t = clip.shape[0]
+        total = torch.zeros_like(clip)
+        weight = torch.zeros((t, 1, 1, 1), device=clip.device)
+        fade = torch.linspace(0, 1, SVR_OVERLAP + 2, device=clip.device)[1:-1]
+        begin = 0
+        while True:
+            end = min(t, begin + SVR_CHUNK)
+            set_seed(SVR_SEED, same_across_ranks=True)
+            part = restore(clip[begin:end]).float()
+            ramp = torch.ones(end - begin, device=clip.device)
+            if begin > 0:
+                ramp[:SVR_OVERLAP] = fade
+            if end < t:
+                ramp[-SVR_OVERLAP:] = torch.minimum(ramp[-SVR_OVERLAP:], fade.flip(0))
+            total[begin:end] += part * ramp[:, None, None, None]
+            weight[begin:end, 0, 0, 0] += ramp
+            del part
+            torch.cuda.empty_cache()
+            if end == t:
+                return total / weight.clamp_min(1e-6)
+            begin = end - SVR_OVERLAP
+
     for name in names:
         if time.time() - started > wall:
             skipped.append(name)
@@ -581,25 +649,33 @@ def seedvr2(request: dict) -> dict:
         torch.cuda.synchronize()
         t0 = time.time()
         with torch.no_grad():
-            video = torch.from_numpy(frames).to("cuda").permute(0, 3, 1, 2).float() / 255.0
-            video = F.interpolate(video, size=(height, width), mode="bicubic", align_corners=False)
-            video = video.clamp(0, 1) * 2 - 1  # (T, C, H, W), -1..1
-            cond = rearrange(video, "t c h w -> c t h w")
-            pad = (-(n - 1)) % 4
-            if pad:
-                cond = torch.cat([cond, cond[:, -1:].repeat(1, pad, 1, 1)], dim=1)
-            latent = runner.vae_encode([cond])[0]
-            noise = torch.randn_like(latent)
-            condition = runner.get_condition(noise, task="sr", latent_blur=latent)
-            with torch.autocast("cuda", torch.bfloat16, enabled=True):
-                sample = runner.inference(
-                    noises=[noise],
-                    conditions=[condition],
-                    texts_pos=[positive],
-                    texts_neg=[negative],
-                    dit_offload=False,
-                )[0]
-            sample = rearrange(sample, "c t h w -> t c h w")[:n]
+            video = torch.from_numpy(frames).to("cuda").permute(0, 3, 1, 2)
+            scaled = []
+            for k in range(0, n, 16):  # bicubic in slices: a 4K clip in float32 is 10 GB
+                part = video[k : k + 16].float() / 255.0
+                part = F.interpolate(
+                    part, size=(height, width), mode="bicubic", align_corners=False
+                )
+                scaled.append(part.clamp(0, 1) * 2 - 1)
+            video = torch.cat(scaled)  # (T, C, H, W), -1..1
+            del scaled, part
+            how = "chunks" if chunked else "whole"
+            try:
+                if chunked:
+                    sample = restore_chunks(video)
+                else:
+                    try:
+                        sample = restore(video)
+                    except torch.cuda.OutOfMemoryError:
+                        torch.cuda.empty_cache()
+                        chunked, how = True, "chunks"
+                        set_seed(SVR_SEED, same_across_ranks=True)
+                        sample = restore_chunks(video)
+            except torch.cuda.OutOfMemoryError as error:
+                failed[name] = f"out of memory in chunks of {SVR_CHUNK}: {str(error)[:300]}"
+                del video
+                torch.cuda.empty_cache()
+                continue
             parts = []
             for k in range(0, n, 8):  # the colour fix in slices: 4K frames are large
                 fixed = wavelet_reconstruction(sample[k : k + 8].float(), video[k : k + 8])
@@ -607,7 +683,7 @@ def seedvr2(request: dict) -> dict:
             torch.cuda.synchronize()
             seconds = time.time() - t0
             result = torch.cat(parts).permute(0, 2, 3, 1).numpy()
-        del video, cond, latent, noise, condition, sample
+        del video, sample
         if target:
             result = _letterbox(result, *target)
             mp4, crf = _deliver(result, fps, *target)
@@ -616,6 +692,7 @@ def seedvr2(request: dict) -> dict:
         out[name] = {
             "mp4": mp4,
             "crf": crf,
+            "restored": how if how == "whole" else f"chunks of {SVR_CHUNK}, {SVR_OVERLAP} faded",
             "outSize": list(target) if target else [int(width), int(height)],
             "fps": fps,
             "frames": int(n),
@@ -641,6 +718,7 @@ def seedvr2(request: dict) -> dict:
         "loadSeconds": round(load, 1),
         "wallS": wall,
         "skipped": skipped,
+        "failed": failed,
         "clips": out,
         "containerSeconds": round(time.time() - started, 1),
     }

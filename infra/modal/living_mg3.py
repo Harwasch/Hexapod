@@ -162,8 +162,14 @@ def run(request: dict) -> dict:
     import pipeline.inference_pipeline as ip
     import torch
     import utils.utils as uu
+    import wan.modules.attention as wan_attention
+    import wan.modules.model as wan_model
     from PIL import Image
     from wan.configs import MAX_AREA_CONFIGS, WAN_CONFIGS
+
+    # Its DiT calls `flash_attention`, which asserts flash-attn (no wheel for this torch); the
+    # repository's own `attention` runs PyTorch's SDPA when flash-attn is absent.
+    wan_model.flash_attention = wan_attention.attention
 
     captured: dict = {}
     ip.process_video = lambda video, *a, **k: captured.__setitem__("video", video)

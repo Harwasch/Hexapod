@@ -95,7 +95,7 @@ The winner, by plant motion in a slight range (a few px p95 at 1280 wide), low n
 and camera creep, and a read by eye, is used for the rest of the LTX ladder. The scores are in
 `numbers.json` and below.
 
-### Scores (run R2-5, H200, the round-1 recipe: 97 frames at 1280x704, seed 42)
+### Scores (run R2-5, H200, the round-1 recipe: 97 frames at 1280x704, seed 1)
 
 Measured on the model's own frames (`r2_deliver.py`). Plant motion is DIS optical flow against
 frame 0 inside the plant mask, in pixels at 1280 wide. Creep is a homography fitted on the
