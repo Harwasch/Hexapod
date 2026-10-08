@@ -176,7 +176,10 @@ describe("extras.variants", () => {
   it("counts as objects and motion for the renderers that cannot draw them", () => {
     expect(declaresInstances({ variants: { objects: DECLARED.objects } })).toBe(true);
     expect(declaresMotion({ variants: { skins: DECLARED.skins } })).toBe(true);
-    expect(declaresObjectsOrMotion({ variants: { fill: DECLARED.fill } })).toBe(false);
+    // A fill's layers are drawn with the scan, their look a GLSL modifier (scanView/layerLook.ts):
+    // the WebGPU trial draws them with WebGL2. They carry no object ids.
+    expect(declaresObjectsOrMotion({ variants: { fill: DECLARED.fill } })).toBe(true);
+    expect(declaresInstances({ variants: { fill: DECLARED.fill } })).toBe(false);
     expect(declaresObjectsOrMotion({})).toBe(false);
   });
 });

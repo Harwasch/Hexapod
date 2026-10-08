@@ -1203,8 +1203,8 @@ in place, with no reload and the camera where it is, under every renderer:
   (`lib/customSets.ts`, keyed by splat) drawn over the new file. The objects panel lists the
   new file's categories; PlayCanvas and Spark rebind their tiles' ids through the store
   (`scanView/scanInstances.ts`).
-- **Fill** (`cesium/inferredLayers.ts`): the drawn layers are unloaded and the variant's
-  loaded. Inferred layers are CesiumJS's under every renderer (below).
+- **Fill** (`cesium/inferredLayers.ts`, `scanView/scanLayers.ts`): the drawn layers are
+  unloaded and the variant's loaded, by whichever renderer draws the scan (below).
   - A fill entry may also name **`supersedes`**: a path to the measured splats its layer
     replaces (swap, don't stack). For example, a thin, see-through patch of the scan with an
     opaque surface rebuilt over it.
@@ -1230,13 +1230,36 @@ scan with objects or motion: the WebGPU trial draws it with WebGL2, and the over
 **Inferred style.** How inferred layers are drawn is a viewer's setting
 (`inferredStyle`, kept on the device; hidden until chosen), beside the switcher as
 **Show · Highlight · Hide**, with the one-line legend "Inferred: generated where no camera
-saw. Not measured." while they are drawn. Highlight is the engine patch's colour hook on each
-layer's own splat primitive (never the measured scan's): pulled toward purple
-(`INFERRED_PURPLE`), hatched in 0.35 m bands across the layer, and a little see-through
-(`INFERRED_HIGHLIGHT`). Inferred layers are drawn by CesiumJS whichever renderer draws the
-measured splats: under PlayCanvas or Spark the scan's own tileset is hidden and drawn on the
-overlay, while its layers stay on the globe's canvas under it, so where both cover a pixel the
-measured splats are in front. Picking a fill while the style is Hide switches it to Show.
+saw. Not measured." while they are drawn. Highlight pulls the layer's splats (never a measured
+one) toward purple (`INFERRED_PURPLE`), hatches them in 0.35 m bands, and makes them a little
+see-through (`INFERRED_HIGHLIGHT`). Picking a fill while the style is Hide switches it to Show.
+
+**One sort.** Splats write no depth in any renderer, so which of two splats is in front is the
+order they are blended in, and only one renderer's sort can order a layer and its scan. A
+layer is therefore drawn by the renderer that draws the scan, sorted with its splats:
+
+- _CesiumJS_ (`cesium/inferredLayers.ts`): the scan's own splat primitive draws the layer's
+  tiles in its one texture and sort (the engine patch's `companions`); the layer's primitive
+  draws nothing (`drawnBy`). Highlight and the layer's view cones act on the layer's slots of
+  the scan's primitive (`CompanionHighlight`, `CompanionViewCones`), through colour and
+  visibility chains shared with the objects' hooks (`splatColor.ts`, `splatVisibility.ts`).
+  A scan primitive that is not in incremental mode (a CPU deformer's) has its layers draw
+  themselves, as two primitives.
+- _PlayCanvas and Spark_ (`scanView/scanLayers.ts`): the layer's tiles are streamed into the
+  overlay's renderer beside the scan's, under `S⁻¹·O` (identity for a layer whose root is the
+  scan's), with Highlight and the view-cone fade as a modifier of their own
+  (`scanView/layerLook.ts`); CesiumJS's copy stays hidden. The WebGPU trial draws a scan with
+  inferred layers with WebGL2 (the modifier is GLSL only).
+
+Before, CesiumJS drew the layers under every renderer. On the overlay's canvas they were under
+the scan: every measured splat behind the Spool's rebuilt top (anchor-refs) -- drum, bottom
+flange, ground -- was painted over it, and 72% of the top's pixels changed when the measured
+splats were hidden (mean of 17 headings 40° off vertical). Under CesiumJS a layer was a
+primitive of its own, and CesiumJS orders splat primitives back to front by the centres of
+their bounding volumes: from 8 of the 17 headings the scan was drawn over the top (62--71%
+changed), from the others the top over the drum in front of it, seen from low on the side.
+Now 0.2--0.3% change from every heading under each renderer. A layer's tiles are left out of
+picking, collision and the objects' ids in every renderer, as before.
 
 **Fixture and checks.** The synthetic yard has two variants per system
 (`data/tiles/synthetic-yard/variants/`, written by `tools/captures/yard_variants.py`, declared
@@ -1248,10 +1271,14 @@ shrubs). `e2e/variants.spec.ts` (`src/dev/variantsHarness.ts`, the app's panels 
 the scan) runs under PlayCanvas, Spark and CesiumJS and checks that picking an objects variant
 changes what the objects panel lists, picking a fill draws its layer and not the other's,
 Highlight turns the layer's pixels purple and changes no other pixel, Hide leaves the frame
-the scan's own, and a skins pick replaces the skin; and that the panel fits a 400 px phone and
-works from the keyboard, with the yard's names and with the spool's long ones (four methods a
-system, listed one a row, no native select). Unit tests: `__tests__/variants.test.ts` (the parser, the store, the
-swaps), `__tests__/inferred.test.ts`, `__tests__/compareMethods.test.tsx`.
+the scan's own, and a skins pick replaces the skin; that the mound, moved onto the measured
+lawn behind the shed, is sorted with them -- hiding the measured scan leaves the mound's top as
+it was from above (about half its pixels changed before, under every renderer), and from the
+side the shed is in front of the mound pixel by pixel (against a fill drawn over its scan);
+and that the panel fits a 400 px phone and works from the keyboard, with the yard's names and
+with the spool's long ones (four methods a system, listed one a row, no native select). Unit
+tests: `__tests__/variants.test.ts` (the parser, the store, the swaps),
+`__tests__/inferred.test.ts`, `__tests__/scanLayers.test.ts`, `__tests__/compareMethods.test.tsx`.
 
 ## 5. Storage by behaviour
 

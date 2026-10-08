@@ -21,6 +21,7 @@ import { pickSourceOf } from "@/cesium/sceneSelect/pickSources";
 import type * as Telemetry from "@/cesium/telemetry";
 import type { PickTile } from "@/lib/splatPick";
 import { useSceneObjects } from "@/state/sceneObjects";
+import { useSettings } from "@/state/settings";
 import { RETRY_FAILED_MS, TileStreamer } from "@/view/stream";
 
 /**
@@ -806,6 +807,93 @@ describe("a dedicated renderer's scan at a runtime scale", () => {
     await r.run(100);
     expect(r.renders.length).toBeGreaterThan(before);
     expect(r.renders.at(-1)?.eye[0]).toBeCloseTo(-80, 9);
+    r.host.destroy();
+  });
+});
+
+describe("the scan's inferred layers under the overlay", () => {
+  const LAYER = {
+    asset: { version: "1.1" },
+    geometricError: 0,
+    root: {
+      refine: "REPLACE",
+      geometricError: 0,
+      boundingVolume: { box: [0, 0, 2, 4, 0, 0, 0, 4, 0, 0, 0, 1] },
+      content: { uri: "splat.glb" },
+      extras: { gaussians: 300 },
+    },
+  };
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    served = TILESET;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          new Response(JSON.stringify(url.includes("/fill/") ? LAYER : served), {
+            status: 200,
+          }),
+        ),
+      ),
+    );
+  });
+  afterEach(() => {
+    useSettings.getState().set({ inferredStyle: "hide" });
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+
+  it("draws a layer's tiles with the scan's, in its renderer, and none while Inferred is Hide", async () => {
+    useSettings.getState().set({ inferredStyle: "show" });
+    const loads: string[] = [];
+    const drawn = new Set<string>();
+    const looks: boolean[] = [];
+    const r = await rig({
+      assetId: "scan-layers",
+      extras: {
+        inferredLayers: [
+          {
+            uri: "fill/tileset.json",
+            evidence: { kind: "inferred", filler: "f", views: 1, gaussians: 300 },
+          },
+        ],
+      },
+      backend: {
+        loadLayer: (url, tile) => {
+          loads.push(new URL(tile.uri, url).pathname);
+          return Promise.resolve(`layer:${tile.uri}`);
+        },
+        setLayerLook: (_mesh, look) => void looks.push(look.highlight),
+        add: (mesh) => void drawn.add(mesh),
+        remove: (mesh) => void drawn.delete(mesh),
+      },
+    });
+    await settle(r);
+    expect(loads).toEqual(["/fill/splat.glb"]);
+    expect(drawn.has("layer:splat.glb")).toBe(true);
+    expect(r.host.status().layers).toMatchObject({ wanted: 1, drawn: 1, tiles: 1 });
+    // Highlight is a look, and a frame.
+    let before = r.renders.length;
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    await r.run(200);
+    expect(looks.at(-1)).toBe(true);
+    expect(r.renders.length).toBeGreaterThan(before);
+    // Hide: off the renderer's screen, and drawn so.
+    before = r.renders.length;
+    useSettings.getState().set({ inferredStyle: "hide" });
+    await r.run(200);
+    expect(drawn.has("layer:splat.glb")).toBe(false);
+    expect(r.host.status().layers).toMatchObject({ drawn: 0 });
+    expect(r.renders.length).toBeGreaterThan(before);
     r.host.destroy();
   });
 });

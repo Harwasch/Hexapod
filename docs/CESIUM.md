@@ -509,6 +509,15 @@ the fill falls back to the tile's height range. Cesium's own error panel is off
 (`showRenderLoopErrors: false`); render errors are logged, toasted and recovered from up to
 five times.
 
+The same patch carries the splat primitive's hooks (`cesium/splatInternals.ts` lists them),
+among them **companions**: a scan's primitive in incremental mode draws other splat tilesets'
+selected tiles -- an inferred layer sitting on the scan -- in its own texture and its own sort,
+baked into its frame, while the layer's primitive (`drawnBy`) draws nothing. Splats write no
+depth, so two primitives are each sorted alone and drawn one after the other (back to front by
+the centres of their bounding volumes), the later over the earlier wherever both reach; one
+primitive blends every splat of both in depth order (`cesium/inferredLayers.ts`,
+docs/SCENE_OBJECTS.md "One sort").
+
 ## API changes noted while building
 
 - `ClippingPolygon` positions are frozen (1.145): rebuild instead of mutating.
