@@ -81,7 +81,7 @@ UPSCALERS: dict[str, dict] = {
         "gpu": "A100-80GB",
         "cpu": 8.0,
         "memoryGiB": 64,
-        "timeoutS": 1200,
+        "timeoutS": 900,
         "needs": (FVSR_REPO,),
         "model": f"{FVSR_REPO} (tiny decoder, sparse ratio 2.0, local range 11)",
         "licence": "Apache-2.0 (weights and code)",
@@ -94,8 +94,9 @@ UPSCALERS: dict[str, dict] = {
 #: are installed now, and it builds (5 minutes, forward kernels only). Its import check needs
 #: torch imported first (libc10). Should the build fail, the image builds without it and
 #: `flashvsr` runs `block_sparse_attn_func` below (PyTorch, the same masks) and says so.
-#: No clip starts after this many seconds of the container (its timeout is 1200 s).
-FVSR_WALL_S = 1000.0
+#: No clip starts after this many seconds of the container (its timeout is 900 s, so the
+#: worst case of a call stays inside what round 2's cap has left).
+FVSR_WALL_S = 750.0
 BSA_CODE = "https://github.com/mit-han-lab/Block-Sparse-Attention.git"
 BSA_COMMIT = "49d6c39e4dc0303442cda3bb758b3925d4399c49"
 BSA_BUILD = (
@@ -169,8 +170,11 @@ SVR_FILES = ("seedvr2_ema_3b.pth", "ema_vae.pth", "pos_emb.pt", "neg_emb.pt")
 SVR_SPACE = "https://huggingface.co/spaces/ByteDance-Seed/SeedVR2-3B"
 SVR_SPACE_COMMIT = "1c8f9fbafac52f6fd2f9b42c869ba27262c52c0a"
 SVR_SEED = 666
-SVR_ORDER = ("ltx", "causal~ctx3", "flf", "causal", "wan")
-SVR_WALL_S = 1000.0  # of its 1200 s timeout (round 1 ran with 600)
+SVR_ORDER = ("ltx-p1", "ltx", "causal~ctx3", "flf", "causal", "wan")
+SVR_WALL_S = 600.0  # of its 900 s timeout
+#: Round 2 takes the starts one at a time (every arm of a start before the next start), so a
+#: wall that stops it early still leaves whole starts to compare.
+SVR_STARTS = ("camp-2", "tree-1", "camp-1", "tree-2")
 #: Round 2 restores at 2560x1408 and 3840x2112, four and nine times round 1's pixels (whose
 #: 97 frames peaked at 57 GB on the H100): an H200, and when a whole clip still runs out of
 #: memory, overlapping chunks of `SVR_CHUNK` frames cross-faded over `SVR_OVERLAP`.
@@ -180,7 +184,7 @@ UPSCALERS["seedvr2"] = {
     "gpu": "H200",
     "cpu": 8.0,
     "memoryGiB": 64,
-    "timeoutS": 1200,
+    "timeoutS": 900,
     "needs": (SVR_REPO,),
     "model": f"{SVR_REPO} (one step, cfg 1, wavelet colour fix)",
     "licence": "Apache-2.0 (weights and code)",
@@ -541,10 +545,12 @@ def seedvr2(request: dict) -> dict:
     _need([str(weights / f) for f in SVR_FILES])
     RESULTS.reload()
 
-    def rank(name: str) -> tuple[int, str]:
+    def rank(name: str) -> tuple[int, int, str]:
         arm, _, start = name.partition("/")
         row = arm + ("~" + start.partition("~")[2] if "~" in start else "")
-        return (SVR_ORDER.index(row) if row in SVR_ORDER else len(SVR_ORDER), start)
+        view = start.partition("~")[0]
+        first = SVR_STARTS.index(view) if view in SVR_STARTS else len(SVR_STARTS)
+        return (first, SVR_ORDER.index(row) if row in SVR_ORDER else len(SVR_ORDER), start)
 
     names = sorted(_clip_names(request), key=rank)
     wall = float(request.get("wallS", SVR_WALL_S))
