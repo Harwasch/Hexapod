@@ -58,7 +58,7 @@ MG3_STEPS = 3
 MG3_FPS = 16.0  # Wan 2.2's sample rate; 97 frames are 6 s
 #: Yaw per frame is 15 degrees x mouse_y (deadzone 0.02): 0.03 is 0.45 degrees a frame.
 MG3_PAN_MOUSE = (0.0, 0.03)
-RUN = {"gpu": "H100", "cpu": 8.0, "memoryGiB": 96, "timeoutS": 1200}
+RUN = {"gpu": "H100", "cpu": 8.0, "memoryGiB": 96, "timeoutS": 900}
 DOWNLOAD = {"gpu": "", "cpu": 2.0, "memoryGiB": 8, "timeoutS": 3600}
 GPU_PER_S = {"H100": 0.001097, "": 0.0}
 

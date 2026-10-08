@@ -1,8 +1,8 @@
 """Round 2's files for the page (the coordinator builds it), from the runs' artifacts.
 
-    r2_deliver.py OUT RUN [RUN ...]
+    r2_deliver.py OUT STARTS RUN [RUN ...]
 
-Each RUN is an unpacked artifact of `.github/workflows/living-view.yml` (`summary.json` with
+STARTS is round 1's starts folder (`{start}.png`, `{start}-mask.png`). Each RUN is an unpacked artifact of `.github/workflows/living-view.yml` (`summary.json` with
 `r2` results, `*-summary.json` of the world models, `upscale-summary.json`; `clips/<arm>/
 <start>.mp4`, `upscaled/<label>/<arm>/<start>.mp4`); later runs replace earlier ones. Under OUT:
 
@@ -211,8 +211,8 @@ def load(runs: list[Path]) -> dict:
 
 def main(argv: list[str]) -> int:
     out = Path(argv[0])
-    runs = [Path(a) for a in argv[1:]]
-    starts_dir = Path(argv[0]).parents[1] / "starts"  # set by the caller (see README below)
+    starts_dir = Path(argv[1])
+    runs = [Path(a) for a in argv[2:]]
     data = load(runs)
     numbers: dict = {}
     (out / "clips").mkdir(parents=True, exist_ok=True)

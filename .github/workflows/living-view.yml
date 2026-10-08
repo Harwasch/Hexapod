@@ -115,7 +115,7 @@ jobs:
               "steps": rf"{step}(,{step})*",
               "arms": rf"{arm}(,{arm})*",
               "svarms": rf"{arm}(,{arm})*",
-              "winner": r"ltx-p[1-4]",
+              "winner": r"ltx-p[1-5]",
               "vsize": r"none|[0-9]{3,4}x[0-9]{3,4}",
               "wbudget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
               "ssize": r"none|[0-9]{3,4}x[0-9]{3,4}",

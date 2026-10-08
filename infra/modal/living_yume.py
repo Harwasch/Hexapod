@@ -53,14 +53,14 @@ YUME_EVENT = (
     "A gentle breeze: leaves, grass and thin branches sway slightly and settle. "
     "Nothing else changes."
 )
-#: Its 5B script's 4 Euler steps (scripts/inference/sample_5b.sh: --num_euler_timesteps 4);
-#: the web app's shift.
+#: Its 5B script's sampling: 4 Euler steps (scripts/inference/sample_5b.sh,
+#: --num_euler_timesteps 4) at shift 7.0 (fastvideo/sample/sample_5b.py), conditional only.
 YUME_STEPS = 4
-YUME_SHIFT = 5.0
+YUME_SHIFT = 7.0
 YUME_FPS = 16
 YUME_SEGMENTS = 2
 YUME_FRAME_ZERO = 32
-RUN = {"gpu": "H100", "cpu": 8.0, "memoryGiB": 96, "timeoutS": 1200}
+RUN = {"gpu": "H100", "cpu": 8.0, "memoryGiB": 96, "timeoutS": 900}
 DOWNLOAD = {"gpu": "", "cpu": 2.0, "memoryGiB": 8, "timeoutS": 3600}
 GPU_PER_S = {"H100": 0.001097, "": 0.0}
 FLASH_ATTN_WHEEL = (

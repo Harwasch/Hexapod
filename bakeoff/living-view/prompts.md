@@ -61,7 +61,7 @@ prompt derived from that, and why. Read 2026-10-08.
   workflow does: 8 + 3 sigmas, guidance 1, STG off. At guidance 1 the negative prompt is inert,
   so freezing the scene rests entirely on the positive prompt and the LoRA strength.
 
-### The generic prompts tested (arms ltx-p1, ltx-p2, ltx-p3)
+### The generic prompts tested (arms ltx-p1 to ltx-p5)
 
 **ltx-p1, derived from the research.** It keeps the card's caption shape, which is what the
 LoRA was trained on. It lists the rigid classes generically rather than naming this view's
@@ -93,7 +93,45 @@ few pixels, the card's own lever is strength (0.5 is "conservative"), so ltx-p1 
 
 The winner, by plant motion in a slight range (a few px p95 at 1280 wide), low non-plant drift
 and camera creep, and a read by eye, is used for the rest of the LTX ladder. The scores are in
-`numbers.json` and below once the run is in.
+`numbers.json` and below.
+
+### Scores (run R2-5, H200, the round-1 recipe: 97 frames at 1280x704, seed 42)
+
+Measured on the model's own frames (`r2_deliver.py`). Plant motion is DIS optical flow against
+frame 0 inside the plant mask, in pixels at 1280 wide. Creep is a homography fitted on the
+textured non-plant pixels. Drop is how many dB the non-plant PSNR against our render loses from
+the first frame to the last. Round 1's LTX clip (scene prompts) is given for scale.
+
+| arm | prompt | plant p95 px (tree-1, tree-2, camp-1, camp-2) | mean | camp creep px (camp-1, camp-2) | worst drop dB | mean abs frame change |
+| --- | --- | --- | ---: | --- | ---: | ---: |
+| ltx (round 1) | scene words | 24.4, 26.6, 14.5, 59.1 | 31.1 | 0.89, 1.75 | 2.0 | 12.8 |
+| **ltx-p1** | researched | 23.4, 27.8, 20.1, 56.8 | 32.0 | **0.53, 0.72** | 1.7 | **12.7** |
+| ltx-p2 | coordinator's | 25.1, 30.8, 18.3, 41.5 | **28.9** | 0.56, 2.06 | 1.4 | 13.8 |
+| ltx-p3 | auto-captioned | 21.2, 29.0, 20.8, 64.0 | 33.8 | 0.78, 2.48 | **9.5** (tree-1) | 13.9 |
+| ltx-p4 | p1 at LoRA 0.6 | 26.5, 33.2, 20.2, 62.2 | 35.5 | 0.74, **8.37** | 1.0 | 15.2 |
+
+All of them take about 10 s for 4 s of video on a warm H200 (0.34-0.40 s of video per second
+of compute). The prompt encodes in 0.1-0.2 s. The enhancer adds 5.7-7.7 s per view (ltx-p3).
+
+**Winner: ltx-p1.** It has the least camera creep (at most 0.7 px over 4 s) and the least
+change overall. Its plant motion ties with ltx-p2 (mean flow 7.0 vs 7.2 px, p95 32 vs 29: p2
+moves camp-2's near conifer less, and the trees and camp-1's ferns more). By eye, p1 is the
+most contained: on camp-1 the motion stays in the fern bush, where p2, p3 and round 1 also stir
+the tree on the left.
+
+**What the scores show.**
+
+- **The wording does not set the amplitude.** No generic prompt gets plant motion into the
+  "few px" range. Every variant swings the near foliage 20-60 px (p95) against frame 0, the same
+  as round 1's scene prompts. "Very slightly" (p1) and "slightly" (p2) score alike. At guidance
+  1 the text steers what moves more than how far it moves.
+- **The LoRA strength works the other way from what we guessed.** At 0.6 (ltx-p4) everything
+  moves more, and camp-2's camera creeps 8.4 px. A stronger LoRA holds the frame better, so
+  ltx-p1 at 1.4 runs with the ladder as **ltx-p5**. The card calls 1.5 "aggressive".
+- **Auto-captioning (ltx-p3) is a regression.** The enhancer writes a 150-220-word cinematic
+  caption with its own mistakes: for tree-1's crown it wrote "a high-angle viewpoint looking
+  down". It also appends a soundscape. Its tree-1 sky drifts 9.5 dB by the last frame, and it
+  costs 6-8 s per view.
 
 ## Matrix-Game 3.0 (Skywork/Matrix-Game-3.0)
 

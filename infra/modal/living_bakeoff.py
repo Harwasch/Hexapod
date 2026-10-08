@@ -195,7 +195,11 @@ R2_LTX_VARIANTS: dict[str, dict] = {
     "ltx-p2": {"prompt": R2_LTX_P2, "loraScale": 1.0},
     "ltx-p3": {"prompt": R2_LTX_P1, "loraScale": 1.0, "enhance": True},
     "ltx-p4": {"prompt": R2_LTX_P1, "loraScale": 0.6},
+    # Run with the ladder: p4 (weaker LoRA) moved more and crept more, so the other way.
+    "ltx-p5": {"prompt": R2_LTX_P1, "loraScale": 1.4},
 }
+#: Variants that run with the ladder rather than with `r2-prompts`.
+R2_LTX_LATE = ("ltx-p5",)
 #: The ladder: stage 1 alone at half size; 2 s chunks with a continuation from the first's last
 #: 9 frames (one latent frame and its first: LTX's 8n+1); the render as both end keyframes.
 R2_S1_SIZE = (640, 352)
@@ -1369,7 +1373,7 @@ def _ltx_prompt_enhancer(model_dir: str) -> object:
     gpu="H200",
     cpu=ARMS["ltx"]["cpu"],
     memory=128 * 1024,  # the prompt enhancer's 10 GB on top of round 1's load
-    timeout=1800,
+    timeout=1200,
     volumes={"/lv": LV_WEIGHTS, "/data": RESULTS},
     secrets=[HF_SECRET],
     single_use_containers=True,
@@ -1384,7 +1388,7 @@ def ltx_ladder(request: dict) -> dict:
     gpu="H100",
     cpu=ARMS["ltx"]["cpu"],
     memory=128 * 1024,
-    timeout=1200,
+    timeout=900,
     volumes={"/lv": LV_WEIGHTS, "/data": RESULTS},
     secrets=[HF_SECRET],
     single_use_containers=True,
@@ -1395,8 +1399,8 @@ def ltx_ladder_h100(request: dict) -> dict:
 
 
 R2_RESERVATIONS = {
-    "ltx_ladder": {"gpu": "H200", "cpu": 8.0, "memoryGiB": 128, "timeoutS": 1800},
-    "ltx_ladder_h100": {"gpu": "H100", "cpu": 8.0, "memoryGiB": 128, "timeoutS": 1200},
+    "ltx_ladder": {"gpu": "H200", "cpu": 8.0, "memoryGiB": 128, "timeoutS": 1200},
+    "ltx_ladder_h100": {"gpu": "H100", "cpu": 8.0, "memoryGiB": 128, "timeoutS": 900},
 }
 
 
@@ -1844,11 +1848,16 @@ def main(
                 _write(folder / "stills", result.pop("files"))
                 cost(f"stills {sc}", STARTS_RESERVATION, time.time() - t0)
         if "r2-prompts" in wanted_steps:
-            jobs = [{"arm": a, "mode": "base"} | v for a, v in R2_LTX_VARIANTS.items()]
+            jobs = [
+                {"arm": a, "mode": "base"} | v
+                for a, v in R2_LTX_VARIANTS.items()
+                if a not in R2_LTX_LATE
+            ]
             request = {"starts": names, "jobs": jobs, "seed": seed}
             r2("r2 ltx prompts", ltx_ladder, R2_RESERVATIONS["ltx_ladder"], request)
         if "r2-ladder" in wanted_steps:
             jobs = [{"arm": f"ltx-{m}", "mode": m} | winner for m in ("s1", "chunk", "loop")]
+            jobs += [{"arm": a, "mode": "base"} | R2_LTX_VARIANTS[a] for a in R2_LTX_LATE]
             request = {"starts": names, "jobs": jobs, "seed": seed}
             r2("r2 ltx ladder", ltx_ladder, R2_RESERVATIONS["ltx_ladder"], request)
         if "r2-h100" in wanted_steps:

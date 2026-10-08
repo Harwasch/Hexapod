@@ -203,7 +203,12 @@ def run(request: dict) -> dict:
     names = list(request["starts"])
     warm = start_image(names[0])
     t0 = time.time()
-    rollout(warm, (0.0, 0.0), WP_WARMUP_CALLS)  # compiles
+    try:
+        rollout(warm, (0.0, 0.0), WP_WARMUP_CALLS)  # compiles (lazily, on the first call)
+    except Exception as error:  # noqa: BLE001 - eager instead, said so
+        compiled = f"eager (compile failed: {type(error).__name__}: {str(error)[:200]})"
+        pipe.transformer._compiled_call_impl = None
+        rollout(warm, (0.0, 0.0), WP_WARMUP_CALLS)
     warmup = time.time() - t0
     load = time.time() - started
     clips: dict = {}
