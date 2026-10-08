@@ -356,7 +356,12 @@ ltx_image = (
 )
 
 #: Causal Forcing's inference environment (its requirements, the parts inference imports),
-#: its code at `CF_COMMIT`. No flash-attn: its attention falls back to torch's SDPA.
+#: its code at `CF_COMMIT`, and flash-attn 2 (its prebuilt wheel for torch 2.5 / CUDA 12): the
+#: self-attention falls back to SDPA without it, but Wan's cross-attention calls it directly.
+FLASH_ATTN_WHEEL = (
+    "flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/"
+    "flash_attn-2.7.4.post1%2Bcu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+)
 cf_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
@@ -388,6 +393,7 @@ cf_image = (
     .run_commands(
         f"git clone {CF_CODE} /opt/causal-forcing && git -C /opt/causal-forcing checkout {CF_COMMIT}"
     )
+    .pip_install(FLASH_ATTN_WHEEL)
 )
 
 
@@ -1151,7 +1157,7 @@ def causal(request: dict) -> dict:
             "size": [width, height],
             "contexts": contexts,
             "seed": seed,
-            "attention": "torch SDPA (no flash-attn)",
+            "attention": "flash-attn 2.7.4",
         },
         "loadSeconds": round(load, 1),
         "clips": clips,
@@ -1310,6 +1316,27 @@ ARM_FUNCTIONS = {"ltx": ltx, "causal": causal, "flf": flf, "wan": wan}
 # --- the run --------------------------------------------------------------------------------
 
 
+def finished_in_turn(spawned: list, timeouts: dict[str, float], poll_s: float = 5.0):
+    """`(label, t0, call)` items yielded as their calls finish (well or not), or once a call
+    has had its timeout and 15 minutes more (the caller's `get` then cancels it)."""
+    pending = list(spawned)
+    while pending:
+        for item in list(pending):
+            label, t0, call = item
+            if time.time() - t0 < timeouts.get(label, 3600) + 900:
+                try:
+                    call.get(timeout=0)
+                except TimeoutError as error:
+                    if not error.args:  # Modal's "not yet"
+                        continue
+                except Exception:  # noqa: BLE001, S110 - finished with its own error, read by the caller
+                    pass
+            pending.remove(item)
+            yield item
+        if pending:
+            time.sleep(poll_s)
+
+
 def _write(folder: Path, files: dict[str, bytes]) -> None:
     for name, data in files.items():
         (folder / name).parent.mkdir(parents=True, exist_ok=True)
@@ -1428,9 +1455,11 @@ def main(
                 spawned.append((a, time.time(), calls.spawn(f"arm {a}", ARM_FUNCTIONS[a], request)))
                 dump()
             summary["results"] = {}
-            for a, t0, call in spawned:
+            # Collected as each finishes, not in the order spawned: an arm's wall time (and so
+            # its dollars) is from its spawn to its own end, not to the end of the one before.
+            for a, t0, call in finished_in_turn(spawned, {a: ARMS[a]["timeoutS"] for a in ARMS}):
                 try:
-                    result = calls.get(call, timeout=ARMS[a]["timeoutS"] + 900)
+                    result = calls.get(call, timeout=60)
                 except Exception as error:  # noqa: BLE001 - one failed arm does not stop the rest
                     summary["results"][a] = {"error": repr(error)[:4000]}
                     cost(f"arm {a} (failed)", ARMS[a], time.time() - t0)
