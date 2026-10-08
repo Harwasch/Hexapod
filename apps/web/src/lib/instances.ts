@@ -62,6 +62,12 @@ export interface Instance {
    * any tag.
    */
   name?: string;
+  /**
+   * What the file says it is, when it says (docs/SCENE_OBJECTS.md §3b): "thing", or "ground"
+   * (a ground cover class or a region of one). The brush reads it (lib/sceneSelect.ts
+   * `topLevels`).
+   */
+  kind?: string;
 }
 
 export interface EmbeddingRef {
@@ -149,6 +155,7 @@ function instanceOf(raw: unknown): Instance | null {
     views: Math.max(0, Math.round(finite(r.views))),
     ...(typeof r.category === "string" && r.category !== "" ? { category: r.category } : {}),
     ...(typeof r.name === "string" && r.name.trim() !== "" ? { name: r.name.trim() } : {}),
+    ...(typeof r.kind === "string" && r.kind !== "" ? { kind: r.kind } : {}),
   };
 }
 

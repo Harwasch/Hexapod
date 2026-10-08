@@ -970,7 +970,10 @@ the tiles the renderer draws now:
   selection the hit's chain does not hold (another object, or one met nearby), the click
   chooses the top of the chain. A top-level instance with more than half the scan's splats
   (with everything below it) is the scene, not an object, and is passed over for its child on
-  the chain. With the selection in the chain, the click chooses the level below it; at the leaf
+  the chain -- unless the file calls it a thing (§3b's `kind`, `sceneShareOf`): those files
+  keep the ground out of their objects and have no root for the scene, and the spool of the
+  close spool capture is 57% of its splats under ground first and the concept-first stand-in.
+  With the selection in the chain, the click chooses the level below it; at the leaf
   it stays. Drilling goes on only within the scan already selected. A click within 400 ms and
   6 px of the last is the same click, so a double-click selects one level, not two.
 
@@ -987,10 +990,10 @@ the tiles the renderer draws now:
   (`features/mission/SelectionCard`) shows an object as it shows a machine or a zone, in the
   right dock (a bottom sheet on a phone): the name (top tag, else the category, never an id)
   and the category, "◀ 1 of 3 ▶", **Hide**, **Show only**, **Fly to**, the brush and **Clear**
-  (its close button). A combination is named by its members and what holds them, "Top flange +
-  drum + Bottom flange (of Spool)" (`combinationLabel`; with more than three members, a name
-  said twice or too long a name, "4 parts of Spool" or "4 objects"), says its overlap with the
-  painted area, and offers **Save as object**. One selection at a time: picking an object clears a machine or zone, and
+  (its close button). A combination is named by its members and what holds them, "Spool +
+  Pumpkin" or "Top flange + drum (of Spool)" (`combinationLabel`; with more than three members,
+  a name said twice or too long a name, "4 parts of Spool" or "4 objects"), says its overlap
+  with the painted area when it was matched by overlap, and offers **Save as object**. One selection at a time: picking an object clears a machine or zone, and
   the reverse (`state/oneSelection.ts`). The selection is the objects store's highlight: the
   controller writes it through `useInstances.highlight`, expanded to descendants. **Fly to**
   goes through the app's camera controller (`CameraController.flyToObject`): the pace and
@@ -1002,21 +1005,72 @@ the tiles the renderer draws now:
   of the rendered depth). A splat counts as painted when it is near its cell's front and the
   cell is under a stroke. Shift adds to the painted area, Alt takes away, and a plain stroke
   starts again. A touch screen has none of those keys: there the card offers **New / Add /
-  Remove** for what a stroke does, and a brush size in place of Alt+wheel. The match is the
-  combination of instances, at whatever levels fit, whose union has the best intersection over
-  union with the painted area (see **Combinations** below): one instance, or several. The IoU
-  is weighted by opacity and counts only visible splats, so an object's hidden back does not
-  count against it. While the stroke is painted, its best match so far is highlighted (at most
-  every 100 ms) and the card says its overlap, so you can stop once the right objects light
-  up; it is selected when the stroke ends. Matching every visible splat at every move would be
-  too slow (the camp has 22.6 M), so the view is indexed once when it is projected
-  (`paintIndex`): per 3 px cell, the visible splats' leaf ids and weights, and per instance its
-  visible weight rolled up its chain and its parent. A match then walks only the painted cells
-  and the instances they hold (`paintSumsIndexed`), and gives the same sums, so the same
-  answer, as matching every splat (`paintSums`).
-- **Combinations** (`bestSet`). Painting is for selecting the right combination or level of
-  the hierarchy: painted over a spool's bottom flange and its top flange and drum, it selects
-  both, not one then the other. The members are instances from disjoint subtrees (none holds
+  Remove** for what a stroke does, and a brush size in place of Alt+wheel. The stroke selects
+  the whole objects it falls on (see **Whole objects** below): a short stroke on a spool's top
+  selects the spool, `[` then the parts of it painted. While the stroke is painted, what it
+  selects so far is highlighted (at most every 100 ms) and the card names it ("Under the
+  stroke: Spool + Pumpkin"), so you can stop once the right objects light up; it is selected
+  when the stroke ends. Matching every visible splat at every move would be too slow (the camp
+  has 22.6 M), so the view is indexed once when it is projected (`paintIndex`): per 3 px cell,
+  the visible splats' leaf ids and weights, and per instance its visible weight rolled up its
+  chain and its parent. A match then walks only the painted cells and the instances they hold
+  (`paintSumsIndexed`), and gives the same sums, so the same answer, as matching every splat
+  (`paintSums`).
+- **Whole objects** (`paintPick`). The owner's test on the spool: painted by intersection over
+  union (below), a stroke selected the small parts it covered, and the whole spool only once
+  most of it was painted. So each painted splat stands for its **top-level object**
+  (`topLevels`): the highest instance on its chain that is not the scene (more than half the
+  scan, as a click passes it over) and not ground. The ground is a cover class
+  (`kind: "ground"`, §3b) and its regions, or a top-level instance nobody named that is filed
+  under Ground & soil, Grass & ground cover or Paths & roads: in today's files, which name
+  nothing, the ground regions (and the yard's lawn and path); in the variants, the class-free
+  pass's leftovers, things by `kind` but tagged "ground". On the spool those are what a stroke
+  falls on beside the spool: concept first's instance 3 lies on the spool's own surface and
+  took a quarter of a stroke across it, feature fields' instance 4 13% of a short stroke on
+  its top. A named thing stays a thing whatever its category (ground first files a "Camping
+  chair" under Ground & soil). A stroke selects the objects that hold a meaningful share of it:
+  - The stroke is measured in its painted cells, each 3 px cell shared among the splats drawn
+    in it by weight (`PaintSums.cover`), so a dense object does not outweigh a sparse one
+    beside it and an unlabelled splat takes its share from no object.
+  - An object is left out as a sliver at the stroke's edge when it holds less than 10% of the
+    stroke's cover on objects and ground (`PAINT_SLIVER_SHARE`) **and** less than one dab of
+    the brush (π r², `dabCells`: about 113 cells, 1,018 px², for the default 18 px brush; it
+    grows with the brush, so a sliver of a big brush is still a sliver). So touching any
+    meaningful part of the spool's top selects the whole spool, and a stroke across two
+    pumpkins selects both, the larger share first ("Pumpkin + Pumpkin" says a name twice, so
+    the card reads "2 objects").
+  - Objects come before the ground: the hay between two pumpkins, or the ground under a spool,
+    is not selected with them. A stroke only over ground (no object holding a meaningful share,
+    and more ground than objects) selects the ground's regions under it by overlap, as before
+    (`bestSet` among the ground's instances only): one grass region, or the whole class when
+    the stroke covers it all.
+  - `[` steps down from the objects to the parts of them the stroke covers (`paintLevels`):
+    in place of each member, its children holding a meaningful part of what the stroke put on
+    it (the same rule within the member; when none does, those within 10% of the largest),
+    then theirs, until only parts with nothing painted below them are left. `]` steps back up,
+    to the whole objects. The levels are the card's candidates ("1 of 3": the objects; each
+    level of several instances a combination, `selectLevels`); a click still drills from the
+    whole object it hits.
+  - A scan whose instances have no hierarchy at all (`TopLevels.flat`: no instance has a
+    parent, nothing above the parts) is matched by overlap among all of them, as before. None
+    of the published variants is flat; the yard's "whole objects" variant is.
+  - Checked on the published spool and pumpkin under today's instances and every objects
+    variant (e2e/sceneSelect.spec.ts with `PUBLISHED_SCANS`), each a different hierarchy, the
+    same under PlayCanvas, Spark and CesiumJS. A 60 px stroke on the spool's top selects the
+    whole spool (instance 1 in every file: "Manhole" today, "Saucer" under feature fields,
+    "Cable spool" under the others), which holds 75-90% of it, and so does painting across
+    it; `[` gives its top flange, or its top and drum. A stroke from one pumpkin to the other
+    selects both (each 28-43% of it; the hay between them, 17-26%, is ground). Today's file
+    adds a third object, instance 4 (14% of the stroke): hay between the pumpkins that the
+    file files under Household, tagged "ground".
+  - Cost, on the camp-sized view below: the sums and the objects take 1.1 ms for an 18 px
+    stroke and 7 ms for the 120 px scrub, as much as the best single instance.
+- **Combinations** (`bestSet`): a stroke over the ground only, or on a scan without a
+  hierarchy, selects the combination of instances, at whatever levels fit, whose union has the
+  best intersection over union with the painted area. The IoU is weighted by opacity and
+  counts only visible splats, so an object's hidden back does not count against it. Painted
+  over a spool's bottom flange and its top flange and drum, it selects both, not one then the
+  other. The members are instances from disjoint subtrees (none holds
   another), so the union's painted and visible weights are the members' sums and a set's IoU
   is `Σinter / (painted + Σvisible − Σinter)`, from the per-instance sums a match gathers
   anyway.
@@ -1051,8 +1105,10 @@ the tiles the renderer draws now:
     only** and **Fly to** (the sphere around the members') act on all of it. A click is
     unchanged: the whole object first, again for its parts; a click from a combination starts
     at the whole object.
-- **Painted objects** (`lib/customSets.ts`). When the best set's IoU is below 0.5, the card
-  offers **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+- **Painted objects** (`lib/customSets.ts`). When what a stroke selects overlaps the painted
+  area by less than 0.5 (IoU) -- whole objects under a short stroke, or a poor best match --
+  the card offers **Use painted area**. This keeps the exact splats as an object of the
+  viewer's own:
   - **Save as object** keeps a combination the same way (`setFromInstances`): as every splat
     its members carry in every tile of the scan, at every level of detail, not only those drawn
     or painted. It is kept as splats, not as the members' ids: the format draws a set by its

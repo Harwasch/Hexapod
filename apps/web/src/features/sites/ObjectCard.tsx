@@ -32,7 +32,12 @@ import {
   selectionLabel,
 } from "@/lib/sceneSelect";
 import { useInstances } from "@/state/instances";
-import { chosenCombination, useSceneSelect, type StrokeMode } from "@/state/sceneSelect";
+import {
+  chosenCombination,
+  useSceneSelect,
+  type PaintResult,
+  type StrokeMode,
+} from "@/state/sceneSelect";
 
 const STROKE_MODES: readonly { value: StrokeMode; label: string }[] = [
   { value: "replace", label: "New" },
@@ -44,19 +49,23 @@ const STROKE_MODES: readonly { value: StrokeMode; label: string }[] = [
 const BRUSH_STEP = 1.25;
 
 /**
- * What the brush says while it is out: how it works, then what the stroke matches (as it is
- * painted, then once it ends).
+ * What the brush says while it is out: how it works, then what the stroke selects (as it is
+ * painted, then once it ends): the objects under it by name (`named`), or for a match by
+ * overlap (the ground, or a scan without a hierarchy) how well it matches.
  */
 function paintHint(
-  paint: { ids: readonly number[]; iou: number; painted: number } | null,
+  paint: Pick<PaintResult, "ids" | "iou" | "painted" | "rule"> | null,
   touch: boolean,
+  named: string,
 ): string {
   if (paint === null)
     return touch
-      ? "Paint over an object with a finger. New starts again; Add and Remove change the painted area."
-      : "Paint over an object. Shift adds, Alt removes; Alt+wheel sizes the brush.";
+      ? "Paint over objects with a finger to select them whole. New starts again; Add and Remove change the painted area."
+      : "Paint over objects to select them whole, then [ for the parts painted. Shift adds, Alt removes; Alt+wheel sizes the brush.";
   if (paint.ids.length === 0)
     return `${String(paint.painted)} splats painted; no object under them.`;
+  if (paint.rule === "objects")
+    return `Under the stroke: ${named} · ${String(paint.painted)} splats.`;
   const parts = paint.ids.length > 1 ? `${String(paint.ids.length)} parts, ` : "";
   return `Best match: ${parts}${overlap(paint.iou)} · ${String(paint.painted)} splats.`;
 }
@@ -73,10 +82,12 @@ function overlap(iou: number): string {
  * met nearby; cycled with the arrows, `[` `]`, Alt and the wheel, the wheel over the arrows, or
  * Tab while the map or this card has focus), Hide, Show only, Fly to, the brush,
  * and for a painted object Delete. While painting it says how the brush works and what the
- * painted area matched, and offers to keep the area as an object when nothing matched it well.
- * A combination the brush selected is named by its members and what holds them ("Top flange +
- * drum + Bottom flange (of Spool)", or "4 parts of Spool"), says its overlap, acts as one on
- * Hide, Show only and Fly to, and can be kept as an object of its own (Save as object).
+ * stroke selects, and offers to keep the painted area as an object when what it selects
+ * overlaps it little. A combination the brush selected is named by its members and what holds
+ * them ("Spool + Pumpkin", "Top flange + drum (of Spool)", or "4 parts of Spool"), says its
+ * overlap when it was a match by overlap, acts as one on Hide, Show only and Fly to, and can be
+ * kept as an object of its own (Save as object). After a stroke the brush's levels are the
+ * candidates: the objects under it, then the parts of them it covers.
  *
  * It is the HUD's one selection card (`features/mission/SelectionCard`) when the selection is
  * an object, so a machine, a zone and an object never show two cards. On a touch screen
@@ -112,17 +123,24 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
   const nameOf = (of: number): string => selectionLabel(instanceOf(of), of, categories?.get(of));
 
   const painting = mode === "paint";
-  // A combination: its members' names, and what holds them all.
-  const whole = combination && doc ? commonChain(doc, combination.ids)[0] : undefined;
+  /** Several instances by their names and what holds them all: "Spool + Pumpkin". */
+  const namesOf = (ids: readonly number[]): string => {
+    if (ids.length === 1) return nameOf(ids[0] ?? 0);
+    const whole = doc ? commonChain(doc, ids)[0] : undefined;
+    return combinationLabel(ids.map(nameOf), whole === undefined ? null : nameOf(whole));
+  };
   const label = combination
-    ? combinationLabel(combination.ids.map(nameOf), whole === undefined ? null : nameOf(whole))
+    ? namesOf(combination.ids)
     : id !== undefined
       ? selectionLabel(instanceOf(id), id, category)
       : "Paint to select";
   const categoryName = category && !combination ? categoryById(category).name : null;
   const painted = !painting && id !== undefined && controller.selectionIsPainted();
   const meta = [
-    combination ? `${overlap(combination.iou)} with the painted area` : null,
+    // The objects under a stroke are not a match to the painted area: their overlap says little.
+    combination && !combination.objects
+      ? `${overlap(combination.iou)} with the painted area`
+      : null,
     categoryName && categoryName !== label ? categoryName : null,
     painted ? "Painted in this browser" : null,
   ].filter((part): part is string => part !== null);
@@ -210,7 +228,7 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
       )}
       {painting && (
         <p className="mc-card__note" data-testid="object-paint-hint">
-          {paintHint(paint, touch)}
+          {paintHint(paint, touch, paint && paint.ids.length > 0 ? namesOf(paint.ids) : "")}
         </p>
       )}
       {painting && touch && (

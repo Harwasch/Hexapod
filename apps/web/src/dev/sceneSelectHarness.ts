@@ -12,6 +12,7 @@
  */
 
 import {
+  BoundingSphere,
   Cartesian2,
   Cartesian3,
   Cesium3DTileset,
@@ -34,7 +35,8 @@ import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats } from "@/cesium/splatInternals";
 import { ObjectCard } from "@/features/sites/ObjectCard";
 import { tileInstanceIds, withDescendants } from "@/lib/instances";
-import { projectTiles, visibleSplats } from "@/lib/splatPaint";
+import { dabCells, paintIndex, paintSumsIndexed, topLevels } from "@/lib/sceneSelect";
+import { BrushMask, projectTiles, visibleSplats } from "@/lib/splatPaint";
 import { castRay } from "@/lib/splatPick";
 import { useInstances } from "@/state/instances";
 import {
@@ -50,6 +52,8 @@ import "@/styles/mission.css";
 
 const BACKGROUND = "#10141a";
 const ASSET = "harness";
+/** The brush's cells (CSS px), as the controller's. */
+const CELL_PX = 3;
 
 export interface Rect {
   x: number;
@@ -59,15 +63,35 @@ export interface Rect {
 }
 
 export interface SceneSelectHarness {
-  /** Looks at instance `id` and waits for the tiles to settle. */
-  view(id: number, headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
+  /**
+   * Looks at instance `id` (or at several together) and waits for the tiles to settle. The
+   * range is in the scan's frame's units.
+   */
+  view(
+    id: number | readonly number[],
+    headingDeg: number,
+    pitchDeg: number,
+    rangeM: number,
+  ): Promise<void>;
   /** Where instance `id`'s drawn splats are on screen (CSS px): their median and 10-90% box. */
   screenOf(id: number): { x: number; y: number; rect: Rect; splats: number } | null;
   /**
    * As `screenOf`, of the splats of `id` the brush would paint: those in front, seen from the
-   * camera (lib/splatPaint.ts `visibleSplats`), not hidden behind another object.
+   * camera (lib/splatPaint.ts `visibleSplats`), not hidden behind another object. With `top`,
+   * only those in the top `top` of its height (the scan's frame is east, north, up): a spool's
+   * top.
    */
-  visibleOf(id: number): { x: number; y: number; rect: Rect; splats: number } | null;
+  visibleOf(id: number, top?: number): { x: number; y: number; rect: Rect; splats: number } | null;
+  /**
+   * What a stroke through `points` (CSS px) with the brush as it is would put on each top-level
+   * object (lib/sceneSelect.ts `topLevels`), as the brush weighs it (`PaintSums.cover`, in
+   * cells): its cover, and its share of all of it; and the stroke's cells and a dab's.
+   */
+  breakdown(points: readonly { x: number; y: number }[]): {
+    cells: number;
+    dab: number;
+    objects: { id: number; cover: number; share: number; ground: boolean }[];
+  } | null;
   /** Every instance. */
   instances(): { id: number; parent: number | null; splats: number }[];
   /** The selection as the stores have it. */
@@ -87,6 +111,7 @@ export interface SceneSelectHarness {
       iou: number;
       painted: number;
       live?: boolean;
+      rule?: string;
     } | null;
     hidden: number[];
     highlighted: number[];
@@ -222,6 +247,33 @@ export async function startSceneSelectHarness(options: {
     };
   };
 
+  /** The view as the controller projects it for the brush: 3 px cells, what is hidden left out. */
+  const project = () => {
+    const source = pickSourceOf(ASSET);
+    const doc = paintedDocOf(ASSET);
+    const toWorld = source?.toWorld();
+    if (!source || !doc || !toWorld) return null;
+    const tiles = source.tiles();
+    const ids = tiles.map((tile) => tileInstanceIds(doc, tile.checksum));
+    const hiddenIds = useInstances.getState().assets[ASSET]?.hidden;
+    const hidden = hiddenIds?.size ? withDescendants(doc, hiddenIds) : new Set<number>();
+    const camera = scene.camera;
+    const viewProj = Matrix4.multiply(
+      camera.frustum.projectionMatrix,
+      Matrix4.multiply(camera.viewMatrix, toWorld, new Matrix4()),
+      new Matrix4(),
+    );
+    const screen = projectTiles(
+      tiles,
+      Matrix4.toArray(viewProj),
+      scene.canvas.clientWidth,
+      scene.canvas.clientHeight,
+      CELL_PX,
+      hidden.size ? (tile, index) => !hidden.has(ids[tile]?.[index] ?? 0) : undefined,
+    );
+    return { doc, tiles, ids, screen, visible: visibleSplats(screen) };
+  };
+
   let held: Uint8ClampedArray | null = null;
   const pixels = (rect: Rect): Uint8ClampedArray | null => {
     const canvas = scene.canvas;
@@ -276,8 +328,10 @@ export async function startSceneSelectHarness(options: {
     async view(id, headingDeg, pitchDeg, rangeM) {
       for (let frame = 0; frame < 600 && !useInstances.getState().assets[ASSET]; frame += 1)
         await nextFrame(scene);
-      const sphere = instanceSphere(ASSET, id);
-      if (!sphere) throw new Error(`no instance ${String(id)}`);
+      const ids = typeof id === "number" ? [id] : id;
+      const spheres = ids.map((each) => instanceSphere(ASSET, each));
+      if (spheres.some((each) => !each)) throw new Error(`no instance among ${ids.join(", ")}`);
+      const sphere = BoundingSphere.fromBoundingSpheres(spheres as BoundingSphere[]);
       scene.camera.lookAt(
         sphere.center,
         new HeadingPitchRange(
@@ -334,43 +388,68 @@ export async function startSceneSelectHarness(options: {
       }
       return spread(xs, ys);
     },
-    visibleOf(id) {
-      const source = pickSourceOf(ASSET);
-      const doc = paintedDocOf(ASSET);
-      const toWorld = source?.toWorld();
-      if (!source || !doc || !toWorld) return null;
-      const tiles = source.tiles();
-      const ids = tiles.map((tile) => tileInstanceIds(doc, tile.checksum));
-      const hiddenIds = useInstances.getState().assets[ASSET]?.hidden;
-      const hidden = hiddenIds?.size ? withDescendants(doc, hiddenIds) : new Set<number>();
-      const camera = scene.camera;
-      const viewProj = Matrix4.multiply(
-        camera.frustum.projectionMatrix,
-        Matrix4.multiply(camera.viewMatrix, toWorld, new Matrix4()),
-        new Matrix4(),
-      );
-      // As the controller projects for the brush: 3 px cells, what is hidden left out.
-      const cellPx = 3;
-      const screen = projectTiles(
-        tiles,
-        Matrix4.toArray(viewProj),
-        scene.canvas.clientWidth,
-        scene.canvas.clientHeight,
-        cellPx,
-        hidden.size ? (tile, index) => !hidden.has(ids[tile]?.[index] ?? 0) : undefined,
-      );
-      const visible = visibleSplats(screen);
+    visibleOf(id, top) {
+      const view = project();
+      if (!view) return null;
+      const { doc, tiles, ids, screen, visible } = view;
       const wanted = withDescendants(doc, [id]);
-      const xs: number[] = [];
-      const ys: number[] = [];
+      const heightOf = (k: number): number =>
+        tiles[screen.tile[k] ?? 0]?.positions[(screen.index[k] ?? 0) * 3 + 2] ?? 0;
+      const seen: number[] = [];
+      let low = Infinity;
+      let high = -Infinity;
       for (let k = 0; k < screen.count; k += 1) {
         if (!visible[k] || (screen.opacity[k] ?? 0) < 0.3) continue;
         if (!wanted.has(ids[screen.tile[k] ?? 0]?.[screen.index[k] ?? 0] ?? 0)) continue;
+        seen.push(k);
+        low = Math.min(low, heightOf(k));
+        high = Math.max(high, heightOf(k));
+      }
+      // Its top: the splats above the given share of its height seen.
+      const floor = top === undefined ? -Infinity : high - top * (high - low);
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (const k of seen) {
+        if (heightOf(k) < floor) continue;
         const cell = screen.cell[k] ?? 0;
-        xs.push(((cell % screen.cols) + 0.5) * cellPx);
-        ys.push((Math.floor(cell / screen.cols) + 0.5) * cellPx);
+        xs.push(((cell % screen.cols) + 0.5) * CELL_PX);
+        ys.push((Math.floor(cell / screen.cols) + 0.5) * CELL_PX);
       }
       return spread(xs, ys);
+    },
+    breakdown(points) {
+      const view = project();
+      const first = points[0];
+      if (!view || !first) return null;
+      const { doc, ids, screen, visible } = view;
+      const perSplat = new Uint32Array(screen.count);
+      for (let k = 0; k < screen.count; k += 1)
+        perSplat[k] = ids[screen.tile[k] ?? 0]?.[screen.index[k] ?? 0] ?? 0;
+      const index = paintIndex(doc, screen, visible, perSplat);
+      const mask = new BrushMask(screen.cols, screen.rows, CELL_PX);
+      const radius = useSceneSelect.getState().brush;
+      mask.stamp(first.x, first.y, radius, 1);
+      for (let p = 1; p < points.length; p += 1) {
+        const from = points[p - 1] ?? first;
+        const to = points[p] ?? first;
+        mask.line(from.x, from.y, to.x, to.y, radius, 1);
+      }
+      const sums = paintSumsIndexed(index, mask);
+      const levels = topLevels(doc);
+      const objects: { id: number; cover: number; ground: boolean }[] = [];
+      let total = 0;
+      sums.ids.forEach((id, k) => {
+        if (levels.top[id] !== id) return;
+        const cover = sums.cover[k] ?? 0;
+        total += cover;
+        objects.push({ id, cover, ground: levels.ground[id] === 1 });
+      });
+      objects.sort((a, b) => b.cover - a.cover);
+      return {
+        cells: sums.cells,
+        dab: dabCells(radius, CELL_PX),
+        objects: objects.map((o) => ({ ...o, share: total > 0 ? o.cover / total : 0 })),
+      };
     },
     instances() {
       return (useInstances.getState().assets[ASSET]?.instances ?? []).map(
