@@ -104,7 +104,16 @@ SCENE_TEXT: dict[str, str] = {
         "overcast daylight"
     ),
 }
-START_SCENES: dict[str, str] = {}
+START_SCENES: dict[str, str] = {
+    "camp-1": (
+        "Ferns, leafy shrubs and a young tree around a trail signboard at the edge of a forest "
+        "campsite, a dirt path, overcast daylight"
+    ),
+    "camp-2": (
+        "Conifer branches and leafy shrubs beside the corner of a log cabin at a forest "
+        "campsite, overcast daylight"
+    ),
+}
 MOTION_TEXT = "A gentle breeze: the leaves and thin branches sway slightly and settle."
 STATIC_TEXT = (
     "Static locked-off tripod shot, no camera movement, no pan, no zoom. Nothing else changes."
@@ -117,9 +126,14 @@ LTX_TRIGGER = "CINEMAGRAPH_MOTION"
 #: The Cinemagraph LoRA's card: say exactly what moves and what stays frozen, a locked-off
 #: tripod camera, and "seamless natural loop" (its widget prompts' form).
 LTX_FROZEN: dict[str, str] = {
-    "tree": "the trunk, the lawn and the sky remain completely frozen",
+    "tree": "the sky and the light remain completely frozen",
     "camp": (
         "the ground, the signboard, the tree trunks and the background remain completely frozen"
+    ),
+    "camp-1": ("the signboard, the dirt path and the dark forest behind remain completely frozen"),
+    "camp-2": (
+        "the log cabin, the tree trunks, the ground and the dark forest behind remain "
+        "completely frozen"
     ),
 }
 LTX_PLANTS: dict[str, str] = {
@@ -250,7 +264,8 @@ def prompt_for(arm: str, start: str) -> str:
         kind = start.split("-")[0]
         return (
             f"{LTX_TRIGGER}, tripod locked-off static camera, zero camera movement, "
-            f"{LTX_FROZEN[kind]}, only {LTX_PLANTS[kind]} sway slightly in a gentle breeze, "
+            f"{LTX_FROZEN.get(start, LTX_FROZEN[kind])}, only {LTX_PLANTS[kind]} sway slightly "
+            "in a gentle breeze, "
             "everything else stays perfectly still, seamless natural loop"
         )
     return f"{scene}. {MOTION_TEXT} {STATIC_TEXT}"
@@ -684,7 +699,7 @@ def _candidates(scene: str, positions: object, plant: object, vfov: float) -> li
                                 float(height),
                             ],
                             "target": [float(cx), float(cy), mid],
-                            "place": f"h{height:.1f}",
+                            "place": f"r{d:.1f}",
                             "bearing": bearing,
                         }
                     )
@@ -790,13 +805,18 @@ def starts(scene: str, keep: int = 2) -> dict:
         thumbs.append((c["name"], renderer(splats, cam, background=SKY).rgb))
     order = sorted(range(len(scored)), key=lambda k: -scored[k]["score"])
     chosen: list[int] = []
-    for k in order:  # another place, or another bearing at least 90 degrees round
+    # The camp: another place, or another bearing at least 90 degrees round. The tree (one
+    # subject, every bearing near its orbit): another distance -- a close view of the crown
+    # and the whole crown on the sky -- and another bearing at least 90 degrees round.
+    for k in order:
         s = scored[k]
-        if all(
-            s["place"] != scored[o]["place"]
-            or 90 <= abs(s["bearing"] - scored[o]["bearing"]) <= 270
-            for o in chosen
-        ):
+
+        def apart(o: int, s: dict = s) -> bool:
+            other = 90 <= abs(s["bearing"] - scored[o]["bearing"]) <= 270
+            elsewhere = s["place"] != scored[o]["place"]
+            return (elsewhere and other) if scene == "tree" else (elsewhere or other)
+
+        if all(apart(o) for o in chosen):
             chosen.append(k)
         if len(chosen) == keep:
             break
