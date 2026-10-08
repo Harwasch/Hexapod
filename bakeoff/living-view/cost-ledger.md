@@ -68,3 +68,13 @@ hard cap of $10: the four arms $2.60 (causal's failed first try included), the u
 failed runs the rest. Still to do once the comparison is decided: delete the weights volume
 `hexapod-living-view-weights` (about 220 GB; inside the free TiB, so it costs nothing while
 it stays) and the results volume `hexapod-living-view`.
+
+## Round 2
+
+Approved separately: target about $6, hard cap **$8**, on top of round 1's $6.82. Same rules:
+each run's worst case (timeouts x list rate) must fit what is left before it is pushed, and it
+is recorded from what Modal metered. Prompts: `bakeoff/living-view/prompts.md`.
+
+| # | GitHub run | what | GPU | minutes | $ | running total |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| R2-1 | (pending) | r2 ltx prompts: ltx-p1..p4 (researched, coordinator's, auto-captioned, p1 at LoRA 0.6) at the round-1 recipe on the 4 starts; the 2k and 4k stills. Estimate $0.7 (worst $3.0) | H200, L4 | | | |

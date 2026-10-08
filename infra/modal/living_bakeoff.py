@@ -41,6 +41,17 @@ The arms (licences in `ARMS`):
     wan      The control: Wan 2.2 TI2V-5B as `world_models.Wan` runs it (1280x704, 50 steps,
              guidance 5), 97 frames at 24 fps. H100.
 
+Round 2 (bakeoff/living-view/prompts.md for the prompts; arm names as the page's):
+
+    r2-prompts  H200. LTX at the round-1 recipe on every start with the generic prompts:
+                ltx-p1 (researched), ltx-p2 (the coordinator's), ltx-p3 (auto-captioned by the
+                pipeline's own prompt enhancer), ltx-p4 (ltx-p1 at LoRA 0.6).
+    r2-ladder   H200. The winning prompt (`--r2-winner`) down the speed ladder: ltx-s1 (stage 1
+                only, 640x352), ltx-chunk (two 49-frame chunks, the second conditioned on the
+                first's last 9 frames), ltx-loop (our render as first and last keyframe).
+    r2-h100     H100, one warm container: the winner's base and stage-1 clips, for the speed.
+    r2-stills   L4. Our render of every start again at 2560x1408 and 3840x2112.
+
 Costs: every GPU function is `single_use_containers` (no idle window billed) and runs every
 start in one warm container. The entrypoint refuses arms whose worst case (timeout x rate)
 does not fit in `--budget-left`, and reports each call's wall time and dollars (Modal's list
@@ -162,6 +173,35 @@ LTX_FPS = 24.0
 #: model's. Its own distilled ComfyUI workflow (LTX-2.5_T2V_I2V_Single_Stage_Distilled) runs
 #: the 8 distilled sigmas at guidance 1, which is what runs here, for speed.
 LTX_LORA_SCALE = 1.0
+
+#: Round 2's generic prompts: no scene words, one per model, for any view
+#: (bakeoff/living-view/prompts.md has the sources and the reasoning).
+R2_LTX_P1 = (
+    f"{LTX_TRIGGER}, tripod locked-off static camera, zero camera movement, static frame, the sky, "
+    "the ground, every building, wall, rock, trunk and object remain completely frozen, only the "
+    "existing leaves, grass and thin twigs sway very slightly in a light breeze, any water or "
+    "fabric already in the frame ripples gently, nothing new appears, everything else stays "
+    "perfectly still, seamless natural loop"
+)
+R2_LTX_P2 = (
+    f"{LTX_TRIGGER}, tripod locked-off static camera, zero camera movement, only the leaves, grass "
+    "and thin branches sway slightly in a gentle breeze, everything else stays perfectly still, "
+    "seamless natural loop"
+)
+#: The prompt variants (arm -> prompt, LoRA strength, whether the pipeline's prompt enhancer
+#: rewrites it from the frame first: "auto-captioned").
+R2_LTX_VARIANTS: dict[str, dict] = {
+    "ltx-p1": {"prompt": R2_LTX_P1, "loraScale": 1.0},
+    "ltx-p2": {"prompt": R2_LTX_P2, "loraScale": 1.0},
+    "ltx-p3": {"prompt": R2_LTX_P1, "loraScale": 1.0, "enhance": True},
+    "ltx-p4": {"prompt": R2_LTX_P1, "loraScale": 0.6},
+}
+#: The ladder: stage 1 alone at half size; 2 s chunks with a continuation from the first's last
+#: 9 frames (one latent frame and its first: LTX's 8n+1); the render as both end keyframes.
+R2_S1_SIZE = (640, 352)
+R2_CHUNK_FRAMES = 49
+R2_CHUNK_OVERLAP = 9
+R2_STILL_SIZES = {"2k": (2560, 1408), "4k": (3840, 2112)}
 
 CF_REPO = "zhuhz22/Causal-Forcing"
 CF_CHECKPOINT = "framewise/causal_forcing.pt"
@@ -1022,6 +1062,349 @@ def ltx(request: dict) -> dict:
     }
 
 
+# --- round 2: the LTX ladder -----------------------------------------------------------------
+
+
+def _ltx_ladder(request: dict) -> dict:
+    """Round 2's LTX jobs, every start each, in one warm container. A job is an arm name, a
+    mode and a prompt (and LoRA strength, and whether the pipeline's prompt enhancer rewrites
+    the prompt from the frame first). Modes:
+
+        base   the round-1 recipe: two stages, 1280x704, 97 frames at 24 fps;
+        s1     stage 1 alone: the 8 distilled sigmas at 640x352, decoded there, 97 frames;
+        chunk  two 49-frame clips at the base recipe, the second conditioned on the first's
+               last 9 frames (`LTX2ConditionPipeline`), joined (89 frames, the seam at 49);
+        loop   the base recipe with our render as the first and the last keyframe.
+
+    Prompts are encoded once each, before any clip (a viewer would hold the generic prompt's
+    embedding), so a clip's time is the render encoded, the latents denoised, the frames
+    decoded; first motion is the first displayable frame -- the whole clip for every mode here
+    but chunk, whose first chunk is."""
+    started = time.time()
+    _hf_token()
+    model_dir = f"/lv/{LTX_REPO}"
+    lora_dir = f"/lv/{LTX_LORA_REPO}"
+    names = list(request["starts"])
+    jobs = list(request["jobs"])
+    _need([f"{model_dir}/model_index.json", f"{lora_dir}/{LTX_LORA_FILE}"])
+    _need([f"/data/starts/{n}.png" for n in names])
+    import numpy as np
+    import torch
+    from diffusers import (
+        LTX2ConditionPipeline,
+        LTX2ImageToVideoPipeline,
+        LTX2LatentUpsamplePipeline,
+        LTX2Pipeline,
+    )
+    from diffusers.pipelines.ltx2.latent_upsampler import LTX2LatentUpsamplerModel
+    from diffusers.pipelines.ltx2.pipeline_ltx2_condition import LTX2VideoCondition
+    from diffusers.pipelines.ltx2.utils import (
+        DISTILLED_SIGMA_VALUES,
+        LTX2_5_I2V_DEFAULT_SYSTEM_PROMPT,
+        STAGE_2_DISTILLED_SIGMA_VALUES,
+    )
+    from PIL import Image
+
+    enhance = any(j.get("enhance") for j in jobs)
+    extra = {} if enhance else {"prompt_enhancer": None}
+    pipe = LTX2Pipeline.from_pretrained(model_dir, dtype=torch.bfloat16, **extra)
+    pipe.load_lora_weights(lora_dir, weight_name=LTX_LORA_FILE, adapter_name="cinemagraph")
+    upsampler = LTX2LatentUpsamplerModel.from_pretrained(
+        model_dir, subfolder="latent_upsampler", dtype=torch.bfloat16
+    )
+    parts = {
+        "scheduler": pipe.scheduler,
+        "vae": pipe.vae,
+        "audio_vae": pipe.audio_vae,
+        "text_encoder": pipe.text_encoder,
+        "tokenizer": pipe.tokenizer,
+        "connectors": pipe.connectors,
+        "transformer": pipe.transformer,
+        "vocoder": pipe.vocoder,
+        "processor": getattr(pipe, "processor", None),
+        "prompt_enhancer": getattr(pipe, "prompt_enhancer", None),
+        "duration_head": getattr(pipe, "duration_head", None),
+    }
+    # The text side first (and off the GPU after, when asked: an H100 has no room for both).
+    pipe.text_encoder.to("cuda")
+    if parts["prompt_enhancer"] is not None:
+        parts["prompt_enhancer"].to("cuda")
+    i2v = LTX2ImageToVideoPipeline(**parts)
+    cond = LTX2ConditionPipeline(**parts)
+    images = {n: _start_image(n) for n in names}
+    texts: dict = {}
+    enhance_s: dict = {}
+    for job in jobs:
+        for n in names:
+            text = job["prompt"]
+            if job.get("enhance"):
+                t0 = time.time()
+                text = i2v.enhance_prompt(
+                    prompt=text,
+                    system_prompt=LTX2_5_I2V_DEFAULT_SYSTEM_PROMPT,
+                    image=images[n],
+                    seed=10,
+                    device="cuda",
+                )[0]
+                if LTX_TRIGGER not in text:
+                    text = f"{LTX_TRIGGER}, {text}"
+                enhance_s[(job["arm"], n)] = round(time.time() - t0, 2)
+            texts[(job["arm"], n)] = text
+    embeds: dict = {}
+    for text in dict.fromkeys(texts.values()):
+        t0 = time.time()
+        pe, pm, _ne, _nm = i2v.encode_prompt(
+            prompt=text, do_classifier_free_guidance=False, device="cuda"
+        )
+        torch.cuda.synchronize()
+        embeds[text] = (pe, pm, round(time.time() - t0, 2))
+    if request.get("offloadText"):
+        pipe.text_encoder.to("cpu")
+        if parts["prompt_enhancer"] is not None:
+            parts["prompt_enhancer"].to("cpu")
+        torch.cuda.empty_cache()
+    for name in ("transformer", "vae", "audio_vae", "connectors", "vocoder"):
+        getattr(pipe, name).to("cuda")
+    upsampler.to("cuda")
+    pipe.vae.enable_tiling()
+    upsample = LTX2LatentUpsamplePipeline(vae=pipe.vae, latent_upsampler=upsampler)
+    load = time.time() - started
+    w, h = START_SIZE
+    seed = int(request.get("seed", 1))
+
+    def common(text: str) -> dict:
+        pe, pm, _ = embeds[text]
+        return {
+            "prompt_embeds": pe,
+            "prompt_attention_mask": pm,
+            "negative_prompt": LTX_NEGATIVE,  # inert at guidance 1, kept as round 1 had it
+            "frame_rate": LTX_FPS,
+            "guidance_scale": 1.0,
+            "audio_guidance_scale": 1.0,
+            "stg_scale": 0.0,
+            "audio_stg_scale": 0.0,
+            "modality_scale": 1.0,
+            "audio_modality_scale": 1.0,
+            "guidance_rescale": 0.0,
+            "audio_guidance_rescale": 0.0,
+            "spatio_temporal_guidance_blocks": None,
+            "generator": torch.Generator("cuda").manual_seed(seed),
+            "return_dict": False,
+        }
+
+    def two_stage(pipeline: object, text: str, frames: int, inputs: dict) -> object:
+        shared = common(text)
+        s1, s1_audio = pipeline(  # type: ignore[operator]
+            height=h // 2,
+            width=w // 2,
+            num_frames=frames,
+            sigmas=DISTILLED_SIGMA_VALUES,
+            output_type="latent",
+            **inputs,
+            **shared,
+        )
+        up = upsample(latents=s1, output_type="latent", return_dict=False)[0]
+        video, _audio = pipeline(  # type: ignore[operator]
+            height=h,
+            width=w,
+            num_frames=frames,
+            sigmas=STAGE_2_DISTILLED_SIGMA_VALUES,
+            latents=up,
+            audio_latents=s1_audio,
+            noise_scale=STAGE_2_DISTILLED_SIGMA_VALUES[0],
+            output_type="np",
+            **inputs,
+            **shared,
+        )
+        return _u8(video[0])
+
+    def psnr(a: object, b: object) -> float:
+        err = np.mean((np.asarray(a, np.float32) - np.asarray(b, np.float32)) ** 2)
+        return float(10 * np.log10(255.0**2 / max(err, 1e-6)))
+
+    clips: dict = {}
+    by_arm: dict = {}
+    for job in jobs:
+        arm, mode = job["arm"], job["mode"]
+        scale = float(job.get("loraScale", LTX_LORA_SCALE))
+        pipe.set_adapters(["cinemagraph"], [scale])
+        for n in names:
+            text = texts[(arm, n)]
+            img = images[n]
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.synchronize()
+            t0 = time.time()
+            notes: dict = {}
+            if mode == "base":
+                frames = two_stage(i2v, text, LTX_FRAMES, {"image": img})
+                first = None
+            elif mode == "s1":
+                sw, sh = R2_S1_SIZE
+                video, _audio = i2v(
+                    image=img,
+                    height=sh,
+                    width=sw,
+                    num_frames=LTX_FRAMES,
+                    sigmas=DISTILLED_SIGMA_VALUES,
+                    output_type="np",
+                    **common(text),
+                )
+                frames = _u8(video[0])
+                first = None
+            elif mode == "chunk":
+                one = two_stage(i2v, text, R2_CHUNK_FRAMES, {"image": img})
+                torch.cuda.synchronize()
+                first = time.time() - t0
+                tail = [Image.fromarray(f) for f in one[-R2_CHUNK_OVERLAP:]]
+                condition = LTX2VideoCondition(frames=tail, index=0, strength=1.0)
+                two = two_stage(cond, text, R2_CHUNK_FRAMES, {"conditions": [condition]})
+                frames = np.concatenate([one, two[R2_CHUNK_OVERLAP:]])
+                seam = len(one)
+                steps = np.abs(np.diff(frames.astype(np.int16), axis=0)).mean(axis=(1, 2, 3))
+                notes = {
+                    "seamFrame": seam,
+                    "firstChunkSeconds": round(first, 2),
+                    "seamStep": round(float(steps[seam - 1]), 2),
+                    "medianStep": round(float(np.median(steps)), 2),
+                    "overlapPsnrDb": round(
+                        psnr(one[-R2_CHUNK_OVERLAP:], two[:R2_CHUNK_OVERLAP]), 2
+                    ),
+                }
+            elif mode == "loop":
+                conditions = [
+                    LTX2VideoCondition(frames=img, index=0, strength=1.0),
+                    LTX2VideoCondition(frames=img, index=-1, strength=1.0),
+                ]
+                frames = two_stage(cond, text, LTX_FRAMES, {"conditions": conditions})
+                render = np.asarray(img.resize((frames.shape[2], frames.shape[1])))
+                notes = {
+                    "lastVsRenderPsnrDb": round(psnr(frames[-1], render), 2),
+                    "lastVsFirstPsnrDb": round(psnr(frames[-1], frames[0]), 2),
+                    "firstVsRenderPsnrDb": round(psnr(frames[0], render), 2),
+                }
+                first = None
+            else:
+                raise ValueError(f"unknown mode {mode!r}")
+            torch.cuda.synchronize()
+            seconds = time.time() - t0
+            size = [int(frames.shape[2]), int(frames.shape[1])]
+            entry = _clip_entry(frames, LTX_FPS, seconds, first or seconds, size)
+            video_s = len(frames) / LTX_FPS
+            entry |= {
+                "mode": mode,
+                "prompt": text,
+                "loraScale": scale,
+                "encodeSeconds": embeds[text][2],
+                "enhanceSeconds": enhance_s.get((arm, n)),
+                "videoSeconds": round(video_s, 3),
+                "videoPerComputeSecond": round(video_s / seconds, 3),
+                **notes,
+            }
+            clips[f"{arm}/{n}"] = entry
+            by_arm.setdefault(arm, {})[n] = entry
+    for arm, entries in by_arm.items():
+        _keep(arm, entries)
+    return {
+        "gpu": torch.cuda.get_device_name(),
+        "settings": {
+            "diffusers": LTX_DIFFUSERS_COMMIT,
+            "guidance": 1.0,
+            "stg": 0.0,
+            "sigmas": {
+                "stage1": [float(x) for x in DISTILLED_SIGMA_VALUES],
+                "stage2": [float(x) for x in STAGE_2_DISTILLED_SIGMA_VALUES],
+            },
+            "seed": seed,
+            "fps": LTX_FPS,
+            "negative": LTX_NEGATIVE,
+            "textOffloaded": bool(request.get("offloadText")),
+        },
+        "loadSeconds": round(load, 1),
+        "clips": clips,
+        "containerSeconds": round(time.time() - started, 1),
+    }
+
+
+@app.function(
+    image=ltx_image,
+    gpu="H200",
+    cpu=ARMS["ltx"]["cpu"],
+    memory=128 * 1024,  # the prompt enhancer's 10 GB on top of round 1's load
+    timeout=1800,
+    volumes={"/lv": LV_WEIGHTS, "/data": RESULTS},
+    secrets=[HF_SECRET],
+    single_use_containers=True,
+)
+def ltx_ladder(request: dict) -> dict:
+    """Round 2's LTX jobs on an H200 (`_ltx_ladder`)."""
+    return _ltx_ladder(request)
+
+
+@app.function(
+    image=ltx_image,
+    gpu="H100",
+    cpu=ARMS["ltx"]["cpu"],
+    memory=128 * 1024,
+    timeout=1200,
+    volumes={"/lv": LV_WEIGHTS, "/data": RESULTS},
+    secrets=[HF_SECRET],
+    single_use_containers=True,
+)
+def ltx_ladder_h100(request: dict) -> dict:
+    """The same on an H100, the text encoder off the GPU once the prompt is encoded."""
+    return _ltx_ladder(request | {"offloadText": True})
+
+
+R2_RESERVATIONS = {
+    "ltx_ladder": {"gpu": "H200", "cpu": 8.0, "memoryGiB": 128, "timeoutS": 1800},
+    "ltx_ladder_h100": {"gpu": "H100", "cpu": 8.0, "memoryGiB": 128, "timeoutS": 1200},
+}
+
+
+@app.function(
+    image=job_image,
+    gpu="L4",
+    cpu=STARTS_RESERVATION["cpu"],
+    memory=STARTS_RESERVATION["memoryGiB"] * 1024,
+    timeout=1800,
+    volumes={"/data": RESULTS},
+    single_use_containers=True,
+)
+def stills(scene: str) -> dict:
+    """Our render of a scene's starts again, from the same cameras, at `R2_STILL_SIZES` (the
+    owner views full screen on a 3840x2160 monitor): JPEG, quality 92."""
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    sys.path.insert(0, CAPTURES)
+    from splat_render import Camera, GsplatRenderer
+
+    started = time.time()
+    with tempfile.TemporaryDirectory() as work:
+        tileset = _fetch(SCANS[scene], Path(work) / "scan")
+        doc_path = tileset.parent / "instances.json"
+        doc = json.loads(doc_path.read_text(encoding="utf-8")) if doc_path.exists() else None
+        splats, _ids = _leaves_with_ids(tileset, doc)
+    splats = splats.take(np.flatnonzero(splats.scales.max(axis=1) <= MAX_SCALE_M))
+    renderer = GsplatRenderer(keep=2)
+    RESULTS.reload()
+    files: dict[str, bytes] = {}
+    for view_path in sorted(Path("/data/starts").glob(f"{scene}-*.json")):
+        view = json.loads(view_path.read_text())
+        for label, (width, height) in R2_STILL_SIZES.items():
+            cam = Camera.look_at(
+                view["eye"], view["target"], fov_deg=FOV_DEG, width=width, height=height
+            )
+            rgb = renderer(splats, cam, background=SKY).rgb
+            u8 = np.clip(np.round(rgb * 255), 0, 255).astype(np.uint8)
+            buf = io.BytesIO()
+            Image.fromarray(u8).save(buf, format="JPEG", quality=92, optimize=True)
+            files[f"{view['start']}-{label}.jpg"] = buf.getvalue()
+    return {"scene": scene, "files": files, "seconds": round(time.time() - started, 1)}
+
+
 # --- arm: Causal Forcing ---------------------------------------------------------------------
 
 
@@ -1353,17 +1736,20 @@ def main(
     contexts: str = "1,3",
     budget_left: float = 0.0,
     out: str = "lv-out",
+    r2_winner: str = "ltx-p1",
 ) -> None:
     """The steps, everything under `out/` with `out/summary.json` (each call's wall time and
-    estimated dollars in `summary["costs"]`)."""
+    estimated dollars in `summary["costs"]`). Round 2's LTX steps use `r2_winner`'s prompt and
+    LoRA strength for the ladder."""
     folder = Path(out)
     folder.mkdir(parents=True, exist_ok=True)
     wanted_steps = [s for s in steps.split(",") if s]
     wanted_arms = [a for a in arms.split(",") if a]
-    for a in wanted_arms:
-        if a not in ARMS:
-            raise SystemExit(f"unknown arm {a!r}")
-    items = {a: ARMS[a] for a in wanted_arms}
+    if "arms" in wanted_steps:
+        for a in wanted_arms:
+            if a not in ARMS:
+                raise SystemExit(f"unknown arm {a!r}")
+    items = {a: ARMS[a] for a in wanted_arms if a in ARMS}
     summary: dict = {"steps": wanted_steps, "arms": wanted_arms, "costs": []}
 
     def dump() -> None:
@@ -1383,7 +1769,59 @@ def main(
         sys.stdout.write(f"cost {json.dumps(row)}\n")
         dump()
 
+    def r2(label: str, function: modal.Function, reservation: dict, request: dict) -> None:
+        """One round-2 LTX call, refused if its worst case does not fit the budget left."""
+        worst = reservation["timeoutS"] * rate_per_s(reservation)
+        spent = sum(r["dollars"] for r in summary["costs"])
+        if worst > budget_left - spent:
+            sys.stdout.write(f"{label}: worst ${worst:.2f} > ${budget_left - spent:.2f} left\n")
+            summary.setdefault("skipped", {})[label] = f"worst ${worst:.2f}"
+            return
+        t0 = time.time()
+        call = calls.spawn(label, function, request)
+        try:
+            result = calls.get(call, timeout=reservation["timeoutS"] + 900)
+        except Exception as error:  # noqa: BLE001 - reported, the run fails at the end
+            summary.setdefault("r2", {})[label] = {"error": repr(error)[:4000]}
+            cost(f"{label} (failed)", reservation, time.time() - t0)
+            return
+        for key, clip in result["clips"].items():
+            target = folder / "clips" / f"{key}.mp4"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(clip.pop("mp4"))
+        summary.setdefault("r2", {})[label] = result
+        cost(label, reservation, time.time() - t0, {"containerSeconds": result["containerSeconds"]})
+
     def run() -> None:
+        names = [n for n in starts_names.split(",") if n]
+        winner = R2_LTX_VARIANTS[r2_winner]
+        if "r2-stills" in wanted_steps:
+            spawned = [
+                (sc, time.time(), calls.spawn(f"stills {sc}", stills, sc))
+                for sc in ("tree", "camp")
+            ]
+            for sc, t0, call in spawned:
+                result = calls.get(call, timeout=2400)
+                _write(folder / "stills", result.pop("files"))
+                cost(f"stills {sc}", STARTS_RESERVATION, time.time() - t0)
+        if "r2-prompts" in wanted_steps:
+            jobs = [{"arm": a, "mode": "base"} | v for a, v in R2_LTX_VARIANTS.items()]
+            request = {"starts": names, "jobs": jobs, "seed": seed}
+            r2("r2 ltx prompts", ltx_ladder, R2_RESERVATIONS["ltx_ladder"], request)
+        if "r2-ladder" in wanted_steps:
+            jobs = [{"arm": f"ltx-{m}", "mode": m} | winner for m in ("s1", "chunk", "loop")]
+            request = {"starts": names, "jobs": jobs, "seed": seed}
+            r2("r2 ltx ladder", ltx_ladder, R2_RESERVATIONS["ltx_ladder"], request)
+        if "r2-h100" in wanted_steps:
+            jobs = [
+                {"arm": "ltx-base-h100", "mode": "base"} | winner,
+                {"arm": "ltx-s1-h100", "mode": "s1"} | winner,
+            ]
+            request = {"starts": names, "jobs": jobs, "seed": seed}
+            r2("r2 ltx h100", ltx_ladder_h100, R2_RESERVATIONS["ltx_ladder_h100"], request)
+        run_round1()
+
+    def run_round1() -> None:
         readable = {a: True for a in items}
         if "access" in wanted_steps:
             t0 = time.time()
