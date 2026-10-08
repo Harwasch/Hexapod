@@ -1105,6 +1105,9 @@ def _ltx_ladder(request: dict) -> dict:
     )
     from PIL import Image
 
+    # No autograd anywhere: `encode_prompt` outside the pipeline's own no_grad would keep every
+    # text-encoder activation alive (run R2-3 ran out of memory on that).
+    torch.set_grad_enabled(False)
     enhance = any(j.get("enhance") for j in jobs)
     pipe = LTX2Pipeline.from_pretrained(model_dir, dtype=torch.bfloat16, prompt_enhancer=None)
     enhancer, enhancer_error = None, None
@@ -1164,6 +1167,9 @@ def _ltx_ladder(request: dict) -> dict:
                 enhance_s[(job["arm"], n)] = round(time.time() - t0, 2)
             texts[(job["arm"], n)] = text
     jobs = [j for j in jobs if j["arm"] not in failed]
+    if enhancer is not None:
+        enhancer.to("cpu")  # its captions are written; the GPU is the transformer's
+        torch.cuda.empty_cache()
     embeds: dict = {}
     for text in dict.fromkeys(texts.values()):
         t0 = time.time()
