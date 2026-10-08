@@ -74,6 +74,8 @@ jobs:
       winner: ${{ steps.plan.outputs.winner }}
       vsize: ${{ steps.plan.outputs.vsize }}
       ssize: ${{ steps.plan.outputs.ssize }}
+      world: ${{ steps.plan.outputs.world }}
+      wbudget: ${{ steps.plan.outputs.wbudget }}
     steps:
       # Read as data, validated here, never interpolated into a shell line.
       - id: plan
@@ -90,7 +92,7 @@ jobs:
           options = {"steps": "access", "arms": "wan,flf,causal,ltx", "budget": "0",
                      "upbudget": "0", "starts": "tree-1,tree-2,camp-1,camp-2", "contexts": "1,3",
                      "logs": "none", "svarms": "wan,flf,causal,ltx", "winner": "ltx-p1",
-                     "vsize": "none", "ssize": "none"}
+                     "vsize": "none", "ssize": "none", "wbudget": "0"}
           if os.environ["EVENT"] == "workflow_dispatch":
               for name in ("steps", "arms", "budget", "upbudget"):
                   options[name] = os.environ.get(name.upper(), "") or options[name]
@@ -106,7 +108,8 @@ jobs:
                   options[name] = value
           step = (r"(access|download|starts|arms|vsr-download|vsr-check|upscale"
                   r"|sv-download|sv-check|sv-upscale|meter"
-                  r"|r2-prompts|r2-ladder|r2-h100|r2-stills)")
+                  r"|r2-prompts|r2-ladder|r2-h100|r2-stills"
+                  r"|wp-download|wp-run|mg3-download|mg3-run|yume-download|yume-run)")
           arm = r"[a-z][a-z0-9~-]{1,30}"
           valid = {
               "steps": rf"{step}(,{step})*",
@@ -114,6 +117,7 @@ jobs:
               "svarms": rf"{arm}(,{arm})*",
               "winner": r"ltx-p[1-4]",
               "vsize": r"none|[0-9]{3,4}x[0-9]{3,4}",
+              "wbudget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
               "ssize": r"none|[0-9]{3,4}x[0-9]{3,4}",
               "budget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
               "upbudget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
@@ -131,6 +135,15 @@ jobs:
           options["bakeoff"] = ",".join(s for s in steps if s not in upscale)
           options["upscale"] = ",".join(upscale[s] for s in steps if s in upscale)
           options["meter"] = "meter" if "meter" in steps else ""
+          world = {"wp": "waypoint", "mg3": "mg3", "yume": "yume"}
+          picked = {}
+          for s in steps:
+              head, _, tail = s.partition("-")
+              if head in world and tail in ("download", "run"):
+                  picked.setdefault(world[head], []).append(tail)
+          options["world"] = " ".join(f"{m}={','.join(v)}" for m, v in picked.items())
+          options["bakeoff"] = ",".join(
+              s for s in options["bakeoff"].split(",") if s and s.partition("-")[0] not in world)
           options["bakeoff"] = ",".join(s for s in options["bakeoff"].split(",") if s != "meter")
           for name, value in options.items():
               print(f"{name}={value}")
@@ -308,4 +321,53 @@ jobs:
         with:
           name: living-meter
           path: meter
+          if-no-files-found: warn
+
+  world:
+    name: World models on Modal
+    needs: plan
+    concurrency:
+      group: living-view-world
+      cancel-in-progress: false
+    if: needs.plan.outputs.world != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      WORLD: ${{ needs.plan.outputs.world }}
+      WBUDGET: ${{ needs.plan.outputs.wbudget }}
+      STARTS: ${{ needs.plan.outputs.starts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Find the Hugging Face secret
+        run: |
+          name="$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
+          import json, sys
+          rows = json.load(sys.stdin)
+          names = [v for r in rows for v in (r.values() if isinstance(r, dict) else [r])
+                   if isinstance(v, str) and v.lower().startswith("hugging")]
+          print(names[0] if names else "huggingface")')"
+          echo "HEXAPOD_HF_SECRET=$name" >> "$GITHUB_ENV"
+      # One module after another (living_waypoint.py, living_mg3.py, living_yume.py); a
+      # failed one does not stop the next. Each refuses a run whose worst case exceeds WBUDGET.
+      - name: modal run the world models
+        run: |
+          status=0
+          for item in $WORLD; do
+            module="${item%%=*}"
+            steps="${item#*=}"
+            echo "::group::$module $steps"
+            uv run --with modal==1.5.5 modal run "infra/modal/living_${module}.py" \
+              --steps "$steps" --budget-left "$WBUDGET" --starts-names "$STARTS" --out lv-out \
+              || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: living-world
+          path: lv-out
           if-no-files-found: warn
