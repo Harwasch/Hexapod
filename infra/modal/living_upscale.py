@@ -91,14 +91,15 @@ UPSCALERS: dict[str, dict] = {
 #: Block-Sparse-Attention (MIT Han lab, Apache-2.0), FlashVSR's sparse attention kernels, at the
 #: commit FlashVSR's README points to. Round 1's build compiled (28 minutes) but its link step
 #: called clang++ (the python build's sysconfig names it), which the base lacked: clang and lld
-#: are installed now. The build may still fail; the image then builds without it and
+#: are installed now, and it builds (5 minutes, forward kernels only). Its import check needs
+#: torch imported first (libc10). Should the build fail, the image builds without it and
 #: `flashvsr` runs `block_sparse_attn_func` below (PyTorch, the same masks) and says so.
 BSA_CODE = "https://github.com/mit-han-lab/Block-Sparse-Attention.git"
 BSA_COMMIT = "49d6c39e4dc0303442cda3bb758b3925d4399c49"
 BSA_BUILD = (
     "cd /opt/bsa && BLOCK_SPARSE_ATTN_CUDA_ARCHS=80 BLOCK_SPARSE_ATTN_FORCE_BUILD=TRUE"
     " MAX_JOBS=8 NVCC_THREADS=2 pip install --no-build-isolation -v . > /opt/bsa-build.log 2>&1"
-    " && python -c 'import block_sparse_attn' && echo built > /opt/bsa-status"
+    " && cd / && python -c 'import torch, block_sparse_attn' && echo built > /opt/bsa-status"
     " || (echo failed > /opt/bsa-status; tail -60 /opt/bsa-build.log)"
 )
 #: FlashVSR's environment (its requirements.txt; torch 2.6 cu124) and its own `diffsynth` at

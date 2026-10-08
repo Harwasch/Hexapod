@@ -78,7 +78,8 @@ is recorded from what Modal metered. Prompts: `bakeoff/living-view/prompts.md`.
 | # | GitHub run | what | GPU | minutes | $ | running total |
 | --- | --- | --- | --- | ---: | ---: | ---: |
 | R2-1 | 37842888808 | the 2k and 4k stills (done: L4, 23 s and 89 s); r2 ltx prompts failed at load in 18 s: LTX-2.5's prompt enhancer config (saved by transformers 5.15) is heterogeneous and 5.14.1 refuses it. Runner's estimate | L4, H200 | 0.3 | 0.07 | 0.07 |
-| R2-2 | (pending) | FlashVSR image with Block-Sparse-Attention's kernels (clang added), built and checked on CPU | builder | | | |
+| R2-2 | 37843335764 | FlashVSR image with Block-Sparse-Attention's kernels (clang added): built in 5 min and installed; its import check wrongly reported a failure (it imported the CUDA module before torch: libc10) | builder | 0 | 0.00 | 0.59 |
+| R2-6 | (pending) | FlashVSR with the kernels at 2560x1408 on round 1's 4 LTX clips (ltx-r1), to measure its real speed. Estimate $0.2 (worst $1.13) | A100-80GB | | | |
 | R2-3 | 37843661933 | r2 ltx prompts again: the enhancer loaded and wrote its captions, then the transformer ran out of GPU memory -- the prompts were encoded outside no_grad, so the text encoder's activations stayed alive. Runner's estimate | H200 | 5.2 | 0.52 | 0.59 |
 | R2-5 | (pending) | r2 ltx prompts, gradients off. Estimate $0.7 (worst $3.0) | H200 | | | |
 | R2-4 | (pending) | world models' weights on CPU: Waypoint-1.5-1B (11 GB), Matrix-Game-3.0 distilled + T5 + VAEs (41 GB), Yume-5B-720P (35 GB). Estimate $0.15 with egress | CPU | | | |
