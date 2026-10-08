@@ -23,7 +23,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "tools" / "captures"))
 
-import living_view as lv  # noqa: E402
+import living_view as lv
 
 ARM_ORDER = ["ltx", "causal", "flf", "wan"]
 ARM_TITLES = {
@@ -374,11 +374,11 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
                 + "</dl></div>"
             )
 
-            def cell(tag: str, src: str, extra_attrs: str = "", name: str = "") -> str:
+            def cell(tag: str, src: str, name: str = "", where: str = f"{start} {arm}") -> str:
                 return (
                     f"<div class='cell'><span class='tag'>{name or tag}</span><div class='frame'>"
-                    f"<video muted loop playsinline preload='none' data-src='{src}' {extra_attrs}"
-                    f" aria-label='{esc(start)} {esc(arm)} {esc(tag)}'></video></div></div>"
+                    f"<video muted loop playsinline preload='none' data-src='{src}'"
+                    f" aria-label='{esc(where)} {esc(tag)}'></video></div></div>"
                 )
 
             up_cell = (

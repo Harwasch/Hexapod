@@ -106,9 +106,12 @@ vsr_image = (
         "cd /opt/bsa && BLOCK_SPARSE_ATTN_CUDA_ARCHS=80 BLOCK_SPARSE_ATTN_FORCE_BUILD=TRUE"
         " TORCH_CUDA_ARCH_LIST=8.0 MAX_JOBS=4 NVCC_THREADS=2"
         " pip install --no-build-isolation -v . 2>&1 | tail -40",
-        # Installed (not imported: the builder has no GPU driver).
+    )
+    # A layer of its own, so a failed check does not throw the compiled kernels away. Installed,
+    # not imported: the builder has no GPU driver.
+    .run_commands(
         'python -c "import importlib.util as u, sys;'
-        " sys.exit(u.find_spec('block_sparse_attn_cuda') is None)\"",
+        " sys.exit(u.find_spec('block_sparse_attn_cuda') is None)\""
     )
     .pip_install(
         "torchmetrics==1.7.3",
