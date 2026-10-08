@@ -38,7 +38,7 @@ import { SplatMotionGate } from "./splatMotionGate";
 import { installCameraPickHook } from "./cameraPickHook";
 import { installSplatDecoder } from "./splatDecoder";
 import { installSplatSorter } from "./splatSorter";
-import { UiActivity } from "./uiActivity";
+import { holdGlobeRenders, UiActivity } from "./uiActivity";
 import {
   prefetchScanDestination,
   ScanRendererHost,
@@ -213,7 +213,13 @@ export class CesiumSceneManager {
     // before the first frame (splatDecoder.ts).
     this.uninstallSplatDecoder = installSplatDecoder(interfaceBusy);
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
-    this.scanRenderer = new ScanRendererHost(this.viewer);
+    // A popover over the map, or a control in use, holds the redraws nobody on screen asked
+    // for -- the globe's and the splat overlay's -- while the camera is still (uiActivity.ts).
+    // Never an animation: the wind keeps its every frame (the Methods panel is open while the
+    // motion methods are compared).
+    const holding = (): boolean => this.uiActivity.holding && !this.performance.isAnimating;
+    this.unsubscribe.push(holdGlobeRenders(scene, holding));
+    this.scanRenderer = new ScanRendererHost(this.viewer, { holding });
     // A dedicated splat renderer that throws while drawing is retired on the spot, and the
     // globe carries on (overlayFrames.ts); the scan it drew is gone from the view, so say why.
     this.scanRenderer.onFailure = (message) =>

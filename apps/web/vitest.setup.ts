@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { MotionGlobalConfig } from "motion/react";
+import { afterEach } from "vitest";
+
+import { scanPayloads } from "@/lib/payloadCache";
+
+// Fetched scan payloads are kept for the page's life (lib/payloadCache.ts); each test fetches
+// its own.
+afterEach(() => scanPayloads.clear());
 
 // jsdom cannot run animations; finish motion transitions instantly.
 MotionGlobalConfig.skipAnimations = true;

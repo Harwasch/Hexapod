@@ -14,8 +14,12 @@
  * `TileWork.run` queues a job and runs it when the current animation frame still has budget
  * for it: `MOVING_BUDGET_MS` a frame while the camera moves, `RESTING_BUDGET_MS` at rest (a
  * click still lands promptly). A job cannot be split, so one always runs in a frame that has
- * spent nothing yet, however long it takes; the next waits for the next frame.
+ * spent nothing yet, however long it takes; the next waits for the next frame. While the
+ * interface holds a still view (`holding`, uiActivity.ts) the moving budget applies, and frames
+ * with tile work come at most every `HELD_FRAME_MS`.
  */
+
+import { HELD_FRAME_MS } from "../uiActivity";
 
 /** Main-thread milliseconds a frame for tile work, while the camera moves and at rest. */
 export const MOVING_BUDGET_MS = 4;
@@ -24,6 +28,8 @@ export const RESTING_BUDGET_MS = 12;
 export interface WorkClock {
   now(): number;
   nextFrame(callback: () => void): void;
+  /** Runs `callback` after `ms` (a pause while the interface holds the view, `holding`). */
+  later?(callback: () => void, ms: number): void;
 }
 
 const browserClock: WorkClock = {
@@ -31,11 +37,20 @@ const browserClock: WorkClock = {
   nextFrame: (callback) => {
     requestAnimationFrame(() => callback());
   },
+  later: (callback, ms) => {
+    setTimeout(callback, ms);
+  },
 };
 
 export class TileWork {
   /** Whether the camera moves (the host says, each overlay frame). */
   moving = false;
+  /**
+   * Whether the interface holds a still view (uiActivity.ts; the host says): tile work then
+   * takes the moving budget, and a frame that ran some is followed by `HELD_FRAME_MS` without
+   * any, so a menu over the scan keeps the frames in between.
+   */
+  holding: () => boolean = () => false;
   private readonly queue: (() => void)[] = [];
   /** Spent in the current frame, and whether a frame boundary is awaited. */
   private spent = 0;
@@ -74,7 +89,7 @@ export class TileWork {
   }
 
   private get budget(): number {
-    return this.moving ? MOVING_BUDGET_MS : RESTING_BUDGET_MS;
+    return this.moving || this.holding() ? MOVING_BUDGET_MS : RESTING_BUDGET_MS;
   }
 
   private pump(): void {
@@ -98,10 +113,14 @@ export class TileWork {
   private awaitFrame(): void {
     if (this.waiting) return;
     this.waiting = true;
-    this.clock.nextFrame(() => {
-      this.waiting = false;
-      this.spent = 0;
-      this.pump();
-    });
+    const next = (): void =>
+      this.clock.nextFrame(() => {
+        this.waiting = false;
+        this.spent = 0;
+        this.pump();
+      });
+    // Held by the interface: the next frame with tile work comes after a pause.
+    if (this.spent > 0 && this.clock.later && this.holding()) this.clock.later(next, HELD_FRAME_MS);
+    else next();
   }
 }

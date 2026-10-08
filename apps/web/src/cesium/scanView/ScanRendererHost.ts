@@ -35,6 +35,11 @@
  * never restarts the renderer (no reload, no flash) -- drawn with a quarter of the budget
  * (`FAR_BUDGET_SHARE`) and nothing culled for size (quality.ts), and with no objects to select.
  *
+ * The interface comes first (uiActivity.ts): while it holds the view -- a popover open over the
+ * map, a control just used or pointed at -- and the camera is still, frames the camera did not
+ * ask for are drawn at most every `HELD_FRAME_MS` (overlayFrames.ts), the cut is re-planned at
+ * most every `HELD_REPLAN_MS`, and tile work is paced to the interface (tileWork.ts).
+ *
  * Under the WebGPU trial a scan with objects or motion is drawn with WebGL2 (PlayCanvas's
  * default renderer): the modifiers that hide, highlight and move them are GLSL only for now
  * (playcanvasBackend.ts, `WorkBufferModifier`), and the readouts say so
@@ -66,6 +71,7 @@ import { parseTileset, type TileNode } from "@/view/tiles";
 import { uniformScale } from "../placement";
 import { DEDICATED_PRIORITY, registerPickSource } from "../sceneSelect/pickSources";
 import { inverseScaledTransformation } from "../tilesetScale";
+import { HELD_REPLAN_MS } from "../uiActivity";
 import { FrameMeter, type FrameReading } from "./frameMeter";
 import { Handover } from "./handover";
 import { OverlayFrames, OverlayInputs, type FrameOutcome } from "./overlayFrames";
@@ -109,12 +115,18 @@ const MOTION_SETTLE_MS = 200;
  */
 export const REST_AFTER_MS = 600;
 /**
- * How many times its motion budget a still view may hold (within the device's ceiling): 4.5M
- * on a desktop at its 3M budget. On the Camp scan's arrival views 3M left tiles in view at 16
- * px; 6M, the desktop's ceiling, brought the worst to 7 px but took a software-GL page past
- * what it could hold.
+ * How many times its motion budget a still view may hold, within the device's ceiling
+ * (lib/detail.ts `deviceSplatCeiling`): the ceiling itself on a desktop, 6M at its 3M budget,
+ * and nothing more on a phone (whose ceiling is its budget). On the Camp scan a still view
+ * spends all of 4.5M from 80 m in and leaves coarse tiles in view that have finer ones under
+ * them -- p95 screen error 6 px at 50 m, 10 at 30 m, 20 at 15 m, 29 at 8 m; 6M brings those
+ * to 4, 6, 12 and 12 px. (Its levels each hold about a fourteenth of the gaussians of the
+ * level below at twice the error, so a close view would need 10 to 18M to be under 2 px
+ * everywhere.) The motion budget can already grow to the ceiling while frames stay fast
+ * (lib/splatBudget.ts); a still view draws once, so holding it there costs memory and one
+ * sort, not frame time.
  */
-export const REST_GROWTH = 1.5;
+export const REST_GROWTH = 2;
 /** Most gaussians put on screen per re-plan (~4M a second at REPLAN_MS): tiles that land
  *  together go up over a few frames instead of all in one. */
 const MAX_SHOWN_PER_UPDATE = 600_000;
@@ -358,6 +370,11 @@ export interface ScanRendererOptions {
   backends?: (kind: Exclude<SplatRendererKind, "cesium">) => Promise<BackendModule>;
   /** Keeps each drawn frame readable after it is shown (harnesses read pixels back). */
   preserveDrawingBuffer?: boolean;
+  /**
+   * Whether the interface holds the view now (uiActivity.ts `UiActivity.holding`): with the
+   * camera still, the overlay then draws and streams at the interface's pace.
+   */
+  holding?: () => boolean;
 }
 
 /** A renderer's module: what `loadBackend` fetches (tests hand the host their own). */
@@ -509,6 +526,7 @@ export class ScanRendererHost {
 
   private readonly backends: (kind: Exclude<SplatRendererKind, "cesium">) => Promise<BackendModule>;
   private readonly preserveDrawingBuffer: boolean;
+  private readonly holding: () => boolean;
 
   constructor(
     private readonly viewer: HostViewer,
@@ -516,6 +534,7 @@ export class ScanRendererHost {
   ) {
     this.backends = options.backends ?? loadBackend;
     this.preserveDrawingBuffer = options.preserveDrawingBuffer === true;
+    this.holding = options.holding ?? (() => false);
     hosts.add(this);
   }
 
@@ -973,6 +992,7 @@ export class ScanRendererHost {
     const meter = new FrameMeter();
     const handheld = isHandheld();
     const inputs = new OverlayInputs();
+    work.holding = () => this.holding() && performance.now() - lastMotionAt >= MOTION_SETTLE_MS;
     const inputSize = (): { width: number; height: number; pixelRatio: number } => ({
       width: viewer.canvas.clientWidth,
       height: viewer.canvas.clientHeight,
@@ -1035,6 +1055,10 @@ export class ScanRendererHost {
       // globe's, at most (quality.ts).
       const moving = now - lastMotionAt < MOTION_SETTLE_MS;
       work.moving = moving;
+      // The interface holds a still view (uiActivity.ts): the cut is re-planned less often
+      // (and tiles are made at the interface's pace, `work.holding`), so the menu over it
+      // keeps its frames.
+      const replanMs = !moving && this.holding() ? HELD_REPLAN_MS : REPLAN_MS;
       // Still long enough: the cut may refine to the rest budget. Moving: back to the motion
       // budget at once, so the first re-plan of a gesture swaps the surplus out.
       rest(now - lastMotionAt >= REST_AFTER_MS);
@@ -1066,7 +1090,7 @@ export class ScanRendererHost {
       lastMotionFrameAt = motion ? now : 0;
       let replanAt: number | null = null;
       if (arrived || moved) {
-        if (now - lastPlan >= REPLAN_MS) {
+        if (now - lastPlan >= replanMs) {
           lastPlan = now;
           arrived = false;
           Cartesian3.clone(camera.positionWC, lastEye);
@@ -1076,7 +1100,7 @@ export class ScanRendererHost {
           );
         } else {
           // Held back by the throttle: re-planned once it allows, camera moving or not.
-          replanAt = lastPlan + REPLAN_MS;
+          replanAt = lastPlan + replanMs;
         }
       }
       // The drivers' motion as it is now (`changed` may have handed it already).
@@ -1134,6 +1158,8 @@ export class ScanRendererHost {
         draw: frame,
         failed,
       },
+      undefined,
+      this.holding,
     );
     wake.frame = (reason) => driver.wake(reason);
     driver.wake("start");
@@ -1270,6 +1296,7 @@ export class ScanRendererHost {
     let lastMotionAt = 0;
     let frames = 0;
     const meter = new FrameMeter();
+    work.holding = () => this.holding() && performance.now() - lastMotionAt >= MOTION_SETTLE_MS;
     // Streaming and sorting are the renderer's: it asks for a frame when it has new detail or
     // a new order (`hooks.frameWanted`); the camera, the canvas and the settle are this one's.
     const frame = (): FrameOutcome => {
@@ -1325,6 +1352,8 @@ export class ScanRendererHost {
         },
         failed,
       },
+      undefined,
+      this.holding,
     );
     wake.frame = (reason) => driver.wake(reason);
     driver.wake("start");

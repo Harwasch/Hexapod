@@ -577,9 +577,10 @@ describe("a still view the budget held back", () => {
   });
 
   it("refines past the motion budget once the camera is still, and swaps back when it moves", async () => {
-    // Two regions of 2M gaussians under a coarse root: 4M, past the desktop's 3M budget and
-    // within the 4.5M a still view may hold (REST_GROWTH). On the Camp scan the budget left
-    // tiles in view at 16 to 31 px for as long as the camera stayed still.
+    // Two regions of 2.8M gaussians under a coarse root: 5.6M, past the desktop's 3M budget
+    // and within the 6M (its ceiling) a still view may hold (REST_GROWTH). On the Camp scan
+    // the budget left tiles in view at 16 to 31 px for as long as the camera stayed still,
+    // and 4.5M still at 6 to 29 px.
     const heavy = {
       ...TILESET,
       root: {
@@ -587,7 +588,7 @@ describe("a still view the budget held back", () => {
         extras: { gaussians: 100_000 },
         children: TILESET.root.children.map((child) => ({
           ...child,
-          extras: { gaussians: 2_000_000 },
+          extras: { gaussians: 2_800_000 },
           children: [],
         })),
       },
@@ -604,7 +605,7 @@ describe("a still view the budget held back", () => {
     // Still for a moment: the regions are fetched and drawn, though nothing else wakes it.
     await r.run(REST_AFTER_MS + 300);
     await settle(r);
-    expect(r.host.status()).toMatchObject({ tiles: 2, gaussians: 4_000_000 });
+    expect(r.host.status()).toMatchObject({ tiles: 2, gaussians: 5_600_000 });
     // Moving again: the motion budget at the first re-plan, the root (kept loaded) back in.
     r.camera.positionWC = new Cartesian3(-20, -59, 10);
     await r.run(400, true);

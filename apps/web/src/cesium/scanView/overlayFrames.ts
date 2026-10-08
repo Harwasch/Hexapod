@@ -39,10 +39,17 @@
  * true. So a frame that throws stops the overlay -- no more frames, no more listening to the
  * globe -- and the error goes to `FrameSource.failed`, which retires the session that drew it
  * (ScanRendererHost); the globe carries on as if the overlay had never been there.
+ *
+ * The interface first (uiActivity.ts): while it holds the view (`holding` -- a popover open
+ * over the map, a control just used or pointed at), a frame the camera did not ask for -- a
+ * tile, a sort result, a fade, a deadline -- waits until `HELD_FRAME_MS` have passed since the
+ * last one drawn, so a menu opening over a sharpening scan is not drawn between its frames. A
+ * moved camera is drawn as ever, in step with the globe.
  */
 
 import { Cartesian3, Matrix4, type Camera } from "cesium";
 
+import { heldRedrawDelay } from "../uiActivity";
 import { countOverlayWake } from "./stats";
 
 /** Frames in a row the overlay waits for the globe's own while the camera moves. */
@@ -99,6 +106,9 @@ export class OverlayFrames {
   private timer: unknown = null;
   private deadline = Number.POSITIVE_INFINITY;
   private deadlineReason = "deadline";
+  /** When the last frame was drawn, and the timer for a frame the interface held back. */
+  private lastDrawAt = Number.NEGATIVE_INFINITY;
+  private heldTimer: unknown = null;
   private stopped = false;
   private readonly removeGlobeListener: () => void;
 
@@ -106,6 +116,8 @@ export class OverlayFrames {
     onGlobeRender: (listener: () => void) => () => void,
     private readonly source: FrameSource,
     private readonly clock: FrameClock = browserFrameClock,
+    /** Whether the interface holds the view now (uiActivity.ts `UiActivity.holding`). */
+    private readonly holding: () => boolean = () => false,
   ) {
     this.removeGlobeListener = onGlobeRender(() => this.globeRendered());
   }
@@ -148,8 +160,10 @@ export class OverlayFrames {
     this.removeGlobeListener();
     if (this.frame !== null) this.clock.cancelFrame(this.frame);
     if (this.timer !== null) this.clock.clearTimer(this.timer);
+    if (this.heldTimer !== null) this.clock.clearTimer(this.heldTimer);
     this.frame = null;
     this.timer = null;
+    this.heldTimer = null;
   }
 
   private schedule(): void {
@@ -164,8 +178,28 @@ export class OverlayFrames {
     this.globeDrew = true;
     this.waited = 0;
     this.guarded(() => {
-      if (this.pending || this.source.changed()) this.drawNow();
+      const moved = this.source.changed();
+      if (!moved && !this.pending) return;
+      // Wanted, though the camera did not move: the interface may hold it back a little.
+      if (!moved && this.heldBack()) return;
+      this.drawNow();
     });
+  }
+
+  /**
+   * Whether a wanted frame the camera did not ask for waits, because the interface holds the
+   * view (`holding`); it is drawn once `HELD_FRAME_MS` have passed since the last one.
+   */
+  private heldBack(): boolean {
+    const wait = heldRedrawDelay(this.holding(), this.lastDrawAt, this.clock.now());
+    if (wait <= 0) return false;
+    if (this.heldTimer === null) {
+      this.heldTimer = this.clock.setTimer(() => {
+        this.heldTimer = null;
+        if (this.pending) this.schedule();
+      }, wait);
+    }
+    return true;
   }
 
   private readonly tick = (): void => {
@@ -179,11 +213,13 @@ export class OverlayFrames {
       return;
     }
     this.guarded(() => {
+      const moved = this.source.changed();
       // Moved, and the globe has not drawn it yet: it will this frame.
-      if (this.source.changed() && this.waited++ < MAX_WAIT_FOR_GLOBE) {
+      if (moved && this.waited++ < MAX_WAIT_FOR_GLOBE) {
         this.schedule();
         return;
       }
+      if (!moved && this.heldBack()) return;
       this.waited = 0;
       this.drawNow();
     });
@@ -211,6 +247,7 @@ export class OverlayFrames {
   private drawNow(): void {
     // Cleared first: a wake while drawing (a renderer asking for another frame) stands.
     this.pending = false;
+    this.lastDrawAt = this.clock.now();
     const outcome = this.source.draw();
     if (outcome.again) this.wake("again");
     if (outcome.by !== null) this.wakeBy(outcome.by, "deadline");

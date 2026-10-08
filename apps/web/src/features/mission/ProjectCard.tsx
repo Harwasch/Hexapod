@@ -102,9 +102,11 @@ export function ProjectCard() {
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, y: -6, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.98 }}
+            // A whole `transform` (not `y` and `scale`), so the browser's compositor plays it:
+            // the menu opens smoothly whatever the main thread is doing under it.
+            initial={{ opacity: 0, transform: "translateY(-6px) scale(0.98)" }}
+            animate={{ opacity: 1, transform: "translateY(0px) scale(1)" }}
+            exit={{ opacity: 0, transform: "translateY(-6px) scale(0.98)" }}
             transition={{ type: "spring", stiffness: 420, damping: 34 }}
             className="mc-project__pop"
             data-hud-popover=""
