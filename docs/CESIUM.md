@@ -282,11 +282,20 @@ tileset hidden for its frame and solids. The overlay is held to the globe's rule
   none is culled for size in a scan seen from afar (a quarter of the budget instead).
 - **A still view refines past the motion budget.** The tile cut (`view/stream.ts`) refines by
   screen error, weighted towards the middle of the view, within the adaptive budget; when
-  that budget stops it short, 600 ms of stillness lets it grow to 1.5 times the budget,
-  within the device's ceiling (4.5M on a desktop), and the next gesture swaps back. On the
-  Camp scan (22.6M gaussians) the 3M budget left tiles in view at 16 to 31 px beside
-  full-detail neighbours for as long as the camera stayed still; refining in another order
-  picks the same tiles, the budget is what binds.
+  that budget stops it short, 600 ms of stillness lets it grow to twice the budget, within
+  the device's ceiling (6M on a desktop, nothing more on a phone), and the next gesture swaps
+  back. On the Camp scan (22.6M gaussians) the 3M budget left tiles in view at 16 to 31 px
+  beside full-detail neighbours for as long as the camera stayed still; refining in another
+  order picks the same tiles, the budget is what binds. At 4.5M a still view of Camp still
+  left in-view tiles at a p95 of 6 px from 50 m, 10 from 30 m, 20 from 15 m and 29 from 8 m,
+  each with finer tiles under it; 6M brings those to 4, 6, 12 and 12. Its levels each keep
+  about a fourteenth of the level below's gaussians at twice the error, so one refinement
+  step costs fourteen times as much, and a close view would need 10 to 18M to be under 2 px.
+- **The interface comes first.** While a popover is open over the map, or a control was just
+  pressed or pointed at, and the camera is still, the redraws nobody on screen asked for (a
+  tile, a sort result, the globe's own tile loads) come at most every 250 ms, the overlay
+  re-plans its cut at most once a second, and its tile work is paced (`uiActivity.ts`). A moved
+  camera, and an animation (the wind), are never held.
 - **Tile work is budgeted.** Decoding happens in workers (PlayCanvas's Morton reorder too);
   what must run on the main thread (building a PlayCanvas resource, digesting a Spark tile)
   runs within 4 ms a frame while the camera moves, 12 ms at rest (`tileWork.ts`). A phone keeps

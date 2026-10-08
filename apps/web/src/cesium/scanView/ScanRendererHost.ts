@@ -115,12 +115,18 @@ const MOTION_SETTLE_MS = 200;
  */
 export const REST_AFTER_MS = 600;
 /**
- * How many times its motion budget a still view may hold (within the device's ceiling): 4.5M
- * on a desktop at its 3M budget. On the Camp scan's arrival views 3M left tiles in view at 16
- * px; 6M, the desktop's ceiling, brought the worst to 7 px but took a software-GL page past
- * what it could hold.
+ * How many times its motion budget a still view may hold, within the device's ceiling
+ * (lib/detail.ts `deviceSplatCeiling`): the ceiling itself on a desktop, 6M at its 3M budget,
+ * and nothing more on a phone (whose ceiling is its budget). On the Camp scan a still view
+ * spends all of 4.5M from 80 m in and leaves coarse tiles in view that have finer ones under
+ * them -- p95 screen error 6 px at 50 m, 10 at 30 m, 20 at 15 m, 29 at 8 m; 6M brings those
+ * to 4, 6, 12 and 12 px. (Its levels each hold about a fourteenth of the gaussians of the
+ * level below at twice the error, so a close view would need 10 to 18M to be under 2 px
+ * everywhere.) The motion budget can already grow to the ceiling while frames stay fast
+ * (lib/splatBudget.ts); a still view draws once, so holding it there costs memory and one
+ * sort, not frame time.
  */
-export const REST_GROWTH = 1.5;
+export const REST_GROWTH = 2;
 /** Most gaussians put on screen per re-plan (~4M a second at REPLAN_MS): tiles that land
  *  together go up over a few frames instead of all in one. */
 const MAX_SHOWN_PER_UPDATE = 600_000;
