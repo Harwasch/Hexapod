@@ -140,9 +140,10 @@ function MapMenu({ at }: { at: MapMenuAt }) {
       ref={root}
       className="map-menu"
       inert={!present}
-      initial={{ opacity: 0, scale: 0.96 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.96 }}
+      // A whole `transform`, played by the compositor (as the site switcher's).
+      initial={{ opacity: 0, transform: "scale(0.96)" }}
+      animate={{ opacity: 1, transform: "scale(1)" }}
+      exit={{ opacity: 0, transform: "scale(0.96)" }}
       transition={{ type: "spring", stiffness: 520, damping: 36 }}
       data-hud-popover=""
       data-testid="map-menu"

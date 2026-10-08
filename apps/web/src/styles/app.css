@@ -686,6 +686,10 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   left: 0;
   right: 0;
   background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  /* Too opaque for a blur behind it to show, and a blur is a full-panel pass on every hover,
+     scroll and repaint of the map under it: none, which looks the same. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   padding: 0.35rem;
   max-height: min(28rem, 62vh);
   overflow: auto;
@@ -1089,6 +1093,9 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   padding: 0.4rem;
   border-radius: 20px;
   background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  /* Too opaque for a blur behind it to show (see .command__results): none. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   animation: status-log-in var(--motion-base) var(--ease-out);
 }
 
@@ -1129,6 +1136,9 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   padding: 0.3rem;
   /* Text over the map: nearly opaque, like the site switcher. */
   background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  /* Too opaque for a blur behind it to show (see .command__results): none. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .map-menu__item {
