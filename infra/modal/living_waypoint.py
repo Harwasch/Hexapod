@@ -61,8 +61,10 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "git", "libgl1", "libglib2.0-0")
     .pip_install(
-        "torch==2.8.0",
-        "torchvision==0.23.0",
+        # Its blocks build flex-attention masks with `BlockMask.from_kv_blocks(...,
+        # compute_q_blocks=...)`, which torch 2.8 lacks.
+        "torch==2.10.0",
+        "torchvision==0.25.0",
         "diffusers==0.40.0",
         "transformers>=5,<6",
         "accelerate>=1.6",

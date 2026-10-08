@@ -4,8 +4,11 @@ Yume's camera is text: each 2-second segment is captioned "First-person perspect
 movement and a rotation phrase from a fixed vocabulary, plus an event text. Idle leaves both
 phrases out (as the repository's single-GPU web app does for "None" and "·"); the pan adds
 "The camera pans to the right (→)." The event text is the generic one (prompts.md). Two
-segments of 32 frames (4 s at 16 fps), every start, one warm H100, driven through the
-repository's own `webapp_single_gpu.long_generate` (its single-GPU 5B path).
+segments of 29 frames (about 3.6 s at 16 fps), every start, one warm H100, driven through the
+repository's own `webapp_single_gpu.long_generate` (its single-GPU 5B path): the first from the
+render, the second through its "continue from last" path, as its web page extends a clip.
+(Asking for two segments in one call gives noise for the second: from the second segment on,
+that path reuses the first segment's sequence length, so the new frames get no timesteps.)
 
     download  CPU: the checkpoint into `hexapod-living-view-weights`.
     run       H100: the rollouts, timed; clips to `/data/clips/yume-idle|yume-pan/<start>.mp4`.
@@ -60,7 +63,7 @@ YUME_SHIFT = 7.0
 YUME_FPS = 16
 YUME_SEGMENTS = 2
 YUME_FRAME_ZERO = 32
-RUN = {"gpu": "H100", "cpu": 8.0, "memoryGiB": 96, "timeoutS": 900}
+RUN = {"gpu": "H100", "cpu": 8.0, "memoryGiB": 96, "timeoutS": 600}
 DOWNLOAD = {"gpu": "", "cpu": 2.0, "memoryGiB": 8, "timeoutS": 3600}
 GPU_PER_S = {"H100": 0.001097, "": 0.0}
 FLASH_ATTN_WHEEL = (
@@ -111,6 +114,22 @@ image = (
 )
 
 
+def _mp4(frames: object, fps: float) -> bytes:
+    import tempfile
+
+    import imageio.v2 as imageio
+    import numpy as np
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+        writer = imageio.get_writer(
+            f.name, fps=fps, codec="libx264", ffmpeg_params=["-crf", "14"], macro_block_size=1
+        )
+        for frame in frames:  # type: ignore[attr-defined]
+            writer.append_data(np.asarray(frame))
+        writer.close()
+        return Path(f.name).read_bytes()
+
+
 def _hf_token() -> str | None:
     keys = [k for k in HF_TOKEN_KEYS if os.environ.get(k)]
     keys += sorted(k for k, v in os.environ.items() if v.startswith("hf_"))
@@ -151,7 +170,8 @@ def download() -> dict:
 )
 def run(request: dict) -> dict:
     """Idle and pan from every start through the web app's `long_generate` (I2V, 704x1280,
-    two segments). First motion is the first segment decoded."""
+    a segment, then each further one continued from the last). First motion is the first
+    segment decoded."""
     started = time.time()
     code = Path("/opt/yume")
     os.chdir(code)
@@ -182,41 +202,49 @@ def run(request: dict) -> dict:
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
             t0 = time.time()
-            out_path, final_prompt = web.long_generate(
-                web.LongGenArgs(
-                    prompt=YUME_EVENT,
-                    jpg_path=f"/data/starts/{name}.png",
-                    output_dir="/tmp/yume-out",
-                    fps=YUME_FPS,
-                    sample_steps=YUME_STEPS,
-                    sample_num=YUME_SEGMENTS,
-                    frame_zero=YUME_FRAME_ZERO,
-                    shift=YUME_SHIFT,
-                    seed=42,
-                    continue_from_last=False,
-                    refine_from_image=False,
-                    caption_path=None,
-                    mode="I2V",
-                    resolution="704x1280",
-                    memory_optimization=False,
-                    vae_memory_optimization=False,
-                    camera_movement1="None",
-                    camera_movement2=turn,
+            parts, segment_seconds = [], []
+            for segment in range(YUME_SEGMENTS):
+                s0 = time.time()
+                out_path, final_prompt = web.long_generate(
+                    web.LongGenArgs(
+                        prompt=YUME_EVENT,
+                        jpg_path=f"/data/starts/{name}.png",
+                        output_dir="/tmp/yume-out",
+                        fps=YUME_FPS,
+                        sample_steps=YUME_STEPS,
+                        sample_num=1,
+                        frame_zero=YUME_FRAME_ZERO,
+                        shift=YUME_SHIFT,
+                        seed=42 + segment,
+                        continue_from_last=segment > 0,
+                        refine_from_image=False,
+                        caption_path=None,
+                        mode="I2V",
+                        resolution="704x1280",
+                        memory_optimization=False,
+                        vae_memory_optimization=False,
+                        camera_movement1="None",
+                        camera_movement2=turn,
+                    )
                 )
-            )
-            torch.cuda.synchronize()
+                torch.cuda.synchronize()
+                segment_seconds.append(round(time.time() - s0, 2))
+                reader = imageio.get_reader(out_path)
+                frames = np.stack([np.asarray(f)[..., :3] for f in reader])
+                reader.close()
+                # A continued call returns the context it was given and then its new segment.
+                parts.append(frames if segment == 0 else frames[-len(parts[0]) :])
             seconds = time.time() - t0
-            data = Path(out_path).read_bytes()
-            reader = imageio.get_reader(out_path)
-            video = np.stack([np.asarray(f)[..., :3] for f in reader])
-            reader.close()
+            video = np.concatenate(parts)
             clips[f"{arm}/{name}"] = {
-                "mp4": data,
+                "mp4": _mp4(video, YUME_FPS),
                 "fps": float(YUME_FPS),
                 "frames": len(video),
                 "size": [int(video.shape[2]), int(video.shape[1])],
                 "caption": final_prompt,
                 "seconds": round(seconds, 2),
+                "segmentSeconds": segment_seconds,
+                "segmentFrames": [len(f) for f in parts],
                 "firstFrameSeconds": round(marks[0] - t0, 2) if marks else None,
                 "peakMemoryGB": round(torch.cuda.max_memory_allocated() / 2**30, 1),
             }

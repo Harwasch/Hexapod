@@ -58,7 +58,7 @@ MG3_STEPS = 3
 MG3_FPS = 16.0  # Wan 2.2's sample rate; 97 frames are 6 s
 #: Yaw per frame is 15 degrees x mouse_y (deadzone 0.02): 0.03 is 0.45 degrees a frame.
 MG3_PAN_MOUSE = (0.0, 0.03)
-RUN = {"gpu": "H100", "cpu": 8.0, "memoryGiB": 96, "timeoutS": 900}
+RUN = {"gpu": "H100", "cpu": 8.0, "memoryGiB": 96, "timeoutS": 600}
 DOWNLOAD = {"gpu": "", "cpu": 2.0, "memoryGiB": 8, "timeoutS": 3600}
 GPU_PER_S = {"H100": 0.001097, "": 0.0}
 
@@ -249,17 +249,20 @@ def run(request: dict) -> dict:
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
             t0 = time.time()
-            pipe.generate(
-                MG3_PROMPT,
-                img,
-                max_area=MAX_AREA_CONFIGS[args.size],
-                shift=cfg.sample_shift,
-                num_inference_steps=MG3_STEPS,
-                guide_scale=1.0,
-                seed=42,
-                use_base_model=False,
-                args=args,
-            )
+            try:
+                pipe.generate(
+                    MG3_PROMPT,
+                    img,
+                    max_area=MAX_AREA_CONFIGS[args.size],
+                    shift=cfg.sample_shift,
+                    num_inference_steps=MG3_STEPS,
+                    guide_scale=1.0,
+                    seed=42,
+                    use_base_model=False,
+                    args=args,
+                )
+            except SystemExit:  # its generate() ends with exit() once the clip is saved
+                pass
             torch.cuda.synchronize()
             seconds = time.time() - t0
             video = np.asarray(captured["video"])
