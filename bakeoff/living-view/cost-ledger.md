@@ -21,6 +21,8 @@ GitHub runner minutes are not Modal spend and are not counted.
 | flf | Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers | Apache-2.0 | yes |
 | wan | Wan-AI/Wan2.2-TI2V-5B-Diffusers (control) | Apache-2.0 | yes |
 | (B) | OpenCV DIS optical flow | Apache-2.0 (OpenCV), no learned weights | yes |
+| A↑ | JunhaoZhuang/FlashVSR-v1.1 (tiny decoder); code OpenImagingLab/FlashVSR; its sparse attention re-written in PyTorch here | Apache-2.0 (weights and code) | yes |
+| A↑ (second) | ByteDance-Seed/SeedVR2-3B; code from the Space ByteDance-Seed/SeedVR2-3B; flash-attn 2.7.4 (BSD-3-Clause); apex replaced by torch norms | Apache-2.0 (weights and code) | yes |
 
 Fallbacks, only if Causal Forcing cannot start from a frame: TencentARC/RollingForcing (MIT);
 krea/krea-realtime-video (the Hub card says Apache-2.0, its GitHub repository says CC BY-NC-SA
@@ -44,3 +46,4 @@ krea/krea-realtime-video (the Hub card says Apache-2.0, its GitHub repository sa
 | 8 | 37806924930 | FlashVSR weights (7 GB, 31 s) and the image check on CPU: diffsynth needs `modelscope`, not in FlashVSR's requirements (caught before any GPU) | CPU | 0.7 | 0.00 | 2.82 |
 | 9 | 37807558216 | FlashVSR image check: imports clean | CPU | 0.2 | 0.00 | 2.82 |
 | 10 | (pending) | FlashVSR on the 12 clips already in the volume (ltx, flf, wan), one A100 container. Estimate $0.9 (worst $2.26) | A100-80GB | | | |
+| 11 | (pending) | SeedVR2-3B weights (14.6 GB) and its image check, on CPU. Estimate $0.02 | CPU | | | |

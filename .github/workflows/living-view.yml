@@ -11,8 +11,10 @@ name: Living view bake-off (Modal GPUs)
 #
 # * **How to run it.** Push a commit to `bakeoff-living-view` whose message carries
 #   `[lv:<steps>|arms=<arms>|budget=<dollars>]` -- steps, comma-separated in this order, from
-#   access, download, starts, arms (the bake-off app) and vsr-download, vsr-check, upscale (the
-#   upscaler app); arms from ltx, causal, flf, wan; budget the dollars the arms may spend at
+#   access, download, starts, arms (the bake-off app) and vsr-download, vsr-check, upscale,
+#   sv-download, sv-check, sv-upscale (the upscaler app: FlashVSR, then SeedVR2-3B); arms from
+#   ltx, causal, flf, wan (the upscalers take those arms' clips); budget the dollars the arms
+#   may spend at
 #   worst (timeout x rate; an arm that does not fit is refused) and upbudget the same for the
 #   upscaler. `starts=` and `contexts=` pass through. A push without a token runs nothing.
 #   `workflow_dispatch` works once this file is on the default branch.
@@ -30,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       steps:
-        description: "Steps, in order: access,download,starts,arms,vsr-download,vsr-check,upscale"
+        description: "Steps, in order: access,download,starts,arms,vsr-download,vsr-check,upscale,sv-download,sv-check,sv-upscale"
         type: string
         default: access
       arms:
@@ -89,7 +91,8 @@ jobs:
                   if name not in options or name == "steps":
                       raise SystemExit(f"unknown option {name!r} in the [lv:] token")
                   options[name] = value
-          step = r"(access|download|starts|arms|vsr-download|vsr-check|upscale)"
+          step = (r"(access|download|starts|arms|vsr-download|vsr-check|upscale"
+                  r"|sv-download|sv-check|sv-upscale)")
           valid = {
               "steps": rf"{step}(,{step})*",
               "arms": r"(ltx|causal|flf|wan)(,(ltx|causal|flf|wan))*",
@@ -102,7 +105,9 @@ jobs:
               if not re.fullmatch(pattern, options[name]):
                   raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
           steps = options.pop("steps").split(",")
-          upscale = {"vsr-download": "download", "vsr-check": "check", "upscale": "upscale"}
+          upscale = {"vsr-download": "download", "vsr-check": "check", "upscale": "upscale",
+                     "sv-download": "seedvr-download", "sv-check": "seedvr-check",
+                     "sv-upscale": "seedvr"}
           options["bakeoff"] = ",".join(s for s in steps if s not in upscale)
           options["upscale"] = ",".join(upscale[s] for s in steps if s in upscale)
           for name, value in options.items():
@@ -220,7 +225,7 @@ jobs:
         timeout-minutes: 120
         run: |
           exec uv run --with modal==1.5.5 modal run infra/modal/living_upscale.py \
-            --steps "$UPSCALE" --budget-left "$UPBUDGET" --out lv-out
+            --steps "$UPSCALE" --budget-left "$UPBUDGET" --arms "$ARMS" --out lv-out
       - name: Summary
         if: always()
         run: |

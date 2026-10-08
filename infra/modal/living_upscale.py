@@ -1,18 +1,23 @@
-"""Living view bake-off, the upscaler: every arm's clip to the render's size with FlashVSR v1.1.
+"""Living view bake-off, the upscalers: every arm's clip to the render's size with FlashVSR
+v1.1, and with SeedVR2-3B as a second opinion.
 
 The A-up column of the bake-off (infra/modal/living_bakeoff.py): the model's own pixels, made
 1280 x 704 by a video super-resolution model instead of bicubic. A Modal app of its own because
 `modal run` builds every image of an app before anything runs: this one's build (it once
 compiled Block-Sparse-Attention, 28 minutes) must not hold up the arms. FlashVSR's
 locality-constrained sparse attention runs in PyTorch (`block_sparse_attn_func`) on the masks
-FlashVSR builds, with the same result as the CUDA kernel.
+FlashVSR builds, with the same result as the CUDA kernel. SeedVR2's DiT takes apex's fused
+norms; torch's own stand in (`_apex_norms`), so apex is not built.
 
 Steps (`--steps`):
 
-    download  CPU: FlashVSR v1.1's weights into `hexapod-living-view-weights`.
-    check     CPU: the image builds and its packages resolve, before a GPU is held.
-    upscale   A100-80GB, one warm container: every clip the arms kept in the volume
-              `hexapod-living-view` (`/data/clips/<arm>/<start>.mp4`), each timed.
+    download         CPU: FlashVSR v1.1's weights into `hexapod-living-view-weights`.
+    check            CPU: the image builds and its packages resolve, before a GPU is held.
+    upscale          A100-80GB, one warm container: every clip the arms kept in the volume
+                     `hexapod-living-view` (`/data/clips/<arm>/<start>.mp4`), each timed.
+    seedvr-download  CPU: SeedVR2-3B's weights (DiT, VAE, text embeddings).
+    seedvr-check     CPU: its image builds, its code imports, its configs make the models.
+    seedvr           H100, one warm container: the same clips through SeedVR2-3B.
 
     modal run infra/modal/living_upscale.py --steps download,check,upscale --budget-left 3
 """
@@ -46,7 +51,7 @@ HF_TOKEN_KEYS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN", "HF_
 START_SIZE = (1280, 704)
 
 #: Modal list prices, $/s (modal.com/pricing, read 2026-10-08).
-GPU_PER_S = {"A100-80GB": 0.000694, "": 0.0}
+GPU_PER_S = {"A100-80GB": 0.000694, "H100": 0.001097, "": 0.0}
 CPU_CORE_PER_S = 0.0000131
 MEMORY_GIB_PER_S = 0.00000222
 DOWNLOAD_RESERVATION = {"gpu": "", "cpu": 2.0, "memoryGiB": 8, "timeoutS": 3600}
@@ -123,6 +128,67 @@ vsr_image = (
     )
     # diffsynth's downloader imports it (not in FlashVSR's requirements.txt).
     .pip_install("modelscope")
+)
+
+#: SeedVR2-3B (A-up's second opinion): one-step diffusion video restoration, as its authors'
+#: `projects/inference_seedvr2_3b.py` runs it on one GPU (cfg 1, one step, conditioning noise
+#: 0, wavelet colour fix), from the code of their Hugging Face Space at `SVR_SPACE_COMMIT`
+#: (their GitHub repository's, plus the Space's demo). The clip goes in at the render's size,
+#: bicubic (the model restores at the output size), so nothing is cropped.
+SVR_REPO = "ByteDance-Seed/SeedVR2-3B"
+SVR_FILES = ("seedvr2_ema_3b.pth", "ema_vae.pth", "pos_emb.pt", "neg_emb.pt")
+SVR_SPACE = "https://huggingface.co/spaces/ByteDance-Seed/SeedVR2-3B"
+SVR_SPACE_COMMIT = "1c8f9fbafac52f6fd2f9b42c869ba27262c52c0a"
+SVR_SEED = 666
+UPSCALERS["seedvr2"] = {
+    "gpu": "H100",
+    "cpu": 8.0,
+    "memoryGiB": 64,
+    "timeoutS": 1800,
+    "needs": (SVR_REPO,),
+    "model": f"{SVR_REPO} (one step, cfg 1, wavelet colour fix)",
+    "licence": "Apache-2.0 (weights and code)",
+}
+#: Downloaded per repo (SeedVR2's repository also carries apex wheels, not needed).
+DOWNLOAD_PATTERNS = {
+    FVSR_REPO: ["*.ckpt", "*.pth", "*.safetensors", "*.json", "README.md"],
+    SVR_REPO: [*SVR_FILES, "README.md"],
+}
+
+#: Flash-attention 2.7.4.post1's prebuilt wheel for torch 2.5 / CUDA 12 / CPython 3.10 (as the
+#: Causal Forcing arm's image); SeedVR2's window attention calls `flash_attn_varlen_func`.
+FLASH_ATTN_WHEEL = (
+    "flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/"
+    "flash_attn-2.7.4.post1%2Bcu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+)
+#: SeedVR2's environment: its requirements.txt's modelling packages (diffusers 0.29.1, whose
+#: VAE blocks the code imports; the hub before 0.26, which diffusers 0.29 still needs), on
+#: torch 2.5.1 so the flash-attention wheel fits; not its training, data or metrics packages.
+svr_image = (
+    modal.Image.debian_slim(python_version="3.10")
+    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
+    .pip_install(
+        "torch==2.5.1", "torchvision==0.20.1", index_url="https://download.pytorch.org/whl/cu124"
+    )
+    .pip_install(
+        "einops==0.7.0",
+        "omegaconf==2.3.0",
+        "diffusers==0.29.1",
+        "huggingface-hub==0.25.2",
+        "rotary-embedding-torch==0.5.3",
+        "mediapy==1.2.0",
+        "numpy==1.26.4",
+        "pillow",
+        "safetensors",
+        "tqdm",
+        "imageio==2.37.0",
+        "imageio-ffmpeg==0.6.0",
+    )
+    .run_commands(
+        f"GIT_LFS_SKIP_SMUDGE=1 git clone {SVR_SPACE} /opt/seedvr"
+        f" && git -C /opt/seedvr checkout {SVR_SPACE_COMMIT}"
+    )
+    .pip_install(FLASH_ATTN_WHEEL)
 )
 
 #: Key blocks gathered per pass of `block_sparse_attn_func`, in bytes (each of K and V).
@@ -203,18 +269,16 @@ def block_sparse_attn_func(
     single_use_containers=True,
 )
 def flashvsr(request: dict) -> dict:
-    """Every clip in the results volume (`/data/clips/<arm>/<start>.mp4`, or `request["clips"]`)
-    through FlashVSR v1.1 (tiny), as its own v1.1 tiny script runs it, to the render's size.
+    """Every clip in the results volume (`/data/clips/<arm>/<start>.mp4`; only `request["arms"]`
+    if given, or exactly `request["clips"]`) through FlashVSR v1.1 (tiny), as its own v1.1 tiny
+    script runs it, to the render's size.
     The clip is padded (reflected) so the upscaled size is a multiple of 128, its frame count
     padded to FlashVSR's 8n+1 with the last frame repeated, and both trimmed back after."""
     started = time.time()
     weights = Path(f"/lv/{FVSR_REPO}")
     _need([str(weights / "diffusion_pytorch_model_streaming_dmd.safetensors")])
     RESULTS.reload()
-    names = request.get("clips") or sorted(
-        str(p.relative_to("/data/clips").with_suffix(""))
-        for p in Path("/data/clips").glob("*/*.mp4")
-    )
+    names = _clip_names(request)
     code = Path("/opt/flashvsr/examples/WanVSR")
     link = code / "FlashVSR-v1.1"
     if not link.exists():
@@ -324,7 +388,234 @@ def flashvsr(request: dict) -> dict:
     }
 
 
-UPSCALER_FUNCTIONS = {"flashvsr": flashvsr}
+# --- upscaler: SeedVR2-3B ----------------------------------------------------------------------
+
+
+def _apex_norms() -> None:
+    """`apex.normalization` as SeedVR2's DiT imports it (`FusedLayerNorm`, `FusedRMSNorm`), from
+    torch: the same parameters (so the checkpoint loads strictly) and the same maths, the
+    statistics in float32 and the result in the input's dtype, as apex's kernels do."""
+    import types
+
+    import torch
+    from torch import nn
+
+    class FusedRMSNorm(nn.Module):
+        def __init__(
+            self, normalized_shape: int, elementwise_affine: bool = True, eps: float = 1e-6
+        ) -> None:
+            super().__init__()
+            self.eps = eps
+            shape = (normalized_shape,) if isinstance(normalized_shape, int) else normalized_shape
+            self.weight = nn.Parameter(torch.ones(shape)) if elementwise_affine else None
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            y = x.float()
+            y = y * torch.rsqrt(y.pow(2).mean(-1, keepdim=True) + self.eps)
+            if self.weight is not None:
+                y = y * self.weight.float()
+            return y.to(x.dtype)
+
+    def FusedLayerNorm(  # apex's name
+        normalized_shape: int, elementwise_affine: bool = True, eps: float = 1e-5
+    ) -> nn.Module:
+        return nn.LayerNorm(normalized_shape, eps=eps, elementwise_affine=elementwise_affine)
+
+    apex = types.ModuleType("apex")
+    norms = types.ModuleType("apex.normalization")
+    norms.FusedRMSNorm = FusedRMSNorm  # type: ignore[attr-defined]
+    norms.FusedLayerNorm = FusedLayerNorm  # type: ignore[attr-defined]
+    apex.normalization = norms  # type: ignore[attr-defined]
+    sys.modules["apex"], sys.modules["apex.normalization"] = apex, norms
+
+
+def _seedvr_env() -> Path:
+    """The Space's code importable from /opt/seedvr, as one rank of one, with apex's norms."""
+    code = Path("/opt/seedvr")
+    os.chdir(code)
+    if str(code) not in sys.path:
+        sys.path.insert(0, str(code))
+    for key, value in (
+        ("MASTER_ADDR", "127.0.0.1"),
+        ("MASTER_PORT", "12355"),
+        ("RANK", "0"),
+        ("LOCAL_RANK", "0"),
+        ("WORLD_SIZE", "1"),
+    ):
+        os.environ.setdefault(key, value)
+    _apex_norms()
+    return code
+
+
+@app.function(
+    image=svr_image,
+    gpu=UPSCALERS["seedvr2"]["gpu"],
+    cpu=UPSCALERS["seedvr2"]["cpu"],
+    memory=UPSCALERS["seedvr2"]["memoryGiB"] * 1024,
+    timeout=UPSCALERS["seedvr2"]["timeoutS"],
+    volumes={"/lv": LV_WEIGHTS, "/data": RESULTS},
+    single_use_containers=True,
+)
+def seedvr2(request: dict) -> dict:
+    """The clips (as `flashvsr` picks them) through SeedVR2-3B, as
+    `projects/inference_seedvr2_3b.py` runs it: the clip bicubic to the render's size (a
+    multiple of 16), padded to 4n+1 frames with its last, VAE-encoded, one DiT step from noise
+    with the clean latent as the condition, decoded, the wavelet colour fix against the input,
+    trimmed back. Each clip is timed from its frames on the GPU to the colour-fixed result."""
+    started = time.time()
+    weights = Path(f"/lv/{SVR_REPO}")
+    _need([str(weights / f) for f in SVR_FILES])
+    RESULTS.reload()
+    names = _clip_names(request)
+    code = _seedvr_env()
+    link = code / "ckpts"  # main.yaml reads the VAE from ./ckpts/ema_vae.pth
+    if not link.exists():
+        link.symlink_to(weights)
+    import datetime
+
+    import imageio.v2 as imageio
+    import numpy as np
+    import torch
+    import torch.nn.functional as F
+    from common.config import load_config
+    from common.distributed import init_torch
+    from common.seed import set_seed
+    from einops import rearrange
+    from omegaconf import OmegaConf
+    from projects.video_diffusion_sr.color_fix import wavelet_reconstruction
+    from projects.video_diffusion_sr.infer import VideoDiffusionInfer
+
+    runner = VideoDiffusionInfer(load_config("./configs_3b/main.yaml"))
+    OmegaConf.set_readonly(runner.config, False)
+    init_torch(cudnn_benchmark=False, timeout=datetime.timedelta(seconds=3600))
+    runner.configure_dit_model(device="cuda", checkpoint=str(weights / "seedvr2_ema_3b.pth"))
+    runner.configure_vae_model()
+    if hasattr(runner.vae, "set_memory_limit"):
+        runner.vae.set_memory_limit(**runner.config.vae.memory_limit)
+    runner.config.diffusion.cfg.scale = 1.0
+    runner.config.diffusion.cfg.rescale = 0.0
+    runner.config.diffusion.timesteps.sampling.steps = 1
+    runner.configure_diffusion()
+    positive = torch.load(weights / "pos_emb.pt").to("cuda")
+    negative = torch.load(weights / "neg_emb.pt").to("cuda")
+    load = time.time() - started
+    width, height = request.get("renderSize", START_SIZE)
+    out: dict = {}
+    for name in names:
+        reader = imageio.get_reader(f"/data/clips/{name}.mp4")
+        fps = float(reader.get_meta_data().get("fps", 24.0))
+        frames = np.stack([np.asarray(f)[..., :3] for f in reader])
+        reader.close()
+        n, h, w = frames.shape[:3]
+        set_seed(SVR_SEED, same_across_ranks=True)
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+        t0 = time.time()
+        with torch.no_grad():
+            video = torch.from_numpy(frames).to("cuda").permute(0, 3, 1, 2).float() / 255.0
+            video = F.interpolate(video, size=(height, width), mode="bicubic", align_corners=False)
+            video = video.clamp(0, 1) * 2 - 1  # (T, C, H, W), -1..1
+            cond = rearrange(video, "t c h w -> c t h w")
+            pad = (-(n - 1)) % 4
+            if pad:
+                cond = torch.cat([cond, cond[:, -1:].repeat(1, pad, 1, 1)], dim=1)
+            latent = runner.vae_encode([cond])[0]
+            noise = torch.randn_like(latent)
+            condition = runner.get_condition(noise, task="sr", latent_blur=latent)
+            with torch.autocast("cuda", torch.bfloat16, enabled=True):
+                sample = runner.inference(
+                    noises=[noise],
+                    conditions=[condition],
+                    texts_pos=[positive],
+                    texts_neg=[negative],
+                    dit_offload=False,
+                )[0]
+            sample = rearrange(sample, "c t h w -> t c h w")[:n].float()
+            sample = wavelet_reconstruction(sample, video[:n])
+            torch.cuda.synchronize()
+            seconds = time.time() - t0
+            result = ((sample.clamp(-1, 1) + 1) * 127.5).round().byte()
+            result = result.permute(0, 2, 3, 1).cpu().numpy()
+        del video, cond, latent, noise, condition, sample
+        out[name] = {
+            "mp4": _mp4(result, fps),
+            "fps": fps,
+            "frames": int(n),
+            "scale": round(width / w, 3),
+            "modelSize": [int(w), int(h)],
+            "srSize": [int(width), int(height)],
+            "seconds": round(seconds, 2),
+            "framesPerSecond": round(n / seconds, 2),
+            "peakMemoryGB": round(torch.cuda.max_memory_allocated() / 2**30, 1),
+        }
+        torch.cuda.empty_cache()
+    RESULTS.reload()
+    for name, clip in out.items():
+        target = Path("/data/upscaled/seedvr2") / f"{name}.mp4"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(clip["mp4"])
+    RESULTS.commit()
+    return {
+        "upscaler": "seedvr2",
+        "model": UPSCALERS["seedvr2"]["model"],
+        "code": f"{SVR_SPACE}@{SVR_SPACE_COMMIT}",
+        "loadSeconds": round(load, 1),
+        "clips": out,
+        "containerSeconds": round(time.time() - started, 1),
+    }
+
+
+@app.function(image=svr_image, cpu=2.0, memory=8192, timeout=900)
+def svr_check() -> dict:
+    """CPU only: SeedVR2's image builds, the flash-attention wheel is installed (its CUDA module
+    may not load without a GPU), the inference code imports with torch's norms for apex's, and
+    its configs make the VAE and (on the meta device) the DiT, so the H100 does not pay for a
+    failed build, import or config."""
+    import importlib.metadata
+    import traceback
+    import types
+
+    found: dict = {}
+    _seedvr_env()
+    try:
+        found["flashAttnWheel"] = importlib.metadata.version("flash_attn").startswith("2.7.4")
+    except importlib.metadata.PackageNotFoundError:
+        found["flashAttnWheel"] = False
+    try:
+        import flash_attn  # noqa: F401
+
+        found["flashAttnImport"] = "ok"
+    except Exception:  # noqa: BLE001 - a CPU container may lack the CUDA driver
+        found["flashAttnImport"] = traceback.format_exc()[-600:]
+        stub = types.ModuleType("flash_attn")
+        stub.flash_attn_varlen_func = None  # type: ignore[attr-defined]
+        sys.modules["flash_attn"] = stub
+    for name, statement in (
+        ("infer", "from projects.video_diffusion_sr.infer import VideoDiffusionInfer"),
+        ("colorfix", "from projects.video_diffusion_sr.color_fix import wavelet_reconstruction"),
+        ("distributed", "from common.distributed import init_torch"),
+        (
+            "models",
+            (
+                "import torch\n"
+                "from common.config import create_object, load_config\n"
+                "config = load_config('./configs_3b/main.yaml')\n"
+                "with torch.device('meta'):\n"
+                "    create_object(config.dit.model)\n"
+                "    create_object(config.vae.model)\n"
+            ),
+        ),
+    ):
+        try:
+            exec(statement, {})  # noqa: S102 - fixed statements
+            found[name] = True
+        except Exception:  # noqa: BLE001 - reported
+            found[name] = False
+            found[f"{name}Error"] = traceback.format_exc()[-1500:]
+    return {"found": {k: v for k, v in found.items() if isinstance(v, bool)}, "detail": found}
+
+
+UPSCALER_FUNCTIONS = {"flashvsr": flashvsr, "seedvr2": seedvr2}
 
 
 @app.function(image=vsr_image, cpu=1.0, memory=4096, timeout=600)
@@ -383,6 +674,16 @@ def _mp4(frames: object, fps: float) -> bytes:
         return Path(f.name).read_bytes()
 
 
+def _clip_names(request: dict) -> list[str]:
+    """`request["clips"]`, or every `<arm>/<start>` in /data/clips (of `request["arms"]` only,
+    when given)."""
+    return request.get("clips") or sorted(
+        str(p.relative_to("/data/clips").with_suffix(""))
+        for p in Path("/data/clips").glob("*/*.mp4")
+        if not request.get("arms") or p.parent.name in request["arms"]
+    )
+
+
 def _need(paths: list[str]) -> None:
     missing = [p for p in paths if not Path(p).exists()]
     if missing:
@@ -404,31 +705,36 @@ download_image = (
     memory=DOWNLOAD_RESERVATION["memoryGiB"] * 1024,
     timeout=DOWNLOAD_RESERVATION["timeoutS"],
 )
-def download() -> dict:
-    """FlashVSR v1.1's weights into /lv/<repo>/ (CPU only), committed."""
+def download(repo: str = FVSR_REPO) -> dict:
+    """An upscaler's weights (FlashVSR v1.1's, SeedVR2-3B's) into /lv/<repo>/ (CPU only),
+    committed."""
     from huggingface_hub import snapshot_download
 
     started = time.time()
-    local = Path("/lv") / FVSR_REPO
+    local = Path("/lv") / repo
     snapshot_download(
-        FVSR_REPO,
+        repo,
         local_dir=str(local),
-        allow_patterns=["*.ckpt", "*.pth", "*.safetensors", "*.json", "README.md"],
+        allow_patterns=DOWNLOAD_PATTERNS[repo],
         token=_hf_token(),
         max_workers=8,
     )
     LV_WEIGHTS.commit()
     size = sum(p.stat().st_size for p in local.rglob("*") if p.is_file())
-    return {"repo": FVSR_REPO, "bytes": size, "seconds": round(time.time() - started, 1)}
+    return {"repo": repo, "bytes": size, "seconds": round(time.time() - started, 1)}
 
 
 # --- the run --------------------------------------------------------------------------------
 
 
 @app.local_entrypoint()
-def main(steps: str = "check", budget_left: float = 0.0, out: str = "lv-out") -> None:
-    """The steps; the upscaled clips under `out/upscaled/flashvsr/<arm>/<start>.mp4` and
-    `out/upscale-summary.json` (each call's wall time and estimated dollars)."""
+def main(
+    steps: str = "check", budget_left: float = 0.0, out: str = "lv-out", arms: str = ""
+) -> None:
+    """The steps (upscale, seedvr: the clips of `arms`, comma-separated, or of every arm); the
+    upscaled clips under `out/upscaled/<upscaler>/<arm>/<start>.mp4` and
+    `out/upscale-summary.json` (each call's wall time and estimated dollars). Each upscaler runs
+    only if its worst case (timeout x rate) fits in what `budget_left` still holds."""
     folder = Path(out)
     folder.mkdir(parents=True, exist_ok=True)
     wanted = [s for s in steps.split(",") if s]
@@ -462,31 +768,49 @@ def main(steps: str = "check", budget_left: float = 0.0, out: str = "lv-out") ->
         cost(label, reservation, time.time() - t0, {"containerSeconds": None})
         return result
 
+    request = {"arms": [a for a in arms.split(",") if a]} if arms else {}
+
+    def checked(label: str, function: modal.Function) -> None:
+        summary[label] = step(label, function, CHECK_RESERVATION)
+        dump()
+        found = (summary[label] or {}).get("found", {})
+        if not found or not all(found.values()):
+            raise RuntimeError(f"{label}: the image is not usable: {summary[label]}")
+
+    def upscale(upscaler: str) -> None:
+        reservation = UPSCALERS[upscaler]
+        worst = reservation["timeoutS"] * rate_per_s(reservation)
+        left = budget_left - sum(r["dollars"] for r in summary["costs"])
+        if worst > left:
+            summary.setdefault("skipped", {})[upscaler] = f"worst ${worst:.2f} > ${left:.2f} left"
+            sys.stdout.write(f"{upscaler} skipped: worst ${worst:.2f} > ${left:.2f} left\n")
+            return
+        result = step(f"upscale {upscaler}", UPSCALER_FUNCTIONS[upscaler], reservation, request)
+        if result is None:
+            return
+        for name, clip in result["clips"].items():
+            target = folder / "upscaled" / upscaler / f"{name}.mp4"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(clip.pop("mp4"))
+        summary.setdefault("upscaled", {})[upscaler] = result | {"licence": reservation["licence"]}
+        summary["costs"][-1]["containerSeconds"] = result.get("containerSeconds")
+        dump()
+
     def run() -> None:
         if "download" in wanted:
             summary["download"] = step("download flashvsr", download, DOWNLOAD_RESERVATION)
         if "check" in wanted:
-            summary["check"] = step("check flashvsr image", vsr_check, CHECK_RESERVATION)
-            dump()
-            found = (summary["check"] or {}).get("found", {})
-            if not found or not all(found.values()):
-                raise RuntimeError(f"FlashVSR's image is not usable: {summary['check']}")
+            checked("check flashvsr image", vsr_check)
         if "upscale" in wanted:
-            reservation = UPSCALERS["flashvsr"]
-            worst = reservation["timeoutS"] * rate_per_s(reservation)
-            if worst > budget_left:
-                summary["skipped"] = f"worst ${worst:.2f} > ${budget_left:.2f} left"
-                sys.stdout.write(f"upscale skipped: {summary['skipped']}\n")
-                return
-            result = step("upscale flashvsr", flashvsr, reservation, {})
-            if result is None:
-                return
-            for name, clip in result["clips"].items():
-                target = folder / "upscaled" / "flashvsr" / f"{name}.mp4"
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(clip.pop("mp4"))
-            summary["upscaled"] = {"flashvsr": result | {"licence": reservation["licence"]}}
-            summary["costs"][-1]["containerSeconds"] = result.get("containerSeconds")
+            upscale("flashvsr")
+        if "seedvr-download" in wanted:
+            summary["seedvr-download"] = step(
+                "download seedvr2", download, DOWNLOAD_RESERVATION, SVR_REPO
+            )
+        if "seedvr-check" in wanted:
+            checked("check seedvr2 image", svr_check)
+        if "seedvr" in wanted:
+            upscale("seedvr2")
 
     try:
         with calls.guard():

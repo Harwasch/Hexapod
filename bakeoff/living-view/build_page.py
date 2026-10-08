@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import statistics
 import subprocess
 import sys
@@ -43,6 +44,7 @@ LICENCES = {
 }
 CAP_DOLLARS = 10.0
 PAGE_CRF = 26
+LEDGER = HERE / "cost-ledger.md"
 
 
 def load_runs(runs: list[Path]) -> dict:
@@ -80,6 +82,29 @@ def load_runs(runs: list[Path]) -> dict:
 def run_dollars(costs: list[dict], call: str) -> float:
     rows = [r for r in costs if r["call"] == call]
     return rows[-1]["dollars"] if rows else 0.0
+
+
+def ledger(path: Path) -> tuple[dict[str, float], float | None]:
+    """What the cost ledger booked: dollars per call, summed over the rows whose "what" opens
+    with it ("arm wan: ...", "upscale flashvsr: ..."; a failed attempt's row does not), and the
+    last running total. The ledger, not the runs' summaries, is the record: it corrects wall
+    times that over-counted."""
+    booked: dict[str, float] = {}
+    total = None
+    if not path.exists():
+        return booked, total
+    for line in path.read_text().splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 7 or not cells[0][:1].isdigit():
+            continue
+        try:
+            dollars, total = float(cells[5]), float(cells[6])
+        except ValueError:
+            continue
+        call = re.match(r"(arm [\w~]+|upscale \w+):", cells[2])
+        if call:
+            booked[call.group(1)] = booked.get(call.group(1), 0.0) + dollars
+    return booked, total
 
 
 def jpeg(png: Path, out: Path, quality: int = 90) -> None:
@@ -284,12 +309,17 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
     rows = [a for a in ARM_ORDER if a in results]
     extra = sorted({row for (_s, row) in numbers if "~" in row})
     upscale = merged["upscaled"].get("flashvsr", {})
-    up_cost = run_dollars(merged["costs"], "upscale flashvsr")
+    booked, total = ledger(LEDGER)
+
+    def cost(call: str) -> float:
+        return booked[call] if call in booked else run_dollars(merged["costs"], call)
+
+    up_cost = cost("upscale flashvsr")
     up_count = max(1, len(upscale.get("clips", {})))
-    spent = sum(r["dollars"] for r in merged["costs"])
+    spent = total if total is not None else sum(r["dollars"] for r in merged["costs"])
 
     def arm_cost(arm: str) -> float:
-        return run_dollars(merged["costs"], f"arm {arm.split('~')[0]}")
+        return cost(f"arm {arm.split('~')[0]}")
 
     # The summary table: one line per arm.
     lines = []
@@ -368,9 +398,14 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
                 f"<dt>$ (arm/clips)</dt><dd>${arm_cost(arm) / max(1, len(result.get('clips', {}))):.2f}</dd>"
                 f"<dt>licence</dt><dd>{esc(LICENCES.get(arm.split('~')[0], '').split(' (')[0])}</dd>"
                 f"<dt>plant motion</dt><dd>{fmt(m['insideMeanPx'], '', 2)} mean · {fmt(m['insideP95Px'], '', 2)} p95 px</dd>"
-                f"<dt>elsewhere</dt><dd>{fmt(m['outsideMeanPx'], '', 2)} mean · {fmt(m['outsideP95Px'], '', 2)} p95 px</dd>"
-                f"<dt>camera creep</dt><dd>{fmt(m['cameraCreepPx'], ' px', 2)}{'' if m['backgroundPx'] else ' (no background to fit)'}</dd>"
-                f"<dt>PSNR not-plant</dt><dd>A {fmt(m.get('psnrOutsideDb'), ' dB')}"
+                + (
+                    f"<dt>elsewhere</dt><dd>{fmt(m['outsideMeanPx'], '', 2)} mean · {fmt(m['outsideP95Px'], '', 2)} p95 px</dd>"
+                    f"<dt>camera creep</dt><dd>{fmt(m['cameraCreepPx'], ' px', 2)}</dd>"
+                    if m["backgroundPx"]
+                    else "<dt>elsewhere</dt><dd>– (only sky: nothing textured to measure)</dd>"
+                    "<dt>camera creep</dt><dd>– (not removable: no background)</dd>"
+                )
+                + f"<dt>PSNR not-plant</dt><dd>A {fmt(m.get('psnrOutsideDb'), ' dB')}"
                 + (f" · A↑ {fmt(m.get('flashvsrPsnrOutsideDb'), ' dB')}" if up else "")
                 + "</dd>"
                 f"<dt>sky halo (B)</dt><dd>{fmt(m['haloPx']['guided'], '', 2)} edge-aware · {fmt(m['haloPx']['bilinear'], '', 2)} bilinear px</dd>"
@@ -452,7 +487,8 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
   {table}
   <p class="eyebrow">GPU spend for the whole bake-off ${spent:.2f} of the ${CAP_DOLLARS:.0f} cap ·
   first motion: time from the request to the first new frame on a warm GPU (whole clip for the
-  non-streaming models) · elsewhere: motion outside the plants before the camera is removed ·
+  non-streaming models) · elsewhere: motion of the textured pixels that are not plant
+  (ground, buildings; not flat sky), before the camera is removed ·
   sky halo: B's motion on the ring of sky round the plants.</p>
 </header>
 {"".join(sections)}
