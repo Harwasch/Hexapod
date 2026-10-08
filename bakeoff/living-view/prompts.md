@@ -133,6 +133,23 @@ the tree on the left.
   down". It also appends a soundscape. Its tree-1 sky drifts 9.5 dB by the last frame, and it
   costs 6-8 s per view.
 
+### What sets the amplitude (run R2-7, same seed, same prompt ltx-p1)
+
+| arm | what changes | plant p95 px (tree-1, tree-2, camp-1, camp-2) | mean | camp creep px |
+| --- | --- | --- | ---: | --- |
+| ltx-p1 | LoRA 1.0 | 23.4, 27.8, 20.1, 56.8 | 32.0 | 0.53, 0.72 |
+| ltx-p5 | LoRA 1.4 | 19.5, 20.3, 18.2, 37.0 | 23.7 | 0.63, 1.45 |
+| ltx-loop | LoRA 1.0, our render as the first **and** the last keyframe | 2.0, 3.7, 4.1, 4.0 | 3.4 | 0.41, 0.08 |
+| ltx-chunk | LoRA 1.0, two 2 s chunks | 15.4, 19.8, 10.1, 16.1 | 15.3 | 1.03, 5.18 |
+
+- A stronger LoRA (1.4) cuts the amplitude by about a quarter without adding creep.
+- **Pinning the render at both ends is what brings the motion into the "few px" range.** The
+  loop's foliage sways 2-4 px (p95) and wraps back onto frame 0 with no visible jump. The same
+  generic prompt is used throughout. The amplitude comes from the conditioning, not the words.
+- The chunks move less than one 4 s clip because each chunk is only 2 s long. The second
+  chunk's seam is a small step (the frame-to-frame motion at the seam is 1.6-2.0x the median)
+  and camp-2 creeps 5 px across it.
+
 ## Matrix-Game 3.0 (Skywork/Matrix-Game-3.0)
 
 - **Text: yes.** A umT5-XXL encoder feeds cross-attention (`use_text_crossattn: true` in

@@ -170,7 +170,7 @@ SVR_SPACE = "https://huggingface.co/spaces/ByteDance-Seed/SeedVR2-3B"
 SVR_SPACE_COMMIT = "1c8f9fbafac52f6fd2f9b42c869ba27262c52c0a"
 SVR_SEED = 666
 SVR_ORDER = ("ltx", "causal~ctx3", "flf", "causal", "wan")
-SVR_WALL_S = 600.0
+SVR_WALL_S = 1000.0  # of its 1200 s timeout (round 1 ran with 600)
 #: Round 2 restores at 2560x1408 and 3840x2112, four and nine times round 1's pixels (whose
 #: 97 frames peaked at 57 GB on the H100): an H200, and when a whole clip still runs out of
 #: memory, overlapping chunks of `SVR_CHUNK` frames cross-faded over `SVR_OVERLAP`.
@@ -364,6 +364,7 @@ def flashvsr(request: dict) -> dict:
     wall = float(request.get("wallS", FVSR_WALL_S))
     skipped: list[str] = []
     out: dict = {}
+    encoder = _Encoder()
     for name in names:
         if time.time() - started > wall:  # the rest next time rather than all lost to a timeout
             skipped.append(name)
@@ -425,12 +426,8 @@ def flashvsr(request: dict) -> dict:
         del lq, video, big
         if target:
             result = _letterbox(result, *target)
-            mp4, crf = _deliver(result, fps, *target)
-        else:
-            mp4, crf = _mp4(result, fps), 14
+        encoder.submit(name, result, fps, target)
         out[name] = {
-            "mp4": mp4,
-            "crf": crf,
             "fps": fps,
             "frames": int(n),
             "scale": scale,
@@ -443,6 +440,7 @@ def flashvsr(request: dict) -> dict:
             "attention": attention,
         }
         torch.cuda.empty_cache()
+    encoder.finish(out)
     RESULTS.reload()
     for name, clip in out.items():
         path = Path("/data/upscaled") / label / f"{name}.mp4"
@@ -587,6 +585,7 @@ def seedvr2(request: dict) -> dict:
     target = request.get("outSize")
     label = request.get("label", "seedvr2")
     out: dict = {}
+    encoder = _Encoder()
     failed: dict = {}
     chunked = False  # once a whole clip runs out of memory, every later one goes in chunks
 
@@ -686,12 +685,8 @@ def seedvr2(request: dict) -> dict:
         del video, sample
         if target:
             result = _letterbox(result, *target)
-            mp4, crf = _deliver(result, fps, *target)
-        else:
-            mp4, crf = _mp4(result, fps), 14
+        encoder.submit(name, result, fps, target)
         out[name] = {
-            "mp4": mp4,
-            "crf": crf,
             "restored": how if how == "whole" else f"chunks of {SVR_CHUNK}, {SVR_OVERLAP} faded",
             "outSize": list(target) if target else [int(width), int(height)],
             "fps": fps,
@@ -704,6 +699,7 @@ def seedvr2(request: dict) -> dict:
             "peakMemoryGB": round(torch.cuda.max_memory_allocated() / 2**30, 1),
         }
         torch.cuda.empty_cache()
+    encoder.finish(out)
     RESULTS.reload()
     for name, clip in out.items():
         path = Path("/data/upscaled") / label / f"{name}.mp4"
@@ -855,13 +851,17 @@ def _letterbox(frames: object, width: int, height: int) -> object:
 
 #: Delivery limits for the page's clips: 2560x1408 at most 8 MB, 3840x2112 at most 14 MB.
 def _deliver(frames: object, fps: float, width: int, height: int) -> tuple[bytes, int]:
-    """H.264 High, yuv420p, +faststart, from CRF 18 up until the clip fits its limit."""
+    """H.264 High, yuv420p, +faststart, at the lowest CRF (18 or more) that fits the clip's
+    limit: one encode at CRF 22, then the CRF its size predicts (the size about halves every 6
+    CRF), then up by 2 until it fits. Round 1 tried every CRF from 18, five encodes a clip."""
+    import math
+
     import imageio.v2 as imageio
     import numpy as np
 
     limit = (8 if width * height <= 2560 * 1408 else 14) * 1024 * 1024
-    data, crf = b"", 18
-    for crf in (18, 20, 22, 24, 26, 28, 30):
+
+    def encode(crf: int) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
             writer = imageio.get_writer(
                 f.name,
@@ -869,17 +869,50 @@ def _deliver(frames: object, fps: float, width: int, height: int) -> tuple[bytes
                 codec="libx264",
                 macro_block_size=1,
                 ffmpeg_params=[
-                    "-crf", str(crf), "-preset", "slow", "-profile:v", "high",
+                    "-crf", str(crf), "-preset", "medium", "-profile:v", "high",
                     "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                 ],
             )  # fmt: skip
             for frame in frames:  # type: ignore[attr-defined]
                 writer.append_data(np.asarray(frame))
             writer.close()
-            data = Path(f.name).read_bytes()
-        if len(data) <= limit:
-            break
+            return Path(f.name).read_bytes()
+
+    crf = 22
+    data = encode(crf)
+    guess = 22 + 2 * math.ceil(3 * math.log2(len(data) / (0.95 * limit)))
+    guess = max(18, min(32, guess))
+    if guess != crf:
+        crf, data = guess, encode(guess)
+    while len(data) > limit and crf < 34:
+        crf += 2
+        data = encode(crf)
     return data, crf
+
+
+class _Encoder:
+    """Encodes finished clips on CPU threads while the GPU goes on to the next clip (at most
+    `workers` clips wait in memory)."""
+
+    def __init__(self, workers: int = 2) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.pool = ThreadPoolExecutor(max_workers=workers)
+        self.workers = workers
+        self.jobs: dict = {}
+
+    def submit(self, name: str, frames: object, fps: float, target: object) -> None:
+        while sum(not job.done() for job in self.jobs.values()) >= self.workers:
+            time.sleep(0.2)
+        if target:
+            self.jobs[name] = self.pool.submit(_deliver, frames, fps, *target)  # type: ignore[misc]
+        else:
+            self.jobs[name] = self.pool.submit(lambda: (_mp4(frames, fps), 14))
+
+    def finish(self, out: dict) -> None:
+        for name, job in self.jobs.items():
+            out[name]["mp4"], out[name]["crf"] = job.result()
+        self.pool.shutdown()
 
 
 def _bsa_status() -> str:

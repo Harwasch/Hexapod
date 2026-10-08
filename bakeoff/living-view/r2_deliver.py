@@ -2,18 +2,27 @@
 
     r2_deliver.py OUT STARTS RUN [RUN ...]
 
-STARTS is round 1's starts folder (`{start}.png`, `{start}-mask.png`). Each RUN is an unpacked artifact of `.github/workflows/living-view.yml` (`summary.json` with
-`r2` results, `*-summary.json` of the world models, `upscale-summary.json`; `clips/<arm>/
-<start>.mp4`, `upscaled/<label>/<arm>/<start>.mp4`); later runs replace earlier ones. Under OUT:
+OUT is the delivery folder (`.../living-view-bakeoff/r2`); STARTS is round 1's starts folder
+(`{start}.png`, `{start}-mask.png`). Each RUN is an unpacked artifact of
+`.github/workflows/living-view.yml` (`summary.json` with `r2` results, `*-summary.json` of the
+world models, `upscale-summary.json`; `clips/<arm>/<start>.mp4`,
+`upscaled/<label>/<arm>/<start>.mp4`); a later run replaces an earlier one's clip.
 
     clips/{start}-{arm}-a.mp4      the model's pixels at 1280x704 (letterboxed if the aspect
                                    differs), H.264 High, yuv420p, +faststart
     clips/{start}-{arm}-u2k.mp4    FlashVSR at 2560x1408 (as the upscaler wrote it)
     clips/{start}-{arm}-s2k.mp4    SeedVR2-3B at 2560x1408
     clips/{start}-{arm}-u4k|s4k.mp4  3840x2112
-    numbers.json                   per "{start}|{arm}": timings, model size, settings, prompt,
-                                   motion and drift numbers, upscale times; per arm: a summary
-                                   and the read by eye (`EYE` below)
+    numbers.json                   per "{start}|{arm}": timings, dollars, model size, settings,
+                                   prompt, motion and drift numbers, upscale times, where each
+                                   file went; per arm: a summary and the read by eye (`EYE`)
+
+OUT holds at most `LIMIT_MB` (stills included): the (arm, kind) groups go in `TIERS` order, the
+round-2 brief's priority, each group of four starts whole or not at all; whatever does not fit
+goes to the sibling folder `r2-more/` under the same names.
+
+The winner's base clip (ltx-p1) is delivered as ltx-base; round 1's LTX clip, re-upscaled, as
+ltx-r1. Clips of an `-h100` arm are timings only (`gpuCompare`).
 
 The motion numbers, on the model's own frames (at most 640 px wide for the flow): plant motion
 (DIS flow against frame 0, inside the plant mask, render px at 1280 wide, mean and p95),
@@ -38,15 +47,55 @@ import living_view as lv
 
 GRID = (1280, 704)
 FLOW_WIDTH = 640
-LIMITS = {"a": 8, "u2k": 8, "s2k": 8, "u4k": 14, "s4k": 14}  # MB
+LIMIT_MB = 150
 KINDS = {
     "flashvsr-2560x1408": "u2k",
     "seedvr2-2560x1408": "s2k",
     "flashvsr-3840x2112": "u4k",
     "seedvr2-3840x2112": "s4k",
 }
-#: Round-1 LTX clips (scene prompts) are re-upscaled as "ltx-r1".
-ARM_ALIASES = {"ltx": "ltx-r1"}
+#: Delivered under another arm name: the winner's base clip, round 1's LTX clip.
+DELIVER_AS = {"ltx-p1": "ltx-base", "ltx": "ltx-r1"}
+STARTS = ("tree-1", "tree-2", "camp-1", "camp-2")
+#: The brief's priority: Part 1 a-b and FlashVSR 2560, the prompt variants, Part 2 idle,
+#: Part 1 c-d, SeedVR2 2560, 4K, Part 2 pans; then the extras.
+TIERS = [
+    ("ltx-base", "a"),
+    ("ltx-base", "u2k"),
+    ("ltx-s1", "a"),
+    ("ltx-s1", "u2k"),
+    ("ltx-r1", "u2k"),
+    ("ltx-p2", "a"),
+    ("ltx-p3", "a"),
+    ("mg3-idle", "a"),
+    ("waypoint-idle", "a"),
+    ("yume-idle", "a"),
+    ("mg3-idle", "u2k"),
+    ("waypoint-idle", "u2k"),
+    ("yume-idle", "u2k"),
+    ("ltx-chunk", "a"),
+    ("ltx-loop", "a"),
+    ("ltx-chunk", "u2k"),
+    ("ltx-loop", "u2k"),
+    ("ltx-base", "s2k"),
+    ("ltx-r1", "s2k"),
+    ("ltx-base", "u4k"),
+    ("ltx-base", "s4k"),
+    ("ltx-r1", "u4k"),
+    ("ltx-r1", "s4k"),
+    ("mg3-pan", "a"),
+    ("waypoint-pan", "a"),
+    ("yume-pan", "a"),
+    ("ltx-p5", "a"),
+    ("ltx-p4", "a"),
+    ("ltx-p5", "u2k"),
+    ("ltx-p2", "u2k"),
+    ("ltx-p3", "u2k"),
+    ("ltx-p4", "u2k"),
+    ("mg3-pan", "u2k"),
+    ("waypoint-pan", "u2k"),
+    ("yume-pan", "u2k"),
+]
 LICENCES = {
     "ltx": "LTX-2.x Community License (commercial use free under $10M revenue)",
     "waypoint": "weights Apache-2.0; inference code (HF repo .py) GPL-3.0",
@@ -134,12 +183,15 @@ def metrics(frames: list[np.ndarray], render: np.ndarray, mask: np.ndarray) -> d
         H, n = lv.global_motion(flow, background)
         if n:
             cam = lv.homography_flow(H, fh, fw)
-            creep = max(creep, float(np.hypot(cam[..., 0], cam[..., 1]).mean() * scale[0]))
+            shift = float(np.hypot(cam[..., 0], cam[..., 1]).mean() * scale[0])
+            if np.isfinite(shift) and shift < 2 * GRID[0]:  # a degenerate fit is no camera
+                creep = max(creep, shift)
         flows.append(flow)
     inside_mean, inside_p95, out_mean, out_p95 = lv.motion_stats(
         flows, m_small, scale, outside=background
     )
     not_plant = mask < lv.NOT_PLANT_SHARE
+    textured = background.sum() >= 200
 
     def psnr(frame: np.ndarray) -> float | None:
         if not not_plant.any():
@@ -150,9 +202,9 @@ def metrics(frames: list[np.ndarray], render: np.ndarray, mask: np.ndarray) -> d
     return {
         "plantMotionMeanPx": round(inside_mean, 2),
         "plantMotionP95Px": round(inside_p95, 2),
-        "nonPlantMotionMeanPx": round(out_mean, 2) if background.sum() >= 200 else None,
-        "nonPlantMotionP95Px": round(out_p95, 2) if background.sum() >= 200 else None,
-        "cameraCreepPx": round(creep, 2) if background.sum() >= 200 else None,
+        "nonPlantMotionMeanPx": round(out_mean, 2) if textured else None,
+        "nonPlantMotionP95Px": round(out_p95, 2) if textured else None,
+        "cameraCreepPx": round(creep, 2) if textured else None,
         "driftPsnrFirstDb": psnr(frames[0]),
         "driftPsnrLastDb": psnr(frames[-1]),
         "flowSize": [fw, fh],
@@ -160,36 +212,46 @@ def metrics(frames: list[np.ndarray], render: np.ndarray, mask: np.ndarray) -> d
 
 
 def load(runs: list[Path]) -> dict:
-    """clips[(arm, start)] -> {"path", "entry", "gpu", "dollars"...}; upscales[(kind, arm,
-    start)] -> {"path", "entry"}."""
+    """clips[(arm, start)] -> {"path", "entry", "gpu", "rate"...}; ups[(kind, arm, start)]."""
     clips: dict = {}
     ups: dict = {}
-    calls: list = []
     for run in runs:
         for summary_path in sorted(run.glob("*summary.json")):
             summary = json.loads(summary_path.read_text())
-            calls += [dict(c, run=run.name) for c in summary.get("costs", [])]
+            rates = {
+                c["call"]: c["dollars"] / c["seconds"]
+                for c in summary.get("costs", [])
+                if c.get("seconds")
+            }
+            calls = {c["call"]: c for c in summary.get("costs", [])}
             for label, result in (summary.get("r2") or {}).items():
-                if "clips" not in result:
-                    continue
-                for key, entry in result["clips"].items():
+                for key, entry in result.get("clips", {}).items():
                     arm, start = key.split("/")
                     clips[(arm, start)] = {
                         "path": run / "clips" / arm / f"{start}.mp4",
                         "entry": entry,
                         "call": label,
+                        "run": run.name,
+                        "callDollars": calls.get(label, {}).get("dollars"),
+                        "clipsInCall": len(result["clips"]),
+                        "rate": rates.get(label),
                         "gpu": result.get("gpu"),
                         "settings": result.get("settings", {}),
                         "loadSeconds": result.get("loadSeconds"),
                     }
             world = summary.get("run")
             if world and "clips" in world:
+                label = next((c for c in calls if c.startswith("run ")), None)
                 for key, entry in world["clips"].items():
                     arm, start = key.split("/")
                     clips[(arm, start)] = {
                         "path": run / "clips" / arm / f"{start}.mp4",
                         "entry": entry,
-                        "call": f"run {arm.split('-')[0]}",
+                        "call": label,
+                        "run": run.name,
+                        "callDollars": calls.get(label, {}).get("dollars"),
+                        "clipsInCall": len(world["clips"]),
+                        "rate": rates.get(label),
                         "gpu": world.get("gpu"),
                         "settings": {k: v for k, v in world.items() if k != "clips"},
                         "loadSeconds": world.get("loadSeconds"),
@@ -198,49 +260,188 @@ def load(runs: list[Path]) -> dict:
                 kind = KINDS.get(label)
                 if not kind:
                     continue
+                call = f"upscale {result.get('upscaler', label.split('-')[0])}"
                 for key, entry in result.get("clips", {}).items():
                     arm, start = key.split("/")
-                    ups[(kind, ARM_ALIASES.get(arm, arm), start)] = {
+                    ups[(kind, DELIVER_AS.get(arm, arm), start)] = {
                         "path": run / "upscaled" / label / arm / f"{start}.mp4",
                         "entry": entry,
                         "attention": result.get("attention"),
                         "label": label,
+                        "run": run.name,
+                        "rate": rates.get(call),
+                        "loadSeconds": result.get("loadSeconds"),
                     }
-    return {"clips": clips, "ups": ups, "calls": calls}
+    return {"clips": clips, "ups": ups}
+
+
+def video_seconds(entry: dict) -> float | None:
+    if entry.get("videoSeconds"):
+        return entry["videoSeconds"]
+    if entry.get("frames") and entry.get("fps"):
+        return round(entry["frames"] / entry["fps"], 3)
+    return None
+
+
+def place(more: Path, out: Path, files: dict, reserved: float) -> dict:
+    """Move whole (arm, kind) groups from `more` into `out` in TIERS order while they fit."""
+    used = reserved
+    where: dict = {}
+    order = TIERS + sorted(k for k in files if k not in TIERS)
+    for group in order:
+        names = files.get(group, [])
+        if not names:
+            continue
+        size = sum((more / "clips" / n).stat().st_size for n in names) / 1e6
+        target = out if used + size <= LIMIT_MB else more
+        if target is out:
+            used += size
+            for n in names:
+                shutil.move(str(more / "clips" / n), str(out / "clips" / n))
+        for n in names:
+            where[n] = f"{target.name}/clips/{n}"
+    return {"where": where, "usedMB": round(used, 1)}
+
+
+def mean(values: list) -> float | None:
+    values = [v for v in values if isinstance(v, int | float)]
+    return round(sum(values) / len(values), 3) if values else None
 
 
 def main(argv: list[str]) -> int:
     out = Path(argv[0])
+    more = out.parent / f"{out.name}-more"
     starts_dir = Path(argv[1])
-    runs = [Path(a) for a in argv[2:]]
-    data = load(runs)
+    data = load([Path(a) for a in argv[2:]])
+    for folder in (out / "clips", more / "clips"):
+        if folder.exists():
+            shutil.rmtree(folder)
+        folder.mkdir(parents=True)
     numbers: dict = {}
-    (out / "clips").mkdir(parents=True, exist_ok=True)
+    gpu_compare: dict = {}
+    files: dict = {}
     for (arm, start), clip in sorted(data["clips"].items()):
+        entry = {k: v for k, v in clip["entry"].items() if k != "mp4"}
+        seconds = entry.get("seconds")
+        warm = round(seconds * clip["rate"], 4) if seconds and clip["rate"] else None
+        if arm.endswith("-h100"):
+            gpu_compare[f"{start}|{arm}"] = entry | {"gpu": clip["gpu"], "dollarsWarm": warm}
+            continue
+        name = DELIVER_AS.get(arm, arm)
         frames, fps = lv.read_clip(clip["path"])
         size = (frames[0].shape[1], frames[0].shape[0])
         render, mask = render_for(starts_dir / start, arm, size)
-        row = {k: v for k, v in clip["entry"].items() if k != "mp4"}
-        row |= metrics(frames, render, mask)
-        row |= {"gpu": clip["gpu"], "licence": licence(arm), "settings": clip["settings"]}
-        row["loadSeconds"] = clip["loadSeconds"]
+        row = entry | metrics(frames, render, mask)
+        vs = video_seconds(entry)
+        row |= {
+            "gpu": clip["gpu"],
+            "licence": licence(arm),
+            "settings": clip["settings"],
+            "loadSeconds": clip["loadSeconds"],
+            "run": clip["run"],
+            "call": clip["call"],
+            "callDollars": clip["callDollars"],
+            "clipsInCall": clip["clipsInCall"],
+            "dollarsWarm": warm,
+            "videoSeconds": vs,
+            "realTimeFactor": round(vs / seconds, 3) if vs and seconds else None,
+        }
+        if name != arm:
+            row["deliveredAs"] = name
+            numbers[f"{start}|{arm}"] = {"sameAs": f"{start}|{name}"}
+        target = f"{start}-{name}-a.mp4"
         grid = letterbox(frames, *GRID)
-        row["crf"] = {"a": ffmpeg_encode(grid, fps, out / "clips" / f"{start}-{arm}-a.mp4", 8)}
-        numbers[f"{start}|{arm}"] = row
-        print(start, arm, json.dumps({k: row[k] for k in row if "Px" in k or "Psnr" in k}))
+        row["crf"] = {"a": ffmpeg_encode(grid, fps, more / "clips" / target, 8)}
+        files.setdefault((name, "a"), []).append(target)
+        numbers[f"{start}|{name}"] = row
+        print(start, name, json.dumps({k: row[k] for k in row if "Px" in k or "Psnr" in k}))
     for (kind, arm, start), up in sorted(data["ups"].items()):
-        target = out / "clips" / f"{start}-{arm}-{kind}.mp4"
-        shutil.copyfile(up["path"], target)
+        target = f"{start}-{arm}-{kind}.mp4"
+        shutil.copyfile(up["path"], more / "clips" / target)
+        files.setdefault((arm, kind), []).append(target)
         row = numbers.setdefault(f"{start}|{arm}", {"licence": licence(arm)})
         entry = {k: v for k, v in up["entry"].items() if k != "mp4"}
+        seconds = entry.get("seconds")
         row.setdefault("upscale", {})[kind] = entry | {
             "attention": up.get("attention"),
-            "bytes": target.stat().st_size,
+            "bytes": (more / "clips" / target).stat().st_size,
+            "dollarsWarm": round(seconds * up["rate"], 4) if seconds and up["rate"] else None,
+            "upscalerLoadSeconds": up["loadSeconds"],
+            "run": up["run"],
         }
-    (out / "numbers.json").write_text(json.dumps({"clips": numbers, "eye": EYE}, indent=1))
-    total = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
-    big = [p.name for p in (out / "clips").glob("*.mp4") if p.stat().st_size > 14 * 1024 * 1024]
-    print(f"{out}: {total / 1e6:.1f} MB, files over 14 MB: {big}")
+    stills = sum(p.stat().st_size for p in (out / "stills").glob("*")) / 1e6
+    placed = place(more, out, files, stills + 1.0)  # 1 MB kept for numbers.json
+    for key, row in numbers.items():
+        start, _, arm = key.partition("|")
+        row["files"] = {
+            kind: placed["where"][n]
+            for (a, kind), names in files.items()
+            if a == arm
+            for n in names
+            if n.startswith(f"{start}-")
+        }
+    arms: dict = {}
+    for key, row in numbers.items():
+        if "sameAs" in row:
+            continue
+        arms.setdefault(key.partition("|")[2], []).append(row)
+    summary = {}
+    for arm, rows in sorted(arms.items()):
+        made = [r for r in rows if "seconds" in r]
+        summary[arm] = {
+            "clips": len(made),
+            "worked": len(made) == len(STARTS),
+            "gpu": made[0].get("gpu") if made else None,
+            "size": made[0].get("size") if made else None,
+            "fps": made[0].get("fps") if made else None,
+            "frames": made[0].get("frames") if made else None,
+            "prompt": (made[0].get("prompt") or made[0].get("caption")) if made else None,
+            "seconds": mean([r.get("seconds") for r in made]),
+            "firstMotionSeconds": mean(
+                [r.get("firstMotionSeconds") or r.get("firstFrameSeconds") for r in made]
+            ),
+            "realTimeFactor": mean([r.get("realTimeFactor") for r in made]),
+            "sustainedFps": mean([r.get("sustainedFps") for r in made]),
+            "dollarsWarm": mean([r.get("dollarsWarm") for r in made]),
+            "plantMotionP95Px": mean([r.get("plantMotionP95Px") for r in made]),
+            "plantMotionMeanPx": mean([r.get("plantMotionMeanPx") for r in made]),
+            "cameraCreepPxMax": max(
+                [r["cameraCreepPx"] for r in made if r.get("cameraCreepPx") is not None],
+                default=None,
+            ),
+            "driftDropDbMean": mean(
+                [
+                    r["driftPsnrFirstDb"] - r["driftPsnrLastDb"]
+                    for r in made
+                    if r.get("driftPsnrFirstDb") is not None
+                ]
+            ),
+            "upscale": {
+                kind: {
+                    "seconds": mean([r["upscale"][kind].get("seconds") for r in rows]),
+                    "framesPerSecond": mean(
+                        [r["upscale"][kind].get("framesPerSecond") for r in rows]
+                    ),
+                    "dollarsWarm": mean([r["upscale"][kind].get("dollarsWarm") for r in rows]),
+                }
+                for kind in sorted({k for r in rows for k in r.get("upscale", {})})
+                if all(kind in r.get("upscale", {}) for r in rows)
+            },
+            "licence": licence(arm),
+            "eye": EYE.get(arm),
+        }
+    document = {
+        "clips": numbers,
+        "arms": summary,
+        "gpuCompare": gpu_compare,
+        "placement": {"limitMB": LIMIT_MB, "usedMB": placed["usedMB"], "overflow": more.name},
+        "eye": EYE,
+    }
+    (out / "numbers.json").write_text(json.dumps(document, indent=1))
+    for folder in (out, more):
+        total = sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
+        big = [p.name for p in folder.rglob("*.mp4") if p.stat().st_size > 14 * 1024 * 1024]
+        print(f"{folder}: {total / 1e6:.1f} MB, files over 14 MB: {big}")
     return 0
 
 
