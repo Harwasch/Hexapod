@@ -45,8 +45,8 @@ start in one warm container. The entrypoint refuses arms whose worst case (timeo
 does not fit in `--budget-left`, and reports each call's wall time and dollars (Modal's list
 prices, read 2026-10-08) for `bakeoff/living-view/cost-ledger.md`.
 
-    modal run infra/modal/living_view.py --steps access,download,starts --arms wan,flf,causal
-    modal run infra/modal/living_view.py --steps arms --arms wan,flf --budget-left 8
+    modal run infra/modal/living_bakeoff.py --steps access,download,starts --arms wan,flf,causal
+    modal run infra/modal/living_bakeoff.py --steps arms --arms wan,flf --budget-left 8
 """
 
 from __future__ import annotations
@@ -114,6 +114,24 @@ NEGATIVE = (
     "people appearing, text, watermark, blur, flicker, low quality"
 )
 LTX_TRIGGER = "CINEMAGRAPH_MOTION"
+#: The Cinemagraph LoRA's card: say exactly what moves and what stays frozen, a locked-off
+#: tripod camera, and "seamless natural loop" (its widget prompts' form).
+LTX_FROZEN: dict[str, str] = {
+    "tree": "the trunk, the lawn and the sky remain completely frozen",
+    "camp": (
+        "the ground, the signboard, the tree trunks and the background remain completely frozen"
+    ),
+}
+LTX_PLANTS: dict[str, str] = {
+    "tree": "the leaves and thin branches of the tree",
+    "camp": "the leaves and thin branches of the shrubs, ferns and young trees",
+}
+#: The card's example negative prompt (inert at guidance 1, the distilled recipe).
+LTX_NEGATIVE = (
+    "camera movement, pan, tilt, zoom, parallax, whole image moving, background sliding, "
+    "person moving, flicker on entire image, noisy texture, crawling texture, distorted, "
+    "blurry, low quality"
+)
 
 # --- the arms -------------------------------------------------------------------------------
 
@@ -125,6 +143,9 @@ LTX_SINGLE_REPO = "Lightricks/LTX-2.5"
 LTX_DIFFUSERS_COMMIT = "7564fb016dabda0c943416190fc92398c50b1b20"
 LTX_FRAMES = 97
 LTX_FPS = 24.0
+#: The card's sweet spot is 1.0-1.2; its recommended 30 steps at guidance 4 are the full
+#: model's. Its own distilled ComfyUI workflow (LTX-2.5_T2V_I2V_Single_Stage_Distilled) runs
+#: the 8 distilled sigmas at guidance 1, which is what runs here, for speed.
 LTX_LORA_SCALE = 1.0
 
 CF_REPO = "zhuhz22/Causal-Forcing"
@@ -248,7 +269,12 @@ def rate_per_s(reservation: dict) -> float:
 def prompt_for(arm: str, start: str) -> str:
     scene = START_SCENES.get(start) or SCENE_TEXT[start.split("-")[0]]
     if arm == "ltx":
-        return f"{LTX_TRIGGER}. {scene}. {MOTION_TEXT} Tripod locked-off static camera."
+        kind = start.split("-")[0]
+        return (
+            f"{LTX_TRIGGER}, tripod locked-off static camera, zero camera movement, "
+            f"{LTX_FROZEN[kind]}, only {LTX_PLANTS[kind]} sway slightly in a gentle breeze, "
+            "everything else stays perfectly still, seamless natural loop"
+        )
     return f"{scene}. {MOTION_TEXT} {STATIC_TEXT}"
 
 
@@ -935,7 +961,6 @@ def ltx(request: dict) -> dict:
     from diffusers import LTX2ImageToVideoPipeline, LTX2LatentUpsamplePipeline, LTX2Pipeline
     from diffusers.pipelines.ltx2.latent_upsampler import LTX2LatentUpsamplerModel
     from diffusers.pipelines.ltx2.utils import (
-        DEFAULT_NEGATIVE_PROMPT,
         DISTILLED_SIGMA_VALUES,
         STAGE_2_DISTILLED_SIGMA_VALUES,
     )
@@ -983,7 +1008,7 @@ def ltx(request: dict) -> dict:
         shared = {
             "image": _start_image(name),
             "prompt": start["prompt"],
-            "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
+            "negative_prompt": LTX_NEGATIVE,
             "frame_rate": LTX_FPS,
             "guidance_scale": guidance,
             "audio_guidance_scale": 1.0,

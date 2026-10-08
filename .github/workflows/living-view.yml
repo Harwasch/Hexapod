@@ -1,6 +1,6 @@
 name: Living view bake-off (Modal GPUs)
 
-# The living-view bake-off (infra/modal/living_view.py): slight wind on the plants of a still
+# The living-view bake-off (infra/modal/living_bakeoff.py): slight wind on the plants of a still
 # render of the scan, from a video model anchored on that render -- LTX-2.5 with the
 # Cinemagraph LoRA, Causal Forcing, Wan 2.1 FLF2V and Wan 2.2 TI2V-5B -- on the Minnetonka tree
 # and the camp's shrubs. Nothing is published: the starts, the clips and summary.json (each
@@ -121,7 +121,7 @@ jobs:
           test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
             || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
       # The Hugging Face secret's name in this workspace (the first whose name starts with
-      # "hugging"); living_view.py reads it from HEXAPOD_HF_SECRET.
+      # "hugging"); living_bakeoff.py reads it from HEXAPOD_HF_SECRET.
       - name: Find the Hugging Face secret
         run: |
           name="$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
@@ -132,10 +132,10 @@ jobs:
           print(names[0] if names else "huggingface")')"
           echo "Hugging Face secret: $name"
           echo "HEXAPOD_HF_SECRET=$name" >> "$GITHUB_ENV"
-      - name: modal run infra/modal/living_view.py
+      - name: modal run infra/modal/living_bakeoff.py
         timeout-minutes: 170
         run: |
-          exec uv run --with modal==1.5.5 modal run infra/modal/living_view.py \
+          exec uv run --with modal==1.5.5 modal run infra/modal/living_bakeoff.py \
             --steps "$STEPS" --arms "$ARMS" --budget-left "$BUDGET" \
             --starts-names "$STARTS" --contexts "$CONTEXTS" --upscalers "$UPSCALERS" --out lv-out
       - name: Summary

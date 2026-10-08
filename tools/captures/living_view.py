@@ -1,6 +1,6 @@
 """Living view: slight wind on the plants of a still render, from a video model, anchored.
 
-The idea under test (the bake-off in `infra/modal/living_view.py`, run by
+The idea under test (the bake-off in `infra/modal/living_bakeoff.py`, run by
 `.github/workflows/living-view.yml`): the viewer shows the measured splat; when the camera
 stops, a video model adds slight wind to the plants, conditioned on the exact render of the
 splat, in short segments that always start again from that render, so nothing can drift. This
