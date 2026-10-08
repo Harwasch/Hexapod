@@ -2,8 +2,10 @@
 
 The A-up column of the bake-off (infra/modal/living_bakeoff.py): the model's own pixels, made
 1280 x 704 by a video super-resolution model instead of bicubic. A Modal app of its own because
-`modal run` builds every image of an app before anything runs, and this one compiles
-Block-Sparse-Attention: its build (or a failure of it) must not hold up the arms.
+`modal run` builds every image of an app before anything runs: this one's build (it once
+compiled Block-Sparse-Attention, 28 minutes) must not hold up the arms. FlashVSR's
+locality-constrained sparse attention runs in PyTorch (`block_sparse_attn_func`) on the masks
+FlashVSR builds, with the same result as the CUDA kernel.
 
 Steps (`--steps`):
 
@@ -60,16 +62,12 @@ def rate_per_s(reservation: dict) -> float:
     )
 
 
-#: Video super-resolution of every arm's clip (A-up on the page): FlashVSR v1.1 (tiny decoder),
-#: its locality-constrained sparse attention on Block-Sparse-Attention, which its authors run
-#: on A100s. 4x as its authors recommend for clips smaller than the render, 2x for clips
-#: already the render's size (a supersampling pass), then area-resized to the render.
+#: Video super-resolution of every arm's clip (A-up on the page): FlashVSR v1.1 (tiny decoder)
+#: on an A100, as its authors run it. 4x as they recommend for clips smaller than the render,
+#: 2x for clips already the render's size (a supersampling pass), then area-resized to it.
 FVSR_REPO = "JunhaoZhuang/FlashVSR-v1.1"
 FVSR_CODE = "https://github.com/OpenImagingLab/FlashVSR.git"
 FVSR_COMMIT = "cf910c61a60733e610e9c6e8b607f80c3a6c202b"
-BSA_CODE = "https://github.com/mit-han-lab/Block-Sparse-Attention.git"
-BSA_COMMIT = "49d6c39e4dc0303442cda3bb758b3925d4399c49"
-SEEDVR_REPO = "ByteDance-Seed/SeedVR2-3B"
 UPSCALERS: dict[str, dict] = {
     "flashvsr": {
         "gpu": "A100-80GB",
@@ -78,44 +76,22 @@ UPSCALERS: dict[str, dict] = {
         "timeoutS": 2400,
         "needs": (FVSR_REPO,),
         "model": f"{FVSR_REPO} (tiny decoder, sparse ratio 2.0, local range 11)",
-        "licence": "Apache-2.0 (weights and code; Block-Sparse-Attention Apache-2.0)",
+        "licence": "Apache-2.0 (weights and code)",
     },
 }
 
-#: FlashVSR's environment (its requirements.txt; torch 2.6 cu124), Block-Sparse-Attention built
-#: from source for the A100 (sm_80) only and forward only -- the backward kernels are dropped
-#: from the build and their launcher stubbed, since inference never calls them -- then
-#: FlashVSR's own `diffsynth` at `FVSR_COMMIT`.
+#: FlashVSR's environment (its requirements.txt; torch 2.6 cu124) and its own `diffsynth` at
+#: `FVSR_COMMIT`. Not Block-Sparse-Attention's CUDA kernels: they compiled on Modal's builder
+#: (28 minutes) but its link step called clang++, which this base lacks. FlashVSR's sparse
+#: attention runs instead as `block_sparse_attn_func` below, in PyTorch, on the same masks.
 vsr_image = (
-    modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04", add_python="3.11")
-    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential")
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
     .pip_install(
         "torch==2.6.0",
         "torchvision==0.21.0",
         "torchaudio==2.6.0",
         index_url="https://download.pytorch.org/whl/cu124",
-    )
-    .pip_install("packaging", "ninja", "psutil", "wheel", "setuptools<80")
-    .run_commands(
-        f"git clone {BSA_CODE} /opt/bsa && git -C /opt/bsa checkout {BSA_COMMIT}"
-        " && git -C /opt/bsa submodule update --init csrc/cutlass",
-        "sed -i '/flash_bwd_block_hdim/d' /opt/bsa/setup.py",
-        "sed -i 's/run_mha_bwd_block_<elem_type, kHeadDim, Is_causal>(params, stream);"
-        '/TORCH_CHECK(false, "block-sparse backward not built");/\''
-        " /opt/bsa/csrc/block_sparse_attn/flash_api.cpp",
-        # The build's own errors, not pip's summary of them, when it fails; two jobs, as each
-        # nvcc of these kernels can take 8-9 GB.
-        "cd /opt/bsa && BLOCK_SPARSE_ATTN_CUDA_ARCHS=80 BLOCK_SPARSE_ATTN_FORCE_BUILD=TRUE"
-        " TORCH_CUDA_ARCH_LIST=8.0 MAX_JOBS=2 NVCC_THREADS=2"
-        " pip install --no-build-isolation -v . > /tmp/bsa.log 2>&1"
-        " || { grep -n -i -E 'error|killed|fatal' /tmp/bsa.log | head -60; tail -60 /tmp/bsa.log;"
-        " exit 1; }",
-    )
-    # A layer of its own, so a failed check does not throw the compiled kernels away. Installed,
-    # not imported: the builder has no GPU driver.
-    .run_commands(
-        'python -c "import importlib.util as u, sys;'
-        " sys.exit(u.find_spec('block_sparse_attn_cuda') is None)\""
     )
     .pip_install(
         "torchmetrics==1.7.3",
@@ -139,12 +115,77 @@ vsr_image = (
         "pandas==2.3.0",
         "tqdm",
         "datasets",
+        "setuptools<80",
     )
     .run_commands(
         f"git clone {FVSR_CODE} /opt/flashvsr && git -C /opt/flashvsr checkout {FVSR_COMMIT}",
         "pip install --no-deps -e /opt/flashvsr",
     )
 )
+
+#: Key blocks gathered per pass of `block_sparse_attn_func`, in bytes (each of K and V).
+GATHER_BYTES = 1 << 28
+
+
+def block_sparse_attn_func(
+    q: object,
+    k: object,
+    v: object,
+    cu_seqlens_q: object,
+    cu_seqlens_k: object,
+    head_mask_type: object,
+    streaming_info: object,
+    base_blockmask: object,
+    max_seqlen_q: int,
+    max_seqlen_k: int,
+    p_dropout: float,
+    deterministic: bool = False,
+    softmax_scale: float | None = None,
+    is_causal: bool = False,
+    exact_streaming: bool = False,
+    return_attn_probs: bool = False,
+) -> object:
+    """Block-Sparse-Attention's `block_sparse_attn_func` as FlashVSR calls it (one sequence,
+    no dropout, not causal), in PyTorch: q, k, v `(L, heads, dim)`; `base_blockmask` `(1, heads,
+    query blocks, key blocks)`, blocks of 128 tokens. Each query block attends to exactly the
+    key blocks its row selects -- they are gathered, padded to the longest row, and given to
+    `scaled_dot_product_attention` with the padding masked -- so the result is the kernel's
+    (to rounding), and the work is the selected blocks', not the dense product's."""
+    import torch
+    import torch.nn.functional as F
+
+    blk = 128
+    lq, heads, dim = q.shape  # type: ignore[attr-defined]
+    lk = k.shape[0]  # type: ignore[attr-defined]
+    mask = base_blockmask[0].to(torch.bool)  # type: ignore[index]
+    nq, nk = int(mask.shape[1]), int(mask.shape[2])
+    device = q.device  # type: ignore[attr-defined]
+
+    def blocks(x: object, n: int, length: int) -> object:
+        x = F.pad(x, (0, 0, 0, 0, 0, n * blk - length))
+        return x.view(n, blk, heads, dim).permute(2, 0, 1, 3)  # (heads, n, blk, dim)
+
+    qb, kb, vb = blocks(q, nq, lq), blocks(k, nk, lk), blocks(v, nk, lk)
+    key_ok = (torch.arange(nk * blk, device=device) < lk).view(nk, blk)
+    counts = mask.sum(-1)  # (heads, nq)
+    width = max(1, int(counts.max()))
+    order = torch.argsort((~mask).to(torch.int8), dim=-1, stable=True)[..., :width]
+    chosen = torch.arange(width, device=device) < counts[..., None]  # (heads, nq, width)
+    hidx = torch.arange(heads, device=device)[:, None, None]
+    step = max(1, GATHER_BYTES // (heads * width * blk * dim * qb.element_size()))
+    out = torch.empty_like(qb)
+    for s in range(0, nq, step):
+        e = min(nq, s + step)
+        idx = order[:, s:e]  # (heads, c, width)
+        c = e - s
+        ks = kb[hidx, idx].reshape(heads, c, width * blk, dim)
+        vs = vb[hidx, idx].reshape(heads, c, width * blk, dim)
+        ok = (chosen[:, s:e, :, None] & key_ok[idx]).reshape(heads, c, 1, width * blk)
+        out[:, s:e] = F.scaled_dot_product_attention(
+            qb[:, s:e], ks, vs, attn_mask=ok, scale=softmax_scale
+        )
+    out = torch.nan_to_num(out)  # a query block that selected nothing reads nothing
+    return out.permute(1, 2, 0, 3).reshape(nq * blk, heads, dim)[:lq]
 
 
 # --- upscaler: FlashVSR v1.1 -------------------------------------------------------------------
@@ -178,10 +219,17 @@ def flashvsr(request: dict) -> dict:
         link.symlink_to(weights)
     os.chdir(code)
     sys.path.insert(0, str(code))
+    import types
+
     import imageio.v2 as imageio
     import numpy as np
     import torch
     import torch.nn.functional as F
+
+    # FlashVSR's DiT imports `block_sparse_attn_func` from Block-Sparse-Attention: this one.
+    kernel = types.ModuleType("block_sparse_attn")
+    kernel.block_sparse_attn_func = block_sparse_attn_func  # type: ignore[attr-defined]
+    sys.modules["block_sparse_attn"] = kernel
     from diffsynth import FlashVSRTinyPipeline, ModelManager
     from utils.TCDecoder import build_tcdecoder
     from utils.utils import Causal_LQ4x_Proj
@@ -279,15 +327,32 @@ UPSCALER_FUNCTIONS = {"flashvsr": flashvsr}
 
 @app.function(image=vsr_image, cpu=1.0, memory=4096, timeout=600)
 def vsr_check() -> dict:
-    """CPU only: FlashVSR's image is built (its kernels compiled) and its packages resolve, so
-    the GPU container that upscales does not pay for a failed build or import."""
-    import importlib.util
+    """CPU only: FlashVSR's image builds and its code imports (with the PyTorch sparse
+    attention standing in), so the GPU container that upscales does not pay for a failed
+    build or import."""
+    import traceback
+    import types
 
-    found = {
-        name: importlib.util.find_spec(name) is not None
-        for name in ("torch", "block_sparse_attn", "block_sparse_attn_cuda", "diffsynth")
-    }
-    return {"found": found, "code": f"{FVSR_CODE}@{FVSR_COMMIT}", "bsa": BSA_COMMIT}
+    found: dict = {}
+    code = Path("/opt/flashvsr/examples/WanVSR")
+    os.chdir(code)
+    sys.path.insert(0, str(code))
+    kernel = types.ModuleType("block_sparse_attn")
+    kernel.block_sparse_attn_func = block_sparse_attn_func  # type: ignore[attr-defined]
+    sys.modules["block_sparse_attn"] = kernel
+    for name, statement in (
+        ("diffsynth", "from diffsynth import FlashVSRTinyPipeline, ModelManager"),
+        ("tcdecoder", "from utils.TCDecoder import build_tcdecoder"),
+        ("lqproj", "from utils.utils import Causal_LQ4x_Proj"),
+    ):
+        try:
+            exec(statement, {})  # noqa: S102 - fixed import statements
+            found[name] = True
+        except Exception:  # noqa: BLE001 - reported
+            found[name] = False
+            found[f"{name}Error"] = traceback.format_exc()[-1500:]
+    found["prompt"] = (code / "prompt_tensor" / "posi_prompt.pth").exists()
+    return {"found": {k: v for k, v in found.items() if isinstance(v, bool)}, "detail": found}
 
 
 # --- helpers ---------------------------------------------------------------------------------
