@@ -32,4 +32,5 @@ krea/krea-realtime-video (the Hub card says Apache-2.0, its GitHub repository sa
 | --- | --- | --- | --- | ---: | ---: | ---: |
 | 1 | 37794816442 | access check: the `huggingface` secret is account harwasch and reads every repo, the three LTX ones included; weights into the volume on CPU (FLF2V 90.1 GB, Causal Forcing + Wan 2.1 1.3B 23.2 GB, LTX-2.5 82.6 GB); starts failed at once (a module-name clash, fixed). Estimated $0.30 | CPU, L4 | 13.5 | 0.06 | 0.06 |
 | 2 | 37796863736 | cancelled before any container ran: the app's images build before anything runs, and FlashVSR's kernel compile (then in the same app) held up the starts; the upscaler moved to an app and job of its own | none | 0 | 0.00 | 0.06 |
-| 3 | (pending) | starts (L4) and, side by side, FlashVSR's weights and image build (CPU). Estimate $0.10 (worst $1.8) | L4, CPU | | | |
+| 3 | 37799382669 | starts: camp done (two views; one was a wall of leaves, re-chosen in run 4), tree failed reading back its result (a numpy scalar, fixed); FlashVSR weights and image build on CPU in the other job (see run 3b) | L4 | 1.5 | 0.03 | 0.09 |
+| 4 | (pending) | starts again (both scenes). Estimate $0.04 (worst $1.7) | L4 | | | |

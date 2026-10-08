@@ -46,10 +46,6 @@ on:
         type: string
         default: "0"
 
-concurrency:
-  group: living-view
-  cancel-in-progress: false
-
 jobs:
   plan:
     name: What to run
@@ -117,6 +113,10 @@ jobs:
   run:
     name: Living view on Modal
     needs: plan
+    # One bake-off run at a time; the upscaler's job has its own lane.
+    concurrency:
+      group: living-view-bakeoff
+      cancel-in-progress: false
     if: needs.plan.outputs.bakeoff != ''
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -181,6 +181,9 @@ jobs:
   upscale:
     name: Upscaler on Modal
     needs: plan
+    concurrency:
+      group: living-view-upscale
+      cancel-in-progress: false
     if: needs.plan.outputs.upscale != ''
     runs-on: ubuntu-latest
     timeout-minutes: 180

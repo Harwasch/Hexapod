@@ -676,7 +676,13 @@ def _candidates(scene: str, positions: object, plant: object, vfov: float) -> li
                     out.append(
                         {
                             "name": f"r{d:.1f}-h{height:.1f}-b{bearing:03d}",
-                            "eye": [cx + d * math.sin(b), cy + d * math.cos(b), height],
+                            # Plain floats: a numpy scalar in the result cannot be read back
+                            # where only `modal` is installed.
+                            "eye": [
+                                float(cx + d * math.sin(b)),
+                                float(cy + d * math.cos(b)),
+                                float(height),
+                            ],
                             "target": [float(cx), float(cy), mid],
                             "place": f"h{height:.1f}",
                             "bearing": bearing,
@@ -774,6 +780,9 @@ def starts(scene: str, keep: int = 2) -> dict:
         else:
             coverage = float((cover > 0.5).mean())
             score = float(framing.mean()) * coverage * min(1.0, median / 2.5) * (1.0 - near)
+            # Some of the frame not plant: the camera's creep is fitted there, and what a model
+            # redraws there shows. A wall of leaves is marked down.
+            score *= max(0.0, 1.0 - max(0.0, plant_fraction - 0.9) / 0.1)
         scored.append(
             {**c, "plantFraction": plant_fraction, "medianPlantDepth": median, "near": near,
              "score": score}
