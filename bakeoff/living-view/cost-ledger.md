@@ -9,7 +9,7 @@ Modal metered (below).
 Modal list prices, read 2026-10-08 (modal.com/pricing): H200 $0.001261/s, H100 $0.001097/s,
 L40S $0.000542/s, L4 $0.000222/s; CPU $0.0000131 per physical core-second; memory
 $0.00000222 per GiB-second. Volume storage $0.09/GiB-month past 1 TiB free (the weights
-volume `hexapod-living-view-weights`, about 190 GB, is inside that; delete it once decided).
+volume `hexapod-living-view-weights`, about 220 GB, is inside that; delete it once decided).
 GitHub runner minutes are not Modal spend and are not counted.
 
 ## Models and licences
@@ -52,8 +52,19 @@ memory lines are shared by reservation x container seconds. Minutes are GPU minu
 | 7 | 37805436202 | app ap-ownvnI9x4IFZAjijgXb0Jr. Arm causal again, with flash-attn 2.7.4: never ran -- Modal had no L40S to give for 31 minutes ("waiting to be scheduled on a GPU_L40S worker"); cancelled. Estimated $0.20 (worst $0.63) | none | 0 | 0.00 | 3.30 |
 | 8 | 37806924930 | app ap-Ygi4GEYlrke7PkaS4o1dhi. FlashVSR weights (7 GB, 31 s) and the image check on CPU: diffsynth needs `modelscope`, not in FlashVSR's requirements (caught before any GPU) | CPU | 0 | 0.01 | 3.30 |
 | 9 | 37807558216 | app ap-l11LEUbKwrwvvulb1WnNfQ. FlashVSR image check: imports clean | CPU | 0 | 0.00 | 3.31 |
-| 10 | 37807747533 | upscale flashvsr: the 12 clips of ltx, flf, wan in one A100 container (app ap-xeM3pdygX2xMa08RkhwD5W): load 25 s, then 151-237 s a clip (0.3 fps at 4x for the 848 x 464 clips, 0.55-0.64 fps at 2x for the 1280 x 704 ones); container 2257 s of its 2400. Estimated $0.9 (worst $2.26); runner's estimate $2.13, to be replaced by the metered figure | A100-80GB | 37.6 | 2.13 | 5.44 |
-| 11 | 37809248102 | SeedVR2-3B weights (14.6 GB, 46 s) and its image check on CPU: flash-attn imports, the code imports with torch norms for apex's, the configs make the DiT and the VAE. Runner's estimate | CPU | 0 | 0.00 | 5.44 |
-| 12 | 37809859637 | meter: Modal's billing report and run 7's app logs, from the runner (no container) | none | 0 | 0.00 | 5.44 |
-| 13 | 37810483113 | arm causal: on an H100, 8 clips (4 starts, still contexts of 1 and 3 latent frames), first motion 0.41-0.82 s, 65 frames in 5.6-6.3 s, load 80 s, container 143 s. Estimated $0.45 (worst $1.13); runner's estimate, to be replaced by the metered figure | H100 | 2.5 | 0.19 | 5.63 |
-| 14 | (pending) | upscale flashvsr on the 8 causal clips (2x: it reaches the render), then SeedVR2-3B on the clips in order ltx, causal~ctx3, flf, causal, wan until 600 s of its H100 container. Estimate $0.45 + $1.0 (worst $1.13 + $1.61) | A100-80GB, H100 | | | |
+| 10 | 37807747533 | upscale flashvsr: the 12 clips of ltx, flf, wan in one A100 container (app ap-xeM3pdygX2xMa08RkhwD5W): load 25 s, then 151-237 s a clip (0.3 fps at 4x for the 848 x 464 clips, 0.55-0.64 fps at 2x for the 1280 x 704 ones); container 2257 s of its 2400. Estimated $0.9 (worst $2.26) | A100-80GB | 37.8 | 2.14 | 5.44 |
+| 11 | 37809248102 | SeedVR2-3B weights (14.6 GB, 46 s) and its image check on CPU: flash-attn imports, the code imports with torch norms for apex's, the configs make the DiT and the VAE (app ap-wHgQNcC3lKMT6OTId3HGyg). Estimated $0.05 | CPU | 0 | 0.01 | 5.45 |
+| 12 | 37809859637 | meter: Modal's billing report and run 7's app logs, from the runner (no container) | none | 0 | 0.00 | 5.45 |
+| 13 | 37810483113 | arm causal: on an H100, 8 clips (4 starts, still contexts of 1 and 3 latent frames), first motion 0.41-0.82 s, 65 frames in 5.6-6.3 s, load 80 s, container 143 s (app ap-pJTVVAtQwy0DAP1I9BRqE0). Estimated $0.45 (worst $1.13) | H100 | 2.4 | 0.19 | 5.64 |
+| 14 | 37813220982 | upscale flashvsr: the 8 causal clips at 2x (it reaches the render), 41-51 s a clip (1.3-1.6 fps), load 18 s, container 402 s (app ap-eMUihRp456vIuKe7Rl7X1E, $1.18 with the next row). Estimated $0.45 (worst $1.13) | A100-80GB | 6.8 | 0.38 | 6.02 |
+| 14 | 37813220982 | upscale seedvr2: all 20 clips inside its 600 s wall (none skipped): load 188 s, then 14 s a 65-frame clip and 21 s a 97-frame clip at 1280 x 704 (4.7 fps), container 591 s. Estimated $1.0 (worst $1.61) | H100 | 9.9 | 0.80 | 6.82 |
+| 15 | 37815636536 | meter: Modal's billing report again, for runs 10-14 (no container) | none | 0 | 0.00 | 6.82 |
+
+## Total
+
+**$6.82** metered by Modal for the whole bake-off, against the target of about $7 and the
+hard cap of $10: the four arms $2.60 (causal's failed first try included), the upscalers $3.32
+(FlashVSR $2.52 for 20 clips, SeedVR2-3B $0.80 for 20), starts, downloads, image builds and
+failed runs the rest. Still to do once the comparison is decided: delete the weights volume
+`hexapod-living-view-weights` (about 220 GB; inside the free TiB, so it costs nothing while
+it stays) and the results volume `hexapod-living-view`.

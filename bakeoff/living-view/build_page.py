@@ -45,8 +45,41 @@ LICENCES = {
 #: The upscalers of A-up: the file suffix of each one's clips under OUT/clips, and its name.
 UPSCALER_SUFFIX = {"flashvsr": "u", "seedvr2": "s"}
 UPSCALER_TITLES = {"flashvsr": "FlashVSR v1.1", "seedvr2": "SeedVR2-3B"}
+#: $/s of each upscaler's container at list price (GPU, 8 cores, 64 GiB): a clip's own cost,
+#: warm, is its seconds times this (the model load is the run's, in the ledger).
+UPSCALER_RATE = {
+    "flashvsr": 0.000694 + 8 * 0.0000131 + 64 * 0.00000222,
+    "seedvr2": 0.001097 + 8 * 0.0000131 + 64 * 0.00000222,
+}
 CAP_DOLLARS = 10.0
-PAGE_CRF = 26
+#: Camera creep beyond this (render px) is no creep: the model redrew the scene.
+LOST_CREEP_PX = 100.0
+#: What the clips look like, read by eye frame by frame (A against B, every start).
+BY_EYE = {
+    "ltx": "The only arm with real wind: branches and fronds sway (p95 15 to 59 px) while the "
+    "signboard, the cabin and the sky hold, with no camera creep. But frame 0 is already "
+    "redrawn (softer, a little darker) and the leaves are re-painted as they move. B keeps our "
+    "pixels, but motion this large tears them: leaf clumps smear and canopy edges stretch "
+    "against the sky.",
+    "causal": "Off the anchor within a second: the camera drifts or zooms and the scene is "
+    "redrawn (camp view 2 grows a large-leaved branch that is not there; colours shift). B has "
+    "nothing usable to carry. First motion is fast (0.4 s on an H100), the frames are not ours.",
+    "causal~ctx3": "Three still latent frames of context hold the layout on three starts of "
+    "four (tree view 1 still drifts), but the plants barely move (0.2 to 0.5 px) and the colour "
+    "drifts (camp view 2 turns cyan). B is close to the still.",
+    "flf": "Hardly moves (0.1 to 0.2 px): A is our render redrawn at 848 x 464 with its texture "
+    "shimmering, B is in effect the still. The slowest arm (200 s a clip).",
+    "wan": "Some sway, but on camp view 1 the whole frame creeps (about 3 px) and mid-clip the "
+    "foliage smears and loses colour; tree view 2 hardly moves. B removes the creep and keeps "
+    "our pixels; what is left is small motion.",
+}
+UPSCALE_EYE = (
+    "FlashVSR (its sparse attention in PyTorch here: 0.3 to 1.6 frames a second on an A100) "
+    "keeps close to the source and softens moving leaves; SeedVR2-3B (4.7 frames a second at "
+    "1280 x 704 on an H100) sharpens hard, sometimes to an over-sharpened, painted look. "
+    "Neither brings back what the model redrew."
+)
+PAGE_CRF = 30  # foliage at 1280 x 704: 26 and 30 look alike, 30 is half the bytes
 LEDGER = HERE / "cost-ledger.md"
 
 
@@ -213,6 +246,14 @@ header { display: grid; gap: 14px; }
 .legend div { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px;
   padding: 12px 14px; min-width: 0; }
 .legend b { font-family: var(--mono); color: var(--accent); margin-right: 6px; }
+.note { font-size: 0.85rem; color: var(--muted); }
+.eye { display: grid; gap: 10px; }
+.eye dl { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); gap: 8px 18px;
+  margin: 0; }
+.eye dt { font-weight: 600; }
+.eye dd { margin: 0; max-width: 72ch; }
+@media (max-width: 640px) { .eye dl { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .eye dd { margin-bottom: 8px; } }
 .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .controls button { font: 600 0.85rem var(--body); color: var(--ink); background: var(--surface);
   border: 1px solid var(--rule); border-radius: 999px; padding: 6px 14px; cursor: pointer; }
@@ -341,9 +382,7 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
         return booked[call] if call in booked else run_dollars(merged["costs"], call)
 
     up_cost = cost("upscale flashvsr")
-    up_count = max(1, len(upscale.get("clips", {})))
     sv_cost = cost("upscale seedvr2")
-    sv_count = max(1, len(second.get("clips", {})))
     spent = total if total is not None else sum(r["dollars"] for r in merged["costs"])
 
     def arm_cost(arm: str) -> float:
@@ -439,7 +478,11 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
                 f"<dt>plant motion</dt><dd>{fmt(m['insideMeanPx'], '', 2)} mean · {fmt(m['insideP95Px'], '', 2)} p95 px</dd>"
                 + (
                     f"<dt>elsewhere</dt><dd>{fmt(m['outsideMeanPx'], '', 2)} mean · {fmt(m['outsideP95Px'], '', 2)} p95 px</dd>"
-                    f"<dt>camera creep</dt><dd>{fmt(m['cameraCreepPx'], ' px', 2)}</dd>"
+                    + (
+                        f"<dt>camera creep</dt><dd>{fmt(m['cameraCreepPx'], ' px', 2)}</dd>"
+                        if m["cameraCreepPx"] <= LOST_CREEP_PX
+                        else "<dt>camera creep</dt><dd>lost: the scene was redrawn</dd>"
+                    )
                     if m["backgroundPx"]
                     else "<dt>elsewhere</dt><dd>– (only sky: nothing textured to measure)</dd>"
                     "<dt>camera creep</dt><dd>– (not removable: no background)</dd>"
@@ -450,12 +493,12 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
                 + "</dd>"
                 f"<dt>sky halo (B)</dt><dd>{fmt(m['haloPx']['guided'], '', 2)} edge-aware · {fmt(m['haloPx']['bilinear'], '', 2)} bilinear px</dd>"
                 + (
-                    f"<dt>FlashVSR</dt><dd>{fmt(up['seconds'], ' s')} · {fmt(up['framesPerSecond'], ' fps')} · ×{up['scale']} · ${up_cost / up_count:.3f}</dd>"
+                    f"<dt>FlashVSR</dt><dd>{fmt(up['seconds'], ' s')} · {fmt(up['framesPerSecond'], ' fps')} · ×{up['scale']} · ${up['seconds'] * UPSCALER_RATE['flashvsr']:.3f}</dd>"
                     if up
                     else ""
                 )
                 + (
-                    f"<dt>SeedVR2</dt><dd>{fmt(sv['seconds'], ' s')} · {fmt(sv['framesPerSecond'], ' fps')} · ${sv_cost / sv_count:.3f}</dd>"
+                    f"<dt>SeedVR2</dt><dd>{fmt(sv['seconds'], ' s')} · {fmt(sv['framesPerSecond'], ' fps')} · ${sv['seconds'] * UPSCALER_RATE['seedvr2']:.3f}</dd>"
                     if sv
                     else ""
                 )
@@ -508,6 +551,11 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
             + "</section>"
         )
 
+    eye = "".join(
+        f"<dt>{esc(ARM_TITLES.get(arm, arm))}</dt><dd>{esc(BY_EYE[arm])}</dd>"
+        for arm in rows + extra
+        if arm in BY_EYE
+    ) + (f"<dt>A↑ upscalers</dt><dd>{esc(UPSCALE_EYE)}</dd>" if upscale else "")
     head = f"""<title>Living View Bake-off</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -528,24 +576,32 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
     Everything you see is the model's drawing, including what it redrew around the plants.</div>
     <div><b>A↑</b>The same frames upscaled to 1280 × 704 by a video super-resolution model
     (FlashVSR v1.1{"; SeedVR2-3B with the toggle" if second else ""}): sharper pixels, still the
-    model's drawing.</div>
+    model's drawing. FlashVSR ${up_cost:.2f} for {len(upscale.get("clips", {}))} clips{
+        f", SeedVR2 ${sv_cost:.2f} for {len(second.get('clips', {}))}" if second else ""
+    }, model loads included.</div>
     <div><b>B</b>Motion only: our own render, warped by the plant motion measured in the model's
     clip (OpenCV DIS optical flow, camera creep removed, outside the plants zeroed, eased to rest
     at the loop). Every pixel is the measured scan; only the movement is generated.</div>
   </div>
   <div class="controls" role="group" aria-label="Display">
     <button id="b-bilinear" type="button" aria-pressed="false">B with bilinear flow</button>
-    {'<button id="u-seedvr" type="button" aria-pressed="false">A↑ by SeedVR2-3B</button>' if second else ""}
+    {
+        '<button id="u-seedvr" type="button" aria-pressed="false">A↑ by SeedVR2-3B</button>'
+        if second
+        else ""
+    }
     <button id="show-mask" type="button" aria-pressed="false">Show plant mask</button>
     <button id="zoom" type="button" aria-pressed="false">Zoom 2×</button>
     <button id="pause" type="button" aria-pressed="false">Pause all</button>
   </div>
   {table}
-  <p class="eyebrow">GPU spend for the whole bake-off ${spent:.2f} of the ${CAP_DOLLARS:.0f} cap ·
-  first motion: time from the request to the first new frame on a warm GPU (whole clip for the
-  non-streaming models) · elsewhere: motion of the textured pixels that are not plant
-  (ground, buildings; not flat sky), before the camera is removed ·
-  sky halo: B's motion on the ring of sky round the plants.</p>
+  <p class="note">Modal spend for the whole bake-off ${spent:.2f} of the ${CAP_DOLLARS:.0f} cap
+  (metered by Modal; downloads, image builds and failed runs included). First motion: from the
+  request to the first new frame on a warm GPU (the whole clip for the models that do not
+  stream). Elsewhere: motion of the textured pixels that are not plant (ground, buildings; not
+  flat sky), before the camera is removed. Sky halo: B's motion on the ring of sky round the
+  plants.</p>
+  <section class="eye"><h2>Read by eye</h2><dl>{eye}</dl></section>
 </header>
 {"".join(sections)}
 <footer>
