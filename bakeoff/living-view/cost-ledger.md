@@ -1,10 +1,10 @@
 # Living view bake-off: cost ledger
 
-Target about $6, hard cap **$10** for the whole bake-off, model downloads and cold starts
-included. Every run is estimated before it is pushed and recorded after, from the run's
-`summary.json` (`costs`: each Modal call's wall time from spawn to result, times the list
-price of what the container reserved -- GPU, CPU cores, memory). Wall time from the runner
-includes queueing and the cold start, so it over-counts slightly, never under.
+Target about $7 (raised from $6 for the upscalers), hard cap **$10** for the whole bake-off,
+model downloads, image builds and cold starts included. Every run is estimated before it is
+pushed (the worst case: each call's timeout times the list price of what its container
+reserves -- GPU, CPU cores, memory -- must fit what is left) and recorded after from what
+Modal metered (below).
 
 Modal list prices, read 2026-10-08 (modal.com/pricing): H200 $0.001261/s, H100 $0.001097/s,
 L40S $0.000542/s, L4 $0.000222/s; CPU $0.0000131 per physical core-second; memory
@@ -30,20 +30,29 @@ krea/krea-realtime-video (the Hub card says Apache-2.0, its GitHub repository sa
 
 ## Runs
 
+Dollars are what Modal metered (`modal billing report --for today -r h --show-resources`,
+saved by the workflow's `meter` step) for the run's app, so they include image builds,
+network egress and cold starts, which the first version of this ledger (booked from the
+runner's estimates) under-counted by $0.49 before run 10. Where one app ran several arms, its
+GPU line is exact per GPU type (the two H100 arms split by container seconds) and its CPU and
+memory lines are shared by reservation x container seconds. Minutes are GPU minutes.
+
 | # | GitHub run | what | GPU | minutes | $ | running total |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| 1 | 37794816442 | access check: the `huggingface` secret is account harwasch and reads every repo, the three LTX ones included; weights into the volume on CPU (FLF2V 90.1 GB, Causal Forcing + Wan 2.1 1.3B 23.2 GB, LTX-2.5 82.6 GB); starts failed at once (a module-name clash, fixed). Estimated $0.30 | CPU, L4 | 13.5 | 0.06 | 0.06 |
-| 2 | 37796863736 | cancelled before any container ran: the app's images build before anything runs, and FlashVSR's kernel compile (then in the same app) held up the starts; the upscaler moved to an app and job of its own | none | 0 | 0.00 | 0.06 |
-| 3 | 37799382669 | starts: camp done (two views; one was a wall of leaves, re-chosen in run 4), tree failed reading back its result (a numpy scalar, fixed); FlashVSR weights and image build on CPU in the other job (see run 3b) | L4 | 1.5 | 0.03 | 0.09 |
-| 4 | 37799908960 | starts, both scenes (the tree's two were both close-ups; re-chosen in run 5) | L4 | 1.5 | 0.03 | 0.12 |
-| 5 | 37800517764 | starts again (tree: a close crown and the whole crown; camp: shrubs and signboard, conifers and cabin) | L4 | 2.3 | 0.05 | 0.17 |
-| 5 | 37800517764 | arm wan: 4 clips, 124 s each warm, load 98 s, container 606 s (wall 642 s) | H100 | 10.7 | 0.78 | 0.95 |
-| 5 | 37800517764 | arm flf: 4 clips, 200 s each warm, load 183 s, container 993 s (wall 1000 s) | H100 | 16.7 | 1.34 | 2.30 |
-| 5 | 37800517764 | arm ltx: 4 clips, 9-11 s each warm, load 85 s, container 136 s; booked at container time + 60 s for the unmeasured boot (the runner's 1816 s was the wait behind the causal arm, collected in spawn order; fixed) | H200 | 3.3 | 0.31 | 2.61 |
-| 5 | 37800517764 | arm causal failed: Wan's cross-attention calls flash-attn directly (`assert FLASH_ATTN_2_AVAILABLE`); container time not measured (it failed on its first clip, after the model load), booked at 5 min | L40S | 5.0 | 0.21 | 2.82 |
-| 3b, 6 | 37799382669, 37802115592 | FlashVSR image builds on Modal's builders: Block-Sparse-Attention's kernels compiled (28 min) but its link step called clang++, absent from the image; replaced by the same block-sparse attention in PyTorch (checked against dense masked attention) | builder | | 0.00 | 2.82 |
-| 7 | (pending) | arm causal again, with flash-attn 2.7.4. Estimate $0.20 (worst $0.63) | L40S | | | |
-| 8 | 37806924930 | FlashVSR weights (7 GB, 31 s) and the image check on CPU: diffsynth needs `modelscope`, not in FlashVSR's requirements (caught before any GPU) | CPU | 0.7 | 0.00 | 2.82 |
-| 9 | 37807558216 | FlashVSR image check: imports clean | CPU | 0.2 | 0.00 | 2.82 |
-| 10 | (pending) | FlashVSR on the 12 clips already in the volume (ltx, flf, wan), one A100 container. Estimate $0.9 (worst $2.26) | A100-80GB | | | |
-| 11 | (pending) | SeedVR2-3B weights (14.6 GB) and its image check, on CPU. Estimate $0.02 | CPU | | | |
+| 1 | 37794816442 | app ap-LgteCwzYzFSlszWG4fMJhD. Access check: the `huggingface` secret is account harwasch and reads every repo, the three LTX ones included; weights into the volume on CPU (FLF2V 90.1 GB, Causal Forcing + Wan 2.1 1.3B 23.2 GB, LTX-2.5 82.6 GB; $0.22 of it network egress); starts failed at once (a module-name clash, fixed). Estimated $0.30, booked $0.06 at first | CPU, L4 | 1.2 | 0.34 | 0.34 |
+| 2 | 37796863736 | app ap-PQ0SED6xnlOFU7LXCNiPFq. Cancelled before any arm ran: the app's images build before anything runs, and FlashVSR's kernel compile (then in the same app) held up the starts; the build itself was metered. The upscaler moved to an app and job of its own | builder | 0 | 0.13 | 0.48 |
+| 3 | 37799382669 | apps ap-orYY1j7AajnebYceox9d90, ap-Hkns9QVJX7DMEURsvY4vqd. Starts: camp done (two views; one was a wall of leaves, re-chosen in run 4), tree failed reading back its result (a numpy scalar, fixed); FlashVSR weights and image build on CPU in the other job | L4 | 2.1 | 0.12 | 0.60 |
+| 4 | 37799908960 | app ap-ZIRh7lAvCNMNxD2FSG8eO0. Starts, both scenes (the tree's two were both close-ups; re-chosen in run 5) | L4 | 1.8 | 0.04 | 0.64 |
+| 5 | 37800517764 | app ap-5dG6wMxXwwoErbeMKNi26e ($2.50 in all). Starts again (tree: a close crown and the whole crown; camp: shrubs and signboard, conifers and cabin) | L4 | 3.6 | 0.08 | 0.71 |
+| 5 | 37800517764 | arm wan: 4 clips, 124 s each warm, load 98 s, container 606 s | H100 | 10.2 | 0.74 | 1.46 |
+| 5 | 37800517764 | arm flf: 4 clips, 200 s each warm, load 183 s, container 993 s | H100 | 16.6 | 1.34 | 2.80 |
+| 5 | 37800517764 | arm ltx: 4 clips, 9-11 s each warm, load 85 s, container 136 s (metered 141 s of H200) | H200 | 2.4 | 0.22 | 3.02 |
+| 5 | 37800517764 | arm causal failed: Wan's cross-attention calls flash-attn directly (`assert FLASH_ATTN_2_AVAILABLE`), after the model load | L40S | 2.7 | 0.11 | 3.14 |
+| 6 | 37802115592 | app ap-nSUsLfMMgPaZOY4guTBzT5. FlashVSR image build on Modal's builders: Block-Sparse-Attention's kernels compiled (28 min) but its link step called clang++, absent from the image; replaced by the same block-sparse attention in PyTorch (checked against dense masked attention) | builder | 0 | 0.16 | 3.30 |
+| 7 | 37805436202 | app ap-ownvnI9x4IFZAjijgXb0Jr. Arm causal again, with flash-attn 2.7.4: never ran -- Modal had no L40S to give for 31 minutes ("waiting to be scheduled on a GPU_L40S worker"); cancelled. Estimated $0.20 (worst $0.63) | none | 0 | 0.00 | 3.30 |
+| 8 | 37806924930 | app ap-Ygi4GEYlrke7PkaS4o1dhi. FlashVSR weights (7 GB, 31 s) and the image check on CPU: diffsynth needs `modelscope`, not in FlashVSR's requirements (caught before any GPU) | CPU | 0 | 0.01 | 3.30 |
+| 9 | 37807558216 | app ap-l11LEUbKwrwvvulb1WnNfQ. FlashVSR image check: imports clean | CPU | 0 | 0.00 | 3.31 |
+| 10 | 37807747533 | app ap-xeM3pdygX2xMa08RkhwD5W. FlashVSR on the 12 clips already in the volume (ltx, flf, wan), one A100 container. Estimate $0.9 (worst $2.26); still running ($0.86 metered by 16:36) | A100-80GB | | | |
+| 11 | 37809248102 | SeedVR2-3B weights (14.6 GB) and its image check, on CPU. Estimate $0.05 | CPU | | | |
+| 12 | 37809859637 | meter: Modal's billing report and run 7's app logs, from the runner (no container) | none | 0 | 0.00 | 3.31 |
+| 13 | (pending) | arm causal on an H100 (no L40S to be had). Estimate $0.45 (worst $1.13) | H100 | | | |

@@ -34,7 +34,8 @@ The arms (licences in `ARMS`):
              video, started from our frame by pre-filling its causal KV cache with the render's
              latent (the repository's own `initial_latent` path), 16 latent frames streamed
              after it (65 frames at 16 fps, 832x480). Time to first motion is the render
-             encoded, the cache filled, the first new latent frame denoised and decoded. L40S.
+             encoded, the cache filled, the first new latent frame denoised and decoded. H100
+             (an L40S was asked first; Modal had none to give for 31 minutes).
     flf      Wan 2.1 FLF2V 14B (diffusers): first and last frame both our render, so the clip
              returns exactly; 848x464 (480p area), 65 frames at 16 fps, 30 steps. H100.
     wan      The control: Wan 2.2 TI2V-5B as `world_models.Wan` runs it (1280x704, 50 steps,
@@ -203,7 +204,7 @@ ARMS: dict[str, dict] = {
         "licence": "LTX-2.x Community License (commercial use free under $10M revenue)",
     },
     "causal": {
-        "gpu": "L40S",
+        "gpu": "H100",
         "cpu": 4.0,
         "memoryGiB": 48,
         "timeoutS": 900,
