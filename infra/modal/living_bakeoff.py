@@ -1106,8 +1106,13 @@ def _ltx_ladder(request: dict) -> dict:
     from PIL import Image
 
     enhance = any(j.get("enhance") for j in jobs)
-    extra = {} if enhance else {"prompt_enhancer": None}
-    pipe = LTX2Pipeline.from_pretrained(model_dir, dtype=torch.bfloat16, **extra)
+    pipe = LTX2Pipeline.from_pretrained(model_dir, dtype=torch.bfloat16, prompt_enhancer=None)
+    enhancer, enhancer_error = None, None
+    if enhance:
+        try:
+            enhancer = _ltx_prompt_enhancer(model_dir)
+        except Exception as error:  # noqa: BLE001 - the auto-captioned arm is skipped, said why
+            enhancer_error = repr(error)[:1500]
     pipe.load_lora_weights(lora_dir, weight_name=LTX_LORA_FILE, adapter_name="cinemagraph")
     upsampler = LTX2LatentUpsamplerModel.from_pretrained(
         model_dir, subfolder="latent_upsampler", dtype=torch.bfloat16
@@ -1122,7 +1127,7 @@ def _ltx_ladder(request: dict) -> dict:
         "transformer": pipe.transformer,
         "vocoder": pipe.vocoder,
         "processor": getattr(pipe, "processor", None),
-        "prompt_enhancer": getattr(pipe, "prompt_enhancer", None),
+        "prompt_enhancer": enhancer,
         "duration_head": getattr(pipe, "duration_head", None),
     }
     # The text side first (and off the GPU after, when asked: an H100 has no room for both).
@@ -1134,22 +1139,31 @@ def _ltx_ladder(request: dict) -> dict:
     images = {n: _start_image(n) for n in names}
     texts: dict = {}
     enhance_s: dict = {}
+    failed: dict = {}
     for job in jobs:
         for n in names:
             text = job["prompt"]
             if job.get("enhance"):
+                if enhancer is None:
+                    failed[job["arm"]] = f"prompt enhancer did not load: {enhancer_error}"
+                    continue
                 t0 = time.time()
-                text = i2v.enhance_prompt(
-                    prompt=text,
-                    system_prompt=LTX2_5_I2V_DEFAULT_SYSTEM_PROMPT,
-                    image=images[n],
-                    seed=10,
-                    device="cuda",
-                )[0]
+                try:
+                    text = i2v.enhance_prompt(
+                        prompt=text,
+                        system_prompt=LTX2_5_I2V_DEFAULT_SYSTEM_PROMPT,
+                        image=images[n],
+                        seed=10,
+                        device="cuda",
+                    )[0]
+                except Exception as error:  # noqa: BLE001 - this arm skipped, said why
+                    failed[job["arm"]] = f"prompt enhancement failed: {repr(error)[:1500]}"
+                    continue
                 if LTX_TRIGGER not in text:
                     text = f"{LTX_TRIGGER}, {text}"
                 enhance_s[(job["arm"], n)] = round(time.time() - t0, 2)
             texts[(job["arm"], n)] = text
+    jobs = [j for j in jobs if j["arm"] not in failed]
     embeds: dict = {}
     for text in dict.fromkeys(texts.values()):
         t0 = time.time()
@@ -1320,9 +1334,28 @@ def _ltx_ladder(request: dict) -> dict:
             "textOffloaded": bool(request.get("offloadText")),
         },
         "loadSeconds": round(load, 1),
+        "failed": failed,
         "clips": clips,
         "containerSeconds": round(time.time() - started, 1),
     }
+
+
+def _ltx_prompt_enhancer(model_dir: str) -> object:
+    """LTX-2.5's dedicated prompt enhancer (Gemma 4), loaded on its own. Its config (saved by
+    transformers 5.15) is heterogeneous -- the global layers have head_dim 512, the rest 256 --
+    and 5.14.1's config validation reads `head_dim` globally and refuses. Global reads are
+    allowed here (the text encoder's config is homogeneous, so nothing else changes)."""
+    import torch
+    from transformers import Gemma4ForConditionalGeneration
+    from transformers.integrations.heterogeneity import configuration_utils as het
+
+    flag = het.HeterogeneousConfigMixin.__dict__["allow_global_per_layer_attribute_access"]
+    het.HeterogeneousConfigMixin.allow_global_per_layer_attribute_access = property(
+        lambda self: True, flag.fset
+    )
+    return Gemma4ForConditionalGeneration.from_pretrained(
+        f"{model_dir}/prompt_enhancer", dtype=torch.bfloat16
+    )
 
 
 @app.function(

@@ -77,4 +77,6 @@ is recorded from what Modal metered. Prompts: `bakeoff/living-view/prompts.md`.
 
 | # | GitHub run | what | GPU | minutes | $ | running total |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| R2-1 | (pending) | r2 ltx prompts: ltx-p1..p4 (researched, coordinator's, auto-captioned, p1 at LoRA 0.6) at the round-1 recipe on the 4 starts; the 2k and 4k stills. Estimate $0.7 (worst $3.0) | H200, L4 | | | |
+| R2-1 | 37842888808 | the 2k and 4k stills (done: L4, 23 s and 89 s); r2 ltx prompts failed at load in 18 s: LTX-2.5's prompt enhancer config (saved by transformers 5.15) is heterogeneous and 5.14.1 refuses it. Runner's estimate | L4, H200 | 0.3 | 0.07 | 0.07 |
+| R2-2 | (pending) | FlashVSR image with Block-Sparse-Attention's kernels (clang added), built and checked on CPU | builder | | | |
+| R2-3 | (pending) | r2 ltx prompts again (the enhancer loaded on its own, global per-layer reads allowed; ltx-p3 skipped if it still fails). Estimate $0.7 (worst $3.0) | H200 | | | |
