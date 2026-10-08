@@ -42,4 +42,5 @@ krea/krea-realtime-video (the Hub card says Apache-2.0, its GitHub repository sa
 | 3b, 6 | 37799382669, 37802115592 | FlashVSR image builds on Modal's builders: Block-Sparse-Attention's kernels compiled (28 min) but its link step called clang++, absent from the image; replaced by the same block-sparse attention in PyTorch (checked against dense masked attention) | builder | | 0.00 | 2.82 |
 | 7 | (pending) | arm causal again, with flash-attn 2.7.4. Estimate $0.20 (worst $0.63) | L40S | | | |
 | 8 | 37806924930 | FlashVSR weights (7 GB, 31 s) and the image check on CPU: diffsynth needs `modelscope`, not in FlashVSR's requirements (caught before any GPU) | CPU | 0.7 | 0.00 | 2.82 |
-| 9 | (pending) | FlashVSR image check again (CPU) | CPU | | | |
+| 9 | 37807558216 | FlashVSR image check: imports clean | CPU | 0.2 | 0.00 | 2.82 |
+| 10 | (pending) | FlashVSR on the 12 clips already in the volume (ltx, flf, wan), one A100 container. Estimate $0.9 (worst $2.26) | A100-80GB | | | |
