@@ -88,18 +88,40 @@ UPSCALERS: dict[str, dict] = {
     },
 }
 
+#: Block-Sparse-Attention (MIT Han lab, Apache-2.0), FlashVSR's sparse attention kernels, at the
+#: commit FlashVSR's README points to. Round 1's build compiled (28 minutes) but its link step
+#: called clang++ (the python build's sysconfig names it), which the base lacked: clang and lld
+#: are installed now. The build may still fail; the image then builds without it and
+#: `flashvsr` runs `block_sparse_attn_func` below (PyTorch, the same masks) and says so.
+BSA_CODE = "https://github.com/mit-han-lab/Block-Sparse-Attention.git"
+BSA_COMMIT = "49d6c39e4dc0303442cda3bb758b3925d4399c49"
+BSA_BUILD = (
+    "cd /opt/bsa && BLOCK_SPARSE_ATTN_CUDA_ARCHS=80 BLOCK_SPARSE_ATTN_FORCE_BUILD=TRUE"
+    " MAX_JOBS=8 NVCC_THREADS=2 pip install --no-build-isolation -v . > /opt/bsa-build.log 2>&1"
+    " && python -c 'import block_sparse_attn' && echo built > /opt/bsa-status"
+    " || (echo failed > /opt/bsa-status; tail -60 /opt/bsa-build.log)"
+)
 #: FlashVSR's environment (its requirements.txt; torch 2.6 cu124) and its own `diffsynth` at
-#: `FVSR_COMMIT`. Not Block-Sparse-Attention's CUDA kernels: they compiled on Modal's builder
-#: (28 minutes) but its link step called clang++, which this base lacks. FlashVSR's sparse
-#: attention runs instead as `block_sparse_attn_func` below, in PyTorch, on the same masks.
+#: `FVSR_COMMIT`, on CUDA's devel image (nvcc for the kernels).
 vsr_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
+    modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04", add_python="3.11")
+    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential", "clang", "lld")
     .pip_install(
         "torch==2.6.0",
         "torchvision==0.21.0",
         "torchaudio==2.6.0",
         index_url="https://download.pytorch.org/whl/cu124",
+    )
+    .pip_install("packaging", "ninja", "psutil", "wheel", "setuptools<80")
+    .run_commands(
+        f"git clone {BSA_CODE} /opt/bsa && git -C /opt/bsa checkout {BSA_COMMIT}"
+        " && git -C /opt/bsa submodule update --init csrc/cutlass",
+        # Forward kernels only (FlashVSR never runs backward): half the compile.
+        "sed -i '/flash_bwd_block_hdim/d' /opt/bsa/setup.py",
+        "sed -i 's/run_mha_bwd_block_<elem_type, kHeadDim, Is_causal>(params, stream);"
+        '/TORCH_CHECK(false, "block-sparse backward not built");/\''
+        " /opt/bsa/csrc/block_sparse_attn/flash_api.cpp",
+        BSA_BUILD,
     )
     .pip_install(
         "torchmetrics==1.7.3",
@@ -123,7 +145,6 @@ vsr_image = (
         "pandas==2.3.0",
         "tqdm",
         "datasets",
-        "setuptools<80",
     )
     .run_commands(
         f"git clone {FVSR_CODE} /opt/flashvsr && git -C /opt/flashvsr checkout {FVSR_COMMIT}",
@@ -299,10 +320,17 @@ def flashvsr(request: dict) -> dict:
     import torch
     import torch.nn.functional as F
 
-    # FlashVSR's DiT imports `block_sparse_attn_func` from Block-Sparse-Attention: this one.
-    kernel = types.ModuleType("block_sparse_attn")
-    kernel.block_sparse_attn_func = block_sparse_attn_func  # type: ignore[attr-defined]
-    sys.modules["block_sparse_attn"] = kernel
+    # FlashVSR's DiT imports `block_sparse_attn_func` from Block-Sparse-Attention: the CUDA
+    # kernels when the image built them, else the PyTorch one here.
+    attention = "pytorch"
+    try:
+        import block_sparse_attn  # noqa: F401
+
+        attention = "kernel"
+    except Exception:  # noqa: BLE001 - the image's build failed: the PyTorch path
+        kernel = types.ModuleType("block_sparse_attn")
+        kernel.block_sparse_attn_func = block_sparse_attn_func  # type: ignore[attr-defined]
+        sys.modules["block_sparse_attn"] = kernel
     from diffsynth import FlashVSRTinyPipeline, ModelManager
     from utils.TCDecoder import build_tcdecoder
     from utils.utils import Causal_LQ4x_Proj
@@ -323,6 +351,8 @@ def flashvsr(request: dict) -> dict:
     pipe.load_models_to_device(["dit", "vae"])
     load = time.time() - started
     width, height = request.get("renderSize", START_SIZE)
+    target = request.get("outSize")  # kept at this size (letterboxed), not resized back
+    label = request.get("label", "flashvsr")
     out: dict = {}
     for name in names:
         reader = imageio.get_reader(f"/data/clips/{name}.mp4")
@@ -330,7 +360,11 @@ def flashvsr(request: dict) -> dict:
         frames = np.stack([np.asarray(f)[..., :3] for f in reader])
         reader.close()
         n, h, w = frames.shape[:3]
-        scale = 2 if 2 * w >= width and 2 * h >= height else 4
+        if target:
+            fw, fh = _fit(w, h, *target)
+            scale = next((k for k in (2, 3, 4) if w * k >= fw and h * k >= fh), 4)
+        else:
+            scale = 2 if 2 * w >= width and 2 * h >= height else 4
         unit = 128 // scale
         pad_h, pad_w = (-h) % unit, (-w) % unit
         torch.cuda.reset_peak_memory_stats()
@@ -364,31 +398,43 @@ def flashvsr(request: dict) -> dict:
         seconds = time.time() - t0
         big = ((video.float() + 1) * 127.5).clamp(0, 255)  # (C, T, H, W)
         big = big[:, :n, : h * scale, : w * scale]
-        small = F.interpolate(big.permute(1, 0, 2, 3), size=(height, width), mode="area")
-        result = small.round().byte().permute(0, 2, 3, 1).cpu().numpy()
-        del lq, video, big, small
+        if target:
+            fit = F.interpolate(big.permute(1, 0, 2, 3), size=(fh, fw), mode="area")
+            result = _letterbox(fit.round().byte().permute(0, 2, 3, 1).cpu().numpy(), *target)
+            mp4, crf = _deliver(result, fps, *target)
+        else:
+            small = F.interpolate(big.permute(1, 0, 2, 3), size=(height, width), mode="area")
+            result = small.round().byte().permute(0, 2, 3, 1).cpu().numpy()
+            mp4, crf = _mp4(result, fps), 14
+        del lq, video, big
         out[name] = {
-            "mp4": _mp4(result, fps),
+            "mp4": mp4,
+            "crf": crf,
             "fps": fps,
             "frames": int(n),
             "scale": scale,
             "modelSize": [int(w), int(h)],
             "srSize": [int(w * scale), int(h * scale)],
+            "outSize": list(target) if target else [int(width), int(height)],
             "seconds": round(seconds, 2),
             "framesPerSecond": round(n / seconds, 2),
             "peakMemoryGB": round(torch.cuda.max_memory_allocated() / 2**30, 1),
+            "attention": attention,
         }
         torch.cuda.empty_cache()
     RESULTS.reload()
     for name, clip in out.items():
-        target = Path("/data/upscaled/flashvsr") / f"{name}.mp4"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(clip["mp4"])
+        path = Path("/data/upscaled") / label / f"{name}.mp4"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(clip["mp4"])
     RESULTS.commit()
     return {
         "upscaler": "flashvsr",
         "model": UPSCALERS["flashvsr"]["model"],
         "code": f"{FVSR_CODE}@{FVSR_COMMIT}",
+        "attention": attention,
+        "bsaBuild": _bsa_status(),
+        "label": label,
         "loadSeconds": round(load, 1),
         "clips": out,
         "containerSeconds": round(time.time() - started, 1),
@@ -515,6 +561,8 @@ def seedvr2(request: dict) -> dict:
     negative = torch.load(weights / "neg_emb.pt").to("cuda")
     load = time.time() - started
     width, height = request.get("renderSize", START_SIZE)
+    target = request.get("outSize")
+    label = request.get("label", "seedvr2")
     out: dict = {}
     for name in names:
         if time.time() - started > wall:
@@ -525,6 +573,8 @@ def seedvr2(request: dict) -> dict:
         frames = np.stack([np.asarray(f)[..., :3] for f in reader])
         reader.close()
         n, h, w = frames.shape[:3]
+        if target:  # restored at the output size (letterboxed), multiples of 16
+            width, height = (v // 16 * 16 for v in _fit(w, h, *target))
         set_seed(SVR_SEED, same_across_ranks=True)
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
@@ -548,15 +598,24 @@ def seedvr2(request: dict) -> dict:
                     texts_neg=[negative],
                     dit_offload=False,
                 )[0]
-            sample = rearrange(sample, "c t h w -> t c h w")[:n].float()
-            sample = wavelet_reconstruction(sample, video[:n])
+            sample = rearrange(sample, "c t h w -> t c h w")[:n]
+            parts = []
+            for k in range(0, n, 8):  # the colour fix in slices: 4K frames are large
+                fixed = wavelet_reconstruction(sample[k : k + 8].float(), video[k : k + 8])
+                parts.append(((fixed.clamp(-1, 1) + 1) * 127.5).round().byte().cpu())
             torch.cuda.synchronize()
             seconds = time.time() - t0
-            result = ((sample.clamp(-1, 1) + 1) * 127.5).round().byte()
-            result = result.permute(0, 2, 3, 1).cpu().numpy()
+            result = torch.cat(parts).permute(0, 2, 3, 1).numpy()
         del video, cond, latent, noise, condition, sample
+        if target:
+            result = _letterbox(result, *target)
+            mp4, crf = _deliver(result, fps, *target)
+        else:
+            mp4, crf = _mp4(result, fps), 14
         out[name] = {
-            "mp4": _mp4(result, fps),
+            "mp4": mp4,
+            "crf": crf,
+            "outSize": list(target) if target else [int(width), int(height)],
             "fps": fps,
             "frames": int(n),
             "scale": round(width / w, 3),
@@ -569,12 +628,13 @@ def seedvr2(request: dict) -> dict:
         torch.cuda.empty_cache()
     RESULTS.reload()
     for name, clip in out.items():
-        target = Path("/data/upscaled/seedvr2") / f"{name}.mp4"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(clip["mp4"])
+        path = Path("/data/upscaled") / label / f"{name}.mp4"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(clip["mp4"])
     RESULTS.commit()
     return {
         "upscaler": "seedvr2",
+        "label": label,
         "model": UPSCALERS["seedvr2"]["model"],
         "code": f"{SVR_SPACE}@{SVR_SPACE_COMMIT}",
         "loadSeconds": round(load, 1),
@@ -665,6 +725,7 @@ def vsr_check() -> dict:
             found[name] = False
             found[f"{name}Error"] = traceback.format_exc()[-1500:]
     found["prompt"] = (code / "prompt_tensor" / "posi_prompt.pth").exists()
+    found["bsaBuild"] = _bsa_status()  # "built" or "failed": reported, not a gate
     return {"found": {k: v for k, v in found.items() if isinstance(v, bool)}, "detail": found}
 
 
@@ -692,6 +753,59 @@ def _mp4(frames: object, fps: float) -> bytes:
             writer.append_data(np.asarray(frame))
         writer.close()
         return Path(f.name).read_bytes()
+
+
+def _fit(w: int, h: int, width: int, height: int) -> tuple[int, int]:
+    """The size a w x h clip takes inside width x height, its aspect kept (even sides)."""
+    k = min(width / w, height / h)
+    return min(width, round(w * k / 2) * 2), min(height, round(h * k / 2) * 2)
+
+
+def _letterbox(frames: object, width: int, height: int) -> object:
+    """Frames (T, h, w, 3) centred on black at width x height (unchanged when they fill it)."""
+    import numpy as np
+
+    t, h, w = frames.shape[:3]  # type: ignore[attr-defined]
+    if (w, h) == (width, height):
+        return frames
+    out = np.zeros((t, height, width, 3), np.uint8)
+    top, left = (height - h) // 2, (width - w) // 2
+    out[:, top : top + h, left : left + w] = frames
+    return out
+
+
+#: Delivery limits for the page's clips: 2560x1408 at most 8 MB, 3840x2112 at most 14 MB.
+def _deliver(frames: object, fps: float, width: int, height: int) -> tuple[bytes, int]:
+    """H.264 High, yuv420p, +faststart, from CRF 18 up until the clip fits its limit."""
+    import imageio.v2 as imageio
+    import numpy as np
+
+    limit = (8 if width * height <= 2560 * 1408 else 14) * 1024 * 1024
+    data, crf = b"", 18
+    for crf in (18, 20, 22, 24, 26, 28, 30):
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+            writer = imageio.get_writer(
+                f.name,
+                fps=fps,
+                codec="libx264",
+                macro_block_size=1,
+                ffmpeg_params=[
+                    "-crf", str(crf), "-preset", "slow", "-profile:v", "high",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                ],
+            )  # fmt: skip
+            for frame in frames:  # type: ignore[attr-defined]
+                writer.append_data(np.asarray(frame))
+            writer.close()
+            data = Path(f.name).read_bytes()
+        if len(data) <= limit:
+            break
+    return data, crf
+
+
+def _bsa_status() -> str:
+    path = Path("/opt/bsa-status")
+    return path.read_text().strip() if path.exists() else "not in image"
 
 
 def _clip_names(request: dict) -> list[str]:
@@ -755,6 +869,8 @@ def main(
     arms: str = "",
     sv_arms: str = "",
     sv_wall_s: float = SVR_WALL_S,
+    vsr_size: str = "",
+    sv_size: str = "",
 ) -> None:
     """The steps (upscale: the clips of `arms`, comma-separated, or of every arm; seedvr: of
     `sv_arms`, within `sv_wall_s` seconds of its container); the
@@ -794,10 +910,18 @@ def main(
         cost(label, reservation, time.time() - t0, {"containerSeconds": None})
         return result
 
+    def sized(size: str, upscaler: str) -> dict:
+        if not size:
+            return {}
+        width, height = (int(v) for v in size.lower().split("x"))
+        return {"outSize": [width, height], "label": f"{upscaler}-{width}x{height}"}
+
     requests = {
-        "flashvsr": {"arms": [a for a in arms.split(",") if a]} if arms else {},
+        "flashvsr": ({"arms": [a for a in arms.split(",") if a]} if arms else {})
+        | sized(vsr_size, "flashvsr"),
         "seedvr2": ({"arms": [a for a in sv_arms.split(",") if a]} if sv_arms else {})
-        | {"wallS": sv_wall_s},
+        | {"wallS": sv_wall_s}
+        | sized(sv_size, "seedvr2"),
     }
 
     def checked(label: str, function: modal.Function) -> None:
@@ -819,11 +943,12 @@ def main(
         result = step(f"upscale {upscaler}", function, reservation, requests[upscaler])
         if result is None:
             return
+        label = result.get("label", upscaler)
         for name, clip in result["clips"].items():
-            target = folder / "upscaled" / upscaler / f"{name}.mp4"
+            target = folder / "upscaled" / label / f"{name}.mp4"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(clip.pop("mp4"))
-        summary.setdefault("upscaled", {})[upscaler] = result | {"licence": reservation["licence"]}
+        summary.setdefault("upscaled", {})[label] = result | {"licence": reservation["licence"]}
         summary["costs"][-1]["containerSeconds"] = result.get("containerSeconds")
         dump()
 
