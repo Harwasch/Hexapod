@@ -68,8 +68,11 @@ def rate_per_s(reservation: dict) -> float:
 
 
 #: Video super-resolution of every arm's clip (A-up on the page): FlashVSR v1.1 (tiny decoder)
-#: on an A100, as its authors run it. 4x as they recommend for clips smaller than the render,
-#: 2x for clips already the render's size (a supersampling pass), then area-resized to it.
+#: on an A100, as its authors run it, at the smaller of its scales (2x, 4x) that reaches the
+#: render's size (2x for a clip already that size: a supersampling pass), then area-resized to
+#: it. Run 10 took 4x for the 848 x 464 clips (0.3 fps against 0.6 at 2x for 1280 x 704: the
+#: work goes with the output's pixels); later runs take 2x wherever 2x reaches the render.
+#: The timeout is per run: run 10 (12 clips) had 2400 s and used 2257.
 FVSR_REPO = "JunhaoZhuang/FlashVSR-v1.1"
 FVSR_CODE = "https://github.com/OpenImagingLab/FlashVSR.git"
 FVSR_COMMIT = "cf910c61a60733e610e9c6e8b607f80c3a6c202b"
@@ -78,7 +81,7 @@ UPSCALERS: dict[str, dict] = {
         "gpu": "A100-80GB",
         "cpu": 8.0,
         "memoryGiB": 64,
-        "timeoutS": 2400,
+        "timeoutS": 1200,
         "needs": (FVSR_REPO,),
         "model": f"{FVSR_REPO} (tiny decoder, sparse ratio 2.0, local range 11)",
         "licence": "Apache-2.0 (weights and code)",
@@ -134,17 +137,21 @@ vsr_image = (
 #: `projects/inference_seedvr2_3b.py` runs it on one GPU (cfg 1, one step, conditioning noise
 #: 0, wavelet colour fix), from the code of their Hugging Face Space at `SVR_SPACE_COMMIT`
 #: (their GitHub repository's, plus the Space's demo). The clip goes in at the render's size,
-#: bicubic (the model restores at the output size), so nothing is cropped.
+#: bicubic (the model restores at the output size), so nothing is cropped. A second opinion
+#: within the budget: clips go in `SVR_ORDER` (one arm across every start before the next)
+#: and no clip starts after `request["wallS"]` seconds of the container.
 SVR_REPO = "ByteDance-Seed/SeedVR2-3B"
 SVR_FILES = ("seedvr2_ema_3b.pth", "ema_vae.pth", "pos_emb.pt", "neg_emb.pt")
 SVR_SPACE = "https://huggingface.co/spaces/ByteDance-Seed/SeedVR2-3B"
 SVR_SPACE_COMMIT = "1c8f9fbafac52f6fd2f9b42c869ba27262c52c0a"
 SVR_SEED = 666
+SVR_ORDER = ("ltx", "causal~ctx3", "flf", "causal", "wan")
+SVR_WALL_S = 600.0
 UPSCALERS["seedvr2"] = {
     "gpu": "H100",
     "cpu": 8.0,
     "memoryGiB": 64,
-    "timeoutS": 1800,
+    "timeoutS": 1200,
     "needs": (SVR_REPO,),
     "model": f"{SVR_REPO} (one step, cfg 1, wavelet colour fix)",
     "licence": "Apache-2.0 (weights and code)",
@@ -323,7 +330,7 @@ def flashvsr(request: dict) -> dict:
         frames = np.stack([np.asarray(f)[..., :3] for f in reader])
         reader.close()
         n, h, w = frames.shape[:3]
-        scale = 4 if w < width else 2
+        scale = 2 if 2 * w >= width and 2 * h >= height else 4
         unit = 128 // scale
         pad_h, pad_w = (-h) % unit, (-w) % unit
         torch.cuda.reset_peak_memory_stats()
@@ -466,7 +473,15 @@ def seedvr2(request: dict) -> dict:
     weights = Path(f"/lv/{SVR_REPO}")
     _need([str(weights / f) for f in SVR_FILES])
     RESULTS.reload()
-    names = _clip_names(request)
+
+    def rank(name: str) -> tuple[int, str]:
+        arm, _, start = name.partition("/")
+        row = arm + ("~" + start.partition("~")[2] if "~" in start else "")
+        return (SVR_ORDER.index(row) if row in SVR_ORDER else len(SVR_ORDER), start)
+
+    names = sorted(_clip_names(request), key=rank)
+    wall = float(request.get("wallS", SVR_WALL_S))
+    skipped: list[str] = []
     code = _seedvr_env()
     link = code / "ckpts"  # main.yaml reads the VAE from ./ckpts/ema_vae.pth
     if not link.exists():
@@ -502,6 +517,9 @@ def seedvr2(request: dict) -> dict:
     width, height = request.get("renderSize", START_SIZE)
     out: dict = {}
     for name in names:
+        if time.time() - started > wall:
+            skipped.append(name)
+            continue
         reader = imageio.get_reader(f"/data/clips/{name}.mp4")
         fps = float(reader.get_meta_data().get("fps", 24.0))
         frames = np.stack([np.asarray(f)[..., :3] for f in reader])
@@ -560,6 +578,8 @@ def seedvr2(request: dict) -> dict:
         "model": UPSCALERS["seedvr2"]["model"],
         "code": f"{SVR_SPACE}@{SVR_SPACE_COMMIT}",
         "loadSeconds": round(load, 1),
+        "wallS": wall,
+        "skipped": skipped,
         "clips": out,
         "containerSeconds": round(time.time() - started, 1),
     }
@@ -729,9 +749,15 @@ def download(repo: str = FVSR_REPO) -> dict:
 
 @app.local_entrypoint()
 def main(
-    steps: str = "check", budget_left: float = 0.0, out: str = "lv-out", arms: str = ""
+    steps: str = "check",
+    budget_left: float = 0.0,
+    out: str = "lv-out",
+    arms: str = "",
+    sv_arms: str = "",
+    sv_wall_s: float = SVR_WALL_S,
 ) -> None:
-    """The steps (upscale, seedvr: the clips of `arms`, comma-separated, or of every arm); the
+    """The steps (upscale: the clips of `arms`, comma-separated, or of every arm; seedvr: of
+    `sv_arms`, within `sv_wall_s` seconds of its container); the
     upscaled clips under `out/upscaled/<upscaler>/<arm>/<start>.mp4` and
     `out/upscale-summary.json` (each call's wall time and estimated dollars). Each upscaler runs
     only if its worst case (timeout x rate) fits in what `budget_left` still holds."""
@@ -768,7 +794,11 @@ def main(
         cost(label, reservation, time.time() - t0, {"containerSeconds": None})
         return result
 
-    request = {"arms": [a for a in arms.split(",") if a]} if arms else {}
+    requests = {
+        "flashvsr": {"arms": [a for a in arms.split(",") if a]} if arms else {},
+        "seedvr2": ({"arms": [a for a in sv_arms.split(",") if a]} if sv_arms else {})
+        | {"wallS": sv_wall_s},
+    }
 
     def checked(label: str, function: modal.Function) -> None:
         summary[label] = step(label, function, CHECK_RESERVATION)
@@ -785,7 +815,8 @@ def main(
             summary.setdefault("skipped", {})[upscaler] = f"worst ${worst:.2f} > ${left:.2f} left"
             sys.stdout.write(f"{upscaler} skipped: worst ${worst:.2f} > ${left:.2f} left\n")
             return
-        result = step(f"upscale {upscaler}", UPSCALER_FUNCTIONS[upscaler], reservation, request)
+        function = UPSCALER_FUNCTIONS[upscaler]
+        result = step(f"upscale {upscaler}", function, reservation, requests[upscaler])
         if result is None:
             return
         for name, clip in result["clips"].items():

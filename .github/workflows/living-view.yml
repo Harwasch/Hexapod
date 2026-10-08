@@ -13,7 +13,8 @@ name: Living view bake-off (Modal GPUs)
 #   `[lv:<steps>|arms=<arms>|budget=<dollars>]` -- steps, comma-separated in this order, from
 #   access, download, starts, arms (the bake-off app) and vsr-download, vsr-check, upscale,
 #   sv-download, sv-check, sv-upscale (the upscaler app: FlashVSR, then SeedVR2-3B); arms from
-#   ltx, causal, flf, wan (the upscalers take those arms' clips); budget the dollars the arms
+#   ltx, causal, flf, wan (FlashVSR takes those arms' clips, SeedVR2 those of `svarms`);
+#   budget the dollars the arms
 #   may spend at
 #   worst (timeout x rate; an arm that does not fit is refused) and upbudget the same for the
 #   upscaler. `starts=` and `contexts=` pass through. A push without a token runs nothing.
@@ -69,6 +70,7 @@ jobs:
       contexts: ${{ steps.plan.outputs.contexts }}
       meter: ${{ steps.plan.outputs.meter }}
       logs: ${{ steps.plan.outputs.logs }}
+      svarms: ${{ steps.plan.outputs.svarms }}
     steps:
       # Read as data, validated here, never interpolated into a shell line.
       - id: plan
@@ -84,7 +86,7 @@ jobs:
           import os, re
           options = {"steps": "access", "arms": "wan,flf,causal,ltx", "budget": "0",
                      "upbudget": "0", "starts": "tree-1,tree-2,camp-1,camp-2", "contexts": "1,3",
-                     "logs": "none"}
+                     "logs": "none", "svarms": "wan,flf,causal,ltx"}
           if os.environ["EVENT"] == "workflow_dispatch":
               for name in ("steps", "arms", "budget", "upbudget"):
                   options[name] = os.environ.get(name.upper(), "") or options[name]
@@ -103,6 +105,7 @@ jobs:
           valid = {
               "steps": rf"{step}(,{step})*",
               "arms": r"(ltx|causal|flf|wan)(,(ltx|causal|flf|wan))*",
+              "svarms": r"(ltx|causal|flf|wan)(,(ltx|causal|flf|wan))*",
               "budget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
               "upbudget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
               "starts": r"(tree|camp)-[1-9](,(tree|camp)-[1-9])*",
@@ -212,6 +215,7 @@ jobs:
       UPBUDGET: ${{ needs.plan.outputs.upbudget }}
       STARTS: ${{ needs.plan.outputs.starts }}
       CONTEXTS: ${{ needs.plan.outputs.contexts }}
+      SVARMS: ${{ needs.plan.outputs.svarms }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -235,7 +239,8 @@ jobs:
         timeout-minutes: 120
         run: |
           exec uv run --with modal==1.5.5 modal run infra/modal/living_upscale.py \
-            --steps "$UPSCALE" --budget-left "$UPBUDGET" --arms "$ARMS" --out lv-out
+            --steps "$UPSCALE" --budget-left "$UPBUDGET" --arms "$ARMS" --sv-arms "$SVARMS" \
+            --out lv-out
       - name: Summary
         if: always()
         run: |
