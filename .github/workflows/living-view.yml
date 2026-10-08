@@ -3,17 +3,20 @@ name: Living view bake-off (Modal GPUs)
 # The living-view bake-off (infra/modal/living_bakeoff.py): slight wind on the plants of a still
 # render of the scan, from a video model anchored on that render -- LTX-2.5 with the
 # Cinemagraph LoRA, Causal Forcing, Wan 2.1 FLF2V and Wan 2.2 TI2V-5B -- on the Minnetonka tree
-# and the camp's shrubs. Nothing is published: the starts, the clips and summary.json (each
-# call's wall time and estimated dollars) are the `living-view` artifact; the motion-only
-# clips and the comparison page are made from it afterwards (tools/captures/living_view.py).
+# and the camp's shrubs; and the upscaler (infra/modal/living_upscale.py, FlashVSR v1.1) that
+# makes every clip the render's size. Nothing is published: the starts, the clips and the
+# summaries (each call's wall time and estimated dollars) are the `living-view` artifact; the
+# motion-only clips and the comparison page are made from it afterwards
+# (bakeoff/living-view/build_page.py with tools/captures/living_view.py).
 #
 # * **How to run it.** Push a commit to `bakeoff-living-view` whose message carries
-#   `[lv:<steps>|arms=<arms>|budget=<dollars>]` -- steps from access, download, starts, arms,
-#   upscale (comma-separated, in that order); arms from ltx, causal, flf, wan; budget the dollars
-#   left under the bake-off's cap (arms whose worst case -- timeout x rate -- does not fit are
-#   refused). `starts=` and `contexts=` pass through. A push without a token runs nothing.
+#   `[lv:<steps>|arms=<arms>|budget=<dollars>]` -- steps, comma-separated in this order, from
+#   access, download, starts, arms (the bake-off app) and vsr-download, vsr-check, upscale (the
+#   upscaler app); arms from ltx, causal, flf, wan; budget the dollars the arms may spend at
+#   worst (timeout x rate; an arm that does not fit is refused) and upbudget the same for the
+#   upscaler. `starts=` and `contexts=` pass through. A push without a token runs nothing.
 #   `workflow_dispatch` works once this file is on the default branch.
-# * **What it spends**: Modal GPU time at list price, estimated per call in summary.json and
+# * **What it spends**: Modal GPU time at list price, estimated per call in the summaries and
 #   kept in bakeoff/living-view/cost-ledger.md. Downloads run on CPU containers; every GPU
 #   function is single-use (no idle window billed). Cancelling the run cancels its Modal calls
 #   (tools/captures/modal_calls.py; `exec`, so the signals reach it).
@@ -27,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       steps:
-        description: "Steps, in order: access,download,starts,arms,upscale"
+        description: "Steps, in order: access,download,starts,arms,vsr-download,vsr-check,upscale"
         type: string
         default: access
       arms:
@@ -35,7 +38,11 @@ on:
         type: string
         default: wan,flf,causal,ltx
       budget:
-        description: "Dollars left under the cap (arms whose worst case does not fit are refused)"
+        description: "Dollars the arms may spend at worst"
+        type: string
+        default: "0"
+      upbudget:
+        description: "Dollars the upscaler may spend at worst"
         type: string
         default: "0"
 
@@ -51,12 +58,13 @@ jobs:
       contains(github.event.head_commit.message, '[lv:')
     runs-on: ubuntu-latest
     outputs:
-      steps: ${{ steps.plan.outputs.steps }}
+      bakeoff: ${{ steps.plan.outputs.bakeoff }}
+      upscale: ${{ steps.plan.outputs.upscale }}
       arms: ${{ steps.plan.outputs.arms }}
       budget: ${{ steps.plan.outputs.budget }}
+      upbudget: ${{ steps.plan.outputs.upbudget }}
       starts: ${{ steps.plan.outputs.starts }}
       contexts: ${{ steps.plan.outputs.contexts }}
-      upscalers: ${{ steps.plan.outputs.upscalers }}
     steps:
       # Read as data, validated here, never interpolated into a shell line.
       - id: plan
@@ -66,34 +74,41 @@ jobs:
           STEPS: ${{ inputs.steps }}
           ARMS: ${{ inputs.arms }}
           BUDGET: ${{ inputs.budget }}
+          UPBUDGET: ${{ inputs.upbudget }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
           options = {"steps": "access", "arms": "wan,flf,causal,ltx", "budget": "0",
-                     "starts": "tree-1,tree-2,camp-1,camp-2", "contexts": "1,3",
-                     "upscalers": "flashvsr"}
+                     "upbudget": "0", "starts": "tree-1,tree-2,camp-1,camp-2", "contexts": "1,3"}
           if os.environ["EVENT"] == "workflow_dispatch":
-              for name in ("steps", "arms", "budget"):
+              for name in ("steps", "arms", "budget", "upbudget"):
                   options[name] = os.environ.get(name.upper(), "") or options[name]
           else:
               found = re.search(r"\[lv:([^\]|]*)((?:\|[^\]]*)?)\]", os.environ.get("MESSAGE", ""))
+              if not found:
+                  raise SystemExit("no [lv:...] token")
               options["steps"] = found.group(1)
               for part in found.group(2).split("|")[1:]:
                   name, _, value = part.partition("=")
                   if name not in options or name == "steps":
                       raise SystemExit(f"unknown option {name!r} in the [lv:] token")
                   options[name] = value
+          step = r"(access|download|starts|arms|vsr-download|vsr-check|upscale)"
           valid = {
-              "steps": r"(access|download|starts|arms|upscale)(,(access|download|starts|arms|upscale))*",
+              "steps": rf"{step}(,{step})*",
               "arms": r"(ltx|causal|flf|wan)(,(ltx|causal|flf|wan))*",
               "budget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
+              "upbudget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
               "starts": r"(tree|camp)-[1-9](,(tree|camp)-[1-9])*",
               "contexts": r"[1-5](,[1-5])*",
-              "upscalers": r"(flashvsr)(,(flashvsr))*",
           }
           for name, pattern in valid.items():
               if not re.fullmatch(pattern, options[name]):
                   raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
+          steps = options.pop("steps").split(",")
+          upscale = {"vsr-download": "download", "vsr-check": "check", "upscale": "upscale"}
+          options["bakeoff"] = ",".join(s for s in steps if s not in upscale)
+          options["upscale"] = ",".join(upscale[s] for s in steps if s in upscale)
           for name, value in options.items():
               print(f"{name}={value}")
           PY
@@ -102,17 +117,19 @@ jobs:
   run:
     name: Living view on Modal
     needs: plan
+    if: needs.plan.outputs.bakeoff != ''
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-      STEPS: ${{ needs.plan.outputs.steps }}
+      BAKEOFF: ${{ needs.plan.outputs.bakeoff }}
+      UPSCALE: ${{ needs.plan.outputs.upscale }}
       ARMS: ${{ needs.plan.outputs.arms }}
       BUDGET: ${{ needs.plan.outputs.budget }}
+      UPBUDGET: ${{ needs.plan.outputs.upbudget }}
       STARTS: ${{ needs.plan.outputs.starts }}
       CONTEXTS: ${{ needs.plan.outputs.contexts }}
-      UPSCALERS: ${{ needs.plan.outputs.upscalers }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -121,7 +138,7 @@ jobs:
           test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
             || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
       # The Hugging Face secret's name in this workspace (the first whose name starts with
-      # "hugging"); living_bakeoff.py reads it from HEXAPOD_HF_SECRET.
+      # "hugging"); the Modal modules read it from HEXAPOD_HF_SECRET.
       - name: Find the Hugging Face secret
         run: |
           name="$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
@@ -136,23 +153,90 @@ jobs:
         timeout-minutes: 170
         run: |
           exec uv run --with modal==1.5.5 modal run infra/modal/living_bakeoff.py \
-            --steps "$STEPS" --arms "$ARMS" --budget-left "$BUDGET" \
-            --starts-names "$STARTS" --contexts "$CONTEXTS" --upscalers "$UPSCALERS" --out lv-out
+            --steps "$BAKEOFF" --arms "$ARMS" --budget-left "$BUDGET" \
+            --starts-names "$STARTS" --contexts "$CONTEXTS" --out lv-out
       - name: Summary
         if: always()
         run: |
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY" || true
-          import json
-          s = json.load(open("lv-out/summary.json"))
+          import json, pathlib
           print("## Living view\n")
           print("| call | GPU | seconds | $ |\n| --- | --- | ---: | ---: |")
-          for r in s.get("costs", []):
-              print(f"| {r['call']} | {r['gpu']} | {r['seconds']} | {r['dollars']} |")
-          print(f"\nEstimated this run: ${s.get('dollars')}")
+          total = 0.0
+          for name in ("summary.json", "upscale-summary.json"):
+              path = pathlib.Path("lv-out") / name
+              if path.exists():
+                  for r in json.loads(path.read_text()).get("costs", []):
+                      total += r["dollars"]
+                      print(f"| {r['call']} | {r['gpu']} | {r['seconds']} | {r['dollars']} |")
+          print(f"\nEstimated this run: ${total:.2f}")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: living-view
+          path: lv-out
+          if-no-files-found: warn
+
+  upscale:
+    name: Upscaler on Modal
+    needs: plan
+    if: needs.plan.outputs.upscale != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      BAKEOFF: ${{ needs.plan.outputs.bakeoff }}
+      UPSCALE: ${{ needs.plan.outputs.upscale }}
+      ARMS: ${{ needs.plan.outputs.arms }}
+      BUDGET: ${{ needs.plan.outputs.budget }}
+      UPBUDGET: ${{ needs.plan.outputs.upbudget }}
+      STARTS: ${{ needs.plan.outputs.starts }}
+      CONTEXTS: ${{ needs.plan.outputs.contexts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the Modal token is there
+        run: |
+          test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
+            || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
+      # The Hugging Face secret's name in this workspace (the first whose name starts with
+      # "hugging"); the Modal modules read it from HEXAPOD_HF_SECRET.
+      - name: Find the Hugging Face secret
+        run: |
+          name="$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
+          import json, sys
+          rows = json.load(sys.stdin)
+          names = [v for r in rows for v in (r.values() if isinstance(r, dict) else [r])
+                   if isinstance(v, str) and v.lower().startswith("hugging")]
+          print(names[0] if names else "huggingface")')"
+          echo "Hugging Face secret: $name"
+          echo "HEXAPOD_HF_SECRET=$name" >> "$GITHUB_ENV"
+      - name: modal run infra/modal/living_upscale.py
+        timeout-minutes: 120
+        run: |
+          exec uv run --with modal==1.5.5 modal run infra/modal/living_upscale.py \
+            --steps "$UPSCALE" --budget-left "$UPBUDGET" --out lv-out
+      - name: Summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY" || true
+          import json, pathlib
+          print("## Living view\n")
+          print("| call | GPU | seconds | $ |\n| --- | --- | ---: | ---: |")
+          total = 0.0
+          for name in ("summary.json", "upscale-summary.json"):
+              path = pathlib.Path("lv-out") / name
+              if path.exists():
+                  for r in json.loads(path.read_text()).get("costs", []):
+                      total += r["dollars"]
+                      print(f"| {r['call']} | {r['gpu']} | {r['seconds']} | {r['dollars']} |")
+          print(f"\nEstimated this run: ${total:.2f}")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: living-upscale
           path: lv-out
           if-no-files-found: warn

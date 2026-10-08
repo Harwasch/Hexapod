@@ -42,7 +42,12 @@ def load_runs(runs: list[Path]) -> dict:
     """The runs merged: starts, results per arm, upscaled clips, costs, and where each clip is."""
     merged: dict = {"starts": {}, "results": {}, "upscaled": {}, "costs": [], "files": {}}
     for run in runs:
-        summary = json.loads((run / "summary.json").read_text())
+        summary: dict = {}
+        for name in ("summary.json", "upscale-summary.json"):
+            if (run / name).exists():
+                part = json.loads((run / name).read_text())
+                summary["costs"] = summary.get("costs", []) + part.get("costs", [])
+                summary |= {k: v for k, v in part.items() if k != "costs"}
         merged["costs"] += [dict(row, run=run.name) for row in summary.get("costs", [])]
         for scene in summary.get("starts", []):
             for view in scene.get("views", []):
@@ -284,7 +289,8 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
     for arm in rows + extra:
         base = arm.split("~")[0]
         result = results.get(base, {})
-        clips = {k: v for k, v in result.get("clips", {}).items() if (k.split("~")[1:] or [""])[0] == (arm.split("~")[1:] or [""])[0]}
+        variant = arm.partition("~")[2]
+        clips = {k: v for k, v in result.get("clips", {}).items() if k.partition("~")[2] == variant}
         first = [c["firstMotionSeconds"] for c in clips.values()]
         gen = [c["seconds"] for c in clips.values()]
         n = max(1, len(result.get("clips", {})))
@@ -441,7 +447,7 @@ def build_html(merged: dict, numbers: dict, out: Path) -> str:
   non-streaming models) · elsewhere: motion outside the plants before the camera is removed ·
   sky halo: B's motion on the ring of sky round the plants.</p>
 </header>
-{''.join(sections)}
+{"".join(sections)}
 <footer>
   <p>Made by infra/modal/living_bakeoff.py (the starts, the arms and the upscaler on Modal) and
   bakeoff/living-view/build_page.py with tools/captures/living_view.py (A, B, the numbers),
