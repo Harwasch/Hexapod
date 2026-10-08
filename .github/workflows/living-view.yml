@@ -8,8 +8,8 @@ name: Living view bake-off (Modal GPUs)
 # clips and the comparison page are made from it afterwards (tools/captures/living_view.py).
 #
 # * **How to run it.** Push a commit to `bakeoff-living-view` whose message carries
-#   `[lv:<steps>|arms=<arms>|budget=<dollars>]` -- steps from access, download, starts, arms
-#   (comma-separated, in that order); arms from ltx, causal, flf, wan; budget the dollars
+#   `[lv:<steps>|arms=<arms>|budget=<dollars>]` -- steps from access, download, starts, arms,
+#   upscale (comma-separated, in that order); arms from ltx, causal, flf, wan; budget the dollars
 #   left under the bake-off's cap (arms whose worst case -- timeout x rate -- does not fit are
 #   refused). `starts=` and `contexts=` pass through. A push without a token runs nothing.
 #   `workflow_dispatch` works once this file is on the default branch.
@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       steps:
-        description: "Steps, in order: access,download,starts,arms"
+        description: "Steps, in order: access,download,starts,arms,upscale"
         type: string
         default: access
       arms:
@@ -56,6 +56,7 @@ jobs:
       budget: ${{ steps.plan.outputs.budget }}
       starts: ${{ steps.plan.outputs.starts }}
       contexts: ${{ steps.plan.outputs.contexts }}
+      upscalers: ${{ steps.plan.outputs.upscalers }}
     steps:
       # Read as data, validated here, never interpolated into a shell line.
       - id: plan
@@ -69,7 +70,8 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
           options = {"steps": "access", "arms": "wan,flf,causal,ltx", "budget": "0",
-                     "starts": "tree-1,tree-2,camp-1,camp-2", "contexts": "1,3"}
+                     "starts": "tree-1,tree-2,camp-1,camp-2", "contexts": "1,3",
+                     "upscalers": "flashvsr"}
           if os.environ["EVENT"] == "workflow_dispatch":
               for name in ("steps", "arms", "budget"):
                   options[name] = os.environ.get(name.upper(), "") or options[name]
@@ -82,11 +84,12 @@ jobs:
                       raise SystemExit(f"unknown option {name!r} in the [lv:] token")
                   options[name] = value
           valid = {
-              "steps": r"(access|download|starts|arms)(,(access|download|starts|arms))*",
+              "steps": r"(access|download|starts|arms|upscale)(,(access|download|starts|arms|upscale))*",
               "arms": r"(ltx|causal|flf|wan)(,(ltx|causal|flf|wan))*",
               "budget": r"[0-9]{1,2}(\.[0-9]{1,2})?",
               "starts": r"(tree|camp)-[1-9](,(tree|camp)-[1-9])*",
               "contexts": r"[1-5](,[1-5])*",
+              "upscalers": r"(flashvsr)(,(flashvsr))*",
           }
           for name, pattern in valid.items():
               if not re.fullmatch(pattern, options[name]):
@@ -109,6 +112,7 @@ jobs:
       BUDGET: ${{ needs.plan.outputs.budget }}
       STARTS: ${{ needs.plan.outputs.starts }}
       CONTEXTS: ${{ needs.plan.outputs.contexts }}
+      UPSCALERS: ${{ needs.plan.outputs.upscalers }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -133,7 +137,7 @@ jobs:
         run: |
           exec uv run --with modal==1.5.5 modal run infra/modal/living_view.py \
             --steps "$STEPS" --arms "$ARMS" --budget-left "$BUDGET" \
-            --starts-names "$STARTS" --contexts "$CONTEXTS" --out lv-out
+            --starts-names "$STARTS" --contexts "$CONTEXTS" --upscalers "$UPSCALERS" --out lv-out
       - name: Summary
         if: always()
         run: |

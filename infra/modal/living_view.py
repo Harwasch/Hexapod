@@ -195,6 +195,28 @@ ARMS: dict[str, dict] = {
         "licence": "Apache-2.0",
     },
 }
+#: Video super-resolution of every arm's clip (A-up on the page): FlashVSR v1.1 (tiny decoder),
+#: its locality-constrained sparse attention on Block-Sparse-Attention, which its authors run
+#: on A100s. 4x as its authors recommend for clips smaller than the render, 2x for clips
+#: already the render's size (a supersampling pass), then area-resized to the render.
+FVSR_REPO = "JunhaoZhuang/FlashVSR-v1.1"
+FVSR_CODE = "https://github.com/OpenImagingLab/FlashVSR.git"
+FVSR_COMMIT = "cf910c61a60733e610e9c6e8b607f80c3a6c202b"
+BSA_CODE = "https://github.com/mit-han-lab/Block-Sparse-Attention.git"
+BSA_COMMIT = "49d6c39e4dc0303442cda3bb758b3925d4399c49"
+SEEDVR_REPO = "ByteDance-Seed/SeedVR2-3B"
+UPSCALERS: dict[str, dict] = {
+    "flashvsr": {
+        "gpu": "A100-80GB",
+        "cpu": 8.0,
+        "memoryGiB": 64,
+        "timeoutS": 2400,
+        "needs": (FVSR_REPO,),
+        "model": f"{FVSR_REPO} (tiny decoder, sparse ratio 2.0, local range 11)",
+        "licence": "Apache-2.0 (weights and code; Block-Sparse-Attention Apache-2.0)",
+    },
+}
+GPU_PER_S["A100-80GB"] = 0.000694
 STARTS_RESERVATION = {"gpu": "L4", "cpu": 4.0, "memoryGiB": 32, "timeoutS": 2400}
 DOWNLOAD_RESERVATION = {"gpu": "", "cpu": 2.0, "memoryGiB": 8, "timeoutS": 3 * 3600}
 
@@ -209,6 +231,8 @@ ACCESS: dict[str, str] = {
     WAN_REPO: "model_index.json",
     "TencentARC/RollingForcing": "README.md",
     "krea/krea-realtime-video": "README.md",
+    FVSR_REPO: "diffusion_pytorch_model_streaming_dmd.safetensors",
+    SEEDVR_REPO: "README.md",
 }
 
 
@@ -348,6 +372,62 @@ cf_image = (
 )
 
 
+#: FlashVSR's environment (its requirements.txt; torch 2.6 cu124), Block-Sparse-Attention built
+#: from source for the A100 (sm_80) only and forward only -- the backward kernels are dropped
+#: from the build and their launcher stubbed, since inference never calls them -- then
+#: FlashVSR's own `diffsynth` at `FVSR_COMMIT`.
+vsr_image = (
+    modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04", add_python="3.11")
+    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential")
+    .pip_install(
+        "torch==2.6.0",
+        "torchvision==0.21.0",
+        "torchaudio==2.6.0",
+        index_url="https://download.pytorch.org/whl/cu124",
+    )
+    .pip_install("packaging", "ninja", "psutil", "wheel", "setuptools<80")
+    .run_commands(
+        f"git clone {BSA_CODE} /opt/bsa && git -C /opt/bsa checkout {BSA_COMMIT}"
+        " && git -C /opt/bsa submodule update --init csrc/cutlass",
+        "sed -i '/flash_bwd_block_hdim/d' /opt/bsa/setup.py",
+        "sed -i 's/run_mha_bwd_block_<elem_type, kHeadDim, Is_causal>(params, stream);"
+        '/TORCH_CHECK(false, "block-sparse backward not built");/\''
+        " /opt/bsa/csrc/block_sparse_attn/flash_api.cpp",
+        "cd /opt/bsa && BLOCK_SPARSE_ATTN_CUDA_ARCHS=80 BLOCK_SPARSE_ATTN_FORCE_BUILD=TRUE"
+        " TORCH_CUDA_ARCH_LIST=8.0 MAX_JOBS=4 NVCC_THREADS=2"
+        " pip install --no-build-isolation -v . 2>&1 | tail -40",
+        "python -c 'import block_sparse_attn_cuda'",
+    )
+    .pip_install(
+        "torchmetrics==1.7.3",
+        "torchsde==0.2.6",
+        "accelerate==1.8.1",
+        "einops==0.8.1",
+        "huggingface-hub==0.34.4",
+        "matplotlib==3.10.3",
+        "numpy==1.26.4",
+        "opencv-python-headless==4.11.0.86",
+        "peft==0.16.0",
+        "pillow==11.0.0",
+        "safetensors==0.5.3",
+        "sentencepiece==0.2.0",
+        "transformers==4.46.2",
+        "pytorch-lightning==2.5.2",
+        "imageio==2.37.0",
+        "imageio-ffmpeg==0.6.0",
+        "protobuf==3.20.3",
+        "ftfy==6.3.1",
+        "pandas==2.3.0",
+        "tqdm",
+        "datasets",
+    )
+    .run_commands(
+        f"git clone {FVSR_CODE} /opt/flashvsr && git -C /opt/flashvsr checkout {FVSR_COMMIT}",
+        "pip install --no-deps -e /opt/flashvsr",
+    )
+)
+
+
 # --- shared helpers --------------------------------------------------------------------------
 
 
@@ -393,6 +473,16 @@ def _need(paths: list[str]) -> None:
     missing = [p for p in paths if not Path(p).exists()]
     if missing:
         raise FileNotFoundError(f"missing: {missing}")
+
+
+def _keep(arm: str, clips: dict) -> None:
+    """An arm's clips into the results volume too, for the upscaler to read."""
+    RESULTS.reload()
+    folder = Path("/data/clips") / arm
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, clip in clips.items():
+        (folder / f"{name}.mp4").write_bytes(clip["mp4"])
+    RESULTS.commit()
 
 
 def _clip_entry(frames: object, fps: float, seconds: float, first: float, size: list[int]) -> dict:
@@ -487,6 +577,8 @@ def _download_plan(arm: str, token: str | None) -> list[tuple[str, list[str]]]:
         parts = ["image_encoder", "image_processor", "scheduler", "text_encoder", "tokenizer"]
         parts += ["transformer", "vae"]
         return [(FLF_REPO, ["model_index.json"] + [f"{p}/*" for p in parts])]
+    if arm == "flashvsr":
+        return [(FVSR_REPO, ["*.ckpt", "*.pth", "*.safetensors", "*.json", "README.md"])]
     if arm == "wan":
         return []  # cached in hexapod-world-model-weights by world_models.Wan
     raise ValueError(f"unknown arm {arm!r}")
@@ -928,6 +1020,7 @@ def ltx(request: dict) -> dict:
         frames = _u8(video[0])
         size = [int(frames.shape[2]), int(frames.shape[1])]
         clips[name] = _clip_entry(frames, LTX_FPS, seconds, seconds, size)
+    _keep("ltx", clips)
     return {
         "arm": "ltx",
         "model": ARMS["ltx"]["model"],
@@ -1069,6 +1162,7 @@ def causal(request: dict) -> dict:
             entry = _clip_entry(frames, CF_FPS, encode + seconds, encode + first, [width, height])
             entry["contextLatentFrames"] = ctx
             clips[label] = entry
+    _keep("causal", clips)
     return {
         "arm": "causal",
         "model": ARMS["causal"]["model"],
@@ -1150,6 +1244,7 @@ def flf(request: dict) -> dict:
         torch.cuda.synchronize()
         seconds = time.time() - t0
         clips[name] = _clip_entry(_u8(frames), FLF_FPS, seconds, seconds, [w, h])
+    _keep("flf", clips)
     return {
         "arm": "flf",
         "model": ARMS["flf"]["model"],
@@ -1217,6 +1312,7 @@ def wan(request: dict) -> dict:
         torch.cuda.synchronize()
         seconds = time.time() - t0
         clips[name] = _clip_entry(_u8(frames), WAN_FPS, seconds, seconds, [w, h])
+    _keep("wan", clips)
     return {
         "arm": "wan",
         "model": ARMS["wan"]["model"],
@@ -1237,6 +1333,136 @@ def wan(request: dict) -> dict:
 ARM_FUNCTIONS = {"ltx": ltx, "causal": causal, "flf": flf, "wan": wan}
 
 
+# --- upscaler: FlashVSR v1.1 -------------------------------------------------------------------
+
+
+@app.function(
+    image=vsr_image,
+    gpu=UPSCALERS["flashvsr"]["gpu"],
+    cpu=UPSCALERS["flashvsr"]["cpu"],
+    memory=UPSCALERS["flashvsr"]["memoryGiB"] * 1024,
+    timeout=UPSCALERS["flashvsr"]["timeoutS"],
+    volumes={"/lv": LV_WEIGHTS, "/data": RESULTS},
+    single_use_containers=True,
+)
+def flashvsr(request: dict) -> dict:
+    """Every clip in the results volume (`/data/clips/<arm>/<start>.mp4`, or `request["clips"]`)
+    through FlashVSR v1.1 (tiny), as its own v1.1 tiny script runs it, to the render's size.
+    The clip is padded (reflected) so the upscaled size is a multiple of 128, its frame count
+    padded to FlashVSR's 8n+1 with the last frame repeated, and both trimmed back after."""
+    started = time.time()
+    weights = Path(f"/lv/{FVSR_REPO}")
+    _need([str(weights / "diffusion_pytorch_model_streaming_dmd.safetensors")])
+    RESULTS.reload()
+    names = request.get("clips") or sorted(
+        str(p.relative_to("/data/clips").with_suffix(""))
+        for p in Path("/data/clips").glob("*/*.mp4")
+    )
+    code = Path("/opt/flashvsr/examples/WanVSR")
+    link = code / "FlashVSR-v1.1"
+    if not link.exists():
+        link.symlink_to(weights)
+    os.chdir(code)
+    sys.path.insert(0, str(code))
+    import imageio.v2 as imageio
+    import numpy as np
+    import torch
+    import torch.nn.functional as F
+    from diffsynth import FlashVSRTinyPipeline, ModelManager
+    from utils.TCDecoder import build_tcdecoder
+    from utils.utils import Causal_LQ4x_Proj
+
+    mm = ModelManager(torch_dtype=torch.bfloat16, device="cpu")
+    mm.load_models([str(link / "diffusion_pytorch_model_streaming_dmd.safetensors")])
+    pipe = FlashVSRTinyPipeline.from_model_manager(mm, device="cuda")
+    proj = Causal_LQ4x_Proj(in_dim=3, out_dim=1536, layer_num=1).to("cuda", dtype=torch.bfloat16)
+    proj.load_state_dict(torch.load(link / "LQ_proj_in.ckpt", map_location="cpu"), strict=True)
+    pipe.denoising_model().LQ_proj_in = proj
+    pipe.TCDecoder = build_tcdecoder(
+        new_channels=[512, 256, 128, 128], new_latent_channels=16 + 768
+    )
+    pipe.TCDecoder.load_state_dict(torch.load(link / "TCDecoder.ckpt"), strict=False)
+    pipe.to("cuda")
+    pipe.enable_vram_management(num_persistent_param_in_dit=None)
+    pipe.init_cross_kv()
+    pipe.load_models_to_device(["dit", "vae"])
+    load = time.time() - started
+    width, height = request.get("renderSize", START_SIZE)
+    out: dict = {}
+    for name in names:
+        reader = imageio.get_reader(f"/data/clips/{name}.mp4")
+        fps = float(reader.get_meta_data().get("fps", 24.0))
+        frames = np.stack([np.asarray(f)[..., :3] for f in reader])
+        reader.close()
+        n, h, w = frames.shape[:3]
+        scale = 4 if w < width else 2
+        unit = 128 // scale
+        pad_h, pad_w = (-h) % unit, (-w) % unit
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+        t0 = time.time()
+        padded = np.pad(frames, ((0, 0), (0, pad_h), (0, pad_w), (0, 0)), mode="reflect")
+        total = ((n + 3 + 7) // 8) * 8 + 1  # FlashVSR keeps total - 4 frames: at least n
+        padded = np.concatenate([padded, np.repeat(padded[-1:], total - n, axis=0)])
+        lq = torch.from_numpy(padded).to("cuda").permute(3, 0, 1, 2).float() / 127.5 - 1.0
+        H4, W4 = (h + pad_h) * scale, (w + pad_w) * scale
+        lq = F.interpolate(lq, size=(H4, W4), mode="bicubic", align_corners=False)
+        lq = lq.clamp(-1, 1).to(torch.bfloat16)[None]  # (1, C, F, H, W)
+        video = pipe(
+            prompt="",
+            negative_prompt="",
+            cfg_scale=1.0,
+            num_inference_steps=1,
+            seed=0,
+            LQ_video=lq,
+            num_frames=total,
+            height=H4,
+            width=W4,
+            is_full_block=False,
+            if_buffer=True,
+            topk_ratio=2.0 * 768 * 1280 / (H4 * W4),
+            kv_ratio=3.0,
+            local_range=11,
+            color_fix=True,
+        )
+        torch.cuda.synchronize()
+        seconds = time.time() - t0
+        big = ((video.float() + 1) * 127.5).clamp(0, 255)  # (C, T, H, W)
+        big = big[:, :n, : h * scale, : w * scale]
+        small = F.interpolate(big.permute(1, 0, 2, 3), size=(height, width), mode="area")
+        result = small.round().byte().permute(0, 2, 3, 1).cpu().numpy()
+        del lq, video, big, small
+        out[name] = {
+            "mp4": _mp4(result, fps),
+            "fps": fps,
+            "frames": int(n),
+            "scale": scale,
+            "modelSize": [int(w), int(h)],
+            "srSize": [int(w * scale), int(h * scale)],
+            "seconds": round(seconds, 2),
+            "framesPerSecond": round(n / seconds, 2),
+            "peakMemoryGB": round(torch.cuda.max_memory_allocated() / 2**30, 1),
+        }
+        torch.cuda.empty_cache()
+    RESULTS.reload()
+    for name, clip in out.items():
+        target = Path("/data/upscaled/flashvsr") / f"{name}.mp4"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(clip["mp4"])
+    RESULTS.commit()
+    return {
+        "upscaler": "flashvsr",
+        "model": UPSCALERS["flashvsr"]["model"],
+        "code": f"{FVSR_CODE}@{FVSR_COMMIT}",
+        "loadSeconds": round(load, 1),
+        "clips": out,
+        "containerSeconds": round(time.time() - started, 1),
+    }
+
+
+UPSCALER_FUNCTIONS = {"flashvsr": flashvsr}
+
+
 # --- the run --------------------------------------------------------------------------------
 
 
@@ -1253,6 +1479,7 @@ def main(
     starts_names: str = "tree-1,tree-2,camp-1,camp-2",
     seed: int = 1,
     contexts: str = "1,3",
+    upscalers: str = "flashvsr",
     budget_left: float = 0.0,
     out: str = "lv-out",
 ) -> None:
@@ -1262,9 +1489,16 @@ def main(
     folder.mkdir(parents=True, exist_ok=True)
     wanted_steps = [s for s in steps.split(",") if s]
     wanted_arms = [a for a in arms.split(",") if a]
+    wanted_upscalers = [u for u in upscalers.split(",") if u]
     for a in wanted_arms:
         if a not in ARMS:
             raise SystemExit(f"unknown arm {a!r}")
+    for u in wanted_upscalers:
+        if u not in UPSCALERS:
+            raise SystemExit(f"unknown upscaler {u!r}")
+    items = {a: ARMS[a] for a in wanted_arms}
+    if "upscale" in wanted_steps or "download" in wanted_steps:
+        items |= {u: UPSCALERS[u] for u in wanted_upscalers}
     summary: dict = {"steps": wanted_steps, "arms": wanted_arms, "costs": []}
 
     def dump() -> None:
@@ -1285,7 +1519,7 @@ def main(
         dump()
 
     def run() -> None:
-        readable = {a: True for a in wanted_arms}
+        readable = {a: True for a in items}
         if "access" in wanted_steps:
             t0 = time.time()
             report = access.remote()
@@ -1296,15 +1530,15 @@ def main(
                 (folder / "cards" / f"{repo.replace('/', '__')}.md").write_text(text)
             summary["access"] = report
             sys.stdout.write(f"access: {json.dumps(report, indent=1)}\n")
-            for a in wanted_arms:
+            for a, item in items.items():
                 readable[a] = all(
-                    str(report["repos"].get(r, "")).startswith("ok") for r in ARMS[a]["needs"]
+                    str(report["repos"].get(r, "")).startswith("ok") for r in item["needs"]
                 )
             summary["readable"] = readable
             dump()
         if "download" in wanted_steps:
             spawned = []
-            for a in wanted_arms:
+            for a in items:
                 if not readable[a]:
                     sys.stdout.write(f"download {a}: skipped, not readable\n")
                     continue
@@ -1374,6 +1608,36 @@ def main(
                 cost(
                     f"arm {a}",
                     ARMS[a],
+                    time.time() - t0,
+                    {"containerSeconds": result.get("containerSeconds")},
+                )
+        if "upscale" in wanted_steps:
+            left = budget_left
+            summary["upscaled"] = {}
+            for u in wanted_upscalers:
+                worst = UPSCALERS[u]["timeoutS"] * rate_per_s(UPSCALERS[u])
+                if not readable.get(u, True) or worst > left:
+                    why = "not readable" if not readable.get(u, True) else f"worst ${worst:.2f}"
+                    sys.stdout.write(f"upscaler {u}: skipped ({why}, ${left:.2f} left)\n")
+                    summary.setdefault("skipped", {})[u] = why
+                    continue
+                left -= worst
+                t0 = time.time()
+                call = calls.spawn(f"upscale {u}", UPSCALER_FUNCTIONS[u], {})
+                try:
+                    result = calls.get(call, timeout=UPSCALERS[u]["timeoutS"] + 900)
+                except Exception as error:  # noqa: BLE001
+                    summary["upscaled"][u] = {"error": repr(error)[:4000]}
+                    cost(f"upscale {u} (failed)", UPSCALERS[u], time.time() - t0)
+                    continue
+                for name, clip in result["clips"].items():
+                    target = folder / "upscaled" / u / f"{name}.mp4"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(clip.pop("mp4"))
+                summary["upscaled"][u] = result | {"licence": UPSCALERS[u]["licence"]}
+                cost(
+                    f"upscale {u}",
+                    UPSCALERS[u],
                     time.time() - t0,
                     {"containerSeconds": result.get("containerSeconds")},
                 )

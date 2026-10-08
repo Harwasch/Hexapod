@@ -162,3 +162,64 @@ def test_upsampled_flow_scales_its_vectors() -> None:
     big = lv.upsample_flow(flow, 40, 30)
     assert big.shape == (30, 40, 2)
     assert np.allclose(big[..., 0], 2.0) and np.allclose(big[..., 1], 6.0)
+
+
+def _plant_on_sky(h: int = H, w: int = W) -> tuple[np.ndarray, np.ndarray]:
+    """A textured disc (the plant) on a flat pale sky, and its share."""
+    disc = _disc(h, w)
+    sky = np.full((h, w, 3), (200, 210, 220), np.float32)
+    render = np.where(disc[..., None] > 0, _texture(1, h, w).astype(np.float32), sky)
+    return render.astype(np.uint8), disc
+
+
+def test_guided_filter_keeps_the_guide_edges() -> None:
+    _, disc = _plant_on_sky()
+    gf = lv.GuidedFilter(disc, radius=4, eps=1e-4)
+    out = gf(disc)  # the guide filtered by itself: the step stays a step
+    assert np.abs(out - disc).max() < 0.05
+    assert np.allclose(gf(np.full_like(disc, 0.3)), 0.3, atol=1e-4)
+
+
+def test_guided_upsampling_keeps_the_plant_motion_inside_its_outline() -> None:
+    import cv2
+
+    render, disc = _plant_on_sky()
+    coarse = np.zeros((H // 2, W // 2, 2), np.float32)
+    small_disc = cv2.resize(disc, (W // 2, H // 2), interpolation=cv2.INTER_AREA)
+    coarse[..., 0] = cv2.GaussianBlur(small_disc, (0, 0), 2.0) * 1.5
+    plain = lv.upsample_flow(coarse, W, H)
+    guided = lv.upsample_flow_guided(coarse, lv.edge_guide(render, disc), disc)
+    ring = lv.edge_ring(disc, 4)
+    core = _disc(radius=20.0) > 0
+    assert guided[core][:, 0].mean() == pytest.approx(3.0, abs=0.4)  # 1.5 px at half size
+    assert np.abs(guided[ring]).mean() < 0.5 * np.abs(plain[ring]).mean()
+
+
+def test_source_mask_moves_sky_only_where_it_reads_plant() -> None:
+    share = np.zeros((10, 10), np.float32)
+    share[:, :5] = 1.0  # plant on the left half
+    flow = np.zeros((10, 10, 2), np.float32)
+    flow[:, 5, 0] = -2.0  # a sky pixel reading the plant two to its left: keeps its motion
+    flow[:, 8, 0] = 1.0  # a sky pixel reading sky: none
+    kept = lv.source_masked(flow, share)
+    assert np.allclose(kept[:, 5, 0], -2.0) and np.allclose(kept[:, 8, 0], 0.0)
+
+
+def test_guided_mode_drags_less_sky_than_bilinear() -> None:
+    import cv2
+
+    render, disc = _plant_on_sky()
+    frames = [render]
+    for k in range(1, 9):
+        flow = np.zeros((H, W, 2), np.float32)
+        flow[..., 0] = 2.5 * math.sin(math.pi * k / 8) * disc
+        frames.append(lv.warp(render, flow))
+    small = [cv2.resize(f, (W // 2, H // 2), interpolation=cv2.INTER_AREA) for f in frames]
+    soft = lv.feather(disc)
+    moved, report = lv.motion_only(render, small, soft, share=disc, modes=lv.MODES, ramp=0.2)
+    assert set(moved) == set(lv.MODES)
+    for mode in lv.MODES:
+        assert np.array_equal(moved[mode][0], render)
+        assert np.array_equal(moved[mode][-1], render)
+    assert report.halo_px["guided"] < 0.6 * report.halo_px["bilinear"]
+    assert report.applied_px["guided"] > 0.5
