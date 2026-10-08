@@ -129,9 +129,13 @@ def reencode(src: Path, dst: Path, crf: int) -> None:
 
 def process_all(merged: dict, out: Path, crf: int) -> dict:
     """Every start x arm through `living_view.process`, the upscaled clips re-encoded; the
-    numbers by (start, arm)."""
+    numbers by (start, arm). A start x arm whose clips and numbers an earlier build left in
+    `out` (`numbers.json`) is not processed again, so a later upscaler's run adds only its own."""
     numbers: dict = {}
     clips = out / "clips"
+    done = {}
+    if (out / "numbers.json").exists():
+        done = json.loads((out / "numbers.json").read_text())
     for (arm, name), clip in sorted(merged["files"].items()):
         start = name.split("~")[0]
         row = arm if "~" not in name else f"{arm}~{name.split('~')[1]}"
@@ -141,18 +145,22 @@ def process_all(merged: dict, out: Path, crf: int) -> dict:
         base = Path(view["dir"])
         key = f"{start}-{row.replace('~', '-')}"
         share = base / f"{start}-share.png"
-        result = lv.process(
-            base / f"{start}.png",
-            base / f"{start}-mask.png",
-            clip,
-            clips,
-            key,
-            share_path=share if share.exists() else None,
-            crf=crf,
-        )
+        kept = done.get(f"{start}|{row}")
+        if kept and all((clips / f"{key}-{s}.mp4").exists() for s in ("a", "b", "g")):
+            result = dict(kept)
+        else:
+            result = lv.process(
+                base / f"{start}.png",
+                base / f"{start}-mask.png",
+                clip,
+                clips,
+                key,
+                share_path=share if share.exists() else None,
+                crf=crf,
+            )
         for upscaler, data in merged["upscaled"].items():
             up = data["clips"].get(f"{arm}/{name}")
-            if up and Path(up["path"]).exists():
+            if up and Path(up["path"]).exists() and f"{upscaler}PsnrOutsideDb" not in result:
                 suffix = UPSCALER_SUFFIX[upscaler]
                 reencode(Path(up["path"]), clips / f"{key}-{suffix}.mp4", crf)
                 frames, _fps = lv.read_clip(Path(up["path"]))
