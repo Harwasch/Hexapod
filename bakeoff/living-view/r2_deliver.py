@@ -17,9 +17,9 @@ world models, `upscale-summary.json`; `clips/<arm>/<start>.mp4`,
                                    prompt, motion and drift numbers, upscale times, where each
                                    file went; per arm: a summary and the read by eye (`EYE`)
 
-OUT holds at most `LIMIT_MB` (stills included): the (arm, kind) groups go in `TIERS` order, the
-round-2 brief's priority, each group of four starts whole or not at all; whatever does not fit
-goes to the sibling folder `r2-more/` under the same names.
+OUT holds at most `LIMIT_MB` (stills included): the (arm, kind) groups go in `TIERS` order,
+each group (its starts) whole or not at all; whatever does not fit goes to the sibling folder
+`r2-more/` under the same names.
 
 The winner's base clip (ltx-p1) is delivered as ltx-base; round 1's LTX clip, re-upscaled, as
 ltx-r1. Clips of an `-h100` arm are timings only (`gpuCompare`).
@@ -57,44 +57,41 @@ KINDS = {
 #: Delivered under another arm name: the winner's base clip, round 1's LTX clip.
 DELIVER_AS = {"ltx-p1": "ltx-base", "ltx": "ltx-r1"}
 STARTS = ("tree-1", "tree-2", "camp-1", "camp-2")
-#: The brief's priority: Part 1 a-b and FlashVSR 2560, the prompt variants, Part 2 idle,
-#: Part 1 c-d, SeedVR2 2560, 4K, Part 2 pans; then the extras.
+#: What goes in OUT first. The brief's GPU priority (Part 1 a-b and FlashVSR 2560, Part 2 idle,
+#: Part 1 c-d, SeedVR2, 4K, pans) with one change: the loop (Part 1 d) comes up beside the base,
+#: because it is the one arm whose motion is in the owner's "slight" range. Every model's own
+#: pixels (a) before most upscales; the 4K files (up to 14 MB each) cannot fit beside them.
 TIERS = [
     ("ltx-base", "a"),
     ("ltx-base", "u2k"),
+    ("ltx-loop", "a"),
+    ("ltx-loop", "u2k"),
+    ("ltx-r1", "u2k"),
     ("ltx-s1", "a"),
     ("ltx-s1", "u2k"),
-    ("ltx-r1", "u2k"),
-    ("ltx-p2", "a"),
-    ("ltx-p3", "a"),
     ("mg3-idle", "a"),
     ("waypoint-idle", "a"),
     ("yume-idle", "a"),
-    ("mg3-idle", "u2k"),
-    ("waypoint-idle", "u2k"),
-    ("yume-idle", "u2k"),
+    ("ltx-p2", "a"),
+    ("ltx-p3", "a"),
     ("ltx-chunk", "a"),
-    ("ltx-loop", "a"),
-    ("ltx-chunk", "u2k"),
-    ("ltx-loop", "u2k"),
+    ("ltx-p5", "a"),
+    ("ltx-loop", "u4k"),
+    ("ltx-r1", "u4k"),
     ("ltx-base", "s2k"),
     ("ltx-r1", "s2k"),
-    ("ltx-base", "u4k"),
-    ("ltx-base", "s4k"),
-    ("ltx-r1", "u4k"),
-    ("ltx-r1", "s4k"),
+    ("mg3-idle", "u2k"),
+    ("yume-idle", "u2k"),
+    ("waypoint-idle", "u2k"),
+    ("ltx-chunk", "u2k"),
     ("mg3-pan", "a"),
     ("waypoint-pan", "a"),
     ("yume-pan", "a"),
-    ("ltx-p5", "a"),
     ("ltx-p4", "a"),
-    ("ltx-p5", "u2k"),
     ("ltx-p2", "u2k"),
     ("ltx-p3", "u2k"),
+    ("ltx-p5", "u2k"),
     ("ltx-p4", "u2k"),
-    ("mg3-pan", "u2k"),
-    ("waypoint-pan", "u2k"),
-    ("yume-pan", "u2k"),
 ]
 LICENCES = {
     "ltx": "LTX-2.x Community License (commercial use free under $10M revenue)",
@@ -178,6 +175,20 @@ EYE: dict[str, str] = {
     "ltx-r1": (
         "Round 1's LTX clip (scene prompts), upscaled again to 2560 with FlashVSR's real "
         "kernels (and SeedVR2)."
+    ),
+    "upscale-flashvsr": (
+        "With the real Block-Sparse-Attention kernels: 4.5 fps at 2560x1408 on an A100 (round "
+        "1's PyTorch fallback did 0.6 fps). Crisp, natural detail on the still parts (leaves, "
+        "bark, the sign). Motion blur from the model stays blur. The better upscaler. At "
+        "3840x2112 (x3) a 97-frame clip runs out of the A100's 80 GB (2560 peaks at 37 GB), so "
+        "there are no 4K clips: that needs the clip in temporal chunks, or the kernels built "
+        "for an H200."
+    ),
+    "upscale-seedvr2": (
+        "At 2560x1408 the foliage turns waxy and painted: smooth plastic leaf shapes and lifted "
+        "blacks, clearly worse than FlashVSR. 1.1 fps on an H200, peaking at 113-124 GB, so "
+        "3840x2112 is out of reach on one GPU. Chunked clips (33 frames, 8 cross-faded) show no "
+        "visible seams."
     ),
 }
 

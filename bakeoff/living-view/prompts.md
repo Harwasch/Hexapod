@@ -168,6 +168,10 @@ the tree on the left.
   > settle, any water ripples gently, while the ground, buildings and objects stay rigid and
   > still.
 
+- **What it did (R2-9):** with idle actions the world freezes: 0.5 px p95 of plant motion,
+  and the frame is only re-rendered through its VAE. The breeze in the text does not make
+  anything move. Motion in this model comes from the actions (the camera), not the caption.
+
 ## Waypoint-1.5 (Overworld/Waypoint-1.5-1B)
 
 - **Text: no.** The checkpoint's `transformer/config.json` has `prompt_conditioning: null`, so
@@ -181,6 +185,9 @@ the tree on the left.
 - **Licence:** the weights are Apache-2.0. The Python that runs them (`modular_blocks.py`,
   `transformer/model.py`, `vae/ae_model.py` in the same repository) is **GPL-3.0**. That allows
   commercial use but is copyleft, so a shipped integration would have to comply or reimplement.
+- **What it did (R2-9):** idle holds tree-1 frozen. On the camp views it switches to a darker,
+  flatter look of its own and creeps 6-7 px. tree-2 turns into another scene within 4 s. The
+  mouse at x 0.1 is already a fast pan.
 
 ## Yume 1.5 (stdstu123/Yume-5B-720P)
 
@@ -212,3 +219,12 @@ the tree on the left.
   distilled path, MG3's distilled path and Yume's distilled sampling run without classifier-free
   guidance, so negatives have no effect there; the positive prompt and the control inputs carry
   everything.
+
+## Yume 1.5: what it did (R2-9)
+
+- Idle (no camera phrases) is not still: the camera drifts 16-20 px over 3.6 s, and the plants
+  churn (27-71 px p95). The frame drifts 15-20 dB away from the render by the end, so the event
+  text's "slightly" and "Nothing else changes" do not hold it.
+- Asking the web app for two segments in one call gives noise for the second (it reuses the
+  first segment's sequence length). The second segment has to go through its "continue from
+  last" path, as its web page does.
