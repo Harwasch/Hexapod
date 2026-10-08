@@ -2,22 +2,25 @@ import { create } from "zustand";
 
 import { loadCustomSets, saveCustomSets, withCustomSets, type CustomSet } from "@/lib/customSets";
 import type { InstancesDoc } from "@/lib/instances";
-import { cycleIndex } from "@/lib/sceneSelect";
+import { cycleIndex, type PaintPick } from "@/lib/sceneSelect";
 import { withSupersedes } from "@/lib/supersedes";
 import { record } from "@/state/history";
 import { useInstances } from "@/state/instances";
 import { activeSupersedes, onSupersedesChange } from "@/state/supersedes";
 
-/** What a painted area matched (lib/sceneSelect.ts `bestSet`). */
+/** What a painted area selects (lib/sceneSelect.ts `paintPick`). */
 export interface PaintResult {
   /**
-   * The best match's instances (ids of the scan's document with its painted objects): one, or
-   * a combination; empty when nothing painted carries an instance.
+   * The instances it selects (ids of the scan's document with its painted objects): the whole
+   * objects under the stroke, or the best match; empty when nothing painted carries one.
    */
   ids: readonly number[];
-  /** The first of `ids`, or null: the best instance when one is the match. */
+  /** The first of `ids`, or null: the largest share of the stroke when there are several. */
   best: number | null;
+  /** Their union's overlap with the painted area (IoU). */
   iou: number;
+  /** How they were chosen (`PaintPick.rule`): the objects under the stroke, or by overlap. */
+  rule?: PaintPick["rule"];
   /** Splats painted (visible and under the brush). */
   painted: number;
   /**
@@ -31,14 +34,17 @@ export interface PaintResult {
 export type StrokeMode = "replace" | "add" | "subtract";
 
 /**
- * A combination of instances the brush selected (lib/sceneSelect.ts `bestSet`): instances of
- * disjoint subtrees whose union matched the painted area better than any one of them.
+ * A combination of instances the brush selected, from disjoint subtrees: the whole objects a
+ * stroke fell on, or the parts of them it covers (lib/sceneSelect.ts `paintPick`,
+ * `paintLevels`); or the instances whose union matched the painted area best (`bestSet`).
  */
 export interface Combination {
-  /** The members, the largest first (`PaintSetMatch.ids`). */
+  /** The members, the largest first. */
   ids: readonly number[];
   /** Their union's overlap with the painted area (IoU). */
   iou: number;
+  /** Set when they are the objects (or parts) under the stroke, not a match by overlap. */
+  objects?: boolean;
 }
 
 /**
@@ -55,7 +61,8 @@ interface SceneSelectState {
   /**
    * Instance ids, leaf → top of the main hit first (lib/sceneSelect.ts `buildCandidates`). For
    * a combination, its first member, then what its members are parts of together, coarser one
-   * by one (`selectSet`).
+   * by one (`selectSet`); for the brush's levels, each level's first member, the finest first
+   * (`selectLevels`).
    */
   candidates: number[];
   /** How many of `candidates` are the main hit's chain. */
@@ -63,10 +70,11 @@ interface SceneSelectState {
   /** The chosen candidate, or -1. */
   index: number;
   /**
-   * Set when the brush selected a combination: candidate 0 is then the combination, not its
-   * first member alone (`selectedIds`); cycling up reaches what holds it, and back.
+   * Per candidate, the combination it stands for, if any (the brush's): choosing that candidate
+   * chooses every member, not its first alone (`selectedIds`); cycling moves between them and
+   * what holds them. Empty for a click's candidates.
    */
-  combination: Combination | null;
+  combinations: readonly (Combination | null)[];
   /** Where the click that made the selection was (CSS px in the viewport). */
   anchor: { x: number; y: number } | null;
   /** Clicking picks; painting collects splats under a brush. */
@@ -98,6 +106,16 @@ interface SceneSelectState {
     assetId: string,
     combination: Combination,
     above: readonly number[],
+    anchor: { x: number; y: number } | null,
+  ) => void;
+  /**
+   * Selects what a stroke fell on, with the levels below it (lib/sceneSelect.ts `paintLevels`,
+   * coarsest first): the coarsest is chosen, `[` steps down a level and `]` back up. A level of
+   * one instance is that instance, of more a combination.
+   */
+  selectLevels: (
+    assetId: string,
+    levels: readonly Combination[],
     anchor: { x: number; y: number } | null,
   ) => void;
   cycle: (step: number) => void;
@@ -154,7 +172,7 @@ export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
   candidates: [],
   chain: 0,
   index: -1,
-  combination: null,
+  combinations: [],
   anchor: null,
   mode: "pick",
   brush: 18,
@@ -167,7 +185,7 @@ export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
       candidates: [...candidates],
       chain,
       index: candidates.length === 0 ? -1 : Math.max(0, Math.min(candidates.length - 1, index)),
-      combination: null,
+      combinations: [],
       ...(anchor ? { anchor } : {}),
     }),
   selectSet: (assetId, combination, above, anchor) => {
@@ -179,7 +197,21 @@ export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
       candidates,
       chain: candidates.length,
       index: 0,
-      combination: { ids: [...combination.ids], iou: combination.iou },
+      combinations: [{ ...combination, ids: [...combination.ids] }],
+      ...(anchor ? { anchor } : {}),
+    });
+  },
+  selectLevels: (assetId, levels, anchor) => {
+    const finest = levels.filter((level) => level.ids.length > 0).reverse();
+    if (finest.length === 0) return;
+    set({
+      assetId,
+      candidates: finest.map((level) => level.ids[0] ?? 0),
+      chain: finest.length,
+      index: finest.length - 1,
+      combinations: finest.map((level) =>
+        level.ids.length > 1 ? { ...level, ids: [...level.ids] } : null,
+      ),
       ...(anchor ? { anchor } : {}),
     });
   },
@@ -188,7 +220,7 @@ export const useSceneSelect = create<SceneSelectState>()((set, get) => ({
       s.candidates.length < 2 ? s : { index: cycleIndex(s.index, s.candidates.length, step) },
     ),
   clear: () =>
-    set({ candidates: [], chain: 0, index: -1, combination: null, paint: null, anchor: null }),
+    set({ candidates: [], chain: 0, index: -1, combinations: [], paint: null, anchor: null }),
   setMode: (mode) => set({ mode, paint: null, strokeMode: "replace" }),
   setBrush: (radius) => set({ brush: Math.max(MIN_BRUSH, Math.min(MAX_BRUSH, radius)) }),
   setStrokeMode: (strokeMode) => set({ strokeMode }),
@@ -225,11 +257,11 @@ export function selectedId(state: Pick<SceneSelectState, "candidates" | "index">
   return state.candidates[state.index] ?? null;
 }
 
-/** The combination, while it is the chosen candidate; else null. */
+/** The combination the chosen candidate stands for, if it stands for one; else null. */
 export function chosenCombination(
-  state: Pick<SceneSelectState, "combination" | "index">,
+  state: Pick<SceneSelectState, "combinations" | "index">,
 ): Combination | null {
-  return state.index === 0 ? state.combination : null;
+  return state.combinations[state.index] ?? null;
 }
 
 const NO_IDS: readonly number[] = [];
@@ -239,7 +271,7 @@ const NO_IDS: readonly number[] = [];
  * none when nothing is. What Hide, Show only, Fly to and the highlight act on.
  */
 export function selectedIds(
-  state: Pick<SceneSelectState, "candidates" | "index" | "combination">,
+  state: Pick<SceneSelectState, "candidates" | "index" | "combinations">,
 ): readonly number[] {
   const combination = chosenCombination(state);
   if (combination) return combination.ids;

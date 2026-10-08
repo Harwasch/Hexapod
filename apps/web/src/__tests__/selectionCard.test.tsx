@@ -279,6 +279,75 @@ describe("the object card", () => {
     }
   });
 
+  it("names the objects a stroke fell on, says them as it is painted, and steps down to their parts", async () => {
+    const user = userEvent.setup();
+    touchScreen(false);
+    stageScan();
+    act(() => useSceneSelect.getState().setMode("paint"));
+    act(() =>
+      useSceneSelect.getState().setPaint({
+        ids: [2, 5],
+        best: 2,
+        iou: 0.2,
+        painted: 40,
+        rule: "objects",
+        live: true,
+      }),
+    );
+    render(wrap(<ObjectCard controller={controller} />));
+    expect(screen.getByTestId("object-paint-hint")).toHaveTextContent(
+      "Under the stroke: Conifer + Shrub · 40 splats.",
+    );
+    // The stroke ends: the objects, then the parts of them it covers.
+    act(() => {
+      useSceneSelect.getState().setPaint({
+        ids: [2, 5],
+        best: 2,
+        iou: 0.2,
+        painted: 40,
+        rule: "objects",
+      });
+      useSceneSelect.getState().selectLevels(
+        ASSET,
+        [
+          { ids: [2, 5], iou: 0.2, objects: true },
+          { ids: [3, 4, 5], iou: 0.4, objects: true },
+        ],
+        null,
+      );
+    });
+    const card = screen.getByTestId("selection-card");
+    const label = within(card).getByTestId("object-label");
+    expect(label).toHaveTextContent("Conifer + Shrub");
+    expect(label).toHaveAttribute("data-ids", "2 5");
+    // Whole objects under a stroke are no match to the painted area: no overlap is said.
+    expect(card).not.toHaveTextContent("overlap with the painted area");
+    expect(within(card).getByTestId("object-candidates")).toHaveTextContent("1 of 2");
+    expect([...(useInstances.getState().assets[ASSET]?.highlighted ?? [])].sort()).toEqual([
+      2, 3, 4, 5,
+    ]);
+    // `[` (the previous candidate): the parts painted, as one.
+    await user.click(within(card).getByRole("button", { name: "Previous candidate" }));
+    expect(label).toHaveTextContent("Branch + Trunk + Shrub");
+    expect(selectedIds(useSceneSelect.getState())).toEqual([3, 4, 5]);
+    expect(within(card).getByTestId("object-candidates")).toHaveTextContent("2 of 2");
+    await user.click(within(card).getByRole("button", { name: "Next candidate" }));
+    expect(label).toHaveTextContent("Conifer + Shrub");
+    // A match by overlap still says how well it matches.
+    act(() =>
+      useSceneSelect.getState().setPaint({
+        ids: [3, 4],
+        best: 3,
+        iou: 0.87,
+        painted: 40,
+        rule: "ground",
+      }),
+    );
+    expect(screen.getByTestId("object-paint-hint")).toHaveTextContent(
+      "Best match: 2 parts, 87% overlap · 40 splats.",
+    );
+  });
+
   it("paints with Shift, Alt and the wheel at a desk, and with buttons on a touch screen", async () => {
     const user = userEvent.setup();
     touchScreen(false);

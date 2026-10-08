@@ -25,19 +25,25 @@ import {
   combinationLabel,
   commonChain,
   cycleIndex,
+  dabCells,
   drillIndex,
   hiddenForShowOnly,
   levelText,
   PAINT_PARENT_SLACK,
   PAINT_SET_GAIN,
+  PAINT_SLIVER_SHARE,
   paintedCount,
   paintIndex,
+  paintLevels,
+  paintPick,
   paintSums,
   paintSumsIndexed,
+  sceneShareOf,
   selectionLabel,
   setIoU,
   splatShares,
   steadySet,
+  topLevels,
   type PaintSample,
   type PaintSetMatch,
   type PaintSums,
@@ -373,6 +379,16 @@ describe("painting", () => {
           bestSetByIoU(parsed, { ids, weights, painted }),
         );
         expect(paintedCount(index, mask), label).toBe(painted.reduce((a, b) => a + b, 0));
+        // And the stroke's cover, cell by cell, and the objects it selects.
+        const indexed = paintSumsIndexed(index, mask);
+        const direct = paintSums(parsed, { ids, weights, painted, cells: screen.cell });
+        expect(indexed.cells, label).toBe(direct.cells);
+        expect([...indexed.ids], label).toEqual([...direct.ids]);
+        indexed.cover.forEach((c, k) => expect(c, label).toBeCloseTo(direct.cover[k] ?? 0, 9));
+        const levels = topLevels(parsed);
+        const picked = (sums: PaintSums) =>
+          [...(paintPick(sums, levels, { minCells: 4 })?.ids ?? [])].sort((a, b) => a - b);
+        expect(picked(indexed), label).toEqual(picked(direct));
       }
     }
   });
@@ -693,7 +709,7 @@ describe("painting a combination", () => {
     // A click's selection is one instance again.
     useSceneSelect.getState().select("scan", [2, 1], 2, 1, null);
     state = useSceneSelect.getState();
-    expect(state.combination).toBeNull();
+    expect(state.combinations).toEqual([]);
     expect(selectedIds(state)).toEqual([1]);
     useSceneSelect.getState().clear();
     expect(selectedIds(useSceneSelect.getState())).toEqual([]);
@@ -775,10 +791,13 @@ describe("painting a combination", () => {
     const rowsOut: string[] = [];
     const median = (list: number[]): number =>
       [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)] ?? 0;
+    const levels = topLevels(parsed);
     for (const { name, mask } of strokes) {
       const single: number[] = [];
       const set: number[] = [];
+      const whole: number[] = [];
       let match: PaintSetMatch | null = null;
+      let objects: number[] = [];
       let met = 0;
       // As a stroke's previews run, many times over: the first few warm up.
       for (let run = 0; run < 25; run++) {
@@ -789,25 +808,323 @@ describe("painting a combination", () => {
         const sums = paintSumsIndexed(index, mask);
         match = steadySet(sums, match?.ids ?? null);
         const many = performance.now() - t;
+        // The brush's own rule: the sums, then the whole objects under the stroke.
+        t = performance.now();
+        objects = paintPick(paintSumsIndexed(index, mask), levels)?.ids ?? [];
+        const top = performance.now() - t;
         met = sums.ids.length;
         if (run < 5) continue;
         single.push(one);
         set.push(many);
+        whole.push(top);
       }
       const cells = mask.data.reduce((a, b) => a + b, 0);
       rowsOut.push(
         `${name}: ${String(cells)} cells, ${String(met)} instances met, one instance ` +
           `${median(single).toFixed(2)} ms, best set ${median(set).toFixed(2)} ms ` +
-          `(${String(match?.ids.length ?? 0)} members, IoU ${(match?.iou ?? 0).toFixed(3)})`,
+          `(${String(match?.ids.length ?? 0)} members, IoU ${(match?.iou ?? 0).toFixed(3)}), ` +
+          `whole objects ${median(whole).toFixed(2)} ms (${String(objects.length)})`,
       );
       // Well within the preview's 100 ms, on a shared machine; the report says what it took.
       expect(median(set)).toBeLessThan(60);
+      expect(median(whole)).toBeLessThan(60);
       expect(match).not.toBeNull();
+      expect(objects.length).toBeGreaterThan(0);
     }
     console.info(
       `camp-sized paint match: ${String(count)} visible splats, ${String(parsed.instances.length)} ` +
         `instances, index ${indexMs.toFixed(0)} ms\n  ${rowsOut.join("\n  ")}`,
     );
+  });
+});
+
+describe("painting whole objects", () => {
+  const box = { min: [0, 0, 0], max: [1, 1, 1] };
+  /**
+   * A cable spool (1, a thing): its top flange (2) of two planks (5, 6), its drum (3) and its
+   * bottom flange (4); two pumpkins (10, with its stem 11 and body 12; and 20); a small rock
+   * (50); and the ground as §3b writes it: the cover class Grass (30) with two regions (31,
+   * 32), and Moss (40) with one, so its splats carry its own id.
+   */
+  function yard(extra: Record<string, unknown>[] = []) {
+    const thing = (id: number, parent: number | null, splats: number, name?: string) => ({
+      id,
+      parent,
+      level: parent === null ? 0 : 1,
+      splats,
+      bounds: box,
+      kind: "thing",
+      ...(name ? { name } : {}),
+    });
+    const cover = (id: number, parent: number | null, splats: number, name: string) => ({
+      id,
+      parent,
+      level: parent === null ? 0 : 1,
+      splats,
+      bounds: box,
+      kind: "ground",
+      category: "ground",
+      name,
+    });
+    const parsed = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [
+        thing(1, null, 0, "Cable spool"),
+        thing(2, 1, 0, "Top flange"),
+        thing(3, 1, 40, "Drum"),
+        thing(4, 1, 30, "Bottom flange"),
+        thing(5, 2, 30, "Plank"),
+        thing(6, 2, 30, "Plank"),
+        thing(10, null, 0, "Pumpkin"),
+        thing(11, 10, 5, "Stem"),
+        thing(12, 10, 60, "Body"),
+        thing(20, null, 50, "Pumpkin"),
+        thing(50, null, 10, "Rock"),
+        cover(30, null, 0, "Grass"),
+        cover(31, 30, 100, "Grass"),
+        cover(32, 30, 100, "Grass"),
+        cover(40, null, 200, "Moss"),
+        ...extra,
+      ],
+      tiles: {},
+    });
+    if (!parsed) throw new Error("fixture did not parse");
+    return parsed;
+  }
+
+  /** Visible splats of weight 1, each in a cell of its own: per leaf, on screen and painted. */
+  function stroke(rows: readonly (readonly [number, number, number])[]): PaintSample {
+    const ids: number[] = [];
+    const painted: number[] = [];
+    for (const [id, visible, brushed] of rows) {
+      for (let k = 0; k < visible; k++) {
+        ids.push(id);
+        painted.push(k < brushed ? 1 : 0);
+      }
+    }
+    return { ids, weights: ids.map(() => 1), painted };
+  }
+
+  /** Every leaf on screen, and `brushed` of each painted. */
+  function over(doc: ReturnType<typeof yard>, brushed: Record<number, number>) {
+    const rows = doc.instances
+      .filter((i) => i.splats > 0)
+      .map((i) => [i.id, i.splats, brushed[i.id] ?? 0] as const);
+    return paintSums(doc, stroke(rows));
+  }
+
+  it("selects the whole object when a stroke touches part of one of its parts", () => {
+    const d = yard();
+    // A short stroke on the spool's top: a third of one plank.
+    const pick = paintPick(over(d, { 5: 10 }), topLevels(d), { minCells: 20 });
+    expect(pick?.ids).toEqual([1]);
+    expect(pick?.rule).toBe("objects");
+    // Not what IoU picks: the plank's own piece matches the painted area far better.
+    expect(bestSet(over(d, { 5: 10 }))?.ids).toEqual([5]);
+    // The same anywhere on it: a part of the drum, the bottom flange, a pumpkin's stem.
+    expect(paintPick(over(d, { 3: 4 }), topLevels(d))?.ids).toEqual([1]);
+    expect(paintPick(over(d, { 4: 30 }), topLevels(d))?.ids).toEqual([1]);
+    expect(paintPick(over(d, { 11: 3 }), topLevels(d))?.ids).toEqual([10]);
+  });
+
+  it("selects both objects a stroke runs across, the larger share first, not the ground between", () => {
+    const d = yard();
+    // Across both pumpkins, over the grass between them.
+    const pick = paintPick(over(d, { 12: 20, 31: 30, 20: 25 }), topLevels(d), { minCells: 20 });
+    expect(pick?.ids).toEqual([20, 10]);
+    expect(pick?.rule).toBe("objects");
+    expect(pick?.iou).toBeCloseTo(setIoU(over(d, { 12: 20, 31: 30, 20: 25 }), [20, 10]), 12);
+    // The spool and a pumpkin: both.
+    expect(paintPick(over(d, { 3: 30, 12: 10 }), topLevels(d), { minCells: 20 })?.ids).toEqual([
+      1, 10,
+    ]);
+  });
+
+  it("leaves out a sliver of a neighbour under the brush's edge", () => {
+    const d = yard();
+    const levels = topLevels(d);
+    // 60 cells on the spool, 4 on the rock: under a tenth of the stroke, under a dab.
+    expect(paintPick(over(d, { 3: 30, 5: 30, 50: 4 }), levels, { minCells: 20 })?.ids).toEqual([1]);
+    // A tenth of the stroke or more is no sliver...
+    expect(paintPick(over(d, { 3: 30, 5: 30, 50: 7 }), levels, { minCells: 20 })?.ids).toEqual([
+      1, 50,
+    ]);
+    // ...nor is as much as a dab of the brush, however long the stroke.
+    expect(paintPick(over(d, { 3: 30, 5: 30, 50: 4 }), levels, { minCells: 4 })?.ids).toEqual([
+      1, 50,
+    ]);
+    expect(PAINT_SLIVER_SHARE).toBe(0.1);
+    // A dab of the default 18 px brush in 3 px cells.
+    expect(dabCells()).toBeCloseTo((Math.PI * 18 * 18) / 9, 9);
+    expect(dabCells(36, 3)).toBeCloseTo(4 * dabCells(), 9);
+  });
+
+  it("selects the ground's regions under a stroke on the ground only, by overlap", () => {
+    const d = yard();
+    const levels = topLevels(d);
+    // A dab on one grass region: that region, not the class (spread over the scan) nor moss.
+    const grass = paintPick(over(d, { 31: 30 }), levels, { minCells: 20 });
+    expect(grass).toMatchObject({ ids: [31], rule: "ground" });
+    // Moss has one region: the class itself.
+    expect(paintPick(over(d, { 40: 30 }), levels)).toMatchObject({ ids: [40], rule: "ground" });
+    // A stroke across both grass regions and the moss: the regions it covers best.
+    const wide = paintPick(over(d, { 31: 100, 32: 100, 40: 3 }), levels, { minCells: 20 });
+    expect(wide?.rule).toBe("ground");
+    expect(wide?.ids).toEqual([30]);
+    // On the ground with a sliver of the rock: still the ground.
+    const edge = paintPick(over(d, { 31: 60, 50: 2 }), levels, { minCells: 20 });
+    expect(edge).toMatchObject({ ids: [31], rule: "ground" });
+    // Mostly ground, but a fair share on a pumpkin: the pumpkin, objects before the ground.
+    expect(paintPick(over(d, { 31: 60, 12: 12 }), levels, { minCells: 20 })).toMatchObject({
+      ids: [10],
+      rule: "objects",
+    });
+  });
+
+  it("matches by overlap on a scan whose instances have no hierarchy", () => {
+    // Every instance top level: the parts of a spool, not a spool.
+    const flat = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [1, 2, 3, 4].map((id) => ({ id, parent: null, splats: 30, bounds: box })),
+      tiles: {},
+    });
+    if (!flat) throw new Error("fixture did not parse");
+    expect(topLevels(flat).flat).toBe(true);
+    expect(topLevels(yard()).flat).toBe(false);
+    const sums = paintSums(
+      flat,
+      stroke([
+        [1, 30, 28],
+        [2, 30, 27],
+        [3, 30, 2],
+        [4, 30, 0],
+      ]),
+    );
+    const pick = paintPick(sums, topLevels(flat), { minCells: 1 });
+    expect(pick?.rule).toBe("overlap");
+    // Today's best set: the two parts painted, not the third grazed.
+    expect(pick?.ids).toEqual(bestSet(sums)?.ids);
+    expect(pick?.ids).toEqual([1, 2]);
+  });
+
+  it("passes over a root that is most of the scan, but never over a thing", () => {
+    // A file without kinds: a scene root (100) that is most of the scan, a bench (101) in it
+    // with a leg (102), and its own leftover splats.
+    const scene = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [
+        { id: 100, parent: null, splats: 300, bounds: box },
+        { id: 101, parent: 100, splats: 40, bounds: box },
+        { id: 102, parent: 101, splats: 10, bounds: box },
+        { id: 103, parent: null, splats: 100, bounds: box },
+      ],
+      tiles: {},
+    });
+    if (!scene) throw new Error("fixture did not parse");
+    const levels = topLevels(scene);
+    expect(levels.top[102]).toBe(101);
+    expect(levels.top[101]).toBe(101);
+    // The scene's own splats are no object.
+    expect(levels.top[100]).toBe(0);
+    expect(levels.top[103]).toBe(103);
+    const pick = paintPick(
+      paintSums(
+        scene,
+        stroke([
+          [100, 300, 40],
+          [102, 10, 5],
+        ]),
+      ),
+      levels,
+      { minCells: 2 },
+    );
+    expect(pick?.ids).toEqual([101]);
+    // A thing as large is the object itself: the spool of a close capture is 57% of it.
+    const spool = yard([{ id: 60, parent: 1, splats: 2000, bounds: box, kind: "thing" }]);
+    expect(splatShares(spool).get(1) ?? 0).toBeGreaterThan(0.5);
+    expect(topLevels(spool).top[60]).toBe(1);
+    expect(sceneShareOf(spool)(1)).toBe(0);
+    // And a click on it starts at the whole spool, as the brush does.
+    expect(drillIndex({ ids: [60, 1], chain: 2 }, null, sceneShareOf(spool))).toBe(1);
+    expect(
+      drillIndex({ ids: [60, 1], chain: 2 }, null, (id) => splatShares(spool).get(id) ?? 0),
+    ).toBe(0);
+    // A file without kinds files its ground by category: the lawn is ground, not an object.
+    const lawn = parseInstances({
+      format: "hexapod.instances",
+      version: 1,
+      instances: [
+        { id: 1, parent: null, splats: 50, bounds: box, category: "grass" },
+        { id: 2, parent: null, splats: 50, bounds: box, category: "shrubs" },
+        { id: 3, parent: 2, splats: 5, bounds: box, category: "shrubs" },
+      ],
+      tiles: {},
+    });
+    if (!lawn) throw new Error("fixture did not parse");
+    expect(topLevels(lawn).ground[1]).toBe(1);
+    expect(topLevels(lawn).ground[2]).toBe(0);
+    // A thing nobody named, filed under the ground (a class-free leftover tagged "ground"), is
+    // ground too, and its parts with it; a thing the file names stays a thing whatever its
+    // category (ground first's "Camping chair" is filed under Ground & soil).
+    const leftovers = yard([
+      { id: 70, parent: null, splats: 0, bounds: box, kind: "thing", category: "ground" },
+      { id: 71, parent: 70, splats: 40, bounds: box, kind: "thing", category: "ground" },
+      { id: 72, parent: null, splats: 20, bounds: box, kind: "thing", category: "ground" },
+    ]);
+    const chair = leftovers.byId.get(72);
+    if (chair) chair.name = "Camping chair";
+    const marked = topLevels(leftovers);
+    expect([marked.ground[70], marked.ground[71], marked.ground[72]]).toEqual([1, 1, 0]);
+    // A stroke over the spool that spills a quarter of itself onto such a leftover: the spool.
+    expect(paintPick(over(leftovers, { 3: 30, 71: 10 }), marked, { minCells: 20 })?.ids).toEqual([
+      1,
+    ]);
+  });
+
+  it("steps down to the parts the stroke covers with [, and back up with ]", () => {
+    const d = yard();
+    // Most of the top flange's planks and some of the drum; one splat of the bottom flange.
+    const sums = over(d, { 5: 20, 6: 12, 3: 8, 4: 1 });
+    const pick = paintPick(sums, topLevels(d), { minCells: 5 });
+    expect(pick?.ids).toEqual([1]);
+    const levels = paintLevels(sums, pick?.ids ?? [], { minCells: 5 });
+    // The spool; its top flange and drum (the bottom flange's splat a sliver); the planks.
+    expect(levels).toEqual([[1], [2, 3], [5, 6, 3]]);
+    // Two objects: each one's parts.
+    const two = over(d, { 5: 20, 12: 15, 11: 4 });
+    expect(paintLevels(two, [1, 10], { minCells: 50 })).toEqual([
+      [1, 10],
+      [2, 12, 11],
+      [5, 12, 11],
+    ]);
+    // Selected as levels: the objects first, `[` one level finer, `]` back.
+    const store = useSceneSelect.getState();
+    store.selectLevels(
+      "scan",
+      levels.map((ids) => ({ ids, iou: setIoU(sums, ids), objects: true })),
+      null,
+    );
+    let state = useSceneSelect.getState();
+    expect(selectedIds(state)).toEqual([1]);
+    expect(state.candidates).toEqual([5, 2, 1]);
+    expect(levelText(state.index, state.chain, state.candidates.length)).toBe("1 of 3");
+    state.cycle(-1);
+    state = useSceneSelect.getState();
+    expect(selectedIds(state)).toEqual([2, 3]);
+    expect(levelText(state.index, state.chain, state.candidates.length)).toBe("2 of 3");
+    state.cycle(-1);
+    expect(selectedIds(useSceneSelect.getState())).toEqual([5, 6, 3]);
+    useSceneSelect.getState().cycle(1);
+    expect(selectedIds(useSceneSelect.getState())).toEqual([2, 3]);
+    useSceneSelect.getState().cycle(1);
+    expect(selectedIds(useSceneSelect.getState())).toEqual([1]);
+    // A stroke over a part with nothing below it: one level, nothing to cycle.
+    const pumpkin = over(d, { 20: 10 });
+    expect(paintLevels(pumpkin, [20])).toEqual([[20]]);
+    useSceneSelect.getState().clear();
   });
 });
 

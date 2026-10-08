@@ -1,5 +1,5 @@
 import { useMission } from "./mission";
-import { objectSelected, useSceneSelect } from "./sceneSelect";
+import { chosenCombination, objectSelected, useSceneSelect } from "./sceneSelect";
 import { useSelection } from "./selection";
 import { useUi } from "./ui";
 
@@ -48,7 +48,7 @@ export function bindOneSelection(scene: SelectionScene = STORES_ONLY): () => voi
       (state.mode === "paint" && previous.mode !== "paint") ||
       (objectSelected(state) &&
         (state.candidates[state.index] !== previous.candidates[previous.index] ||
-          state.combination !== previous.combination ||
+          chosenCombination(state) !== chosenCombination(previous) ||
           state.assetId !== previous.assetId));
     if (!started) return;
     if (useMission.getState().selection) {

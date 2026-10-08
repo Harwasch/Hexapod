@@ -18,14 +18,17 @@
  *   released where it began.
  * - **Brush** (`B`, or the card's Brush): strokes on screen collect the front-most splats under
  *   them -- Shift (or the card's Add) adds to the painted area, Alt (or Remove) takes away, a
- *   plain stroke starts again -- and the combination of instances (at whatever levels fit)
- *   whose union has the best intersection over union with it is selected: one instance, or
- *   several (both flanges of a spool) when together they match better (lib/sceneSelect.ts
- *   `bestSet`). While a stroke is painted its best match so far is highlighted, held steady
- *   between near-equal answers (`steadySet`), so painting can stop once the right objects
- *   light up. Below `PAINT_MIN_IOU` the painted splats can be kept as an object of their own,
- *   and a combination can be kept as one too (lib/customSets.ts), drawn through the same hide
- *   and highlight pipeline.
+ *   plain stroke starts again -- and the whole objects the painted area falls on are selected
+ *   (lib/sceneSelect.ts `paintPick`): a short stroke on a spool's top selects the spool, one
+ *   across two pumpkins both, a sliver under the brush's edge nothing. `[` then steps down to
+ *   the parts of them the stroke covers, and `]` back up (`paintLevels`). A stroke on the
+ *   ground only selects the ground's regions under it, and on a scan whose instances have no
+ *   hierarchy the combination whose union best matches the painted area (`bestSet`). While a
+ *   stroke is painted what it selects so far is highlighted, so painting can stop once the
+ *   right objects light up. When what it selects overlaps the painted area by less than
+ *   `PAINT_MIN_IOU`, the painted splats can be kept as an object of their own, and a
+ *   combination can be kept as one too (lib/customSets.ts), drawn through the same hide and
+ *   highlight pipeline.
  *
  * What is selected (`selectedIds`: the chosen candidate, or the combination) is the objects
  * store's highlight (`state/instances.ts`); the HUD's selection card
@@ -63,17 +66,22 @@ import {
   buildCandidates,
   chainOf,
   commonChain,
+  dabCells,
   drillIndex,
   hiddenForShowOnly,
   PAINT_MIN_IOU,
   paintedCount,
   paintIndex,
+  paintLevels,
+  paintPick,
   paintSumsIndexed,
   sameMembers,
-  splatShares,
-  steadySet,
+  sceneShareOf,
+  setIoU,
+  topLevels,
   type PaintIndex,
-  type PaintSetMatch,
+  type PaintPick,
+  type PaintSums,
 } from "@/lib/sceneSelect";
 import {
   BrushMask,
@@ -471,8 +479,7 @@ export class SceneSelectController {
     // the brush chose (not a level of any chain), the whole object again.
     const current =
       state.assetId === assetId && !chosenCombination(state) ? selectedId(state) : null;
-    const shares = splatShares(doc);
-    const index = drillIndex(candidates, current, (id) => shares.get(id) ?? 0);
+    const index = drillIndex(candidates, current, sceneShareOf(doc));
     state.select(assetId, candidates.ids, candidates.chain, index, anchor ?? { x, y });
     log.info("picked", { asset: assetId, candidates: candidates.ids, index });
     return true;
@@ -970,19 +977,24 @@ export class SceneSelectController {
   }
 
   /**
-   * The stroke's best match now (lib/sceneSelect.ts `bestSet`), held on what the preview shows
-   * while that is still about as good (`steadySet`).
+   * What the stroke selects now (lib/sceneSelect.ts `paintPick`): the whole objects it falls
+   * on, a sliver of one under the brush's edge (less than a tenth of the stroke and less than a
+   * dab of the brush) left out. A match by overlap (the ground only, or a scan without a
+   * hierarchy) is held on what the preview shows while that is still about as good.
    */
-  #match(view: PaintView): PaintSetMatch | null {
+  #match(view: PaintView): { pick: PaintPick | null; sums: PaintSums; minCells: number } {
     const shown = this.#previewed;
-    return steadySet(
-      paintSumsIndexed(view.index, view.mask),
-      shown?.assetId === view.assetId ? shown.ids : null,
-    );
+    const sums = paintSumsIndexed(view.index, view.mask);
+    const minCells = dabCells(useSceneSelect.getState().brush, CELL_PX);
+    const pick = paintPick(sums, topLevels(view.doc), {
+      minCells,
+      shown: shown?.assetId === view.assetId ? shown.ids : null,
+    });
+    return { pick, sums, minCells };
   }
 
   /**
-   * Highlights the stroke's best match so far, through the objects store as the selection is
+   * Highlights what the stroke selects so far, through the objects store as the selection is
    * (only the instances' state table changes, which every renderer applies cheaply), and says
    * it on the card (`PaintResult.live`). Nothing is selected until the stroke ends.
    */
@@ -990,7 +1002,7 @@ export class SceneSelectController {
     const view = this.#paintView;
     if (!this.#stroke || !view) return;
     const started = performance.now();
-    const best = this.#match(view);
+    const best = this.#match(view).pick;
     const ids = best?.ids ?? [];
     const shown = this.#previewed;
     if (shown?.assetId !== view.assetId || !sameMembers(shown.ids, ids)) {
@@ -1002,14 +1014,25 @@ export class SceneSelectController {
       this.#viewer.scene.requestRender();
     }
     const painted = paintedCount(view.index, view.mask);
-    useSceneSelect
-      .getState()
-      .setPaint({ ids, best: ids[0] ?? null, iou: best?.iou ?? 0, painted, live: true });
+    useSceneSelect.getState().setPaint({
+      ids,
+      best: ids[0] ?? null,
+      iou: best?.iou ?? 0,
+      painted,
+      live: true,
+      ...(best ? { rule: best.rule } : {}),
+    });
     this.#previewAt = performance.now();
     const ms = this.#previewAt - started;
     this.#previewCost.runs++;
     this.#previewCost.maxMs = Math.max(this.#previewCost.maxMs, ms);
-    log.debug("paint preview", { ms, ids: ids.slice(0, 8), iou: best?.iou, splats: painted });
+    log.debug("paint preview", {
+      ms,
+      ids: ids.slice(0, 8),
+      rule: best?.rule,
+      iou: best?.iou,
+      splats: painted,
+    });
   }
 
   /**
@@ -1046,16 +1069,33 @@ export class SceneSelectController {
     const painted = paintedSplats(view.screen, view.visible, view.mask);
     let count = 0;
     for (let k = 0; k < view.screen.count; k++) if (painted[k]) count++;
-    // What was lit as the stroke ended, if it is still about as good: what you see is selected.
-    const best = this.#match(view);
+    // What the painted area selects as the stroke ended: what was lit, brought up to date.
+    const { pick: best, sums, minCells } = this.#match(view);
     const ids = best?.ids ?? [];
     const first = ids[0];
     const store = useSceneSelect.getState();
-    store.setPaint({ ids, best: first ?? null, iou: best?.iou ?? 0, painted: count });
+    store.setPaint({
+      ids,
+      best: first ?? null,
+      iou: best?.iou ?? 0,
+      painted: count,
+      ...(best ? { rule: best.rule } : {}),
+    });
     this.#painted =
       count > 0 ? { assetId: view.assetId, tiles: view.tiles, screen: view.screen, painted } : null;
-    if (best && first !== undefined && ids.length > 1) {
-      store.selectSet(view.assetId, best, commonChain(view.doc, ids), null);
+    let levels = 0;
+    if (best?.rule === "objects") {
+      // The objects, then the parts of them the stroke covers, one level a `[`.
+      const below = paintLevels(sums, ids, { minCells });
+      levels = below.length;
+      store.selectLevels(
+        view.assetId,
+        below.map((level) => ({ ids: level, iou: setIoU(sums, level), objects: true })),
+        null,
+      );
+      this.#focusScene();
+    } else if (best && first !== undefined && ids.length > 1) {
+      store.selectSet(view.assetId, { ids, iou: best.iou }, commonChain(view.doc, ids), null);
       this.#focusScene();
     } else if (first !== undefined) {
       const chain = chainOf(view.doc, first);
@@ -1070,6 +1110,8 @@ export class SceneSelectController {
       asset: view.assetId,
       ids: ids.slice(0, 8),
       members: ids.length,
+      rule: best?.rule,
+      levels,
       iou: best?.iou,
       splats: count,
       preview: this.#previewCost,
