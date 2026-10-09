@@ -8,7 +8,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
-| Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft recovery | Broader cadastral coverage, snapping/splitting, unfinished drawing recovery, large/dateline corridor handling |
+| Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover raster calculation and private map tiles | Time-series/imagery datasets and broader compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
@@ -823,3 +823,19 @@ gallery navigation, map footprints, source-question focus, saved results after r
 mobile layout with no overflow or page errors. The unavailable-image fallback was exercised
 as well. Chromium required the environment's existing proxy CA in its test trust store;
 TLS verification remained enabled. Production/deployment remains untouched.
+
+
+## Implemented increment: unfinished drawing recovery
+
+Polygon points and corridor centerlines now persist before a reviewed boundary exists.
+Recovery restores the drawing mode, points, corridor width and units, and frames the drawing
+on the map. Switching feet/meters preserves physical width. Browser data is scoped to the
+current identity/workspace, bounded and validated; the prior reviewed-draft format remains
+readable. Starting a deliberate new drawing replaces the stored draft, while browsing alone
+does not erase it. Cancelling removes it. Changed or deleted saved land can be recovered as a
+separate area without overwriting another revision.
+
+Validation: 36 focused land UI tests, full web typing and affected-file lint passed. All six
+selection/action browser journeys passed, including two new reload-and-continue drawing
+journeys (the original four and two recovery tests were run separately after correcting the
+shared fixture's onboarding reset). No API/schema/deployment change is required.

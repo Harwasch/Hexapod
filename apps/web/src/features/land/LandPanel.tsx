@@ -64,8 +64,7 @@ export function LandPanel() {
   const [combination, setCombination] = useState<"union" | "difference" | "intersection" | null>(
     null,
   );
-  const [width, setWidth] = useState(100);
-  const [unit, setUnit] = useState<"ft" | "m">("ft");
+  const { corridorWidth: width, corridorUnit: unit } = state;
   const fileInput = useRef<HTMLInputElement>(null);
   const operation = useRef(0);
   const { active, draft, points, mode } = state;
@@ -376,12 +375,12 @@ export function LandPanel() {
                     min="0.1"
                     max={unit === "ft" ? 328084 : 100000}
                     value={width}
-                    onChange={(e) => setWidth(Number(e.target.value))}
+                    onChange={(e) => state.setCorridorWidth(Number(e.target.value))}
                   />
                   <select
                     aria-label="Width units"
                     value={unit}
-                    onChange={(e) => setUnit(e.target.value === "m" ? "m" : "ft")}
+                    onChange={(e) => state.setCorridorUnit(e.target.value === "m" ? "m" : "ft")}
                   >
                     <option value="ft">feet</option>
                     <option value="m">meters</option>

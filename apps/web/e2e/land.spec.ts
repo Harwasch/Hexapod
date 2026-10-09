@@ -394,3 +394,91 @@ test("review and schedule an action, then preserve that mission when revising", 
   expect(versions[0]?.missionId).toBeNull();
   expect(requests).toEqual(["draft", "approve", "schedule", "revise"]);
 });
+
+for (const kind of ["boundary", "corridor"] as const) {
+  test(`recover an unfinished ${kind} after reload and continue tracing`, async ({ app }) => {
+    await landApi(app);
+    await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+    await app.getByTestId("tool-land").click();
+    await app.evaluate(() => {
+      const twin = (
+        window as unknown as {
+          __twin: {
+            camera: {
+              cancelFlight(): void;
+              setView(
+                lon: number,
+                lat: number,
+                height: number,
+                heading: number,
+                pitch: number,
+              ): void;
+            };
+          };
+        }
+      ).__twin;
+      twin.camera.cancelFlight();
+      twin.camera.setView(-77.05, 38.888, 1500, 0, -90);
+    });
+    await app
+      .getByRole("button", { name: kind === "boundary" ? /Draw a boundary/ : /Trace a corridor/ })
+      .click();
+    if (kind === "corridor") {
+      await app.getByLabel("Total corridor width", { exact: true }).fill("150");
+      await app.getByRole("combobox", { name: "Width units", exact: true }).selectOption("m");
+      await expect(app.getByLabel("Total corridor width", { exact: true })).toHaveValue("45.72");
+    }
+    await app.mouse.click(650, 300);
+    await app.mouse.click(1000, 300);
+    await expect(app.getByText(/2 points placed/)).toBeVisible();
+    const points = await app.evaluate(
+      () =>
+        (
+          JSON.parse(localStorage.getItem("living-world-land-draft:pilot")!) as {
+            sketch: { points: number[][] };
+          }
+        ).sketch.points,
+    );
+    await app.reload();
+    // The shared fixture intentionally resets onboarding on every document load.
+    await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+    await app.getByTestId("tool-land").click();
+    await expect(app.getByText(/2 drawn points are stored/)).toBeVisible();
+    await app.getByRole("button", { name: "Resume drawing", exact: true }).click();
+    await expect(app.getByText(/2 points placed/)).toBeVisible();
+    expect(
+      await app.evaluate(
+        () =>
+          (
+            JSON.parse(localStorage.getItem("living-world-land-draft:pilot")!) as {
+              sketch: { points: number[][] };
+            }
+          ).sketch.points,
+      ),
+    ).toEqual(points);
+    if (kind === "corridor") {
+      await expect(app.getByLabel("Total corridor width", { exact: true })).toHaveValue("45.72");
+      await expect(app.getByRole("combobox", { name: "Width units", exact: true })).toHaveValue(
+        "m",
+      );
+    }
+    await expect
+      .poll(() =>
+        app.evaluate(() =>
+          Boolean(
+            (window as unknown as { __twin: { viewer: { camera: { _currentFlight?: unknown } } } })
+              .__twin.viewer.camera._currentFlight,
+          ),
+        ),
+      )
+      .toBe(false);
+    await app.mouse.click(1000, 550);
+    await expect(app.getByText(/3 points placed/)).toBeVisible();
+    await app.getByRole("button", { name: "Last point", exact: true }).click();
+    await expect(app.getByText(/2 points placed/)).toBeVisible();
+    await app.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(
+      await app.evaluate(() => localStorage.getItem("living-world-land-draft:pilot")),
+    ).toBeNull();
+  });
+}

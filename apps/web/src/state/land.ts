@@ -6,6 +6,12 @@ import { recordAction } from "./history";
 
 export type LandMode = "browse" | "draw" | "corridor" | "pick" | "candidates" | "edit";
 export type LandPoint = [number, number];
+export interface LandSketch {
+  mode: "draw" | "corridor";
+  points: LandPoint[];
+  width: number;
+  unit: "ft" | "m";
+}
 
 interface LandState {
   session: number;
@@ -13,6 +19,11 @@ interface LandState {
   draft: LandCreate | null;
   mode: LandMode;
   points: LandPoint[];
+  corridorWidth: number;
+  corridorUnit: "ft" | "m";
+  setCorridorWidth: (width: number) => void;
+  setCorridorUnit: (unit: "ft" | "m") => void;
+  restoreSketch: (sketch: LandSketch, draft: LandCreate | null) => void;
   error: string | null;
   select: (land: LandArea) => void;
   begin: (mode: LandMode) => void;
@@ -33,6 +44,27 @@ export const useLand = create<LandState>()((set, get) => ({
   draft: null,
   mode: "browse",
   points: [],
+  corridorWidth: 100,
+  corridorUnit: "ft",
+  setCorridorWidth: (corridorWidth) => set({ corridorWidth }),
+  setCorridorUnit: (corridorUnit) =>
+    set((state) => ({
+      corridorUnit,
+      corridorWidth:
+        corridorUnit === state.corridorUnit
+          ? state.corridorWidth
+          : Number((state.corridorWidth * (corridorUnit === "m" ? 0.3048 : 1 / 0.3048)).toFixed(4)),
+    })),
+  restoreSketch: (sketch, draft) =>
+    set((state) => ({
+      draft,
+      mode: sketch.mode,
+      points: sketch.points,
+      corridorWidth: sketch.width,
+      corridorUnit: sketch.unit,
+      error: null,
+      session: state.session + 1,
+    })),
   error: null,
   select: (active) =>
     set((s) => ({
@@ -115,6 +147,8 @@ export const useLand = create<LandState>()((set, get) => ({
       draft: null,
       mode: "browse",
       points: [],
+      corridorWidth: 100,
+      corridorUnit: "ft",
       error: null,
       session: s.session + 1,
     })),
