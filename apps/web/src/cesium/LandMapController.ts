@@ -1,5 +1,5 @@
 import {
-  type Cartesian2,
+  Cartesian2,
   Cartesian3,
   Cartographic,
   Color,
@@ -16,7 +16,8 @@ import {
 import type { Footprint } from "@twin/contracts";
 import { boundsOf, polygonsOf } from "@twin/geo";
 
-import { useLandContext } from "@/state/landContext";
+import { MappedSnapIndex } from "@/features/land/mappedSnap";
+import { useLandContext, type LandContextLayer } from "@/state/landContext";
 import { nearestBoundaryPoint } from "@/features/land/boundarySnap";
 
 import type { LandMode, LandPoint } from "@/state/land";
@@ -36,6 +37,8 @@ export class LandMapController {
   private dragging: { polygon: number; ring: number; vertex: number } | null = null;
   private cameraInputs = true;
   private snapEnabled = true;
+  private snapMapped = true;
+  private readonly mappedSnap = new MappedSnapIndex();
   private snapMarker: Entity | null = null;
   private readonly release = () => this.finishDrag();
 
@@ -43,12 +46,13 @@ export class LandMapController {
     private readonly host: CesiumSceneManager,
     private readonly point: (point: LandPoint) => void,
     private readonly change: (boundary: Footprint) => void,
+    private readonly snapTarget?: (label: string | null) => void,
   ) {
     window.addEventListener("pointerup", this.release);
     window.addEventListener("blur", this.release);
   }
 
-  private ground(position: Cartesian2): LandPoint | null {
+  private groundPoint(position: Cartesian2): LandPoint | null {
     const { scene, viewer } = this.host;
     const ray = viewer.camera.getPickRay(position);
     const hit = ray ? scene.globe.pick(ray, scene) : undefined;
@@ -59,29 +63,65 @@ export class LandMapController {
       CesiumMath.toDegrees(at.longitude),
       CesiumMath.toDegrees(at.latitude),
     ];
-    const target =
-      this.snapEnabled && this.footprint && this.mode !== "pick" && this.mode !== "candidates"
+    return point;
+  }
+
+  private ground(position: Cartesian2): LandPoint | null {
+    const point = this.groundPoint(position);
+    if (!point) {
+      this.showSnap(null);
+      return null;
+    }
+    if (this.mode === "pick" || this.mode === "candidates") return point;
+    const { scene } = this.host;
+    const distance = (target: LandPoint) => {
+      const height = scene.globe.getHeight(Cartographic.fromDegrees(...target)) ?? 0;
+      const screen = scene.cartesianToCanvasCoordinates(Cartesian3.fromDegrees(...target, height));
+      return screen ? Math.hypot(screen.x - position.x, screen.y - position.y) : Infinity;
+    };
+    const boundary =
+      this.snapEnabled && this.footprint
         ? nearestBoundaryPoint(this.footprint, point, this.dragging)
         : null;
-    if (target) {
-      const height = scene.globe.getHeight(Cartographic.fromDegrees(...target)) ?? 0;
-      const world = Cartesian3.fromDegrees(...target, height);
-      const screen = scene.cartesianToCanvasCoordinates(world);
-      if (screen && Math.hypot(screen.x - position.x, screen.y - position.y) <= 12) {
-        this.showSnap(target);
-        return target;
-      }
+    let best = boundary
+      ? { point: boundary, label: "This boundary", distance: distance(boundary) }
+      : null;
+    if (this.snapMapped && !this.mappedSnap.empty) {
+      const bounds = { minX: point[0], minY: point[1], maxX: point[0], maxY: point[1] };
+      for (const x of [-24, 0, 24])
+        for (const y of [-24, 0, 24]) {
+          if (!x && !y) continue;
+          const sample = this.groundPoint(new Cartesian2(position.x + x, position.y + y));
+          if (!sample || Math.abs(sample[0] - point[0]) > 180) continue;
+          bounds.minX = Math.min(bounds.minX, sample[0]);
+          bounds.maxX = Math.max(bounds.maxX, sample[0]);
+          bounds.minY = Math.min(bounds.minY, sample[1]);
+          bounds.maxY = Math.max(bounds.maxY, sample[1]);
+        }
+      const mapped = this.mappedSnap.nearest(point, bounds, distance);
+      if (mapped && (!best || mapped.distance < best.distance)) best = mapped;
+    }
+    if (best && best.distance <= 12) {
+      this.showSnap(best.point, best.label);
+      return best.point;
     }
     this.showSnap(null);
     return point;
   }
 
-  setSnapping(enabled: boolean): void {
+  setSnapping(enabled: boolean, mapped = true): void {
+    if (this.snapEnabled === enabled && this.snapMapped === mapped) return;
     this.snapEnabled = enabled;
-    if (!enabled) this.showSnap(null);
+    this.snapMapped = mapped;
+    this.showSnap(null);
   }
 
-  private showSnap(point: LandPoint | null): void {
+  setSnapLayers(layers: Record<string, LandContextLayer>): void {
+    if (this.mappedSnap.sync(layers)) this.showSnap(null);
+  }
+
+  private showSnap(point: LandPoint | null, label: string | null = null): void {
+    this.snapTarget?.(point ? label : null);
     if (!point && !this.snapMarker) return;
     if (point && this.snapMarker) {
       this.snapMarker.position = new ConstantPositionProperty(Cartesian3.fromDegrees(...point));

@@ -7,6 +7,7 @@ import { useLand, type LandSketch } from "@/state/land";
 import { landScope } from "@/state/landIdentity";
 import { useUi } from "@/state/ui";
 import { importBoundary } from "./geometry";
+import { parseBoundaryReferences } from "./boundarySources";
 
 const PREFIX = "living-world-land-draft:";
 interface SavedDraft {
@@ -30,6 +31,7 @@ function readDraft(key: string): SavedDraft | null {
     }
     const sketch = value.version >= 2 ? value.sketch : null;
     if (sketch) {
+      if (sketch.sources !== undefined) sketch.sources = parseBoundaryReferences(sketch.sources);
       if (
         !["draw", "corridor", "split"].includes(sketch.mode) ||
         (sketch.mode === "split" && !value.draft) ||
@@ -77,11 +79,26 @@ export function LandDraftRecovery({ scope }: { scope: string }) {
   useEffect(() => {
     const store = () => {
       if (pending.current || landScope() !== scope) return;
-      const { draft, active, mode, points, corridorWidth, corridorUnit, boundaryOperation } =
-        useLand.getState();
+      const {
+        draft,
+        active,
+        mode,
+        points,
+        corridorWidth,
+        corridorUnit,
+        boundaryOperation,
+        traceSources,
+      } = useLand.getState();
       const sketch: LandSketch | null =
         (mode === "draw" || mode === "corridor" || mode === "split") && points.length
-          ? { mode, points, width: corridorWidth, unit: corridorUnit, operation: boundaryOperation }
+          ? {
+              mode,
+              points,
+              width: corridorWidth,
+              unit: corridorUnit,
+              operation: boundaryOperation,
+              sources: traceSources,
+            }
           : null;
       try {
         if (!draft && !sketch) localStorage.removeItem(key);
@@ -108,7 +125,8 @@ export function LandDraftRecovery({ scope }: { scope: string }) {
         next.mode !== previous.mode ||
         next.corridorWidth !== previous.corridorWidth ||
         next.boundaryOperation !== previous.boundaryOperation ||
-        next.corridorUnit !== previous.corridorUnit
+        next.corridorUnit !== previous.corridorUnit ||
+        next.traceSources !== previous.traceSources
       ) {
         // A deliberate new edit replaces the previous recoverable draft.
         if (

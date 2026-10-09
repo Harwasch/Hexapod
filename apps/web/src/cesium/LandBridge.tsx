@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { Footprint } from "@twin/contracts";
 
 import { useLand } from "@/state/land";
+import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 
 import { LandMapController } from "./LandMapController";
@@ -15,6 +16,7 @@ export function LandBridge() {
       scene,
       (point) => useLand.getState().addPoint(point),
       (boundary) => useLand.getState().updateBoundary(boundary),
+      (label) => useLand.getState().setSnapTarget(label),
     );
     let owningPointer = false;
     let shownBoundary: Footprint | null | undefined;
@@ -33,7 +35,7 @@ export function LandBridge() {
         );
       }
       controller.setMode(mode);
-      controller.setSnapping(state.snapEnabled);
+      controller.setSnapping(state.snapEnabled, state.snapMapped);
       const boundary = state.draft?.boundary ?? state.active?.boundary ?? null;
       const editing = mode === "edit";
       if (boundary !== shownBoundary || state.points !== shownPoints || editing !== shownEditing) {
@@ -45,10 +47,15 @@ export function LandBridge() {
     };
     const offLand = useLand.subscribe(sync);
     const offUi = useUi.subscribe(sync);
+    const offContext = useLandContext.subscribe((next, previous) => {
+      if (next.layers !== previous.layers) controller.setSnapLayers(next.layers);
+    });
+    controller.setSnapLayers(useLandContext.getState().layers);
     sync();
     return () => {
       offLand();
       offUi();
+      offContext();
       controller.destroy();
       if (owningPointer && !scene.isDestroyed) scene.setInteractionMode("select");
     };

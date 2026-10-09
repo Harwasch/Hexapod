@@ -2862,6 +2862,32 @@ export interface components {
             observedAt?: string | null;
             /** Recordid */
             recordId?: string | null;
+            /** References */
+            references?: components["schemas"]["BoundarySourceReference"][];
+            /** Url */
+            url?: string | null;
+        };
+        /** BoundarySourceReference */
+        BoundarySourceReference: {
+            /** Attribution */
+            attribution?: string | null;
+            /** Label */
+            label: string;
+            /**
+             * Meaning
+             * @default study-area
+             * @enum {string}
+             */
+            meaning?: "study-area" | "recorded-parcel" | "physical-feature";
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "drawn" | "imported" | "parcel" | "mapped-feature" | "imagery" | "corridor";
+            /** Observedat */
+            observedAt?: string | null;
+            /** Recordid */
+            recordId?: string | null;
             /** Url */
             url?: string | null;
         };
@@ -8539,6 +8565,7 @@ export type SchemaBoundaryOperation = components['schemas']['BoundaryOperation']
 export type SchemaBoundaryResult = components['schemas']['BoundaryResult'];
 export type SchemaBoundaryRevisionRead = components['schemas']['BoundaryRevisionRead'];
 export type SchemaBoundarySource = components['schemas']['BoundarySource'];
+export type SchemaBoundarySourceReference = components['schemas']['BoundarySourceReference'];
 export type SchemaBoundarySplit = components['schemas']['BoundarySplit'];
 export type SchemaBoundarySplitResult = components['schemas']['BoundarySplitResult'];
 export type SchemaBoundingBox = components['schemas']['BoundingBox'];

@@ -77,9 +77,15 @@ it("does not display a different workspace's stored draft", () => {
 });
 
 it("recovers an unfinished corridor with its width and units before it becomes a boundary", async () => {
+  const source = {
+    method: "mapped-feature" as const,
+    label: "Guide line",
+    attribution: "Open data fixture",
+  };
   const first = render(<LandDraftRecovery scope="pilot" />);
   act(() => {
     useLand.getState().begin("corridor");
+    useLand.getState().setTraceSources([source]);
     useLand.getState().setCorridorWidth(150);
     useLand.getState().setCorridorUnit("m");
     useLand.getState().addPoint([-77.05, 38.888]);
@@ -101,6 +107,7 @@ it("recovers an unfinished corridor with its width and units before it becomes a
   expect(useLand.getState().corridorWidth).toBe(width);
   expect(useLand.getState().corridorUnit).toBe("m");
   expect(useLand.getState().draft).toBeNull();
+  expect(useLand.getState().traceSources[0]).toMatchObject(source);
   act(() => useLand.getState().cancel());
   expect(localStorage.getItem(key)).toBeNull();
 });

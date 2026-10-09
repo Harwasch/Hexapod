@@ -9,6 +9,7 @@ import { api, unwrap } from "@/api/client";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { describeError } from "@/lib/log";
+import { drawingReferences } from "./boundarySources";
 
 export function LandCandidatePicker() {
   const mode = useLand((state) => state.mode);
@@ -295,6 +296,32 @@ export function LandCandidatePicker() {
                 : selected.length > 1
                   ? "Combine selected areas"
                   : "Preview this boundary"}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              try {
+                const references = drawingReferences(selected.map((candidate) => candidate.source));
+                useLandContext.getState().setLayer({
+                  id: "drawing-guides",
+                  title: "Drawing guides",
+                  drawingGuideSources: references,
+                  features: selected.map((candidate) => ({
+                    id: candidate.id,
+                    label: candidate.label,
+                    geometry: candidate.geometry,
+                  })),
+                });
+                useLand.getState().setSnapMapped(true);
+                useLand.getState().begin(line ? "corridor" : "draw");
+                useLand.getState().setTraceSources(references);
+              } catch (cause) {
+                setError(describeError(cause));
+              }
+            }}
+          >
+            Trace using selected features
           </button>
         </div>
       )}

@@ -89,6 +89,43 @@ def test_polygon_holes_remain_excluded(client: TestClient) -> None:
     assert len(response.json()["boundary"]["coordinates"][0]) == 2
 
 
+def test_traced_boundary_retains_guide_provenance_in_revisions(client: TestClient) -> None:
+    reference = {
+        "method": "mapped-feature",
+        "label": "Public software fixture line",
+        "url": "https://example.test/source",
+        "recordId": "fixture:line",
+        "attribution": "Synthetic fixture; no real property is represented.",
+        "observedAt": "2026-10-09T00:00:00Z",
+        "meaning": "physical-feature",
+    }
+    source = {**BODY["source"], "references": [reference]}
+    response = client.post("/api/v1/land", json={**BODY, "source": source})
+    assert response.status_code == 201, response.text
+    area = response.json()
+    assert area["source"]["meaning"] == "study-area"
+    assert area["source"]["references"] == [reference]
+    assert client.get(f"/api/v1/land/{area['id']}").json()["source"]["references"] == [reference]
+    revised = client.put(
+        f"/api/v1/land/{area['id']}", json={**BODY, "source": source, "expectedRevision": 1}
+    )
+    assert revised.status_code == 200
+    assert all(
+        row["source"]["references"] == [reference]
+        for row in client.get(f"/api/v1/land/{area['id']}/revisions").json()
+    )
+    assert (
+        client.post(
+            "/api/v1/land",
+            json={
+                **BODY,
+                "source": {**source, "references": [{**reference, "references": [reference]}]},
+            },
+        ).status_code
+        == 422
+    )
+
+
 def test_corridor_width_is_total_width_in_metres(client: TestClient) -> None:
     # About 1111 metres north/south at the equator. A 100-ft total-width corridor
     # with flat caps should have roughly length * 30.48 m of area.

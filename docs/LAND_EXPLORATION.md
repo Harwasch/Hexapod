@@ -8,7 +8,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
-| Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, reviewed line splitting, boundary edge/corner snapping, geospatial imports, revisions, reviewed-draft and unfinished-operation recovery | Broader cadastral coverage, snapping to external mapped features, large/dateline corridor handling |
+| Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, reviewed line splitting, boundary and visible-feature snapping with retained drawing-guide provenance, geospatial imports, revisions, reviewed-draft and unfinished-operation recovery | Broader cadastral coverage and large/dateline corridor handling |
 | Research | Durable worker, resumable authenticated live progress with incremental polling fallback, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, linked map/list feature inspection with source evidence and pinned agent follow-ups, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | Verified local reference communities and calibrated ecological forecasting |
@@ -1962,3 +1962,46 @@ was created by the browser check. Artifacts: `/tmp/land-question-recovery-result
 `/tmp/land-question-recovery-desktop.png`, `/tmp/land-question-recovery-mobile.png`.
 Existing PlayCanvas worker-module externalization build warnings remain. No migration or
 production deployment is part of this increment; the original checkout remains untouched.
+
+
+## Implemented increment: mapped-feature snapping and attributable drawing guides
+
+Boundary drawing, corridor tracing, splitting and vertex edits can now snap to visible research
+maps, saved inventory features and explicitly selected drawing guides. Current-boundary snapping
+remains independently switchable. A gold ring and source label identify the snap target; snapping
+is limited to 12 screen pixels and follows the displayed source data rather than establishing
+survey-grade accuracy. Editable previews and temporary split geometry are excluded.
+
+Mapped segments and points use per-layer RBush spatial indexes. Selection-only changes reuse
+indexes, hidden/removed layers stop contributing targets, and pointer movement projects nearby
+candidates rather than scanning every feature. Point targets, lines, polygon holes and disconnected
+polygons are supported. Unsplit antimeridian segments are excluded instead of producing false
+cross-world targets. This does not snap to imagery pixels or arbitrary 3D-model edges.
+
+The candidate picker offers Trace using selected features. Reviewed lines become corridor guides;
+areas become boundary guides. Clearing the visible guides leaves their source references attached
+to the in-progress trace. Optional flat source references retain methods, labels, links, record
+IDs, observation dates, attribution and source meanings. The resulting manually traced boundary
+remains a study area. References are shown in the review/saved-land provenance view, retained in
+boundary revision history and GeoJSON exports, and carried through unfinished-drawing recovery.
+Existing version-3 browser drafts remain readable; guide geometry itself is a temporary overlay
+and is not restored automatically. Reference nesting is not accepted.
+
+Validation: 39 focused API tests and 27 frontend tests pass, including source preservation across
+save/reopen/revisions, inventory/research regressions, holes/multipart/point snapping, hidden
+layers, unchanged-geometry reuse and source retention after guide removal and drawing recovery.
+The 20,000-point index test projects only the nearby target. All seven land Chromium regressions,
+API/web type and lint checks, and the production build pass. The existing PlayCanvas worker-module
+externalization build warnings remain; package installation also reports the repository's existing
+ESLint/TypeScript peer-version warnings. RBush 4.0.1, already used transitively by Cesium, is now an
+explicit web dependency with its type package.
+
+A real Chromium/Cesium check used an explicitly synthetic guide on the public National Mall
+software fixture. Near-edge and near-endpoint clicks snapped to the source coordinates; disabling
+snapping returned the unsnapped ground point. Removing guides removed their entities, while a
+subsequent corridor review retained the exact guide link, attribution and record ID. Desktop,
+390px phone and provenance screenshots were inspected, with no page errors or unintended overflow.
+The test did not save a land record. Artifacts: `/tmp/land-mapped-snap-result.json`,
+`/tmp/land-mapped-snap-desktop.png`, `/tmp/land-mapped-snap-mobile.png`,
+`/tmp/land-mapped-snap-provenance.png`. The isolated API and research worker were restarted with
+the updated optional source schema. No database migration or production deployment is involved.

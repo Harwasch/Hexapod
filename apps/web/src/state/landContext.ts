@@ -8,6 +8,7 @@ export interface LandContextFeature {
   value?: number | null;
 }
 export interface LandContextLayer {
+  drawingGuideSources?: LandCandidate["source"][];
   researchArtifactId?: string;
   unit?: string | null;
   legend?: string;

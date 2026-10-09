@@ -13,7 +13,7 @@ from app.schemas.base import CamelModel
 from app.schemas.geojson import Footprint, Position, _check_position
 
 
-class BoundarySource(CamelModel):
+class BoundarySourceReference(CamelModel):
     method: Literal["drawn", "imported", "parcel", "mapped-feature", "imagery", "corridor"]
     label: str = Field(min_length=1, max_length=300)
     url: HttpUrl | None = None
@@ -22,6 +22,10 @@ class BoundarySource(CamelModel):
     attribution: str | None = Field(default=None, max_length=2000)
     # This describes what the boundary represents, never a claim of verified title.
     meaning: Literal["study-area", "recorded-parcel", "physical-feature"] = "study-area"
+
+
+class BoundarySource(BoundarySourceReference):
+    references: list[BoundarySourceReference] = Field(default_factory=list, max_length=100)
 
 
 class LandCreate(CamelModel):

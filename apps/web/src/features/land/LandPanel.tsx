@@ -32,6 +32,8 @@ import { createCorridor, createLand, reviseLand, useBoundaryHistory, useLandArea
 import { LandDraftRecovery } from "./LandDraftRecovery";
 import { LandBoundaryImport } from "./LandBoundaryImport";
 import { LandBoundarySplit } from "./LandBoundarySplit";
+import { BoundaryReferences } from "./BoundaryReferences";
+import { drawingReferences } from "./boundarySources";
 import "./land.css";
 import { LandWorkspaceResizer } from "./LandWorkspaceResizer";
 import { LandCandidatePicker } from "./LandCandidatePicker";
@@ -55,6 +57,7 @@ export function LandPanel() {
   const open = useUi((s) => s.activePanel === "land");
   const tokenPrompt = useUi((s) => s.writeTokenPrompt);
   const state = useLand();
+  const drawingGuides = useLandContext((s) => s.layers["drawing-guides"]);
   const scene = useScene();
   const queryClient = useQueryClient();
   const catalog = useLandAreas(open);
@@ -93,6 +96,8 @@ export function LandPanel() {
     scene?.areas.cancelPick();
     scene?.areas.edit(null);
     state.begin(next);
+    if (next === "draw" || next === "corridor")
+      state.setTraceSources(drawingReferences(drawingGuides?.drawingGuideSources ?? []));
   };
 
   useEffect(() => {
@@ -148,7 +153,13 @@ export function LandPanel() {
             }),
           );
           if (operation.current !== ticket) return;
+          const references = drawingReferences([
+            ...(draft.source.references ?? []),
+            ...state.traceSources,
+          ]);
           state.updateBoundary(result.boundary);
+          const updated = useLand.getState().draft;
+          if (updated) state.updateDraft({ source: { ...updated.source, references } });
           state.begin("browse");
           setCombination(null);
         } catch (error) {
@@ -161,7 +172,12 @@ export function LandPanel() {
           name: active?.name ?? "Untitled land",
           description: active?.description ?? "",
           boundary,
-          source: { method: "drawn", label: "Drawn on the map", meaning: "study-area" },
+          source: {
+            method: "drawn",
+            label: "Drawn on the map",
+            meaning: "study-area",
+            references: state.traceSources,
+          },
         });
       }
       return;
@@ -178,6 +194,7 @@ export function LandPanel() {
           method: "corridor",
           label: `${width} ${unit} total width, centered on the drawn line`,
           meaning: "study-area",
+          references: state.traceSources,
         },
       });
     } catch (error) {
@@ -343,18 +360,53 @@ export function LandPanel() {
         )}
 
         <LandCandidatePicker key={state.session} />
-        {visible &&
-          (mode === "draw" || mode === "corridor" || mode === "split" || mode === "edit") && (
+        {(mode === "draw" || mode === "corridor" || mode === "split" || mode === "edit") && (
+          <div>
+            {visible && (
+              <label className="land-snap-toggle">
+                <input
+                  type="checkbox"
+                  checked={state.snapEnabled}
+                  onChange={(event) => state.setSnapEnabled(event.target.checked)}
+                />
+                Snap to this boundary
+                <small>
+                  A gold ring marks an exact edge or corner within reach of the pointer.
+                </small>
+              </label>
+            )}
             <label className="land-snap-toggle">
               <input
                 type="checkbox"
-                checked={state.snapEnabled}
-                onChange={(event) => state.setSnapEnabled(event.target.checked)}
+                checked={state.snapMapped}
+                onChange={(event) => state.setSnapMapped(event.target.checked)}
               />
-              Snap to this boundary
-              <small>A gold ring marks an exact edge or corner within reach of the pointer.</small>
+              Snap to visible mapped features
+              <small>
+                Uses drawing guides, saved assets and research maps. Precision follows the source
+                data.
+              </small>
             </label>
-          )}
+            {state.snapTarget && (
+              <p role="status" className="land-footnote">
+                Snapping to {state.snapTarget}
+              </p>
+            )}
+          </div>
+        )}
+        {drawingGuides && (
+          <div className="land-notice">
+            {drawingGuides.features.length} drawing guide
+            {drawingGuides.features.length === 1 ? "" : "s"} on the map.
+            <button
+              type="button"
+              onClick={() => useLandContext.getState().removeLayer("drawing-guides")}
+            >
+              Clear drawing guides
+            </button>
+            <BoundaryReferences sources={drawingGuides.drawingGuideSources ?? []} />
+          </div>
+        )}
         {mode === "split" && draft && <LandBoundarySplit key={`${scope}:${state.session}`} />}
 
         {(mode === "draw" || mode === "corridor" || mode === "pick") && (
@@ -502,6 +554,7 @@ export function LandPanel() {
                   {visible.source.attribution && <small>{visible.source.attribution}</small>}
                 </div>
               </div>
+              <BoundaryReferences sources={visible.source.references ?? []} />
             </details>
             {draft ? (
               <>

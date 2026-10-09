@@ -1714,6 +1714,14 @@
             ],
             "title": "Recordid"
           },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/BoundarySourceReference"
+            },
+            "maxItems": 100,
+            "title": "References",
+            "type": "array"
+          },
           "url": {
             "anyOf": [
               {
@@ -1734,6 +1742,95 @@
           "label"
         ],
         "title": "BoundarySource",
+        "type": "object"
+      },
+      "BoundarySourceReference": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution"
+          },
+          "label": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "meaning": {
+            "default": "study-area",
+            "enum": [
+              "study-area",
+              "recorded-parcel",
+              "physical-feature"
+            ],
+            "title": "Meaning",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "drawn",
+              "imported",
+              "parcel",
+              "mapped-feature",
+              "imagery",
+              "corridor"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "recordId": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordid"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "method",
+          "label"
+        ],
+        "title": "BoundarySourceReference",
         "type": "object"
       },
       "BoundarySplit": {

@@ -3,11 +3,13 @@ import { create } from "zustand";
 import type { Footprint, LandArea, LandCreate } from "@twin/contracts";
 
 import { recordAction } from "./history";
+import type { BoundaryReference } from "@/features/land/boundarySources";
 
 export type LandMode = "browse" | "draw" | "corridor" | "split" | "pick" | "candidates" | "edit";
 export type BoundaryOperation = "union" | "difference" | "intersection";
 export type LandPoint = [number, number];
 export interface LandSketch {
+  sources?: BoundaryReference[];
   mode: "draw" | "corridor" | "split";
   operation?: BoundaryOperation | null;
   points: LandPoint[];
@@ -16,6 +18,12 @@ export interface LandSketch {
 }
 
 interface LandState {
+  traceSources: BoundaryReference[];
+  setTraceSources: (sources: BoundaryReference[]) => void;
+  snapMapped: boolean;
+  setSnapMapped: (enabled: boolean) => void;
+  snapTarget: string | null;
+  setSnapTarget: (label: string | null) => void;
   snapEnabled: boolean;
   setSnapEnabled: (enabled: boolean) => void;
   session: number;
@@ -45,6 +53,14 @@ interface LandState {
 
 /** The land under investigation is independent of the map's inspected feature. */
 export const useLand = create<LandState>()((set, get) => ({
+  traceSources: [],
+  setTraceSources: (traceSources) => set({ traceSources }),
+  snapMapped: true,
+  setSnapMapped: (snapMapped) => set({ snapMapped }),
+  snapTarget: null,
+  setSnapTarget: (snapTarget) => {
+    if (get().snapTarget !== snapTarget) set({ snapTarget });
+  },
   snapEnabled: true,
   setSnapEnabled: (snapEnabled) => set({ snapEnabled }),
   session: 0,
@@ -68,6 +84,7 @@ export const useLand = create<LandState>()((set, get) => ({
   restoreSketch: (sketch, draft) =>
     set((state) => ({
       draft,
+      traceSources: sketch.sources ?? [],
       mode: sketch.mode,
       points: sketch.points,
       corridorWidth: sketch.width,
@@ -80,6 +97,7 @@ export const useLand = create<LandState>()((set, get) => ({
   select: (active) =>
     set((s) => ({
       active,
+      traceSources: [],
       draft: null,
       boundaryOperation: null,
       mode: "browse",
@@ -90,6 +108,7 @@ export const useLand = create<LandState>()((set, get) => ({
   begin: (mode) =>
     set((s) => ({
       mode,
+      traceSources: [],
       boundaryOperation: mode === "draw" ? s.boundaryOperation : null,
       points: [],
       error: null,
@@ -167,6 +186,7 @@ export const useLand = create<LandState>()((set, get) => ({
     set((s) => ({
       draft: null,
       mode: "browse",
+      traceSources: [],
       points: [],
       boundaryOperation: null,
       error: null,
@@ -175,6 +195,8 @@ export const useLand = create<LandState>()((set, get) => ({
   clear: () =>
     set((s) => ({
       active: null,
+      traceSources: [],
+      snapTarget: null,
       draft: null,
       mode: "browse",
       points: [],
