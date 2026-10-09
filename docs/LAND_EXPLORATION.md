@@ -686,3 +686,17 @@ results; no type-checking exclusions were added. `mypy .` passes all 226 API sou
 and full API lint/format checks pass. Migration checks and the focused frontend tests pass.
 This extends the records workflow; it does not complete raster analysis, archives, domain
 analysis, fleet integration or the full acceptance/handoff plan.
+
+## Raster input foundation (analysis/UI still pending)
+
+`app/analysis/raster_io.py` supplies a read-only range file/opener for Rasterio/GDAL.
+It accepts only registered public raster hosts, refuses redirects and auxiliary paths,
+checks exact byte ranges and source version validators, and shares request/byte/time budgets
+across an analysis. A bounded block cache avoids repeated downloads. The application HTTP
+client owns HTTPS trust; GDAL does not perform network access through this opener.
+
+A live Copernicus GLO-30 catalog/COG check returned the requested 32×32 window using
+1,638,401 bytes and 26 range requests from a 39,786,033-byte source object. Three deterministic
+tests cover seeking/cache/byte buffers, changing versions, servers ignoring Range, unapproved
+URLs, auxiliary paths and download budgets. This is an input foundation only: zonal terrain
+statistics, private output tiling, map display and other raster domains remain pending.
