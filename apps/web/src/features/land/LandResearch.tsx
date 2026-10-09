@@ -125,6 +125,10 @@ export function LandResearch({ land }: { land: LandArea }) {
     refetchInterval: running ? 1500 : false,
   });
 
+  useEffect(() => {
+    if (!lastRun?.id || (lastRun?.status !== "succeeded" && lastRun?.status !== "partial")) return;
+    void cache.invalidateQueries({ queryKey: ["land-scenarios", scope, land.id] });
+  }, [lastRun?.id, lastRun?.status, cache, scope, land.id]);
   const refresh = () => cache.invalidateQueries({ queryKey: ["land-research", scope] });
   useEffect(() => {
     if (!ready || !canEdit || !catalog.isSuccess || catalog.data.length > 0) return;

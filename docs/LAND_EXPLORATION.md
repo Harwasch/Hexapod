@@ -167,6 +167,33 @@ backend type checks and frontend type/lint checks. Live model/search calls remai
 without a configured model key. Search discovery does not complete the planned analytical,
 historical, rights, restoration, infrastructure or financial workflows.
 
+## Implemented increment: versioned solar and restoration scenarios
+
+Migration `0014` adds private scenarios and immutable revisions pinned to land boundaries.
+Users can preview calculations, save/revise assumptions, compare up to three alternatives,
+inspect calculation rows, see sensitivity/cost schedules, and export inputs and results.
+Boundary changes mark existing results stale. Stable request identifiers deduplicate creates;
+revision checks prevent overwriting newer edits. Evidence references must belong to the land.
+The agent can create scenarios through the same deterministic calculation service and receives
+saved scenario inputs and summaries as research context.
+
+The solar calculator covers supplied usable module area and plane-of-array irradiation,
+module efficiency, losses, degradation, self-consumption/export tariffs, escalation,
+maintenance/replacement costs, financing, discounted cash flow, sustained equity recovery,
+and capital/yield sensitivity. It does not yet determine roof geometry, shade or plane resource
+from imagery/terrain. Tilt and azimuth are recorded inputs; they do not transform horizontal
+irradiation. The restoration calculator compares supplied mutually exclusive cover classes
+with targets and calculates treatment/monitoring budgets with contingency and discounting.
+It does not infer species cover or predict ecological establishment.
+
+Validation: four numerical/API/agent scenario tests pass, including immutable snapshots,
+private access, idempotency and low-interest financing. Combined feature tests passed apart
+from an outdated expectation corrected and rechecked in the scenario suite. Forty-three
+frontend regression tests pass; type/lint/build/contracts checks pass. A live browser/API
+smoke calculated, saved, reloaded and reopened a solar scenario without page exceptions or
+horizontal overflow. The development preview had no imagery catalog; this smoke does not
+establish imagery availability. Full domain workflows and deployment remain outstanding.
+
 ## Validation
 
 Backend: `tests/test_land.py` covers persistence without missions/sites, revision history,

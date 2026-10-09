@@ -16,8 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.models.land import LandBoundaryRevision
+from app.models.land import LandArea, LandBoundaryRevision
 from app.models.research import Investigation, ResearchMessage
+from app.models.scenario import LandScenario, LandScenarioRevision
 from app.research import queue
 from app.research.model import (
     ArtifactAction,
@@ -27,6 +28,7 @@ from app.research.model import (
     ResearchDecision,
     ResearchModel,
     RetrieveAction,
+    ScenarioAction,
     SearchAction,
 )
 from app.research.outputs import overview_outputs
@@ -35,6 +37,8 @@ from app.research.providers.open_data import SOURCES, retrieve
 from app.research.search import ClaudeResearchSearch, ResearchSearch
 from app.schemas.geojson import Footprint
 from app.schemas.research import EvidenceContent, ResearchBudget
+from app.schemas.scenarios import ScenarioCreate
+from app.services import scenarios
 from app.services.errors import InvalidInputError
 
 log = logging.getLogger("twin.research")
@@ -274,6 +278,10 @@ class ResearchWorker:
             budget = ResearchBudget.model_validate(run.budget)
             kind, question = run.kind, run.question
             boundary_revision = investigation.boundary_revision
+            land_id, principal_id = investigation.land_id, investigation.created_by
+            workspace_id = db.execute(
+                select(LandArea.workspace_id).where(LandArea.id == land_id)
+            ).scalar_one()
             history = list(
                 db.scalars(
                     select(ResearchMessage)
@@ -282,6 +290,27 @@ class ResearchWorker:
                     .limit(20)
                 )
             )
+            saved_scenarios = [
+                {
+                    "id": str(row.id),
+                    "revision": row.revision,
+                    "boundaryRevision": snapshot.boundary_revision,
+                    "inputs": snapshot.payload["inputs"],
+                    "name": row.name,
+                    "summary": snapshot.result["summary"],
+                }
+                for row, snapshot in db.execute(
+                    select(LandScenario, LandScenarioRevision)
+                    .join(
+                        LandScenarioRevision,
+                        (LandScenarioRevision.scenario_id == LandScenario.id)
+                        & (LandScenarioRevision.revision == LandScenario.revision),
+                    )
+                    .where(LandScenario.land_id == land_id)
+                    .order_by(LandScenario.updated_at.desc())
+                    .limit(10)
+                )
+            ]
             conversation = [
                 {"role": message.role, "content": message.content} for message in reversed(history)
             ]
@@ -356,6 +385,7 @@ class ResearchWorker:
                         {
                             "question": question,
                             "conversation": conversation,
+                            "savedScenarios": saved_scenarios,
                             "boundaryRevision": boundary_revision,
                             "bounds": context.geometry.bounds,
                             "sourcesAvailable": [asdict(source) for source in SOURCES.values()],
@@ -387,6 +417,34 @@ class ResearchWorker:
                         result = f"Retrieved {action.provider}; see retrieved source data."
                     elif isinstance(action, SearchAction):
                         result = self._search(db, run_id, token, action, context, state, budget)
+                    elif isinstance(action, ScenarioAction):
+                        current = queue.locked(db, run_id, token)
+                        queue.validate_citations(
+                            db, current, [uuid.UUID(value) for value in action.evidence_ids]
+                        )
+                        scenario = scenarios.create(
+                            db,
+                            workspace_id,
+                            land_id,
+                            principal_id,
+                            ScenarioCreate(
+                                request_key=uuid.uuid5(run_id, output_key),
+                                name=action.name,
+                                boundary_revision=boundary_revision,
+                                inputs=action.inputs,
+                                evidence_ids=[uuid.UUID(value) for value in action.evidence_ids],
+                            ),
+                            identifier=uuid.uuid5(run_id, output_key),
+                            commit=False,
+                        )
+                        result = json.dumps(
+                            {
+                                "scenarioId": str(scenario.id),
+                                "revision": scenario.revision,
+                                "inputs": scenario.inputs.model_dump(mode="json"),
+                                "result": scenario.result.model_dump(mode="json"),
+                            }
+                        )
                     elif isinstance(action, FindingAction):
                         identifier = queue.save_finding(
                             db, run_id, token, output_key, action.finding

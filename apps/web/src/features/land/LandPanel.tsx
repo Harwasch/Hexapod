@@ -33,6 +33,7 @@ import { LandBoundaryImport } from "./LandBoundaryImport";
 import "./land.css";
 import { LandWorkspaceResizer } from "./LandWorkspaceResizer";
 import { LandCandidatePicker } from "./LandCandidatePicker";
+import { LandScenarios } from "./LandScenarios";
 import { LandResearch } from "./LandResearch";
 import { WorkspaceIdentity } from "./WorkspaceIdentity";
 import { landUsesOidc, useLandScope } from "@/state/landIdentity";
@@ -628,7 +629,12 @@ export function LandPanel() {
           </>
         )}
 
-        {active && !draft && mode === "browse" && <LandResearch key={active.id} land={active} />}
+        {active && !draft && mode === "browse" && (
+          <>
+            <LandResearch key={`research:${scope}:${active.id}`} land={active} />
+            <LandScenarios key={`scenarios:${scope}:${active.id}`} land={active} />
+          </>
+        )}
 
         {!draft && mode === "browse" && (
           <div className="land-library">

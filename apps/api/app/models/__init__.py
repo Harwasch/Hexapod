@@ -28,6 +28,7 @@ from app.models.research import (
     ResearchMessage,
     ResearchRun,
 )
+from app.models.scenario import LandScenario, LandScenarioRevision
 from app.models.site import Site
 from app.models.workspace import Membership, Workspace
 
@@ -50,6 +51,8 @@ __all__ = [
     "JobStep",
     "LandArea",
     "LandBoundaryRevision",
+    "LandScenario",
+    "LandScenarioRevision",
     "Layer",
     "LayerCategory",
     "LayerSourceType",

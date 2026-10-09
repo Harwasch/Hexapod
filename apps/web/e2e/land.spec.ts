@@ -18,7 +18,7 @@ async function landApi(page: Page) {
   await page.route("**/api/v1/land{,/**,?*}", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (path.endsWith("/investigations")) {
+    if (path.endsWith("/investigations") || path.endsWith("/scenarios")) {
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
       return;
     }

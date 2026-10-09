@@ -403,3 +403,123 @@
     font-size: 11px;
   }
 }
+
+.land-import-review,
+.land-scenarios,
+.land-scenario-form,
+.land-scenario-result {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.land-import-review,
+.land-scenarios {
+  border-top: 1px solid #a5c4a530;
+  padding-top: 18px;
+}
+.land-scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  padding: 12px 0;
+}
+.land-scenario-form fieldset {
+  border: 1px solid #a5c4a530;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.land-scenario-form legend,
+.land-scenario-form summary {
+  font-size: 13px;
+}
+.land-scenario-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0;
+}
+.land-scenario-summary dt {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.land-scenario-summary dd {
+  margin: 4px 0 0;
+  font-size: 17px;
+}
+.land-scenario-result figure {
+  margin: 0;
+  color: var(--accent-strong);
+}
+.land-scenario-result figcaption {
+  font-size: 11px;
+}
+.land-scenario-result ul {
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.land-scenario-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.land-scenario-list label {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  align-items: center;
+}
+.land-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.land-table-scroll table {
+  border-collapse: collapse;
+  font-size: 11px;
+  width: 100%;
+}
+.land-table-scroll th,
+.land-table-scroll td {
+  padding: 8px;
+  text-align: left;
+  border-bottom: 1px solid #a5c4a530;
+  white-space: nowrap;
+}
+.land-table-scroll caption {
+  text-align: left;
+  padding: 8px 0;
+  font-size: 12px;
+}
+.land-cover-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.land-cover-chart strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.land-cover-chart > div > div {
+  position: relative;
+  padding: 5px 8px;
+  margin-top: 5px;
+  background: #a5c4a510;
+}
+.land-cover-chart span {
+  position: relative;
+  z-index: 1;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+.land-cover-chart i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: #88c8e530;
+}
+.land-cover-chart i.land-cover-target {
+  background: #a8d7b450;
+}

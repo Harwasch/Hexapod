@@ -595,6 +595,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/scenarios": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_api_v1_land__land_id__scenarios_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_api_v1_land__land_id__scenarios_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/scenarios/{scenario_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_v1_land__land_id__scenarios__scenario_id__get"];
+        /** Revise */
+        put: operations["revise_api_v1_land__land_id__scenarios__scenario_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/scenarios/{scenario_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_v1_land__land_id__scenarios__scenario_id__revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/scenarios/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview */
+        post: operations["preview_api_v1_land__land_id__scenarios_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/corridor": {
         parameters: {
             query?: never;
@@ -2274,6 +2344,17 @@ export interface components {
             coordinates: number[][];
             /** Widthm */
             widthM: number;
+        };
+        /** CoverClass */
+        CoverClass: {
+            /** Baselinepercent */
+            baselinePercent: number;
+            /** Evidencebasis */
+            evidenceBasis: string;
+            /** Name */
+            name: string;
+            /** Targetpercent */
+            targetPercent: number;
         };
         /** CrsMetadata */
         CrsMetadata: {
@@ -4139,6 +4220,57 @@ export interface components {
             /** Pointspacingm */
             pointSpacingM?: number | null;
         };
+        /** RestorationInputs */
+        RestorationInputs: {
+            /** Assumptions */
+            assumptions: string;
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "field-survey" | "remote-estimate" | "user-estimate";
+            /** Contingencyfraction */
+            contingencyFraction: number;
+            /** Cover */
+            cover: components["schemas"]["CoverClass"][];
+            /** Currency */
+            currency: string;
+            /** Discountrate */
+            discountRate: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "restoration";
+            /** Monitoringcostpervisit */
+            monitoringCostPerVisit: number;
+            /** Monitoringyears */
+            monitoringYears: number[];
+            /** Referenceecosystem */
+            referenceEcosystem: string;
+            /**
+             * Surveydate
+             * Format: date
+             */
+            surveyDate: string;
+            /** Surveymethod */
+            surveyMethod: string;
+            /** Treatments */
+            treatments: components["schemas"]["RestorationTreatment"][];
+        };
+        /** RestorationTreatment */
+        RestorationTreatment: {
+            /** Areaha */
+            areaHa: number;
+            /** Costperha */
+            costPerHa: number;
+            /** Name */
+            name: string;
+            /** Objective */
+            objective: string;
+            /** Year */
+            year: number;
+        };
         /** RunCreate */
         RunCreate: {
             budget?: components["schemas"]["ResearchBudget"];
@@ -4296,6 +4428,100 @@ export interface components {
          * @enum {string}
          */
         ScaleSource: "arkit" | "exif-gps" | "manual" | "camera-height-estimate" | "unresolved";
+        /** ScenarioCreate */
+        ScenarioCreate: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Inputs */
+            inputs: components["schemas"]["SolarInputs"] | components["schemas"]["RestorationInputs"];
+            /** Name */
+            name: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+        };
+        /** ScenarioRead */
+        ScenarioRead: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Inputs */
+            inputs: components["schemas"]["SolarInputs"] | components["schemas"]["RestorationInputs"];
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Name */
+            name: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+            result: components["schemas"]["ScenarioResult"];
+            /** Revision */
+            revision: number;
+            /** Stale */
+            stale: boolean;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** ScenarioResult */
+        ScenarioResult: {
+            /** Algorithm */
+            algorithm: string;
+            /** Limitations */
+            limitations: string[];
+            /** Rows */
+            rows: {
+                [key: string]: number | string | null;
+            }[];
+            /** Sensitivity */
+            sensitivity?: {
+                [key: string]: number | string;
+            }[];
+            /** Summary */
+            summary: {
+                [key: string]: number | string | null;
+            };
+        };
+        /** ScenarioRevise */
+        ScenarioRevise: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Expectedrevision */
+            expectedRevision: number;
+            /** Inputs */
+            inputs: components["schemas"]["SolarInputs"] | components["schemas"]["RestorationInputs"];
+            /** Name */
+            name: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+        };
         /** SelectionInstruction */
         SelectionInstruction: {
             /** Candidates */
@@ -4550,6 +4776,69 @@ export interface components {
             name?: string | null;
             /** Thumbnailurl */
             thumbnailUrl?: string | null;
+        };
+        /** SolarInputs */
+        SolarInputs: {
+            /** Annualmaintenancecost */
+            annualMaintenanceCost: number;
+            /** Annualplaneirradiationkwhm2 */
+            annualPlaneIrradiationKwhM2: number;
+            /** Assumptions */
+            assumptions: string;
+            /** Azimuthdegrees */
+            azimuthDegrees: number;
+            /** Currency */
+            currency: string;
+            /** Degradationperyear */
+            degradationPerYear: number;
+            /** Discountrate */
+            discountRate: number;
+            /** Exportrateperkwh */
+            exportRatePerKwh: number;
+            /** Financedfraction */
+            financedFraction: number;
+            /** Installedcost */
+            installedCost: number;
+            /** Irradiationbasis */
+            irradiationBasis: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "solar";
+            /** Loaninterestrate */
+            loanInterestRate: number;
+            /** Loanyears */
+            loanYears: number;
+            /** Maintenanceescalation */
+            maintenanceEscalation: number;
+            /** Moduleefficiency */
+            moduleEfficiency: number;
+            /** Purchaserateperkwh */
+            purchaseRatePerKwh: number;
+            /**
+             * Replacementcost
+             * @default 0
+             */
+            replacementCost?: number;
+            /** Replacementyear */
+            replacementYear?: number | null;
+            /** Selfconsumptionfraction */
+            selfConsumptionFraction: number;
+            /** Shadeloss */
+            shadeLoss: number;
+            /** Systemloss */
+            systemLoss: number;
+            /** Tariffescalation */
+            tariffEscalation: number;
+            /** Tiltdegrees */
+            tiltDegrees: number;
+            /** Upfrontincentive */
+            upfrontIncentive: number;
+            /** Usableroofaream2 */
+            usableRoofAreaM2: number;
+            /** Years */
+            years: number;
         };
         /** SourceRead */
         SourceRead: {
@@ -4886,6 +5175,7 @@ export type SchemaChartSeries = components['schemas']['ChartSeries'];
 export type SchemaClarification = components['schemas']['Clarification'];
 export type SchemaClarificationOption = components['schemas']['ClarificationOption'];
 export type SchemaCorridorRequest = components['schemas']['CorridorRequest'];
+export type SchemaCoverClass = components['schemas']['CoverClass'];
 export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
 export type SchemaCzmlSource = components['schemas']['CzmlSource'];
 export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
@@ -4983,12 +5273,18 @@ export type SchemaResearchBudget = components['schemas']['ResearchBudget'];
 export type SchemaResearchPage = components['schemas']['ResearchPage'];
 export type SchemaResearchStatus = components['schemas']['ResearchStatus'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
+export type SchemaRestorationInputs = components['schemas']['RestorationInputs'];
+export type SchemaRestorationTreatment = components['schemas']['RestorationTreatment'];
 export type SchemaRunCreate = components['schemas']['RunCreate'];
 export type SchemaRunRead = components['schemas']['RunRead'];
 export type SchemaRunStatus = components['schemas']['RunStatus'];
 export type SchemaScaleEvidence = components['schemas']['ScaleEvidence'];
 export type SchemaScaleEvidenceInput = components['schemas']['ScaleEvidenceInput'];
 export type SchemaScaleSource = components['schemas']['ScaleSource'];
+export type SchemaScenarioCreate = components['schemas']['ScenarioCreate'];
+export type SchemaScenarioRead = components['schemas']['ScenarioRead'];
+export type SchemaScenarioResult = components['schemas']['ScenarioResult'];
+export type SchemaScenarioRevise = components['schemas']['ScenarioRevise'];
 export type SchemaSelectionInstruction = components['schemas']['SelectionInstruction'];
 export type SchemaSelectionInterpretation = components['schemas']['SelectionInterpretation'];
 export type SchemaSidecarAttach = components['schemas']['SidecarAttach'];
@@ -4999,6 +5295,7 @@ export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
 export type SchemaSiteSummary = components['schemas']['SiteSummary'];
 export type SchemaSiteUpdate = components['schemas']['SiteUpdate'];
+export type SchemaSolarInputs = components['schemas']['SolarInputs'];
 export type SchemaSourceRead = components['schemas']['SourceRead'];
 export type SchemaStacSource = components['schemas']['StacSource'];
 export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
@@ -7445,6 +7742,387 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BoundaryRevisionRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listing_api_v1_land__land_id__scenarios_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_api_v1_land__land_id__scenarios_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_api_v1_land__land_id__scenarios__scenario_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revise_api_v1_land__land_id__scenarios__scenario_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioRevise"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    history_api_v1_land__land_id__scenarios__scenario_id__revisions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_api_v1_land__land_id__scenarios_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioResult"];
                 };
             };
             /** @description Missing or wrong write token */
