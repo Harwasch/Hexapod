@@ -12,7 +12,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
-| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
+| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews | Batch imports, inventory draft recovery, broader detection and asset catalog linkage |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
@@ -1321,3 +1321,41 @@ The entered asymptote/rate assumptions give a year-five envelope of 71.7377–88
 are software-test assumptions, not measured or predicted National Mall ecology. Exported
 results match the saved result. Desktop and 390-pixel phone views had no page exceptions or
 unintended panel overflow. The deployment checkout and production remain untouched.
+
+
+## Implemented increment: asset geometry editing
+
+Assets can now be placed directly on the map and edited as points, lines, polygons or
+multipart polygons. The editor exposes each area and exclusion ring, map-picked or
+numeric vertices, insertion/removal, and bounded undo/redo. Rings close on submission;
+the closing coordinate cannot drift away from the first vertex. Large geometries page
+vertex controls and draw handles only for the active page. Incomplete rings remain
+unfilled editing paths until validated. Switching tools cancels the editor's map picker
+without clearing another tool's picker.
+
+The workspace-scoped geometry preview validates topology, coordinate bounds, the 20,000
+vertex limit and unsupported antimeridian crossings, then reports geodesic area, length,
+perimeter and relationship to the current land boundary. Previewing does not save an
+asset. Every coordinate edit invalidates its preview; stale responses cannot enable
+Apply. Applying changes updates the draft. Saving an existing asset requires a revision
+note and retains its original source, prior geometry and pinned inspection revisions.
+Outside-land assets remain explicit rather than silently clipped. Selected records are
+loaded by ID even when outside the currently paged inventory list.
+
+Validation: seven backend inventory tests pass, including independent geodesic length,
+hole area subtraction, private scope, no preview mutation and immutable revised geometry.
+Six frontend inventory/editor tests pass, including preserved holes/multipart geometry,
+undo, invalidated/stale previews, bounded history and canceled picker ownership. API
+lint/format/type checking, web type checking/targeted lint and production build pass.
+A Chromium/API smoke on the public National Mall software fixture created a synthetic
+polygon with an exclusion, edited the exclusion with undo/redo, reviewed it on desktop
+and a 390px phone, saved revision 2 and reopened its history. No page exceptions or
+unintended layout overflow were observed. Native text-input scrolling is expected for
+long names and is not treated as layout overflow. The preview has no high-resolution
+basemap; this verifies interaction and geometry persistence, not surveyed location accuracy.
+
+The successful synthetic feature is `21f1cd39-2667-5889-ae11-4e611c4ef5df`.
+Local validation artifacts: `/tmp/land-inventory-geometry-browser-result.json`,
+`/tmp/land-inventory-geometry-desktop.png`, `/tmp/land-inventory-geometry-mobile.png`.
+No schema migration is needed for this increment. Batch import and inventory draft
+recovery remain unfinished; the overall feature remains in progress and undeployed.

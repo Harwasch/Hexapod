@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import uuid
 from datetime import datetime
+from itertools import pairwise
 from typing import Literal
 
 from pydantic import Field, TypeAdapter, model_validator
@@ -12,6 +13,45 @@ from shapely.geometry import mapping, shape
 from app.schemas.base import CamelModel
 from app.schemas.geojson import MapGeometry
 from app.schemas.land import BoundarySource
+
+
+def validated_geometry(value: MapGeometry) -> MapGeometry:
+    geometry = shape(value.model_dump())
+    if geometry.is_empty or not geometry.is_valid or get_num_coordinates(geometry) > 20_000:
+        raise ValueError("An inventory feature needs valid geometry with at most 20,000 vertices.")
+    lines = (
+        [value.coordinates]
+        if value.type == "LineString"
+        else value.coordinates
+        if value.type == "Polygon"
+        else [ring for polygon in value.coordinates for ring in polygon]
+        if value.type == "MultiPolygon"
+        else []
+    )
+    if any(abs(a[0] - b[0]) > 180 for line in lines for a, b in pairwise(line)):
+        raise ValueError(
+            "Split inventory geometry at the antimeridian before importing or editing it."
+        )
+    if geometry.has_z:
+        return TypeAdapter(MapGeometry).validate_python(mapping(force_2d(geometry)))
+    return value
+
+
+class FeatureGeometryRequest(CamelModel):
+    geometry: MapGeometry
+
+    @model_validator(mode="after")
+    def bounded_geometry(self) -> FeatureGeometryRequest:
+        self.geometry = validated_geometry(self.geometry)
+        return self
+
+
+class FeatureGeometryRead(FeatureGeometryRequest):
+    intersects_land: bool
+    distance_m: float
+    area_m2: float | None
+    length_m: float | None
+    perimeter_m: float | None
 
 
 class LandFeatureCreate(CamelModel):
@@ -27,11 +67,7 @@ class LandFeatureCreate(CamelModel):
 
     @model_validator(mode="after")
     def bounded_feature(self) -> LandFeatureCreate:
-        geometry = shape(self.geometry.model_dump())
-        if geometry.is_empty or not geometry.is_valid or get_num_coordinates(geometry) > 20_000:
-            raise ValueError(
-                "an inventory feature needs valid geometry with at most 20,000 vertices"
-            )
+        self.geometry = validated_geometry(self.geometry)
         if any(
             len(key) > 100 or (isinstance(value, str) and len(value) > 2000)
             for key, value in self.attributes.items()
@@ -42,8 +78,6 @@ class LandFeatureCreate(CamelModel):
             for value in self.attributes.values()
         ):
             raise ValueError("numeric attributes must be finite")
-        if geometry.has_z:
-            self.geometry = TypeAdapter(MapGeometry).validate_python(mapping(force_2d(geometry)))
         return self
 
 

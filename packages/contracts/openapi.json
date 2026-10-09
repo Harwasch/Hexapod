@@ -4302,6 +4302,124 @@
         "title": "EvidenceRead",
         "type": "object"
       },
+      "FeatureGeometryRead": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aream2"
+          },
+          "distanceM": {
+            "title": "Distancem",
+            "type": "number"
+          },
+          "geometry": {
+            "discriminator": {
+              "mapping": {
+                "LineString": "#/components/schemas/LineString",
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Point": "#/components/schemas/Point",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Point"
+              },
+              {
+                "$ref": "#/components/schemas/LineString"
+              },
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Geometry"
+          },
+          "intersectsLand": {
+            "title": "Intersectsland",
+            "type": "boolean"
+          },
+          "lengthM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lengthm"
+          },
+          "perimeterM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perimeterm"
+          }
+        },
+        "required": [
+          "geometry",
+          "intersectsLand",
+          "distanceM",
+          "areaM2",
+          "lengthM",
+          "perimeterM"
+        ],
+        "title": "FeatureGeometryRead",
+        "type": "object"
+      },
+      "FeatureGeometryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "geometry": {
+            "discriminator": {
+              "mapping": {
+                "LineString": "#/components/schemas/LineString",
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Point": "#/components/schemas/Point",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Point"
+              },
+              {
+                "$ref": "#/components/schemas/LineString"
+              },
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Geometry"
+          }
+        },
+        "required": [
+          "geometry"
+        ],
+        "title": "FeatureGeometryRequest",
+        "type": "object"
+      },
       "FeatureInspectionCreate": {
         "additionalProperties": false,
         "properties": {
@@ -23582,6 +23700,111 @@
           }
         ],
         "summary": "Create",
+        "tags": [
+          "land inventory"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/features/geometry/preview": {
+      "post": {
+        "operationId": "geometry_preview_api_v1_land__land_id__features_geometry_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeatureGeometryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureGeometryRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Geometry Preview",
         "tags": [
           "land inventory"
         ]

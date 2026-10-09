@@ -8,6 +8,8 @@ import { describeError } from "@/lib/log";
 import { useLandScope, useLandCanEdit, useLandAccessReady } from "@/state/landIdentity";
 import { useLandContext } from "@/state/landContext";
 import { useSelection } from "@/state/selection";
+import { useUi } from "@/state/ui";
+import { InventoryGeometryEditor } from "./InventoryGeometryEditor";
 
 import { LandInspectionForm } from "./LandInspectionForm";
 
@@ -27,6 +29,24 @@ export function LandInventory({ land }: { land: LandArea }) {
   const [offset, setOffset] = useState(0);
   const [draft, setDraft] = useState<FeatureDraft | null>(null);
   const [editing, setEditing] = useState<Feature | null>(null);
+  const [geometryEditing, setGeometryEditing] = useState(false);
+  const [revisionNote, setRevisionNote] = useState("");
+  const activeSection = useLandContext((state) => state.section);
+  const panel = useUi((state) => state.activePanel);
+  const picker = useLandContext((state) => state.pointPicker);
+  const pickOwner = `inventory-new:${land.id}`;
+  const pickTicket = useRef(0);
+  const active = ready && canEdit && activeSection === "inventory" && panel === "land";
+  useEffect(() => {
+    if (!active) return;
+    return () => {
+      pickTicket.current += 1;
+      if (useLandContext.getState().pointPicker === pickOwner) {
+        scene?.areas.cancelPick();
+        useLandContext.getState().setPointPicker(null);
+      }
+    };
+  }, [active, scene, pickOwner]);
   const [candidates, setCandidates] = useState<LandCandidate[]>([]);
   const [lookupMessage, setLookupMessage] = useState("");
   const [lookupKind, setLookupKind] = useState<"line" | "building">("building");
@@ -52,7 +72,19 @@ export function LandInventory({ land }: { land: LandArea }) {
       ),
     retry: false,
   });
-  const selected = catalog.data?.find((feature) => feature.id === selectedId) ?? null;
+  const selectedRecord = useQuery({
+    queryKey: ["land-inventory-record", scope, land.id, land.revision, selectedId],
+    enabled: ready && Boolean(selectedId),
+    retry: false,
+    queryFn: () =>
+      unwrap(
+        api.GET("/api/v1/land/{land_id}/features/{feature_id}", {
+          params: { path: { land_id: land.id, feature_id: selectedId ?? "" } },
+        }),
+      ),
+  });
+  const selected =
+    selectedRecord.data ?? catalog.data?.find((feature) => feature.id === selectedId) ?? null;
   const inspections = useQuery({
     queryKey: ["land-inspections", scope, land.id, selectedId],
     enabled: ready && Boolean(selectedId),
@@ -129,6 +161,8 @@ export function LandInventory({ land }: { land: LandArea }) {
   };
   const fromCandidate = (candidate: LandCandidate) => {
     setEditing(null);
+    setGeometryEditing(false);
+    setRevisionNote("");
     setDraft({
       requestKey: crypto.randomUUID(),
       name: candidate.label,
@@ -169,8 +203,29 @@ export function LandInventory({ land }: { land: LandArea }) {
       if (ticket.current === current) setBusy(false);
     }
   };
+  const placeAsset = async () => {
+    if (!scene || !active || draft) return;
+    const current = ++pickTicket.current;
+    useLandContext.getState().setPointPicker(pickOwner);
+    const point = await scene.areas.pickGround();
+    if (current !== pickTicket.current || useLandContext.getState().pointPicker !== pickOwner)
+      return;
+    useLandContext.getState().setPointPicker(null);
+    if (!point) return;
+    setEditing(null);
+    setGeometryEditing(false);
+    setRevisionNote("");
+    setDraft({
+      requestKey: crypto.randomUUID(),
+      name: "",
+      category: "other",
+      status: "candidate",
+      geometry: { type: "Point", coordinates: [point.longitude, point.latitude] },
+      source: { method: "drawn", meaning: "physical-feature", label: "User-picked map location" },
+    });
+  };
   const save = async () => {
-    if (!draft) return;
+    if (!draft || geometryEditing || !canEdit || busy) return;
     const current = ++ticket.current;
     setBusy(true);
     setError(null);
@@ -182,7 +237,7 @@ export function LandInventory({ land }: { land: LandArea }) {
               body: {
                 ...draft,
                 expectedRevision: editing.revision,
-                note: "Updated in the land inventory",
+                note: revisionNote.trim(),
               },
             }),
           )
@@ -198,6 +253,7 @@ export function LandInventory({ land }: { land: LandArea }) {
         useLandContext.getState().selectInventory(feature.id);
       }
       await refresh();
+      await cache.invalidateQueries({ queryKey: ["land-inventory-record", scope, land.id] });
     } catch (cause) {
       if (ticket.current === current)
         setError(
@@ -238,7 +294,34 @@ export function LandInventory({ land }: { land: LandArea }) {
         />{" "}
         Show inventory on map
       </label>
-      {canEdit && (
+      {selectedRecord.isError && (
+        <p role="alert">
+          The selected feature could not be loaded.{" "}
+          <button type="button" onClick={() => void selectedRecord.refetch()}>
+            Retry selected feature
+          </button>
+        </p>
+      )}
+      {canEdit && !draft && (
+        <div className="land-actions">
+          <button
+            type="button"
+            disabled={!scene || !active || busy}
+            onClick={() => void placeAsset()}
+          >
+            Place new asset on map
+          </button>
+        </div>
+      )}
+      {picker === pickOwner && (
+        <p role="status">
+          Click the map to place the asset.{" "}
+          <button type="button" onClick={() => scene?.areas.cancelPick()}>
+            Cancel asset placement
+          </button>
+        </p>
+      )}
+      {canEdit && !draft && (
         <details>
           <summary>Add a mapped or inspected feature</summary>
           <label className="land-name">
@@ -270,6 +353,8 @@ export function LandInventory({ land }: { land: LandArea }) {
               onClick={() => {
                 if (!inspected) return;
                 setEditing(null);
+                setGeometryEditing(false);
+                setRevisionNote("");
                 setDraft({
                   requestKey: crypto.randomUUID(),
                   name: inspected.title,
@@ -307,7 +392,7 @@ export function LandInventory({ land }: { land: LandArea }) {
           </div>
         </details>
       )}
-      {draft && (
+      {draft && canEdit && (
         <form
           className="land-inventory-form"
           onSubmit={(event) => {
@@ -315,69 +400,116 @@ export function LandInventory({ land }: { land: LandArea }) {
             void save();
           }}
         >
-          <label className="land-name">
-            Feature name
-            <input
-              required
-              maxLength={200}
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-            />
-          </label>
-          <label className="land-name">
-            Category
-            <select
-              value={draft.category}
-              onChange={(event) =>
-                setDraft({ ...draft, category: event.target.value as FeatureDraft["category"] })
-              }
-            >
-              {["building", "power", "water", "transport", "equipment", "vegetation", "other"].map(
-                (kind) => (
+          <fieldset disabled={busy} className="land-inventory-inputs">
+            <label className="land-name">
+              Feature name
+              <input
+                required
+                maxLength={200}
+                value={draft.name}
+                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+              />
+            </label>
+            <label className="land-name">
+              Category
+              <select
+                value={draft.category}
+                onChange={(event) =>
+                  setDraft({ ...draft, category: event.target.value as FeatureDraft["category"] })
+                }
+              >
+                {[
+                  "building",
+                  "power",
+                  "water",
+                  "transport",
+                  "equipment",
+                  "vegetation",
+                  "other",
+                ].map((kind) => (
                   <option key={kind}>{kind}</option>
-                ),
-              )}
-            </select>
-          </label>
-          <label className="land-name">
-            Identity status
-            <select
-              value={draft.status ?? "candidate"}
-              onChange={(event) =>
-                setDraft({ ...draft, status: event.target.value as FeatureDraft["status"] })
-              }
-            >
-              <option value="candidate">Candidate · needs verification</option>
-              <option value="confirmed">Confirmed identity</option>
-              <option value="retired">Retired</option>
-            </select>
-          </label>
-          <label className="land-name">
-            Feature notes
-            <textarea
-              rows={3}
-              value={draft.description ?? ""}
-              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
-            />
-          </label>
-          <p className="land-footnote">
-            Source: {draft.source.label}. Identity confirmation does not establish ownership.
-          </p>
-          <div className="land-actions">
-            <button disabled={busy} type="submit">
-              {editing ? "Save feature revision" : "Add to inventory"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                ticket.current++;
-                setBusy(false);
-                setDraft(null);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
+                ))}
+              </select>
+            </label>
+            <label className="land-name">
+              Identity status
+              <select
+                value={draft.status ?? "candidate"}
+                onChange={(event) =>
+                  setDraft({ ...draft, status: event.target.value as FeatureDraft["status"] })
+                }
+              >
+                <option value="candidate">Candidate · needs verification</option>
+                <option value="confirmed">Confirmed identity</option>
+                <option value="retired">Retired</option>
+              </select>
+            </label>
+            <label className="land-name">
+              Feature notes
+              <textarea
+                rows={3}
+                value={draft.description ?? ""}
+                onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+              />
+            </label>
+            <p className="land-footnote">
+              Source: {draft.source.label}. Identity confirmation does not establish ownership.
+            </p>
+            {geometryEditing ? (
+              <InventoryGeometryEditor
+                key={draft.requestKey}
+                landId={land.id}
+                boundaryRevision={land.revision}
+                geometry={draft.geometry}
+                onApply={(geometry) => {
+                  setDraft({ ...draft, geometry });
+                  setGeometryEditing(false);
+                }}
+                onCancel={() => setGeometryEditing(false)}
+              />
+            ) : (
+              <button type="button" onClick={() => setGeometryEditing(true)}>
+                Edit shape and location
+              </button>
+            )}
+            {editing && (
+              <label className="land-name">
+                Revision note
+                <textarea
+                  required
+                  maxLength={1000}
+                  value={revisionNote}
+                  onChange={(event) => setRevisionNote(event.target.value)}
+                  placeholder="Describe what changed and how you checked it"
+                />
+              </label>
+            )}
+            {geometryEditing && (
+              <p className="land-footnote">
+                Apply or discard the geometry edits before saving this feature.
+              </p>
+            )}
+            <div className="land-actions">
+              <button
+                disabled={busy || geometryEditing || (Boolean(editing) && !revisionNote.trim())}
+                type="submit"
+              >
+                {editing ? "Save feature revision" : "Add to inventory"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  ticket.current++;
+                  setBusy(false);
+                  setDraft(null);
+                  setEditing(null);
+                  setGeometryEditing(false);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </fieldset>
         </form>
       )}
       <div className="land-candidates">
@@ -432,11 +564,13 @@ export function LandInventory({ land }: { land: LandArea }) {
           <p className="land-footnote">
             Revision {selected.revision} · source: {selected.source.label}
           </p>
-          {canEdit && (
+          {canEdit && !draft && (
             <button
               type="button"
               onClick={() => {
                 setEditing(selected);
+                setRevisionNote("");
+                setGeometryEditing(false);
                 setDraft({
                   requestKey: crypto.randomUUID(),
                   name: selected.name,
@@ -450,7 +584,7 @@ export function LandInventory({ land }: { land: LandArea }) {
                 });
               }}
             >
-              Edit feature details
+              Edit feature details and geometry
             </button>
           )}
           {Object.keys(selected.attributes ?? {}).length > 0 && (

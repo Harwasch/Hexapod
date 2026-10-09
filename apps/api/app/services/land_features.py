@@ -4,13 +4,15 @@ import uuid
 
 from geoalchemy2.shape import from_shape
 from shapely.geometry import shape
-from sqlalchemy import func, select
+from sqlalchemy import func, null, select
 from sqlalchemy.orm import Session
 
 from app.models.land import LandArea
 from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureRevision
 from app.models.research import Evidence, Investigation, ResearchRun
 from app.schemas.land_features import (
+    FeatureGeometryRead,
+    FeatureGeometryRequest,
     FeatureInspectionCreate,
     FeatureInspectionRead,
     LandFeatureCreate,
@@ -20,6 +22,32 @@ from app.schemas.land_features import (
 )
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.land import get_land
+
+
+def preview_geometry(
+    db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID, payload: FeatureGeometryRequest
+) -> FeatureGeometryRead:
+    get_land(db, workspace_id, land_id)
+    geometry = func.ST_SetSRID(func.ST_GeomFromGeoJSON(payload.geometry.model_dump_json()), 4326)
+    geographic = func.geography(geometry)
+    polygon = payload.geometry.type in {"Polygon", "MultiPolygon"}
+    intersects, distance, area, length, perimeter = db.execute(
+        select(
+            func.ST_Intersects(geometry, LandArea.boundary),
+            func.ST_Distance(geographic, func.geography(LandArea.boundary)),
+            func.ST_Area(geographic) if polygon else null(),
+            func.ST_Length(geographic) if payload.geometry.type == "LineString" else null(),
+            func.ST_Perimeter(geographic) if polygon else null(),
+        ).where(LandArea.id == land_id)
+    ).one()
+    return FeatureGeometryRead(
+        geometry=payload.geometry,
+        intersects_land=intersects,
+        distance_m=distance,
+        area_m2=area,
+        length_m=length,
+        perimeter_m=perimeter,
+    )
 
 
 def validate_evidence(db: Session, land_id: uuid.UUID, ids: list[uuid.UUID]) -> None:

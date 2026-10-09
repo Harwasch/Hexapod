@@ -9,6 +9,8 @@ from app.api.deps import DbSession
 from app.api.workspace_deps import WorkspaceDep
 from app.models.land_feature import FeatureInspection, LandFeature
 from app.schemas.land_features import (
+    FeatureGeometryRead,
+    FeatureGeometryRequest,
     FeatureInspectionCreate,
     FeatureInspectionRead,
     LandFeatureCreate,
@@ -47,6 +49,13 @@ def create(
 ) -> LandFeatureRead:
     scope.require("owner", "editor")
     return land_features.create(db, scope.id, land_id, payload)
+
+
+@router.post("/geometry/preview", response_model=FeatureGeometryRead)
+def geometry_preview(
+    land_id: uuid.UUID, payload: FeatureGeometryRequest, db: DbSession, scope: WorkspaceDep
+) -> FeatureGeometryRead:
+    return land_features.preview_geometry(db, scope.id, land_id, payload)
 
 
 @router.get("/{feature_id}", response_model=LandFeatureRead)

@@ -129,3 +129,71 @@ def test_inventory_rejects_nonfinite_numeric_attributes() -> None:
 
     with pytest.raises(ValidationError, match="finite"):
         LandFeatureCreate.model_validate({**FEATURE, "attributes": {"height": float("inf")}})
+
+
+def test_geometry_preview_metrics_holes_and_private_scope(client: TestClient, db: Session) -> None:
+    from app.schemas.land_features import FeatureGeometryRequest
+
+    land = client.post("/api/v1/land", json=BODY).json()
+    path = f"/api/v1/land/{land['id']}/features/geometry/preview"
+    line = {"type": "LineString", "coordinates": [[0, 0], [0.001, 0]]}
+    response = client.post(path, json={"geometry": line})
+    assert response.status_code == 200, response.text
+    metrics = response.json()
+    assert metrics["lengthM"] == pytest.approx(111.31949, abs=0.01)
+    assert metrics["areaM2"] is None and metrics["perimeterM"] is None
+    assert not metrics["intersectsLand"] and metrics["distanceM"] > 1_000_000
+    outer = [[0, 0], [0.01, 0], [0.01, 0.01], [0, 0.01], [0, 0]]
+    hole = [[0.002, 0.002], [0.002, 0.004], [0.004, 0.004], [0.004, 0.002], [0.002, 0.002]]
+    full = client.post(path, json={"geometry": {"type": "Polygon", "coordinates": [outer]}}).json()
+    cut = client.post(
+        path, json={"geometry": {"type": "Polygon", "coordinates": [outer, hole]}}
+    ).json()
+    assert cut["areaM2"] / full["areaM2"] == pytest.approx(0.96, abs=0.00001)
+    assert cut["perimeterM"] > full["perimeterM"]
+    assert cut["lengthM"] is None
+    assert client.get(f"/api/v1/land/{land['id']}/features").json() == []
+    private = Workspace(name="Other workspace")
+    db.add(private)
+    db.commit()
+    with pytest.raises(NotFoundError):
+        land_features.preview_geometry(
+            db,
+            private.id,
+            uuid.UUID(land["id"]),
+            FeatureGeometryRequest.model_validate({"geometry": line}),
+        )
+
+
+def test_geometry_preview_rejects_invalid_shapes_and_revisions_preserve_geometry(
+    client: TestClient,
+) -> None:
+    land = client.post("/api/v1/land", json=BODY).json()
+    path = f"/api/v1/land/{land['id']}/features"
+    for geometry in [
+        {"type": "LineString", "coordinates": [[179, 0], [-179, 0]]},
+        {"type": "Polygon", "coordinates": [[[0, 0], [1, 1], [1, 0], [0, 1], [0, 0]]]},
+        {"type": "Point", "coordinates": [181, 0]},
+    ]:
+        assert (
+            client.post(f"{path}/geometry/preview", json={"geometry": geometry}).status_code == 422
+        )
+        assert client.post(path, json={**FEATURE, "geometry": geometry}).status_code == 422
+    feature = client.post(path, json=FEATURE).json()
+    changed_geometry = {"type": "Point", "coordinates": [-122.12, 47.645, 500]}
+    preview = client.post(f"{path}/geometry/preview", json={"geometry": changed_geometry}).json()
+    changed = client.put(
+        f"{path}/{feature['id']}",
+        json={
+            **FEATURE,
+            "geometry": preview["geometry"],
+            "expectedRevision": 1,
+            "note": "Corrected the mapped position using field notes",
+        },
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["geometry"] == {"type": "Point", "coordinates": [-122.12, 47.645]}
+    assert not changed.json()["intersectsLand"]
+    history = client.get(f"{path}/{feature['id']}/revisions").json()
+    assert history[0]["note"] == "Corrected the mapped position using field notes"
+    assert history[1]["content"]["geometry"] == feature["geometry"]

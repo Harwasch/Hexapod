@@ -893,6 +893,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/features/geometry/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Geometry Preview */
+        post: operations["geometry_preview_api_v1_land__land_id__features_geometry_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/investigations": {
         parameters: {
             query?: never;
@@ -3525,6 +3542,26 @@ export interface components {
             title: string;
             /** Url */
             url?: string | null;
+        };
+        /** FeatureGeometryRead */
+        FeatureGeometryRead: {
+            /** Aream2 */
+            areaM2: number | null;
+            /** Distancem */
+            distanceM: number;
+            /** Geometry */
+            geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Intersectsland */
+            intersectsLand: boolean;
+            /** Lengthm */
+            lengthM: number | null;
+            /** Perimeterm */
+            perimeterM: number | null;
+        };
+        /** FeatureGeometryRequest */
+        FeatureGeometryRequest: {
+            /** Geometry */
+            geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
         };
         /** FeatureInspectionCreate */
         FeatureInspectionCreate: {
@@ -7768,6 +7805,8 @@ export type SchemaDocumentSearchHit = components['schemas']['DocumentSearchHit']
 export type SchemaEcologyRequest = components['schemas']['EcologyRequest'];
 export type SchemaEventRead = components['schemas']['EventRead'];
 export type SchemaEvidenceRead = components['schemas']['EvidenceRead'];
+export type SchemaFeatureGeometryRead = components['schemas']['FeatureGeometryRead'];
+export type SchemaFeatureGeometryRequest = components['schemas']['FeatureGeometryRequest'];
 export type SchemaFeatureInspectionCreate = components['schemas']['FeatureInspectionCreate'];
 export type SchemaFeatureInspectionRead = components['schemas']['FeatureInspectionRead'];
 export type SchemaFindingDisposition = components['schemas']['FindingDisposition'];
@@ -12029,6 +12068,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LandFeatureRevisionRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    geometry_preview_api_v1_land__land_id__features_geometry_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeatureGeometryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeatureGeometryRead"];
                 };
             };
             /** @description Missing or wrong write token */
