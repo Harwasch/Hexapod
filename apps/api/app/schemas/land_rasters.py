@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field, HttpUrl
+from pydantic import Field, HttpUrl, model_validator
 
 from app.schemas.base import CamelModel
 
@@ -12,9 +12,15 @@ Finite = Annotated[float, Field(allow_inf_nan=False)]
 
 
 class RasterRequest(CamelModel):
-    dataset: Literal["cop-dem-glo-30"] = "cop-dem-glo-30"
-    resolution_m: Finite = Field(default=30, ge=30, le=1000)
+    dataset: Literal["cop-dem-glo-30", "esa-worldcover-2021"] = "cop-dem-glo-30"
+    resolution_m: Finite = Field(default=30, ge=10, le=1000)
     max_dimension: Literal[256, 512, 1024] = 512
+
+    @model_validator(mode="after")
+    def source_resolution(self) -> RasterRequest:
+        if self.dataset == "cop-dem-glo-30" and self.resolution_m < 30:
+            raise ValueError("Copernicus GLO-30 analysis requires at least 30 m grid spacing.")
+        return self
 
 
 class RasterSource(CamelModel):
@@ -30,6 +36,15 @@ class RasterSource(CamelModel):
     attribution: str
 
 
+class RasterClass(CamelModel):
+    code: int = Field(ge=1, le=255)
+    label: str
+    color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    cells: int = Field(ge=0)
+    fraction: Finite | None = Field(ge=0, le=1)
+    sampled_area_m2: Finite = Field(ge=0)
+
+
 class RasterBand(CamelModel):
     index: int = Field(ge=1, le=16)
     name: str
@@ -42,7 +57,8 @@ class RasterBand(CamelModel):
     percentiles: dict[str, Finite]
     histogram_edges: list[Finite]
     histogram_counts: list[int]
-    palette: Literal["viridis", "magma"]
+    palette: Literal["viridis", "magma", "categorical"]
+    classes: list[RasterClass] = Field(default_factory=list, max_length=255)
 
 
 class RasterMetadata(CamelModel):

@@ -11,16 +11,12 @@ import numpy as np
 import rasterio
 from numpy.typing import NDArray
 from pydantic import HttpUrl
-from pyproj import CRS, Transformer
 from rasterio.enums import Resampling
-from rasterio.features import geometry_mask
 from rasterio.io import MemoryFile
 from rasterio.shutil import copy as copy_raster
-from rasterio.transform import from_origin
 from rasterio.vrt import WarpedVRT
-from shapely.geometry import mapping, shape
-from shapely.ops import transform as transform_geometry
 
+from app.analysis.raster_grid import make_grid
 from app.analysis.raster_io import RasterOpener, ReadBudget
 from app.research.providers.base import SourceSpec, fetch_json
 from app.schemas.geojson import Footprint
@@ -124,44 +120,12 @@ def encode_cog(bands: list[NDArray[np.float32]], crs: str, affine: Any) -> bytes
 
 
 def analyze(boundary: Footprint, request: RasterRequest, client: httpx.Client) -> TerrainResult:
-    geometry = shape(boundary.model_dump())
-    west, south, east, north = geometry.bounds
-    if east - west > 10 or north - south > 10:
-        raise ValueError(
-            "Analyze a regional area at a time. Split distant or antimeridian-spanning parts before raster analysis."
-        )
-    point = geometry.representative_point()
-    metric_crs = CRS.from_proj4(
-        f"+proj=aeqd +lat_0={point.y} +lon_0={point.x} +datum=WGS84 +units=m +no_defs"
-    )
-    projected = transform_geometry(
-        Transformer.from_crs(4326, metric_crs, always_xy=True).transform, geometry
-    )
-    left, bottom, right, top = projected.bounds
-    span = max(right - left, top - bottom)
-    if span > 250_000:
-        raise ValueError(
-            "This regional analysis supports extents up to 250 km. Analyze a smaller portion of the land."
-        )
-    resolution = max(request.resolution_m, span / (request.max_dimension - 6))
-    origin_x, origin_y = (
-        math.floor(left / resolution) * resolution - resolution,
-        math.ceil(top / resolution) * resolution + resolution,
-    )
-    width, height = (
-        max(3, math.ceil((right - origin_x) / resolution) + 1),
-        max(3, math.ceil((origin_y - bottom) / resolution) + 1),
-    )
-    affine = from_origin(origin_x, origin_y, resolution, resolution)
-    inside = geometry_mask(
-        [mapping(projected)],
-        out_shape=(height, width),
-        transform=affine,
-        invert=True,
-        all_touched=False,
-    )
+    grid = make_grid(boundary, request)
+    west, south, east, north = grid.bounds
+    metric_crs, affine, resolution = grid.crs, grid.affine, grid.resolution
+    width, height, inside = grid.width, grid.height, grid.inside
     # Search a padded region because slope needs neighboring samples outside the boundary.
-    padding = max(0.002, resolution * 3 / 111000 / max(0.05, math.cos(math.radians(point.y))))
+    padding = max(0.002, resolution * 3 / 111000 / max(0.05, math.cos(math.radians(grid.latitude))))
     bbox = [
         max(-180, west - padding),
         max(-90, south - padding),

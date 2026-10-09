@@ -5,6 +5,8 @@ import {
   ImageryLayer,
   Rectangle,
   Resource,
+  TextureMagnificationFilter,
+  TextureMinificationFilter,
   UrlTemplateImageryProvider,
 } from "cesium";
 import { env } from "@/app/env";
@@ -87,6 +89,10 @@ export function LandRasterBridge() {
               );
         });
         const layer = new ImageryLayer(provider, { alpha: definition.opacity });
+        if (definition.categorical) {
+          layer.magnificationFilter = TextureMagnificationFilter.NEAREST;
+          layer.minificationFilter = TextureMinificationFilter.NEAREST;
+        }
         host.viewer.imageryLayers.add(layer);
         rendered.set(definition.id, { definition, layer, auth });
       }

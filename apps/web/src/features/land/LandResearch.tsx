@@ -121,9 +121,12 @@ export function LandResearch({ land }: { land: LandArea }) {
     key: string;
     budget: components["schemas"]["ResearchBudget"];
   } | null>(null);
-  const pendingTerrain = useRef<{ investigationId: string; key: string; revision: number } | null>(
-    null,
-  );
+  const pendingTerrain = useRef<{
+    investigationId: string;
+    key: string;
+    revision: number;
+    dataset: string;
+  } | null>(null);
   const lastRun = detail.data?.runs.at(-1);
   const running = lastRun?.status === "queued" || lastRun?.status === "running";
   const progress = useQuery({
@@ -197,18 +200,22 @@ export function LandResearch({ land }: { land: LandArea }) {
       setBusy(false);
     }
   };
-  const analyzeTerrain = async () => {
+  const analyzeRaster = async (dataset: "cop-dem-glo-30" | "esa-worldcover-2021") => {
     if (!canEdit) return;
     setBusy(true);
     setError(null);
     try {
       let operation = pendingTerrain.current;
-      if (operation?.revision !== land.revision) {
-        const investigation = await beginInvestigation(land, "Surface elevation and slope");
+      if (operation?.revision !== land.revision || operation.dataset !== dataset) {
+        const investigation = await beginInvestigation(
+          land,
+          dataset === "esa-worldcover-2021" ? "Land cover in 2021" : "Surface elevation and slope",
+        );
         operation = {
           investigationId: investigation.id,
           key: crypto.randomUUID(),
           revision: land.revision,
+          dataset,
         };
         pendingTerrain.current = operation;
       }
@@ -217,9 +224,16 @@ export function LandResearch({ land }: { land: LandArea }) {
           params: { path: { investigation_id: operation.investigationId } },
           body: {
             kind: "raster",
-            question: "Analyze surface elevation and slope inside this land.",
+            question:
+              dataset === "esa-worldcover-2021"
+                ? "Analyze the broad land-cover classes mapped in 2021 inside this land."
+                : "Analyze surface elevation and slope inside this land.",
             requestKey: operation.key,
-            analysis: { dataset: "cop-dem-glo-30", resolutionM: 30, maxDimension: 512 },
+            analysis: {
+              dataset,
+              resolutionM: dataset === "esa-worldcover-2021" ? 10 : 30,
+              maxDimension: 512,
+            },
           },
         }),
       );
@@ -322,9 +336,23 @@ export function LandResearch({ land }: { land: LandArea }) {
         <button
           type="button"
           disabled={busy || running || !ready || !canEdit}
-          onClick={() => void analyzeTerrain()}
+          onClick={() => void analyzeRaster("cop-dem-glo-30")}
         >
           {busy ? "Starting…" : "Analyze terrain"}
+        </button>
+      </div>
+      <div className="land-terrain-start">
+        <strong>What covers this land?</strong>
+        <p className="land-footnote">
+          Explore tree cover, grassland, water and other broad classes mapped in 2021. Use these as
+          a starting point for field observations and restoration questions.
+        </p>
+        <button
+          type="button"
+          disabled={busy || running || !ready || !canEdit}
+          onClick={() => void analyzeRaster("esa-worldcover-2021")}
+        >
+          {busy ? "Starting…" : "Analyze land cover"}
         </button>
       </div>
       {catalog.data && catalog.data.length > 0 && (

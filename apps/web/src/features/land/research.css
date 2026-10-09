@@ -339,3 +339,42 @@
   border: 1px solid var(--border-subtle, #ffffff20);
   border-radius: 10px;
 }
+
+.land-cover-legend {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 14px;
+}
+.land-cover-legend li > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.land-cover-legend strong {
+  flex: 1;
+  font-size: 13px;
+}
+.land-cover-swatch {
+  width: 13px;
+  height: 13px;
+  border: 1px solid #ffffff60;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.land-cover-bar {
+  height: 5px;
+  margin: 5px 0;
+  background: #ffffff15;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.land-cover-bar span {
+  display: block;
+  height: 100%;
+}
+.land-cover-legend small {
+  opacity: 0.7;
+  font-size: 11px;
+}

@@ -123,7 +123,7 @@ def tile(db: Session, row: LandRaster, band: int, z: int, x: int, y: int) -> byt
     definition = next((value for value in metadata.bands if value.index == band), None)
     if definition is None or not 0 <= z <= 22 or not 0 <= x < 2 ** (z + 1) or not 0 <= y < 2**z:
         raise NotFoundError("raster tile", f"{band}/{z}/{x}/{y}")
-    if definition.minimum is None or definition.maximum is None:
+    if not definition.valid_cells:
         return transparent_tile()
     bounds = TMS.bounds(morecantile.Tile(x, y, z))
     west, south, east, north = metadata.bounds
@@ -151,16 +151,29 @@ def tile(db: Session, row: LandRaster, band: int, z: int, x: int, y: int) -> byt
             num_threads=1,
             warp_mem_limit=16,
         )
-    high = definition.maximum if definition.maximum > definition.minimum else definition.minimum + 1
     valid = np.isfinite(destination)
-    normalized = np.where(
-        valid, (destination - definition.minimum) / (high - definition.minimum), 0
-    )
-    indices = np.clip(normalized * 255, 0, 255).astype(np.uint8)
-    palette = np.array(
-        [cmap.get(definition.palette)[index] for index in range(256)], dtype=np.uint8
-    )
-    rgba = palette[indices]
+    if definition.palette == "categorical":
+        palette = np.zeros((256, 4), dtype=np.uint8)
+        for item in definition.classes:
+            palette[item.code] = (*bytes.fromhex(item.color[1:]), 255)
+        indices = np.where(valid, destination, 0).astype(np.uint8)
+        rgba = palette[indices]
+    else:
+        if definition.minimum is None or definition.maximum is None:
+            return transparent_tile()
+        high = (
+            definition.maximum
+            if definition.maximum > definition.minimum
+            else definition.minimum + 1
+        )
+        normalized = np.where(
+            valid, (destination - definition.minimum) / (high - definition.minimum), 0
+        )
+        indices = np.clip(normalized * 255, 0, 255).astype(np.uint8)
+        palette = np.array(
+            [cmap.get(definition.palette)[index] for index in range(256)], dtype=np.uint8
+        )
+        rgba = palette[indices]
     rgba[~valid, 3] = 0
     output = io.BytesIO()
     Image.fromarray(rgba).save(output, format="PNG")

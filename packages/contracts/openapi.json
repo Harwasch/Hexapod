@@ -10151,6 +10151,14 @@
       "RasterBand": {
         "additionalProperties": false,
         "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/RasterClass"
+            },
+            "maxItems": 255,
+            "title": "Classes",
+            "type": "array"
+          },
           "histogramCounts": {
             "items": {
               "type": "integer"
@@ -10211,7 +10219,8 @@
           "palette": {
             "enum": [
               "viridis",
-              "magma"
+              "magma",
+              "categorical"
             ],
             "title": "Palette",
             "type": "string"
@@ -10259,6 +10268,59 @@
           "palette"
         ],
         "title": "RasterBand",
+        "type": "object"
+      },
+      "RasterClass": {
+        "additionalProperties": false,
+        "properties": {
+          "cells": {
+            "minimum": 0.0,
+            "title": "Cells",
+            "type": "integer"
+          },
+          "code": {
+            "maximum": 255.0,
+            "minimum": 1.0,
+            "title": "Code",
+            "type": "integer"
+          },
+          "color": {
+            "pattern": "^#[0-9a-fA-F]{6}$",
+            "title": "Color",
+            "type": "string"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "sampledAreaM2": {
+            "minimum": 0.0,
+            "title": "Sampledaream2",
+            "type": "number"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "color",
+          "cells",
+          "fraction",
+          "sampledAreaM2"
+        ],
+        "title": "RasterClass",
         "type": "object"
       },
       "RasterMetadata": {
@@ -10405,8 +10467,11 @@
         "additionalProperties": false,
         "properties": {
           "dataset": {
-            "const": "cop-dem-glo-30",
             "default": "cop-dem-glo-30",
+            "enum": [
+              "cop-dem-glo-30",
+              "esa-worldcover-2021"
+            ],
             "title": "Dataset",
             "type": "string"
           },
@@ -10423,7 +10488,7 @@
           "resolutionM": {
             "default": 30,
             "maximum": 1000.0,
-            "minimum": 30.0,
+            "minimum": 10.0,
             "title": "Resolutionm",
             "type": "number"
           }

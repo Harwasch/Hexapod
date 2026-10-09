@@ -9,7 +9,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft recovery | Broader cadastral coverage, snapping/splitting, unfinished drawing recovery, large/dateline corridor handling |
-| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain raster calculation and private map tiles | Broader raster datasets and compute tools, agent evaluations and live model validation |
+| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover raster calculation and private map tiles | Time-series/imagery datasets and broader compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
@@ -759,3 +759,41 @@ also passed. No live model calls were exercised because credentials remain uncon
 This increment completes the initial terrain path, not the full feature. Archives,
 land-cover/time-series analysis, deeper ecology/solar, selection refinements and fleet
 execution remain in progress or planned. Production deployment remains with its owner.
+
+
+## Implemented increment: categorical land-cover exploration
+
+The same durable raster workflow now supports ESA WorldCover 2021 v200. **Analyze land cover**
+uses its public tile grid and bounded source-window reads, clips an immutable categorical
+COG to the pinned boundary and returns class counts, valid-sample fractions and approximate
+sampled hectares. It preserves the eleven official broad class codes and colors. Unknown
+codes and missing cells are excluded explicitly. Polygon holes use the same cell-center
+mask as terrain; the shared grid constructor retains the existing extent/pixel bounds.
+
+Classification is sampled with nearest neighbors, including COG overviews and map rendering.
+Integer class codes are never averaged into fictitious categories. Cesium also uses nearest
+texture filtering for these maps. The UI shows class names, color keys and proportion bars,
+reports missing-data coverage, decodes sampled point classes and exports a georeferenced,
+color-mapped categorical TIFF. Numeric means/percentiles are omitted for categorical codes.
+The default direct analysis uses 10 m spacing; larger regions may require coarser sampling,
+which is clearly labeled rather than presented as exact source-pixel area totals.
+
+The source is CC BY 4.0 and retains the required ESA/Copernicus attribution. 2021 is the
+reference year, not a claim about today's land. These classes do not identify species,
+native/invasive status or habitat condition. The agent is instructed to preserve those
+limits, and the UI explains that field observations and recent imagery are needed. WorldCover
+2020/2021 algorithm changes also mean a difference between the products cannot be treated
+as observed land-cover change. Time-series comparison is not implemented by this increment.
+
+Validation: a live public National Mall fixture finished in 6.4 seconds with 4,816 valid
+10 m samples and complete sampled coverage. The real API/worker/browser journey queued the
+analysis, rendered 34 successful tile requests, sampled a class, downloaded the COG and
+reopened the result after reload. Desktop/mobile checks found no page errors or horizontal
+overflow. The affected backend suite passed 27 tests (including class preservation, unknown
+code exclusion, palette correctness and terrain/research regressions); full API typing
+passed 240 files and lint/format checks passed. Frontend categorical tests verify class-name
+sampling, visible proportions and the absence of meaningless numeric summaries. The final
+58-test focused frontend run, type checks, targeted lint and feature-enabled production build
+passed. Production
+remains unchanged; this extends the ecology evidence foundation rather than supplying species
+coverage or a restoration prescription.

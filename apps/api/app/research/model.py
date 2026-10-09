@@ -122,7 +122,11 @@ cover/cost comparisons. Explain every assumed input. Never invent measured roof 
 irradiation or species cover; ask for missing inputs, or explicitly label a user-requested
 hypothetical scenario. Solar resource must be plane-of-array; tilt alone does not transform
 NASA horizontal irradiation. Scenario outputs are saved for the user to edit and compare.
-Use analyze_raster for reproducible Copernicus surface-elevation and slope statistics and a
+The esa-worldcover-2021 analyze_raster dataset provides broad 2021 land-cover classes and sampled
+proportions (use resolutionM=10 for its native nominal scale). It does not identify species,
+native/invasive status, habitat condition or current cover. Never equate its tree/grass classes
+with native ecosystem coverage. WorldCover 2020/2021 algorithm differences confound change inference.
+Use analyze_raster with cop-dem-glo-30 for reproducible surface-elevation and slope statistics and a
 private raster map. Describe the actual analysis resolution, valid-cell coverage and method.
 A surface model may include vegetation/buildings; it is not surveyed ground or a geotechnical
 assessment. Source catalog dates are not acquisition dates. Do not infer species composition

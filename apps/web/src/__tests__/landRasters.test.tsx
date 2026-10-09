@@ -69,7 +69,7 @@ function mount(value = raster) {
         ? {
             longitude: -77.05,
             latitude: 38.888,
-            values: [0, null],
+            values: value.request.dataset === "esa-worldcover-2021" ? [10] : [0, null],
             units: ["m", "degrees"],
             resolutionM: 30,
             interpretation: "Nearest analysis-grid cell; not an on-site measurement.",
@@ -147,18 +147,80 @@ it("does not offer a map for unresolved small areas", async () => {
 });
 
 it("reopens the measurement and opacity of the map that is already visible", async () => {
-  useLandContext
-    .getState()
-    .setRaster({
-      id: "raster",
-      band: 2,
-      opacity: 0.4,
-      bounds: raster.metadata.bounds,
-      attribution: "Fixture",
-    });
+  useLandContext.getState().setRaster({
+    id: "raster",
+    band: 2,
+    opacity: 0.4,
+    bounds: raster.metadata.bounds,
+    attribution: "Fixture",
+  });
   mount();
   expect(await screen.findByRole("combobox")).toHaveValue("2");
   expect(screen.getByRole("slider")).toHaveValue("0.4");
   fireEvent.click(screen.getByRole("button", { name: "Hide terrain map" }));
   expect(screen.getByRole("combobox")).toHaveValue("2");
+});
+
+it("shows categorical cover proportions without arithmetic summaries and decodes point classes", async () => {
+  useSelection
+    .getState()
+    .setSelection({
+      kind: "ground",
+      title: "Public park test point",
+      longitude: -77.05,
+      latitude: 38.888,
+      height: null,
+      terrainHeight: null,
+      at: 1,
+    });
+  mount({
+    ...raster,
+    request: { dataset: "esa-worldcover-2021", resolutionM: 10 },
+    metadata: {
+      ...raster.metadata,
+      resolutionM: 10,
+      bands: [
+        {
+          ...elevation,
+          name: "Land cover (2021)",
+          palette: "categorical",
+          unit: "class code",
+          minimum: null,
+          maximum: null,
+          mean: null,
+          standardDeviation: null,
+          percentiles: {},
+          histogramCounts: [],
+          histogramEdges: [],
+          classes: [
+            {
+              code: 10,
+              label: "Tree cover",
+              color: "#006400",
+              cells: 6,
+              fraction: 0.75,
+              sampledAreaM2: 600,
+            },
+            {
+              code: 50,
+              label: "Built-up",
+              color: "#fa0000",
+              cells: 2,
+              fraction: 0.25,
+              sampledAreaM2: 200,
+            },
+          ],
+        },
+      ],
+    },
+  });
+  expect(await screen.findByRole("region", { name: "Land-cover analysis" })).toBeVisible();
+  expect(screen.getByText("75%")).toBeVisible();
+  expect(screen.getByText(/do not identify species/)).toBeVisible();
+  expect(screen.queryByText("Mean")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show land-cover map" }));
+  expect(useLandContext.getState().rasters.raster?.categorical).toBe(true);
+  fireEvent.click(screen.getByText("Sample a point"));
+  fireEvent.click(screen.getByRole("button", { name: "Sample selected point" }));
+  expect(await screen.findByText("Land cover (2021): Tree cover")).toBeVisible();
 });

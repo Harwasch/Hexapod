@@ -5269,6 +5269,8 @@ export interface components {
         };
         /** RasterBand */
         RasterBand: {
+            /** Classes */
+            classes?: components["schemas"]["RasterClass"][];
             /** Histogramcounts */
             histogramCounts: number[];
             /** Histogramedges */
@@ -5287,7 +5289,7 @@ export interface components {
              * Palette
              * @enum {string}
              */
-            palette: "viridis" | "magma";
+            palette: "viridis" | "magma" | "categorical";
             /** Percentiles */
             percentiles: {
                 [key: string]: number;
@@ -5298,6 +5300,21 @@ export interface components {
             unit: string;
             /** Validcells */
             validCells: number;
+        };
+        /** RasterClass */
+        RasterClass: {
+            /** Cells */
+            cells: number;
+            /** Code */
+            code: number;
+            /** Color */
+            color: string;
+            /** Fraction */
+            fraction: number | null;
+            /** Label */
+            label: string;
+            /** Sampledaream2 */
+            sampledAreaM2: number;
         };
         /** RasterMetadata */
         RasterMetadata: {
@@ -5350,9 +5367,9 @@ export interface components {
             /**
              * Dataset
              * @default cop-dem-glo-30
-             * @constant
+             * @enum {string}
              */
-            dataset?: "cop-dem-glo-30";
+            dataset?: "cop-dem-glo-30" | "esa-worldcover-2021";
             /**
              * Maxdimension
              * @default 512
@@ -6669,6 +6686,7 @@ export type SchemaQualityCounts = components['schemas']['QualityCounts'];
 export type SchemaQualityRoi = components['schemas']['QualityRoi'];
 export type SchemaQualityTip = components['schemas']['QualityTip'];
 export type SchemaRasterBand = components['schemas']['RasterBand'];
+export type SchemaRasterClass = components['schemas']['RasterClass'];
 export type SchemaRasterMetadata = components['schemas']['RasterMetadata'];
 export type SchemaRasterOutput = components['schemas']['RasterOutput'];
 export type SchemaRasterRequest = components['schemas']['RasterRequest'];

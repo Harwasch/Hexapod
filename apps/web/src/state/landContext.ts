@@ -14,6 +14,7 @@ export interface LandContextLayer {
   selectedIds?: string[];
 }
 export interface LandRasterLayer {
+  categorical?: boolean;
   id: string;
   band: number;
   bounds: number[];

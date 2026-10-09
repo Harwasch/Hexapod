@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.analysis.raster_runner import RasterCancelledError
 from app.analysis.raster_runner import run as run_raster
 from app.analysis.terrain import SPEC as TERRAIN_SPEC
+from app.analysis.worldcover import SPEC as COVER_SPEC
 from app.config import Settings
 from app.models.land import LandArea, LandBoundaryRevision
 from app.models.land_document import LandDocument, LandDocumentLink
@@ -172,6 +173,8 @@ class ResearchWorker:
         state: dict[str, Any],
         cancelled: threading.Event | None = None,
     ) -> dict[str, Any]:
+        categorical = request.dataset == "esa-worldcover-2021"
+        spec = COVER_SPEC if categorical else TERRAIN_SPEC
         key = "raster/" + hashlib.sha256(request.model_dump_json().encode()).hexdigest()
         if key in state["sources"]:
             return dict(state["sources"][key])
@@ -185,7 +188,9 @@ class ResearchWorker:
                 state,
                 kind="analysis",
                 payload={
-                    "message": "Reading surface elevation and calculating slope inside the selected boundary."
+                    "message": "Reading mapped land-cover classes inside the selected boundary."
+                    if categorical
+                    else "Reading surface elevation and calculating slope inside the selected boundary."
                 },
             )
             db.rollback()
@@ -211,7 +216,7 @@ class ResearchWorker:
                 state,
                 kind="analysis",
                 payload={
-                    "message": "Terrain calculation saved; preparing the map and source evidence.",
+                    "message": "Raster calculation saved; preparing the map and source evidence.",
                     "rasterId": str(identifier),
                 },
             )
@@ -220,7 +225,7 @@ class ResearchWorker:
         for source in metadata.sources:
             item = EvidenceContent(
                 provider=request.dataset,
-                title=f"Copernicus surface model · {source.id}",
+                title=f"{spec.name} · {source.id}",
                 url=source.catalog_url,
                 license=source.license,
                 attribution=source.attribution,
@@ -236,38 +241,60 @@ class ResearchWorker:
                 ),
                 snapshot_hash=row.sha256,
                 spatial_relevance="regional",
-                relevance_note="Public surface-model tile used for the selected land and neighboring slope context. "
+                relevance_note="Public raster source tile used for the selected land and analysis context. "
                 "The clipped output and source version are preserved; these are not surveyed site measurements.",
             )
             ids.append(queue.save_evidence(db, run_id, token, f"{key}/{source.id}", item))
-        elevation, slope = metadata.bands[:2]
-        if elevation.mean is None:
-            summary = "The surface model has no valid analysis samples inside this boundary at the selected resolution."
+        if categorical:
+            if not metadata.valid_cells:
+                summary = "No valid 2021 land-cover samples fall inside this boundary at the analysis resolution."
+            else:
+                leading = sorted(
+                    metadata.bands[0].classes, key=lambda item: item.cells, reverse=True
+                )[:3]
+                composition = ", ".join(
+                    f"{item.label}: {(item.fraction or 0) * 100:.1f}%"
+                    for item in leading
+                    if item.cells
+                )
+                summary = (
+                    f"Sampled 2021 land cover: {composition}. "
+                    "These are broad mapped classes, not a species survey."
+                )
         else:
-            summary = (
-                f"Mean sampled surface elevation is {elevation.mean:.1f} m "
-                f"on a {metadata.resolution_m:.1f} m grid."
-            )
-            if slope.mean is not None:
-                summary += f" Mean sampled surface slope is {slope.mean:.1f} degrees."
-            summary += (
-                f" Valid elevation coverage: {(metadata.coverage_fraction or 0) * 100:.1f}% "
-                "of boundary grid cells."
-            )
+            elevation, slope = metadata.bands[:2]
+            if elevation.mean is None:
+                summary = (
+                    "The surface model has no valid analysis samples inside this boundary "
+                    "at the selected resolution."
+                )
+            else:
+                summary = (
+                    f"Mean sampled surface elevation is {elevation.mean:.1f} m "
+                    f"on a {metadata.resolution_m:.1f} m grid."
+                )
+                if slope.mean is not None:
+                    summary += f" Mean sampled surface slope is {slope.mean:.1f} degrees."
+                summary += (
+                    f" Valid elevation coverage: {(metadata.coverage_fraction or 0) * 100:.1f}% "
+                    "of boundary grid cells."
+                )
         queue.save_finding(
             db,
             run_id,
             token,
             key,
             FindingContent(
-                title=TERRAIN_SPEC.name,
+                title=spec.name,
                 summary=summary,
-                category="physical",
+                category="ecology" if categorical else "physical",
                 evidence_ids=ids,
                 confidence="supported" if metadata.valid_cells else "uncertain",
                 uncertainty=" ".join(metadata.warnings)[:3000],
                 suggested_questions=[
-                    "Where are the steepest sampled areas, and what would field measurements need to verify?"
+                    "What field observations would help assess restoration opportunities in these mapped classes?"
+                    if categorical
+                    else "Where are the steepest sampled areas, and what would field measurements need to verify?"
                 ],
             ),
         )
@@ -277,7 +304,7 @@ class ResearchWorker:
             token,
             key,
             ArtifactContent(
-                title="Surface elevation and slope",
+                title="Land cover in 2021" if categorical else "Surface elevation and slope",
                 method=metadata.method,
                 evidence_ids=ids,
                 output=RasterOutput(kind="raster", raster_id=identifier),

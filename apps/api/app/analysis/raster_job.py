@@ -29,7 +29,12 @@ def main() -> None:
         boundary: Footprint = TypeAdapter(Footprint).validate_python(payload["boundary"])
         request = RasterRequest.model_validate(payload["request"])
         with httpx.Client(headers={"User-Agent": "LivingWorld-LandAnalysis/1.0"}) as client:
-            result = analyze(boundary, request, client)
+            if request.dataset == "esa-worldcover-2021":
+                from app.analysis.worldcover import analyze as analyze_cover
+
+                result = analyze_cover(boundary, request, client)
+            else:
+                result = analyze(boundary, request, client)
         (directory / "output.tif").write_bytes(result.data)
         (directory / "result.json").write_text(result.metadata.model_dump_json())
     except Exception as error:

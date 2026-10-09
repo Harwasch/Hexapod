@@ -16,6 +16,8 @@ vi.mock("cesium", () => ({
     constructor(public text: string) {}
   },
   GeographicTilingScheme: vi.fn(),
+  TextureMagnificationFilter: { NEAREST: 9728 },
+  TextureMinificationFilter: { NEAREST: 9728 },
   Rectangle: { fromDegrees: (...values: number[]) => values },
   Resource: class {
     url: string;
@@ -70,6 +72,7 @@ it("carries workspace credentials in headers and rebuilds private tiles after to
   useLandContext.getState().setRaster({
     id: "raster",
     band: 2,
+    categorical: true,
     bounds: [-77.055, 38.886, -77.045, 38.891],
     attribution: "Public reference fixture",
     opacity: 0.6,
@@ -80,6 +83,9 @@ it("carries workspace credentials in headers and rebuilds private tiles after to
     "X-Workspace-ID": "workspace",
   });
   expect(fixture.requests[0]?.url.url).not.toContain("token");
+  expect(fixture.add).toHaveBeenCalledWith(
+    expect.objectContaining({ magnificationFilter: 9728, minificationFilter: 9728 }),
+  );
   expect(fixture.requests[0]?.rectangle).toEqual([-77.055, 38.886, -77.045, 38.891]);
   useLandIdentity.getState().setSession("refreshed-test-token", "alice");
   expect(fixture.requests).toHaveLength(2);
