@@ -28,6 +28,7 @@
  * | `primitive.holdRebuilds` | **patch** | no new snapshot while the camera moves (`splatMotionGate.ts`) |
  * | `tileset.selectOffscreen` | **patch** (`Cesium3DTilesetBaseTraversal.js`) | a refining tile's out-of-view children drawn coarse |
  * | `tileset.splatIncremental` / `primitive.incremental` / `_tileSlots` | **patch** | a tile uploads alone into its own slot range |
+ * | `primitive.companions` / `primitive.drawnBy` | **patch** | an inferred layer's tiles drawn in the scan's texture and sort |
  * | `GaussianSplatTextureGenerator.generateFromAttributes` | exported at `cesium/Source/Cesium.js:638` | the CPU path's interception point |
  *
  * **The aggregation order is the whole of multi-tile support.** A snapshot is
@@ -85,6 +86,8 @@ export interface SplatTileContent {
 export interface SplatTile {
   readonly children?: readonly SplatTile[];
   readonly content?: SplatTileContent;
+  /** The tileset the tile is of: another than the primitive's for a companion's tile. */
+  readonly tileset?: unknown;
 }
 
 /** What the patched engine calls on each draw-command build. See `splatGpuMotion.ts`. */
@@ -138,6 +141,16 @@ export interface SplatPrimitive {
    * mark, not the sum.
    */
   readonly _tileSlots?: ReadonlyMap<SplatTile, { readonly start: number; readonly count: number }>;
+  /**
+   * Patched engine, incremental mode: other splat tilesets whose selected tiles this primitive
+   * draws with its own, in one texture and one sort (an inferred layer on the scan,
+   * `inferredLayers.ts`). Their tiles are in `_tileSlots` beside the tileset's own.
+   */
+  companions?: Cesium3DTileset[];
+  /** Patched engine: the primitive that draws this one's tiles as a companion, or undefined. */
+  drawnBy?: SplatPrimitive;
+  /** The tileset the primitive is of (what its own tiles' `tileset` is). */
+  readonly _tileset?: unknown;
   isDestroyed?(): boolean;
 }
 

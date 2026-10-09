@@ -1523,14 +1523,10 @@ export class SiteManager {
         // What the capture never saw, faded from the views it never had (lib/viewCones.ts).
         attachViewCones(tileset),
         // What an image model filled in where it never looked, beside it (lib/inferred.ts):
-        // drawn by CesiumJS while the scan is drawn by any renderer.
-        attachInferredLayers(
-          tileset,
-          this.scene,
-          asset.id,
-          undefined,
-          () => tileset.show || this.scanTarget()?.tileset === tileset,
-        ),
+        // drawn by whichever renderer draws the scan, in the same sort as its splats -- by
+        // CesiumJS while CesiumJS draws it, by the overlay's renderer otherwise
+        // (scanView/scanLayers.ts).
+        attachInferredLayers(tileset, this.scene, asset.id),
         // Other methods' objects, fills and skins for the same scan (lib/variants.ts).
         attachVariants(tileset, asset.id),
         attachInstances(tileset, this.scene, asset.id),

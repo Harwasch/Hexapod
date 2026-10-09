@@ -379,7 +379,7 @@ for (const renderer of ["playcanvas", "spark", "playcanvas-webgpu"] as const) {
       if (webgpu) {
         expect(scan?.api).toBe("webgl2");
         expect(scan?.webgl2ForObjects).toBe(true);
-        expect(scan?.notice).toBe("WebGL2 for scans with objects or motion");
+        expect(scan?.notice).toBe("WebGL2 for scans with objects, motion or inferred fill");
       }
       expect(scan?.native).toBe(false);
       expect(hooks.table).toBe(true);

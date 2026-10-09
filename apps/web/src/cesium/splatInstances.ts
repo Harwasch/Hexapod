@@ -64,6 +64,14 @@ import { onPickChange, pickedVariant, useVariants, type VariantStatus } from "@/
 
 import { cesiumPickSource } from "./sceneSelect/cesiumPickSource";
 import { CESIUM_PRIORITY, registerPickSource } from "./sceneSelect/pickSources";
+import {
+  addColorPart,
+  hasColorPart,
+  removeColorPart,
+  type ColorPrimitive,
+  type SplatColorPart,
+  type SplatVertexColor,
+} from "./splatColor";
 import { invertAffine, unbakePositions } from "./splatFrames";
 import {
   splatTilesetOf,
@@ -116,16 +124,9 @@ export interface InstanceGpu {
 }
 
 /** A primitive of the patched engine, with the visibility and colour accessors. */
-export type InstancePrimitive = VisibilityPrimitive & { vertexColor?: SplatVertexColor };
+export type InstancePrimitive = VisibilityPrimitive & ColorPrimitive;
 
-/** What the patched engine calls on each draw-command build (`vertexColor`). */
-export interface SplatVertexColor {
-  addToShader(
-    shaderBuilder: SplatShaderBuilder,
-    uniformMap: Record<string, () => unknown>,
-    context: unknown,
-  ): void;
-}
+export type { SplatVertexColor };
 
 /** How the highlight looks. */
 export interface HighlightStyle {
@@ -185,9 +186,9 @@ float splatInstanceVisibility(uint splatIndex, vec3 position) {
 }
 `;
 
-/** The patched engine's `splatVertexColor`: the highlight, and the rest dimmed. */
+/** The colour part (`splatColor.ts`): the highlight, and the rest dimmed. */
 export const INSTANCE_COLOR_GLSL = `
-vec4 splatVertexColor(uint splatIndex, vec3 position, vec4 color) {
+vec4 splatInstanceColor(uint splatIndex, vec3 position, vec4 color) {
     if (u_instanceParams.x < 0.5 || u_instanceParams.w < 0.5) {
         return color;
     }
@@ -420,8 +421,13 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
     );
   }
 
-  /** The `vertexColor` hook: a thin wrapper, so the visibility part and it share one object. */
-  readonly colorHook: SplatVertexColor = {
+  /**
+   * The colour part (in the primitive's `vertexColor` chain, `splatColor.ts`): a thin wrapper,
+   * so the visibility part and it share one object.
+   */
+  readonly colorHook: SplatColorPart = {
+    colorFunction: "splatInstanceColor",
+    colorOrder: 0,
     addToShader: (shaderBuilder, uniformMap, context) => {
       this.#buildingColor = true;
       try {
@@ -440,18 +446,15 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
     if (this.#primitive && this.#primitive !== primitive) this.uninstall();
     this.#primitive = primitive;
     const hides = hasVisibilityPart(primitive, this) || addVisibilityPart(primitive, this);
-    let colours = false;
-    if ("vertexColor" in primitive) {
-      primitive.vertexColor ??= this.colorHook;
-      colours = primitive.vertexColor === this.colorHook;
-    }
+    const colours =
+      hasColorPart(primitive, this.colorHook) || addColorPart(primitive, this.colorHook);
     return hides || colours;
   }
 
   /** Whether both hooks are on the primitive. */
   get installed(): boolean {
     const primitive = this.#primitive;
-    return hasVisibilityPart(primitive, this) && primitive?.vertexColor === this.colorHook;
+    return hasVisibilityPart(primitive, this) && hasColorPart(primitive, this.colorHook);
   }
 
   uninstall(): void {
@@ -459,7 +462,7 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
     this.#primitive = undefined;
     if (!primitive || primitive.isDestroyed?.() === true) return;
     removeVisibilityPart(primitive, this);
-    if (primitive.vertexColor === this.colorHook) primitive.vertexColor = undefined;
+    removeColorPart(primitive, this.colorHook);
   }
 
   /**

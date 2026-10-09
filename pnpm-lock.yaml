@@ -9,7 +9,7 @@ overrides:
 
 patchedDependencies:
   '@cesium/engine@26.3.0':
-    hash: 9454d55c294526c4efdf0e1ef1b539448cbaebcc9d4eccbd6332ad019079dd76
+    hash: c5c1912207bb50c667f1cc3fd9e603bcf1011421e65e2c6147c9ab46619724e0
     path: patches/@cesium__engine@26.3.0.patch
 
 importers:
@@ -2846,7 +2846,7 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@cesium/engine@26.3.0(patch_hash=9454d55c294526c4efdf0e1ef1b539448cbaebcc9d4eccbd6332ad019079dd76)':
+  '@cesium/engine@26.3.0(patch_hash=c5c1912207bb50c667f1cc3fd9e603bcf1011421e65e2c6147c9ab46619724e0)':
     dependencies:
       '@cesium/wasm-splats': 0.1.0-alpha.2
       '@spz-loader/core': 0.3.1
@@ -2874,7 +2874,7 @@ snapshots:
 
   '@cesium/widgets@16.2.0':
     dependencies:
-      '@cesium/engine': 26.3.0(patch_hash=9454d55c294526c4efdf0e1ef1b539448cbaebcc9d4eccbd6332ad019079dd76)
+      '@cesium/engine': 26.3.0(patch_hash=c5c1912207bb50c667f1cc3fd9e603bcf1011421e65e2c6147c9ab46619724e0)
       nosleep.js: 0.12.0
 
   '@csstools/color-helpers@6.1.1': {}
@@ -3786,7 +3786,7 @@ snapshots:
 
   cesium@1.145.0:
     dependencies:
-      '@cesium/engine': 26.3.0(patch_hash=9454d55c294526c4efdf0e1ef1b539448cbaebcc9d4eccbd6332ad019079dd76)
+      '@cesium/engine': 26.3.0(patch_hash=c5c1912207bb50c667f1cc3fd9e603bcf1011421e65e2c6147c9ab46619724e0)
       '@cesium/widgets': 16.2.0
       protobufjs: 8.8.0
 

@@ -13,7 +13,12 @@
  *   Hide removes the layer;
  * - picking a skins variant replaces the skin the scan's objects move by;
  * - a fill that supersedes measured splats (lib/supersedes.ts) hides them while it is shown,
- *   Show or Highlight, and Hide or another method gives back the untouched scan.
+ *   Show or Highlight, and Hide or another method gives back the untouched scan;
+ * - a fill sitting on the measured scan is sorted with it, by the renderer that draws the scan:
+ *   in front of the lawn under it from above, behind the shed in front of it from the side.
+ *   Splats write no depth, so a fill drawn by another renderer than its scan was painted over
+ *   by every measured splat behind it (under the overlay), or over every one in front of it
+ *   (CesiumJS, two primitives).
  *
  * Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -45,6 +50,13 @@ interface Rect {
 /** `src/dev/variantsHarness.ts`, as the page exposes it. */
 interface VariantsHarness {
   view(headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
+  viewAt(local: number[], headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
+  hideMeasured(hidden: boolean): Promise<void>;
+  companions(): { companions: number; drawnBy: boolean[] } | null;
+  nearerMeasured(
+    rect: Rect,
+    slots: { both: string; measured: string; fill: string },
+  ): { pixels: number; share: number };
   settle(): Promise<void>;
   pick(system: string, name: string | null): Promise<void>;
   style(style: "show" | "highlight" | "hide"): Promise<void>;
@@ -212,6 +224,19 @@ function supersedesOf(
   return { superseded, tiles };
 }
 
+/** The mound fill's tileset, as its own tileset.json places it. */
+const MOUND_TILESET = "synthetic-yard/variants/fill/mound/tileset.json";
+/**
+ * Where the sorting test puts the mound: on the yard's measured lawn (instances 2 and 14), just
+ * north of the shed and lifted clear of the ground, by its root transform -- the layer's own
+ * frame then is not the scan's (`S⁻¹·O`, scanView/scanLayers.ts), as it may be for any layer.
+ * Its middle (`min`, `max`) is the part that is all mound from above.
+ */
+const MOUND_MOVE = [-15.5, 0.5, 0.6] as const;
+const MOUND_OVER = { centre: [20, 12.5, 1.3], min: [18.8, 11.3, 1.8], max: [21.2, 13.7, 1.8] };
+/** The yard's shed (instance 8, "buildings"): solid, and taller than the mound behind it. */
+const SHED = { min: [17.0, 3.9, -0.1], max: [23.0, 8.6, 4.6] };
+
 async function open(
   page: Page,
   renderer: Renderer,
@@ -219,7 +244,8 @@ async function open(
   {
     names = "fixture",
     supersede = false,
-  }: { names?: "fixture" | "spool"; supersede?: boolean } = {},
+    moveMound = false,
+  }: { names?: "fixture" | "spool"; supersede?: boolean; moveMound?: boolean } = {},
 ): Promise<void> {
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
@@ -261,6 +287,18 @@ async function open(
     }
     if (supersede && relative === SUPERSEDES) {
       return route.fulfill({ status: 200, json: supersedesOf(instancesDoc, TREE.id) });
+    }
+    if (moveMound && relative === MOUND_TILESET) {
+      // `T(d)` after the root transform: d metres along the yard's own east, north, up.
+      const layer = read(MOUND_TILESET) as { root: { transform: number[] } };
+      const t = layer.root.transform;
+      for (let r = 0; r < 3; r += 1)
+        t[12 + r] =
+          (t[12 + r] ?? 0) +
+          (t[r] ?? 0) * MOUND_MOVE[0] +
+          (t[4 + r] ?? 0) * MOUND_MOVE[1] +
+          (t[8 + r] ?? 0) * MOUND_MOVE[2];
+      return route.fulfill({ status: 200, json: layer });
     }
     const file = resolve(TILES, relative);
     if (!existsSync(file)) return route.fulfill({ status: 404, body: "" });
@@ -466,6 +504,80 @@ for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
     await page.screenshot({ path: test.info().outputPath("4-mound.png") });
     expect(await call("changed", tree, false, "untouched")).toBeLessThan(0.002);
     expect((await call("picks")).status.fill?.state).toBe("ready");
+    expect(shaderErrors(errors)).toEqual([]);
+  });
+}
+
+for (const renderer of ["playcanvas", "spark", "cesium"] as const) {
+  test(`a fill on the measured scan is sorted with it under ${renderer}: over the lawn, behind the shed`, async ({
+    page,
+  }) => {
+    test.setTimeout(900_000);
+    const errors: string[] = [];
+    await open(page, renderer, errors, { moveMound: true });
+    const call = caller(page);
+    await page
+      .getByTestId("compare-methods")
+      .getByRole("group", { name: "Fill" })
+      .getByRole("radio", { name: "Mound" })
+      .click();
+    await expect.poll(async () => (await call("inferred")).fillers).toEqual(["fixture-mound"]);
+    // Splats write no depth anywhere: only one renderer's sort can put the fill in front of the
+    // lawn under it and behind the shed in front of it. Drawn by another renderer than the
+    // scan, one of the two was painted over the other wherever both reached.
+
+    // From straight above, the mound is in front of the lawn it sits on: hiding the lawn (and
+    // every other measured object) leaves the mound's middle as it was.
+    await call("viewAt", MOUND_OVER.centre, 0, -89.5, 22);
+    if (renderer === "cesium") {
+      // CesiumJS: the scan's own primitive draws the fill's tiles, in its one sort.
+      expect(await call("companions")).toEqual({ companions: 1, drawnBy: [true] });
+    }
+    const top = await call("rectOfLocal", MOUND_OVER.min, MOUND_OVER.max);
+    if (!top) throw new Error("the mound is off screen");
+    expect((await call("inferred")).shown).toBe(1);
+    expect((await call("measure", top)).coverage).toBeGreaterThan(0.95);
+    await call("remember", "both");
+    await page.screenshot({ path: test.info().outputPath("1-above.png") });
+    await call("hideMeasured", true);
+    await page.screenshot({ path: test.info().outputPath("2-above-fill-only.png") });
+    const bleed = await call("changed", top, false, "both");
+    test
+      .info()
+      .annotations.push({ type: "above: mound pixels changed", description: String(bleed) });
+    expect(bleed).toBeLessThan(0.05);
+    await call("hideMeasured", false);
+
+    // From the south, low, the shed stands between the camera and the mound (a few metres
+    // behind it, lower than its roof). The shed's walls let a little through, so the question
+    // is per pixel: where the mound alone and the scan alone differ, both drawn must look like
+    // the scan -- the shed in front -- not like the mound painted over it.
+    await call("viewAt", MOUND_OVER.centre, 0, -5, 25);
+    const behind = await call("rectOfLocal", MOUND_OVER.min, MOUND_OVER.max);
+    const shed = await call("rectOfLocal", SHED.min, SHED.max);
+    if (!behind || !shed) throw new Error("the mound or the shed is off screen");
+    // The mound's middle is inside the shed's outline on screen.
+    expect(behind.x).toBeGreaterThan(shed.x);
+    expect(behind.x + behind.width).toBeLessThan(shed.x + shed.width);
+    expect(behind.y).toBeGreaterThan(shed.y);
+    await call("remember", "both");
+    await page.screenshot({ path: test.info().outputPath("3-behind-shed.png") });
+    await call("hideMeasured", true);
+    await call("remember", "fill");
+    await page.screenshot({ path: test.info().outputPath("4-behind-shed-fill-only.png") });
+    await call("hideMeasured", false);
+    await page.getByRole("radio", { name: "Hide inferred fill" }).click();
+    await call("settle");
+    await call("remember", "measured");
+    await page.screenshot({ path: test.info().outputPath("5-behind-shed-no-fill.png") });
+    const front = await call("nearerMeasured", behind, {
+      both: "both",
+      measured: "measured",
+      fill: "fill",
+    });
+    test.info().annotations.push({ type: "behind the shed", description: JSON.stringify(front) });
+    expect(front.pixels).toBeGreaterThan(100);
+    expect(front.share).toBeGreaterThan(0.6);
     expect(shaderErrors(errors)).toEqual([]);
   });
 }
