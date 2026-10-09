@@ -1249,7 +1249,10 @@ layer is therefore drawn by the renderer that draws the scan, sorted with its sp
   overlay's renderer beside the scan's, under `S⁻¹·O` (identity for a layer whose root is the
   scan's), with Highlight and the view-cone fade as a modifier of their own
   (`scanView/layerLook.ts`); CesiumJS's copy stays hidden. The WebGPU trial draws a scan with
-  inferred layers with WebGL2 (the modifier is GLSL only).
+  inferred layers with WebGL2 (the modifier is GLSL only). A layer then looks as that renderer
+  draws splats: the Camp's Today layer (an image model's flat discs, each facing the virtual
+  camera it was lifted from) is faint under Spark from where its discs are seen edge on, as it
+  is when Spark draws that layer alone, and plain under PlayCanvas and CesiumJS.
 
 Before, CesiumJS drew the layers under every renderer. On the overlay's canvas they were under
 the scan: every measured splat behind the Spool's rebuilt top (anchor-refs) -- drum, bottom
