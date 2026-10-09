@@ -137,6 +137,7 @@ export function ResearchArtifactView({
     }
     useLandContext.getState().setLayer({
       id: artifact.id,
+      researchArtifactId: artifact.id,
       title: artifact.title,
       features: output.features.map((feature, index) => ({ id: String(index), ...feature })),
     });

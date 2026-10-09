@@ -10,7 +10,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
-| Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Saved views, live identity-provider acceptance, deeper accessibility/performance verification |
+| Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation and current inventory context | Persistent unfinished view-save recovery and broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
@@ -1664,3 +1664,57 @@ Local artifacts: `/tmp/land-workspace-ui-result.json`, `/tmp/land-workspace-desk
 Web type checking, targeted lint and the production build pass, along with all seven land
 browser regressions. The build retains the existing PlayCanvas worker externalization warnings.
 The complete land exploration feature remains in progress.
+
+
+## Implemented increment: saved land exploration views
+
+Saved exploration views are workspace-scoped records on each land area, independent of site
+camera bookmarks and mission planning. They retain camera position/orientation, workspace tab,
+selected investigation/asset/survey/solar record, live inventory visibility, up to twenty research
+map references, and up to two raster or historical-map alignment references with band/opacity.
+Editors and owners save, rename and delete; viewers can list and open. Listings are paginated.
+Saving uses a stable request key and an immutable captured payload for same-session retries;
+renames and deletion require the expected version. Removing a view leaves the source records
+untouched. Saved views preserve source references rather than accepting replacement geometry
+or arbitrary tile URLs from the client.
+
+Opening resolves every referenced source within the same land. Unavailable sources are omitted
+with explicit notices. Earlier boundary revisions are identified while the current land boundary
+remains visible; old research/raster boundary references are also disclosed. Chosen raster bands,
+opacity, bounds and attribution are restored from stored source metadata. Inventory selections
+reopen current records and are described as live. Temporary map-editing overlays and unfinished
+forms remain separate and are not silently discarded; the save form lists unsupported overlays.
+Opening is disabled during a map pick, and a response for land the user has left cannot move
+the camera. The camera flight API now accepts an optional roll for saved orientations; ordinary
+flights still default to a level horizon.
+
+Migration 0027 adds saved views. Both isolated test and preview databases are at 0027, and the
+test database passed a 0027 → 0026 → 0027 roundtrip. Existing OpenAPI schemas and paths are
+unchanged; generated contracts add the saved-view models and routes.
+
+Validation: four backend tests cover scope/roles, immutable map references, invalid bands,
+missing sources, opacity/bounds, boundary revision notices, idempotent retries and rename/delete
+conflicts. Three frontend tests cover captured retries, retained unfinished overlays, restored
+layers/camera and stale land-switch responses; five related frontend suites pass (44 tests).
+API lint/format/type checks, web type checking/targeted lint, production build and all seven
+land browser regressions pass. The build retains the existing PlayCanvas worker externalization
+warnings.
+
+A real Chromium/API check used the explicit public National Mall software fixture and its saved
+slope raster. It intentionally dropped a successful save response, retried the same request,
+verified one stored record, reloaded, restored band 2 at opacity 0.37, and preserved a local name
+when a concurrent rename produced a conflict. Desktop and 390px phone checks found no page
+exceptions or unintended horizontal overflow; screenshots were inspected. Local artifacts:
+`/tmp/land-saved-views-result.json`, `/tmp/land-saved-views-desktop.png`,
+`/tmp/land-saved-views-mobile.png`. The initial browser fixture attempt loaded a second Vite
+module instance and did not reach save; the corrected fixture uses the app's existing module.
+A further real API check saved and opened a combined slope/historical-alignment view, preserving
+both layer kinds, bands, opacity and attribution. Its artifact is
+`/tmp/land-saved-views-alignment-result.json` (view `4ab66be3-78fa-4f91-9c49-836d9e8be982`).
+The browser fixture view is `c1531171-79f3-4fa6-9476-5f85a6dd917d`.
+
+Limits: unfinished view-save capture is retained for the current component session, not yet
+recovered after a browser restart. Survey sketches, unsaved asset/import previews, action
+footprints and other temporary overlays are explicitly excluded from the saved view; their
+underlying records and independent draft recovery remain available. The overall feature is
+still in progress and nothing has been deployed.

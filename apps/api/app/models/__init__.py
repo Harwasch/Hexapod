@@ -36,6 +36,7 @@ from app.models.land_image_registration import LandImageRegistration, LandImageR
 from app.models.land_raster import LandRaster, LandRasterBlob
 from app.models.land_solar import LandSolar, LandSolarBlob
 from app.models.land_survey import LandSurvey
+from app.models.land_view import LandView
 from app.models.layer import Layer
 from app.models.plan import Plan, PlanRevision
 from app.models.research import (
@@ -92,6 +93,7 @@ __all__ = [
     "LandSolar",
     "LandSolarBlob",
     "LandSurvey",
+    "LandView",
     "Layer",
     "LayerCategory",
     "LayerSourceType",

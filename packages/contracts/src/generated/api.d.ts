@@ -1238,6 +1238,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_api_v1_land__land_id__views_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_api_v1_land__land_id__views_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/views/{view_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Open View */
+        get: operations["open_view_api_v1_land__land_id__views__view_id__get"];
+        put?: never;
+        post?: never;
+        /** Remove */
+        delete: operations["remove_api_v1_land__land_id__views__view_id__delete"];
+        options?: never;
+        head?: never;
+        /** Rename */
+        patch: operations["rename_api_v1_land__land_id__views__view_id__patch"];
+        trace?: never;
+    };
     "/api/v1/land/corridor": {
         parameters: {
             query?: never;
@@ -5163,6 +5200,176 @@ export interface components {
             note?: string;
             source: components["schemas"]["BoundarySource"];
         };
+        /** LandViewCamera */
+        LandViewCamera: {
+            /** Heading */
+            heading: number;
+            /** Height */
+            height: number;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Pitch */
+            pitch: number;
+            /** Roll */
+            roll: number;
+        };
+        /** LandViewCreate */
+        LandViewCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey: string;
+            state: components["schemas"]["LandViewState"];
+        };
+        /** LandViewMap */
+        LandViewMap: {
+            /** Features */
+            features: components["schemas"]["MapFeature"][];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Title */
+            title: string;
+        };
+        /** LandViewOpen */
+        LandViewOpen: {
+            /** Maps */
+            maps: components["schemas"]["LandViewMap"][];
+            /** Rasters */
+            rasters: components["schemas"]["LandViewRasterRead"][];
+            state: components["schemas"]["LandViewState"];
+            view: components["schemas"]["LandViewRead"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /** LandViewRaster */
+        LandViewRaster: {
+            /**
+             * Band
+             * @default 1
+             */
+            band?: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @default raster
+             * @enum {string}
+             */
+            kind?: "raster" | "archive-alignment";
+            /**
+             * Opacity
+             * @default 0.8
+             */
+            opacity?: number;
+        };
+        /** LandViewRasterRead */
+        LandViewRasterRead: {
+            /** Attribution */
+            attribution: string;
+            /**
+             * Band
+             * @default 1
+             */
+            band?: number;
+            /** Bounds */
+            bounds: number[];
+            /**
+             * Categorical
+             * @default false
+             */
+            categorical?: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @default raster
+             * @enum {string}
+             */
+            kind?: "raster" | "archive-alignment";
+            /**
+             * Opacity
+             * @default 0.8
+             */
+            opacity?: number;
+        };
+        /** LandViewRead */
+        LandViewRead: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            state: components["schemas"]["LandViewState"];
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** LandViewRename */
+        LandViewRename: {
+            /** Expectedrevision */
+            expectedRevision: number;
+            /** Name */
+            name: string;
+        };
+        /** LandViewState */
+        LandViewState: {
+            /** Artifactids */
+            artifactIds?: string[];
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            camera: components["schemas"]["LandViewCamera"];
+            /** Inventoryid */
+            inventoryId?: string | null;
+            /**
+             * Inventoryvisible
+             * @default true
+             */
+            inventoryVisible?: boolean;
+            /** Investigationid */
+            investigationId?: string | null;
+            /** Rasters */
+            rasters?: components["schemas"]["LandViewRaster"][];
+            /**
+             * Section
+             * @default discover
+             * @enum {string}
+             */
+            section?: "discover" | "records" | "inventory" | "ecology" | "scenarios" | "actions";
+            /** Solarid */
+            solarId?: string | null;
+            /** Surveyid */
+            surveyId?: string | null;
+        };
         /**
          * LayerCategory
          * @enum {string}
@@ -8313,6 +8520,15 @@ export type SchemaLandFeatureRevisionRead = components['schemas']['LandFeatureRe
 export type SchemaLandRasterRead = components['schemas']['LandRasterRead'];
 export type SchemaLandRead = components['schemas']['LandRead'];
 export type SchemaLandRevise = components['schemas']['LandRevise'];
+export type SchemaLandViewCamera = components['schemas']['LandViewCamera'];
+export type SchemaLandViewCreate = components['schemas']['LandViewCreate'];
+export type SchemaLandViewMap = components['schemas']['LandViewMap'];
+export type SchemaLandViewOpen = components['schemas']['LandViewOpen'];
+export type SchemaLandViewRaster = components['schemas']['LandViewRaster'];
+export type SchemaLandViewRasterRead = components['schemas']['LandViewRasterRead'];
+export type SchemaLandViewRead = components['schemas']['LandViewRead'];
+export type SchemaLandViewRename = components['schemas']['LandViewRename'];
+export type SchemaLandViewState = components['schemas']['LandViewState'];
 export type SchemaLayerCategory = components['schemas']['LayerCategory'];
 export type SchemaLayerCreate = components['schemas']['LayerCreate'];
 export type SchemaLayerRead = components['schemas']['LayerRead'];
@@ -14109,6 +14325,320 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SurveySummary"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listing_api_v1_land__land_id__views_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandViewRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_api_v1_land__land_id__views_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LandViewCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandViewRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    open_view_api_v1_land__land_id__views__view_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                view_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandViewOpen"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    remove_api_v1_land__land_id__views__view_id__delete: {
+        parameters: {
+            query: {
+                expected_revision: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                view_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rename_api_v1_land__land_id__views__view_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                view_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LandViewRename"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandViewRead"];
                 };
             };
             /** @description Missing or wrong write token */

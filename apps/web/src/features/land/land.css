@@ -783,3 +783,9 @@
 .land-action-saved-summary li + li {
   margin-top: 12px;
 }
+
+.land-saved-views { border: 1px solid var(--glass-border, #465565); padding: 10px; border-radius: 10px; margin: 10px 0; min-width: 0; }
+.land-saved-views summary { cursor: pointer; font-weight: 600; }
+.land-view-list { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 12px; }
+.land-view-list > li { border-top: 1px solid #465565; padding-top: 10px; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.land-saved-views input { min-width: 0; max-width: 100%; box-sizing: border-box; }

@@ -37,7 +37,8 @@ function Inventory({ land, scope }: { land: LandArea; scope: string }) {
   const inspected = useSelection((state) => state.selection);
   const selectedId = useLandContext((state) => state.selectedInventoryId);
   const section = useRef<HTMLElement>(null);
-  const [visible, setVisible] = useState(true);
+  const visible = useLandContext((state) => state.inventoryVisible);
+  const setVisible = useLandContext((state) => state.setInventoryVisible);
   const [offset, setOffset] = useState(0);
   const [draft, setDraft] = useState<FeatureDraft | null>(null);
   const [editing, setEditing] = useState<Feature | null>(null);
@@ -226,11 +227,17 @@ function Inventory({ land, scope }: { land: LandArea; scope: string }) {
     setDraft({
       requestKey: crypto.randomUUID(),
       name: candidate.label,
-      category: candidate.properties?.power ? "power"
-        : candidate.properties?.building ? "building"
-        : candidate.properties?.waterway ? "water"
-        : candidate.properties?.highway || candidate.properties?.railway ? "transport"
-        : candidate.geometry.type === "Point" ? "equipment" : "other",
+      category: candidate.properties?.power
+        ? "power"
+        : candidate.properties?.building
+          ? "building"
+          : candidate.properties?.waterway
+            ? "water"
+            : candidate.properties?.highway || candidate.properties?.railway
+              ? "transport"
+              : candidate.geometry.type === "Point"
+                ? "equipment"
+                : "other",
       geometry: candidate.geometry,
       source: candidate.source,
       status: "candidate",

@@ -1,6 +1,7 @@
 import { useId, type KeyboardEvent } from "react";
 import type { LandArea } from "@twin/contracts";
 import { useLandContext } from "@/state/landContext";
+import { LandSavedViews } from "./LandSavedViews";
 import { LandResearch } from "./LandResearch";
 import { LandInventory } from "./LandInventory";
 import { LandEcology } from "./LandEcology";
@@ -35,6 +36,7 @@ export function LandWorkspace({ land }: { land: LandArea }) {
   };
   return (
     <div className="land-exploration-workspace">
+      <LandSavedViews land={land} />
       <div className="land-workspace-tabs" role="tablist" aria-label="Land workspace">
         {sections.map(([value, label], index) => (
           <button

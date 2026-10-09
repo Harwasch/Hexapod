@@ -8,6 +8,7 @@ export interface LandContextFeature {
   value?: number | null;
 }
 export interface LandContextLayer {
+  researchArtifactId?: string;
   id: string;
   title: string;
   features: LandContextFeature[];
@@ -24,7 +25,9 @@ export interface LandRasterLayer {
 }
 export type LandWorkspaceSection =
   "discover" | "records" | "inventory" | "ecology" | "scenarios" | "actions";
-interface LandContextState {
+export interface LandContextState {
+  inventoryVisible: boolean;
+  setInventoryVisible: (value: boolean) => void;
   pointPicker: string | null;
   setPointPicker: (id: string | null) => void;
   selectedInvestigationId: string | null;
@@ -55,6 +58,8 @@ interface LandContextState {
 }
 
 export const useLandContext = create<LandContextState>((set, get) => ({
+  inventoryVisible: true,
+  setInventoryVisible: (inventoryVisible) => set({ inventoryVisible }),
   pointPicker: null,
   setPointPicker: (pointPicker) => set({ pointPicker }),
   selectedInvestigationId: null,
@@ -135,6 +140,7 @@ export const useLandContext = create<LandContextState>((set, get) => ({
     })),
   clear: () =>
     set({
+      inventoryVisible: true,
       pointPicker: null,
       layers: {},
       rasters: {},
