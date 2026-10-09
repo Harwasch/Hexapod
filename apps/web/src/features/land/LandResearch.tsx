@@ -26,6 +26,13 @@ import {
 } from "./researchApi";
 import { ResearchArtifactView } from "./ResearchArtifacts";
 import { useResearchProgress } from "./useResearchProgress";
+import {
+  parseResearchDraft,
+  researchDraftKey,
+  type ResearchDraft,
+  type CapturedResearchRequest,
+  type QuestionBudget,
+} from "./researchDraft";
 import { LandDocumentViewer } from "./LandDocumentViewer";
 import { VegetationStart } from "./VegetationStart";
 import "./research.css";
@@ -148,21 +155,107 @@ export function LandResearch({ land }: { land: LandArea }) {
   }, [land.id, scope]);
   const [evidence, setEvidence] = useState<LandEvidence | null>(null);
   const [showDismissed, setShowDismissed] = useState(false);
-  const [newTopic, setNewTopic] = useState(false);
-  const [budget, setBudget] = useState<components["schemas"]["ResearchBudget"]>({
-    maxSteps: 16,
-    maxSeconds: 180,
-    maxOutputTokens: 12000,
-    maxWebSearches: 6,
+  const storageKey = researchDraftKey(scope, land.id);
+  const [initial] = useState(() => {
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem(storageKey);
+      const draft = raw ? parseResearchDraft(raw, land.id) : null;
+      const context = useLandContext.getState();
+      const apply =
+        !context.researchQuestion ||
+        (draft?.question === context.researchQuestion &&
+          JSON.stringify(draft.focus) === JSON.stringify(context.researchFocus));
+      return { draft, raw, apply, error: null, storageFailed: false };
+    } catch (cause) {
+      return {
+        draft: null,
+        raw,
+        apply: false,
+        error: raw ? describeError(cause) : null,
+        storageFailed: !raw,
+      };
+    }
   });
-  const pending = useRef<{
-    investigationId: string;
-    question: string;
-    key: string;
-    budget: components["schemas"]["ResearchBudget"];
-    focus: components["schemas"]["ResearchFocusReference"] | null;
-    session: number;
-  } | null>(null);
+  const [storageError, setStorageError] = useState(initial.storageFailed);
+  const [recoveryError, setRecoveryError] = useState(initial.error);
+  const [recoveryNotice, setRecoveryNotice] = useState(
+    initial.draft && !useLandContext.getState().researchQuestion
+      ? initial.draft.boundaryRevision
+      : null,
+  );
+  const [newTopic, setNewTopic] = useState(
+    initial.apply ? (initial.draft?.newTopic ?? false) : false,
+  );
+  const [budget, setBudget] = useState<QuestionBudget>(
+    (initial.apply ? initial.draft?.budget : null) ?? {
+      maxSteps: 16,
+      maxSeconds: 180,
+      maxOutputTokens: 12000,
+      maxWebSearches: 6,
+    },
+  );
+  const [pending, setPending] = useState<CapturedResearchRequest | null>(
+    initial.draft?.pending ?? null,
+  );
+  const pendingRef = useRef(pending);
+  const capture = (value: CapturedResearchRequest | null) => {
+    pendingRef.current = value;
+    setPending(value);
+  };
+  useEffect(() => {
+    const context = useLandContext.getState();
+    if (initial.draft && !context.researchQuestion && !context.researchFocus) {
+      context.setResearchQuestion(initial.draft.question);
+      context.setResearchFocus(initial.draft.focus);
+      context.selectInvestigation(initial.draft.investigationId);
+    }
+  }, [initial]);
+  useEffect(() => {
+    if (recoveryError || landScope() !== scope || useLand.getState().active?.id !== land.id) return;
+    const context = useLandContext.getState();
+    const snapshot: ResearchDraft = {
+      version: 1,
+      landId: land.id,
+      boundaryRevision: land.revision,
+      question: context.researchQuestion,
+      focus: context.researchFocus,
+      budget,
+      newTopic,
+      investigationId: context.selectedInvestigationId ?? selected,
+      pending: pendingRef.current,
+    };
+    const save = () => {
+      try {
+        if (!snapshot.question && !snapshot.focus && !snapshot.pending)
+          localStorage.removeItem(storageKey);
+        else localStorage.setItem(storageKey, JSON.stringify(snapshot));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const saved = save();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setStorageError(!saved);
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    question,
+    focus,
+    selected,
+    budget,
+    newTopic,
+    pending,
+    land.id,
+    land.revision,
+    storageKey,
+    scope,
+    recoveryError,
+  ]);
   const pendingTerrain = useRef<{
     investigationId: string;
     key: string;
@@ -331,58 +424,96 @@ export function LandResearch({ land }: { land: LandArea }) {
       setBusy(false);
     }
   };
-  const ask = async () => {
-    if (!canEdit || busy || !question.trim()) return;
+  const ask = async (captured?: CapturedResearchRequest) => {
+    if (!canEdit || !ready || recoveryError || busy || (!captured && (!question.trim() || pending)))
+      return;
     const session = useLand.getState().session;
     const generation = lifetime.current;
     const current = () =>
       lifetime.current === generation &&
       landScope() === scope &&
       useLand.getState().session === session;
-    const reference = focus
-      ? { artifactId: focus.artifactId, featureIndex: focus.featureIndex }
-      : null;
     setBusy(true);
     setError(null);
     try {
-      let operation = pending.current;
+      let operation = captured;
+      const targetId = operation?.investigationId ?? (selected && !newTopic ? selected : null);
+      const target = targetId
+        ? (
+            await unwrap(
+              api.GET("/api/v1/research/investigations/{investigation_id}", {
+                params: { path: { investigation_id: targetId }, query: { limit: 1 } },
+              }),
+            )
+          ).investigation
+        : null;
+      if (!current()) return;
       if (
-        operation?.question !== question ||
-        operation.session !== session ||
-        JSON.stringify(operation.focus) !== JSON.stringify(reference) ||
-        (selected && operation.investigationId !== selected && !newTopic)
-      ) {
-        const id = selected && !newTopic ? selected : (await beginInvestigation(land, question)).id;
+        target &&
+        (target.landId !== land.id ||
+          (operation && operation.boundaryRevision !== target.boundaryRevision))
+      )
+        throw new Error(
+          "This captured investigation does not match the selected land and boundary revision.",
+        );
+      if (!operation) {
+        const investigation = target ?? (await beginInvestigation(land, question));
         if (!current()) return;
         operation = {
-          investigationId: id,
+          investigationId: investigation.id,
+          boundaryRevision: investigation.boundaryRevision,
           question,
           key: crypto.randomUUID(),
           budget,
-          focus: reference,
-          session,
+          focus,
         };
-        pending.current = operation;
       }
+      capture(operation);
+      // Persist the exact request before the network call: retries never spend against a new key.
+      try {
+        const context = useLandContext.getState();
+        const snapshot: ResearchDraft = {
+          version: 1,
+          landId: land.id,
+          boundaryRevision: land.revision,
+          question: context.researchQuestion,
+          focus: context.researchFocus,
+          budget,
+          newTopic,
+          investigationId: selected,
+          pending: operation,
+        };
+        localStorage.setItem(storageKey, JSON.stringify(snapshot));
+        setStorageError(false);
+      } catch {
+        setStorageError(true);
+      }
+      const reference = operation.focus
+        ? { artifactId: operation.focus.artifactId, featureIndex: operation.focus.featureIndex }
+        : null;
       await startResearch(
         operation.investigationId,
         operation.question,
         "investigation",
         operation.key,
         operation.budget,
-        operation.focus,
+        reference,
       );
       if (!current()) return;
       setChosen(operation.investigationId);
       const context = useLandContext.getState();
-      if (context.researchQuestion === operation.question && context.researchFocus === focus) {
+      if (
+        context.researchQuestion === operation.question &&
+        JSON.stringify(context.researchFocus) === JSON.stringify(operation.focus)
+      ) {
         setQuestion("");
         context.setResearchFocus(null);
       }
       setNewTopic(false);
       setOffset(0);
       setTab("conversation");
-      pending.current = null;
+      capture(null);
+      setRecoveryNotice(null);
       await refresh();
     } catch (cause) {
       if (current()) setError(describeError(cause));
@@ -491,7 +622,6 @@ export function LandResearch({ land }: { land: LandArea }) {
               setChosen(event.target.value);
               setOffset(0);
               setEvidence(null);
-              pending.current = null;
             }}
           >
             {catalog.data.map((item) => (
@@ -803,6 +933,93 @@ export function LandResearch({ land }: { land: LandArea }) {
           produce sourced findings and charts.
         </p>
       )}
+      {recoveryNotice !== null && (
+        <p className="land-notice">
+          Your question was restored from this browser. Restoring it did not submit a question.
+          {recoveryNotice !== land.revision &&
+            ` It was drafted at boundary revision ${recoveryNotice}; this land is now revision ${land.revision}.`}
+          <button type="button" onClick={() => setRecoveryNotice(null)}>
+            Dismiss recovery notice
+          </button>
+        </p>
+      )}
+      {recoveryError && (
+        <section className="land-evidence" aria-label="Unreadable saved question">
+          <p>{recoveryError} The saved record is retained until you discard it.</p>
+          <div className="land-actions">
+            <button
+              type="button"
+              onClick={() => {
+                const url = URL.createObjectURL(
+                  new Blob([initial.raw ?? ""], { type: "application/json" }),
+                );
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = "land-question-recovery.json";
+                link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              }}
+            >
+              Download saved question
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  localStorage.removeItem(storageKey);
+                  setRecoveryError(null);
+                } catch {
+                  setStorageError(true);
+                }
+              }}
+            >
+              Discard unreadable record
+            </button>
+          </div>
+        </section>
+      )}
+      {storageError && (
+        <p className="land-notice">
+          This browser could not save or restore the research draft. Keep this tab open to retain
+          your current question and retry record.
+        </p>
+      )}
+      {pending && !busy && (
+        <section className="land-evidence" aria-label="Captured research request">
+          <h4>Confirm the last research request</h4>
+          <blockquote>{pending.question}</blockquote>
+          {pending.focus && <p>About {pending.focus.label}</p>}
+          <p className="land-footnote">
+            Boundary {pending.boundaryRevision} · {pending.budget.maxSeconds} seconds · up to{" "}
+            {pending.budget.maxWebSearches} web searches
+          </p>
+          <p>
+            The request may already be queued. Retrying checks the same request and starts it only
+            if it was not received.
+          </p>
+          <div className="land-actions">
+            <button type="button" disabled={!canEdit || !ready} onClick={() => void ask(pending)}>
+              Retry captured request
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setChosen(pending.investigationId);
+                setOffset(0);
+                setTab("conversation");
+              }}
+            >
+              View its investigation
+            </button>
+            <button type="button" onClick={() => capture(null)}>
+              Discard retry record
+            </button>
+          </div>
+          <p className="land-footnote">
+            Discarding this record does not stop research that is already running.
+          </p>
+        </section>
+      )}
       <form
         className="land-ask"
         onSubmit={(event) => {
@@ -873,7 +1090,13 @@ export function LandResearch({ land }: { land: LandArea }) {
           <button
             type="submit"
             disabled={
-              !canEdit || busy || running || !question.trim() || !status.data?.modelConfigured
+              !canEdit ||
+              busy ||
+              running ||
+              !!pending ||
+              !!recoveryError ||
+              !question.trim() ||
+              !status.data?.modelConfigured
             }
           >
             <Search size={15} />

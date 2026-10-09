@@ -1927,3 +1927,38 @@ production build (with the existing PlayCanvas worker-module externalization war
 The test database passed a 0028 → 0027 → 0028 migration roundtrip; both isolated test and
 preview databases are now at 0028. The final desktop/phone interaction check was rerun after
 the focus-chip layout adjustment and again reported no errors or unintended overflow.
+
+## Implemented increment: recoverable research questions and captured retries
+
+General research questions now persist per identity/workspace and land in browser storage,
+including their selected map feature, research limits and investigation choice. Reopening the
+land restores the draft without submitting it. A recovery notice identifies a changed boundary
+revision. An existing question supplied by another workflow takes precedence over the stored
+question; its focus is preserved.
+
+Before queueing, the client captures the exact question, limits, focus, investigation, boundary
+revision and request key. A lost response leaves an explicit retry record independent of newer
+edits to the question. Reloading retains both. Retry checks that the captured investigation
+still belongs to this land and revision, then uses the same server idempotency key. A successful
+retry removes the record while retaining a newer draft. Users can open the investigation or
+explicitly discard the retry record; the interface explains that discarding does not cancel an
+already-running investigation. New submission waits until that record is resolved or discarded.
+
+Recovery parsing validates version, land identity, UUIDs, question/label sizes, feature indices,
+boundary revisions and research limits, and excludes unknown fields from restored requests.
+Unreadable records remain available to download or explicitly discard rather than being silently
+overwritten. Browser storage failures are visible; the current in-memory question remains usable.
+No credentials, geometry payloads or evidence snapshots are stored in these browser records.
+
+Validation: 21 focused frontend tests, web type checking, targeted lint and production build
+pass. Tests cover reload recovery, identical retry payloads/keys, newer drafts, wrong-land
+investigations, storage failures and preservation of unreadable records alongside prior map and
+streaming regressions. A real Chromium/Cesium check on the public National Mall fixture simulated
+a lost queue response, changed the question and time budget, reloaded, and retried. The retry
+sent the original 180-second request with the exact same key while the newer 600-second draft
+remained intact. Desktop and 390px phone screenshots were inspected; no page errors or unintended
+overflow occurred. Synthetic source and queue fixtures were clearly marked and no research run
+was created by the browser check. Artifacts: `/tmp/land-question-recovery-result.json`,
+`/tmp/land-question-recovery-desktop.png`, `/tmp/land-question-recovery-mobile.png`.
+Existing PlayCanvas worker-module externalization build warnings remain. No migration or
+production deployment is part of this increment; the original checkout remains untouched.
