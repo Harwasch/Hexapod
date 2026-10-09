@@ -11,6 +11,7 @@ from app.schemas.geojson import Footprint, MapGeometry
 from app.schemas.land_archives import ArchiveMedia
 from app.schemas.land_documents import DocumentLocator
 from app.schemas.land_rasters import RasterRequest
+from app.schemas.land_solar import SolarRequest
 from app.schemas.land_surveys import SurveyLocator
 
 
@@ -38,15 +39,17 @@ class InvestigationRead(InvestigationCreate):
 
 class RunCreate(CamelModel):
     request_key: uuid.UUID
-    kind: Literal["overview", "investigation", "raster", "archive"] = "investigation"
+    kind: Literal["overview", "investigation", "raster", "archive", "solar"] = "investigation"
     question: str = Field(min_length=1, max_length=10_000)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
-    analysis: RasterRequest | None = None
+    analysis: RasterRequest | SolarRequest | None = None
 
     @model_validator(mode="after")
     def analysis_request(self) -> RunCreate:
-        if (self.kind == "raster") != (self.analysis is not None):
-            raise ValueError("Raster runs require analysis parameters; other runs must omit them.")
+        if (self.kind == "raster") != isinstance(self.analysis, RasterRequest):
+            raise ValueError("Raster runs require raster analysis parameters.")
+        if (self.kind == "solar") != isinstance(self.analysis, SolarRequest):
+            raise ValueError("Solar runs require solar analysis parameters.")
         return self
 
 
@@ -54,8 +57,8 @@ class RunRead(CamelModel):
     id: uuid.UUID
     investigation_id: uuid.UUID
     question: str
-    kind: Literal["overview", "investigation", "raster", "archive"]
-    analysis: RasterRequest | None = None
+    kind: Literal["overview", "investigation", "raster", "archive", "solar"]
+    analysis: RasterRequest | SolarRequest | None = None
     status: Literal["queued", "running", "succeeded", "partial", "failed", "cancelled"]
     budget: ResearchBudget
     attempt: int
@@ -182,6 +185,11 @@ class GalleryOutput(CamelModel):
     evidence_ids: list[uuid.UUID] = Field(min_length=1, max_length=30)
 
 
+class SolarOutput(CamelModel):
+    kind: Literal["solar"]
+    assessment_id: uuid.UUID
+
+
 class RasterOutput(CamelModel):
     kind: Literal["raster"]
     raster_id: uuid.UUID
@@ -205,6 +213,7 @@ Output = Annotated[
     | MapOutput
     | DocumentOutput
     | TimelineOutput
+    | SolarOutput
     | RasterOutput
     | GalleryOutput,
     Field(discriminator="kind"),

@@ -51,6 +51,8 @@ dependencies = [
   "rasterio>=1.4",
   "rio-tiler>=7",
   "pypdf>=5",
+  "pvlib>=0.16.1,<0.17",
+  "pandas>=3,<4",
 ]
 
 [project.optional-dependencies]
@@ -181,4 +183,9 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 # Rasterio's C extension has no PEP 561 marker. Analysis boundaries validate arrays/metadata explicitly.
 module = ["rasterio", "rasterio.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# pvlib/pandas ship no typing marker; solar analysis validates typed model inputs and outputs.
+module = ["pvlib", "pvlib.*", "pandas", "pandas.*"]
 ignore_missing_imports = true

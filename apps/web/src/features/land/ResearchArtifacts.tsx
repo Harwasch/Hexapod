@@ -5,6 +5,7 @@ import { boundsOf } from "@twin/geo";
 import type { LandEvidence, ResearchArtifact } from "@twin/contracts";
 
 import { ArchiveGallery } from "./ArchiveGallery";
+import { SolarAssessmentView } from "./SolarAssessmentView";
 import { LandRasterView } from "./LandRasterView";
 
 type Chart = Extract<ResearchArtifact["output"], { kind: "chart" }>;
@@ -170,6 +171,20 @@ export function ResearchArtifactView({
       <h4>{artifact.title}</h4>
       {output.kind === "gallery" && (
         <ArchiveGallery ids={output.evidenceIds} evidence={evidence} onAsk={onAsk} />
+      )}
+      {output.kind === "solar" && (
+        <>
+          <SolarAssessmentView id={output.assessmentId} />
+          <button
+            type="button"
+            onClick={() => {
+              useLandContext.getState().selectSolar(output.assessmentId);
+              useLandContext.getState().setSection("scenarios");
+            }}
+          >
+            Explore solar economics
+          </button>
+        </>
       )}
       {output.kind === "raster" && <LandRasterView id={output.rasterId} />}
       {output.kind === "chart" && <ChartView output={output} />}

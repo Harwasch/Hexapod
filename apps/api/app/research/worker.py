@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.raster_runner import RasterCancelledError
 from app.analysis.raster_runner import run as run_raster
+from app.analysis.solar_runner import SolarCancelledError
+from app.analysis.solar_runner import run as run_solar
 from app.analysis.terrain import SPEC as TERRAIN_SPEC
 from app.analysis.vegetation import SPEC as VEGETATION_SPEC
 from app.analysis.worldcover import SPEC as COVER_SPEC
@@ -26,6 +28,7 @@ from app.models.land_archive_image import LandArchiveImage, LandArchiveImageBlob
 from app.models.land_document import LandDocument, LandDocumentLink
 from app.models.land_feature import LandFeature
 from app.models.land_raster import LandRaster
+from app.models.land_solar import LandSolar
 from app.models.land_survey import LandSurvey
 from app.models.research import Evidence, Investigation, ResearchMessage, ResearchRun
 from app.models.scenario import LandScenario, LandScenarioRevision
@@ -49,6 +52,8 @@ from app.research.model import (
     RetrieveAction,
     ScenarioAction,
     SearchAction,
+    SolarAction,
+    SolarReadAction,
     SurveyReadAction,
 )
 from app.research.outputs import overview_outputs
@@ -58,6 +63,7 @@ from app.research.providers.open_data import OVERVIEW_SOURCES, SOURCES, retrieve
 from app.research.search import ClaudeResearchSearch, ResearchSearch
 from app.schemas.geojson import Footprint
 from app.schemas.land_rasters import RasterMetadata, RasterRequest
+from app.schemas.land_solar import SolarMetadata, SolarRequest
 from app.schemas.land_surveys import SurveyLocator
 from app.schemas.research import (
     ArtifactContent,
@@ -65,9 +71,17 @@ from app.schemas.research import (
     FindingContent,
     RasterOutput,
     ResearchBudget,
+    SolarOutput,
 )
 from app.schemas.scenarios import ScenarioCreate
-from app.services import land_actions, land_archive_images, land_rasters, land_surveys, scenarios
+from app.services import (
+    land_actions,
+    land_archive_images,
+    land_rasters,
+    land_solar,
+    land_surveys,
+    scenarios,
+)
 from app.services.errors import InvalidInputError, NotFoundError
 
 log = logging.getLogger("twin.research")
@@ -170,6 +184,127 @@ class ResearchWorker:
             if self.client is None:
                 client.close()
         return True
+
+    def _solar(
+        self,
+        db: Session,
+        run_id: uuid.UUID,
+        token: uuid.UUID,
+        workspace_id: uuid.UUID,
+        context: SourceContext,
+        request: SolarRequest,
+        state: dict[str, Any],
+        cancelled: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        key = "solar/" + hashlib.sha256(request.model_dump_json().encode()).hexdigest()
+        if key in state["sources"]:
+            return dict(state["sources"][key])
+        identifier = uuid.uuid5(run_id, key)
+        row = db.get(LandSolar, identifier)
+        if row is None:
+            queue.checkpoint(
+                db,
+                run_id,
+                token,
+                state,
+                kind="analysis",
+                payload={"message": "Reading hourly weather and modeling the mapped solar array."},
+            )
+            db.rollback()
+            try:
+                calculated = run_solar(context.boundary, request, cancelled)
+            except SolarCancelledError as error:
+                raise queue.LeaseLostError() from error
+            run = queue.locked(db, run_id, token)
+            row = land_solar.save(
+                db,
+                workspace_id,
+                run,
+                identifier,
+                request,
+                calculated,
+                self.settings.land_solar_workspace_quota_bytes,
+            )
+            queue.checkpoint(
+                db,
+                run_id,
+                token,
+                state,
+                kind="analysis",
+                payload={
+                    "message": "Hourly calculation and source archive saved.",
+                    "assessmentId": str(identifier),
+                },
+            )
+        metadata = SolarMetadata.model_validate(row.metadata_json)
+        evidence_id = queue.save_evidence(
+            db,
+            run_id,
+            token,
+            key,
+            EvidenceContent(
+                provider=request.dataset,
+                title=f"NASA POWER hourly solar · {request.year}",
+                url=metadata.source_url,
+                license=metadata.license,
+                attribution=metadata.attribution,
+                record_id=str(identifier),
+                retrieved_at=metadata.retrieved_at,
+                excerpt=metadata.model_dump_json(),
+                snapshot_hash=metadata.source_sha256,
+                spatial_relevance="regional",
+                relevance_note="Regional hourly weather at the array zone; equipment, orientation and "
+                "horizon are recorded assumptions. Original weather and modeled hours are preserved.",
+            ),
+        )
+        summary = (
+            f"Modeled {metadata.modeled_generation_kwh:,.0f} kWh in "
+            f"{metadata.valid_hours:,} of {metadata.expected_hours:,} source hours for {request.year}. "
+        )
+        summary += (
+            "Complete historical year; not a future performance guarantee."
+            if metadata.complete_year
+            else "Incomplete weather coverage; this sum is not annual generation."
+        )
+        queue.save_finding(
+            db,
+            run_id,
+            token,
+            key,
+            FindingContent(
+                title=f"Solar generation · {request.year}",
+                summary=summary,
+                category="physical",
+                evidence_ids=[evidence_id],
+                confidence="supported" if metadata.valid_hours else "uncertain",
+                uncertainty=" ".join(metadata.limitations)[:3000],
+                suggested_questions=[
+                    "How do equipment, shading and electricity tariffs change this option?"
+                ],
+            ),
+        )
+        queue.save_artifact(
+            db,
+            run_id,
+            token,
+            key,
+            ArtifactContent(
+                title=f"Hourly solar assessment · {request.year}",
+                method=metadata.algorithm,
+                evidence_ids=[evidence_id],
+                output=SolarOutput(kind="solar", assessment_id=identifier),
+            ),
+        )
+        value = {
+            "provider": request.dataset,
+            "status": "available" if metadata.valid_hours else "empty",
+            "summary": summary,
+            "evidenceIds": [str(evidence_id)],
+            "data": {"assessmentId": str(identifier), "metadata": metadata.model_dump(mode="json")},
+        }
+        state["sources"][key] = value
+        queue.checkpoint(db, run_id, token, state)
+        return value
 
     def _raster(
         self,
@@ -657,7 +792,11 @@ class ResearchWorker:
             context = SourceContext(FOOTPRINT.validate_python(boundary.boundary))
             budget = ResearchBudget.model_validate(run.budget)
             kind, question = run.kind, run.question
-            raster_request = RasterRequest.model_validate(run.analysis) if run.analysis else None
+            analysis_request = (
+                TypeAdapter(RasterRequest | SolarRequest).validate_python(run.analysis)
+                if run.analysis
+                else None
+            )
             boundary_revision = investigation.boundary_revision
             land_id, principal_id = investigation.land_id, investigation.created_by
             workspace_id = db.execute(
@@ -690,6 +829,21 @@ class ResearchWorker:
                     .where(LandScenario.land_id == land_id)
                     .order_by(LandScenario.updated_at.desc())
                     .limit(10)
+                )
+            ]
+            saved_solar = [
+                {
+                    "id": str(assessment.id),
+                    "year": assessment.request["year"],
+                    "capacityKwDc": assessment.metadata_json["capacity_kw_dc"],
+                    "completeYear": assessment.metadata_json["complete_year"],
+                    "boundaryRevision": assessment.boundary_revision,
+                }
+                for assessment in db.scalars(
+                    select(LandSolar)
+                    .where(LandSolar.land_id == land_id)
+                    .order_by(LandSolar.created_at.desc())
+                    .limit(30)
                 )
             ]
             field_surveys = [
@@ -774,12 +928,23 @@ class ResearchWorker:
                 "actions": [],
             }
             db.rollback()
+            if kind == "solar":
+                try:
+                    if not isinstance(analysis_request, SolarRequest):
+                        raise ValueError("This solar run has no analysis parameters.")
+                    result = self._solar(
+                        db, run_id, token, workspace_id, context, analysis_request, state, cancelled
+                    )
+                    queue.finish(db, run_id, token, "succeeded", result["summary"])
+                except ValueError as error:
+                    queue.finish(db, run_id, token, "failed", str(error)[:1000])
+                return
             if kind == "raster":
                 try:
-                    if raster_request is None:
+                    if not isinstance(analysis_request, RasterRequest):
                         raise ValueError("This raster run has no analysis parameters.")
                     raster_run_result = self._raster(
-                        db, run_id, token, workspace_id, context, raster_request, state, cancelled
+                        db, run_id, token, workspace_id, context, analysis_request, state, cancelled
                     )
                     queue.finish(db, run_id, token, "succeeded", raster_run_result["summary"])
                 except ValueError as error:
@@ -857,6 +1022,7 @@ class ResearchWorker:
                             "conversation": conversation,
                             "savedScenarios": saved_scenarios,
                             "fieldSurveys": field_surveys,
+                            "savedSolarAssessments": saved_solar,
                             "inventoryFeatures": saved_features,
                             "landDocuments": saved_documents,
                             "archiveSources": archive_sources,
@@ -909,6 +1075,70 @@ class ResearchWorker:
                         result = self._image(
                             db, run_id, token, workspace_id, action.evidence_id, client, state
                         )
+                    elif isinstance(action, SolarReadAction):
+                        assessment = land_solar.read(
+                            db, land_solar.scoped(db, workspace_id, action.assessment_id)
+                        )
+                        if assessment.land_id != land_id:
+                            raise InvalidInputError("Read solar assessments from this land only.")
+                        key = f"saved-solar/{assessment.id}"
+                        metadata = assessment.metadata
+                        solar_data = {
+                            "assessmentId": str(assessment.id),
+                            "boundaryRevision": assessment.boundary_revision,
+                            "stale": assessment.boundary_revision != boundary_revision,
+                            "sha256": assessment.sha256,
+                            "request": assessment.request.model_dump(
+                                mode="json", exclude={"array_zone", "horizon"}
+                            ),
+                            "horizonPointCount": len(assessment.request.horizon),
+                            "metadata": metadata.model_dump(mode="json"),
+                            "geometryNote": "Full array geometry and horizon are in the private assessment archive.",
+                        }
+                        excerpt = json.dumps(solar_data, ensure_ascii=False)
+                        if len(excerpt) > 29_000:
+                            raise InvalidInputError(
+                                "Assessment metadata exceeds the evidence limit."
+                            )
+                        identifier = queue.save_evidence(
+                            db,
+                            run_id,
+                            token,
+                            key,
+                            EvidenceContent(
+                                provider="saved-solar-assessment",
+                                title=f"Saved hourly solar · {assessment.request.year}",
+                                url=metadata.source_url,
+                                license=metadata.license,
+                                attribution=metadata.attribution,
+                                record_id=str(assessment.id),
+                                retrieved_at=metadata.retrieved_at,
+                                excerpt=excerpt,
+                                snapshot_hash=assessment.sha256,
+                                spatial_relevance="regional",
+                                relevance_note="Regional weather and private entered array assumptions from the "
+                                "saved pinned-boundary assessment, not measured roof output.",
+                            ),
+                        )
+                        state["sources"][key] = {
+                            "provider": "saved-solar-assessment",
+                            "status": "available",
+                            "data": solar_data,
+                            "evidenceIds": [str(identifier)],
+                        }
+                        result = "Read saved hourly solar assumptions, output, coverage and source evidence."
+                    elif isinstance(action, SolarAction):
+                        solar_result = self._solar(
+                            db,
+                            run_id,
+                            token,
+                            workspace_id,
+                            context,
+                            action.analysis,
+                            state,
+                            cancelled,
+                        )
+                        result = solar_result["summary"]
                     elif isinstance(action, RasterAction):
                         raster_result = self._raster(
                             db,
@@ -1043,6 +1273,7 @@ class ResearchWorker:
                                 boundary_revision=boundary_revision,
                                 inputs=action.inputs,
                                 field_survey_ids=action.field_survey_ids,
+                                solar_assessment_id=action.solar_assessment_id,
                                 evidence_ids=[uuid.UUID(value) for value in action.evidence_ids],
                             ),
                             identifier=uuid.uuid5(run_id, output_key),

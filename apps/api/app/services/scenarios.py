@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from math import isclose
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -9,8 +10,9 @@ from app.analysis.scenarios import analyze
 from app.models.land import LandArea, LandBoundaryRevision
 from app.models.research import Evidence, Investigation, ResearchRun
 from app.models.scenario import LandScenario, LandScenarioRevision
+from app.schemas.land_solar import SolarMetadata, SolarRequest
 from app.schemas.scenarios import ScenarioCreate, ScenarioRead, ScenarioResult, ScenarioRevise
-from app.services import land_surveys
+from app.services import land_solar, land_surveys
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.land import FOOTPRINT, get_land
 
@@ -52,7 +54,47 @@ def preview(
         4326,
     )
     area = db.execute(select(func.ST_Area(func.geography(geometry)))).scalar_one()
-    return analyze(payload.inputs, float(area))
+    annual_generation = None
+    assessment = None
+    if payload.solar_assessment_id is not None:
+        assessment = land_solar.scoped(db, workspace_id, payload.solar_assessment_id)
+        if (
+            payload.inputs.kind != "solar"
+            or assessment.land_id != land_id
+            or assessment.boundary_revision != payload.boundary_revision
+        ):
+            raise InvalidInputError(
+                "Solar assessments must match the scenario's land and pinned boundary."
+            )
+        metadata = SolarMetadata.model_validate(assessment.metadata_json)
+        physical = SolarRequest.model_validate(assessment.request)
+        if not metadata.complete_year or metadata.annual_generation_kwh is None:
+            raise InvalidInputError(
+                "Incomplete hourly weather coverage cannot supply annual scenario generation."
+            )
+        expected = {
+            "usable_roof_area_m2": physical.module_area_m2,
+            "module_efficiency": physical.module_efficiency,
+            "annual_plane_irradiation_kwh_m2": metadata.unshaded_plane_irradiation_kwh_m2,
+            "tilt_degrees": physical.tilt_degrees,
+            "azimuth_degrees": physical.azimuth_degrees,
+            "shade_loss": physical.additional_shade_loss,
+            "system_loss": physical.system_loss,
+        }
+        if any(
+            not isclose(getattr(payload.inputs, key), value, rel_tol=1e-8, abs_tol=1e-8)
+            for key, value in expected.items()
+        ):
+            raise InvalidInputError(
+                "Physical assumptions must match the pinned solar assessment. "
+                "Recalculate the assessment to change its array or losses."
+            )
+        annual_generation = metadata.annual_generation_kwh
+    result = analyze(payload.inputs, float(area), annual_generation)
+    if assessment is not None:
+        result.summary["solarAssessmentId"] = str(assessment.id)
+        result.summary["solarAssessmentSha256"] = assessment.sha256
+    return result
 
 
 def scoped(

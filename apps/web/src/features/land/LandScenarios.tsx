@@ -5,6 +5,9 @@ import { api, unwrap, ApiError } from "@/api/client";
 import { useLandContext } from "@/state/landContext";
 import { describeError } from "@/lib/log";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
+import { SolarStudy } from "./SolarStudy";
+import { SolarAssessmentView } from "./SolarAssessmentView";
+import { physicalFields, solarFinance, type SolarAssessment } from "./solarStudy";
 import { ScenarioResultView } from "./ScenarioResultView";
 import { fieldLabel, valueLabel } from "./scenarioDefaults";
 import {
@@ -38,6 +41,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [history, setHistory] = useState<Scenario[]>([]);
   const [evidenceIds, setEvidenceIds] = useState<string[]>([]);
+  const [solarAssessmentId, setSolarAssessmentId] = useState<string | null>(null);
   const [fieldSurveyIds, setFieldSurveyIds] = useState<string[]>([]);
   const surveys = useQuery({
     queryKey: ["land-surveys", scope, land.id, "scenario-references"],
@@ -65,6 +69,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
         inputs,
         evidenceIds,
         fieldSurveyIds,
+        solarAssessmentId,
       } satisfies components["schemas"]["ScenarioCreate"])
     : null;
   const signature = JSON.stringify(payload);
@@ -87,6 +92,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
     setBoundaryRevision(land.revision);
     setEvidenceIds([]);
     setFieldSurveyIds([]);
+    setSolarAssessmentId(null);
     setMonitoringText("1, 3, 5");
   };
   const calculate = async (save: boolean) => {
@@ -146,6 +152,16 @@ export function LandScenarios({ land }: { land: LandArea }) {
     setBoundaryRevision(scenario.boundaryRevision);
     setEvidenceIds(scenario.evidenceIds ?? []);
     setFieldSurveyIds(scenario.fieldSurveyIds ?? []);
+    setSolarAssessmentId(scenario.solarAssessmentId ?? null);
+  };
+  const useSolar = (assessment: SolarAssessment) => {
+    reset();
+    setInputs(solarFinance(assessment));
+    setName(`Solar economics · ${assessment.request.year}`);
+    setBoundaryRevision(assessment.boundaryRevision);
+    setSolarAssessmentId(assessment.id);
+    setEvidenceIds([]);
+    setFieldSurveyIds([]);
   };
   return (
     <section className="land-scenarios" aria-label="Land scenarios">
@@ -158,6 +174,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
       <p>
         Turn evidence and your assumptions into a calculation you can inspect, revise and compare.
       </p>
+      {!inputs && <SolarStudy land={land} onUse={useSolar} />}
       {!inputs && canEdit && (
         <div className="land-actions">
           <button type="button" onClick={() => begin("solar")}>
@@ -203,6 +220,18 @@ export function LandScenarios({ land }: { land: LandArea }) {
             survey and cost data you want to test.
           </p>
           <p>Uses land boundary revision {boundaryRevision}.</p>
+          {solarAssessmentId && (
+            <div className="land-notice">
+              <p>
+                Uses saved hourly AC generation. Physical assumptions are locked to that assessment;
+                financial assumptions remain editable.
+              </p>
+              <SolarAssessmentView id={solarAssessmentId} />
+              <button type="button" onClick={() => setSolarAssessmentId(null)}>
+                Switch to manual generation assumptions
+              </button>
+            </div>
+          )}
           {inputs.kind === "restoration" && (
             <fieldset>
               <legend>Field survey references</legend>
@@ -269,6 +298,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
                           {field.label}
                           <input
                             type="number"
+                            disabled={!!solarAssessmentId && physicalFields.has(field.key)}
                             step="any"
                             required={field.key !== "replacementYear"}
                             value={
@@ -297,6 +327,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
                 <textarea
                   required
                   rows={2}
+                  readOnly={!!solarAssessmentId}
                   value={inputs.irradiationBasis}
                   onChange={(event) =>
                     setInputs({ ...inputs, irradiationBasis: event.target.value })
@@ -653,6 +684,12 @@ export function LandScenarios({ land }: { land: LandArea }) {
           <h4>{scenario.name}</h4>
           <p>{scenario.inputs.assumptions}</p>
           <ScenarioResultView result={scenario.result} />
+          {scenario.solarAssessmentId && (
+            <details>
+              <summary>Linked hourly solar assessment</summary>
+              <SolarAssessmentView id={scenario.solarAssessmentId} />
+            </details>
+          )}
           {!!scenario.fieldSurveyIds?.length && (
             <div className="land-actions">
               {scenario.fieldSurveyIds.map((id) => (
@@ -721,6 +758,12 @@ export function LandScenarios({ land }: { land: LandArea }) {
                 {new Date(scenario.updatedAt).toLocaleDateString()}
               </p>
               <ScenarioResultView result={scenario.result} />
+              {scenario.solarAssessmentId && (
+                <details>
+                  <summary>Linked hourly solar assessment</summary>
+                  <SolarAssessmentView id={scenario.solarAssessmentId} />
+                </details>
+              )}
               {!!scenario.fieldSurveyIds?.length && (
                 <div className="land-actions">
                   {scenario.fieldSurveyIds.map((id) => (

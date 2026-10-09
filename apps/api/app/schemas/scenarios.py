@@ -16,7 +16,7 @@ class SolarInputs(CamelModel):
     kind: Literal["solar"]
     usable_roof_area_m2: float = Field(gt=0, le=1e8, allow_inf_nan=False)
     module_efficiency: float = Field(gt=0, le=0.5, allow_inf_nan=False)
-    annual_plane_irradiation_kwh_m2: float = Field(gt=0, le=5000, allow_inf_nan=False)
+    annual_plane_irradiation_kwh_m2: float = Field(ge=0, le=5000, allow_inf_nan=False)
     irradiation_basis: str = Field(min_length=1, max_length=2000)
     # Plane-of-array resource already incorporates tilt/orientation, separately
     # recorded so a regional horizontal resource is not mislabeled roof-specific.
@@ -110,6 +110,7 @@ class ScenarioCreate(CamelModel):
     boundary_revision: int = Field(ge=1)
     inputs: ScenarioInputs
     evidence_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+    solar_assessment_id: uuid.UUID | None = None
     field_survey_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
 
 

@@ -14,6 +14,7 @@ from app.config import Settings
 from app.schemas.base import CamelModel
 from app.schemas.land_actions import LandActionCreate
 from app.schemas.land_rasters import RasterRequest
+from app.schemas.land_solar import SolarRequest
 from app.schemas.research import ArtifactContent, FindingContent
 from app.schemas.scenarios import ScenarioInputs
 
@@ -69,6 +70,7 @@ class ScenarioAction(CamelModel):
     kind: Literal["create_scenario"]
     name: str = Field(min_length=1, max_length=200)
     inputs: ScenarioInputs
+    solar_assessment_id: uuid.UUID | None = None
     field_survey_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     evidence_ids: list[str] = Field(default_factory=list, max_length=100)
 
@@ -76,6 +78,16 @@ class ScenarioAction(CamelModel):
 class ActionDraftAction(CamelModel):
     kind: Literal["create_action_draft"]
     draft: LandActionCreate
+
+
+class SolarReadAction(CamelModel):
+    kind: Literal["read_solar_assessment"]
+    assessment_id: uuid.UUID
+
+
+class SolarAction(CamelModel):
+    kind: Literal["analyze_solar"]
+    analysis: SolarRequest
 
 
 class RasterAction(CamelModel):
@@ -111,6 +123,8 @@ class ResearchDecision(CamelModel):
         | DocumentOcrAction
         | SurveyReadAction
         | ArchiveImageAction
+        | SolarReadAction
+        | SolarAction
         | RasterAction
         | FindingAction
         | ArtifactAction
@@ -176,6 +190,16 @@ cloud/quality exclusions, sampled coverage and source scale/offset. Compare comm
 on common clear cells; whole-window means with changing footprints can mislead. Missing
 observations are not zero. NDVI does not identify species, species cover, native status,
 biomass or restoration success; seasonal/measurement changes do not establish a cause.
+Use read_solar_assessment to inspect existing savedSolarAssessments with their evidence before
+recomputing or answering follow-up questions. A saved assessment includes its pinned boundary and
+source coverage; distinguish stale boundaries and partial years. create_scenario can link a
+solarAssessmentId; physical fields must match the saved assessment, and its annual AC yield is
+used directly without reapplying physical losses.
+Use analyze_solar for a mapped local array zone and a completed historical year. It retrieves
+NASA POWER hourly weather and calculates orientation, temperature, horizon shading and inverter
+output. Equipment, roof geometry and horizon are entered assumptions, never inferred measurements.
+Ask for missing assumptions or explicitly label user-approved planning values. Partial source coverage
+is not annual yield. Results preserve hourly inputs, methods and limitations in a private archive.
 Use analyze_raster with cop-dem-glo-30 for reproducible surface-elevation and slope statistics and a
 private raster map. Describe the actual analysis resolution, valid-cell coverage and method.
 A surface model may include vegetation/buildings; it is not surveyed ground or a geotechnical

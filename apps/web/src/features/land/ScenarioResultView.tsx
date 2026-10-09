@@ -13,12 +13,14 @@ export function ScenarioResultView({ result }: { result: ScenarioResult }) {
   return (
     <section className="land-scenario-result" aria-label="Scenario result">
       <dl className="land-scenario-summary">
-        {Object.entries(result.summary).map(([key, value]) => (
-          <div key={key}>
-            <dt>{fieldLabel(key === "paybackYear" ? "equityRecoveryYear" : key)}</dt>
-            <dd>{valueLabel(value)}</dd>
-          </div>
-        ))}
+        {Object.entries(result.summary)
+          .filter(([key]) => key !== "solarAssessmentId" && key !== "solarAssessmentSha256")
+          .map(([key, value]) => (
+            <div key={key}>
+              <dt>{fieldLabel(key === "paybackYear" ? "equityRecoveryYear" : key)}</dt>
+              <dd>{valueLabel(value)}</dd>
+            </div>
+          ))}
       </dl>
       {values.length > 1 && (
         <figure>

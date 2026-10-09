@@ -9,6 +9,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.land_raster import LandRaster
+from app.models.land_solar import LandSolar
 from app.models.research import Evidence, Finding, ResearchArtifact, ResearchMessage, ResearchRun
 from app.schemas.research import (
     ArtifactContent,
@@ -16,6 +17,7 @@ from app.schemas.research import (
     FindingContent,
     GalleryOutput,
     RasterOutput,
+    SolarOutput,
     TimelineOutput,
 )
 from app.services.errors import InvalidInputError
@@ -199,6 +201,17 @@ def save_artifact(
         )
         if raster is None:
             raise InvalidInputError("Raster outputs must belong to this investigation.")
+    if isinstance(content.output, SolarOutput):
+        assessment = db.scalar(
+            select(LandSolar)
+            .join(ResearchRun, ResearchRun.id == LandSolar.run_id)
+            .where(
+                LandSolar.id == content.output.assessment_id,
+                ResearchRun.investigation_id == run.investigation_id,
+            )
+        )
+        if assessment is None:
+            raise InvalidInputError("Solar outputs must belong to this investigation.")
     row = db.scalar(
         select(ResearchArtifact).where(
             ResearchArtifact.run_id == run_id, ResearchArtifact.output_key == key

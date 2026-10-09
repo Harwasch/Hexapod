@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pydantic import TypeAdapter
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,7 @@ from app.models.research import (
     ResearchRun,
 )
 from app.schemas.land_rasters import RasterRequest
+from app.schemas.land_solar import SolarRequest
 from app.schemas.research import (
     EvidenceRead,
     FindingRead,
@@ -135,7 +137,11 @@ def create_run(
             existing.question != payload.question
             or existing.kind != payload.kind
             or ResearchBudget.model_validate(existing.budget) != payload.budget
-            or (RasterRequest.model_validate(existing.analysis) if existing.analysis else None)
+            or (
+                TypeAdapter(RasterRequest | SolarRequest).validate_python(existing.analysis)
+                if existing.analysis
+                else None
+            )
             != payload.analysis
         ):
             raise ConflictError(

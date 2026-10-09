@@ -18,6 +18,7 @@ from app.api.v1 import (
     land_features,
     land_image_registrations,
     land_rasters,
+    land_solar,
     land_surveys,
     layers,
     live,
@@ -73,3 +74,5 @@ api_v1.include_router(land_actions.router)
 api_v1.include_router(land_documents.router)
 
 api_v1.include_router(land_surveys.router)
+
+api_v1.include_router(land_solar.router)

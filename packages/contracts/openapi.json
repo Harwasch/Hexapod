@@ -11645,6 +11645,7 @@
                 "gallery": "#/components/schemas/GalleryOutput",
                 "map": "#/components/schemas/MapOutput",
                 "raster": "#/components/schemas/RasterOutput",
+                "solar": "#/components/schemas/SolarOutput",
                 "table": "#/components/schemas/TableOutput",
                 "timeline": "#/components/schemas/TimelineOutput"
               },
@@ -11665,6 +11666,9 @@
               },
               {
                 "$ref": "#/components/schemas/TimelineOutput"
+              },
+              {
+                "$ref": "#/components/schemas/SolarOutput"
               },
               {
                 "$ref": "#/components/schemas/RasterOutput"
@@ -11995,9 +11999,13 @@
                 "$ref": "#/components/schemas/RasterRequest"
               },
               {
+                "$ref": "#/components/schemas/SolarRequest"
+              },
+              {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Analysis"
           },
           "budget": {
             "$ref": "#/components/schemas/ResearchBudget"
@@ -12008,7 +12016,8 @@
               "overview",
               "investigation",
               "raster",
-              "archive"
+              "archive",
+              "solar"
             ],
             "title": "Kind",
             "type": "string"
@@ -12041,9 +12050,13 @@
                 "$ref": "#/components/schemas/RasterRequest"
               },
               {
+                "$ref": "#/components/schemas/SolarRequest"
+              },
+              {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Analysis"
           },
           "attempt": {
             "title": "Attempt",
@@ -12095,7 +12108,8 @@
               "overview",
               "investigation",
               "raster",
-              "archive"
+              "archive",
+              "solar"
             ],
             "title": "Kind",
             "type": "string"
@@ -12515,6 +12529,18 @@
             "format": "uuid",
             "title": "Requestkey",
             "type": "string"
+          },
+          "solarAssessmentId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solarassessmentid"
           }
         },
         "required": [
@@ -12601,6 +12627,18 @@
           "revision": {
             "title": "Revision",
             "type": "integer"
+          },
+          "solarAssessmentId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solarassessmentid"
           },
           "stale": {
             "title": "Stale",
@@ -12770,6 +12808,18 @@
             "format": "uuid",
             "title": "Requestkey",
             "type": "string"
+          },
+          "solarAssessmentId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solarassessmentid"
           }
         },
         "required": [
@@ -13587,6 +13637,90 @@
         "title": "SiteUpdate",
         "type": "object"
       },
+      "SolarAssessmentRead": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "byteSize": {
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/SolarMetadata"
+          },
+          "request": {
+            "$ref": "#/components/schemas/SolarRequest"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "landId",
+          "runId",
+          "boundaryRevision",
+          "request",
+          "metadata",
+          "sha256",
+          "byteSize",
+          "createdAt",
+          "stale"
+        ],
+        "title": "SolarAssessmentRead",
+        "type": "object"
+      },
+      "SolarHorizonPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "azimuthDegrees": {
+            "exclusiveMaximum": 360.0,
+            "minimum": 0.0,
+            "title": "Azimuthdegrees",
+            "type": "number"
+          },
+          "elevationDegrees": {
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "title": "Elevationdegrees",
+            "type": "number"
+          }
+        },
+        "required": [
+          "azimuthDegrees",
+          "elevationDegrees"
+        ],
+        "title": "SolarHorizonPoint",
+        "type": "object"
+      },
       "SolarInputs": {
         "additionalProperties": false,
         "properties": {
@@ -13597,8 +13731,8 @@
             "type": "number"
           },
           "annualPlaneIrradiationKwhM2": {
-            "exclusiveMinimum": 0.0,
             "maximum": 5000.0,
+            "minimum": 0.0,
             "title": "Annualplaneirradiationkwhm2",
             "type": "number"
           },
@@ -13787,6 +13921,506 @@
           "assumptions"
         ],
         "title": "SolarInputs",
+        "type": "object"
+      },
+      "SolarMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "annualGenerationKwh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annualgenerationkwh"
+          },
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "capacityKwDc": {
+            "title": "Capacitykwdc",
+            "type": "number"
+          },
+          "completeYear": {
+            "title": "Completeyear",
+            "type": "boolean"
+          },
+          "documentationUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Documentationurl",
+            "type": "string"
+          },
+          "expectedHours": {
+            "title": "Expectedhours",
+            "type": "integer"
+          },
+          "horizonSkyFraction": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Horizonskyfraction",
+            "type": "number"
+          },
+          "invalidParameterHours": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Invalidparameterhours",
+            "type": "object"
+          },
+          "inverterKwAc": {
+            "title": "Inverterkwac",
+            "type": "number"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "mappedZoneAreaM2": {
+            "title": "Mappedzoneaream2",
+            "type": "number"
+          },
+          "modelVersion": {
+            "title": "Modelversion",
+            "type": "string"
+          },
+          "modeledGenerationKwh": {
+            "title": "Modeledgenerationkwh",
+            "type": "number"
+          },
+          "monthly": {
+            "items": {
+              "$ref": "#/components/schemas/SolarMonth"
+            },
+            "maxItems": 12,
+            "minItems": 12,
+            "title": "Monthly",
+            "type": "array"
+          },
+          "peakAcKw": {
+            "title": "Peakackw",
+            "type": "number"
+          },
+          "planeIrradiationKwhM2": {
+            "title": "Planeirradiationkwhm2",
+            "type": "number"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "sourceBytes": {
+            "title": "Sourcebytes",
+            "type": "integer"
+          },
+          "sourceElevationM": {
+            "title": "Sourceelevationm",
+            "type": "number"
+          },
+          "sourceEtag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceetag"
+          },
+          "sourceHeader": {
+            "additionalProperties": true,
+            "title": "Sourceheader",
+            "type": "object"
+          },
+          "sourceLastModified": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcelastmodified"
+          },
+          "sourceSha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sourcesha256",
+            "type": "string"
+          },
+          "sourceUnits": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sourceunits",
+            "type": "object"
+          },
+          "sourceUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Sourceurl",
+            "type": "string"
+          },
+          "unshadedGenerationKwh": {
+            "title": "Unshadedgenerationkwh",
+            "type": "number"
+          },
+          "unshadedPlaneIrradiationKwhM2": {
+            "title": "Unshadedplaneirradiationkwhm2",
+            "type": "number"
+          },
+          "validHours": {
+            "title": "Validhours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "algorithm",
+          "modelVersion",
+          "sourceUrl",
+          "sourceSha256",
+          "sourceBytes",
+          "sourceHeader",
+          "sourceUnits",
+          "sourceEtag",
+          "sourceLastModified",
+          "retrievedAt",
+          "attribution",
+          "license",
+          "documentationUrl",
+          "longitude",
+          "latitude",
+          "sourceElevationM",
+          "mappedZoneAreaM2",
+          "capacityKwDc",
+          "inverterKwAc",
+          "expectedHours",
+          "validHours",
+          "completeYear",
+          "invalidParameterHours",
+          "modeledGenerationKwh",
+          "annualGenerationKwh",
+          "unshadedGenerationKwh",
+          "planeIrradiationKwhM2",
+          "unshadedPlaneIrradiationKwhM2",
+          "horizonSkyFraction",
+          "peakAcKw",
+          "monthly",
+          "limitations"
+        ],
+        "title": "SolarMetadata",
+        "type": "object"
+      },
+      "SolarMonth": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedHours": {
+            "title": "Expectedhours",
+            "type": "integer"
+          },
+          "generationKwh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generationkwh"
+          },
+          "month": {
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Month",
+            "type": "integer"
+          },
+          "planeIrradiationKwhM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planeirradiationkwhm2"
+          },
+          "unshadedGenerationKwh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unshadedgenerationkwh"
+          },
+          "unshadedPlaneIrradiationKwhM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unshadedplaneirradiationkwhm2"
+          },
+          "validHours": {
+            "title": "Validhours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "month",
+          "expectedHours",
+          "validHours",
+          "generationKwh",
+          "unshadedGenerationKwh",
+          "planeIrradiationKwhM2",
+          "unshadedPlaneIrradiationKwhM2"
+        ],
+        "title": "SolarMonth",
+        "type": "object"
+      },
+      "SolarOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "assessmentId": {
+            "format": "uuid",
+            "title": "Assessmentid",
+            "type": "string"
+          },
+          "kind": {
+            "const": "solar",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "assessmentId"
+        ],
+        "title": "SolarOutput",
+        "type": "object"
+      },
+      "SolarPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "capacityKwDc": {
+            "title": "Capacitykwdc",
+            "type": "number"
+          },
+          "inverterKwAc": {
+            "title": "Inverterkwac",
+            "type": "number"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "mappedZoneAreaM2": {
+            "title": "Mappedzoneaream2",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mappedZoneAreaM2",
+          "capacityKwDc",
+          "inverterKwAc",
+          "longitude",
+          "latitude"
+        ],
+        "title": "SolarPreview",
+        "type": "object"
+      },
+      "SolarRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "additionalShadeLoss": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Additionalshadeloss",
+            "type": "number"
+          },
+          "albedo": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Albedo",
+            "type": "number"
+          },
+          "arrayZone": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Arrayzone"
+          },
+          "assumptions": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Assumptions",
+            "type": "string"
+          },
+          "azimuthDegrees": {
+            "exclusiveMaximum": 360.0,
+            "minimum": 0.0,
+            "title": "Azimuthdegrees",
+            "type": "number"
+          },
+          "dataset": {
+            "const": "nasa-power-hourly-solar",
+            "default": "nasa-power-hourly-solar",
+            "title": "Dataset",
+            "type": "string"
+          },
+          "dcAcRatio": {
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "title": "Dcacratio",
+            "type": "number"
+          },
+          "horizon": {
+            "items": {
+              "$ref": "#/components/schemas/SolarHorizonPoint"
+            },
+            "maxItems": 360,
+            "title": "Horizon",
+            "type": "array"
+          },
+          "horizonBasis": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Horizonbasis",
+            "type": "string"
+          },
+          "iamB": {
+            "maximum": 0.2,
+            "minimum": 0.0,
+            "title": "Iamb",
+            "type": "number"
+          },
+          "inverterEfficiency": {
+            "maximum": 1.0,
+            "minimum": 0.8,
+            "title": "Inverterefficiency",
+            "type": "number"
+          },
+          "moduleAreaM2": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000000.0,
+            "title": "Moduleaream2",
+            "type": "number"
+          },
+          "moduleEfficiency": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 0.5,
+            "title": "Moduleefficiency",
+            "type": "number"
+          },
+          "mounting": {
+            "enum": [
+              "open_rack_glass_glass",
+              "close_mount_glass_glass",
+              "insulated_back_glass_polymer"
+            ],
+            "title": "Mounting",
+            "type": "string"
+          },
+          "systemLoss": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Systemloss",
+            "type": "number"
+          },
+          "temperatureCoefficient": {
+            "maximum": 0.0,
+            "minimum": -0.01,
+            "title": "Temperaturecoefficient",
+            "type": "number"
+          },
+          "tiltDegrees": {
+            "maximum": 85.0,
+            "minimum": 0.0,
+            "title": "Tiltdegrees",
+            "type": "number"
+          },
+          "year": {
+            "minimum": 2001.0,
+            "title": "Year",
+            "type": "integer"
+          },
+          "zoneBasis": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Zonebasis",
+            "type": "string"
+          }
+        },
+        "required": [
+          "arrayZone",
+          "zoneBasis",
+          "year",
+          "moduleAreaM2",
+          "moduleEfficiency",
+          "tiltDegrees",
+          "azimuthDegrees",
+          "mounting",
+          "temperatureCoefficient",
+          "dcAcRatio",
+          "inverterEfficiency",
+          "systemLoss",
+          "additionalShadeLoss",
+          "albedo",
+          "iamB",
+          "horizonBasis",
+          "assumptions"
+        ],
+        "title": "SolarRequest",
         "type": "object"
       },
       "SourceRead": {
@@ -19023,6 +19657,200 @@
         ]
       }
     },
+    "/api/v1/land/solar-assessments/{assessment_id}": {
+      "get": {
+        "operationId": "get_api_v1_land_solar_assessments__assessment_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "assessment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Assessment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolarAssessmentRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get",
+        "tags": [
+          "land solar"
+        ]
+      }
+    },
+    "/api/v1/land/solar-assessments/{assessment_id}/download": {
+      "get": {
+        "operationId": "download_api_v1_land_solar_assessments__assessment_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "assessment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Assessment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/zip": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Download",
+        "tags": [
+          "land solar"
+        ]
+      }
+    },
     "/api/v1/land/{land_id}": {
       "delete": {
         "operationId": "delete_area_api_v1_land__land_id__delete",
@@ -23890,6 +24718,233 @@
         "summary": "History",
         "tags": [
           "land scenarios"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/solar-assessments": {
+      "get": {
+        "operationId": "listing_api_v1_land__land_id__solar_assessments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SolarAssessmentRead"
+                  },
+                  "title": "Response Listing Api V1 Land  Land Id  Solar Assessments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Listing",
+        "tags": [
+          "land solar"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/solar-assessments/preview": {
+      "post": {
+        "operationId": "preview_api_v1_land__land_id__solar_assessments_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolarRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolarPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Preview",
+        "tags": [
+          "land solar"
         ]
       }
     },

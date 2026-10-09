@@ -1015,6 +1015,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/solar-assessments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_api_v1_land__land_id__solar_assessments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/solar-assessments/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview */
+        post: operations["preview_api_v1_land__land_id__solar_assessments_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/surveys": {
         parameters: {
             query?: never;
@@ -1214,6 +1248,40 @@ export interface paths {
         put?: never;
         /** Selection Interpret */
         post: operations["selection_interpret_api_v1_land_selection_interpret_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/solar-assessments/{assessment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_v1_land_solar_assessments__assessment_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/solar-assessments/{assessment_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download */
+        get: operations["download_api_v1_land_solar_assessments__assessment_id__download_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5962,7 +6030,7 @@ export interface components {
             /** Method */
             method: string;
             /** Output */
-            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["RasterOutput"] | components["schemas"]["GalleryOutput"];
+            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["SolarOutput"] | components["schemas"]["RasterOutput"] | components["schemas"]["GalleryOutput"];
             /**
              * Runid
              * Format: uuid
@@ -6079,14 +6147,15 @@ export interface components {
         };
         /** RunCreate */
         RunCreate: {
-            analysis?: components["schemas"]["RasterRequest"] | null;
+            /** Analysis */
+            analysis?: components["schemas"]["RasterRequest"] | components["schemas"]["SolarRequest"] | null;
             budget?: components["schemas"]["ResearchBudget"];
             /**
              * Kind
              * @default investigation
              * @enum {string}
              */
-            kind?: "overview" | "investigation" | "raster" | "archive";
+            kind?: "overview" | "investigation" | "raster" | "archive" | "solar";
             /** Question */
             question: string;
             /**
@@ -6097,7 +6166,8 @@ export interface components {
         };
         /** RunRead */
         RunRead: {
-            analysis?: components["schemas"]["RasterRequest"] | null;
+            /** Analysis */
+            analysis?: components["schemas"]["RasterRequest"] | components["schemas"]["SolarRequest"] | null;
             /** Attempt */
             attempt: number;
             budget: components["schemas"]["ResearchBudget"];
@@ -6124,7 +6194,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "overview" | "investigation" | "raster" | "archive";
+            kind: "overview" | "investigation" | "raster" | "archive" | "solar";
             /** Question */
             question: string;
             /** Startedat */
@@ -6253,6 +6323,8 @@ export interface components {
              * Format: uuid
              */
             requestKey?: string;
+            /** Solarassessmentid */
+            solarAssessmentId?: string | null;
         };
         /** ScenarioRead */
         ScenarioRead: {
@@ -6289,6 +6361,8 @@ export interface components {
             result: components["schemas"]["ScenarioResult"];
             /** Revision */
             revision: number;
+            /** Solarassessmentid */
+            solarAssessmentId?: string | null;
             /** Stale */
             stale: boolean;
             /**
@@ -6335,6 +6409,8 @@ export interface components {
              * Format: uuid
              */
             requestKey?: string;
+            /** Solarassessmentid */
+            solarAssessmentId?: string | null;
         };
         /** SelectionInstruction */
         SelectionInstruction: {
@@ -6591,6 +6667,46 @@ export interface components {
             /** Thumbnailurl */
             thumbnailUrl?: string | null;
         };
+        /** SolarAssessmentRead */
+        SolarAssessmentRead: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Bytesize */
+            byteSize: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            metadata: components["schemas"]["SolarMetadata"];
+            request: components["schemas"]["SolarRequest"];
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+            /** Sha256 */
+            sha256: string;
+            /** Stale */
+            stale: boolean;
+        };
+        /** SolarHorizonPoint */
+        SolarHorizonPoint: {
+            /** Azimuthdegrees */
+            azimuthDegrees: number;
+            /** Elevationdegrees */
+            elevationDegrees: number;
+        };
         /** SolarInputs */
         SolarInputs: {
             /** Annualmaintenancecost */
@@ -6653,6 +6769,179 @@ export interface components {
             usableRoofAreaM2: number;
             /** Years */
             years: number;
+        };
+        /** SolarMetadata */
+        SolarMetadata: {
+            /** Algorithm */
+            algorithm: string;
+            /** Annualgenerationkwh */
+            annualGenerationKwh: number | null;
+            /** Attribution */
+            attribution: string;
+            /** Capacitykwdc */
+            capacityKwDc: number;
+            /** Completeyear */
+            completeYear: boolean;
+            /**
+             * Documentationurl
+             * Format: uri
+             */
+            documentationUrl: string;
+            /** Expectedhours */
+            expectedHours: number;
+            /** Horizonskyfraction */
+            horizonSkyFraction: number;
+            /** Invalidparameterhours */
+            invalidParameterHours: {
+                [key: string]: number;
+            };
+            /** Inverterkwac */
+            inverterKwAc: number;
+            /** Latitude */
+            latitude: number;
+            /** License */
+            license: string;
+            /** Limitations */
+            limitations: string[];
+            /** Longitude */
+            longitude: number;
+            /** Mappedzoneaream2 */
+            mappedZoneAreaM2: number;
+            /** Modeledgenerationkwh */
+            modeledGenerationKwh: number;
+            /** Modelversion */
+            modelVersion: string;
+            /** Monthly */
+            monthly: components["schemas"]["SolarMonth"][];
+            /** Peakackw */
+            peakAcKw: number;
+            /** Planeirradiationkwhm2 */
+            planeIrradiationKwhM2: number;
+            /**
+             * Retrievedat
+             * Format: date-time
+             */
+            retrievedAt: string;
+            /** Sourcebytes */
+            sourceBytes: number;
+            /** Sourceelevationm */
+            sourceElevationM: number;
+            /** Sourceetag */
+            sourceEtag: string | null;
+            /** Sourceheader */
+            sourceHeader: {
+                [key: string]: unknown;
+            };
+            /** Sourcelastmodified */
+            sourceLastModified: string | null;
+            /** Sourcesha256 */
+            sourceSha256: string;
+            /** Sourceunits */
+            sourceUnits: {
+                [key: string]: string;
+            };
+            /**
+             * Sourceurl
+             * Format: uri
+             */
+            sourceUrl: string;
+            /** Unshadedgenerationkwh */
+            unshadedGenerationKwh: number;
+            /** Unshadedplaneirradiationkwhm2 */
+            unshadedPlaneIrradiationKwhM2: number;
+            /** Validhours */
+            validHours: number;
+        };
+        /** SolarMonth */
+        SolarMonth: {
+            /** Expectedhours */
+            expectedHours: number;
+            /** Generationkwh */
+            generationKwh: number | null;
+            /** Month */
+            month: number;
+            /** Planeirradiationkwhm2 */
+            planeIrradiationKwhM2: number | null;
+            /** Unshadedgenerationkwh */
+            unshadedGenerationKwh: number | null;
+            /** Unshadedplaneirradiationkwhm2 */
+            unshadedPlaneIrradiationKwhM2: number | null;
+            /** Validhours */
+            validHours: number;
+        };
+        /** SolarOutput */
+        SolarOutput: {
+            /**
+             * Assessmentid
+             * Format: uuid
+             */
+            assessmentId: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "solar";
+        };
+        /** SolarPreview */
+        SolarPreview: {
+            /** Capacitykwdc */
+            capacityKwDc: number;
+            /** Inverterkwac */
+            inverterKwAc: number;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Mappedzoneaream2 */
+            mappedZoneAreaM2: number;
+        };
+        /** SolarRequest */
+        SolarRequest: {
+            /** Additionalshadeloss */
+            additionalShadeLoss: number;
+            /** Albedo */
+            albedo: number;
+            /** Arrayzone */
+            arrayZone: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Assumptions */
+            assumptions: string;
+            /** Azimuthdegrees */
+            azimuthDegrees: number;
+            /**
+             * Dataset
+             * @default nasa-power-hourly-solar
+             * @constant
+             */
+            dataset?: "nasa-power-hourly-solar";
+            /** Dcacratio */
+            dcAcRatio: number;
+            /** Horizon */
+            horizon?: components["schemas"]["SolarHorizonPoint"][];
+            /** Horizonbasis */
+            horizonBasis: string;
+            /** Iamb */
+            iamB: number;
+            /** Inverterefficiency */
+            inverterEfficiency: number;
+            /** Moduleaream2 */
+            moduleAreaM2: number;
+            /** Moduleefficiency */
+            moduleEfficiency: number;
+            /**
+             * Mounting
+             * @enum {string}
+             */
+            mounting: "open_rack_glass_glass" | "close_mount_glass_glass" | "insulated_back_glass_polymer";
+            /** Systemloss */
+            systemLoss: number;
+            /** Temperaturecoefficient */
+            temperatureCoefficient: number;
+            /** Tiltdegrees */
+            tiltDegrees: number;
+            /** Year */
+            year: number;
+            /** Zonebasis */
+            zoneBasis: string;
         };
         /** SourceRead */
         SourceRead: {
@@ -7411,7 +7700,14 @@ export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
 export type SchemaSiteSummary = components['schemas']['SiteSummary'];
 export type SchemaSiteUpdate = components['schemas']['SiteUpdate'];
+export type SchemaSolarAssessmentRead = components['schemas']['SolarAssessmentRead'];
+export type SchemaSolarHorizonPoint = components['schemas']['SolarHorizonPoint'];
 export type SchemaSolarInputs = components['schemas']['SolarInputs'];
+export type SchemaSolarMetadata = components['schemas']['SolarMetadata'];
+export type SchemaSolarMonth = components['schemas']['SolarMonth'];
+export type SchemaSolarOutput = components['schemas']['SolarOutput'];
+export type SchemaSolarPreview = components['schemas']['SolarPreview'];
+export type SchemaSolarRequest = components['schemas']['SolarRequest'];
 export type SchemaSourceRead = components['schemas']['SourceRead'];
 export type SchemaSpeciesObservation = components['schemas']['SpeciesObservation'];
 export type SchemaStacSource = components['schemas']['StacSource'];
@@ -12192,6 +12488,133 @@ export interface operations {
             };
         };
     };
+    listing_api_v1_land__land_id__solar_assessments_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolarAssessmentRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_api_v1_land__land_id__solar_assessments_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SolarRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolarPreview"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listing_api_v1_land__land_id__surveys_get: {
         parameters: {
             query?: {
@@ -12963,6 +13386,127 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SelectionInterpretation"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_api_v1_land_solar_assessments__assessment_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                assessment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolarAssessmentRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    download_api_v1_land_solar_assessments__assessment_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                assessment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/zip": string;
                 };
             };
             /** @description Missing or wrong write token */

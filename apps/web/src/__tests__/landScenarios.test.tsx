@@ -108,7 +108,12 @@ it("compares saved values without recomputing or hiding a stale boundary", async
       limitations: [],
     },
   };
-  vi.spyOn(api, "GET").mockResolvedValue({ data: [scenario, restored], response: new Response() });
+  vi.spyOn(api, "GET").mockImplementation((path) =>
+    Promise.resolve({
+      data: String(path).endsWith("/scenarios") ? [scenario, restored] : [],
+      response: new Response(),
+    }),
+  );
   mount();
   await screen.findByRole("checkbox", { name: /Meadow option.*earlier boundary/ });
   fireEvent.click(screen.getByRole("checkbox", { name: /Solar option/ }));
@@ -120,14 +125,14 @@ it("compares saved values without recomputing or hiding a stale boundary", async
 });
 
 it("pins field survey references without converting overlapping species into cover classes", async () => {
-  vi.spyOn(api, "GET")
-    .mockResolvedValueOnce({ data: [], response: new Response() })
-    .mockResolvedValue({
-      data: [
-        { id: "survey", name: "Measured plots", boundaryRevision: 1, observedOn: "2025-07-01" },
-      ],
+  vi.spyOn(api, "GET").mockImplementation((path) =>
+    Promise.resolve({
+      data: String(path).endsWith("/surveys")
+        ? [{ id: "survey", name: "Measured plots", boundaryRevision: 1, observedOn: "2025-07-01" }]
+        : [],
       response: new Response(),
-    });
+    }),
+  );
   const post = vi.spyOn(api, "POST").mockResolvedValue({ data: result, response: new Response() });
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Restoration and cover" }));

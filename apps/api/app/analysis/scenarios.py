@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import expm1, log1p
+from math import cos, expm1, isfinite, log1p, radians
 from typing import Any
 
 from app.schemas.scenarios import RestorationInputs, ScenarioInputs, ScenarioResult, SolarInputs
@@ -8,7 +8,10 @@ from app.services.errors import InvalidInputError
 
 
 def _solar_case(
-    p: SolarInputs, yield_factor: float = 1, cost_factor: float = 1
+    p: SolarInputs,
+    yield_factor: float = 1,
+    cost_factor: float = 1,
+    annual_generation: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     capacity = p.usable_roof_area_m2 * p.module_efficiency  # STC is 1 kW/m².
     generation = (
@@ -18,6 +21,8 @@ def _solar_case(
         * (1 - p.system_loss)
         * yield_factor
     )
+    if annual_generation is not None:
+        generation = annual_generation * yield_factor
     installed = p.installed_cost * cost_factor
     net_cost = max(0, installed - p.upfront_incentive)
     principal = net_cost * p.financed_fraction
@@ -90,12 +95,19 @@ def _solar_case(
     }
 
 
-def solar(p: SolarInputs, land_area_m2: float) -> ScenarioResult:
-    if p.usable_roof_area_m2 > land_area_m2 * 1.001:
+def solar(
+    p: SolarInputs, land_area_m2: float, annual_generation: float | None = None
+) -> ScenarioResult:
+    if annual_generation is not None and (not isfinite(annual_generation) or annual_generation < 0):
+        raise InvalidInputError("Annual generation must be a finite nonnegative value.")
+    projected_area = p.usable_roof_area_m2 * (
+        cos(radians(p.tilt_degrees)) if annual_generation is not None else 1
+    )
+    if projected_area > land_area_m2 * 1.001:
         raise InvalidInputError(
             "Usable roof area exceeds the pinned land area. Select the correct land or revise the area."
         )
-    rows, summary = _solar_case(p)
+    rows, summary = _solar_case(p, annual_generation=annual_generation)
     sensitivity = []
     for yield_factor, cost_factor, label in [
         (0.8, 1, "Generation -20%"),
@@ -103,19 +115,33 @@ def solar(p: SolarInputs, land_area_m2: float) -> ScenarioResult:
         (1, 0.8, "Capital cost -20%"),
         (1, 1.2, "Capital cost +20%"),
     ]:
-        _, case = _solar_case(p, yield_factor, cost_factor)
+        _, case = _solar_case(p, yield_factor, cost_factor, annual_generation)
         sensitivity.append({"case": label, "netPresentValue": case["netPresentValue"]})
     return ScenarioResult(
-        algorithm="solar-cash-flow/1",
+        algorithm="solar-hourly-cash-flow/1"
+        if annual_generation is not None
+        else "solar-cash-flow/1",
         summary=summary,
         rows=rows,
         sensitivity=sensitivity,
-        limitations=[
-            "Scenario estimate from supplied assumptions, not a measured or engineered roof design.",
-            "Plane-of-array irradiation must already account for tilt and azimuth. Those angles are "
-            "recorded, not used to transform a horizontal resource.",
-            "Shade, usable roof area and self-consumption are supplied assumptions; no roof obstruction, "
-            "structural or hourly load model has been run.",
+        limitations=(
+            [
+                "Generation uses a pinned complete historical hourly assessment including orientation, "
+                "temperature, shading and inverter effects. Those losses are not applied a second time.",
+                "One historical weather year is repeated with entered degradation; it is not a forecast "
+                "or an interannual uncertainty model. Read the assessment's physical limitations.",
+                "Self-consumption and tariffs are annual entered assumptions, not an hourly load or tariff simulation.",
+            ]
+            if annual_generation is not None
+            else [
+                "Scenario estimate from supplied assumptions, not a measured or engineered roof design.",
+                "Plane-of-array irradiation must already account for tilt and azimuth. Those angles are "
+                "recorded, not used to transform a horizontal resource.",
+                "Shade, usable roof area and self-consumption are supplied assumptions; no roof obstruction, "
+                "structural or hourly load model has been run.",
+            ]
+        )
+        + [
             "Annual end-of-year cash flows; tax effects, salvage value and additional incentives are "
             "excluded. Tariffs, financing and maintenance follow the entered assumptions.",
         ],
@@ -175,9 +201,11 @@ def restoration(p: RestorationInputs, land_area_m2: float) -> ScenarioResult:
     )
 
 
-def analyze(inputs: ScenarioInputs, land_area_m2: float) -> ScenarioResult:
+def analyze(
+    inputs: ScenarioInputs, land_area_m2: float, annual_generation: float | None = None
+) -> ScenarioResult:
     return (
-        solar(inputs, land_area_m2)
+        solar(inputs, land_area_m2, annual_generation)
         if isinstance(inputs, SolarInputs)
         else restoration(inputs, land_area_m2)
     )

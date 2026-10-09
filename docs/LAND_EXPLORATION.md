@@ -11,7 +11,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
-| Scenarios and ecology | Versioned solar economics and restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references | Roof/shading analysis, taxonomy/reference-ecosystem integrations and predictive restoration modeling |
+| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references | 3D roof/obstruction reconstruction and fitted panel layouts, taxonomy/reference-ecosystem integrations and predictive restoration modeling |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
@@ -1086,3 +1086,96 @@ estimate unsampled whole-land composition, provide ecological succession predict
 or establish an appropriate restoration reference ecosystem. Live model-provider validation
 still requires credentials absent from this environment. Nothing was deployed; the full
 land-exploration feature remains in progress.
+
+
+## Implemented increment: hourly solar generation and linked economics
+
+Migration `0023` adds immutable private solar assessments with a pinned land boundary,
+typed equipment/geometry assumptions, weather/model metadata, and checksummed ZIP archives.
+The research queue accepts `kind: solar` with a `SolarRequest`; the same durable lease,
+cancellation and recovery rules apply. Saved bytes commit before findings/artifacts so a
+recovered worker reuses the original calculation. Workspace storage is serialized and
+limited by `LAND_SOLAR_WORKSPACE_QUOTA_BYTES` (256 MiB default). Each output is at most
+16 MiB. The fixed subprocess has 2 GiB memory, 45 CPU seconds and 110 seconds wall time;
+it executes no generated code and retrieves only the fixed NASA POWER hourly endpoint.
+
+The source is a completed calendar year from 2001 onward, explicitly in UTC, with global,
+direct and diffuse solar irradiation, temperature and 10-meter wind. Source units and
+location/time metadata are checked. Missing, nonfinite, fill and out-of-range inputs remain
+missing; a full annual yield is available only when every expected hour is valid. Leap
+years retain 8,784 hours. The source's start-of-hour energy values are converted to hourly
+mean irradiance and solar geometry is evaluated at the interval midpoint.
+
+The model uses pvlib solar position, Hay-Davies transposition, SAPM cell temperature,
+ASHRAE incidence losses, PVWatts DC and inverter output including clipping. Equipment
+and mounting parameters are explicit assumptions. An entered full-circle horizon is
+periodically interpolated and masks direct/circumsolar light; isotropic diffuse visibility
+and incidence loss use one-degree hemisphere quadrature. Additional uniform shading and
+other DC system losses are separate inputs. The open-horizon comparison uses identical
+weather/equipment while removing the entered horizon and additional shade.
+
+The mapped array zone must be a valid local polygon entirely within the pinned land,
+including holes/exclusions. Projected module face area cannot exceed the zone. This is a
+necessary area check, not a fitted panel layout or roof survey. The tool does not infer
+roof pitch, structural capacity, module strings, local tree/building shadows, snow,
+bifacial behavior or an hourly electricity-load profile. One historical year is not a
+forecast, typical meteorological year, or interannual uncertainty analysis.
+
+`/api/v1/land/{land_id}/solar-assessments` lists private results; `/preview` checks the
+array against the current land before queueing. `/api/v1/land/solar-assessments/{id}` and
+`/download` return metadata and the preserved `request.json`, `result.json`, `source.json`
+and `hourly.csv`. Metadata includes source/ZIP hashes, versions, exact retrieval URL,
+coverage, monthly energy and assumptions/limitations. No public result URLs are created.
+
+Scenarios now accept `solarAssessmentId`. The server verifies workspace, land, boundary,
+complete weather coverage and matching physical assumptions. Cash flow uses the saved
+annual AC output directly, without double-applying shading/system losses or inventing an
+'equivalent' irradiation. Financial assumptions remain editable; physical changes require
+a new assessment or an explicit switch to manual resource assumptions. Scenario results
+pin the assessment ID/hash and retain the original simple-model behavior for old scenarios.
+
+Research tools `analyze_solar` and `read_solar_assessment` let the agent calculate a new
+assessment or inspect an existing one with cited source evidence. Recent saved assessment
+identities are available in context. Reading preserves private assumptions and source
+hashes without rerunning weather retrieval. Full zone/horizon arrays remain in the private
+archive instead of expanding every model context. Live model-provider acceptance remains
+unverified; controlled model tests exercise both tools and citations.
+
+The Scenarios workspace supports map corner picking, saved polygon features, GeoJSON
+outlines, scoped unfinished-draft/corner recovery, equipment/horizon editing, server review,
+durable job status/cancellation, monthly comparisons, array overlays, source downloads,
+saved-result reopening, and linked financial scenarios. Failed queue responses retain an
+idempotency key for retry/recovery. Discover renders the same assessment and links into
+economics. A four-point horizon is available in the form; the typed analysis interface
+supports up to 360 measured horizon points.
+
+Scientific references:
+- [NASA POWER hourly API](https://power.larc.nasa.gov/docs/services/api/temporal/hourly/)
+- [NASA POWER timestamp FAQ](https://power.larc.nasa.gov/docs/faqs/other/)
+- [pvlib Hay-Davies](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.irradiance.haydavies.html)
+- [pvlib SAPM cell temperature](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.temperature.sapm_cell.html)
+- [pvlib PVWatts inverter](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.inverter.pvwatts.html)
+- [pvlib ASHRAE incidence model](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.iam.ashrae.html)
+
+Validation: 30 focused backend/model/worker/scenario/raster/migration checks passed,
+including independent diffuse energy balance, leap-year units, orientation, incidence,
+temperature, horizon wrap/quadrature, clipping, missing weather, ZIP source preservation,
+private access, cancel fencing, quota, recovery without recomputation, old raster request
+compatibility, financial assumption matching, partial-year refusal and controlled agent
+read/analyze tools. Full API typing (273 files), lint and formatting passed. Six focused
+frontend solar/scenario tests, full web typing, affected lint and the production build passed.
+All seven existing land browser journeys passed after extending their isolated API fixture
+to return an empty solar-assessment catalog.
+
+The live browser/API/worker check used a fictional 100 m² module array in a manually
+picked 465.93 m² zone within the public National Mall software fixture. Actual map picks,
+unfinished-draft reload, reviewed queueing, weather retrieval, saved output, ZIP download,
+exact-yield financial saving and reopening worked. All 8,784 source hours of 2024 were
+valid; the fictional assumptions produced 25,919.095 kWh. This is software validation,
+not a real installation or roof suitability assessment. The saved assessment is
+`8f2878d0-c4d8-55a6-bbe5-985b54d904f5`; the downloaded archive independently verifies as
+`fee63bce97234411f2bd6c3b00d03763596da4306403952678643af09b53be17`, and its embedded
+weather snapshot verifies as `63c9b3c952d666cf84842de555aba8a052ceece95bdc118f684b2a1b27315a99`.
+Desktop and 390-pixel phone views were inspected; reopening and map display had no page
+exceptions or internal panel overflow. The preview still lacks high-resolution basemap
+imagery, so roof alignment/accuracy has not been demonstrated. Nothing was deployed.

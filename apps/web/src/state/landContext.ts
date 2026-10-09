@@ -31,6 +31,8 @@ interface LandContextState {
   setResearchQuestion: (question: string) => void;
   section: LandWorkspaceSection;
   setSection: (section: LandWorkspaceSection) => void;
+  selectedSolarId: string | null;
+  selectSolar: (id: string | null) => void;
   selectedSurveyId: string | null;
   selectSurvey: (id: string | null) => void;
   selectedInventoryId: string | null;
@@ -57,6 +59,8 @@ export const useLandContext = create<LandContextState>((set, get) => ({
   setResearchQuestion: (researchQuestion) => set({ researchQuestion }),
   section: "discover",
   setSection: (section) => set({ section }),
+  selectedSolarId: null,
+  selectSolar: (selectedSolarId) => set({ selectedSolarId }),
   selectedSurveyId: null,
   selectSurvey: (selectedSurveyId) => set({ selectedSurveyId }),
   selectedInventoryId: null,
@@ -135,6 +139,7 @@ export const useLandContext = create<LandContextState>((set, get) => ({
       selectedIds: [],
       selectedInventoryId: null,
       section: "discover",
+      selectedSolarId: null,
       selectedSurveyId: null,
       researchQuestion: "",
     }),
