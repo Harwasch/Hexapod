@@ -73,6 +73,8 @@ class LandViewRead(CamelModel):
 
 
 class LandViewMap(CamelModel):
+    unit: str | None = None
+    legend: str = ""
     id: uuid.UUID
     title: str
     features: list[MapFeature]

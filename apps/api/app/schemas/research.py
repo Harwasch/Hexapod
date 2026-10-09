@@ -255,6 +255,13 @@ class ResearchArtifactRead(ArtifactContent):
     run_id: uuid.UUID
 
 
+class ResearchArtifactDetail(ResearchArtifactRead):
+    land_id: uuid.UUID
+    investigation_id: uuid.UUID
+    boundary_revision: int
+    stale: bool
+
+
 class MessageRead(CamelModel):
     id: uuid.UUID
     role: Literal["user", "assistant"]

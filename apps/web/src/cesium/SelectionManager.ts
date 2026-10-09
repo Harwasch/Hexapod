@@ -263,6 +263,20 @@ export class SelectionManager {
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
       return;
+    if (isEntityPick(picked) && picked.id.id.startsWith("land-context:")) {
+      const properties = picked.id.properties?.getValue(this.viewer.clock.currentTime) as
+        Record<string, unknown> | undefined;
+      if (
+        typeof properties?.landResearchArtifactId === "string" &&
+        typeof properties.landResearchFeatureId === "string"
+      ) {
+        this.events.emit("land-research-feature-select", {
+          layerId: properties.landResearchArtifactId,
+          featureId: properties.landResearchFeatureId,
+        });
+        return;
+      }
+    }
     if (isEntityPick(picked) && picked.id.id.startsWith("land-context:inventory/")) {
       const id = picked.id.id.slice("land-context:inventory/".length).split("#")[0];
       if (id) this.events.emit("land-feature-select", { id });

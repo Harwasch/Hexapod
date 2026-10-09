@@ -9,6 +9,8 @@ export interface LandContextFeature {
 }
 export interface LandContextLayer {
   researchArtifactId?: string;
+  unit?: string | null;
+  legend?: string;
   id: string;
   title: string;
   features: LandContextFeature[];
@@ -26,6 +28,9 @@ export interface LandRasterLayer {
 export type LandWorkspaceSection =
   "discover" | "records" | "inventory" | "ecology" | "scenarios" | "actions";
 export interface LandContextState {
+  selectedMapFeature: { layerId: string; featureId: string; origin: "map" | "list" } | null;
+  selectMapFeature: (layerId: string, featureId: string, origin?: "map" | "list") => void;
+  clearMapSelection: () => void;
   inventoryVisible: boolean;
   setInventoryVisible: (value: boolean) => void;
   pointPicker: string | null;
@@ -58,6 +63,30 @@ export interface LandContextState {
 }
 
 export const useLandContext = create<LandContextState>((set, get) => ({
+  selectedMapFeature: null,
+  selectMapFeature: (layerId, featureId, origin = "list") => {
+    const state = get(),
+      layer = state.layers[layerId];
+    if (!layer?.researchArtifactId || !layer.features.some((feature) => feature.id === featureId))
+      return;
+    const previous = state.selectedMapFeature && state.layers[state.selectedMapFeature.layerId];
+    set({
+      selectedMapFeature: { layerId, featureId, origin },
+      layers: {
+        ...state.layers,
+        ...(previous ? { [previous.id]: { ...previous, selectedIds: [] } } : {}),
+        [layerId]: { ...layer, selectedIds: [featureId] },
+      },
+    });
+  },
+  clearMapSelection: () => {
+    const state = get(),
+      layer = state.selectedMapFeature && state.layers[state.selectedMapFeature.layerId];
+    set({
+      selectedMapFeature: null,
+      ...(layer ? { layers: { ...state.layers, [layer.id]: { ...layer, selectedIds: [] } } } : {}),
+    });
+  },
   inventoryVisible: true,
   setInventoryVisible: (inventoryVisible) => set({ inventoryVisible }),
   pointPicker: null,
@@ -132,14 +161,32 @@ export const useLandContext = create<LandContextState>((set, get) => ({
       };
     });
   },
-  setLayer: (layer) => set((state) => ({ layers: { ...state.layers, [layer.id]: layer } })),
+  setLayer: (layer) =>
+    set((state) => {
+      const selection = state.selectedMapFeature;
+      if (selection?.layerId !== layer.id)
+        return { layers: { ...state.layers, [layer.id]: layer } };
+      const retained = Boolean(
+        layer.researchArtifactId &&
+        layer.features.some((feature) => feature.id === selection.featureId),
+      );
+      return {
+        selectedMapFeature: retained ? selection : null,
+        layers: {
+          ...state.layers,
+          [layer.id]: { ...layer, selectedIds: retained ? [selection.featureId] : [] },
+        },
+      };
+    }),
   removeLayer: (id) =>
     set((state) => ({
       layers: Object.fromEntries(Object.entries(state.layers).filter(([key]) => key !== id)),
       ...(id === "candidates" ? { candidates: [], selectedIds: [] } : {}),
+      ...(state.selectedMapFeature?.layerId === id ? { selectedMapFeature: null } : {}),
     })),
   clear: () =>
     set({
+      selectedMapFeature: null,
       inventoryVisible: true,
       pointPicker: null,
       layers: {},

@@ -645,3 +645,12 @@
 .land-raster-ramp.rdylgn {
   background: linear-gradient(to right, #a50026, #f46d43, #ffffbf, #66bd63, #006837);
 }
+
+.land-map-feature-list { list-style: none; padding: 0; display: grid; gap: 6px; }
+.land-map-feature-list li { display: flex; align-items: stretch; gap: 6px; border-radius: 6px; border: 1px solid transparent; min-width: 0; }
+.land-map-feature-list li[data-selected="true"] { border-color: #f1cb7a; background: #f1cb7a18; }
+.land-map-feature-list button { min-height: 42px; padding: 8px; border: 1px solid #617265; border-radius: 6px; color: inherit; background: transparent; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
+.land-map-feature-list button:first-child { display: grid; flex: 1; text-align: left; min-width: 0; }
+.land-map-feature-list button span { font-size: 12px; opacity: .8; }
+.land-selected-map-feature { padding: 12px; margin: 12px 0; border: 1px solid #f1cb7a; border-radius: 10px; overflow-wrap: anywhere; }
+.land-selected-map-feature h4 { margin: 6px 0; }

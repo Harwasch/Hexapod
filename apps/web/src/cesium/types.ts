@@ -43,6 +43,7 @@ export interface SceneEvents extends Record<string, unknown> {
   tilesets: string[];
   explore: boolean;
   "land-feature-select": { id: string };
+  "land-research-feature-select": { layerId: string; featureId: string };
   "mission-select": { kind: "zone" | "machine"; id: string };
   /** The operator reshaped an area on the map; the store takes the new outline. */
   "area-edit": { zoneId: string; footprint: Footprint };

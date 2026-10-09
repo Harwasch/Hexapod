@@ -1689,6 +1689,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Artifact */
+        get: operations["get_artifact_api_v1_research_artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research/evidence/{evidence_id}": {
         parameters: {
             query?: never;
@@ -5255,8 +5272,15 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Legend
+             * @default
+             */
+            legend?: string;
             /** Title */
             title: string;
+            /** Unit */
+            unit?: string | null;
         };
         /** LandViewOpen */
         LandViewOpen: {
@@ -6821,6 +6845,41 @@ export interface components {
          * @enum {string}
          */
         Representation: "gaussian-splat" | "mesh" | "point-cloud" | "terrain" | "imagery";
+        /** ResearchArtifactDetail */
+        ResearchArtifactDetail: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Evidenceids */
+            evidenceIds: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Investigationid
+             * Format: uuid
+             */
+            investigationId: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Method */
+            method: string;
+            /** Output */
+            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["SolarOutput"] | components["schemas"]["RasterOutput"] | components["schemas"]["GalleryOutput"];
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+            /** Stale */
+            stale: boolean;
+            /** Title */
+            title: string;
+        };
         /** ResearchArtifactRead */
         ResearchArtifactRead: {
             /** Evidenceids */
@@ -8622,6 +8681,7 @@ export type SchemaRecipeStageRead = components['schemas']['RecipeStageRead'];
 export type SchemaRenderConfig = components['schemas']['RenderConfig'];
 export type SchemaRenderMetadata = components['schemas']['RenderMetadata'];
 export type SchemaRepresentation = components['schemas']['Representation'];
+export type SchemaResearchArtifactDetail = components['schemas']['ResearchArtifactDetail'];
 export type SchemaResearchArtifactRead = components['schemas']['ResearchArtifactRead'];
 export type SchemaResearchBudget = components['schemas']['ResearchBudget'];
 export type SchemaResearchPage = components['schemas']['ResearchPage'];
@@ -16460,6 +16520,66 @@ export interface operations {
                 };
             };
             /** @description No recipe catalogue on this host */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_artifact_api_v1_research_artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchArtifactDetail"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
             404: {
                 headers: {
                     [name: string]: unknown;

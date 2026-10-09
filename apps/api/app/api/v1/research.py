@@ -12,7 +12,15 @@ from sqlalchemy import select
 
 from app.api.deps import DbSession, SettingsDep
 from app.api.workspace_deps import WorkspaceDep, workspace_access
-from app.models.research import Evidence, Finding, Investigation, ResearchEvent, ResearchRun
+from app.models.land import LandArea
+from app.models.research import (
+    Evidence,
+    Finding,
+    Investigation,
+    ResearchArtifact,
+    ResearchEvent,
+    ResearchRun,
+)
 from app.schemas.research import (
     EventRead,
     EvidenceRead,
@@ -24,6 +32,7 @@ from app.schemas.research import (
     LandEvidenceOption,
     OverviewRead,
     OverviewRequest,
+    ResearchArtifactDetail,
     ResearchStatus,
     RunCreate,
     RunRead,
@@ -253,3 +262,28 @@ def overview(
         db, scope.id, land_id, scope.principal.id, payload.boundary_revision
     )
     return OverviewRead(investigation=investigation, run=run)
+
+
+@router.get("/research/artifacts/{artifact_id}", response_model=ResearchArtifactDetail)
+def get_artifact(
+    artifact_id: uuid.UUID, db: DbSession, scope: WorkspaceDep
+) -> ResearchArtifactDetail:
+    row = db.execute(
+        select(ResearchArtifact, Investigation, LandArea.revision)
+        .join(ResearchRun, ResearchRun.id == ResearchArtifact.run_id)
+        .join(Investigation, Investigation.id == ResearchRun.investigation_id)
+        .join(LandArea, LandArea.id == Investigation.land_id)
+        .where(ResearchArtifact.id == artifact_id, LandArea.workspace_id == scope.id)
+    ).first()
+    if row is None:
+        raise NotFoundError("research output", artifact_id)
+    artifact, investigation, current_revision = row
+    return ResearchArtifactDetail(
+        id=artifact.id,
+        run_id=artifact.run_id,
+        land_id=investigation.land_id,
+        investigation_id=investigation.id,
+        boundary_revision=investigation.boundary_revision,
+        stale=current_revision != investigation.boundary_revision,
+        **artifact.content,
+    )

@@ -1,9 +1,8 @@
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Overflow tables need keyboard scrolling. */
 import { useLandContext } from "@/state/landContext";
-import { useScene } from "@/cesium/SceneContext";
-import { boundsOf } from "@twin/geo";
 import type { LandEvidence, ResearchArtifact } from "@twin/contracts";
 
+import { ResearchMapExplorer } from "./ResearchMapExplorer";
 import { ArchiveGallery } from "./ArchiveGallery";
 import { SolarAssessmentView } from "./SolarAssessmentView";
 import { LandRasterView } from "./LandRasterView";
@@ -127,46 +126,6 @@ export function ResearchArtifactView({
   onAsk?: () => void;
 }) {
   const output = artifact.output;
-  const scene = useScene();
-  const shown = useLandContext((state) => Boolean(state.layers[artifact.id]));
-  const toggleMap = () => {
-    if (output.kind !== "map") return;
-    if (shown) {
-      useLandContext.getState().removeLayer(artifact.id);
-      return;
-    }
-    useLandContext.getState().setLayer({
-      id: artifact.id,
-      researchArtifactId: artifact.id,
-      title: artifact.title,
-      features: output.features.map((feature, index) => ({ id: String(index), ...feature })),
-    });
-    const points = output.features.flatMap(({ geometry }) => {
-      if (geometry.type === "Point") return [geometry.coordinates];
-      if (geometry.type === "LineString") return geometry.coordinates;
-      const b = boundsOf(geometry);
-      return [
-        [b.west, b.south],
-        [b.east, b.north],
-      ];
-    });
-    if (points.length) {
-      const xs = points.map((point) => point[0] ?? 0),
-        ys = points.map((point) => point[1] ?? 0);
-      const west = Math.min(...xs),
-        east = Math.max(...xs),
-        south = Math.min(...ys),
-        north = Math.max(...ys);
-      const dx = Math.max(0.0005, (east - west) * 0.1),
-        dy = Math.max(0.0005, (north - south) * 0.1);
-      scene?.camera.flyToRectangle(
-        Math.max(-180, west - dx),
-        Math.max(-90, south - dy),
-        Math.min(180, east + dx),
-        Math.min(90, north + dy),
-      );
-    }
-  };
   return (
     <article className="land-artifact">
       <h4>{artifact.title}</h4>
@@ -227,16 +186,7 @@ export function ResearchArtifactView({
         </ol>
       )}
       {output.kind === "map" && (
-        <p>
-          {output.features.length} mapped features. {output.legend}
-        </p>
-      )}
-      {output.kind === "map" && (
-        <div className="land-actions">
-          <button type="button" aria-pressed={shown} disabled={!scene} onClick={toggleMap}>
-            {shown ? "Hide map layer" : "Show map layer"}
-          </button>
-        </div>
+        <ResearchMapExplorer artifactId={artifact.id} title={artifact.title} output={output} />
       )}
       <details>
         <summary>Method and limitations</summary>

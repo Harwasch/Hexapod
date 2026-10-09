@@ -9,7 +9,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
-| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
+| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, linked map/list feature inspection with source evidence, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
@@ -1754,3 +1754,38 @@ or unintended overflow; screenshots were inspected. Synthetic view:
 `/tmp/land-view-recovery-mobile.png`. The previous increment's restart-recovery limitation is
 resolved. Production and the original checkout remain untouched; the full feature remains in
 progress.
+
+## Implemented increment: linked research map inspection
+
+Research map outputs now expose searchable, paginated feature lists linked to globe picks.
+Selecting a row highlights its geometry without moving the camera; explicit focus controls
+frame one feature or the full output. Picking a map feature opens the inspector and reveals
+its list page. Zero values, missing values, units and legends remain distinct. Removing a layer
+clears its selection; replacing a layer preserves selection only while its feature still exists.
+
+The inspector is independent of the current research page and works for layers restored from
+saved views. It retrieves the immutable research output and its citations through the new
+workspace-scoped `GET /research/artifacts/{artifact_id}` endpoint, reports an older boundary
+revision, and permits inspection of the original source evidence. Saved-view map references
+now restore units and legends too. No migration is needed beyond 0027.
+
+Cesium updates highlight styles on existing entities instead of rebuilding geometry. Polygon
+holes and multipart areas are retained. Changes unrelated to map layers no longer trigger
+this bridge's rendering work. Camera bounds for long lines avoid argument spreading.
+
+Validation: nine focused backend tests pass, including source lookup, boundary staleness and
+cross-workspace denial. Six frontend tests cover filtered selection, map-to-list pagination,
+zero/missing values, 150,000-point bounds, selection replacement, in-place rendering and
+multipart polygon holes. API lint/format/type checks and web type checking pass. A Chromium
+check clicked an actual Cesium point, selected another from the list and inspected its source;
+desktop and 390px phone checks reported no page errors or unintended overflow. Screenshots
+were inspected. The research values and source responses in that browser check were explicitly
+synthetic fixtures over the public National Mall test area, not real findings or a live AI run.
+Artifacts: `/tmp/land-research-map-result.json`, `/tmp/land-research-map-desktop.png`,
+`/tmp/land-research-map-mobile.png`.
+
+The complete feature remains in progress. The original checkout and deployment remain untouched.
+
+Final checks for this increment: all seven land Chromium regression tests pass; targeted web
+lint and the production build pass. The build retains the existing PlayCanvas worker-module
+externalization warnings. The isolated preview API was restarted with the new source endpoint.

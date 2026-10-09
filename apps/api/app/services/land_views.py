@@ -112,7 +112,13 @@ def resolve(
             unavailable(f"Saved output {identifier} is not a research map.")
             continue
         maps.append(
-            LandViewMap(id=identifier, title=content.title, features=content.output.features)
+            LandViewMap(
+                id=identifier,
+                title=content.title,
+                features=content.output.features,
+                unit=content.output.unit,
+                legend=content.output.legend,
+            )
         )
         if revision != land.revision:
             warnings.append(f"{content.title} was researched against boundary revision {revision}.")

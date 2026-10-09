@@ -8292,9 +8292,25 @@
             "title": "Id",
             "type": "string"
           },
+          "legend": {
+            "default": "",
+            "title": "Legend",
+            "type": "string"
+          },
           "title": {
             "title": "Title",
             "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
           }
         },
         "required": [
@@ -12948,6 +12964,117 @@
         ],
         "title": "Representation",
         "type": "string"
+      },
+      "ResearchArtifactDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "evidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Evidenceids",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "investigationId": {
+            "format": "uuid",
+            "title": "Investigationid",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "method": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Method",
+            "type": "string"
+          },
+          "output": {
+            "discriminator": {
+              "mapping": {
+                "chart": "#/components/schemas/ChartOutput",
+                "document": "#/components/schemas/DocumentOutput",
+                "gallery": "#/components/schemas/GalleryOutput",
+                "map": "#/components/schemas/MapOutput",
+                "raster": "#/components/schemas/RasterOutput",
+                "solar": "#/components/schemas/SolarOutput",
+                "table": "#/components/schemas/TableOutput",
+                "timeline": "#/components/schemas/TimelineOutput"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TableOutput"
+              },
+              {
+                "$ref": "#/components/schemas/ChartOutput"
+              },
+              {
+                "$ref": "#/components/schemas/MapOutput"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentOutput"
+              },
+              {
+                "$ref": "#/components/schemas/TimelineOutput"
+              },
+              {
+                "$ref": "#/components/schemas/SolarOutput"
+              },
+              {
+                "$ref": "#/components/schemas/RasterOutput"
+              },
+              {
+                "$ref": "#/components/schemas/GalleryOutput"
+              }
+            ],
+            "title": "Output"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "method",
+          "evidenceIds",
+          "output",
+          "id",
+          "runId",
+          "landId",
+          "investigationId",
+          "boundaryRevision",
+          "stale"
+        ],
+        "title": "ResearchArtifactDetail",
+        "type": "object"
       },
       "ResearchArtifactRead": {
         "additionalProperties": false,
@@ -30124,6 +30251,101 @@
         "summary": "The recipes a run can use, and the providers it can be sent to",
         "tags": [
           "recipes"
+        ]
+      }
+    },
+    "/api/v1/research/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "get_artifact_api_v1_research_artifacts__artifact_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchArtifactDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get Artifact",
+        "tags": [
+          "land research"
         ]
       }
     },

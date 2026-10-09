@@ -190,6 +190,31 @@ def test_private_research_and_events_follow_workspace_membership(
     run_id, lease = claimed
     eid = queue.save_evidence(db, run_id, lease, "survey", evidence())
     fid = queue.save_finding(db, run_id, lease, "finding", finding(eid))
+    aid = queue.save_artifact(
+        db,
+        run_id,
+        lease,
+        "source-detail",
+        ArtifactContent.model_validate(
+            {
+                "title": "Synthetic map",
+                "method": "Test method",
+                "evidenceIds": [str(eid)],
+                "output": {"kind": "map", "features": [], "legend": "Synthetic fixture"},
+            }
+        ),
+    )
+    output = client.get(f"/api/v1/research/artifacts/{aid}", headers=alice)
+    assert output.status_code == 200, output.text
+    assert output.json()["landId"] == land["id"] and output.json()["evidenceIds"] == [str(eid)]
+    assert output.json()["stale"] is False
+    assert (
+        client.put(
+            f"/api/v1/land/{land['id']}", headers=alice, json={**BODY, "expectedRevision": 1}
+        ).status_code
+        == 200
+    )
+    assert client.get(f"/api/v1/research/artifacts/{aid}", headers=alice).json()["stale"] is True
     other = client.post(
         "/api/v1/workspaces", headers=headers(token("bob")), json={"name": "Other"}
     ).json()["id"]
@@ -201,6 +226,7 @@ def test_private_research_and_events_follow_workspace_membership(
         f"/research/runs/{run_id}/events",
         f"/research/runs/{run_id}/stream",
         f"/research/evidence/{eid}",
+        f"/research/artifacts/{aid}",
     ):
         assert client.get("/api/v1" + path, headers=bob).status_code == 404
     assert client.post(f"/api/v1/research/runs/{run_id}/cancel", headers=bob).status_code == 404

@@ -136,6 +136,7 @@ function SavedViews({ land, scope }: { land: LandArea; scope: string }) {
       return;
     }
     useLandContext.setState({
+      selectedMapFeature: null,
       section: result.state.section,
       selectedInvestigationId: result.state.investigationId ?? null,
       selectedInventoryId: result.state.inventoryId ?? null,
@@ -152,6 +153,8 @@ function SavedViews({ land, scope }: { land: LandArea; scope: string }) {
             {
               id: layer.id,
               researchArtifactId: layer.id,
+              unit: layer.unit,
+              legend: layer.legend,
               title: layer.title,
               features: layer.features.map((feature, index) => ({ id: String(index), ...feature })),
             },
