@@ -8,7 +8,13 @@ from sqlalchemy import select
 from app.api.deps import DbSession
 from app.api.workspace_deps import WorkspaceDep
 from app.models.scenario import LandScenario, LandScenarioRevision
-from app.schemas.scenarios import ScenarioCreate, ScenarioRead, ScenarioResult, ScenarioRevise
+from app.schemas.scenarios import (
+    ScenarioCreate,
+    ScenarioRead,
+    ScenarioRequestRead,
+    ScenarioResult,
+    ScenarioRevise,
+)
 from app.services import scenarios
 from app.services.errors import NotFoundError
 from app.services.land import get_land
@@ -49,6 +55,13 @@ def listing(
         .offset(offset)
     )
     return [scenarios.read(db, row) for row in rows]
+
+
+@router.get("/requests/{request_key}", response_model=ScenarioRequestRead)
+def request_read(
+    land_id: uuid.UUID, request_key: uuid.UUID, db: DbSession, scope: WorkspaceDep
+) -> ScenarioRequestRead:
+    return scenarios.request_read(db, scope.id, land_id, request_key)
 
 
 @router.get("/{scenario_id}", response_model=ScenarioRead)

@@ -739,3 +739,31 @@
   max-height: 60vh;
   border-radius: 8px;
 }
+
+.land-scenarios .land-notice pre {
+  max-height: 20rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.land-scenario-form .land-name {
+  min-width: 0;
+}
+.land-scenario-form select,
+.land-scenario-form input,
+.land-scenario-form textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+.land-scenarios .land-notice .land-actions button {
+  border: 1px solid var(--control-border);
+  background: #a5c4a508;
+  color: inherit;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 8px 11px;
+  font: inherit;
+  white-space: normal;
+  text-decoration: none;
+}

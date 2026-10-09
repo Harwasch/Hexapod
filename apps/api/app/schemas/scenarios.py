@@ -154,3 +154,8 @@ class ScenarioRead(ScenarioCreate):
     result: ScenarioResult
     created_at: datetime
     updated_at: datetime
+
+
+class ScenarioRequestRead(CamelModel):
+    saved: ScenarioRead
+    current: ScenarioRead

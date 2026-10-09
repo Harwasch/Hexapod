@@ -12,7 +12,13 @@ from app.models.land import LandArea, LandBoundaryRevision
 from app.models.research import Evidence, Investigation, ResearchRun
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.schemas.land_solar import SolarMetadata, SolarRequest
-from app.schemas.scenarios import ScenarioCreate, ScenarioRead, ScenarioResult, ScenarioRevise
+from app.schemas.scenarios import (
+    ScenarioCreate,
+    ScenarioRead,
+    ScenarioRequestRead,
+    ScenarioResult,
+    ScenarioRevise,
+)
 from app.services import land_solar, land_surveys
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.land import FOOTPRINT, get_land
@@ -241,3 +247,28 @@ def revise(
     )
     db.commit()
     return read(db, row)
+
+
+def request_read(
+    db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID, request_key: uuid.UUID
+) -> ScenarioRequestRead:
+    get_land(db, workspace_id, land_id)
+    snapshots = list(
+        db.scalars(
+            select(LandScenarioRevision)
+            .where(
+                LandScenarioRevision.land_id == land_id,
+                LandScenarioRevision.payload["request_key"].astext == str(request_key),
+            )
+            .limit(2)
+        )
+    )
+    if not snapshots:
+        raise NotFoundError("scenario request", request_key)
+    if len(snapshots) != 1:
+        raise ConflictError(
+            "This request key identifies multiple revisions; inspect their history."
+        )
+    snapshot = snapshots[0]
+    row = scoped(db, workspace_id, land_id, snapshot.scenario_id)
+    return ScenarioRequestRead(saved=read(db, row, snapshot), current=read(db, row))

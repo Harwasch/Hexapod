@@ -11,7 +11,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
-| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
+| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
@@ -1513,3 +1513,54 @@ claims of successful live AI acceptance. Local validation artifacts:
 The isolated preview API and worker were restarted with this code. No new migration beyond
 0024 is required. Production and the original checkout remain untouched; the full feature
 is still in progress.
+
+
+## Implemented increment: scenario draft recovery
+
+Solar finance and restoration forms now preserve unfinished assumptions in browser storage,
+scoped to the current identity/workspace and land. This includes linked hourly assessments,
+field-survey and evidence references, species targets, response parameters, and the exact
+unfinished monitoring-years text. Blank numeric inputs remain blank instead of becoming
+zero. Non-finite draft values use an explicit local serialization marker; they are never
+accepted as calculated results. Recovery checks the saved structure and land scope, limits
+size, and requires a fresh calculation before saving.
+
+A recoverable draft is offered before creating or editing another option. It can be recovered,
+downloaded, deliberately copied into a new scenario, or discarded. Storage failures preserve
+the in-memory form and offer a download. Invalid recovery data remains available for download
+instead of being silently replaced. Drafts clear after successful saving or explicit discard.
+Changing identity/workspace or land remounts the editor under its own recovery key.
+
+The private read-only `GET /land/{land_id}/scenarios/requests/{request_key}` endpoint returns
+the revision written by that request and the current scenario. Recovery recognizes a completed
+creation or revision even if its response was lost and another editor later changed it, without
+issuing another write. Revision requests now carry the browser's stable request key. Ambiguous
+reused keys are reported rather than choosing an arbitrary revision.
+
+Recovery and server conflict responses compare the current scenario revision with the draft's
+base. A newer saved version is shown alongside the draft's name and boundary reference;
+its assumptions can be inspected. Saving over it is disabled. The user may keep local assumptions
+as a separate scenario or explicitly load the latest saved assumptions. Neither choice silently
+merges ecological or financial assumptions. Boundary references remain pinned until explicitly
+changed. Long survey controls and conflict details fit the phone panel.
+
+Validation: five backend scenario tests and eleven frontend scenario/restoration tests pass,
+including request lookup scope and original/current revision separation, unfinished species
+and monitoring input recovery, lost-save recognition after a subsequent revision, explicit
+concurrent-copy behavior, invalid stored data retention and storage-quota failure. API lint,
+formatting and type checks, web type checking/targeted lint, generated contracts and the
+production build pass. All seven land browser regressions pass.
+
+A real Chromium/API test on the public National Mall software fixture recovered blank
+numeric and unfinished monitoring inputs, recalculated the retained ecological plan, received
+a concurrent revision conflict, preserved the draft as a separate option, and deliberately
+dropped the successful creation response. Reload recovery recognized the saved request with
+exactly one POST and no second write. The check exposed and fixed phone overflow from long
+survey selectors; desktop and 390px phone checks then found no unintended overflow or page
+exceptions, and screenshots were inspected. It advanced synthetic scenario
+`1b81361b-8ede-553e-aaa2-91c3c501e1a6` to revision 4 and recovered new synthetic scenario
+`6b6f8c35-a051-5f13-a465-d3024d5bf0e5`. Local artifacts:
+`/tmp/land-scenario-recovery-browser-result.json`,
+`/tmp/land-scenario-recovery-desktop.png`, `/tmp/land-scenario-recovery-mobile.png`.
+No new migration is required beyond 0024. The isolated preview API was restarted; production
+and the original checkout remain untouched. The overall feature is still in progress.

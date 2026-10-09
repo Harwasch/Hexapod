@@ -1118,6 +1118,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/scenarios/requests/{request_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Request Read */
+        get: operations["request_read_api_v1_land__land_id__scenarios_requests__request_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/solar-assessments": {
         parameters: {
             query?: never;
@@ -6724,6 +6741,11 @@ export interface components {
              */
             updatedAt: string;
         };
+        /** ScenarioRequestRead */
+        ScenarioRequestRead: {
+            current: components["schemas"]["ScenarioRead"];
+            saved: components["schemas"]["ScenarioRead"];
+        };
         /** ScenarioResult */
         ScenarioResult: {
             /** Algorithm */
@@ -8136,6 +8158,7 @@ export type SchemaScaleEvidenceInput = components['schemas']['ScaleEvidenceInput
 export type SchemaScaleSource = components['schemas']['ScaleSource'];
 export type SchemaScenarioCreate = components['schemas']['ScenarioCreate'];
 export type SchemaScenarioRead = components['schemas']['ScenarioRead'];
+export type SchemaScenarioRequestRead = components['schemas']['ScenarioRequestRead'];
 export type SchemaScenarioResult = components['schemas']['ScenarioResult'];
 export type SchemaScenarioRevise = components['schemas']['ScenarioRevise'];
 export type SchemaSelectionInstruction = components['schemas']['SelectionInstruction'];
@@ -13340,6 +13363,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScenarioResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    request_read_api_v1_land__land_id__scenarios_requests__request_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                request_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioRequestRead"];
                 };
             };
             /** @description Missing or wrong write token */

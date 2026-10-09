@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components, LandArea } from "@twin/contracts";
 import { api, unwrap, ApiError } from "@/api/client";
@@ -9,6 +9,15 @@ import { SolarStudy } from "./SolarStudy";
 import { SolarAssessmentView } from "./SolarAssessmentView";
 import { physicalFields, solarFinance, type SolarAssessment } from "./solarStudy";
 import { RestorationTargets } from "./RestorationTargets";
+import {
+  downloadScenarioDraft,
+  parseScenarioDraft,
+  sameScenario,
+  scenarioDraftKey,
+  serializeScenarioDraft,
+  type ScenarioDraft,
+  type ScenarioEdit,
+} from "./scenarioDraft";
 import "./restoration.css";
 import { ScenarioResultView } from "./ScenarioResultView";
 import { fieldLabel, valueLabel } from "./scenarioDefaults";
@@ -22,8 +31,11 @@ import {
 } from "./scenarioDefaults";
 
 export function LandScenarios({ land }: { land: LandArea }) {
-  const scope = useLandScope(),
-    ready = useLandAccessReady(),
+  const scope = useLandScope();
+  return <Scenarios key={`${scope}:${land.id}`} land={land} scope={scope} />;
+}
+function Scenarios({ land, scope }: { land: LandArea; scope: string }) {
+  const ready = useLandAccessReady(),
     canEdit = useLandCanEdit();
   const cache = useQueryClient();
   const key = ["land-scenarios", scope, land.id];
@@ -39,7 +51,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
   const [inputs, setInputs] = useState<ScenarioInputs | null>(null);
   const [name, setName] = useState("");
   const [monitoringText, setMonitoringText] = useState("1, 3, 5");
-  const [editing, setEditing] = useState<Scenario | null>(null);
+  const [editing, setEditing] = useState<ScenarioEdit | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [history, setHistory] = useState<Scenario[]>([]);
   const [evidenceIds, setEvidenceIds] = useState<string[]>([]);
@@ -63,7 +75,18 @@ export function LandScenarios({ land }: { land: LandArea }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const operation = useRef(0);
-  const requestKey = useRef(crypto.randomUUID());
+  const [requestKey, setRequestKey] = useState<string>(() => crypto.randomUUID());
+  const draftKey = scenarioDraftKey(scope, land.id);
+  const [recovery, setRecovery] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(draftKey);
+    } catch {
+      return null;
+    }
+  });
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<Scenario | null>(null);
   const payload = inputs
     ? ({
         name,
@@ -74,13 +97,56 @@ export function LandScenarios({ land }: { land: LandArea }) {
         solarAssessmentId,
       } satisfies components["schemas"]["ScenarioCreate"])
     : null;
-  const signature = JSON.stringify(payload);
+  const signature = serializeScenarioDraft(payload);
+  const snapshot: ScenarioDraft | null = payload
+    ? {
+        version: 1,
+        landId: land.id,
+        requestKey,
+        payload,
+        editing,
+        monitoringText,
+      }
+    : null;
+  const serialized = snapshot ? serializeScenarioDraft(snapshot) : null;
+  useEffect(() => {
+    if (!serialized || recovery || !canEdit) return;
+    let message: string | null = null;
+    try {
+      if (serialized.length > 2_000_000) throw new Error("Draft exceeds the recovery size limit");
+      localStorage.setItem(draftKey, serialized);
+    } catch {
+      message =
+        "This browser could not preserve the scenario draft. Download a copy before leaving.";
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setStorageError(message);
+    });
+    return () => {
+      active = false;
+    };
+  }, [serialized, recovery, canEdit, draftKey]);
+  const clearStored = () => {
+    try {
+      localStorage.removeItem(draftKey);
+      setStorageError(null);
+    } catch {
+      setStorageError(
+        "The browser could not remove the saved draft. It may reappear after reload.",
+      );
+    }
+    setRecovery(null);
+  };
   const visiblePreview = preview?.signature === signature ? preview.result : null;
   const choices = catalog.data?.filter((scenario) => selected.includes(scenario.id)) ?? [];
   const reset = () => {
+    clearStored();
+    setConflict(null);
+    setNotice(null);
     setHistory([]);
     operation.current++;
-    requestKey.current = crypto.randomUUID();
+    setRequestKey(crypto.randomUUID());
     setInputs(null);
     setEditing(null);
     setPreview(null);
@@ -98,7 +164,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
     setMonitoringText("1, 3, 5");
   };
   const calculate = async (save: boolean) => {
-    if (!payload) return;
+    if (!payload || (save && conflict)) return;
     const ticket = ++operation.current;
     setBusy(true);
     setError(null);
@@ -107,7 +173,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
         const result = await unwrap(
           api.POST("/api/v1/land/{land_id}/scenarios/preview", {
             params: { path: { land_id: land.id } },
-            body: { ...payload, requestKey: requestKey.current },
+            body: { ...payload, requestKey },
           }),
         );
         if (ticket === operation.current) setPreview({ signature, result });
@@ -116,16 +182,17 @@ export function LandScenarios({ land }: { land: LandArea }) {
           ? await unwrap(
               api.PUT("/api/v1/land/{land_id}/scenarios/{scenario_id}", {
                 params: { path: { land_id: land.id, scenario_id: editing.id } },
-                body: { ...payload, expectedRevision: editing.revision },
+                body: { ...payload, requestKey, expectedRevision: editing.revision },
               }),
             )
           : await unwrap(
               api.POST("/api/v1/land/{land_id}/scenarios", {
                 params: { path: { land_id: land.id } },
-                body: { ...payload, requestKey: requestKey.current },
+                body: { ...payload, requestKey },
               }),
             );
         if (ticket === operation.current) {
+          clearStored();
           setSelected([saved.id]);
           setInputs(null);
           setEditing(null);
@@ -134,19 +201,32 @@ export function LandScenarios({ land }: { land: LandArea }) {
         await cache.invalidateQueries({ queryKey: key });
       }
     } catch (cause) {
-      if (ticket === operation.current)
+      if (ticket === operation.current) {
         setError(
           cause instanceof ApiError && cause.fieldErrors.length
             ? cause.fieldErrors.join(". ")
             : describeError(cause),
         );
+        if (editing && cause instanceof ApiError && cause.status === 409) {
+          try {
+            const current = await unwrap(
+              api.GET("/api/v1/land/{land_id}/scenarios/{scenario_id}", {
+                params: { path: { land_id: land.id, scenario_id: editing.id } },
+              }),
+            );
+            if (ticket === operation.current) setConflict(current);
+          } catch {
+            /* The original error and local draft remain available. */
+          }
+        }
+      }
     } finally {
       if (ticket === operation.current) setBusy(false);
     }
   };
   const edit = (scenario: Scenario) => {
     reset();
-    setEditing(scenario);
+    setEditing({ id: scenario.id, revision: scenario.revision, landId: scenario.landId });
     setName(scenario.name);
     setInputs(scenario.inputs);
     if (scenario.inputs.kind === "restoration")
@@ -165,6 +245,66 @@ export function LandScenarios({ land }: { land: LandArea }) {
     setEvidenceIds([]);
     setFieldSurveyIds([]);
   };
+  const recover = async (asNew = false) => {
+    if (!recovery) return;
+    const ticket = ++operation.current;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const saved = parseScenarioDraft(recovery, land.id);
+      let baseline = asNew ? null : saved.editing;
+      let latest: Scenario | null = null;
+      let nextKey = asNew ? crypto.randomUUID() : saved.requestKey;
+      if (!asNew) {
+        const response = await api.GET("/api/v1/land/{land_id}/scenarios/requests/{request_key}", {
+          params: { path: { land_id: land.id, request_key: saved.requestKey } },
+        });
+        if (response.response.status !== 404) {
+          const found = await unwrap(Promise.resolve(response));
+          if (ticket !== operation.current) return;
+          if (sameScenario(saved.payload, found.saved)) {
+            clearStored();
+            setSelected([found.current.id]);
+            setNotice(
+              "This draft was already saved. Opened the current scenario without creating another revision.",
+            );
+            await cache.invalidateQueries({ queryKey: key });
+            return;
+          }
+          baseline = found.saved;
+          latest = found.current;
+          nextKey = crypto.randomUUID();
+        }
+        if (baseline && !latest)
+          latest = await unwrap(
+            api.GET("/api/v1/land/{land_id}/scenarios/{scenario_id}", {
+              params: { path: { land_id: land.id, scenario_id: baseline.id } },
+            }),
+          );
+      }
+      if (ticket !== operation.current) return;
+      setRequestKey(nextKey);
+      setEditing(
+        baseline ? { id: baseline.id, revision: baseline.revision, landId: baseline.landId } : null,
+      );
+      setName(saved.payload.name);
+      setInputs(saved.payload.inputs);
+      setBoundaryRevision(saved.payload.boundaryRevision);
+      setEvidenceIds(saved.payload.evidenceIds ?? []);
+      setFieldSurveyIds(saved.payload.fieldSurveyIds ?? []);
+      setSolarAssessmentId(saved.payload.solarAssessmentId ?? null);
+      setMonitoringText(saved.monitoringText);
+      setPreview(null);
+      setRecovery(null);
+      setConflict(latest && latest.revision !== baseline?.revision ? latest : null);
+      setNotice("Recovered your assumptions. Calculate again to review the results before saving.");
+    } catch (cause) {
+      if (ticket === operation.current) setError(describeError(cause));
+    } finally {
+      if (ticket === operation.current) setBusy(false);
+    }
+  };
   return (
     <section className="land-scenarios" aria-label="Land scenarios">
       <div className="land-place-heading">
@@ -176,8 +316,8 @@ export function LandScenarios({ land }: { land: LandArea }) {
       <p>
         Turn evidence and your assumptions into a calculation you can inspect, revise and compare.
       </p>
-      {!inputs && <SolarStudy land={land} onUse={useSolar} />}
-      {!inputs && canEdit && (
+      {!inputs && !recovery && <SolarStudy land={land} onUse={useSolar} />}
+      {!inputs && !recovery && canEdit && (
         <div className="land-actions">
           <button type="button" onClick={() => begin("solar")}>
             Solar and economics
@@ -185,6 +325,68 @@ export function LandScenarios({ land }: { land: LandArea }) {
           <button type="button" onClick={() => begin("restoration")}>
             Restoration and cover
           </button>
+        </div>
+      )}
+      {recovery && canEdit && (
+        <div className="land-notice" role="region" aria-label="Recover scenario draft">
+          <p>An unfinished scenario is saved in this browser for this land.</p>
+          <div className="land-actions">
+            <button type="button" disabled={busy} onClick={() => void recover()}>
+              Recover scenario draft
+            </button>
+            <button type="button" disabled={busy} onClick={() => void recover(true)}>
+              Recover as a new scenario
+            </button>
+            <button type="button" onClick={() => downloadScenarioDraft(recovery)}>
+              Download scenario draft
+            </button>
+            <button type="button" disabled={busy} onClick={clearStored}>
+              Discard scenario draft
+            </button>
+          </div>
+        </div>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      {storageError && <p role="alert">{storageError}</p>}
+      {inputs && (
+        <div className="land-actions">
+          <button type="button" onClick={() => downloadScenarioDraft(snapshot)}>
+            Download scenario draft
+          </button>
+        </div>
+      )}
+      {conflict && (
+        <div className="land-notice" role="region" aria-label="Review newer scenario revision">
+          <p>
+            This scenario now has revision {conflict.revision}. Your draft started from revision{" "}
+            {editing?.revision}.
+          </p>
+          <p>
+            Saved: {conflict.name} · boundary revision {conflict.boundaryRevision}. Your draft:{" "}
+            {name} · boundary revision {boundaryRevision}.
+          </p>
+          <details>
+            <summary>Current saved assumptions</summary>
+            <pre>{JSON.stringify(conflict.inputs, null, 2)}</pre>
+          </details>
+          <div className="land-actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setEditing(null);
+                setConflict(null);
+                setRequestKey(crypto.randomUUID());
+                setPreview(null);
+                setError(null);
+              }}
+            >
+              Keep my assumptions as a new scenario
+            </button>
+            <button type="button" disabled={busy} onClick={() => edit(conflict)}>
+              Load latest saved assumptions
+            </button>
+          </div>
         </div>
       )}
       {error && (
@@ -208,7 +410,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
             void calculate(false);
           }}
         >
-          <fieldset className="land-scenario-inputs" disabled={busy}>
+          <fieldset className="land-scenario-inputs" disabled={busy || !canEdit}>
             <label className="land-name">
               Scenario name
               <input
@@ -305,7 +507,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
                               step="any"
                               required={field.key !== "replacementYear"}
                               value={
-                                typeof value === "number"
+                                typeof value === "number" && Number.isFinite(value)
                                   ? Number((value * (field.percent ? 100 : 1)).toPrecision(10))
                                   : ""
                               }
@@ -315,7 +517,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
                                   [field.key]:
                                     event.target.value === "" && field.key === "replacementYear"
                                       ? null
-                                      : Number(event.target.value) / (field.percent ? 100 : 1),
+                                      : event.target.valueAsNumber / (field.percent ? 100 : 1),
                                 })
                               }
                             />
@@ -412,13 +614,13 @@ export function LandScenarios({ land }: { land: LandArea }) {
                             min={0}
                             max={100}
                             step="any"
-                            value={cover[field]}
+                            value={Number.isFinite(cover[field]) ? cover[field] : ""}
                             onChange={(event) =>
                               setInputs({
                                 ...inputs,
                                 cover: inputs.cover.map((row, i) =>
                                   i === index
-                                    ? { ...row, [field]: Number(event.target.value) }
+                                    ? { ...row, [field]: event.target.valueAsNumber }
                                     : row,
                                 ),
                               })
@@ -506,13 +708,13 @@ export function LandScenarios({ land }: { land: LandArea }) {
                             type="number"
                             step="any"
                             min={0}
-                            value={treatment[field]}
+                            value={Number.isFinite(treatment[field]) ? treatment[field] : ""}
                             onChange={(event) =>
                               setInputs({
                                 ...inputs,
                                 treatments: inputs.treatments.map((row, i) =>
                                   i === index
-                                    ? { ...row, [field]: Number(event.target.value) }
+                                    ? { ...row, [field]: event.target.valueAsNumber }
                                     : row,
                                 ),
                               })
@@ -575,9 +777,13 @@ export function LandScenarios({ land }: { land: LandArea }) {
                     type="number"
                     step="any"
                     min={0}
-                    value={inputs.monitoringCostPerVisit}
+                    value={
+                      Number.isFinite(inputs.monitoringCostPerVisit)
+                        ? inputs.monitoringCostPerVisit
+                        : ""
+                    }
                     onChange={(event) =>
-                      setInputs({ ...inputs, monitoringCostPerVisit: Number(event.target.value) })
+                      setInputs({ ...inputs, monitoringCostPerVisit: event.target.valueAsNumber })
                     }
                   />
                 </label>
@@ -588,11 +794,15 @@ export function LandScenarios({ land }: { land: LandArea }) {
                     step="any"
                     min={0}
                     max={100}
-                    value={inputs.contingencyFraction * 100}
+                    value={
+                      Number.isFinite(inputs.contingencyFraction)
+                        ? inputs.contingencyFraction * 100
+                        : ""
+                    }
                     onChange={(event) =>
                       setInputs({
                         ...inputs,
-                        contingencyFraction: Number(event.target.value) / 100,
+                        contingencyFraction: event.target.valueAsNumber / 100,
                       })
                     }
                   />
@@ -604,9 +814,9 @@ export function LandScenarios({ land }: { land: LandArea }) {
                     step="any"
                     min={0}
                     max={50}
-                    value={inputs.discountRate * 100}
+                    value={Number.isFinite(inputs.discountRate) ? inputs.discountRate * 100 : ""}
                     onChange={(event) =>
-                      setInputs({ ...inputs, discountRate: Number(event.target.value) / 100 })
+                      setInputs({ ...inputs, discountRate: event.target.valueAsNumber / 100 })
                     }
                   />
                 </label>
@@ -639,7 +849,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
               </button>
               <button
                 type="button"
-                disabled={busy || !visiblePreview}
+                disabled={busy || !visiblePreview || !!conflict}
                 onClick={() => void calculate(true)}
               >
                 {editing ? "Save scenario revision" : "Save scenario"}
@@ -731,7 +941,11 @@ export function LandScenarios({ land }: { land: LandArea }) {
           )}
           <div className="land-actions">
             {canEdit && (
-              <button type="button" onClick={() => edit(scenario)}>
+              <button
+                type="button"
+                disabled={busy || !!inputs || !!recovery}
+                onClick={() => edit(scenario)}
+              >
                 Edit assumptions
               </button>
             )}

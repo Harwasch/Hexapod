@@ -221,3 +221,44 @@ def test_research_agent_creates_a_reproducible_scenario(
     assert saved[0]["name"] == "Agent solar option"
     assert saved[0]["result"]["summary"]["firstYearGenerationKwh"] == 20000
     assert saved[0]["inputs"]["assumptions"] == SOLAR["assumptions"]
+
+
+def test_request_recovery_finds_creation_and_revision_without_writing(
+    client: TestClient, db: Session
+) -> None:
+    land = client.post("/api/v1/land", json=BODY).json()
+    path = f"/api/v1/land/{land['id']}/scenarios"
+    first_key, second_key = uuid.uuid4(), uuid.uuid4()
+    payload = {
+        "requestKey": str(first_key),
+        "name": "First option",
+        "boundaryRevision": 1,
+        "inputs": SOLAR,
+    }
+    created = client.post(path, json=payload)
+    assert created.status_code == 201, created.text
+    identifier = created.json()["id"]
+    revised = client.put(
+        path + f"/{identifier}",
+        json={
+            **payload,
+            "requestKey": str(second_key),
+            "expectedRevision": 1,
+            "name": "Revised option",
+        },
+    )
+    assert revised.status_code == 200, revised.text
+    original = client.get(path + f"/requests/{first_key}")
+    assert original.status_code == 200, original.text
+    assert original.json()["saved"]["revision"] == 1
+    assert original.json()["current"]["revision"] == 2
+    saved = client.get(path + f"/requests/{second_key}").json()
+    assert saved["saved"]["name"] == saved["current"]["name"] == "Revised option"
+    assert len(client.get(path + f"/{identifier}/revisions").json()) == 2
+    assert client.get(path + f"/requests/{uuid.uuid4()}").status_code == 404
+    other = client.post("/api/v1/land", json=BODY).json()
+    assert (
+        client.get(f"/api/v1/land/{other['id']}/scenarios/requests/{first_key}").status_code == 404
+    )
+    with pytest.raises(NotFoundError):
+        scenarios.request_read(db, uuid.uuid4(), uuid.UUID(land["id"]), first_key)
