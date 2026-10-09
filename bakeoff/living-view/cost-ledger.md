@@ -91,5 +91,22 @@ is recorded from what Modal metered. Prompts: `bakeoff/living-view/prompts.md`.
 | R2-9 | 37849848296 | world, all three working: Waypoint 1.5 (compile max-autotune 309 s, then 8 rollouts of 240 frames at 60 fps: first frame 0.4-1.0 s, 21-47 fps sustained), Matrix-Game 3.0 (8 rollouts of 97 frames, 25.8 s each, first frame 12.4 s), Yume 1.5 (8 rollouts of 58 frames, 27 s each, first frame 9.5-9.9 s); containers 429, 301, 379 s. Worst $1.21 + $0.85 + $0.85; runner's estimates | H100 | 18.5 | 1.58 | 5.32 |
 | R2-10 | 37852868011 | meter: Modal's billing report for today (no container). Round 2's apps (20:54 on) metered **$5.57** in all through R2-9, against the runner's $5.32: image builds (the Block-Sparse-Attention build $0.09, the world models' images), egress and cold starts | none | 0 | 0.00 | 5.57 |
 | R2-11 | 37853209981 | upscale flashvsr failed at the first x3 clip (waypoint-idle: its 1024x512 padded to a multiple of 128/3 = 42, so 1638 rows, not a multiple of 16) and lost the clips it had done (ltx-s1, mg3-idle), 218 s. Fixed: x3 pads to a multiple of 128, and a failing clip no longer loses the batch. Runner's estimate | A100-80GB | 3.6 | 0.21 | 5.78 |
-| R2-11 | 37853209981 | upscale seedvr2 to 2560x1408 on an H200, start by start: 5 of 8 clips inside its 600 s wall (ltx-p1 camp-2, tree-1, camp-1; ltx camp-2, camp-1), 87 s a whole clip (1.1 fps, peak 113-124 GB of 141), 111 s in cross-faded chunks; ltx tree-1 and ltx-p1 tree-2 ran out of memory even in chunks (fragmented), ltx tree-2 not started; load 19 s, container 620 s. Worst $1.36; runner's estimate | H200 | 10.4 | 0.94 | 6.72 |
-| R2-12 | 37855188657 | upscale flashvsr, one container, three jobs: 2560x1408 for ltx-s1 (x4), mg3-idle and yume-idle (x2), 21.8-22.1 s a 97-frame clip and 13.3 s a 58-frame one (4.3-4.5 fps); 3840x2112 (x3) for ltx-loop and ltx ran out of the A100's 80 GB on every clip (no 4K clips); then waypoint-idle at 2560x1408 (x3 from 1024x512, 68 s a 240-frame clip, 3.5 fps, 60 GB) for camp-2 and tree-1 before the 750 s wall; container 772 s. Worst $0.85; runner's estimate | A100-80GB | 12.9 | 0.74 | 7.46 |
+| R2-11 | 37853209981 | upscale seedvr2 to 2560x1408 on an H200, start by start: 5 of 8 clips inside its 600 s wall (ltx-p1 camp-2, tree-1, camp-1; ltx camp-2, camp-1), 87 s a whole clip (1.1 fps, peak 113-124 GB of 141), 111 s in cross-faded chunks; ltx tree-1 and ltx-p1 tree-2 ran out of memory even in chunks (fragmented), ltx tree-2 not started; load 19 s, container 620 s. Worst $1.36; runner's estimate (Modal metered $1.15 for R2-11's app, both rows) | H200 | 10.4 | 0.94 | 6.72 |
+| R2-12 | 37855188657 | upscale flashvsr, one container, three jobs: 2560x1408 for ltx-s1 (x4), mg3-idle and yume-idle (x2), 21.8-22.1 s a 97-frame clip and 13.3 s a 58-frame one (4.3-4.5 fps); 3840x2112 (x3) for ltx-loop and ltx ran out of the A100's 80 GB on every clip (no 4K clips); then waypoint-idle at 2560x1408 (x3 from 1024x512, 68 s a 240-frame clip, 3.5 fps, 60 GB) for camp-2 and tree-1 before the 750 s wall; container 772 s. Worst $0.85; metered (the runner estimated $0.74) | A100-80GB | 12.9 | 0.67 | 7.41 |
+| R2-13 | 37856727296 | meter: Modal's billing report again (no container): round 2's apps metered **$7.41** in all | none | 0 | 0.00 | 7.41 |
+
+### Round 2 total
+
+**$7.41** metered by Modal for round 2 (apps from 20:54 on; the last run's figure may still
+move by a few cents as Modal closes the hour), against the target of about $6 and the hard
+cap of $8. By kind (Modal's figures per app):
+
+- LTX (the prompt test, the ladder, the H100 timing run) and the stills: $1.73. That
+  includes R2-3's out-of-memory run ($0.47).
+- World models: $2.43, with their downloads and failed starts. Waypoint $0.67, Matrix-Game
+  $0.78, Yume $0.98 (its first, noise-tailed run was $0.40).
+- Upscalers: $3.26. FlashVSR $2.22 (R2-11's lost batch about $0.21), SeedVR2 about $0.94,
+  the Block-Sparse-Attention build $0.09.
+
+GPU work stopped there. The 4K clips would need another FlashVSR run (with the clip in
+temporal chunks) whose worst case does not fit in what is left under the cap.

@@ -1,6 +1,7 @@
 """Round 2's files for the page (the coordinator builds it), from the runs' artifacts.
 
     r2_deliver.py OUT STARTS RUN [RUN ...]
+    r2_deliver.py --summary OUT/numbers.json     (the per-arm summary and notes again)
 
 OUT is the delivery folder (`.../living-view-bakeoff/r2`); STARTS is round 1's starts folder
 (`{start}.png`, `{start}-mask.png`). Each RUN is an unpacked artifact of
@@ -57,42 +58,43 @@ KINDS = {
 #: Delivered under another arm name: the winner's base clip, round 1's LTX clip.
 DELIVER_AS = {"ltx-p1": "ltx-base", "ltx": "ltx-r1"}
 STARTS = ("tree-1", "tree-2", "camp-1", "camp-2")
-#: What goes in OUT first. The brief's GPU priority (Part 1 a-b and FlashVSR 2560, Part 2 idle,
-#: Part 1 c-d, SeedVR2, 4K, pans) with one change: the loop (Part 1 d) comes up beside the base,
-#: because it is the one arm whose motion is in the owner's "slight" range. Every model's own
-#: pixels (a) before most upscales; the 4K files (up to 14 MB each) cannot fit beside them.
+#: What goes in OUT first: the brief's priority. Part 1 a-b with FlashVSR 2560, then the prompt
+#: variants, then Part 2 idle, then Part 1 c-d. Next come the upscales of the loop and of round
+#: 1's LTX, SeedVR2, the other upscales and the pans. In practice OUT ends after Part 1 c-d's
+#: grid copies, and everything later goes to r2-more/.
 TIERS = [
     ("ltx-base", "a"),
     ("ltx-base", "u2k"),
-    ("ltx-loop", "a"),
-    ("ltx-loop", "u2k"),
-    ("ltx-r1", "u2k"),
     ("ltx-s1", "a"),
     ("ltx-s1", "u2k"),
+    ("ltx-p2", "a"),
+    ("ltx-p3", "a"),
     ("mg3-idle", "a"),
     ("waypoint-idle", "a"),
     ("yume-idle", "a"),
-    ("ltx-p2", "a"),
-    ("ltx-p3", "a"),
+    ("ltx-loop", "a"),
     ("ltx-chunk", "a"),
+    ("ltx-loop", "u2k"),
+    ("ltx-r1", "u2k"),
     ("ltx-p5", "a"),
-    ("ltx-loop", "u4k"),
-    ("ltx-r1", "u4k"),
     ("ltx-base", "s2k"),
     ("ltx-r1", "s2k"),
+    ("ltx-chunk", "u2k"),
     ("mg3-idle", "u2k"),
     ("yume-idle", "u2k"),
     ("waypoint-idle", "u2k"),
-    ("ltx-chunk", "u2k"),
     ("mg3-pan", "a"),
     ("waypoint-pan", "a"),
     ("yume-pan", "a"),
     ("ltx-p4", "a"),
+    ("ltx-p5", "u2k"),
     ("ltx-p2", "u2k"),
     ("ltx-p3", "u2k"),
-    ("ltx-p5", "u2k"),
     ("ltx-p4", "u2k"),
 ]
+#: The grid copies (1280x704) are previews: at most 3 MB each (CRF 18 up), which only touches
+#: the 60 fps Waypoint clips and Matrix-Game's.
+GRID_MB = 3
 LICENCES = {
     "ltx": "LTX-2.x Community License (commercial use free under $10M revenue)",
     "waypoint": "weights Apache-2.0; inference code (HF repo .py) GPL-3.0",
@@ -107,7 +109,8 @@ EYE: dict[str, str] = {
         "scene-prompted clip. The near foliage still swings visibly (20-57 px p95), while trunks, "
         "the sign, the path and the sky stay put (creep at most 0.7 px). Fast fronds smear (the "
         "model's own motion blur), the rest is sharp. FlashVSR at 2560 sharpens the still parts "
-        "well and keeps the smear."
+        "well and keeps the smear. SeedVR2 at 2560 exists for camp-2, tree-1 and camp-1; "
+        "tree-2 ran out of memory."
     ),
     "ltx-s1": (
         "Stage 1 alone at 640x352 runs faster than real time (3.7 s for 4 s of video) but is "
@@ -157,7 +160,8 @@ EYE: dict[str, str] = {
         "but the world wanders. tree-1 holds (frozen). The camp views switch to a darker, "
         "flatter look of its own from the first generated frame, then creep 6-7 px. "
         "tree-2 turns into a different scene within 4 s: a yellowed tree, scattered leaves and "
-        "a wall. It only sees a 2:1 crop at 1024x512."
+        "a wall. It only sees a 2:1 crop at 1024x512, and its 2560 upscale (x3) stays soft. "
+        "Two of its four upscales (camp-1, tree-2) did not fit in the last run's wall."
     ),
     "waypoint-pan": (
         "Mouse x 0.1 is a fast pan, and it invents a blank grey wall to the right of camp-1. "
@@ -174,7 +178,8 @@ EYE: dict[str, str] = {
     ),
     "ltx-r1": (
         "Round 1's LTX clip (scene prompts), upscaled again to 2560 with FlashVSR's real "
-        "kernels (and SeedVR2)."
+        "kernels. SeedVR2 at 2560 exists for camp-2 and camp-1; tree-1 ran out of memory and "
+        "tree-2 was past the wall."
     ),
     "upscale-flashvsr": (
         "With the real Block-Sparse-Attention kernels: 4.5 fps at 2560x1408 on an A100 (round "
@@ -395,7 +400,78 @@ def mean(values: list) -> float | None:
     return round(sum(values) / len(values), 3) if values else None
 
 
+def real_time(row: dict) -> float | None:
+    """Seconds of video per second of generation (Waypoint: its sustained rate over 60 fps)."""
+    if row.get("realTimeFactor") is not None:
+        return row["realTimeFactor"]
+    if row.get("sustainedFps") and row.get("fps"):
+        return round(row["sustainedFps"] / row["fps"], 3)
+    return None
+
+
+def summarise(numbers: dict) -> dict:
+    """Per arm: what it made, how fast, how it moved and drifted, its upscales, the read by eye."""
+    arms: dict = {}
+    for key, row in numbers.items():
+        if "sameAs" in row:
+            continue
+        arms.setdefault(key.partition("|")[2], []).append(row)
+    summary = {}
+    for arm, rows in sorted(arms.items()):
+        made = [r for r in rows if "plantMotionP95Px" in r]
+        summary[arm] = {
+            "clips": len(made),
+            "worked": (len(made) == len(STARTS)) if made else None,
+            "gpu": made[0].get("gpu") if made else None,
+            "size": made[0].get("size") if made else None,
+            "fps": made[0].get("fps") if made else None,
+            "frames": made[0].get("frames") if made else None,
+            "prompt": (made[0].get("prompt") or made[0].get("caption")) if made else None,
+            "seconds": mean([r.get("seconds") for r in made]),
+            "firstMotionSeconds": mean(
+                [r.get("firstMotionSeconds") or r.get("firstFrameSeconds") for r in made]
+            ),
+            "realTimeFactor": mean([real_time(r) for r in made]),
+            "sustainedFps": mean([r.get("sustainedFps") for r in made]),
+            "dollarsWarm": mean([r.get("dollarsWarm") for r in made]),
+            "plantMotionP95Px": mean([r.get("plantMotionP95Px") for r in made]),
+            "plantMotionMeanPx": mean([r.get("plantMotionMeanPx") for r in made]),
+            "cameraCreepPxMax": max(
+                [r["cameraCreepPx"] for r in made if r.get("cameraCreepPx") is not None],
+                default=None,
+            ),
+            "driftDropDbMean": mean(
+                [
+                    r["driftPsnrFirstDb"] - r["driftPsnrLastDb"]
+                    for r in made
+                    if r.get("driftPsnrFirstDb") is not None
+                ]
+            ),
+            "upscale": {
+                kind: {
+                    "clips": len(done),
+                    "seconds": mean([u.get("seconds") for u in done]),
+                    "framesPerSecond": mean([u.get("framesPerSecond") for u in done]),
+                    "peakMemoryGB": mean([u.get("peakMemoryGB") for u in done]),
+                    "dollarsWarm": mean([u.get("dollarsWarm") for u in done]),
+                }
+                for kind in sorted({k for r in rows for k in r.get("upscale", {})})
+                for done in [[r["upscale"][kind] for r in rows if kind in r.get("upscale", {})]]
+            },
+            "licence": licence(arm),
+            "eye": EYE.get(arm),
+        }
+    return summary
+
+
 def main(argv: list[str]) -> int:
+    if argv[0] == "--summary":  # rebuild the per-arm summary and the notes of a numbers.json
+        path = Path(argv[1])
+        document = json.loads(path.read_text())
+        document["arms"] = summarise(document["clips"])
+        document["eye"] = EYE
+        path.write_text(json.dumps(document, indent=1))
+        return 0
     out = Path(argv[0])
     more = out.parent / f"{out.name}-more"
     starts_dir = Path(argv[1])
@@ -438,7 +514,7 @@ def main(argv: list[str]) -> int:
             numbers[f"{start}|{arm}"] = {"sameAs": f"{start}|{name}"}
         target = f"{start}-{name}-a.mp4"
         grid = letterbox(frames, *GRID)
-        row["crf"] = {"a": ffmpeg_encode(grid, fps, more / "clips" / target, 8)}
+        row["crf"] = {"a": ffmpeg_encode(grid, fps, more / "clips" / target, GRID_MB)}
         files.setdefault((name, "a"), []).append(target)
         numbers[f"{start}|{name}"] = row
         print(start, name, json.dumps({k: row[k] for k in row if "Px" in k or "Psnr" in k}))
@@ -467,56 +543,7 @@ def main(argv: list[str]) -> int:
             for n in names
             if n.startswith(f"{start}-")
         }
-    arms: dict = {}
-    for key, row in numbers.items():
-        if "sameAs" in row:
-            continue
-        arms.setdefault(key.partition("|")[2], []).append(row)
-    summary = {}
-    for arm, rows in sorted(arms.items()):
-        made = [r for r in rows if "seconds" in r]
-        summary[arm] = {
-            "clips": len(made),
-            "worked": len(made) == len(STARTS),
-            "gpu": made[0].get("gpu") if made else None,
-            "size": made[0].get("size") if made else None,
-            "fps": made[0].get("fps") if made else None,
-            "frames": made[0].get("frames") if made else None,
-            "prompt": (made[0].get("prompt") or made[0].get("caption")) if made else None,
-            "seconds": mean([r.get("seconds") for r in made]),
-            "firstMotionSeconds": mean(
-                [r.get("firstMotionSeconds") or r.get("firstFrameSeconds") for r in made]
-            ),
-            "realTimeFactor": mean([r.get("realTimeFactor") for r in made]),
-            "sustainedFps": mean([r.get("sustainedFps") for r in made]),
-            "dollarsWarm": mean([r.get("dollarsWarm") for r in made]),
-            "plantMotionP95Px": mean([r.get("plantMotionP95Px") for r in made]),
-            "plantMotionMeanPx": mean([r.get("plantMotionMeanPx") for r in made]),
-            "cameraCreepPxMax": max(
-                [r["cameraCreepPx"] for r in made if r.get("cameraCreepPx") is not None],
-                default=None,
-            ),
-            "driftDropDbMean": mean(
-                [
-                    r["driftPsnrFirstDb"] - r["driftPsnrLastDb"]
-                    for r in made
-                    if r.get("driftPsnrFirstDb") is not None
-                ]
-            ),
-            "upscale": {
-                kind: {
-                    "seconds": mean([r["upscale"][kind].get("seconds") for r in rows]),
-                    "framesPerSecond": mean(
-                        [r["upscale"][kind].get("framesPerSecond") for r in rows]
-                    ),
-                    "dollarsWarm": mean([r["upscale"][kind].get("dollarsWarm") for r in rows]),
-                }
-                for kind in sorted({k for r in rows for k in r.get("upscale", {})})
-                if all(kind in r.get("upscale", {}) for r in rows)
-            },
-            "licence": licence(arm),
-            "eye": EYE.get(arm),
-        }
+    summary = summarise(numbers)
     document = {
         "clips": numbers,
         "arms": summary,
