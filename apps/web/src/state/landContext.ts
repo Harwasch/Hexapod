@@ -13,8 +13,10 @@ export interface LandContextLayer {
   features: LandContextFeature[];
   selectedIds?: string[];
 }
-export type LandWorkspaceSection = "discover" | "inventory" | "scenarios" | "actions";
+export type LandWorkspaceSection = "discover" | "records" | "inventory" | "scenarios" | "actions";
 interface LandContextState {
+  researchQuestion: string;
+  setResearchQuestion: (question: string) => void;
   section: LandWorkspaceSection;
   setSection: (section: LandWorkspaceSection) => void;
   selectedInventoryId: string | null;
@@ -30,6 +32,8 @@ interface LandContextState {
 }
 
 export const useLandContext = create<LandContextState>((set, get) => ({
+  researchQuestion: "",
+  setResearchQuestion: (researchQuestion) => set({ researchQuestion }),
   section: "discover",
   setSection: (section) => set({ section }),
   selectedInventoryId: null,
@@ -82,5 +86,6 @@ export const useLandContext = create<LandContextState>((set, get) => ({
       selectedIds: [],
       selectedInventoryId: null,
       section: "discover",
+      researchQuestion: "",
     }),
 }));

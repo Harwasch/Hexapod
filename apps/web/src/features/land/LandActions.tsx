@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { components, LandArea } from "@twin/contracts";
+import type { components, LandArea, LandEvidence } from "@twin/contracts";
 import { boundsOf } from "@twin/geo";
 import { api, unwrap, ApiError } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
@@ -10,6 +10,7 @@ import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 import { useInvestigation, useInvestigations } from "./researchApi";
 import { ActionEvidence } from "./ActionEvidence";
+import { EvidenceView } from "./LandResearch";
 
 type Action = components["schemas"]["LandActionRead"];
 type Draft = components["schemas"]["LandActionCreate"];
@@ -142,6 +143,7 @@ export function LandActions({ land }: { land: LandArea }) {
   const [offset, setOffset] = useState(0);
   const [investigationId, setInvestigationId] = useState<string | null>(null);
   const [evidenceOffset, setEvidenceOffset] = useState(0);
+  const [sourceEvidence, setSourceEvidence] = useState<LandEvidence | null>(null);
   const ticket = useRef(0);
   const review = useRef<HTMLElement>(null);
   useEffect(
@@ -705,12 +707,15 @@ export function LandActions({ land }: { land: LandArea }) {
                 />
                 <span>
                   {item.title} · {item.spatialRelevance}{" "}
-                  <a href={item.url} target="_blank" rel="noopener noreferrer">
-                    Source
-                  </a>
+                  <button type="button" onClick={() => setSourceEvidence(item)}>
+                    Inspect source{item.document ? ` · page ${item.document.page}` : ""}
+                  </button>
                 </span>
               </label>
             ))}
+            {sourceEvidence && (
+              <EvidenceView evidence={sourceEvidence} onClose={() => setSourceEvidence(null)} />
+            )}
             {(evidenceOffset > 0 ||
               (evidence.data?.page.totals.evidence ?? 0) > evidenceOffset + 100) && (
               <div className="land-actions">

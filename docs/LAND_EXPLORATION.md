@@ -10,10 +10,10 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft recovery | Broader cadastral coverage, snapping/splitting, unfinished drawing recovery, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts and scenarios | Broader sources, isolated raster/compute tools, agent evaluations and live model validation |
-| Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
+| Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
-| Historical and rights workflows | Public search leads and cited research framework | Archive georeferencing, document ingestion, page citations and instrument/parcel lineage |
+| Historical and rights workflows | Private PDF/text originals, bounded page extraction, exact private citations, record search, dated document relationships and agent retrieval | OCR, archive imagery/georeferencing and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
 ## Product direction
@@ -608,3 +608,44 @@ visual outputs, all listed domain workflows, a redesigned action transition, acc
 and verified recovery paths. A polished selection panel or a chat that only returns prose
 does not satisfy the full feature. Live identity/model/provider configuration and external
 data availability must be reported separately from implementation and fixture-test coverage.
+
+## Implemented increment: private records and page citations
+
+Migration `0017` adds private land documents, original bytes, extracted pages, and dated
+relationships between records. The Records tab accepts PDF and UTF-8 text files, preserves
+immutable originals, records source/date/parcel metadata, and supports text search, page
+reading, original download, and relationships such as amendments or parcel lineage. A
+relationship records a user's evidence and does not establish current legal effect.
+
+Uploads use a bounded raw-byte transfer after metadata creation. Each file is limited to
+20 MiB; pending uploads reserve storage against `LAND_DOCUMENT_WORKSPACE_QUOTA_BYTES`
+(default 1 GiB). Original bytes live in a separate private database table, avoiding the
+public asset-storage path and loading blobs only for downloads. Retries reuse the same
+request and document; pending transfers can resume after reload. Unfinished reservations
+older than one day are reclaimed when another upload is initiated.
+
+PDF/text extraction runs in a disposable process with memory, CPU and wall-time limits.
+It does not execute embedded scripts or follow document URLs. Limits are 500 pages,
+20,000 extracted characters per page, and 2,000,000 per document. Text form-feed separators
+are the only source of page numbers for plain text. Scanned/empty pages, corrupt files,
+and truncation are surfaced explicitly, and the original remains available. OCR is not
+implemented in this increment.
+
+The research agent can search private records and read up to three exact pages per tool
+call. Evidence carries the document ID, page, immutable original SHA-256, actual extracted
+passage, source metadata and unresolved spatial applicability. A private citation does not
+need a fabricated public URL. Retrieval checkpoints and evidence IDs survive worker
+recovery. The page viewer and action evidence inspector open these private citations; an
+"Ask about this page" action prepares a question for user review. Research is never started
+merely by selecting a document. Private API responses now carry `private, no-store` and
+vary by authorization/workspace.
+
+Validation: 22 document/research/action API tests and five migration checks passed, including
+immutable retry behavior, bounded uploads, quota reservations, cross-land/workspace denial,
+PDF extraction, missing OCR, exact page citations and a typed agent fixture. Fifty relevant
+frontend tests, TypeScript, lint and a feature-enabled production build passed. A real local
+API browser journey uploaded a two-page synthetic record, read and linked page two, downloaded
+the original, prepared a page-specific question, reloaded and found the page through search;
+desktop/mobile checks reported no browser errors or horizontal overflow. The migration
+rollback test now ends its read transaction before running DDL on another connection.
+Live model behavior still needs configured model credentials. No deployment occurred.

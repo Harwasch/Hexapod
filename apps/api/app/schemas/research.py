@@ -4,10 +4,11 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field, HttpUrl
+from pydantic import Field, HttpUrl, model_validator
 
 from app.schemas.base import CamelModel
 from app.schemas.geojson import Footprint, MapGeometry
+from app.schemas.land_documents import DocumentLocator
 
 
 class ResearchBudget(CamelModel):
@@ -63,7 +64,8 @@ class EventRead(CamelModel):
 class EvidenceContent(CamelModel):
     provider: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=500)
-    url: HttpUrl
+    url: HttpUrl | None = None
+    document: DocumentLocator | None = None
     license: str = Field(min_length=1, max_length=1000)
     attribution: str = Field(min_length=1, max_length=2000)
     record_id: str | None = Field(default=None, max_length=500)
@@ -74,6 +76,12 @@ class EvidenceContent(CamelModel):
     spatial_relevance: Literal["intersects", "within", "nearby", "regional", "unresolved"]
     relevance_note: str = Field(min_length=1, max_length=2000)
     snapshot_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def source_locator(self) -> EvidenceContent:
+        if self.url is None and self.document is None:
+            raise ValueError("evidence needs a source URL or an immutable document page")
+        return self
 
 
 class EvidenceRead(EvidenceContent):

@@ -3199,6 +3199,217 @@
         "title": "CzmlSource",
         "type": "object"
       },
+      "DocumentLinkCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "maxLength": 3000,
+            "minLength": 1,
+            "title": "Basis",
+            "type": "string"
+          },
+          "effectiveDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effectivedate"
+          },
+          "fromDocumentId": {
+            "format": "uuid",
+            "title": "Fromdocumentid",
+            "type": "string"
+          },
+          "fromPage": {
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Frompage",
+            "type": "integer"
+          },
+          "relation": {
+            "enum": [
+              "amends",
+              "supersedes",
+              "conflicts-with",
+              "mentions",
+              "parcel-lineage",
+              "related"
+            ],
+            "title": "Relation",
+            "type": "string"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          },
+          "toDocumentId": {
+            "format": "uuid",
+            "title": "Todocumentid",
+            "type": "string"
+          },
+          "toPage": {
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Topage",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fromDocumentId",
+          "fromPage",
+          "toDocumentId",
+          "toPage",
+          "relation",
+          "basis"
+        ],
+        "title": "DocumentLinkCreate",
+        "type": "object"
+      },
+      "DocumentLinkRead": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "maxLength": 3000,
+            "minLength": 1,
+            "title": "Basis",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "createdBy": {
+            "title": "Createdby",
+            "type": "string"
+          },
+          "effectiveDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effectivedate"
+          },
+          "fromDocumentId": {
+            "format": "uuid",
+            "title": "Fromdocumentid",
+            "type": "string"
+          },
+          "fromPage": {
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Frompage",
+            "type": "integer"
+          },
+          "fromTitle": {
+            "title": "Fromtitle",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "relation": {
+            "enum": [
+              "amends",
+              "supersedes",
+              "conflicts-with",
+              "mentions",
+              "parcel-lineage",
+              "related"
+            ],
+            "title": "Relation",
+            "type": "string"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          },
+          "toDocumentId": {
+            "format": "uuid",
+            "title": "Todocumentid",
+            "type": "string"
+          },
+          "toPage": {
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Topage",
+            "type": "integer"
+          },
+          "toTitle": {
+            "title": "Totitle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromDocumentId",
+          "fromPage",
+          "toDocumentId",
+          "toPage",
+          "relation",
+          "basis",
+          "fromTitle",
+          "toTitle",
+          "id",
+          "landId",
+          "createdBy",
+          "createdAt"
+        ],
+        "title": "DocumentLinkRead",
+        "type": "object"
+      },
+      "DocumentLocator": {
+        "additionalProperties": false,
+        "properties": {
+          "documentId": {
+            "format": "uuid",
+            "title": "Documentid",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "page": {
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "landId",
+          "documentId",
+          "page",
+          "sha256"
+        ],
+        "title": "DocumentLocator",
+        "type": "object"
+      },
       "DocumentOutput": {
         "additionalProperties": false,
         "properties": {
@@ -3218,6 +3429,76 @@
           "markdown"
         ],
         "title": "DocumentOutput",
+        "type": "object"
+      },
+      "DocumentPageRead": {
+        "additionalProperties": false,
+        "properties": {
+          "documentId": {
+            "format": "uuid",
+            "title": "Documentid",
+            "type": "string"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "documentId",
+          "page",
+          "text",
+          "truncated",
+          "sha256"
+        ],
+        "title": "DocumentPageRead",
+        "type": "object"
+      },
+      "DocumentSearchHit": {
+        "additionalProperties": false,
+        "properties": {
+          "documentId": {
+            "format": "uuid",
+            "title": "Documentid",
+            "type": "string"
+          },
+          "excerpt": {
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "documentId",
+          "title",
+          "page",
+          "excerpt",
+          "truncated"
+        ],
+        "title": "DocumentSearchHit",
         "type": "object"
       },
       "EventRead": {
@@ -3259,6 +3540,16 @@
             "minLength": 1,
             "title": "Attribution",
             "type": "string"
+          },
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentLocator"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "excerpt": {
             "maxLength": 30000,
@@ -3364,17 +3655,23 @@
             "type": "string"
           },
           "url": {
-            "format": "uri",
-            "maxLength": 2083,
-            "minLength": 1,
-            "title": "Url",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
           }
         },
         "required": [
           "provider",
           "title",
-          "url",
           "license",
           "attribution",
           "retrievedAt",
@@ -5337,6 +5634,345 @@
           "source"
         ],
         "title": "LandCreate",
+        "type": "object"
+      },
+      "LandDocumentCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "documentDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentdate"
+          },
+          "filename": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "jurisdiction": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Jurisdiction",
+            "type": "string"
+          },
+          "kind": {
+            "default": "other",
+            "enum": [
+              "deed",
+              "easement",
+              "mineral",
+              "water",
+              "survey",
+              "historical",
+              "report",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "license": {
+            "default": "User-provided record; workspace access only. Reuse rights unverified.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "License",
+            "type": "string"
+          },
+          "mediaType": {
+            "enum": [
+              "application/pdf",
+              "text/plain"
+            ],
+            "title": "Mediatype",
+            "type": "string"
+          },
+          "parcelReferences": {
+            "items": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Parcelreferences",
+            "type": "array"
+          },
+          "recordedDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordeddate"
+          },
+          "recordingNumber": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Recordingnumber",
+            "type": "string"
+          },
+          "relevanceNote": {
+            "default": "Applicability to the selected land has not been established.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Relevancenote",
+            "type": "string"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          },
+          "sizeBytes": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 20971520.0,
+            "title": "Sizebytes",
+            "type": "integer"
+          },
+          "sourceNote": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Sourcenote",
+            "type": "string"
+          },
+          "sourceUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceurl"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "filename",
+          "mediaType",
+          "sizeBytes",
+          "sourceNote"
+        ],
+        "title": "LandDocumentCreate",
+        "type": "object"
+      },
+      "LandDocumentRead": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "documentDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentdate"
+          },
+          "extractedCharacters": {
+            "title": "Extractedcharacters",
+            "type": "integer"
+          },
+          "filename": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "jurisdiction": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Jurisdiction",
+            "type": "string"
+          },
+          "kind": {
+            "default": "other",
+            "enum": [
+              "deed",
+              "easement",
+              "mineral",
+              "water",
+              "survey",
+              "historical",
+              "report",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "license": {
+            "default": "User-provided record; workspace access only. Reuse rights unverified.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "License",
+            "type": "string"
+          },
+          "mediaType": {
+            "enum": [
+              "application/pdf",
+              "text/plain"
+            ],
+            "title": "Mediatype",
+            "type": "string"
+          },
+          "pageCount": {
+            "title": "Pagecount",
+            "type": "integer"
+          },
+          "parcelReferences": {
+            "items": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Parcelreferences",
+            "type": "array"
+          },
+          "recordedDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordeddate"
+          },
+          "recordingNumber": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Recordingnumber",
+            "type": "string"
+          },
+          "relevanceNote": {
+            "default": "Applicability to the selected land has not been established.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Relevancenote",
+            "type": "string"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "sizeBytes": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 20971520.0,
+            "title": "Sizebytes",
+            "type": "integer"
+          },
+          "sourceNote": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Sourcenote",
+            "type": "string"
+          },
+          "sourceUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceurl"
+          },
+          "status": {
+            "enum": [
+              "awaiting-upload",
+              "ready",
+              "needs-ocr",
+              "unreadable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "filename",
+          "mediaType",
+          "sizeBytes",
+          "sourceNote",
+          "id",
+          "landId",
+          "status",
+          "sha256",
+          "pageCount",
+          "extractedCharacters",
+          "warnings",
+          "createdAt"
+        ],
+        "title": "LandDocumentRead",
         "type": "object"
       },
       "LandFeatureCreate": {
@@ -12394,7 +13030,7 @@
     }
   },
   "info": {
-    "description": "\nCatalog service for the geospatial digital twin.\n\n* **Sites** \u2014 physical places with reality captures, footprints and camera bookmarks.\n* **Assets** \u2014 derived, renderable delivery assets (3D Tiles) with provenance.\n* **Layers** \u2014 composable world layers from open data or the user's own sources.\n* **Captures** \u2014 uploads in progress: source files go browser \u2192 object storage over\n  presigned multipart URLs, never through this API.\n* **Jobs** \u2014 pipeline runs over a capture, queued here and executed by a worker.\n\nAll geometry is GeoJSON (WGS 84, RFC 7946). All timestamps are ISO 8601.\n\nReads are open. Every mutating endpoint requires the shared write token as\n`Authorization: Bearer <API_WRITE_TOKEN>`, unless the deployment has no token\nconfigured \u2014 which production refuses to start without.\n",
+    "description": "\nCatalog service for the geospatial digital twin.\n\n* **Sites** \u2014 physical places with reality captures, footprints and camera bookmarks.\n* **Assets** \u2014 derived, renderable delivery assets (3D Tiles) with provenance.\n* **Layers** \u2014 composable world layers from open data or the user's own sources.\n* **Captures** \u2014 uploads in progress: source files go browser \u2192 object storage over\n  presigned multipart URLs, never through this API.\n* **Jobs** \u2014 pipeline runs over a capture, queued here and executed by a worker.\n\nAll geometry is GeoJSON (WGS 84, RFC 7946). All timestamps are ISO 8601.\n\nCatalog reads are public. Land, research, document and workspace routes use the configured\nland identity mode and workspace authorization. Catalog mutations require the shared write\ntoken as `Authorization: Bearer <API_WRITE_TOKEN>`, unless the deployment has no token\nconfigured \u2014 which production refuses to start without.\n",
     "title": "Digital Twin API",
     "version": "1.0.0"
   },
@@ -16929,6 +17565,1031 @@
         "summary": "Revisions",
         "tags": [
           "land actions"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/documents": {
+      "get": {
+        "operationId": "listing_api_v1_land__land_id__documents_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LandDocumentRead"
+                  },
+                  "title": "Response Listing Api V1 Land  Land Id  Documents Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Listing",
+        "tags": [
+          "land documents"
+        ]
+      },
+      "post": {
+        "operationId": "initiate_api_v1_land__land_id__documents_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LandDocumentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandDocumentRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Initiate",
+        "tags": [
+          "land documents"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/documents/links": {
+      "get": {
+        "operationId": "links_api_v1_land__land_id__documents_links_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentLinkRead"
+                  },
+                  "title": "Response Links Api V1 Land  Land Id  Documents Links Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Links",
+        "tags": [
+          "land documents"
+        ]
+      },
+      "post": {
+        "operationId": "link_api_v1_land__land_id__documents_links_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentLinkCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentLinkRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Link",
+        "tags": [
+          "land documents"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/documents/search": {
+      "get": {
+        "operationId": "search_api_v1_land__land_id__documents_search_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 3,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentSearchHit"
+                  },
+                  "title": "Response Search Api V1 Land  Land Id  Documents Search Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Search",
+        "tags": [
+          "land documents"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/documents/{document_id}": {
+      "get": {
+        "operationId": "get_api_v1_land__land_id__documents__document_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandDocumentRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get",
+        "tags": [
+          "land documents"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/documents/{document_id}/content": {
+      "get": {
+        "operationId": "download_api_v1_land__land_id__documents__document_id__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Download",
+        "tags": [
+          "land documents"
+        ]
+      },
+      "put": {
+        "operationId": "upload_api_v1_land__land_id__documents__document_id__content_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandDocumentRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Upload",
+        "tags": [
+          "land documents"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/documents/{document_id}/pages/{page}": {
+      "get": {
+        "operationId": "page_api_v1_land__land_id__documents__document_id__pages__page__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "page",
+            "required": true,
+            "schema": {
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentPageRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Page",
+        "tags": [
+          "land documents"
         ]
       }
     },

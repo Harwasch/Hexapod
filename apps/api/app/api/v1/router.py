@@ -13,6 +13,7 @@ from app.api.v1 import (
     jobs,
     land,
     land_actions,
+    land_documents,
     land_features,
     layers,
     live,
@@ -61,3 +62,5 @@ api_v1.include_router(scenarios.router)
 api_v1.include_router(land_features.router)
 
 api_v1.include_router(land_actions.router)
+
+api_v1.include_router(land_documents.router)

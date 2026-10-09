@@ -578,7 +578,7 @@
   z-index: 2;
   backdrop-filter: blur(16px);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
   padding: 5px;
   border-radius: 12px;
@@ -653,4 +653,58 @@
 .land-action-feature {
   padding: 12px 0;
   border-bottom: 1px solid var(--control-border);
+}
+
+.land-records,
+.land-record-form,
+.land-document-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.land-record-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+}
+.land-record-form details > * + * {
+  margin-top: 12px;
+}
+.land-record-form input[type="file"] {
+  width: 100%;
+  font-size: 12px;
+}
+.land-page-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 380px;
+  overflow: auto;
+  background: #09161055;
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  padding: 14px;
+  line-height: 1.6;
+  font:
+    12px/1.6 ui-monospace,
+    monospace;
+}
+.land-document-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  font-size: 12px;
+}
+.land-document-dates dt {
+  color: var(--text-secondary);
+}
+.land-document-dates dd {
+  margin: 4px 0 0;
+}
+.land-record-link {
+  border-top: 1px solid var(--control-border);
+  padding-top: 14px;
 }

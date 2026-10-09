@@ -17,15 +17,19 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.models.land import LandArea, LandBoundaryRevision
+from app.models.land_document import LandDocument, LandDocumentLink
 from app.models.land_feature import LandFeature
 from app.models.research import Investigation, ResearchMessage
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.research import queue
+from app.research.documents import retrieve as retrieve_documents
 from app.research.model import (
     ActionDraftAction,
     ArtifactAction,
     ClaudeResearchModel,
     CompleteAction,
+    DocumentReadAction,
+    DocumentSearchAction,
     FindingAction,
     ResearchDecision,
     ResearchModel,
@@ -41,7 +45,7 @@ from app.schemas.geojson import Footprint
 from app.schemas.research import EvidenceContent, ResearchBudget
 from app.schemas.scenarios import ScenarioCreate
 from app.services import land_actions, scenarios
-from app.services.errors import InvalidInputError
+from app.services.errors import InvalidInputError, NotFoundError
 
 log = logging.getLogger("twin.research")
 FOOTPRINT: TypeAdapter[Footprint] = TypeAdapter(Footprint)
@@ -194,6 +198,60 @@ class ResearchWorker:
         queue.checkpoint(db, run_id, token, state)
         return value
 
+    def _documents(
+        self,
+        db: Session,
+        run_id: uuid.UUID,
+        token: uuid.UUID,
+        workspace_id: uuid.UUID,
+        land_id: uuid.UUID,
+        action: DocumentSearchAction | DocumentReadAction,
+        state: dict[str, Any],
+    ) -> str:
+        key = "documents/" + hashlib.sha256(action.model_dump_json().encode()).hexdigest()
+        if key in state["sources"]:
+            return "These document passages are already available in retrieved evidence."
+        cached = state.get("pending_documents")
+        if cached and cached["key"] == key:
+            result = unpack(cached["result"])
+        else:
+            if isinstance(action, DocumentSearchAction):
+                result = retrieve_documents(db, workspace_id, land_id, query=action.query)
+            else:
+                result = retrieve_documents(
+                    db,
+                    workspace_id,
+                    land_id,
+                    document_id=action.document_id,
+                    first_page=action.first_page,
+                    count=action.count,
+                )
+            state["pending_documents"] = {"key": key, "result": pack(result)}
+            queue.checkpoint(db, run_id, token, state)
+        ids = [
+            queue.save_evidence(db, run_id, token, f"{key}/{item_key}", item)
+            for item_key, item in result.evidence
+        ]
+        for page, identifier in zip(result.data["pages"], ids, strict=True):
+            page["evidenceId"] = str(identifier)
+        state["sources"][key] = {
+            "provider": result.provider,
+            "status": result.status,
+            "summary": result.summary,
+            "evidenceIds": [str(identifier) for identifier in ids],
+            "data": result.data,
+        }
+        state.pop("pending_documents", None)
+        queue.checkpoint(
+            db,
+            run_id,
+            token,
+            state,
+            kind="source",
+            payload={"provider": "land-documents", "message": result.summary},
+        )
+        return result.summary
+
     def _search(
         self,
         db: Session,
@@ -313,6 +371,32 @@ class ResearchWorker:
                     .limit(10)
                 )
             ]
+            saved_documents = [
+                {
+                    "id": str(document.id),
+                    "title": document.metadata_json["title"],
+                    "kind": document.metadata_json["kind"],
+                    "pages": document.page_count,
+                    "status": document.status,
+                    "documentDate": document.metadata_json.get("document_date"),
+                    "recordedDate": document.metadata_json.get("recorded_date"),
+                }
+                for document in db.scalars(
+                    select(LandDocument)
+                    .where(LandDocument.land_id == land_id)
+                    .order_by(LandDocument.created_at.desc())
+                    .limit(50)
+                )
+            ]
+            document_relationships = [
+                relationship.content
+                for relationship in db.scalars(
+                    select(LandDocumentLink)
+                    .where(LandDocumentLink.land_id == land_id)
+                    .order_by(LandDocumentLink.created_at.desc())
+                    .limit(30)
+                )
+            ]
             saved_features = [
                 {
                     "id": str(feature.id),
@@ -405,6 +489,8 @@ class ResearchWorker:
                             "conversation": conversation,
                             "savedScenarios": saved_scenarios,
                             "inventoryFeatures": saved_features,
+                            "landDocuments": saved_documents,
+                            "userRecordedDocumentRelationships": document_relationships,
                             "boundaryRevision": boundary_revision,
                             "bounds": context.geometry.bounds,
                             "sourcesAvailable": [asdict(source) for source in SOURCES.values()],
@@ -436,6 +522,10 @@ class ResearchWorker:
                         result = f"Retrieved {action.provider}; see retrieved source data."
                     elif isinstance(action, SearchAction):
                         result = self._search(db, run_id, token, action, context, state, budget)
+                    elif isinstance(action, (DocumentSearchAction, DocumentReadAction)):
+                        result = self._documents(
+                            db, run_id, token, workspace_id, land_id, action, state
+                        )
                     elif isinstance(action, ScenarioAction):
                         current = queue.locked(db, run_id, token)
                         queue.validate_citations(
@@ -517,7 +607,7 @@ class ResearchWorker:
                         )
                         queue.finish(db, run_id, token, "succeeded", action.summary + citations)
                         return
-                except (InvalidInputError, ValueError) as error:
+                except (ValueError, NotFoundError) as error:
                     db.rollback()
                     result = str(error)[:1000]
                 state["actions"].append({"action": action.kind, "result": result})

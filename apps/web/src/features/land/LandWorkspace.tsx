@@ -5,9 +5,11 @@ import { LandResearch } from "./LandResearch";
 import { LandInventory } from "./LandInventory";
 import { LandScenarios } from "./LandScenarios";
 import { LandActions } from "./LandActions";
+import { LandDocuments } from "./LandDocuments";
 
 const sections = [
   ["discover", "Discover"],
+  ["records", "Records"],
   ["inventory", "Assets"],
   ["scenarios", "Scenarios"],
   ["actions", "Actions"],
@@ -59,6 +61,8 @@ export function LandWorkspace({ land }: { land: LandArea }) {
         >
           {value === "discover" ? (
             <LandResearch land={land} />
+          ) : value === "records" ? (
+            <LandDocuments land={land} />
           ) : value === "inventory" ? (
             <LandInventory land={land} />
           ) : value === "scenarios" ? (

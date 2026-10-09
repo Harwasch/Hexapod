@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     api_write_token: str | None = None
 
     # OIDC workspaces and the legacy single-operator pilot are separate auth modes.
+    land_document_workspace_quota_bytes: int = Field(
+        default=1024 * 1024 * 1024, ge=20 * 1024 * 1024
+    )
     land_auth_mode: Literal["pilot", "oidc"] = "pilot"
     land_oidc_issuer: str | None = None
     land_oidc_audience: str | None = None

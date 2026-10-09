@@ -88,6 +88,8 @@ def test_action_review_immutable_history_and_private_mission_handoff(client, db,
     assert client.get(identifier + "/mission").json()["id"] == mission["id"]
     from alembic import command
 
+    # End the client fixture's read transaction before DDL runs on another connection.
+    db.rollback()
     with pytest.raises(RuntimeError, match="private missions"):
         command.downgrade(alembic_config, "0015")
 

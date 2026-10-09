@@ -13,6 +13,7 @@ import { boundsOf } from "@twin/geo";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
 import { useLandAccessReady, useLandScope, useLandCanEdit } from "@/state/landIdentity";
+import { useLandContext } from "@/state/landContext";
 import {
   beginInvestigation,
   cancelResearch,
@@ -23,6 +24,7 @@ import {
   useResearchStatus,
 } from "./researchApi";
 import { ResearchArtifactView } from "./ResearchArtifacts";
+import { LandDocumentViewer } from "./LandDocumentViewer";
 import "./research.css";
 
 function eventText(event: ResearchEvent): string {
@@ -64,9 +66,20 @@ export function EvidenceView({
       </dl>
       <blockquote>{evidence.excerpt}</blockquote>
       <p className="land-footnote">{evidence.attribution}</p>
-      <a href={evidence.url} target="_blank" rel="noopener noreferrer">
-        Open original source <ArrowUpRight size={14} />
-      </a>
+      {evidence.document && (
+        <LandDocumentViewer
+          key={`${evidence.document.documentId}:${evidence.document.page}`}
+          landId={evidence.document.landId}
+          documentId={evidence.document.documentId}
+          initialPage={evidence.document.page}
+          pinnedHash={evidence.document.sha256}
+        />
+      )}
+      {evidence.url && (
+        <a href={evidence.url} target="_blank" rel="noopener noreferrer">
+          Open original source <ArrowUpRight size={14} />
+        </a>
+      )}
     </section>
   );
 }
@@ -88,7 +101,8 @@ export function LandResearch({ land }: { land: LandArea }) {
   const [offset, setOffset] = useState(0);
   const detail = useInvestigation(selected, offset);
   const [tab, setTab] = useState<"overview" | "conversation" | "visuals">("overview");
-  const [question, setQuestion] = useState("");
+  const question = useLandContext((state) => state.researchQuestion);
+  const setQuestion = useLandContext((state) => state.setResearchQuestion);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [evidence, setEvidence] = useState<LandEvidence | null>(null);

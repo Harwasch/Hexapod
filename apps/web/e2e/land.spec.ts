@@ -23,7 +23,9 @@ async function landApi(page: Page) {
       path.endsWith("/investigations") ||
       path.endsWith("/scenarios") ||
       path.endsWith("/features") ||
-      path.endsWith("/actions")
+      path.endsWith("/actions") ||
+      path.endsWith("/documents") ||
+      path.endsWith("/documents/links")
     ) {
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
       return;

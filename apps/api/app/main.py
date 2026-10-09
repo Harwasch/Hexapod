@@ -42,8 +42,9 @@ Catalog service for the geospatial digital twin.
 
 All geometry is GeoJSON (WGS 84, RFC 7946). All timestamps are ISO 8601.
 
-Reads are open. Every mutating endpoint requires the shared write token as
-`Authorization: Bearer <API_WRITE_TOKEN>`, unless the deployment has no token
+Catalog reads are public. Land, research, document and workspace routes use the configured
+land identity mode and workspace authorization. Catalog mutations require the shared write
+token as `Authorization: Bearer <API_WRITE_TOKEN>`, unless the deployment has no token
 configured — which production refuses to start without.
 """
 
@@ -136,7 +137,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         # Authorization carries the write token, so the preflight has to allow it or
         # every browser write fails before it is sent.
-        allow_headers=["Content-Type", "Accept", "Authorization", "X-Workspace-ID", "Last-Event-ID"],
+        allow_headers=[
+            "Content-Type",
+            "Accept",
+            "Authorization",
+            "X-Workspace-ID",
+            "Last-Event-ID",
+        ],
         # A handoff-authorised response carries the next token in this header, and a
         # cross-origin phone page cannot read a header the server does not expose --
         # without this line the renewal chain silently breaks the moment the web app is
@@ -153,6 +160,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = await call_next(request)
         elapsed_ms = (time.perf_counter() - started) * 1000
         response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
+        if request.url.path.startswith(("/api/v1/land", "/api/v1/research", "/api/v1/workspaces")):
+            response.headers["Cache-Control"] = "private, no-store"
+            vary = [
+                item.strip() for item in response.headers.get("Vary", "").split(",") if item.strip()
+            ]
+            response.headers["Vary"] = ", ".join(
+                dict.fromkeys([*vary, "Authorization", "X-Workspace-ID"])
+            )
         if elapsed_ms > 500:
             logger.warning(
                 "slow request %s %s took %.0f ms", request.method, request.url.path, elapsed_ms
