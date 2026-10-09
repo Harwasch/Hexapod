@@ -4131,6 +4131,16 @@
             "title": "Spatialrelevance",
             "type": "string"
           },
+          "survey": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurveyLocator"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "title": {
             "maxLength": 500,
             "minLength": 1,
@@ -12468,6 +12478,15 @@
             "title": "Evidenceids",
             "type": "array"
           },
+          "fieldSurveyIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Fieldsurveyids",
+            "type": "array"
+          },
           "inputs": {
             "discriminator": {
               "mapping": {
@@ -12526,6 +12545,15 @@
             },
             "maxItems": 100,
             "title": "Evidenceids",
+            "type": "array"
+          },
+          "fieldSurveyIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Fieldsurveyids",
             "type": "array"
           },
           "id": {
@@ -12704,6 +12732,15 @@
             "minimum": 1.0,
             "title": "Expectedrevision",
             "type": "integer"
+          },
+          "fieldSurveyIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Fieldsurveyids",
+            "type": "array"
           },
           "inputs": {
             "discriminator": {
@@ -13804,6 +13841,76 @@
         "title": "SourceRead",
         "type": "object"
       },
+      "SpeciesObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "hits": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hits"
+          },
+          "identification": {
+            "enum": [
+              "verified",
+              "tentative",
+              "unidentified"
+            ],
+            "title": "Identification",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Notes",
+            "type": "string"
+          },
+          "percentCover": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percentcover"
+          },
+          "stratum": {
+            "enum": [
+              "canopy",
+              "shrub",
+              "herb",
+              "ground",
+              "aquatic"
+            ],
+            "title": "Stratum",
+            "type": "string"
+          },
+          "taxon": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Taxon",
+            "type": "string"
+          }
+        },
+        "required": [
+          "taxon",
+          "stratum",
+          "identification"
+        ],
+        "title": "SpeciesObservation",
+        "type": "object"
+      },
       "StacSource": {
         "additionalProperties": false,
         "description": "Reference to a STAC item/collection. Resolution to a renderable asset happens client-side.",
@@ -13918,6 +14025,467 @@
           "checkedAt"
         ],
         "title": "StorageReconciliation",
+        "type": "object"
+      },
+      "SurveyCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "assessedStrata": {
+            "items": {
+              "enum": [
+                "canopy",
+                "shrub",
+                "herb",
+                "ground",
+                "aquatic"
+              ],
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Assessedstrata",
+            "type": "array"
+          },
+          "boundaryRevision": {
+            "minimum": 1.0,
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "design": {
+            "enum": [
+              "census",
+              "random",
+              "systematic",
+              "purposive"
+            ],
+            "title": "Design",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "visual-cover",
+              "point-intercept"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "methodNotes": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Methodnotes",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "observedOn": {
+            "format": "date",
+            "title": "Observedon",
+            "type": "string"
+          },
+          "observer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Observer",
+            "type": "string"
+          },
+          "plots": {
+            "items": {
+              "$ref": "#/components/schemas/SurveyPlot"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Plots",
+            "type": "array"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          },
+          "supersedesId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedesid"
+          }
+        },
+        "required": [
+          "name",
+          "boundaryRevision",
+          "observedOn",
+          "observer",
+          "method",
+          "design",
+          "assessedStrata",
+          "methodNotes",
+          "plots"
+        ],
+        "title": "SurveyCreate",
+        "type": "object"
+      },
+      "SurveyLocator": {
+        "additionalProperties": false,
+        "properties": {
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "surveyId": {
+            "format": "uuid",
+            "title": "Surveyid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "landId",
+          "surveyId",
+          "sha256"
+        ],
+        "title": "SurveyLocator",
+        "type": "object"
+      },
+      "SurveyPlot": {
+        "additionalProperties": false,
+        "properties": {
+          "boundary": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "completeInventory": {
+            "default": false,
+            "title": "Completeinventory",
+            "type": "boolean"
+          },
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/SpeciesObservation"
+            },
+            "maxItems": 200,
+            "title": "Observations",
+            "type": "array"
+          },
+          "samplePoints": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Samplepoints"
+          }
+        },
+        "required": [
+          "label",
+          "boundary",
+          "observations"
+        ],
+        "title": "SurveyPlot",
+        "type": "object"
+      },
+      "SurveyRead": {
+        "additionalProperties": false,
+        "properties": {
+          "assessedStrata": {
+            "items": {
+              "enum": [
+                "canopy",
+                "shrub",
+                "herb",
+                "ground",
+                "aquatic"
+              ],
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Assessedstrata",
+            "type": "array"
+          },
+          "boundaryRevision": {
+            "minimum": 1.0,
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "design": {
+            "enum": [
+              "census",
+              "random",
+              "systematic",
+              "purposive"
+            ],
+            "title": "Design",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "visual-cover",
+              "point-intercept"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "methodNotes": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Methodnotes",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "observedOn": {
+            "format": "date",
+            "title": "Observedon",
+            "type": "string"
+          },
+          "observer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Observer",
+            "type": "string"
+          },
+          "plots": {
+            "items": {
+              "$ref": "#/components/schemas/SurveyPlot"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Plots",
+            "type": "array"
+          },
+          "recordedBy": {
+            "title": "Recordedby",
+            "type": "string"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SurveySummary"
+          },
+          "supersedesId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedesid"
+          }
+        },
+        "required": [
+          "name",
+          "boundaryRevision",
+          "observedOn",
+          "observer",
+          "method",
+          "design",
+          "assessedStrata",
+          "methodNotes",
+          "plots",
+          "id",
+          "landId",
+          "summary",
+          "sha256",
+          "recordedBy",
+          "createdAt",
+          "stale"
+        ],
+        "title": "SurveyRead",
+        "type": "object"
+      },
+      "SurveySpeciesSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "assessedAreaM2": {
+            "title": "Assessedaream2",
+            "type": "number"
+          },
+          "assessedSampleFraction": {
+            "title": "Assessedsamplefraction",
+            "type": "number"
+          },
+          "identifications": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Identifications",
+            "type": "array"
+          },
+          "maximumPercent": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Maximumpercent",
+            "type": "number"
+          },
+          "meanPercent": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Meanpercent",
+            "type": "number"
+          },
+          "measuredPlots": {
+            "title": "Measuredplots",
+            "type": "integer"
+          },
+          "minimumPercent": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Minimumpercent",
+            "type": "number"
+          },
+          "stratum": {
+            "enum": [
+              "canopy",
+              "shrub",
+              "herb",
+              "ground",
+              "aquatic"
+            ],
+            "title": "Stratum",
+            "type": "string"
+          },
+          "taxon": {
+            "title": "Taxon",
+            "type": "string"
+          }
+        },
+        "required": [
+          "taxon",
+          "stratum",
+          "identifications",
+          "meanPercent",
+          "minimumPercent",
+          "maximumPercent",
+          "measuredPlots",
+          "assessedAreaM2",
+          "assessedSampleFraction"
+        ],
+        "title": "SurveySpeciesSummary",
+        "type": "object"
+      },
+      "SurveySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "default": "field-cover-area-weighted-v1",
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "landAreaM2": {
+            "title": "Landaream2",
+            "type": "number"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "plotAreasM2": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Plotareasm2",
+            "type": "array"
+          },
+          "sampledAreaM2": {
+            "title": "Sampledaream2",
+            "type": "number"
+          },
+          "sampledFraction": {
+            "title": "Sampledfraction",
+            "type": "number"
+          },
+          "species": {
+            "items": {
+              "$ref": "#/components/schemas/SurveySpeciesSummary"
+            },
+            "title": "Species",
+            "type": "array"
+          }
+        },
+        "required": [
+          "landAreaM2",
+          "sampledAreaM2",
+          "sampledFraction",
+          "plotAreasM2",
+          "species",
+          "limitations"
+        ],
+        "title": "SurveySummary",
         "type": "object"
       },
       "TableColumn": {
@@ -23322,6 +23890,441 @@
         "summary": "History",
         "tags": [
           "land scenarios"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/surveys": {
+      "get": {
+        "operationId": "listing_api_v1_land__land_id__surveys_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SurveyRead"
+                  },
+                  "title": "Response Listing Api V1 Land  Land Id  Surveys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Listing",
+        "tags": [
+          "land ecology"
+        ]
+      },
+      "post": {
+        "operationId": "create_api_v1_land__land_id__surveys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SurveyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurveyRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create",
+        "tags": [
+          "land ecology"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/surveys/preview": {
+      "post": {
+        "operationId": "preview_api_v1_land__land_id__surveys_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SurveyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurveySummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Preview",
+        "tags": [
+          "land ecology"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/surveys/{survey_id}": {
+      "get": {
+        "operationId": "get_api_v1_land__land_id__surveys__survey_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "survey_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Survey Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurveyRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get",
+        "tags": [
+          "land ecology"
         ]
       }
     },

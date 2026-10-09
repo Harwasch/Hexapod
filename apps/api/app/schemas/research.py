@@ -11,6 +11,7 @@ from app.schemas.geojson import Footprint, MapGeometry
 from app.schemas.land_archives import ArchiveMedia
 from app.schemas.land_documents import DocumentLocator
 from app.schemas.land_rasters import RasterRequest
+from app.schemas.land_surveys import SurveyLocator
 
 
 class ResearchBudget(CamelModel):
@@ -76,6 +77,7 @@ class EvidenceContent(CamelModel):
     title: str = Field(min_length=1, max_length=500)
     url: HttpUrl | None = None
     document: DocumentLocator | None = None
+    survey: SurveyLocator | None = None
     media: ArchiveMedia | None = None
     license: str = Field(min_length=1, max_length=1000)
     attribution: str = Field(min_length=1, max_length=2000)
@@ -90,8 +92,8 @@ class EvidenceContent(CamelModel):
 
     @model_validator(mode="after")
     def source_locator(self) -> EvidenceContent:
-        if self.url is None and self.document is None:
-            raise ValueError("evidence needs a source URL or an immutable document page")
+        if self.url is None and self.document is None and self.survey is None:
+            raise ValueError("evidence needs a source URL, immutable document page or field survey")
         return self
 
 

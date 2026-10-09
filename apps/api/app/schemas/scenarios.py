@@ -110,6 +110,7 @@ class ScenarioCreate(CamelModel):
     boundary_revision: int = Field(ge=1)
     inputs: ScenarioInputs
     evidence_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+    field_survey_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
 
 
 class ScenarioRevise(ScenarioCreate):

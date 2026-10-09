@@ -3,6 +3,7 @@ import type { LandArea } from "@twin/contracts";
 import { useLandContext } from "@/state/landContext";
 import { LandResearch } from "./LandResearch";
 import { LandInventory } from "./LandInventory";
+import { LandEcology } from "./LandEcology";
 import { LandScenarios } from "./LandScenarios";
 import { LandActions } from "./LandActions";
 import { LandDocuments } from "./LandDocuments";
@@ -11,6 +12,7 @@ const sections = [
   ["discover", "Discover"],
   ["records", "Records"],
   ["inventory", "Assets"],
+  ["ecology", "Ecology"],
   ["scenarios", "Scenarios"],
   ["actions", "Actions"],
 ] as const;
@@ -65,6 +67,8 @@ export function LandWorkspace({ land }: { land: LandArea }) {
             <LandDocuments land={land} />
           ) : value === "inventory" ? (
             <LandInventory land={land} />
+          ) : value === "ecology" ? (
+            <LandEcology land={land} />
           ) : value === "scenarios" ? (
             <LandScenarios land={land} />
           ) : (

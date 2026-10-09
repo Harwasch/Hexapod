@@ -22,6 +22,7 @@ async function landApi(page: Page) {
     if (
       path.endsWith("/investigations") ||
       path.endsWith("/scenarios") ||
+    path.endsWith("/surveys") ||
       path.endsWith("/features") ||
       path.endsWith("/actions") ||
       path.endsWith("/documents") ||

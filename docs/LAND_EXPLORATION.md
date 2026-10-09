@@ -11,7 +11,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
-| Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
+| Scenarios and ecology | Versioned solar economics and restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references | Roof/shading analysis, taxonomy/reference-ecosystem integrations and predictive restoration modeling |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
@@ -1021,3 +1021,68 @@ inspected. A discovered native-select/grid overflow was fixed, then both page an
 horizontal-overflow checks passed with no browser errors. No production deployment was made.
 Live AI selection of this tool still requires configured model credentials; this environment
 has none attached. The complete feature remains in progress.
+
+## Implemented increment: field species surveys
+
+Migration `0022` adds immutable dated field surveys pinned to a land boundary revision.
+Each survey records the observer, assessed vegetation strata, sampling design and method,
+plot polygons, species identifications, observations and method notes. Methods support visual
+percent cover and point-intercept counts with explicit sampled-point denominators. Plot
+geometry must be inside the pinned boundary, including its holes, and plots cannot overlap.
+A claimed census must cover the whole boundary. Regional calculations are limited to five
+degrees of extent and latitudes below 85 degrees. Plot area uses the WGS84 ellipsoid.
+
+Species percentages and vertical strata may overlap; they are never normalized to a 100%
+composition. Summary means use mapped plot-area weights. Unlisted species remain unknown
+unless the observer explicitly records a complete inventory for the assessed strata; even
+then, the resulting zero is non-detection, not proof of ecological absence. Each species
+summary exposes its own assessed area, plot count, range and identification states. These
+are descriptive sample means, not statistical whole-land estimates or confidence intervals.
+Point-intercept measurements count points with a taxon, not repeated contacts at a point.
+
+Workspace-scoped preview, create, paged list and read routes live under
+`/api/v1/land/{land_id}/surveys`. Viewer roles may inspect/preview; recording requires an
+editor or owner. Creates are idempotent, request-key reuse with changed observations is a
+conflict, and each record carries a checksum over canonical observations and calculation.
+Corrections create a new record referring to the prior survey. Land deletion cascades, and
+boundary changes mark existing surveys stale without changing their recorded observations.
+
+Research can retrieve bounded pages of species summaries through `read_field_survey` and
+cite a private, immutable survey locator and checksum. Model context lists recent survey
+identities and observation dates. Survey notes are untrusted source data, and research
+instructions distinguish tentative identifications, plot observations and whole-land claims.
+Restoration scenarios can pin field-survey references for the same land/boundary revision;
+users must still explicitly interpret observations before entering exclusive cover classes.
+
+The Ecology workspace supports plot picking, incomplete-draft recovery,
+measurement entry, reviewed saving, mapped plots, visual summaries, correction copies,
+JSON import/export, private research citations and scenario reference controls. Numeric
+measurements begin empty and changing methods clears them instead of inventing equivalents.
+
+
+Validation: 32 backend research/document/scenario/survey regressions and two migration
+round-trip/model-agreement checks passed. The ten survey tests were rerun after bounding
+agent evidence pages; they include long Unicode names/notes, private source citations,
+viewer permissions, source pagination, weighted measurements, missing observations,
+corrections, cross-land refusal, stale boundaries and restoration references. Full API
+lint/format/typing (264 files) passed. Web type checking, affected lint, focused ecology
+and scenario tests, and production build passed. All seven existing land browser journeys
+also passed after the workspace navigation change.
+
+Live browser/API validation used explicitly synthetic measurements in a 463.3 m² plot
+within the public National Mall software fixture. It exercised actual map corner picks,
+reload recovery of an unfinished plot and survey, observation entry, review, immutable
+save, map rendering, export, reopening and correction copies. The original exported
+record's SHA-256 independently verifies as
+`4327b635642779cc37a1e91ae0e00f2fd1e0d76ef7b6e224954d5b9298bab367`.
+The corrected copy is `27d9e35e-365c-557f-b9e8-766aefcb47bf`. Synthetic 80% herb and 90%
+canopy observations remain distinct; their 170% sum is not falsely normalized. Desktop
+and 390-pixel mobile screenshots were inspected, with no browser errors or panel overflow.
+The configured preview has no high-resolution basemap, so this check establishes plot
+interaction/rendering, not image-to-field survey positional accuracy.
+
+These records do not automatically identify species, verify taxonomy or native status,
+estimate unsampled whole-land composition, provide ecological succession predictions,
+or establish an appropriate restoration reference ecosystem. Live model-provider validation
+still requires credentials absent from this environment. Nothing was deployed; the full
+land-exploration feature remains in progress.

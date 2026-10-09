@@ -1015,6 +1015,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/surveys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_api_v1_land__land_id__surveys_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_api_v1_land__land_id__surveys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/surveys/{survey_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_v1_land__land_id__surveys__survey_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/surveys/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview */
+        post: operations["preview_api_v1_land__land_id__surveys_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/corridor": {
         parameters: {
             query?: never;
@@ -3328,6 +3380,7 @@ export interface components {
              * @enum {string}
              */
             spatialRelevance: "intersects" | "within" | "nearby" | "regional" | "unresolved";
+            survey?: components["schemas"]["SurveyLocator"] | null;
             /** Title */
             title: string;
             /** Url */
@@ -6189,6 +6242,8 @@ export interface components {
             boundaryRevision: number;
             /** Evidenceids */
             evidenceIds?: string[];
+            /** Fieldsurveyids */
+            fieldSurveyIds?: string[];
             /** Inputs */
             inputs: components["schemas"]["SolarInputs"] | components["schemas"]["RestorationInputs"];
             /** Name */
@@ -6210,6 +6265,8 @@ export interface components {
             createdAt: string;
             /** Evidenceids */
             evidenceIds?: string[];
+            /** Fieldsurveyids */
+            fieldSurveyIds?: string[];
             /**
              * Id
              * Format: uuid
@@ -6267,6 +6324,8 @@ export interface components {
             evidenceIds?: string[];
             /** Expectedrevision */
             expectedRevision: number;
+            /** Fieldsurveyids */
+            fieldSurveyIds?: string[];
             /** Inputs */
             inputs: components["schemas"]["SolarInputs"] | components["schemas"]["RestorationInputs"];
             /** Name */
@@ -6617,6 +6676,30 @@ export interface components {
             /** Resolution */
             resolution: string;
         };
+        /** SpeciesObservation */
+        SpeciesObservation: {
+            /** Hits */
+            hits?: number | null;
+            /**
+             * Identification
+             * @enum {string}
+             */
+            identification: "verified" | "tentative" | "unidentified";
+            /**
+             * Notes
+             * @default
+             */
+            notes?: string;
+            /** Percentcover */
+            percentCover?: number | null;
+            /**
+             * Stratum
+             * @enum {string}
+             */
+            stratum: "canopy" | "shrub" | "herb" | "ground" | "aquatic";
+            /** Taxon */
+            taxon: string;
+        };
         /**
          * StacSource
          * @description Reference to a STAC item/collection. Resolution to a renderable asset happens client-side.
@@ -6669,6 +6752,177 @@ export interface components {
             scanned: number;
             /** Truncated */
             truncated: boolean;
+        };
+        /** SurveyCreate */
+        SurveyCreate: {
+            /** Assessedstrata */
+            assessedStrata: ("canopy" | "shrub" | "herb" | "ground" | "aquatic")[];
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Design
+             * @enum {string}
+             */
+            design: "census" | "random" | "systematic" | "purposive";
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "visual-cover" | "point-intercept";
+            /** Methodnotes */
+            methodNotes: string;
+            /** Name */
+            name: string;
+            /**
+             * Observedon
+             * Format: date
+             */
+            observedOn: string;
+            /** Observer */
+            observer: string;
+            /** Plots */
+            plots: components["schemas"]["SurveyPlot"][];
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+            /** Supersedesid */
+            supersedesId?: string | null;
+        };
+        /** SurveyLocator */
+        SurveyLocator: {
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Sha256 */
+            sha256: string;
+            /**
+             * Surveyid
+             * Format: uuid
+             */
+            surveyId: string;
+        };
+        /** SurveyPlot */
+        SurveyPlot: {
+            /** Boundary */
+            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Completeinventory
+             * @default false
+             */
+            completeInventory?: boolean;
+            /** Label */
+            label: string;
+            /** Observations */
+            observations: components["schemas"]["SpeciesObservation"][];
+            /** Samplepoints */
+            samplePoints?: number | null;
+        };
+        /** SurveyRead */
+        SurveyRead: {
+            /** Assessedstrata */
+            assessedStrata: ("canopy" | "shrub" | "herb" | "ground" | "aquatic")[];
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Design
+             * @enum {string}
+             */
+            design: "census" | "random" | "systematic" | "purposive";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "visual-cover" | "point-intercept";
+            /** Methodnotes */
+            methodNotes: string;
+            /** Name */
+            name: string;
+            /**
+             * Observedon
+             * Format: date
+             */
+            observedOn: string;
+            /** Observer */
+            observer: string;
+            /** Plots */
+            plots: components["schemas"]["SurveyPlot"][];
+            /** Recordedby */
+            recordedBy: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+            /** Sha256 */
+            sha256: string;
+            /** Stale */
+            stale: boolean;
+            summary: components["schemas"]["SurveySummary"];
+            /** Supersedesid */
+            supersedesId?: string | null;
+        };
+        /** SurveySpeciesSummary */
+        SurveySpeciesSummary: {
+            /** Assessedaream2 */
+            assessedAreaM2: number;
+            /** Assessedsamplefraction */
+            assessedSampleFraction: number;
+            /** Identifications */
+            identifications: string[];
+            /** Maximumpercent */
+            maximumPercent: number;
+            /** Meanpercent */
+            meanPercent: number;
+            /** Measuredplots */
+            measuredPlots: number;
+            /** Minimumpercent */
+            minimumPercent: number;
+            /**
+             * Stratum
+             * @enum {string}
+             */
+            stratum: "canopy" | "shrub" | "herb" | "ground" | "aquatic";
+            /** Taxon */
+            taxon: string;
+        };
+        /** SurveySummary */
+        SurveySummary: {
+            /**
+             * Algorithm
+             * @default field-cover-area-weighted-v1
+             */
+            algorithm?: string;
+            /** Landaream2 */
+            landAreaM2: number;
+            /** Limitations */
+            limitations: string[];
+            /** Plotareasm2 */
+            plotAreasM2: number[];
+            /** Sampledaream2 */
+            sampledAreaM2: number;
+            /** Sampledfraction */
+            sampledFraction: number;
+            /** Species */
+            species: components["schemas"]["SurveySpeciesSummary"][];
         };
         /** TableColumn */
         TableColumn: {
@@ -7159,8 +7413,15 @@ export type SchemaSiteSummary = components['schemas']['SiteSummary'];
 export type SchemaSiteUpdate = components['schemas']['SiteUpdate'];
 export type SchemaSolarInputs = components['schemas']['SolarInputs'];
 export type SchemaSourceRead = components['schemas']['SourceRead'];
+export type SchemaSpeciesObservation = components['schemas']['SpeciesObservation'];
 export type SchemaStacSource = components['schemas']['StacSource'];
 export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
+export type SchemaSurveyCreate = components['schemas']['SurveyCreate'];
+export type SchemaSurveyLocator = components['schemas']['SurveyLocator'];
+export type SchemaSurveyPlot = components['schemas']['SurveyPlot'];
+export type SchemaSurveyRead = components['schemas']['SurveyRead'];
+export type SchemaSurveySpeciesSummary = components['schemas']['SurveySpeciesSummary'];
+export type SchemaSurveySummary = components['schemas']['SurveySummary'];
 export type SchemaTableColumn = components['schemas']['TableColumn'];
 export type SchemaTableOutput = components['schemas']['TableOutput'];
 export type SchemaTemporalExtent = components['schemas']['TemporalExtent'];
@@ -11891,6 +12152,258 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScenarioResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listing_api_v1_land__land_id__surveys_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SurveyRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_api_v1_land__land_id__surveys_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SurveyCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SurveyRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_api_v1_land__land_id__surveys__survey_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                survey_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SurveyRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_api_v1_land__land_id__surveys_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SurveyCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SurveySummary"];
                 };
             };
             /** @description Missing or wrong write token */

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components, LandArea } from "@twin/contracts";
 import { api, unwrap, ApiError } from "@/api/client";
+import { useLandContext } from "@/state/landContext";
 import { describeError } from "@/lib/log";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 import { ScenarioResultView } from "./ScenarioResultView";
@@ -37,6 +38,18 @@ export function LandScenarios({ land }: { land: LandArea }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [history, setHistory] = useState<Scenario[]>([]);
   const [evidenceIds, setEvidenceIds] = useState<string[]>([]);
+  const [fieldSurveyIds, setFieldSurveyIds] = useState<string[]>([]);
+  const surveys = useQuery({
+    queryKey: ["land-surveys", scope, land.id, "scenario-references"],
+    enabled: ready,
+    queryFn: () =>
+      unwrap(
+        api.GET("/api/v1/land/{land_id}/surveys", {
+          params: { path: { land_id: land.id }, query: { limit: 100 } },
+        }),
+      ),
+    retry: false,
+  });
   const [boundaryRevision, setBoundaryRevision] = useState(land.revision);
   const [preview, setPreview] = useState<{ signature: string; result: ScenarioResult } | null>(
     null,
@@ -51,6 +64,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
         boundaryRevision,
         inputs,
         evidenceIds,
+        fieldSurveyIds,
       } satisfies components["schemas"]["ScenarioCreate"])
     : null;
   const signature = JSON.stringify(payload);
@@ -72,6 +86,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
     setName(kind === "solar" ? "Solar option" : "Restoration option");
     setBoundaryRevision(land.revision);
     setEvidenceIds([]);
+    setFieldSurveyIds([]);
     setMonitoringText("1, 3, 5");
   };
   const calculate = async (save: boolean) => {
@@ -84,7 +99,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
         const result = await unwrap(
           api.POST("/api/v1/land/{land_id}/scenarios/preview", {
             params: { path: { land_id: land.id } },
-            body: payload,
+            body: { ...payload, requestKey: requestKey.current },
           }),
         );
         if (ticket === operation.current) setPreview({ signature, result });
@@ -99,7 +114,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
           : await unwrap(
               api.POST("/api/v1/land/{land_id}/scenarios", {
                 params: { path: { land_id: land.id } },
-                body: payload,
+                body: { ...payload, requestKey: requestKey.current },
               }),
             );
         if (ticket === operation.current) {
@@ -130,6 +145,7 @@ export function LandScenarios({ land }: { land: LandArea }) {
       setMonitoringText(scenario.inputs.monitoringYears.join(", "));
     setBoundaryRevision(scenario.boundaryRevision);
     setEvidenceIds(scenario.evidenceIds ?? []);
+    setFieldSurveyIds(scenario.fieldSurveyIds ?? []);
   };
   return (
     <section className="land-scenarios" aria-label="Land scenarios">
@@ -187,6 +203,54 @@ export function LandScenarios({ land }: { land: LandArea }) {
             survey and cost data you want to test.
           </p>
           <p>Uses land boundary revision {boundaryRevision}.</p>
+          {inputs.kind === "restoration" && (
+            <fieldset>
+              <legend>Field survey references</legend>
+              <p className="land-footnote">
+                Link the observations behind your assumptions. Species can overlap; interpret them
+                before defining exclusive cover classes.
+              </p>
+              {surveys.data
+                ?.filter((s) => s.boundaryRevision === boundaryRevision)
+                .map((s) => (
+                  <label className="land-check" key={s.id}>
+                    <input
+                      type="checkbox"
+                      checked={fieldSurveyIds.includes(s.id)}
+                      onChange={(e) =>
+                        setFieldSurveyIds(
+                          e.target.checked
+                            ? [...fieldSurveyIds, s.id]
+                            : fieldSurveyIds.filter((id) => id !== s.id),
+                        )
+                      }
+                    />
+                    {s.name} · {s.observedOn}
+                  </label>
+                ))}
+              {!surveys.data?.length && (
+                <p>Record field observations in Ecology to add survey references.</p>
+              )}
+              {fieldSurveyIds
+                .filter(
+                  (id) =>
+                    !surveys.data?.some(
+                      (s) => s.id === id && s.boundaryRevision === boundaryRevision,
+                    ),
+                )
+                .map((id) => (
+                  <p key={id}>
+                    Retained survey reference {id}.{" "}
+                    <button
+                      type="button"
+                      onClick={() => setFieldSurveyIds((ids) => ids.filter((v) => v !== id))}
+                    >
+                      Remove reference
+                    </button>
+                  </p>
+                ))}
+            </fieldset>
+          )}
           {boundaryRevision !== land.revision && (
             <button type="button" onClick={() => setBoundaryRevision(land.revision)}>
               Recalculate against current boundary revision {land.revision}
@@ -589,6 +653,23 @@ export function LandScenarios({ land }: { land: LandArea }) {
           <h4>{scenario.name}</h4>
           <p>{scenario.inputs.assumptions}</p>
           <ScenarioResultView result={scenario.result} />
+          {!!scenario.fieldSurveyIds?.length && (
+            <div className="land-actions">
+              {scenario.fieldSurveyIds.map((id) => (
+                <button
+                  type="button"
+                  key={id}
+                  onClick={() => {
+                    const context = useLandContext.getState();
+                    context.selectSurvey(id);
+                    context.setSection("ecology");
+                  }}
+                >
+                  Open survey {surveys.data?.find((s) => s.id === id)?.name ?? id}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="land-actions">
             {canEdit && (
               <button type="button" onClick={() => edit(scenario)}>
@@ -640,6 +721,23 @@ export function LandScenarios({ land }: { land: LandArea }) {
                 {new Date(scenario.updatedAt).toLocaleDateString()}
               </p>
               <ScenarioResultView result={scenario.result} />
+              {!!scenario.fieldSurveyIds?.length && (
+                <div className="land-actions">
+                  {scenario.fieldSurveyIds.map((id) => (
+                    <button
+                      type="button"
+                      key={id}
+                      onClick={() => {
+                        const context = useLandContext.getState();
+                        context.selectSurvey(id);
+                        context.setSection("ecology");
+                      }}
+                    >
+                      Open survey {surveys.data?.find((s) => s.id === id)?.name ?? id}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </details>

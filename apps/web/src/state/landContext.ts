@@ -22,7 +22,8 @@ export interface LandRasterLayer {
   attribution: string;
   opacity: number;
 }
-export type LandWorkspaceSection = "discover" | "records" | "inventory" | "scenarios" | "actions";
+export type LandWorkspaceSection =
+  "discover" | "records" | "inventory" | "ecology" | "scenarios" | "actions";
 interface LandContextState {
   pointPicker: string | null;
   setPointPicker: (id: string | null) => void;
@@ -30,6 +31,8 @@ interface LandContextState {
   setResearchQuestion: (question: string) => void;
   section: LandWorkspaceSection;
   setSection: (section: LandWorkspaceSection) => void;
+  selectedSurveyId: string | null;
+  selectSurvey: (id: string | null) => void;
   selectedInventoryId: string | null;
   selectInventory: (id: string | null) => void;
   layers: Record<string, LandContextLayer>;
@@ -54,6 +57,8 @@ export const useLandContext = create<LandContextState>((set, get) => ({
   setResearchQuestion: (researchQuestion) => set({ researchQuestion }),
   section: "discover",
   setSection: (section) => set({ section }),
+  selectedSurveyId: null,
+  selectSurvey: (selectedSurveyId) => set({ selectedSurveyId }),
   selectedInventoryId: null,
   selectInventory: (selectedInventoryId) =>
     set({ selectedInventoryId, ...(selectedInventoryId ? { section: "inventory" as const } : {}) }),
@@ -130,6 +135,7 @@ export const useLandContext = create<LandContextState>((set, get) => ({
       selectedIds: [],
       selectedInventoryId: null,
       section: "discover",
+      selectedSurveyId: null,
       researchQuestion: "",
     }),
 }));

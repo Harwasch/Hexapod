@@ -77,6 +77,18 @@ export function EvidenceView({
           pinnedOcrId={evidence.document.ocrId ?? undefined}
         />
       )}
+      {evidence.survey && (
+        <button
+          type="button"
+          onClick={() => {
+            const context = useLandContext.getState();
+            context.selectSurvey(evidence.survey?.surveyId ?? null);
+            context.setSection("ecology");
+          }}
+        >
+          Open cited field survey
+        </button>
+      )}
       {evidence.url && (
         <a href={evidence.url} target="_blank" rel="noopener noreferrer">
           Open original source <ArrowUpRight size={14} />

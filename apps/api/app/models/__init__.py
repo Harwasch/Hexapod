@@ -29,6 +29,7 @@ from app.models.land_document import (
 from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureRevision
 from app.models.land_image_registration import LandImageRegistration, LandImageRegistrationBlob
 from app.models.land_raster import LandRaster, LandRasterBlob
+from app.models.land_survey import LandSurvey
 from app.models.layer import Layer
 from app.models.plan import Plan, PlanRevision
 from app.models.research import (
@@ -81,6 +82,7 @@ __all__ = [
     "LandRasterBlob",
     "LandScenario",
     "LandScenarioRevision",
+    "LandSurvey",
     "Layer",
     "LayerCategory",
     "LayerSourceType",

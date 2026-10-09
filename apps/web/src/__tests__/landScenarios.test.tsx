@@ -118,3 +118,30 @@ it("compares saved values without recomputing or hiding a stale boundary", async
   );
   expect(screen.getAllByText("5,000").length).toBeGreaterThan(0);
 });
+
+it("pins field survey references without converting overlapping species into cover classes", async () => {
+  vi.spyOn(api, "GET")
+    .mockResolvedValueOnce({ data: [], response: new Response() })
+    .mockResolvedValue({
+      data: [
+        { id: "survey", name: "Measured plots", boundaryRevision: 1, observedOn: "2025-07-01" },
+      ],
+      response: new Response(),
+    });
+  const post = vi.spyOn(api, "POST").mockResolvedValue({ data: result, response: new Response() });
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Restoration and cover" }));
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Measured plots/ }));
+  fireEvent.change(screen.getByLabelText("Reference ecosystem"), {
+    target: { value: "Locally evaluated meadow reference" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Calculate scenario" }));
+  await screen.findByRole("region", { name: "Scenario result" });
+  const calls = post.mock.calls as unknown as [
+    string,
+    { body: { fieldSurveyIds: string[]; inputs: ReturnType<typeof restorationDefaults> } },
+  ][];
+  expect(calls[0]?.[0]).toBe("/api/v1/land/{land_id}/scenarios/preview");
+  expect(calls[0]?.[1].body.fieldSurveyIds).toEqual(["survey"]);
+  expect(calls[0]?.[1].body.inputs.cover).toEqual(restorationDefaults().cover);
+});

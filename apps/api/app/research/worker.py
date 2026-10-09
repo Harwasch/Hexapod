@@ -26,6 +26,7 @@ from app.models.land_archive_image import LandArchiveImage, LandArchiveImageBlob
 from app.models.land_document import LandDocument, LandDocumentLink
 from app.models.land_feature import LandFeature
 from app.models.land_raster import LandRaster
+from app.models.land_survey import LandSurvey
 from app.models.research import Evidence, Investigation, ResearchMessage, ResearchRun
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.research import queue
@@ -48,6 +49,7 @@ from app.research.model import (
     RetrieveAction,
     ScenarioAction,
     SearchAction,
+    SurveyReadAction,
 )
 from app.research.outputs import overview_outputs
 from app.research.providers.archives import ARCHIVE_SOURCES
@@ -56,6 +58,7 @@ from app.research.providers.open_data import OVERVIEW_SOURCES, SOURCES, retrieve
 from app.research.search import ClaudeResearchSearch, ResearchSearch
 from app.schemas.geojson import Footprint
 from app.schemas.land_rasters import RasterMetadata, RasterRequest
+from app.schemas.land_surveys import SurveyLocator
 from app.schemas.research import (
     ArtifactContent,
     EvidenceContent,
@@ -64,7 +67,7 @@ from app.schemas.research import (
     ResearchBudget,
 )
 from app.schemas.scenarios import ScenarioCreate
-from app.services import land_actions, land_archive_images, land_rasters, scenarios
+from app.services import land_actions, land_archive_images, land_rasters, land_surveys, scenarios
 from app.services.errors import InvalidInputError, NotFoundError
 
 log = logging.getLogger("twin.research")
@@ -689,6 +692,23 @@ class ResearchWorker:
                     .limit(10)
                 )
             ]
+            field_surveys = [
+                {
+                    "id": str(survey.id),
+                    "name": survey.content["name"],
+                    "observedOn": survey.content["observed_on"],
+                    "method": survey.content["method"],
+                    "boundaryRevision": survey.boundary_revision,
+                    "sha256": survey.sha256,
+                    "supersedesId": survey.content.get("supersedes_id"),
+                }
+                for survey in db.scalars(
+                    select(LandSurvey)
+                    .where(LandSurvey.land_id == land_id)
+                    .order_by(LandSurvey.created_at.desc())
+                    .limit(30)
+                )
+            ]
             saved_documents = [
                 {
                     "id": str(document.id),
@@ -836,6 +856,7 @@ class ResearchWorker:
                             "currentDate": datetime.now(UTC).date().isoformat(),
                             "conversation": conversation,
                             "savedScenarios": saved_scenarios,
+                            "fieldSurveys": field_surveys,
                             "inventoryFeatures": saved_features,
                             "landDocuments": saved_documents,
                             "archiveSources": archive_sources,
@@ -930,6 +951,82 @@ class ResearchWorker:
                             ),
                             state,
                         )
+                    elif isinstance(action, SurveyReadAction):
+                        survey = land_surveys.read(
+                            db, land_surveys.scoped(db, workspace_id, land_id, action.survey_id)
+                        )
+                        key = f"field-survey/{survey.id}/{action.offset}/{action.count}"
+                        data: dict[str, Any] = {
+                            "surveyId": str(survey.id),
+                            "sha256": survey.sha256,
+                            "boundaryRevision": survey.boundary_revision,
+                            "observedOn": str(survey.observed_on),
+                            "method": survey.method,
+                            "design": survey.design,
+                            "methodNotes": survey.method_notes,
+                            "assessedStrata": survey.assessed_strata,
+                            "observer": survey.observer,
+                            "supersedesId": str(survey.supersedes_id)
+                            if survey.supersedes_id
+                            else None,
+                            "sampledFraction": survey.summary.sampled_fraction,
+                            "totalSpeciesRows": len(survey.summary.species),
+                            "offset": action.offset,
+                            "species": [
+                                v.model_dump(mode="json")
+                                for v in survey.summary.species[
+                                    action.offset : action.offset + action.count
+                                ]
+                            ],
+                            "limitations": survey.summary.limitations,
+                        }
+                        # Bound complete JSON records, not a truncated JSON string. Long Unicode
+                        # names/notes can make fewer than the requested rows fit one evidence page.
+                        while True:
+                            data["nextOffset"] = (
+                                action.offset + len(data["species"])
+                                if action.offset + len(data["species"])
+                                < len(survey.summary.species)
+                                else None
+                            )
+                            excerpt = json.dumps(data, ensure_ascii=False)
+                            if len(excerpt) <= 29_000:
+                                break
+                            if not data["species"]:
+                                raise InvalidInputError(
+                                    "The survey metadata exceeds the evidence page limit."
+                                )
+                            data["species"].pop()
+                        item = EvidenceContent(
+                            provider="field-survey",
+                            title=survey.name,
+                            survey=SurveyLocator(
+                                land_id=land_id, survey_id=survey.id, sha256=survey.sha256
+                            ),
+                            license="Private workspace field record; no public redistribution permission inferred.",
+                            attribution=survey.observer,
+                            record_id=str(survey.id),
+                            retrieved_at=datetime.now(UTC),
+                            observed_at=datetime.combine(
+                                survey.observed_on, datetime.min.time(), tzinfo=UTC
+                            ),
+                            excerpt=excerpt,
+                            spatial_relevance="within",
+                            relevance_note=(
+                                "User-recorded observations within the cited boundary revision. Sample means "
+                                "are not whole-land estimates."
+                            ),
+                            snapshot_hash=survey.sha256,
+                        )
+                        evidence_id = queue.save_evidence(db, run_id, token, key, item)
+                        state["sources"][key] = {
+                            "provider": "field-survey",
+                            "status": "available",
+                            "data": data,
+                            "evidenceIds": [str(evidence_id)],
+                        }
+                        queue.checkpoint(db, run_id, token, state)
+                        result = "Field survey page retrieved with immutable source citation."
                     elif isinstance(action, ScenarioAction):
                         current = queue.locked(db, run_id, token)
                         queue.validate_citations(
@@ -945,6 +1042,7 @@ class ResearchWorker:
                                 name=action.name,
                                 boundary_revision=boundary_revision,
                                 inputs=action.inputs,
+                                field_survey_ids=action.field_survey_ids,
                                 evidence_ids=[uuid.UUID(value) for value in action.evidence_ids],
                             ),
                             identifier=uuid.uuid5(run_id, output_key),

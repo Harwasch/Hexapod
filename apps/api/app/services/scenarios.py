@@ -10,6 +10,7 @@ from app.models.land import LandArea, LandBoundaryRevision
 from app.models.research import Evidence, Investigation, ResearchRun
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.schemas.scenarios import ScenarioCreate, ScenarioRead, ScenarioResult, ScenarioRevise
+from app.services import land_surveys
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.land import FOOTPRINT, get_land
 
@@ -37,6 +38,15 @@ def preview(
         )
         if ids != set(payload.evidence_ids):
             raise InvalidInputError("Scenario evidence must come from this land's investigations.")
+    for identifier in payload.field_survey_ids:
+        survey = land_surveys.scoped(db, workspace_id, land_id, identifier)
+        if (
+            payload.inputs.kind != "restoration"
+            or survey.boundary_revision != payload.boundary_revision
+        ):
+            raise InvalidInputError(
+                "Field surveys must use the restoration scenario's pinned boundary revision."
+            )
     geometry = func.ST_SetSRID(
         func.ST_GeomFromGeoJSON(FOOTPRINT.validate_python(snapshot.boundary).model_dump_json()),
         4326,
@@ -119,7 +129,7 @@ def create(
                 LandScenarioRevision.scenario_id == identifier, LandScenarioRevision.revision == 1
             )
         )
-        if original is None or original.payload != payload.model_dump(mode="json"):
+        if original is None or ScenarioCreate.model_validate(original.payload) != payload:
             raise ConflictError("The scenario request was already used for different assumptions.")
         return read(db, row, original)
     result = preview(db, workspace_id, land_id, payload)
