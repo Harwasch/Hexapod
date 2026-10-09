@@ -4,7 +4,7 @@ import type { Footprint, LandArea, LandCreate } from "@twin/contracts";
 
 import { recordAction } from "./history";
 
-export type LandMode = "browse" | "draw" | "corridor" | "pick" | "edit";
+export type LandMode = "browse" | "draw" | "corridor" | "pick" | "candidates" | "edit";
 export type LandPoint = [number, number];
 
 interface LandState {
@@ -49,11 +49,13 @@ export const useLand = create<LandState>()((set, get) => ({
       points: [],
       error: null,
       session:
-        mode === "draw" || mode === "corridor" || mode === "pick" ? s.session + 1 : s.session,
+        mode === "draw" || mode === "corridor" || mode === "pick" || mode === "candidates"
+          ? s.session + 1
+          : s.session,
     })),
   addPoint: (point) => {
     const previous = get().points;
-    if (get().mode === "pick" && previous.length) return;
+    if ((get().mode === "pick" || get().mode === "candidates") && previous.length) return;
     const last = previous.at(-1);
     if (last?.[0] === point[0] && last[1] === point[1]) return;
     if (previous.length >= 2000) {

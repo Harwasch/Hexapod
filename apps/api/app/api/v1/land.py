@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Query, Response
+import httpx
+from fastapi import APIRouter, Form, Query, Response, UploadFile
+from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, SettingsDep
 from app.api.workspace_deps import WorkspaceDep
 from app.schemas.land import (
     BoundaryOperation,
@@ -15,7 +18,14 @@ from app.schemas.land import (
     LandRead,
     LandRevise,
 )
-from app.services import land
+from app.schemas.land_import import BoundaryImportRead
+from app.schemas.land_selection import (
+    CandidateRequest,
+    CandidateResult,
+    SelectionInstruction,
+    SelectionInterpretation,
+)
+from app.services import land, land_import, land_selection
 
 router = APIRouter(prefix="/land", tags=["land"])
 
@@ -75,3 +85,36 @@ def delete_area(land_id: uuid.UUID, db: DbSession, workspace: WorkspaceDep) -> R
     workspace.require("owner", "editor")
     land.delete_land(db, workspace.id, land_id)
     return Response(status_code=204)
+
+
+@router.post("/selection/candidates", response_model=CandidateResult)
+def selection_candidates(
+    payload: CandidateRequest, db: DbSession, workspace: WorkspaceDep
+) -> CandidateResult:
+    workspace.require("owner", "editor")
+    with httpx.Client(headers={"User-Agent": "LivingWorld-LandSelection/1.0"}) as client:
+        return land_selection.candidates(db, payload, client)
+
+
+@router.post("/selection/interpret", response_model=SelectionInterpretation)
+def selection_interpret(
+    payload: SelectionInstruction, settings: SettingsDep, workspace: WorkspaceDep
+) -> SelectionInterpretation:
+    workspace.require("owner", "editor")
+    return land_selection.interpret(payload, settings)
+
+
+@router.post("/import", response_model=BoundaryImportRead)
+async def import_area(
+    workspace: WorkspaceDep,
+    file: UploadFile,
+    source_crs: Annotated[str | None, Form(pattern=r"^EPSG:\d+$")] = None,
+    layer: Annotated[str | None, Form(max_length=200)] = None,
+    repair: Annotated[bool, Form()] = False,
+) -> BoundaryImportRead:
+    workspace.require("owner", "editor")
+    data = await file.read(land_import.MAX_UPLOAD + 1)
+    # Parsing/GDAL/reprojection are blocking work; keep them off the API event loop.
+    return await run_in_threadpool(
+        land_import.import_boundary, data, file.filename or "boundary", source_crs, layer, repair
+    )

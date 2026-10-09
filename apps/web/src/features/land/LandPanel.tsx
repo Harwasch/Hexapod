@@ -12,14 +12,14 @@ import {
   Undo2,
   Upload,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import type { Footprint, LandArea } from "@twin/contracts";
 import { boundsOf, footprintAreaM2 } from "@twin/geo";
 
 import { useScene } from "@/cesium/SceneContext";
-import { ApiError } from "@/api/client";
+import { ApiError, api, unwrap } from "@/api/client";
 import { describeError } from "@/lib/log";
 import { fetchOsmContaining, OSM_ATTRIBUTION } from "@/missions/osm";
 import { useLand, type LandMode } from "@/state/land";
@@ -28,11 +28,14 @@ import { useUi } from "@/state/ui";
 import { FloatingPanel } from "../shell/FloatingPanel";
 import { WriteTokenField } from "../captures/WriteTokenField";
 import { createCorridor, createLand, reviseLand, useBoundaryHistory, useLandAreas } from "./api";
-import { importBoundary } from "./geometry";
+import { LandDraftRecovery } from "./LandDraftRecovery";
+import { LandBoundaryImport } from "./LandBoundaryImport";
 import "./land.css";
+import { LandWorkspaceResizer } from "./LandWorkspaceResizer";
+import { LandCandidatePicker } from "./LandCandidatePicker";
 import { LandResearch } from "./LandResearch";
 import { WorkspaceIdentity } from "./WorkspaceIdentity";
-import { landUsesOidc } from "@/state/landIdentity";
+import { landUsesOidc, useLandScope } from "@/state/landIdentity";
 
 function areaLabel(squareMetres: number): string {
   if (squareMetres < 4046.8564224) return `${Math.round(squareMetres).toLocaleString()} m²`;
@@ -46,15 +49,21 @@ function landError(error: unknown): string {
 }
 
 export function LandPanel() {
+  const scope = useLandScope();
   const open = useUi((s) => s.activePanel === "land");
   const tokenPrompt = useUi((s) => s.writeTokenPrompt);
   const state = useLand();
   const scene = useScene();
   const queryClient = useQueryClient();
   const catalog = useLandAreas(open);
+  const [panelWidth, setPanelWidth] = useState(440);
+  const [sheetSize, setSheetSize] = useState<"compact" | "expanded">("compact");
   const [historyOpen, setHistoryOpen] = useState(false);
   const history = useBoundaryHistory(open && historyOpen ? (state.active?.id ?? null) : null);
   const [busy, setBusy] = useState(false);
+  const [combination, setCombination] = useState<"union" | "difference" | "intersection" | null>(
+    null,
+  );
   const [width, setWidth] = useState(100);
   const [unit, setUnit] = useState<"ft" | "m">("ft");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -128,12 +137,32 @@ export function LandPanel() {
     state.setError(null);
     if (mode === "draw") {
       if (points.length < 3 || !points[0]) return;
-      state.propose({
-        name: active?.name ?? "Untitled land",
-        description: active?.description ?? "",
-        boundary: { type: "Polygon", coordinates: [[...points, points[0]]] },
-        source: { method: "drawn", label: "Drawn on the map", meaning: "study-area" },
-      });
+      const boundary: Footprint = { type: "Polygon", coordinates: [[...points, points[0]]] };
+      if (combination && draft) {
+        setBusy(true);
+        try {
+          const result = await unwrap(
+            api.POST("/api/v1/land/operations", {
+              body: { operation: combination, left: draft.boundary, right: boundary },
+            }),
+          );
+          if (operation.current !== ticket) return;
+          state.updateBoundary(result.boundary);
+          state.begin("browse");
+          setCombination(null);
+        } catch (error) {
+          if (operation.current === ticket) state.setError(landError(error));
+        } finally {
+          if (operation.current === ticket) setBusy(false);
+        }
+      } else {
+        state.propose({
+          name: active?.name ?? "Untitled land",
+          description: active?.description ?? "",
+          boundary,
+          source: { method: "drawn", label: "Drawn on the map", meaning: "study-area" },
+        });
+      }
       return;
     }
     setBusy(true);
@@ -208,7 +237,17 @@ export function LandPanel() {
       open={open}
       title="Your land"
       wide
-      className="land-panel"
+      className={`land-panel land-panel--${sheetSize}`}
+      style={{ "--land-workspace-width": `${panelWidth}px` } as CSSProperties}
+      actions={
+        <button
+          className="land-sheet-toggle"
+          type="button"
+          onClick={() => setSheetSize(sheetSize === "compact" ? "expanded" : "compact")}
+        >
+          {sheetSize === "compact" ? "Expand" : "Collapse"}
+        </button>
+      }
       testId="land-panel"
       onClose={() => {
         operation.current += 1;
@@ -217,8 +256,10 @@ export function LandPanel() {
         useUi.getState().setPanel(null);
       }}
     >
-      <div className="land-workspace">
+      <LandWorkspaceResizer panelWidth={panelWidth} setPanelWidth={setPanelWidth} />
+      <div className={`land-workspace ${active && !draft ? "land-workspace--saved" : ""}`}>
         <WorkspaceIdentity />
+        <LandDraftRecovery key={`recovery:${scope}`} scope={scope} />
         {tokenPrompt && !landUsesOidc && (
           <WriteTokenField
             hint="This server requires its access token to load and save land areas."
@@ -253,6 +294,14 @@ export function LandPanel() {
               </p>
             </div>
             <div className="land-methods">
+              <button type="button" onClick={() => begin("candidates")} disabled={!scene}>
+                <LandPlot size={20} />
+                <span>
+                  <strong>Find parcels, lines or buildings</strong>
+                  <small>Select mapped records and describe your boundary</small>
+                </span>
+                <ChevronRight size={16} />
+              </button>
               <button type="button" onClick={() => begin("draw")} disabled={!scene}>
                 <Pencil size={20} />
                 <span>
@@ -281,7 +330,7 @@ export function LandPanel() {
                 <Upload size={20} />
                 <span>
                   <strong>Import a boundary</strong>
-                  <small>GeoJSON polygons, including exclusions</small>
+                  <small>GeoJSON, KML, shapefile, or GeoPackage</small>
                 </span>
                 <ChevronRight size={16} />
               </button>
@@ -292,6 +341,8 @@ export function LandPanel() {
           </>
         )}
 
+        <LandCandidatePicker key={state.session} />
+
         {(mode === "draw" || mode === "corridor" || mode === "pick") && (
           <div className="land-selection">
             <span className="land-eyebrow">Select your land</span>
@@ -299,7 +350,13 @@ export function LandPanel() {
               {mode === "pick"
                 ? "Point to the place."
                 : mode === "draw"
-                  ? "Trace the boundary."
+                  ? combination === "difference"
+                    ? "Draw the area to exclude."
+                    : combination === "intersection"
+                      ? "Draw the area to retain."
+                      : combination === "union"
+                        ? "Draw another piece of land."
+                        : "Trace the boundary."
                   : "Follow the centerline."}
             </h3>
             <p aria-live="polite">
@@ -355,7 +412,13 @@ export function LandPanel() {
                   Last point
                 </button>
               )}
-              <button type="button" onClick={() => begin("browse")}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCombination(null);
+                  begin("browse");
+                }}
+              >
                 Cancel
               </button>
             </div>
@@ -409,20 +472,23 @@ export function LandPanel() {
                 </div>
               )}
             </div>
-            <div className="land-source">
-              <LandPlot size={16} />
-              <div>
-                <strong>{visible.source.label}</strong>
-                <span>
-                  {visible.source.meaning === "recorded-parcel"
-                    ? "Recorded parcel boundary"
-                    : visible.source.meaning === "physical-feature"
-                      ? "Physical feature · not a property boundary"
-                      : "Study area · not a verified property boundary"}
-                </span>
-                {visible.source.attribution && <small>{visible.source.attribution}</small>}
+            <details className="land-provenance" open={Boolean(draft)}>
+              <summary>Boundary source and meaning</summary>
+              <div className="land-source">
+                <LandPlot size={16} />
+                <div>
+                  <strong>{visible.source.label}</strong>
+                  <span>
+                    {visible.source.meaning === "recorded-parcel"
+                      ? "Recorded parcel boundary"
+                      : visible.source.meaning === "physical-feature"
+                        ? "Physical feature · not a property boundary"
+                        : "Study area · not a verified property boundary"}
+                  </span>
+                  {visible.source.attribution && <small>{visible.source.attribution}</small>}
+                </div>
               </div>
-            </div>
+            </details>
             {draft ? (
               <>
                 <label className="land-name">
@@ -441,6 +507,27 @@ export function LandPanel() {
                     Press Escape when finished.
                   </p>
                 )}
+                <div className="land-actions" aria-label="Combine boundary shapes">
+                  {(
+                    [
+                      ["union", "Add an area"],
+                      ["difference", "Draw an exclusion"],
+                      ["intersection", "Keep an intersection"],
+                    ] as const
+                  ).map(([operation, label]) => (
+                    <button
+                      key={operation}
+                      type="button"
+                      disabled={!scene || busy}
+                      onClick={() => {
+                        setCombination(operation);
+                        begin("draw");
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
                 <div className="land-actions">
                   <button
                     className="land-primary"
@@ -573,39 +660,7 @@ export function LandPanel() {
             )}
           </div>
         )}
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".geojson,.json,application/geo+json,application/json"
-          className="land-file-input"
-          aria-label="Import GeoJSON boundary"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = "";
-            if (!file) return;
-            if (file.size > 5 * 1024 * 1024) {
-              state.setError("Choose a GeoJSON file smaller than 5 MB.");
-              return;
-            }
-            const ticket = ++operation.current;
-            void file
-              .text()
-              .then((text) => {
-                if (ticket !== operation.current) return;
-                const boundary = importBoundary(text);
-                state.propose({
-                  name: file.name.replace(/\.(geojson|json)$/i, ""),
-                  description: "",
-                  boundary,
-                  source: { method: "imported", label: file.name, meaning: "study-area" },
-                });
-                frame(boundary);
-              })
-              .catch((error: unknown) => {
-                if (ticket === operation.current) state.setError(describeError(error));
-              });
-          }}
-        />
+        {open && <LandBoundaryImport key={`import:${scope}`} inputRef={fileInput} frame={frame} />}
       </div>
     </FloatingPanel>
   );

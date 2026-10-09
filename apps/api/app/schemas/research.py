@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from pydantic import Field, HttpUrl
 
 from app.schemas.base import CamelModel
-from app.schemas.geojson import Footprint
+from app.schemas.geojson import Footprint, MapGeometry
 
 
 class ResearchBudget(CamelModel):
@@ -139,7 +139,7 @@ class ChartOutput(CamelModel):
 
 class MapFeature(CamelModel):
     label: str = Field(max_length=300)
-    boundary: Footprint
+    geometry: MapGeometry
     value: float | None = None
 
 

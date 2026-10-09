@@ -220,7 +220,7 @@ export function LandResearch({ land }: { land: LandArea }) {
       <div className="land-research-heading">
         <div>
           <span className="land-eyebrow">Look closer</span>
-          <h3>What makes this place yours?</h3>
+          <h3>Explore this land</h3>
         </div>
         <BookOpen size={24} />
       </div>
@@ -297,7 +297,7 @@ export function LandResearch({ land }: { land: LandArea }) {
           <span className={`land-run-dot ${running ? "is-running" : ""}`} />
           <span>
             {lastRun.status === "queued"
-              ? "Waiting for the research worker"
+              ? "Research is queued"
               : lastRun.status === "running"
                 ? "Investigating your land"
                 : lastRun.status === "partial"

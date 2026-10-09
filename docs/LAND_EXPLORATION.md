@@ -125,6 +125,31 @@ Configuration is documented in `.env.example`. Run migrations through `0013` and
 separate research worker in preview. Production deployment remains with the designated
 agent. No production resources have been changed.
 
+## Implemented increment: mapped selection, imports and recovery
+
+Mapped candidate lookup now supports Washington's public parcel service and OSM lines and
+buildings. Candidate outlines are interactive overlays; selected lines produce corridors
+with total width, end caps and a selectable span of mapped vertices. Natural-language
+selection is grounded in candidate IDs, with explicit clarification for ambiguity. Local
+width/selection commands work without a model; broader interpretation uses the configured
+model. A parcel record remains distinct from verified title. Coverage outside the current
+parcel adapter is reported explicitly.
+
+Boundary imports support GeoJSON, KML/KMZ, zipped shapefiles and GeoPackages with bounded
+uploads, archive traversal checks, polygon/vertex limits, CRS transformation, layer choice,
+and explicit repair preview. Multipart outlines and exclusions are retained. Boundary
+review adds union, exclusion and intersection drawing. Drafts are recoverable in the same
+browser and scoped by identity/workspace; recovery checks the saved revision before editing.
+Explicit sign-out removes that identity's stored drafts. Research map artifacts now render
+points, lines and polygons as independent overlays. The desktop workspace is resizable and
+the phone sheet can expand.
+
+Validation: 39 focused backend tests and 41 frontend tests pass. Desktop/phone selection and
+the new mapped transmission-line instruction journey pass in Chromium with software WebGL.
+Public parcel/OSM service smoke results establish those adapters at tested locations, not
+universal coverage. Full domain workflows and broader analytical infrastructure remain
+outstanding. No production changes have been made.
+
 ## Validation
 
 Backend: `tests/test_land.py` covers persistence without missions/sites, revision history,

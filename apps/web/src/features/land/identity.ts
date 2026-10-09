@@ -68,5 +68,11 @@ export async function signInToLand() {
   await identityManager().signinRedirect();
 }
 export async function signOutOfLand() {
+  const principal = useLandIdentity.getState().principalId;
+  if (principal) {
+    const prefix = `living-world-land-draft:${encodeURIComponent(`${principal}/`)}`;
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith(prefix)) localStorage.removeItem(key);
+  }
   await identityManager().removeUser();
 }

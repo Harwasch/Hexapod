@@ -56,12 +56,21 @@ class SourceError(Exception):
 
 
 def fetch_json(
-    client: httpx.Client, spec: SourceSpec, params: dict[str, str | int | float | bool]
+    client: httpx.Client,
+    spec: SourceSpec,
+    params: dict[str, str | int | float | bool],
+    *,
+    method: Literal["GET", "POST"] = "GET",
 ) -> tuple[dict[str, Any], str]:
     # Only registry endpoints are fetched. Redirects cannot turn a trusted endpoint
     # into an arbitrary URL, and response size is bounded even without Content-Length.
     with client.stream(
-        "GET", spec.endpoint, params=params, follow_redirects=False, timeout=25
+        method,
+        spec.endpoint,
+        params=params if method == "GET" else None,
+        data=params if method == "POST" else None,
+        follow_redirects=False,
+        timeout=25,
     ) as response:
         response.raise_for_status()
         chunks = bytearray()

@@ -1,6 +1,12 @@
 import type { Page } from "@playwright/test";
 
-import type { BoundaryRevision, LandArea, LandCreate, LandRevise } from "@twin/contracts";
+import type {
+  BoundaryRevision,
+  Footprint,
+  LandArea,
+  LandCreate,
+  LandRevise,
+} from "@twin/contracts";
 
 import { expect, test } from "./fixtures";
 
@@ -21,6 +27,23 @@ async function landApi(page: Page) {
         status: 503,
         contentType: "application/json",
         body: JSON.stringify({ title: "Research unavailable in selection fixture", status: 503 }),
+      });
+      return;
+    }
+    if (path.endsWith("/import")) {
+      const part = request.postData()?.split("\r\n\r\n")[1]?.split("\r\n--")[0];
+      const boundary = JSON.parse(part ?? "{}") as Footprint;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ready",
+          boundary: { type: "MultiPolygon", coordinates: [boundary.coordinates] },
+          sourceCrs: "EPSG:4326",
+          targetCrs: "EPSG:4326",
+          layers: [],
+          warnings: [],
+        }),
       });
       return;
     }
@@ -135,7 +158,7 @@ test("import with an exclusion and preserve the map on a phone", async ({ app })
       ],
     ],
   };
-  await app.getByLabel("Import GeoJSON boundary").setInputFiles({
+  await app.getByLabel("Import land boundary").setInputFiles({
     name: "Creek reserve.geojson",
     mimeType: "application/geo+json",
     buffer: Buffer.from(JSON.stringify(boundary)),
@@ -154,4 +177,93 @@ test("import with an exclusion and preserve the map on a phone", async ({ app })
     ).length;
   });
   expect(outlines).toBe(2);
+});
+
+test("select a mapped transmission line and preview a described corridor", async ({ app }) => {
+  await landApi(app);
+  const coordinates = [
+    [-122.14, 47.64],
+    [-122.14, 47.645],
+    [-122.139, 47.65],
+  ];
+  await app.route("**/api/v1/land/selection/candidates", async (route) => {
+    await route.fulfill({
+      json: {
+        status: "available",
+        message: "One mapped line found.",
+        truncated: false,
+        candidates: [
+          {
+            id: "osm:way:9",
+            label: "Transmission line 9",
+            geometry: { type: "LineString", coordinates },
+            source: {
+              method: "mapped-feature",
+              meaning: "physical-feature",
+              label: "OpenStreetMap line",
+            },
+            distanceM: 0,
+            properties: {},
+          },
+        ],
+      },
+    });
+  });
+  await app.route("**/api/v1/land/selection/interpret", async (route) => {
+    expect((route.request().postDataJSON() as { selectedIds: string[] }).selectedIds).toEqual([
+      "osm:way:9",
+    ]);
+    await route.fulfill({
+      json: {
+        operation: "corridor",
+        candidateIds: ["osm:way:9"],
+        widthM: 30.48,
+        cap: "flat",
+        explanation: "100 feet total width along the selected line",
+        provider: "local",
+      },
+    });
+  });
+  await app.route("**/api/v1/land/corridor", async (route) => {
+    const body = route.request().postDataJSON() as {
+      widthM: number;
+      coordinates: number[][];
+      cap: string;
+    };
+    expect(body.widthM).toBe(30.48);
+    expect(body.coordinates).toEqual(coordinates);
+    expect(body.cap).toBe("flat");
+    await route.fulfill({
+      json: {
+        boundary: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [-122.141, 47.64],
+              [-122.138, 47.64],
+              [-122.138, 47.65],
+              [-122.141, 47.65],
+              [-122.141, 47.64],
+            ],
+          ],
+        },
+        areaM2: 30000,
+        perimeterM: 2100,
+      },
+    });
+  });
+  await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+  await app.getByTestId("tool-land").click();
+  await app.getByRole("button", { name: /Find parcels, lines or buildings/ }).click();
+  await app.getByRole("combobox", { name: "Find", exact: true }).selectOption("line");
+  await app.mouse.click(900, 400);
+  const candidate = app.getByRole("button", { name: /Transmission line 9/ });
+  await candidate.click();
+  await expect(candidate).toHaveAttribute("aria-pressed", "true");
+  await app
+    .getByLabel("Or describe your selection")
+    .fill("100 feet wide along this transmission line, flat ends");
+  await app.getByRole("button", { name: "Preview my instruction" }).click();
+  await expect(app.getByLabel("Name this land")).toHaveValue("Transmission line 9");
+  await expect(app.getByText("Corridor along Transmission line 9", { exact: true })).toBeVisible();
 });

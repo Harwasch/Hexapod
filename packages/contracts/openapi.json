@@ -1038,6 +1038,49 @@
         "title": "Attribution",
         "type": "object"
       },
+      "Body_import_area_api_v1_land_import_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "layer": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layer"
+          },
+          "repair": {
+            "default": false,
+            "title": "Repair",
+            "type": "boolean"
+          },
+          "source_crs": {
+            "anyOf": [
+              {
+                "pattern": "^EPSG:\\d+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Crs"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_area_api_v1_land_import_post",
+        "type": "object"
+      },
       "Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post": {
         "properties": {
           "file": {
@@ -1050,6 +1093,81 @@
           "file"
         ],
         "title": "Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post",
+        "type": "object"
+      },
+      "BoundaryImportRead": {
+        "additionalProperties": false,
+        "properties": {
+          "boundary": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "layers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Layers",
+            "type": "array"
+          },
+          "sourceCrs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcecrs"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "choose-layer",
+              "needs-crs",
+              "needs-repair"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "targetCrs": {
+            "default": "EPSG:4326",
+            "title": "Targetcrs",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "BoundaryImportRead",
         "type": "object"
       },
       "BoundaryOperation": {
@@ -1480,6 +1598,74 @@
           "createdAt"
         ],
         "title": "CameraBookmarkRead",
+        "type": "object"
+      },
+      "CandidateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "parcel",
+              "line",
+              "building"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "point": {
+            "$ref": "#/components/schemas/Point"
+          },
+          "radiusM": {
+            "default": 250,
+            "exclusiveMinimum": 0.0,
+            "maximum": 2000.0,
+            "title": "Radiusm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "point",
+          "kind"
+        ],
+        "title": "CandidateRequest",
+        "type": "object"
+      },
+      "CandidateResult": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/LandCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "candidates"
+        ],
+        "title": "CandidateResult",
         "type": "object"
       },
       "CaptureCreate": {
@@ -4126,6 +4312,83 @@
         "title": "JobStepRead",
         "type": "object"
       },
+      "LandCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "distanceM": {
+            "minimum": 0.0,
+            "title": "Distancem",
+            "type": "number"
+          },
+          "geometry": {
+            "discriminator": {
+              "mapping": {
+                "LineString": "#/components/schemas/LineString",
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Point": "#/components/schemas/Point",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Point"
+              },
+              {
+                "$ref": "#/components/schemas/LineString"
+              },
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Geometry"
+          },
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Properties",
+            "type": "object"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BoundarySource"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "geometry",
+          "source",
+          "distanceM"
+        ],
+        "title": "LandCandidate",
+        "type": "object"
+      },
       "LandCreate": {
         "additionalProperties": false,
         "properties": {
@@ -5009,6 +5272,36 @@
         "title": "LicenseMetadata",
         "type": "object"
       },
+      "LineString": {
+        "additionalProperties": false,
+        "properties": {
+          "coordinates": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 2,
+              "type": "array"
+            },
+            "maxItems": 20000,
+            "minItems": 2,
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "type": {
+            "const": "LineString",
+            "default": "LineString",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "coordinates"
+        ],
+        "title": "LineString",
+        "type": "object"
+      },
       "LiveCameras": {
         "additionalProperties": false,
         "description": "Registered cameras and a sample of the sparse points, from the newest snapshot.",
@@ -5412,15 +5705,23 @@
       "MapFeature": {
         "additionalProperties": false,
         "properties": {
-          "boundary": {
+          "geometry": {
             "discriminator": {
               "mapping": {
+                "LineString": "#/components/schemas/LineString",
                 "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Point": "#/components/schemas/Point",
                 "Polygon": "#/components/schemas/Polygon"
               },
               "propertyName": "type"
             },
             "oneOf": [
+              {
+                "$ref": "#/components/schemas/Point"
+              },
+              {
+                "$ref": "#/components/schemas/LineString"
+              },
               {
                 "$ref": "#/components/schemas/Polygon"
               },
@@ -5428,7 +5729,7 @@
                 "$ref": "#/components/schemas/MultiPolygon"
               }
             ],
-            "title": "Boundary"
+            "title": "Geometry"
           },
           "label": {
             "maxLength": 300,
@@ -5449,7 +5750,7 @@
         },
         "required": [
           "label",
-          "boundary"
+          "geometry"
         ],
         "title": "MapFeature",
         "type": "object"
@@ -7264,6 +7565,31 @@
         "title": "PlannerZone",
         "type": "object"
       },
+      "Point": {
+        "additionalProperties": false,
+        "properties": {
+          "coordinates": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 2,
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "type": {
+            "const": "Point",
+            "default": "Point",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "coordinates"
+        ],
+        "title": "Point",
+        "type": "object"
+      },
       "PointCloudShading": {
         "additionalProperties": false,
         "properties": {
@@ -8563,6 +8889,118 @@
         ],
         "title": "ScaleSource",
         "type": "string"
+      },
+      "SelectionInstruction": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/LandCandidate"
+            },
+            "maxItems": 50,
+            "title": "Candidates",
+            "type": "array"
+          },
+          "instruction": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "selectedIds": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Selectedids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "instruction",
+          "candidates"
+        ],
+        "title": "SelectionInstruction",
+        "type": "object"
+      },
+      "SelectionInterpretation": {
+        "additionalProperties": false,
+        "properties": {
+          "candidateIds": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Candidateids",
+            "type": "array"
+          },
+          "cap": {
+            "default": "round",
+            "enum": [
+              "round",
+              "flat",
+              "square"
+            ],
+            "title": "Cap",
+            "type": "string"
+          },
+          "explanation": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "select",
+              "union",
+              "corridor",
+              "clarify"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "provider": {
+            "default": "local",
+            "enum": [
+              "model",
+              "local"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "widthM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Widthm"
+          }
+        },
+        "required": [
+          "operation",
+          "explanation"
+        ],
+        "title": "SelectionInterpretation",
+        "type": "object"
       },
       "SidecarAttach": {
         "additionalProperties": false,
@@ -12903,6 +13341,101 @@
         ]
       }
     },
+    "/api/v1/land/import": {
+      "post": {
+        "operationId": "import_area_api_v1_land_import_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_area_api_v1_land_import_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundaryImportRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Import Area",
+        "tags": [
+          "land"
+        ]
+      }
+    },
     "/api/v1/land/operations": {
       "post": {
         "operationId": "operate_api_v1_land_operations_post",
@@ -12993,6 +13526,196 @@
           }
         ],
         "summary": "Operate",
+        "tags": [
+          "land"
+        ]
+      }
+    },
+    "/api/v1/land/selection/candidates": {
+      "post": {
+        "operationId": "selection_candidates_api_v1_land_selection_candidates_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Selection Candidates",
+        "tags": [
+          "land"
+        ]
+      }
+    },
+    "/api/v1/land/selection/interpret": {
+      "post": {
+        "operationId": "selection_interpret_api_v1_land_selection_interpret_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectionInstruction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectionInterpretation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Selection Interpret",
         "tags": [
           "land"
         ]

@@ -25,7 +25,6 @@ export const useLandIdentity = create<LandIdentityState>((set, get) => ({
   error: null,
   setSession: (accessToken, principalId) => {
     const changed = principalId !== get().principalId;
-    if (changed || !accessToken) useLand.getState().clear();
     set({
       accessToken,
       principalId,
@@ -33,10 +32,12 @@ export const useLandIdentity = create<LandIdentityState>((set, get) => ({
       error: null,
       ...(changed || !accessToken ? { workspaceId: null, role: null } : {}),
     });
+    if (changed || !accessToken) useLand.getState().clear();
   },
   selectWorkspace: (workspaceId, role) => {
-    if (workspaceId !== get().workspaceId) useLand.getState().clear();
+    const changed = workspaceId !== get().workspaceId;
     set({ workspaceId, role: role ?? null });
+    if (changed) useLand.getState().clear();
   },
   setError: (error) => set({ error, ready: true }),
 }));
@@ -55,4 +56,9 @@ export function useLandAccessReady() {
 
 export function useLandCanEdit() {
   return useLandIdentity((s) => !landUsesOidc || s.role === "owner" || s.role === "editor");
+}
+
+export function landScope() {
+  const s = useLandIdentity.getState();
+  return landUsesOidc ? `${s.principalId ?? "anonymous"}/${s.workspaceId ?? "none"}` : "pilot";
 }

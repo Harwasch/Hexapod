@@ -297,3 +297,109 @@
 .land-file-input {
   display: none;
 }
+.land-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.land-candidates button {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid var(--control-border);
+  background: transparent;
+  border-radius: 8px;
+}
+.land-candidates button[aria-pressed="true"] {
+  border-color: #f1cb7a;
+  background: #f1cb7a15;
+}
+.land-candidates strong {
+  font-size: 12px;
+}
+.land-candidates span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.land-width-controls {
+  display: flex;
+  gap: 8px;
+}
+.land-width-controls input {
+  width: 100%;
+  min-width: 0;
+}
+.land-panel {
+  position: relative;
+}
+.land-panel > .panel {
+  width: var(--land-workspace-width, 440px);
+}
+.land-resizer {
+  position: absolute;
+  right: -5px;
+  top: 16px;
+  bottom: 16px;
+  width: 10px;
+  z-index: 2;
+  cursor: ew-resize;
+  touch-action: none;
+  border-radius: 5px;
+}
+.land-resizer:hover,
+.land-resizer:focus-visible {
+  background: var(--accent-fill);
+  outline: 0;
+  opacity: 0.65;
+}
+.land-sheet-toggle {
+  display: none;
+}
+.land-workspace--saved {
+  gap: 12px;
+}
+.land-workspace--saved .land-metrics {
+  padding: 12px 0;
+}
+.land-workspace--saved .land-metrics strong {
+  font-size: 17px;
+}
+.land-provenance summary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 0;
+}
+.land-provenance[open] .land-source {
+  margin-top: 10px;
+}
+@media (max-width: 899px) {
+  .land-panel > .panel {
+    width: 100%;
+    max-height: 58dvh;
+  }
+  .land-panel.land-panel--expanded > .panel {
+    max-height: 100%;
+    height: 100%;
+  }
+  .land-panel.land-panel--expanded {
+    height: 100%;
+  }
+  .land-resizer {
+    display: none;
+  }
+  .land-sheet-toggle {
+    display: block;
+    background: transparent;
+    color: inherit;
+    border: 1px solid var(--control-border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font: inherit;
+    font-size: 11px;
+  }
+}

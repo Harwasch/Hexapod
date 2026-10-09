@@ -612,6 +612,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Area */
+        post: operations["import_area_api_v1_land_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/operations": {
         parameters: {
             query?: never;
@@ -623,6 +640,40 @@ export interface paths {
         put?: never;
         /** Operate */
         post: operations["operate_api_v1_land_operations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/selection/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Selection Candidates */
+        post: operations["selection_candidates_api_v1_land_selection_candidates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/selection/interpret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Selection Interpret */
+        post: operations["selection_interpret_api_v1_land_selection_interpret_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1534,10 +1585,45 @@ export interface components {
             /** Url */
             url?: string | null;
         };
+        /** Body_import_area_api_v1_land_import_post */
+        Body_import_area_api_v1_land_import_post: {
+            /** File */
+            file: string;
+            /** Layer */
+            layer?: string | null;
+            /**
+             * Repair
+             * @default false
+             */
+            repair?: boolean;
+            /** Source Crs */
+            source_crs?: string | null;
+        };
         /** Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post */
         Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post: {
             /** File */
             file: string;
+        };
+        /** BoundaryImportRead */
+        BoundaryImportRead: {
+            /** Boundary */
+            boundary?: (components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
+            /** Layers */
+            layers?: string[];
+            /** Sourcecrs */
+            sourceCrs?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "choose-layer" | "needs-crs" | "needs-repair";
+            /**
+             * Targetcrs
+             * @default EPSG:4326
+             */
+            targetCrs?: string;
+            /** Warnings */
+            warnings?: string[];
         };
         /** BoundaryOperation */
         BoundaryOperation: {
@@ -1698,6 +1784,37 @@ export interface components {
              * Format: uuid
              */
             siteId: string;
+        };
+        /** CandidateRequest */
+        CandidateRequest: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "parcel" | "line" | "building";
+            point: components["schemas"]["Point"];
+            /**
+             * Radiusm
+             * @default 250
+             */
+            radiusM?: number;
+        };
+        /** CandidateResult */
+        CandidateResult: {
+            /** Candidates */
+            candidates: components["schemas"]["LandCandidate"][];
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "empty" | "uncovered" | "unavailable";
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated?: boolean;
         };
         /** CaptureCreate */
         CaptureCreate: {
@@ -2643,6 +2760,22 @@ export interface components {
              */
             updatedAt: string;
         };
+        /** LandCandidate */
+        LandCandidate: {
+            /** Distancem */
+            distanceM: number;
+            /** Geometry */
+            geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Properties */
+            properties?: {
+                [key: string]: string | number | null;
+            };
+            source: components["schemas"]["BoundarySource"];
+        };
         /** LandCreate */
         LandCreate: {
             /** Boundary */
@@ -2846,6 +2979,16 @@ export interface components {
             /** Url */
             url?: string | null;
         };
+        /** LineString */
+        LineString: {
+            /** Coordinates */
+            coordinates: number[][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "LineString";
+        };
         /**
          * LiveCameras
          * @description Registered cameras and a sample of the sparse points, from the newest snapshot.
@@ -2965,8 +3108,8 @@ export interface components {
         };
         /** MapFeature */
         MapFeature: {
-            /** Boundary */
-            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Geometry */
+            geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
             /** Label */
             label: string;
             /** Value */
@@ -3653,6 +3796,16 @@ export interface components {
             /** Zoneid */
             zoneId: string | null;
         };
+        /** Point */
+        Point: {
+            /** Coordinates */
+            coordinates: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "Point";
+        };
         /** PointCloudShading */
         PointCloudShading: {
             /**
@@ -4138,6 +4291,43 @@ export interface components {
          * @enum {string}
          */
         ScaleSource: "arkit" | "exif-gps" | "manual" | "camera-height-estimate" | "unresolved";
+        /** SelectionInstruction */
+        SelectionInstruction: {
+            /** Candidates */
+            candidates: components["schemas"]["LandCandidate"][];
+            /** Instruction */
+            instruction: string;
+            /** Selectedids */
+            selectedIds?: string[];
+        };
+        /** SelectionInterpretation */
+        SelectionInterpretation: {
+            /** Candidateids */
+            candidateIds?: string[];
+            /**
+             * Cap
+             * @default round
+             * @enum {string}
+             */
+            cap?: "round" | "flat" | "square";
+            /** Explanation */
+            explanation: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "select" | "union" | "corridor" | "clarify";
+            /**
+             * Provider
+             * @default local
+             * @enum {string}
+             */
+            provider?: "model" | "local";
+            /** Question */
+            question?: string | null;
+            /** Widthm */
+            widthM?: number | null;
+        };
         /**
          * SidecarAttach
          * @description Attach the files staged under `stagingPrefix` to an asset's tileset.
@@ -4656,7 +4846,9 @@ export type SchemaAssetRead = components['schemas']['AssetRead'];
 export type SchemaAssetScaleUpdate = components['schemas']['AssetScaleUpdate'];
 export type SchemaAssetUpdate = components['schemas']['AssetUpdate'];
 export type SchemaAttribution = components['schemas']['Attribution'];
+export type SchemaBodyImportAreaApiV1LandImportPost = components['schemas']['Body_import_area_api_v1_land_import_post'];
 export type SchemaBodyUploadThumbnailApiV1SitesSiteIdThumbnailPost = components['schemas']['Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post'];
+export type SchemaBoundaryImportRead = components['schemas']['BoundaryImportRead'];
 export type SchemaBoundaryOperation = components['schemas']['BoundaryOperation'];
 export type SchemaBoundaryResult = components['schemas']['BoundaryResult'];
 export type SchemaBoundaryRevisionRead = components['schemas']['BoundaryRevisionRead'];
@@ -4665,6 +4857,8 @@ export type SchemaBoundingBox = components['schemas']['BoundingBox'];
 export type SchemaBusyWindow = components['schemas']['BusyWindow'];
 export type SchemaCameraBookmarkCreate = components['schemas']['CameraBookmarkCreate'];
 export type SchemaCameraBookmarkRead = components['schemas']['CameraBookmarkRead'];
+export type SchemaCandidateRequest = components['schemas']['CandidateRequest'];
+export type SchemaCandidateResult = components['schemas']['CandidateResult'];
 export type SchemaCaptureCreate = components['schemas']['CaptureCreate'];
 export type SchemaCaptureDetail = components['schemas']['CaptureDetail'];
 export type SchemaCaptureFileComplete = components['schemas']['CaptureFileComplete'];
@@ -4712,6 +4906,7 @@ export type SchemaJobRead = components['schemas']['JobRead'];
 export type SchemaJobRetry = components['schemas']['JobRetry'];
 export type SchemaJobStepLog = components['schemas']['JobStepLog'];
 export type SchemaJobStepRead = components['schemas']['JobStepRead'];
+export type SchemaLandCandidate = components['schemas']['LandCandidate'];
 export type SchemaLandCreate = components['schemas']['LandCreate'];
 export type SchemaLandRead = components['schemas']['LandRead'];
 export type SchemaLandRevise = components['schemas']['LandRevise'];
@@ -4723,6 +4918,7 @@ export type SchemaLayerUpdate = components['schemas']['LayerUpdate'];
 export type SchemaLegendEntry = components['schemas']['LegendEntry'];
 export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
+export type SchemaLineString = components['schemas']['LineString'];
 export type SchemaLiveCameras = components['schemas']['LiveCameras'];
 export type SchemaLiveProgress = components['schemas']['LiveProgress'];
 export type SchemaLiveSplat = components['schemas']['LiveSplat'];
@@ -4761,6 +4957,7 @@ export type SchemaPlanRevise = components['schemas']['PlanRevise'];
 export type SchemaPlanRevisionRead = components['schemas']['PlanRevisionRead'];
 export type SchemaPlanStatusUpdate = components['schemas']['PlanStatusUpdate'];
 export type SchemaPlanStep = components['schemas']['PlanStep'];
+export type SchemaPoint = components['schemas']['Point'];
 export type SchemaPointCloudShading = components['schemas']['PointCloudShading'];
 export type SchemaPolygon = components['schemas']['Polygon'];
 export type SchemaPresignedPart = components['schemas']['PresignedPart'];
@@ -4787,6 +4984,8 @@ export type SchemaRunStatus = components['schemas']['RunStatus'];
 export type SchemaScaleEvidence = components['schemas']['ScaleEvidence'];
 export type SchemaScaleEvidenceInput = components['schemas']['ScaleEvidenceInput'];
 export type SchemaScaleSource = components['schemas']['ScaleSource'];
+export type SchemaSelectionInstruction = components['schemas']['SelectionInstruction'];
+export type SchemaSelectionInterpretation = components['schemas']['SelectionInterpretation'];
 export type SchemaSidecarAttach = components['schemas']['SidecarAttach'];
 export type SchemaSidecarAttachment = components['schemas']['SidecarAttachment'];
 export type SchemaSidecarFlag = components['schemas']['SidecarFlag'];
@@ -7343,6 +7542,68 @@ export interface operations {
             };
         };
     };
+    import_area_api_v1_land_import_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_area_api_v1_land_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundaryImportRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     operate_api_v1_land_operations_post: {
         parameters: {
             query?: never;
@@ -7365,6 +7626,130 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BoundaryResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    selection_candidates_api_v1_land_selection_candidates_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CandidateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    selection_interpret_api_v1_land_selection_interpret_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectionInstruction"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelectionInterpretation"];
                 };
             };
             /** @description Missing or wrong write token */

@@ -15,6 +15,8 @@ import {
 import type { Footprint } from "@twin/contracts";
 import { boundsOf, polygonsOf } from "@twin/geo";
 
+import { useLandContext } from "@/state/landContext";
+
 import type { LandMode, LandPoint } from "@/state/land";
 
 import type { CesiumSceneManager } from "./CesiumSceneManager";
@@ -65,6 +67,20 @@ export class LandMapController {
     this.handler = handler;
     handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (this.mode === "edit") return;
+      if (this.mode === "candidates") {
+        const picked: unknown = this.host.scene.pick(event.position);
+        if (
+          picked &&
+          typeof picked === "object" &&
+          "id" in picked &&
+          picked.id instanceof Entity &&
+          picked.id.id.startsWith("land-context:candidates/")
+        ) {
+          const id = picked.id.id.slice("land-context:candidates/".length).split("#")[0];
+          if (id) useLandContext.getState().toggleCandidate(id);
+          return;
+        }
+      }
       const point = this.ground(event.position);
       if (point) this.point(point);
     }, ScreenSpaceEventType.LEFT_CLICK);
@@ -131,6 +147,7 @@ export class LandMapController {
               polygon.slice(1).map((ring) => new PolygonHierarchy(positions(ring))),
             ),
             material: FILL,
+            height: 0,
             heightReference: HeightReference.CLAMP_TO_GROUND,
           },
         });
@@ -168,6 +185,7 @@ export class LandMapController {
         polygon: {
           hierarchy: new PolygonHierarchy(positions(points)),
           material: new ColorMaterialProperty(FILL),
+          height: 0,
           heightReference: HeightReference.CLAMP_TO_GROUND,
         },
       });
