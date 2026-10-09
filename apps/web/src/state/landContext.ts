@@ -27,6 +27,8 @@ export type LandWorkspaceSection =
 interface LandContextState {
   pointPicker: string | null;
   setPointPicker: (id: string | null) => void;
+  selectedInvestigationId: string | null;
+  selectInvestigation: (id: string | null) => void;
   researchQuestion: string;
   setResearchQuestion: (question: string) => void;
   section: LandWorkspaceSection;
@@ -55,6 +57,8 @@ interface LandContextState {
 export const useLandContext = create<LandContextState>((set, get) => ({
   pointPicker: null,
   setPointPicker: (pointPicker) => set({ pointPicker }),
+  selectedInvestigationId: null,
+  selectInvestigation: (selectedInvestigationId) => set({ selectedInvestigationId }),
   researchQuestion: "",
   setResearchQuestion: (researchQuestion) => set({ researchQuestion }),
   section: "discover",
@@ -141,6 +145,7 @@ export const useLandContext = create<LandContextState>((set, get) => ({
       section: "discover",
       selectedSolarId: null,
       selectedSurveyId: null,
+      selectedInvestigationId: null,
       researchQuestion: "",
     }),
 }));

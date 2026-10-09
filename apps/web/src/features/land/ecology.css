@@ -78,3 +78,46 @@
 .land-ecology code {
   overflow-wrap: anywhere;
 }
+
+.land-ecology-research {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  padding: 14px;
+  background: #91d6a208;
+  overflow-wrap: anywhere;
+}
+.land-ecology-research > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.land-ecology-research select {
+  max-width: 100%;
+  min-width: 0;
+}
+.land-ecology-research .land-survey-form {
+  display: block;
+}
+.land-ecology-research .land-survey-form > * + * {
+  margin-top: 12px;
+}
+
+.land-ecology-research > * {
+  min-width: 0;
+}
+.land-ecology-research button {
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #a5c4a508;
+  color: inherit;
+  white-space: normal;
+}
+.land-ecology-research > button:first-of-type {
+  background: var(--accent-fill);
+  color: var(--on-accent-fill);
+}

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import uuid
 
+from app.research.ecology_outputs import ecology_outputs
 from app.research.providers.archives import ARCHIVE_SOURCES
 from app.research.providers.base import SourceResult
+from app.research.providers.ecology import ECOLOGY_SOURCES
 from app.research.providers.open_data import SOURCES
 from app.schemas.research import (
     ArtifactContent,
@@ -23,6 +25,8 @@ MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", 
 def overview_outputs(
     result: SourceResult, ids: list[uuid.UUID]
 ) -> tuple[FindingContent | None, list[ArtifactContent]]:
+    if result.provider in ECOLOGY_SOURCES:
+        return ecology_outputs(result, ids)
     if not ids or result.status != "available":
         return None, []
     category = SOURCES[result.provider].domain

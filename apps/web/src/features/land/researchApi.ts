@@ -17,15 +17,15 @@ export function useInvestigations(landId: string) {
   });
 }
 
-export function useInvestigation(id: string | null, offset = 0) {
+export function useInvestigation(id: string | null, offset = 0, limit = 100) {
   const scope = useLandScope();
   const ready = useLandAccessReady();
   return useQuery({
-    queryKey: ["land-research", scope, "investigation", id, offset],
+    queryKey: ["land-research", scope, "investigation", id, offset, limit],
     queryFn: () =>
       unwrap(
         api.GET("/api/v1/research/investigations/{investigation_id}", {
-          params: { path: { investigation_id: id ?? "" }, query: { offset, limit: 100 } },
+          params: { path: { investigation_id: id ?? "" }, query: { offset, limit } },
         }),
       ),
     enabled: Boolean(id) && ready,

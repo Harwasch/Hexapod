@@ -3390,6 +3390,32 @@ export interface components {
             /** Truncated */
             truncated: boolean;
         };
+        /** EcologyRequest */
+        EcologyRequest: {
+            /**
+             * Dataset
+             * @default ecological-context
+             * @constant
+             */
+            dataset?: "ecological-context";
+            /**
+             * Includeecologicalsites
+             * @default true
+             */
+            includeEcologicalSites?: boolean;
+            /**
+             * Includeecoregions
+             * @default true
+             */
+            includeEcoregions?: boolean;
+            /**
+             * Includeoccurrences
+             * @default true
+             */
+            includeOccurrences?: boolean;
+            /** Taxa */
+            taxa?: components["schemas"]["TaxonQuery"][];
+        };
         /** EventRead */
         EventRead: {
             /**
@@ -6148,14 +6174,14 @@ export interface components {
         /** RunCreate */
         RunCreate: {
             /** Analysis */
-            analysis?: components["schemas"]["RasterRequest"] | components["schemas"]["SolarRequest"] | null;
+            analysis?: components["schemas"]["RasterRequest"] | components["schemas"]["SolarRequest"] | components["schemas"]["EcologyRequest"] | null;
             budget?: components["schemas"]["ResearchBudget"];
             /**
              * Kind
              * @default investigation
              * @enum {string}
              */
-            kind?: "overview" | "investigation" | "raster" | "archive" | "solar";
+            kind?: "overview" | "investigation" | "raster" | "archive" | "solar" | "ecology";
             /** Question */
             question: string;
             /**
@@ -6167,7 +6193,7 @@ export interface components {
         /** RunRead */
         RunRead: {
             /** Analysis */
-            analysis?: components["schemas"]["RasterRequest"] | components["schemas"]["SolarRequest"] | null;
+            analysis?: components["schemas"]["RasterRequest"] | components["schemas"]["SolarRequest"] | components["schemas"]["EcologyRequest"] | null;
             /** Attempt */
             attempt: number;
             budget: components["schemas"]["ResearchBudget"];
@@ -6194,7 +6220,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "overview" | "investigation" | "raster" | "archive" | "solar";
+            kind: "overview" | "investigation" | "raster" | "archive" | "solar" | "ecology";
             /** Question */
             question: string;
             /** Startedat */
@@ -7236,6 +7262,13 @@ export interface components {
                 [key: string]: string | number | boolean | null;
             }[];
         };
+        /** TaxonQuery */
+        TaxonQuery: {
+            /** Kingdom */
+            kingdom?: string | null;
+            /** Scientificname */
+            scientificName: string;
+        };
         /** TemporalExtent */
         TemporalExtent: {
             /** End */
@@ -7558,6 +7591,7 @@ export type SchemaDocumentOcrRequest = components['schemas']['DocumentOcrRequest
 export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
 export type SchemaDocumentPageRead = components['schemas']['DocumentPageRead'];
 export type SchemaDocumentSearchHit = components['schemas']['DocumentSearchHit'];
+export type SchemaEcologyRequest = components['schemas']['EcologyRequest'];
 export type SchemaEventRead = components['schemas']['EventRead'];
 export type SchemaEvidenceRead = components['schemas']['EvidenceRead'];
 export type SchemaFeatureInspectionCreate = components['schemas']['FeatureInspectionCreate'];
@@ -7720,6 +7754,7 @@ export type SchemaSurveySpeciesSummary = components['schemas']['SurveySpeciesSum
 export type SchemaSurveySummary = components['schemas']['SurveySummary'];
 export type SchemaTableColumn = components['schemas']['TableColumn'];
 export type SchemaTableOutput = components['schemas']['TableOutput'];
+export type SchemaTaxonQuery = components['schemas']['TaxonQuery'];
 export type SchemaTemporalExtent = components['schemas']['TemporalExtent'];
 export type SchemaTilesUrlLayerSource = components['schemas']['TilesUrlLayerSource'];
 export type SchemaTilesUrlSource = components['schemas']['TilesUrlSource'];

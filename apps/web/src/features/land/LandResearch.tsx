@@ -106,7 +106,8 @@ export function LandResearch({ land }: { land: LandArea }) {
   const scene = useScene();
   const catalog = useInvestigations(land.id);
   const status = useResearchStatus();
-  const [chosen, setChosen] = useState<string | null>(null);
+  const chosen = useLandContext((s) => s.selectedInvestigationId);
+  const setChosen = useLandContext((s) => s.selectInvestigation);
   const selected =
     chosen ??
     catalog.data?.find((item) => item.boundaryRevision === land.revision)?.id ??
@@ -196,7 +197,17 @@ export function LandResearch({ land }: { land: LandArea }) {
     return () => {
       current = false;
     };
-  }, [ready, canEdit, catalog.isSuccess, catalog.data, cache, scope, land.id, land.revision]);
+  }, [
+    ready,
+    canEdit,
+    catalog.isSuccess,
+    catalog.data,
+    cache,
+    scope,
+    land.id,
+    land.revision,
+    setChosen,
+  ]);
 
   const startCurrentOverview = async () => {
     setBusy(true);

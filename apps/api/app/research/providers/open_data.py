@@ -17,6 +17,8 @@ from app.research.providers.base import (
     evidence,
     fetch_json,
 )
+from app.research.providers.ecology import ECOLOGY_SOURCES, ecological_sites, regions
+from app.research.providers.taxonomy import CHECKLIST
 from app.research.providers.us_land import US_SOURCES, flood_zones, soils
 from app.schemas.research import EvidenceContent
 
@@ -59,6 +61,7 @@ SOURCES = {
 SOURCES.update(US_SOURCES)
 OVERVIEW_SOURCES = tuple(SOURCES)
 SOURCES.update(ARCHIVE_SOURCES)
+SOURCES.update(ECOLOGY_SOURCES)
 
 
 def elevation(context: SourceContext, client: httpx.Client) -> SourceResult:
@@ -168,6 +171,7 @@ def occurrences(context: SourceContext, client: httpx.Client) -> SourceResult:
             "decimalLatitude": f"{south},{north}",
             "decimalLongitude": f"{west},{east}",
             "hasCoordinate": "true",
+            "checklistKey": CHECKLIST,
             "hasGeospatialIssue": "false",
             "limit": 100,
         },
@@ -206,6 +210,7 @@ def occurrences(context: SourceContext, client: httpx.Client) -> SourceResult:
             "publisher": record.get("institutionCode")
             or record.get("datasetName", "GBIF data publisher"),
             "datasetKey": record.get("datasetKey"),
+            "taxonomyChecklistKey": CHECKLIST,
             "license": license_url,
         }
         item = evidence(
@@ -238,6 +243,7 @@ def occurrences(context: SourceContext, client: httpx.Client) -> SourceResult:
         "excludedLicense": excluded_license,
         "excludedGeneralized": excluded_generalized,
         "queryUrl": url,
+        "taxonomyChecklistKey": CHECKLIST,
     }
     summary = (
         f"{len(records)} openly licensed observation records in the retrieved sample "
@@ -255,6 +261,8 @@ def occurrences(context: SourceContext, client: httpx.Client) -> SourceResult:
 
 
 ADAPTERS = {
+    "epa-ecoregions": regions,
+    "usda-ecological-sites": ecological_sites,
     "usgs-elevation": elevation,
     "nasa-power": climate,
     "gbif-occurrences": occurrences,

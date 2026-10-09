@@ -11,7 +11,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
-| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references | 3D roof/obstruction reconstruction and fitted panel layouts, taxonomy/reference-ecosystem integrations and predictive restoration modeling |
+| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and predictive restoration modeling |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
@@ -1179,3 +1179,77 @@ weather snapshot verifies as `63c9b3c952d666cf84842de555aba8a052ceece95bdc118f68
 Desktop and 390-pixel phone views were inspected; reopening and map display had no page
 exceptions or internal panel overflow. The preview still lacks high-resolution basemap
 imagery, so roof alignment/accuracy has not been demonstrated. Nothing was deployed.
+
+
+## Implemented increment: ecological context and taxonomic name review
+
+The Ecology workspace now runs a durable, model-independent investigation with selectable
+EPA regional ecoregions, USDA soil-linked ecological-class associations, GBIF occurrence
+samples and up to twenty scientific-name lookups. Users can copy labels from the displayed
+field survey into an editable list, supply a kingdom hint, and review them before querying.
+Survey observations remain immutable; name matches never silently rewrite field identifications.
+Source choices and pending request keys survive browser reloads and lost queue responses.
+Results include source coverage, cited findings, tables, saved investigation selection,
+cancellation, stale-boundary labels and a handoff to the same investigation in Discover.
+Tables scroll within the card on small screens.
+
+`kind: ecology` carries a typed `ecological-context` analysis request through the existing
+research queue. Source snapshots are checkpointed before derived outputs. Recovery preserves
+the original retrieved data and citations and does not charge a second step for an interrupted
+task. Outages, successful empty responses, geographic noncoverage and budget exhaustion remain
+distinct. The normal five-source overview stays bounded; the two regional ecological sources
+are available as additional registered agent tools. No database migration is needed beyond 0023.
+
+Taxonomic matching explicitly selects Catalogue of Life Extended Release through GBIF's v2
+matching API. It records the matching-service index observed immediately before lookup, rather
+than labelling it as the latest catalog release. The saved subset includes supplied name,
+matched and accepted usages, synonym status, classification, diagnostic match type and score,
+notes, issues and up to five alternatives, with explicit truncation flags. Separately licensed
+conservation-status fields and formatted source HTML are excluded. GBIF occurrence queries
+also explicitly request the COL checklist and retain its identity. Matching a name does not
+verify the organism, local presence, cover, native/invasive status or restoration suitability;
+fuzzy, higher-rank and ambiguous matches remain visibly uncertain.
+
+EPA Level IV labels use the public ORD map service's December 2011 regional framework,
+compiled at 1:250,000. Queries use the actual polygon, including holes, and return context
+labels without fabricated area shares or site-scale habitat boundaries. USDA references come
+from major components of one soil map unit sampled at a representative point. Map-unit
+percentages are not land-wide proportions. Standard ecological-site identifiers may provide
+a candidate description link; the linked document has not been fetched or interpreted.
+Empty associations are retained as successful source evidence, not restoration impossibility.
+Neither source supplies a verified local reference community or a predictive restoration model.
+
+The agent gains `match_taxon` and `read_research_evidence`. Previous evidence metadata from
+the investigation is available in context; reading retrieves the saved source snapshot with
+its existing citation. Evidence from another investigation is rejected. This lets follow-up
+research review earlier results without relying on titles alone or replacing sources with a
+fresh retrieval. Controlled model tests validate both tools; live model-provider acceptance
+remains outstanding because this environment has no configured model credentials.
+
+Primary technical references:
+- [GBIF taxonomy interpretation](https://techdocs.gbif.org/en/data-processing/taxonomy-interpretation)
+- [GBIF Catalogue of Life transition](https://data-blog.gbif.org/post/catalogue-of-life-taxonomic-backbone/)
+- [GBIF species API](https://techdocs.gbif.org/en/openapi/v1/species)
+- [EPA ecoregion framework](https://www.epa.gov/eco-research/level-iii-and-iv-ecoregions-continental-united-states)
+- [EPA public ORD service metadata](https://geodata.epa.gov/arcgis/rest/services/ORD/USEPA_Ecoregions_Level_III_and_IV/MapServer)
+- [USDA Soil Data Access service](https://sdmdataaccess.sc.egov.usda.gov/WebServiceHelp.aspx)
+
+Live validation used the public National Mall software fixture, not a private parcel.
+Investigation `c0993f83-ad33-49e0-b7c6-346b5ffcbc8e`, run
+`618f3a07-a8d9-4a73-a16b-a31915b2416a`, completed successfully. It retrieved the Chesapeake
+Rolling Coastal Plain regional label, an empty USDA ecological association response,
+twenty usable openly licensed biodiversity records, and an exact name match for Quercus alba.
+These observations do not establish current species occupancy. The name matching service
+reported `COL26.6 XR`, index `315557`, created July 18, 2026; its saved subset hashes to
+`21d339955bfcc2b2f00cafda20283a878f6727ab14307dc68ee86345bd42fe62`.
+The browser verified reload recovery, source inspection, saved results and the Discover
+handoff. A detected mobile overflow was fixed; the subsequent desktop/390-pixel phone check
+had no page exceptions or unintended panel overflow. Nothing was deployed.
+
+Validation also covers typed run requests and idempotency, empty-source evidence, bounded
+untrusted responses, polygon hole orientation, taxonomic ambiguity and unresolved synonyms,
+step budgets, provider outages, interrupted lookup recovery without refetching, saved-evidence
+follow-ups and rejection of foreign citations. Existing research and solar API regressions
+passed. API typing (279 files), lint and formatting passed. Ten frontend ecology/survey/solar
+tests, full web typing, affected lint, the production build and all seven existing land browser
+journeys passed. The original deployment checkout remains clean and untouched.

@@ -3974,6 +3974,42 @@
         "title": "DocumentSearchHit",
         "type": "object"
       },
+      "EcologyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "dataset": {
+            "const": "ecological-context",
+            "default": "ecological-context",
+            "title": "Dataset",
+            "type": "string"
+          },
+          "includeEcologicalSites": {
+            "default": true,
+            "title": "Includeecologicalsites",
+            "type": "boolean"
+          },
+          "includeEcoregions": {
+            "default": true,
+            "title": "Includeecoregions",
+            "type": "boolean"
+          },
+          "includeOccurrences": {
+            "default": true,
+            "title": "Includeoccurrences",
+            "type": "boolean"
+          },
+          "taxa": {
+            "items": {
+              "$ref": "#/components/schemas/TaxonQuery"
+            },
+            "maxItems": 20,
+            "title": "Taxa",
+            "type": "array"
+          }
+        },
+        "title": "EcologyRequest",
+        "type": "object"
+      },
       "EventRead": {
         "additionalProperties": false,
         "properties": {
@@ -12002,6 +12038,9 @@
                 "$ref": "#/components/schemas/SolarRequest"
               },
               {
+                "$ref": "#/components/schemas/EcologyRequest"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -12017,7 +12056,8 @@
               "investigation",
               "raster",
               "archive",
-              "solar"
+              "solar",
+              "ecology"
             ],
             "title": "Kind",
             "type": "string"
@@ -12051,6 +12091,9 @@
               },
               {
                 "$ref": "#/components/schemas/SolarRequest"
+              },
+              {
+                "$ref": "#/components/schemas/EcologyRequest"
               },
               {
                 "type": "null"
@@ -12109,7 +12152,8 @@
               "investigation",
               "raster",
               "archive",
-              "solar"
+              "solar",
+              "ecology"
             ],
             "title": "Kind",
             "type": "string"
@@ -15205,6 +15249,35 @@
           "rows"
         ],
         "title": "TableOutput",
+        "type": "object"
+      },
+      "TaxonQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "kingdom": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kingdom"
+          },
+          "scientificName": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Scientificname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scientificName"
+        ],
+        "title": "TaxonQuery",
         "type": "object"
       },
       "TemporalExtent": {

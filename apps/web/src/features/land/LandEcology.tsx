@@ -9,6 +9,7 @@ import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 import { describeError } from "@/lib/log";
 import { parseSurveyCorners, parseSurveyDraft } from "./surveyDraft";
+import { EcologyResearch } from "./EcologyResearch";
 import { SurveySummaryView } from "./SurveySummaryView";
 import "./ecology.css";
 
@@ -283,6 +284,12 @@ function EcologyEditor({ land, scope }: { land: LandArea; scope: string }) {
         Map sampled plots, record the species you observed, and preserve the method behind each
         estimate.
       </p>
+      <EcologyResearch
+        land={land}
+        surveyNames={(draft?.plots ?? selected.data?.plots ?? []).flatMap((plot) =>
+          plot.observations.map((observation) => observation.taxon),
+        )}
+      />
       {error && (
         <p role="alert" className="land-error">
           {error}

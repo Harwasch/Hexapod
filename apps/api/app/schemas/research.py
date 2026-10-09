@@ -10,6 +10,7 @@ from app.schemas.base import CamelModel
 from app.schemas.geojson import Footprint, MapGeometry
 from app.schemas.land_archives import ArchiveMedia
 from app.schemas.land_documents import DocumentLocator
+from app.schemas.land_ecology import EcologyRequest
 from app.schemas.land_rasters import RasterRequest
 from app.schemas.land_solar import SolarRequest
 from app.schemas.land_surveys import SurveyLocator
@@ -39,10 +40,12 @@ class InvestigationRead(InvestigationCreate):
 
 class RunCreate(CamelModel):
     request_key: uuid.UUID
-    kind: Literal["overview", "investigation", "raster", "archive", "solar"] = "investigation"
+    kind: Literal["overview", "investigation", "raster", "archive", "solar", "ecology"] = (
+        "investigation"
+    )
     question: str = Field(min_length=1, max_length=10_000)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
-    analysis: RasterRequest | SolarRequest | None = None
+    analysis: RasterRequest | SolarRequest | EcologyRequest | None = None
 
     @model_validator(mode="after")
     def analysis_request(self) -> RunCreate:
@@ -50,6 +53,8 @@ class RunCreate(CamelModel):
             raise ValueError("Raster runs require raster analysis parameters.")
         if (self.kind == "solar") != isinstance(self.analysis, SolarRequest):
             raise ValueError("Solar runs require solar analysis parameters.")
+        if (self.kind == "ecology") != isinstance(self.analysis, EcologyRequest):
+            raise ValueError("Ecology runs require ecological context parameters.")
         return self
 
 
@@ -57,8 +62,8 @@ class RunRead(CamelModel):
     id: uuid.UUID
     investigation_id: uuid.UUID
     question: str
-    kind: Literal["overview", "investigation", "raster", "archive", "solar"]
-    analysis: RasterRequest | SolarRequest | None = None
+    kind: Literal["overview", "investigation", "raster", "archive", "solar", "ecology"]
+    analysis: RasterRequest | SolarRequest | EcologyRequest | None = None
     status: Literal["queued", "running", "succeeded", "partial", "failed", "cancelled"]
     budget: ResearchBudget
     attempt: int

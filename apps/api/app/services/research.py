@@ -18,6 +18,7 @@ from app.models.research import (
     ResearchMessage,
     ResearchRun,
 )
+from app.schemas.land_ecology import EcologyRequest
 from app.schemas.land_rasters import RasterRequest
 from app.schemas.land_solar import SolarRequest
 from app.schemas.research import (
@@ -138,7 +139,9 @@ def create_run(
             or existing.kind != payload.kind
             or ResearchBudget.model_validate(existing.budget) != payload.budget
             or (
-                TypeAdapter(RasterRequest | SolarRequest).validate_python(existing.analysis)
+                TypeAdapter(RasterRequest | SolarRequest | EcologyRequest).validate_python(
+                    existing.analysis
+                )
                 if existing.analysis
                 else None
             )

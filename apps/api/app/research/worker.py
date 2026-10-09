@@ -34,6 +34,7 @@ from app.models.research import Evidence, Investigation, ResearchMessage, Resear
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.research import queue
 from app.research.documents import retrieve as retrieve_documents
+from app.research.ecology_outputs import ecology_outputs
 from app.research.model import (
     ActionDraftAction,
     ArchiveImageAction,
@@ -43,6 +44,7 @@ from app.research.model import (
     DocumentOcrAction,
     DocumentReadAction,
     DocumentSearchAction,
+    EvidenceReadAction,
     FindingAction,
     MultimodalResearchModel,
     RasterAction,
@@ -55,13 +57,16 @@ from app.research.model import (
     SolarAction,
     SolarReadAction,
     SurveyReadAction,
+    TaxonAction,
 )
 from app.research.outputs import overview_outputs
 from app.research.providers.archives import ARCHIVE_SOURCES
 from app.research.providers.base import SourceContext, SourceResult
 from app.research.providers.open_data import OVERVIEW_SOURCES, SOURCES, retrieve
+from app.research.providers.taxonomy import match as match_taxon
 from app.research.search import ClaudeResearchSearch, ResearchSearch
 from app.schemas.geojson import Footprint
+from app.schemas.land_ecology import EcologyRequest, TaxonQuery
 from app.schemas.land_rasters import RasterMetadata, RasterRequest
 from app.schemas.land_solar import SolarMetadata, SolarRequest
 from app.schemas.land_surveys import SurveyLocator
@@ -547,6 +552,120 @@ class ResearchWorker:
         queue.checkpoint(db, run_id, token, state)
         return value
 
+    @staticmethod
+    def _taxon_key(query: TaxonQuery) -> str:
+        return "taxonomy/" + hashlib.sha256(query.model_dump_json().encode()).hexdigest()
+
+    def _taxonomy(
+        self,
+        db: Session,
+        run_id: uuid.UUID,
+        token: uuid.UUID,
+        query: TaxonQuery,
+        client: httpx.Client,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        key = self._taxon_key(query)
+        if key in state["sources"]:
+            return state["sources"][key]  # type: ignore[no-any-return]
+        cached = state.get("pending_taxonomy")
+        if cached and cached["key"] == key:
+            result = unpack(cached["result"])
+        else:
+            db.rollback()
+            result = match_taxon(query, client)
+            state["pending_taxonomy"] = {"key": key, "result": pack(result)}
+            queue.checkpoint(
+                db,
+                run_id,
+                token,
+                state,
+                kind="source",
+                payload={
+                    "provider": result.provider,
+                    "status": result.status,
+                    "message": result.summary,
+                },
+            )
+        ids = [
+            queue.save_evidence(db, run_id, token, f"{key}/{suffix}", item)
+            for suffix, item in result.evidence
+        ]
+        finding, artifacts = ecology_outputs(result, ids)
+        if finding:
+            queue.save_finding(db, run_id, token, key, finding)
+        for index, artifact in enumerate(artifacts):
+            queue.save_artifact(db, run_id, token, f"{key}/{index}", artifact)
+        value = {
+            "provider": result.provider,
+            "status": result.status,
+            "summary": result.summary,
+            "evidenceIds": [str(identifier) for identifier in ids],
+            "data": result.data,
+        }
+        state["sources"][key] = value
+        state.pop("pending_taxonomy", None)
+        queue.checkpoint(db, run_id, token, state)
+        return value
+
+    def _ecology(
+        self,
+        db: Session,
+        run_id: uuid.UUID,
+        token: uuid.UUID,
+        context: SourceContext,
+        request: EcologyRequest,
+        client: httpx.Client,
+        state: dict[str, Any],
+        budget: ResearchBudget,
+    ) -> None:
+        tasks: list[tuple[str, TaxonQuery | None]] = [
+            (provider, None)
+            for provider, enabled in [
+                ("epa-ecoregions", request.include_ecoregions),
+                ("usda-ecological-sites", request.include_ecological_sites),
+                ("gbif-occurrences", request.include_occurrences),
+            ]
+            if enabled
+        ]
+        tasks.extend((self._taxon_key(query), query) for query in request.taxa)
+        for key, query in tasks:
+            if key in state["sources"]:
+                continue
+            # Persist the active task with its charged step, so crash recovery doesn't
+            # consume another step or associate a new lookup with existing citations.
+            if state.get("ecology_task") != key:
+                if state["steps"] >= budget.max_steps:
+                    queue.finish(
+                        db,
+                        run_id,
+                        token,
+                        "partial",
+                        "Ecological research reached its step budget. Completed evidence is retained.",
+                    )
+                    return
+                state["steps"] += 1
+                state["ecology_task"] = key
+                queue.checkpoint(db, run_id, token, state)
+            if query is None:
+                self._source(db, run_id, token, key, context, client, state)
+            else:
+                self._taxonomy(db, run_id, token, query, client, state)
+            state.pop("ecology_task", None)
+            queue.checkpoint(db, run_id, token, state)
+        missing = any(value["status"] == "unavailable" for value in state["sources"].values())
+        queue.finish(
+            db,
+            run_id,
+            token,
+            "partial" if missing else "succeeded",
+            "Ecological context is ready. Review source coverage, dates and name matches "
+            "before setting restoration targets."
+            + (
+                " Some sources were unavailable; completed results are retained." if missing else ""
+            ),
+        )
+
     def _documents(
         self,
         db: Session,
@@ -793,7 +912,9 @@ class ResearchWorker:
             budget = ResearchBudget.model_validate(run.budget)
             kind, question = run.kind, run.question
             analysis_request = (
-                TypeAdapter(RasterRequest | SolarRequest).validate_python(run.analysis)
+                TypeAdapter(RasterRequest | SolarRequest | EcologyRequest).validate_python(
+                    run.analysis
+                )
                 if run.analysis
                 else None
             )
@@ -921,6 +1042,22 @@ class ResearchWorker:
                     .limit(30)
                 )
             ]
+            saved_research_evidence = [
+                {
+                    "id": str(item.id),
+                    "title": item.content["title"],
+                    "provider": item.content["provider"],
+                    "retrievedAt": item.content["retrieved_at"],
+                    "spatialRelevance": item.content["spatial_relevance"],
+                }
+                for item in db.scalars(
+                    select(Evidence)
+                    .join(ResearchRun, ResearchRun.id == Evidence.run_id)
+                    .where(ResearchRun.investigation_id == investigation.id)
+                    .order_by(Evidence.created_at.desc(), Evidence.id)
+                    .limit(150)
+                )
+            ]
             state = dict(run.checkpoint) or {
                 "sources": {},
                 "steps": 0,
@@ -928,6 +1065,11 @@ class ResearchWorker:
                 "actions": [],
             }
             db.rollback()
+            if kind == "ecology":
+                if not isinstance(analysis_request, EcologyRequest):
+                    raise ValueError("This ecology run has no context parameters.")
+                self._ecology(db, run_id, token, context, analysis_request, client, state, budget)
+                return
             if kind == "solar":
                 try:
                     if not isinstance(analysis_request, SolarRequest):
@@ -1020,6 +1162,7 @@ class ResearchWorker:
                             "question": question,
                             "currentDate": datetime.now(UTC).date().isoformat(),
                             "conversation": conversation,
+                            "savedResearchEvidence": saved_research_evidence,
                             "savedScenarios": saved_scenarios,
                             "fieldSurveys": field_surveys,
                             "savedSolarAssessments": saved_solar,
@@ -1065,6 +1208,27 @@ class ResearchWorker:
                     if isinstance(action, RetrieveAction):
                         self._source(db, run_id, token, action.provider, context, client, state)
                         result = f"Retrieved {action.provider}; see retrieved source data."
+                    elif isinstance(action, EvidenceReadAction):
+                        current = queue.locked(db, run_id, token)
+                        queue.validate_citations(db, current, [action.evidence_id])
+                        evidence_row = db.get(Evidence, action.evidence_id)
+                        if evidence_row is None:
+                            raise InvalidInputError("The source evidence is unavailable.")
+                        item = EvidenceContent.model_validate(evidence_row.content)
+                        state["sources"][f"saved-evidence/{action.evidence_id}"] = {
+                            "provider": item.provider,
+                            "status": "available",
+                            "evidenceIds": [str(action.evidence_id)],
+                            "data": item.model_dump(mode="json"),
+                        }
+                        queue.checkpoint(db, run_id, token, state)
+                        result = "Saved evidence retrieved. Review its content and limitations."
+
+                    elif isinstance(action, TaxonAction):
+                        self._taxonomy(db, run_id, token, action.query, client, state)
+                        result = (
+                            "Taxonomic name lookup complete; see source diagnostics and evidence."
+                        )
                     elif isinstance(action, SearchAction):
                         result = self._search(db, run_id, token, action, context, state, budget)
                     elif isinstance(action, ArchiveImageAction):
