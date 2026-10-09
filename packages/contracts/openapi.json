@@ -3445,6 +3445,95 @@
         "title": "CoverClass",
         "type": "object"
       },
+      "CoverProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "high": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Low",
+            "type": "number"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "low",
+          "high"
+        ],
+        "title": "CoverProjection",
+        "type": "object"
+      },
+      "CoverResponse": {
+        "additionalProperties": false,
+        "description": "An explicit what-if response curve, not an automatically fitted ecological model.",
+        "properties": {
+          "annualRateHigh": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Annualratehigh",
+            "type": "number"
+          },
+          "annualRateLow": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Annualratelow",
+            "type": "number"
+          },
+          "asymptoteHigh": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Asymptotehigh",
+            "type": "number"
+          },
+          "asymptoteLow": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Asymptotelow",
+            "type": "number"
+          },
+          "basis": {
+            "maxLength": 3000,
+            "minLength": 1,
+            "title": "Basis",
+            "type": "string"
+          },
+          "evidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Evidenceids",
+            "type": "array"
+          },
+          "startYear": {
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Startyear",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "startYear",
+          "asymptoteLow",
+          "asymptoteHigh",
+          "annualRateLow",
+          "annualRateHigh",
+          "basis"
+        ],
+        "title": "CoverResponse",
+        "type": "object"
+      },
       "CrsMetadata": {
         "additionalProperties": false,
         "properties": {
@@ -6779,6 +6868,48 @@
           "createdAt"
         ],
         "title": "LandDocumentRead",
+        "type": "object"
+      },
+      "LandEvidenceOption": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "investigationId": {
+            "format": "uuid",
+            "title": "Investigationid",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "provider",
+          "investigationId",
+          "boundaryRevision",
+          "retrievedAt"
+        ],
+        "title": "LandEvidenceOption",
         "type": "object"
       },
       "LandFeatureCreate": {
@@ -11874,6 +12005,97 @@
         "title": "ResolutionMetadata",
         "type": "object"
       },
+      "RestorationEcology": {
+        "additionalProperties": false,
+        "properties": {
+          "referenceBasis": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Referencebasis",
+            "type": "string"
+          },
+          "referenceEvidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Referenceevidenceids",
+            "type": "array"
+          },
+          "siteConstraints": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Siteconstraints",
+            "type": "string"
+          },
+          "speciesTargets": {
+            "items": {
+              "$ref": "#/components/schemas/SpeciesTarget"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Speciestargets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "referenceBasis",
+          "siteConstraints",
+          "speciesTargets"
+        ],
+        "title": "RestorationEcology",
+        "type": "object"
+      },
+      "RestorationEcologyResult": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "default": "restoration-species-targets-and-conditional-response/1",
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "referenceBasis": {
+            "title": "Referencebasis",
+            "type": "string"
+          },
+          "referenceEvidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Referenceevidenceids",
+            "type": "array"
+          },
+          "siteConstraints": {
+            "title": "Siteconstraints",
+            "type": "string"
+          },
+          "species": {
+            "items": {
+              "$ref": "#/components/schemas/SpeciesTargetResult"
+            },
+            "title": "Species",
+            "type": "array"
+          }
+        },
+        "required": [
+          "referenceBasis",
+          "referenceEvidenceIds",
+          "siteConstraints",
+          "species",
+          "limitations"
+        ],
+        "title": "RestorationEcologyResult",
+        "type": "object"
+      },
       "RestorationInputs": {
         "additionalProperties": false,
         "properties": {
@@ -11917,6 +12139,16 @@
             "minimum": 0.0,
             "title": "Discountrate",
             "type": "number"
+          },
+          "ecology": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestorationEcology"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "kind": {
             "const": "restoration",
@@ -12715,6 +12947,16 @@
           "algorithm": {
             "title": "Algorithm",
             "type": "string"
+          },
+          "ecology": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestorationEcologyResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "limitations": {
             "items": {
@@ -14587,6 +14829,267 @@
           "identification"
         ],
         "title": "SpeciesObservation",
+        "type": "object"
+      },
+      "SpeciesTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "baselineBasis": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Baselinebasis",
+            "type": "string"
+          },
+          "baselinePercent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baselinepercent"
+          },
+          "baselineSurveyId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baselinesurveyid"
+          },
+          "evidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Evidenceids",
+            "type": "array"
+          },
+          "monitoringMethod": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Monitoringmethod",
+            "type": "string"
+          },
+          "monitoringSeason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Monitoringseason",
+            "type": "string"
+          },
+          "rationale": {
+            "maxLength": 3000,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "responseIfOffTrack": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Responseifofftrack",
+            "type": "string"
+          },
+          "stratum": {
+            "enum": [
+              "canopy",
+              "shrub",
+              "herb",
+              "ground",
+              "aquatic"
+            ],
+            "title": "Stratum",
+            "type": "string"
+          },
+          "targetBasis": {
+            "default": "hypothetical",
+            "enum": [
+              "hypothetical",
+              "reference-evidence"
+            ],
+            "title": "Targetbasis",
+            "type": "string"
+          },
+          "targetHigh": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Targethigh",
+            "type": "number"
+          },
+          "targetLow": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Targetlow",
+            "type": "number"
+          },
+          "targetYear": {
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Targetyear",
+            "type": "integer"
+          },
+          "taxon": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Taxon",
+            "type": "string"
+          },
+          "treatmentNames": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Treatmentnames",
+            "type": "array"
+          }
+        },
+        "required": [
+          "taxon",
+          "stratum",
+          "baselineBasis",
+          "targetLow",
+          "targetHigh",
+          "targetYear",
+          "rationale",
+          "monitoringMethod",
+          "monitoringSeason",
+          "responseIfOffTrack"
+        ],
+        "title": "SpeciesTarget",
+        "type": "object"
+      },
+      "SpeciesTargetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "assessedAreaM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessedaream2"
+          },
+          "assessedLandFraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessedlandfraction"
+          },
+          "baselinePercent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baselinepercent"
+          },
+          "baselineScope": {
+            "enum": [
+              "surveyed-plots",
+              "entered-assumption",
+              "unknown"
+            ],
+            "title": "Baselinescope",
+            "type": "string"
+          },
+          "identificationStatus": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Identificationstatus",
+            "type": "array"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "observedOn": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedon"
+          },
+          "projection": {
+            "items": {
+              "$ref": "#/components/schemas/CoverProjection"
+            },
+            "maxItems": 51,
+            "title": "Projection",
+            "type": "array"
+          },
+          "surveySha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surveysha256"
+          },
+          "target": {
+            "$ref": "#/components/schemas/SpeciesTarget"
+          },
+          "targetRelation": {
+            "enum": [
+              "not-modeled",
+              "inside-target",
+              "overlaps-target",
+              "outside-target"
+            ],
+            "title": "Targetrelation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "baselinePercent",
+          "baselineScope",
+          "targetRelation",
+          "limitations"
+        ],
+        "title": "SpeciesTargetResult",
         "type": "object"
       },
       "StacSource": {
@@ -22723,6 +23226,139 @@
         "summary": "Run Ocr",
         "tags": [
           "land documents"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/evidence": {
+      "get": {
+        "operationId": "land_evidence_api_v1_land__land_id__evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 100,
+              "title": "Query",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LandEvidenceOption"
+                  },
+                  "title": "Response Land Evidence Api V1 Land  Land Id  Evidence Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Land Evidence",
+        "tags": [
+          "land research"
         ]
       }
     },

@@ -105,6 +105,15 @@ class EvidenceContent(CamelModel):
         return self
 
 
+class LandEvidenceOption(CamelModel):
+    id: uuid.UUID
+    title: str
+    provider: str
+    investigation_id: uuid.UUID
+    boundary_revision: int
+    retrieved_at: datetime
+
+
 class EvidenceRead(EvidenceContent):
     id: uuid.UUID
     run_id: uuid.UUID

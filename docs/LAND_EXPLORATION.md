@@ -11,7 +11,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
-| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and predictive restoration modeling |
+| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
@@ -1253,3 +1253,71 @@ follow-ups and rejection of foreign citations. Existing research and solar API r
 passed. API typing (279 files), lint and formatting passed. Ten frontend ecology/survey/solar
 tests, full web typing, affected lint, the production build and all seven existing land browser
 journeys passed. The original deployment checkout remains clean and untouched.
+
+
+## Implemented increment: species restoration targets and conditional response
+
+Restoration scenarios now optionally include a species plan alongside the existing exclusive
+cover-class and cost comparison. Each taxon/stratum target preserves its baseline basis,
+independent target range and assessment year, rationale, supporting evidence, named treatment
+links, monitoring method and season, and an off-track response. Species and strata may overlap;
+their targets are never normalized into the exclusive cover-class table. Treatment names must
+exist, and each assessment year must appear in the monitoring schedule. The species plan
+adds no second copy of treatment or monitoring costs.
+
+A target can read its baseline from a pinned immutable survey. The API resolves the exact
+recorded taxon/stratum summary and retains the survey hash, observed date, identification
+status, assessed area and fraction of the land. That mean remains a sampled-plot result;
+it is not extrapolated to the property. A missing taxon is rejected rather than interpreted
+as zero. Without a linked survey, an explicit assumed baseline or an unknown value is allowed.
+Unknown baselines can have proposed targets but cannot generate response curves. Survey
+references must belong to this land and the scenario's boundary revision; all nested source
+citations are validated against this land, and agent-created citations against the current
+investigation. Previously saved scenario revisions and results remain immutable.
+
+An optional response computes a transparent what-if envelope from supplied asymptotic-cover
+and annual-rate ranges, after an entered start year:
+
+`C(t) = C0 + (A - C0) * (1 - exp(-r * max(0, t - start)))`.
+
+The envelope evaluates the parameter-range corners, supports increasing or decreasing cover,
+and preserves the baseline before the start. It compares the final envelope with the stated
+target range. Parameters start blank in the editor. This calculation is **not a fitted
+restoration forecast, inferred treatment effect, statistical confidence interval or probability
+of success**. There is no automatic parameter calibration, competition/disturbance model or
+claim that regional classifications establish the correct local species community. Empirical
+site calibration and ecological forecasting remain open work.
+
+The UI supports reference and target source inspection, a paged title-searchable evidence
+picker, choosing an actual taxon/layer from a saved survey, editing treatment links and
+monitoring criteria, reviewing cover envelopes and numerical rows, saving/revising scenarios,
+exporting assumptions/results and reopening baseline observations. Blank baseline values
+remain unknown. Form inputs lock while a calculation or save is in flight. The new private
+`GET /land/{land_id}/evidence` catalog returns small scoped metadata records and literal title
+search results; full evidence is read through the existing authorized evidence endpoint.
+
+The agent can create species plans through the existing typed scenario tool and inspect
+immutable revisions with `read_scenario`. Overview, cover classes, treatments, species targets
+and species results have bounded, paged reads, revision identifiers, snapshot hashes and
+continuation offsets. Large inputs are omitted from the initial saved-scenario context, and
+large create responses point to the read tool. An individual read is capped at 29,000 characters;
+original source references retain their investigation scope. This avoids expanding every large
+scenario into each model turn. No new migration or external service is required.
+
+Validation: analytical half-time and start-delay checks, declining trajectories, zero-rate
+limits, envelopes against interior parameter combinations, independent overlapping strata,
+unknown baselines, missing taxa, treatment/schedule validation, survey scope/hashes, immutable
+results, nested citation isolation and paged private scenario reads passed. Existing scenario,
+field-survey and solar API regressions also passed. Controlled agent tests create a cited plan,
+read its bounded pages and reject foreign nested citations. API typing covers 283 files;
+frontend typing/lint, nine focused scenario/solar/species UI tests, the production build
+and all seven existing land browser journeys passed. Live model-provider acceptance remains unverified.
+
+A browser check saved, exported and reopened synthetic scenario
+`1b81361b-8ede-553e-aaa2-91c3c501e1a6` on the public National Mall software fixture. Its
+80% baseline comes from synthetic sampled plots covering only 0.0962% of the fixture land,
+with survey hash `2d20878d89a7d3384104625bde354818afe530745c44113833a3cc32e0ec459a`.
+The entered asymptote/rate assumptions give a year-five envelope of 71.7377–88.2623%; these
+are software-test assumptions, not measured or predicted National Mall ecology. Exported
+results match the saved result. Desktop and 390-pixel phone views had no page exceptions or
+unintended panel overflow. The deployment checkout and production remain untouched.

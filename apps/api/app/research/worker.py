@@ -53,6 +53,7 @@ from app.research.model import (
     ResearchModel,
     RetrieveAction,
     ScenarioAction,
+    ScenarioReadAction,
     SearchAction,
     SolarAction,
     SolarReadAction,
@@ -64,6 +65,7 @@ from app.research.providers.archives import ARCHIVE_SOURCES
 from app.research.providers.base import SourceContext, SourceResult
 from app.research.providers.open_data import OVERVIEW_SOURCES, SOURCES, retrieve
 from app.research.providers.taxonomy import match as match_taxon
+from app.research.scenarios import read as read_scenario
 from app.research.search import ClaudeResearchSearch, ResearchSearch
 from app.schemas.geojson import Footprint
 from app.schemas.land_ecology import EcologyRequest, TaxonQuery
@@ -936,7 +938,10 @@ class ResearchWorker:
                     "id": str(row.id),
                     "revision": row.revision,
                     "boundaryRevision": snapshot.boundary_revision,
-                    "inputs": snapshot.payload["inputs"],
+                    "inputs": snapshot.payload["inputs"]
+                    if len(json.dumps(snapshot.payload["inputs"])) <= 12_000
+                    else None,
+                    "inputReadTool": "read_scenario",
                     "name": row.name,
                     "summary": snapshot.result["summary"],
                 }
@@ -1421,11 +1426,35 @@ class ResearchWorker:
                         }
                         queue.checkpoint(db, run_id, token, state)
                         result = "Field survey page retrieved with immutable source citation."
+                    elif isinstance(action, ScenarioReadAction):
+                        key = (
+                            "saved-scenario/"
+                            + hashlib.sha256(action.model_dump_json().encode()).hexdigest()
+                        )
+                        if key not in state["sources"]:
+                            scenario_data = read_scenario(
+                                db,
+                                workspace_id,
+                                land_id,
+                                action.scenario_id,
+                                action.revision,
+                                action.section,
+                                action.offset,
+                                action.count,
+                            )
+                            state["sources"][key] = {
+                                "provider": "saved-scenario",
+                                "status": "available",
+                                "data": scenario_data,
+                            }
+                            queue.checkpoint(db, run_id, token, state)
+                        result = "Saved scenario section retrieved; follow nextOffset using its pinned revision."
                     elif isinstance(action, ScenarioAction):
                         current = queue.locked(db, run_id, token)
-                        queue.validate_citations(
-                            db, current, [uuid.UUID(value) for value in action.evidence_ids]
-                        )
+                        scenario_citations = {uuid.UUID(value) for value in action.evidence_ids}
+                        if action.inputs.kind == "restoration" and action.inputs.ecology:
+                            scenario_citations.update(action.inputs.ecology.evidence_ids())
+                        queue.validate_citations(db, current, list(scenario_citations))
                         scenario = scenarios.create(
                             db,
                             workspace_id,
@@ -1443,14 +1472,21 @@ class ResearchWorker:
                             identifier=uuid.uuid5(run_id, output_key),
                             commit=False,
                         )
-                        result = json.dumps(
-                            {
+                        scenario_reply = {
+                            "scenarioId": str(scenario.id),
+                            "revision": scenario.revision,
+                            "inputs": scenario.inputs.model_dump(mode="json"),
+                            "result": scenario.result.model_dump(mode="json"),
+                        }
+                        if len(json.dumps(scenario_reply)) > 29_000:
+                            scenario_reply = {
                                 "scenarioId": str(scenario.id),
                                 "revision": scenario.revision,
-                                "inputs": scenario.inputs.model_dump(mode="json"),
-                                "result": scenario.result.model_dump(mode="json"),
+                                "summary": scenario.result.summary,
+                                "readTool": "read_scenario",
+                                "note": "Use the paged read tool for full saved assumptions and results.",
                             }
-                        )
+                        result = json.dumps(scenario_reply)
                     elif isinstance(action, ActionDraftAction):
                         current = queue.locked(db, run_id, token)
                         action_citations = [

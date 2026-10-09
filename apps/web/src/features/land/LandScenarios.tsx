@@ -8,6 +8,8 @@ import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landId
 import { SolarStudy } from "./SolarStudy";
 import { SolarAssessmentView } from "./SolarAssessmentView";
 import { physicalFields, solarFinance, type SolarAssessment } from "./solarStudy";
+import { RestorationTargets } from "./RestorationTargets";
+import "./restoration.css";
 import { ScenarioResultView } from "./ScenarioResultView";
 import { fieldLabel, valueLabel } from "./scenarioDefaults";
 import {
@@ -206,427 +208,447 @@ export function LandScenarios({ land }: { land: LandArea }) {
             void calculate(false);
           }}
         >
-          <label className="land-name">
-            Scenario name
-            <input
-              value={name}
-              maxLength={200}
-              required
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-          <p className="land-notice">
-            Starting values are editable planning assumptions, not measurements. Enter the resource,
-            survey and cost data you want to test.
-          </p>
-          <p>Uses land boundary revision {boundaryRevision}.</p>
-          {solarAssessmentId && (
-            <div className="land-notice">
-              <p>
-                Uses saved hourly AC generation. Physical assumptions are locked to that assessment;
-                financial assumptions remain editable.
-              </p>
-              <SolarAssessmentView id={solarAssessmentId} />
-              <button type="button" onClick={() => setSolarAssessmentId(null)}>
-                Switch to manual generation assumptions
+          <fieldset className="land-scenario-inputs" disabled={busy}>
+            <label className="land-name">
+              Scenario name
+              <input
+                value={name}
+                maxLength={200}
+                required
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+            <p className="land-notice">
+              Starting values are editable planning assumptions, not measurements. Enter the
+              resource, survey and cost data you want to test.
+            </p>
+            <p>Uses land boundary revision {boundaryRevision}.</p>
+            {solarAssessmentId && (
+              <div className="land-notice">
+                <p>
+                  Uses saved hourly AC generation. Physical assumptions are locked to that
+                  assessment; financial assumptions remain editable.
+                </p>
+                <SolarAssessmentView id={solarAssessmentId} />
+                <button type="button" onClick={() => setSolarAssessmentId(null)}>
+                  Switch to manual generation assumptions
+                </button>
+              </div>
+            )}
+            {inputs.kind === "restoration" && (
+              <fieldset>
+                <legend>Field survey references</legend>
+                <p className="land-footnote">
+                  Link the observations behind your assumptions. Species can overlap; interpret them
+                  before defining exclusive cover classes.
+                </p>
+                {surveys.data
+                  ?.filter((s) => s.boundaryRevision === boundaryRevision)
+                  .map((s) => (
+                    <label className="land-check" key={s.id}>
+                      <input
+                        type="checkbox"
+                        checked={fieldSurveyIds.includes(s.id)}
+                        onChange={(e) =>
+                          setFieldSurveyIds(
+                            e.target.checked
+                              ? [...fieldSurveyIds, s.id]
+                              : fieldSurveyIds.filter((id) => id !== s.id),
+                          )
+                        }
+                      />
+                      {s.name} · {s.observedOn}
+                    </label>
+                  ))}
+                {!surveys.data?.length && (
+                  <p>Record field observations in Ecology to add survey references.</p>
+                )}
+                {fieldSurveyIds
+                  .filter(
+                    (id) =>
+                      !surveys.data?.some(
+                        (s) => s.id === id && s.boundaryRevision === boundaryRevision,
+                      ),
+                  )
+                  .map((id) => (
+                    <p key={id}>
+                      Retained survey reference {id}.{" "}
+                      <button
+                        type="button"
+                        onClick={() => setFieldSurveyIds((ids) => ids.filter((v) => v !== id))}
+                      >
+                        Remove reference
+                      </button>
+                    </p>
+                  ))}
+              </fieldset>
+            )}
+            {boundaryRevision !== land.revision && (
+              <button type="button" onClick={() => setBoundaryRevision(land.revision)}>
+                Recalculate against current boundary revision {land.revision}
               </button>
-            </div>
-          )}
-          {inputs.kind === "restoration" && (
-            <fieldset>
-              <legend>Field survey references</legend>
-              <p className="land-footnote">
-                Link the observations behind your assumptions. Species can overlap; interpret them
-                before defining exclusive cover classes.
-              </p>
-              {surveys.data
-                ?.filter((s) => s.boundaryRevision === boundaryRevision)
-                .map((s) => (
-                  <label className="land-check" key={s.id}>
-                    <input
-                      type="checkbox"
-                      checked={fieldSurveyIds.includes(s.id)}
-                      onChange={(e) =>
-                        setFieldSurveyIds(
-                          e.target.checked
-                            ? [...fieldSurveyIds, s.id]
-                            : fieldSurveyIds.filter((id) => id !== s.id),
-                        )
-                      }
-                    />
-                    {s.name} · {s.observedOn}
-                  </label>
+            )}
+            {inputs.kind === "solar" ? (
+              <>
+                {solarGroups.map((group, index) => (
+                  <details key={group.title} open={index === 0}>
+                    <summary>{group.title}</summary>
+                    <div className="land-scenario-grid">
+                      {group.fields.map((field) => {
+                        const value = inputs[field.key];
+                        return (
+                          <label key={field.key} className="land-name">
+                            {field.label}
+                            <input
+                              type="number"
+                              disabled={!!solarAssessmentId && physicalFields.has(field.key)}
+                              step="any"
+                              required={field.key !== "replacementYear"}
+                              value={
+                                typeof value === "number"
+                                  ? Number((value * (field.percent ? 100 : 1)).toPrecision(10))
+                                  : ""
+                              }
+                              onChange={(event) =>
+                                setInputs({
+                                  ...inputs,
+                                  [field.key]:
+                                    event.target.value === "" && field.key === "replacementYear"
+                                      ? null
+                                      : Number(event.target.value) / (field.percent ? 100 : 1),
+                                })
+                              }
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </details>
                 ))}
-              {!surveys.data?.length && (
-                <p>Record field observations in Ecology to add survey references.</p>
-              )}
-              {fieldSurveyIds
-                .filter(
-                  (id) =>
-                    !surveys.data?.some(
-                      (s) => s.id === id && s.boundaryRevision === boundaryRevision,
-                    ),
-                )
-                .map((id) => (
-                  <p key={id}>
-                    Retained survey reference {id}.{" "}
-                    <button
-                      type="button"
-                      onClick={() => setFieldSurveyIds((ids) => ids.filter((v) => v !== id))}
-                    >
-                      Remove reference
-                    </button>
-                  </p>
-                ))}
-            </fieldset>
-          )}
-          {boundaryRevision !== land.revision && (
-            <button type="button" onClick={() => setBoundaryRevision(land.revision)}>
-              Recalculate against current boundary revision {land.revision}
-            </button>
-          )}
-          {inputs.kind === "solar" ? (
-            <>
-              {solarGroups.map((group, index) => (
-                <details key={group.title} open={index === 0}>
-                  <summary>{group.title}</summary>
-                  <div className="land-scenario-grid">
-                    {group.fields.map((field) => {
-                      const value = inputs[field.key];
-                      return (
-                        <label key={field.key} className="land-name">
-                          {field.label}
-                          <input
-                            type="number"
-                            disabled={!!solarAssessmentId && physicalFields.has(field.key)}
-                            step="any"
-                            required={field.key !== "replacementYear"}
-                            value={
-                              typeof value === "number"
-                                ? Number((value * (field.percent ? 100 : 1)).toPrecision(10))
-                                : ""
-                            }
-                            onChange={(event) =>
-                              setInputs({
-                                ...inputs,
-                                [field.key]:
-                                  event.target.value === "" && field.key === "replacementYear"
-                                    ? null
-                                    : Number(event.target.value) / (field.percent ? 100 : 1),
-                              })
-                            }
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
-                </details>
-              ))}
-              <label className="land-name">
-                Solar resource source and method
-                <textarea
-                  required
-                  rows={2}
-                  readOnly={!!solarAssessmentId}
-                  value={inputs.irradiationBasis}
-                  onChange={(event) =>
-                    setInputs({ ...inputs, irradiationBasis: event.target.value })
-                  }
-                  placeholder="Source, period, and how tilt/orientation were accounted for"
-                />
-              </label>
-            </>
-          ) : (
-            <>
-              <label className="land-name">
-                Reference ecosystem
-                <input
-                  required
-                  value={inputs.referenceEcosystem}
-                  onChange={(event) =>
-                    setInputs({ ...inputs, referenceEcosystem: event.target.value })
-                  }
-                />
-              </label>
-              <label className="land-name">
-                Assessment date
-                <input
-                  type="date"
-                  required
-                  value={inputs.surveyDate}
-                  onChange={(event) => setInputs({ ...inputs, surveyDate: event.target.value })}
-                />
-              </label>
-              <label className="land-name">
-                Evidence type
-                <select
-                  value={inputs.confidence}
-                  onChange={(event) =>
-                    setInputs({
-                      ...inputs,
-                      confidence: event.target.value as typeof inputs.confidence,
-                    })
-                  }
-                >
-                  <option value="user-estimate">User estimate</option>
-                  <option value="remote-estimate">Remote sensing estimate</option>
-                  <option value="field-survey">Field survey</option>
-                </select>
-              </label>
-              <label className="land-name">
-                Survey or estimation method
-                <textarea
-                  required
-                  value={inputs.surveyMethod}
-                  onChange={(event) => setInputs({ ...inputs, surveyMethod: event.target.value })}
-                />
-              </label>
-              <h4>Cover classes · targets must total 100%</h4>
-              {inputs.cover.map((cover, index) => (
-                <fieldset key={index}>
-                  <legend>Cover class {index + 1}</legend>
-                  <label className="land-name">
-                    Species or cover class
-                    <input
-                      required
-                      value={cover.name}
-                      onChange={(event) =>
-                        setInputs({
-                          ...inputs,
-                          cover: inputs.cover.map((row, i) =>
-                            i === index ? { ...row, name: event.target.value } : row,
-                          ),
-                        })
-                      }
-                    />
-                  </label>
-                  <div className="land-scenario-grid">
-                    {(["baselinePercent", "targetPercent"] as const).map((field) => (
-                      <label className="land-name" key={field}>
-                        {field === "baselinePercent" ? "Current cover (%)" : "Target cover (%)"}
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          step="any"
-                          value={cover[field]}
-                          onChange={(event) =>
-                            setInputs({
-                              ...inputs,
-                              cover: inputs.cover.map((row, i) =>
-                                i === index ? { ...row, [field]: Number(event.target.value) } : row,
-                              ),
-                            })
-                          }
-                        />
-                      </label>
-                    ))}
-                  </div>
-                  <label className="land-name">
-                    Evidence for this estimate
-                    <input
-                      required
-                      value={cover.evidenceBasis}
-                      onChange={(event) =>
-                        setInputs({
-                          ...inputs,
-                          cover: inputs.cover.map((row, i) =>
-                            i === index ? { ...row, evidenceBasis: event.target.value } : row,
-                          ),
-                        })
-                      }
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setInputs({ ...inputs, cover: inputs.cover.filter((_, i) => i !== index) })
+                <label className="land-name">
+                  Solar resource source and method
+                  <textarea
+                    required
+                    rows={2}
+                    readOnly={!!solarAssessmentId}
+                    value={inputs.irradiationBasis}
+                    onChange={(event) =>
+                      setInputs({ ...inputs, irradiationBasis: event.target.value })
+                    }
+                    placeholder="Source, period, and how tilt/orientation were accounted for"
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <label className="land-name">
+                  Reference ecosystem
+                  <input
+                    required
+                    value={inputs.referenceEcosystem}
+                    onChange={(event) =>
+                      setInputs({ ...inputs, referenceEcosystem: event.target.value })
+                    }
+                  />
+                </label>
+                <label className="land-name">
+                  Assessment date
+                  <input
+                    type="date"
+                    required
+                    value={inputs.surveyDate}
+                    onChange={(event) => setInputs({ ...inputs, surveyDate: event.target.value })}
+                  />
+                </label>
+                <label className="land-name">
+                  Evidence type
+                  <select
+                    value={inputs.confidence}
+                    onChange={(event) =>
+                      setInputs({
+                        ...inputs,
+                        confidence: event.target.value as typeof inputs.confidence,
+                      })
                     }
                   >
-                    Remove class
-                  </button>
-                </fieldset>
-              ))}
-              <button
-                type="button"
-                onClick={() =>
-                  setInputs({
-                    ...inputs,
-                    cover: [
-                      ...inputs.cover,
-                      { name: "", baselinePercent: 0, targetPercent: 0, evidenceBasis: "" },
-                    ],
-                  })
-                }
-              >
-                Add cover class
-              </button>
-              <h4>Treatments and costs</h4>
-              {inputs.treatments.map((treatment, index) => (
-                <fieldset key={index}>
-                  <legend>Treatment {index + 1}</legend>
-                  {(["name", "objective"] as const).map((field) => (
-                    <label className="land-name" key={field}>
-                      {fieldLabel(field)}
+                    <option value="user-estimate">User estimate</option>
+                    <option value="remote-estimate">Remote sensing estimate</option>
+                    <option value="field-survey">Field survey</option>
+                  </select>
+                </label>
+                <label className="land-name">
+                  Survey or estimation method
+                  <textarea
+                    required
+                    value={inputs.surveyMethod}
+                    onChange={(event) => setInputs({ ...inputs, surveyMethod: event.target.value })}
+                  />
+                </label>
+                <h4>Cover classes · targets must total 100%</h4>
+                {inputs.cover.map((cover, index) => (
+                  <fieldset key={index}>
+                    <legend>Cover class {index + 1}</legend>
+                    <label className="land-name">
+                      Exclusive cover class
                       <input
                         required
-                        value={treatment[field]}
+                        value={cover.name}
                         onChange={(event) =>
                           setInputs({
                             ...inputs,
-                            treatments: inputs.treatments.map((row, i) =>
-                              i === index ? { ...row, [field]: event.target.value } : row,
+                            cover: inputs.cover.map((row, i) =>
+                              i === index ? { ...row, name: event.target.value } : row,
                             ),
                           })
                         }
                       />
                     </label>
-                  ))}
-                  <div className="land-scenario-grid">
-                    {(["areaHa", "costPerHa", "year"] as const).map((field) => (
+                    <div className="land-scenario-grid">
+                      {(["baselinePercent", "targetPercent"] as const).map((field) => (
+                        <label className="land-name" key={field}>
+                          {field === "baselinePercent" ? "Current cover (%)" : "Target cover (%)"}
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step="any"
+                            value={cover[field]}
+                            onChange={(event) =>
+                              setInputs({
+                                ...inputs,
+                                cover: inputs.cover.map((row, i) =>
+                                  i === index
+                                    ? { ...row, [field]: Number(event.target.value) }
+                                    : row,
+                                ),
+                              })
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <label className="land-name">
+                      Evidence for this estimate
+                      <input
+                        required
+                        value={cover.evidenceBasis}
+                        onChange={(event) =>
+                          setInputs({
+                            ...inputs,
+                            cover: inputs.cover.map((row, i) =>
+                              i === index ? { ...row, evidenceBasis: event.target.value } : row,
+                            ),
+                          })
+                        }
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setInputs({ ...inputs, cover: inputs.cover.filter((_, i) => i !== index) })
+                      }
+                    >
+                      Remove class
+                    </button>
+                  </fieldset>
+                ))}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setInputs({
+                      ...inputs,
+                      cover: [
+                        ...inputs.cover,
+                        { name: "", baselinePercent: 0, targetPercent: 0, evidenceBasis: "" },
+                      ],
+                    })
+                  }
+                >
+                  Add cover class
+                </button>
+                <RestorationTargets
+                  landId={land.id}
+                  plan={inputs.ecology}
+                  onChange={(ecology) => setInputs({ ...inputs, ecology })}
+                  surveys={
+                    surveys.data?.filter(
+                      (survey) => survey.boundaryRevision === boundaryRevision,
+                    ) ?? []
+                  }
+                  treatmentNames={inputs.treatments.map((treatment) => treatment.name)}
+                />
+                <h4>Treatments and costs</h4>
+                {inputs.treatments.map((treatment, index) => (
+                  <fieldset key={index}>
+                    <legend>Treatment {index + 1}</legend>
+                    {(["name", "objective"] as const).map((field) => (
                       <label className="land-name" key={field}>
                         {fieldLabel(field)}
                         <input
-                          type="number"
-                          step="any"
-                          min={0}
+                          required
                           value={treatment[field]}
                           onChange={(event) =>
                             setInputs({
                               ...inputs,
                               treatments: inputs.treatments.map((row, i) =>
-                                i === index ? { ...row, [field]: Number(event.target.value) } : row,
+                                i === index ? { ...row, [field]: event.target.value } : row,
                               ),
                             })
                           }
                         />
                       </label>
                     ))}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setInputs({
-                        ...inputs,
-                        treatments: inputs.treatments.filter((_, i) => i !== index),
-                      })
-                    }
-                  >
-                    Remove treatment
-                  </button>
-                </fieldset>
-              ))}
-              <button
-                type="button"
-                onClick={() =>
-                  setInputs({
-                    ...inputs,
-                    treatments: [
-                      ...inputs.treatments,
-                      {
-                        name: "",
-                        objective: "",
-                        areaHa: land.areaM2 / 10000,
-                        costPerHa: 0,
-                        year: 0,
-                      },
-                    ],
-                  })
-                }
-              >
-                Add treatment
-              </button>
-              <label className="land-name">
-                Monitoring years (comma separated)
-                <input
-                  value={monitoringText}
-                  onChange={(event) => {
-                    setMonitoringText(event.target.value);
+                    <div className="land-scenario-grid">
+                      {(["areaHa", "costPerHa", "year"] as const).map((field) => (
+                        <label className="land-name" key={field}>
+                          {fieldLabel(field)}
+                          <input
+                            type="number"
+                            step="any"
+                            min={0}
+                            value={treatment[field]}
+                            onChange={(event) =>
+                              setInputs({
+                                ...inputs,
+                                treatments: inputs.treatments.map((row, i) =>
+                                  i === index
+                                    ? { ...row, [field]: Number(event.target.value) }
+                                    : row,
+                                ),
+                              })
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setInputs({
+                          ...inputs,
+                          treatments: inputs.treatments.filter((_, i) => i !== index),
+                        })
+                      }
+                    >
+                      Remove treatment
+                    </button>
+                  </fieldset>
+                ))}
+                <button
+                  type="button"
+                  onClick={() =>
                     setInputs({
                       ...inputs,
-                      monitoringYears: event.target.value
-                        .split(",")
-                        .map((value) => (value.trim() ? Number(value.trim()) : Number.NaN)),
-                    });
-                  }}
-                />
-              </label>
-              <label className="land-name">
-                Cost per monitoring visit
-                <input
-                  type="number"
-                  step="any"
-                  min={0}
-                  value={inputs.monitoringCostPerVisit}
-                  onChange={(event) =>
-                    setInputs({ ...inputs, monitoringCostPerVisit: Number(event.target.value) })
+                      treatments: [
+                        ...inputs.treatments,
+                        {
+                          name: "",
+                          objective: "",
+                          areaHa: land.areaM2 / 10000,
+                          costPerHa: 0,
+                          year: 0,
+                        },
+                      ],
+                    })
                   }
-                />
-              </label>
-              <label className="land-name">
-                Contingency (%)
-                <input
-                  type="number"
-                  step="any"
-                  min={0}
-                  max={100}
-                  value={inputs.contingencyFraction * 100}
-                  onChange={(event) =>
-                    setInputs({ ...inputs, contingencyFraction: Number(event.target.value) / 100 })
-                  }
-                />
-              </label>
-              <label className="land-name">
-                Discount rate (%)
-                <input
-                  type="number"
-                  step="any"
-                  min={0}
-                  max={50}
-                  value={inputs.discountRate * 100}
-                  onChange={(event) =>
-                    setInputs({ ...inputs, discountRate: Number(event.target.value) / 100 })
-                  }
-                />
-              </label>
-            </>
-          )}
-          <label className="land-name">
-            Currency code
-            <input
-              required
-              pattern="[A-Z]{3}"
-              maxLength={3}
-              value={inputs.currency}
-              onChange={(event) =>
-                setInputs({ ...inputs, currency: event.target.value.toUpperCase() })
-              }
-            />
-          </label>
-          <label className="land-name">
-            Assumptions and missing evidence
-            <textarea
-              required
-              rows={3}
-              value={inputs.assumptions}
-              onChange={(event) => setInputs({ ...inputs, assumptions: event.target.value })}
-            />
-          </label>
-          <div className="land-actions">
-            <button disabled={busy} type="submit">
-              {busy ? "Calculating…" : "Calculate scenario"}
-            </button>
-            <button
-              type="button"
-              disabled={busy || !visiblePreview}
-              onClick={() => void calculate(true)}
-            >
-              {editing ? "Save scenario revision" : "Save scenario"}
-            </button>
-            <button type="button" onClick={reset}>
-              Cancel
-            </button>
-          </div>
+                >
+                  Add treatment
+                </button>
+                <label className="land-name">
+                  Monitoring years (comma separated)
+                  <input
+                    value={monitoringText}
+                    onChange={(event) => {
+                      setMonitoringText(event.target.value);
+                      setInputs({
+                        ...inputs,
+                        monitoringYears: event.target.value
+                          .split(",")
+                          .map((value) => (value.trim() ? Number(value.trim()) : Number.NaN)),
+                      });
+                    }}
+                  />
+                </label>
+                <label className="land-name">
+                  Cost per monitoring visit
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    value={inputs.monitoringCostPerVisit}
+                    onChange={(event) =>
+                      setInputs({ ...inputs, monitoringCostPerVisit: Number(event.target.value) })
+                    }
+                  />
+                </label>
+                <label className="land-name">
+                  Contingency (%)
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    max={100}
+                    value={inputs.contingencyFraction * 100}
+                    onChange={(event) =>
+                      setInputs({
+                        ...inputs,
+                        contingencyFraction: Number(event.target.value) / 100,
+                      })
+                    }
+                  />
+                </label>
+                <label className="land-name">
+                  Discount rate (%)
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    max={50}
+                    value={inputs.discountRate * 100}
+                    onChange={(event) =>
+                      setInputs({ ...inputs, discountRate: Number(event.target.value) / 100 })
+                    }
+                  />
+                </label>
+              </>
+            )}
+            <label className="land-name">
+              Currency code
+              <input
+                required
+                pattern="[A-Z]{3}"
+                maxLength={3}
+                value={inputs.currency}
+                onChange={(event) =>
+                  setInputs({ ...inputs, currency: event.target.value.toUpperCase() })
+                }
+              />
+            </label>
+            <label className="land-name">
+              Assumptions and missing evidence
+              <textarea
+                required
+                rows={3}
+                value={inputs.assumptions}
+                onChange={(event) => setInputs({ ...inputs, assumptions: event.target.value })}
+              />
+            </label>
+            <div className="land-actions">
+              <button disabled={busy} type="submit">
+                {busy ? "Calculating…" : "Calculate scenario"}
+              </button>
+              <button
+                type="button"
+                disabled={busy || !visiblePreview}
+                onClick={() => void calculate(true)}
+              >
+                {editing ? "Save scenario revision" : "Save scenario"}
+              </button>
+              <button type="button" onClick={reset}>
+                Cancel
+              </button>
+            </div>
+          </fieldset>
           {visiblePreview && <ScenarioResultView result={visiblePreview} />}
         </form>
       )}

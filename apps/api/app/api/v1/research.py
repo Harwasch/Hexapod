@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.api.deps import DbSession, SettingsDep
 from app.api.workspace_deps import WorkspaceDep, workspace_access
-from app.models.research import Evidence, Finding, ResearchEvent
+from app.models.research import Evidence, Finding, Investigation, ResearchEvent, ResearchRun
 from app.schemas.research import (
     EventRead,
     EvidenceRead,
@@ -21,6 +21,7 @@ from app.schemas.research import (
     InvestigationCreate,
     InvestigationDetail,
     InvestigationRead,
+    LandEvidenceOption,
     OverviewRead,
     OverviewRequest,
     ResearchStatus,
@@ -30,6 +31,7 @@ from app.schemas.research import (
 )
 from app.services import research
 from app.services.errors import NotFoundError
+from app.services.land import get_land
 
 router = APIRouter(tags=["land research"])
 
@@ -73,6 +75,41 @@ def list_investigations(
     offset: int = Query(0, ge=0),
 ) -> list[InvestigationRead]:
     return research.list_investigations(db, scope.id, land_id, limit, offset)
+
+
+@router.get("/land/{land_id}/evidence", response_model=list[LandEvidenceOption])
+def land_evidence(
+    land_id: uuid.UUID,
+    db: DbSession,
+    scope: WorkspaceDep,
+    query: str = Query("", max_length=100),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> list[LandEvidenceOption]:
+    get_land(db, scope.id, land_id)
+    statement = (
+        select(Evidence, Investigation)
+        .join(ResearchRun, ResearchRun.id == Evidence.run_id)
+        .join(Investigation, Investigation.id == ResearchRun.investigation_id)
+        .where(Investigation.land_id == land_id)
+    )
+    if query.strip():
+        statement = statement.where(
+            Evidence.content["title"].astext.icontains(query.strip(), autoescape=True)
+        )
+    return [
+        LandEvidenceOption(
+            id=item.id,
+            title=item.content["title"],
+            provider=item.content["provider"],
+            investigation_id=investigation.id,
+            boundary_revision=investigation.boundary_revision,
+            retrieved_at=item.content["retrieved_at"],
+        )
+        for item, investigation in db.execute(
+            statement.order_by(Evidence.created_at.desc(), Evidence.id).limit(limit).offset(offset)
+        )
+    ]
 
 
 @router.get("/research/investigations/{investigation_id}", response_model=InvestigationDetail)

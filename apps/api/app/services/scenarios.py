@@ -6,6 +6,7 @@ from math import isclose
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.analysis.restoration_ecology import evaluate as evaluate_ecology
 from app.analysis.scenarios import analyze
 from app.models.land import LandArea, LandBoundaryRevision
 from app.models.research import Evidence, Investigation, ResearchRun
@@ -29,18 +30,26 @@ def preview(
     )
     if snapshot is None:
         raise NotFoundError("land boundary revision", payload.boundary_revision)
-    if payload.evidence_ids:
+    ecology = payload.inputs.ecology if payload.inputs.kind == "restoration" else None
+    evidence_ids = set(payload.evidence_ids) | (ecology.evidence_ids() if ecology else set())
+    if evidence_ids:
         ids = set(
             db.scalars(
                 select(Evidence.id)
                 .join(ResearchRun, ResearchRun.id == Evidence.run_id)
                 .join(Investigation, Investigation.id == ResearchRun.investigation_id)
-                .where(Investigation.land_id == land_id, Evidence.id.in_(payload.evidence_ids))
+                .where(Investigation.land_id == land_id, Evidence.id.in_(evidence_ids))
             )
         )
-        if ids != set(payload.evidence_ids):
+        if ids != evidence_ids:
             raise InvalidInputError("Scenario evidence must come from this land's investigations.")
-    for identifier in payload.field_survey_ids:
+    survey_ids = set(payload.field_survey_ids) | {
+        target.baseline_survey_id
+        for target in (ecology.species_targets if ecology else [])
+        if target.baseline_survey_id is not None
+    }
+    baseline_surveys = {}
+    for identifier in survey_ids:
         survey = land_surveys.scoped(db, workspace_id, land_id, identifier)
         if (
             payload.inputs.kind != "restoration"
@@ -49,6 +58,7 @@ def preview(
             raise InvalidInputError(
                 "Field surveys must use the restoration scenario's pinned boundary revision."
             )
+        baseline_surveys[identifier] = land_surveys.read(db, survey)
     geometry = func.ST_SetSRID(
         func.ST_GeomFromGeoJSON(FOOTPRINT.validate_python(snapshot.boundary).model_dump_json()),
         4326,
@@ -91,6 +101,8 @@ def preview(
             )
         annual_generation = metadata.annual_generation_kwh
     result = analyze(payload.inputs, float(area), annual_generation)
+    if ecology:
+        result.ecology = evaluate_ecology(ecology, baseline_surveys)
     if assessment is not None:
         result.summary["solarAssessmentId"] = str(assessment.id)
         result.summary["solarAssessmentSha256"] = assessment.sha256

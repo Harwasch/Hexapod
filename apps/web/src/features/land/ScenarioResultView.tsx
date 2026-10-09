@@ -1,3 +1,4 @@
+import { RestorationTargetResults } from "./RestorationTargetResults";
 import { useState } from "react";
 import type { ScenarioResult } from "./scenarioDefaults";
 import { fieldLabel, valueLabel } from "./scenarioDefaults";
@@ -71,6 +72,7 @@ export function ScenarioResultView({ result }: { result: ScenarioResult }) {
           ))}
         </figure>
       )}
+      {result.ecology && <RestorationTargetResults result={result.ecology} />}
       {(result.sensitivity?.length ?? 0) > 0 && (
         <div className="land-table-scroll">
           <table>

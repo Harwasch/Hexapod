@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from app.schemas.base import CamelModel
+from app.schemas.restoration_ecology import RestorationEcology, RestorationEcologyResult
 
 Fraction = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 Money = Annotated[float, Field(ge=0, le=1e12, allow_inf_nan=False)]
@@ -71,6 +72,7 @@ class RestorationTreatment(CamelModel):
 
 class RestorationInputs(CamelModel):
     kind: Literal["restoration"]
+    ecology: RestorationEcology | None = None
     reference_ecosystem: str = Field(min_length=1, max_length=2000)
     survey_date: date
     survey_method: str = Field(min_length=1, max_length=2000)
@@ -98,6 +100,23 @@ class RestorationInputs(CamelModel):
             year < 0 or year > 50 for year in self.monitoring_years
         ):
             raise ValueError("monitoring years must be unique values between 0 and 50")
+        if self.ecology:
+            names = [t.name for t in self.treatments]
+            if len(names) != len(set(names)):
+                raise ValueError("Treatments need unique names when linked to species targets.")
+            if any(
+                name not in names
+                for target in self.ecology.species_targets
+                for name in target.treatment_names
+            ):
+                raise ValueError("Every species treatment link must name an existing treatment.")
+            if any(
+                target.target_year not in self.monitoring_years
+                for target in self.ecology.species_targets
+            ):
+                raise ValueError(
+                    "Schedule a monitoring visit in each species target's assessment year."
+                )
         return self
 
 
@@ -119,6 +138,7 @@ class ScenarioRevise(ScenarioCreate):
 
 
 class ScenarioResult(CamelModel):
+    ecology: RestorationEcologyResult | None = None
     algorithm: str
     summary: dict[str, float | int | str | None]
     rows: list[dict[str, float | int | str | None]]

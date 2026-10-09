@@ -1,0 +1,67 @@
+.land-restoration-targets,
+.land-restoration-results,
+.land-restoration-species {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.land-restoration-targets,
+.land-restoration-species {
+  padding: 14px;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  background: #91d6a208;
+}
+.land-restoration-targets > *,
+.land-restoration-species > * {
+  min-width: 0;
+}
+.land-restoration-targets fieldset {
+  display: grid;
+  gap: 12px;
+}
+.land-restoration-results figure {
+  margin: 0;
+}
+.land-restoration-results svg {
+  width: 100%;
+}
+.land-restoration-results figcaption {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.land-evidence-picker {
+  min-width: 0;
+}
+.land-evidence-picker > * + * {
+  margin-top: 10px;
+}
+.land-source-choice {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.land-restoration-targets button,
+.land-restoration-results button,
+.land-evidence-picker button {
+  border: 1px solid var(--control-border);
+  background: #a5c4a508;
+  color: inherit;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 8px 11px;
+  font: inherit;
+  white-space: normal;
+}
+
+.land-scenario-form > .land-scenario-inputs {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}

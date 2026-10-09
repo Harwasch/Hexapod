@@ -805,6 +805,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Land Evidence */
+        get: operations["land_evidence_api_v1_land__land_id__evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/features": {
         parameters: {
             query?: never;
@@ -3164,6 +3181,35 @@ export interface components {
             /** Targetpercent */
             targetPercent: number;
         };
+        /** CoverProjection */
+        CoverProjection: {
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Year */
+            year: number;
+        };
+        /**
+         * CoverResponse
+         * @description An explicit what-if response curve, not an automatically fitted ecological model.
+         */
+        CoverResponse: {
+            /** Annualratehigh */
+            annualRateHigh: number;
+            /** Annualratelow */
+            annualRateLow: number;
+            /** Asymptotehigh */
+            asymptoteHigh: number;
+            /** Asymptotelow */
+            asymptoteLow: number;
+            /** Basis */
+            basis: string;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Startyear */
+            startYear: number;
+        };
         /** CrsMetadata */
         CrsMetadata: {
             /** Horizontal */
@@ -4407,6 +4453,30 @@ export interface components {
             title: string;
             /** Warnings */
             warnings: string[];
+        };
+        /** LandEvidenceOption */
+        LandEvidenceOption: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Investigationid
+             * Format: uuid
+             */
+            investigationId: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Retrievedat
+             * Format: date-time
+             */
+            retrievedAt: string;
+            /** Title */
+            title: string;
         };
         /** LandFeatureCreate */
         LandFeatureCreate: {
@@ -6120,6 +6190,35 @@ export interface components {
             /** Pointspacingm */
             pointSpacingM?: number | null;
         };
+        /** RestorationEcology */
+        RestorationEcology: {
+            /** Referencebasis */
+            referenceBasis: string;
+            /** Referenceevidenceids */
+            referenceEvidenceIds?: string[];
+            /** Siteconstraints */
+            siteConstraints: string;
+            /** Speciestargets */
+            speciesTargets: components["schemas"]["SpeciesTarget"][];
+        };
+        /** RestorationEcologyResult */
+        RestorationEcologyResult: {
+            /**
+             * Algorithm
+             * @default restoration-species-targets-and-conditional-response/1
+             */
+            algorithm?: string;
+            /** Limitations */
+            limitations: string[];
+            /** Referencebasis */
+            referenceBasis: string;
+            /** Referenceevidenceids */
+            referenceEvidenceIds: string[];
+            /** Siteconstraints */
+            siteConstraints: string;
+            /** Species */
+            species: components["schemas"]["SpeciesTargetResult"][];
+        };
         /** RestorationInputs */
         RestorationInputs: {
             /** Assumptions */
@@ -6137,6 +6236,7 @@ export interface components {
             currency: string;
             /** Discountrate */
             discountRate: number;
+            ecology?: components["schemas"]["RestorationEcology"] | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -6401,6 +6501,7 @@ export interface components {
         ScenarioResult: {
             /** Algorithm */
             algorithm: string;
+            ecology?: components["schemas"]["RestorationEcologyResult"] | null;
             /** Limitations */
             limitations: string[];
             /** Rows */
@@ -7015,6 +7116,77 @@ export interface components {
             /** Taxon */
             taxon: string;
         };
+        /** SpeciesTarget */
+        SpeciesTarget: {
+            /** Baselinebasis */
+            baselineBasis: string;
+            /** Baselinepercent */
+            baselinePercent?: number | null;
+            /** Baselinesurveyid */
+            baselineSurveyId?: string | null;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Monitoringmethod */
+            monitoringMethod: string;
+            /** Monitoringseason */
+            monitoringSeason: string;
+            /** Rationale */
+            rationale: string;
+            response?: components["schemas"]["CoverResponse"] | null;
+            /** Responseifofftrack */
+            responseIfOffTrack: string;
+            /**
+             * Stratum
+             * @enum {string}
+             */
+            stratum: "canopy" | "shrub" | "herb" | "ground" | "aquatic";
+            /**
+             * Targetbasis
+             * @default hypothetical
+             * @enum {string}
+             */
+            targetBasis?: "hypothetical" | "reference-evidence";
+            /** Targethigh */
+            targetHigh: number;
+            /** Targetlow */
+            targetLow: number;
+            /** Targetyear */
+            targetYear: number;
+            /** Taxon */
+            taxon: string;
+            /** Treatmentnames */
+            treatmentNames?: string[];
+        };
+        /** SpeciesTargetResult */
+        SpeciesTargetResult: {
+            /** Assessedaream2 */
+            assessedAreaM2?: number | null;
+            /** Assessedlandfraction */
+            assessedLandFraction?: number | null;
+            /** Baselinepercent */
+            baselinePercent: number | null;
+            /**
+             * Baselinescope
+             * @enum {string}
+             */
+            baselineScope: "surveyed-plots" | "entered-assumption" | "unknown";
+            /** Identificationstatus */
+            identificationStatus?: string[];
+            /** Limitations */
+            limitations: string[];
+            /** Observedon */
+            observedOn?: string | null;
+            /** Projection */
+            projection?: components["schemas"]["CoverProjection"][];
+            /** Surveysha256 */
+            surveySha256?: string | null;
+            target: components["schemas"]["SpeciesTarget"];
+            /**
+             * Targetrelation
+             * @enum {string}
+             */
+            targetRelation: "not-modeled" | "inside-target" | "overlaps-target" | "outside-target";
+        };
         /**
          * StacSource
          * @description Reference to a STAC item/collection. Resolution to a renderable asset happens client-side.
@@ -7580,6 +7752,8 @@ export type SchemaClarificationOption = components['schemas']['ClarificationOpti
 export type SchemaControlPointFit = components['schemas']['ControlPointFit'];
 export type SchemaCorridorRequest = components['schemas']['CorridorRequest'];
 export type SchemaCoverClass = components['schemas']['CoverClass'];
+export type SchemaCoverProjection = components['schemas']['CoverProjection'];
+export type SchemaCoverResponse = components['schemas']['CoverResponse'];
 export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
 export type SchemaCzmlSource = components['schemas']['CzmlSource'];
 export type SchemaDocumentLinkCreate = components['schemas']['DocumentLinkCreate'];
@@ -7630,6 +7804,7 @@ export type SchemaLandCandidate = components['schemas']['LandCandidate'];
 export type SchemaLandCreate = components['schemas']['LandCreate'];
 export type SchemaLandDocumentCreate = components['schemas']['LandDocumentCreate'];
 export type SchemaLandDocumentRead = components['schemas']['LandDocumentRead'];
+export type SchemaLandEvidenceOption = components['schemas']['LandEvidenceOption'];
 export type SchemaLandFeatureCreate = components['schemas']['LandFeatureCreate'];
 export type SchemaLandFeatureRead = components['schemas']['LandFeatureRead'];
 export type SchemaLandFeatureRevise = components['schemas']['LandFeatureRevise'];
@@ -7712,6 +7887,8 @@ export type SchemaResearchBudget = components['schemas']['ResearchBudget'];
 export type SchemaResearchPage = components['schemas']['ResearchPage'];
 export type SchemaResearchStatus = components['schemas']['ResearchStatus'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
+export type SchemaRestorationEcology = components['schemas']['RestorationEcology'];
+export type SchemaRestorationEcologyResult = components['schemas']['RestorationEcologyResult'];
 export type SchemaRestorationInputs = components['schemas']['RestorationInputs'];
 export type SchemaRestorationTreatment = components['schemas']['RestorationTreatment'];
 export type SchemaRunCreate = components['schemas']['RunCreate'];
@@ -7744,6 +7921,8 @@ export type SchemaSolarPreview = components['schemas']['SolarPreview'];
 export type SchemaSolarRequest = components['schemas']['SolarRequest'];
 export type SchemaSourceRead = components['schemas']['SourceRead'];
 export type SchemaSpeciesObservation = components['schemas']['SpeciesObservation'];
+export type SchemaSpeciesTarget = components['schemas']['SpeciesTarget'];
+export type SchemaSpeciesTargetResult = components['schemas']['SpeciesTargetResult'];
 export type SchemaStacSource = components['schemas']['StacSource'];
 export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
 export type SchemaSurveyCreate = components['schemas']['SurveyCreate'];
@@ -11340,6 +11519,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentSearchHit"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    land_evidence_api_v1_land__land_id__evidence_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                query?: string;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandEvidenceOption"][];
                 };
             };
             /** @description Missing or wrong write token */
