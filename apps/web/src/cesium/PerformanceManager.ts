@@ -625,6 +625,11 @@ export class PerformanceManager {
     if (animating && this.sharpened) this.applyLevel();
   }
 
+  /** Whether something other than the camera renders every tick (`setAnimating`). */
+  get isAnimating(): boolean {
+    return this.animating;
+  }
+
   reportContext(altitude: number, nearSite: boolean): void {
     this.altitude = altitude;
     this.nearSite = nearSite;

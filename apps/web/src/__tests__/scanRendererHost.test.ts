@@ -10,6 +10,7 @@ import type { RigidMotion } from "@twin/world";
 
 import {
   FAR_BUDGET_SHARE,
+  REST_AFTER_MS,
   ScanRendererHost,
   prefetchScanDestination,
   type BackendModule,
@@ -20,6 +21,7 @@ import { pickSourceOf } from "@/cesium/sceneSelect/pickSources";
 import type * as Telemetry from "@/cesium/telemetry";
 import type { PickTile } from "@/lib/splatPick";
 import { useSceneObjects } from "@/state/sceneObjects";
+import { useSettings } from "@/state/settings";
 import { RETRY_FAILED_MS, TileStreamer } from "@/view/stream";
 
 /**
@@ -552,6 +554,83 @@ describe("a scan seen from afar", () => {
   });
 });
 
+describe("a still view the budget held back", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(served), { status: 200 }))),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    served = TILESET;
+  });
+
+  it("refines past the motion budget once the camera is still, and swaps back when it moves", async () => {
+    // Two regions of 2.8M gaussians under a coarse root: 5.6M, past the desktop's 3M budget
+    // and within the 6M (its ceiling) a still view may hold (REST_GROWTH). On the Camp scan
+    // the budget left tiles in view at 16 to 31 px for as long as the camera stayed still,
+    // and 4.5M still at 6 to 29 px.
+    const heavy = {
+      ...TILESET,
+      root: {
+        ...TILESET.root,
+        extras: { gaussians: 100_000 },
+        children: TILESET.root.children.map((child) => ({
+          ...child,
+          extras: { gaussians: 2_800_000 },
+          children: [],
+        })),
+      },
+    };
+    const r = await rig({ tileset: heavy });
+    // Moving: the budget holds the cut at the root.
+    for (let i = 0; i < 20; i++) {
+      r.camera.positionWC = new Cartesian3(-20, -60 + i * 0.01, 10);
+      r.globe();
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    expect(r.host.status().tiles).toBe(1);
+    const budgets = r.budgets.length;
+    // Still for a moment: the regions are fetched and drawn, though nothing else wakes it.
+    await r.run(REST_AFTER_MS + 300);
+    await settle(r);
+    expect(r.host.status()).toMatchObject({ tiles: 2, gaussians: 5_600_000 });
+    // Moving again: the motion budget at the first re-plan, the root (kept loaded) back in.
+    r.camera.positionWC = new Cartesian3(-20, -59, 10);
+    await r.run(400, true);
+    expect(r.host.status().tiles).toBe(1);
+    // The renderer's own budget is left alone: PlayCanvas re-sorts every splat when it moves.
+    expect(r.budgets.length).toBe(budgets);
+    r.host.destroy();
+  });
+
+  it("a view the budget did not hold back draws nothing more once it is still", async () => {
+    const r = await rig();
+    await settle(r);
+    const before = r.renders.length;
+    r.camera.positionWC = new Cartesian3(-20, -59.5, 10);
+    await r.run(400, true);
+    const moved = r.renders.length;
+    expect(moved).toBeGreaterThan(before);
+    // Past the rest delay: no frame for a rest budget it has no use for.
+    await r.run(REST_AFTER_MS + 2000);
+    expect(r.renders.length).toBe(moved);
+    r.host.destroy();
+  });
+});
+
 describe("the scan's objects moving under the overlay", () => {
   beforeEach(() => {
     vi.useFakeTimers({
@@ -728,6 +807,93 @@ describe("a dedicated renderer's scan at a runtime scale", () => {
     await r.run(100);
     expect(r.renders.length).toBeGreaterThan(before);
     expect(r.renders.at(-1)?.eye[0]).toBeCloseTo(-80, 9);
+    r.host.destroy();
+  });
+});
+
+describe("the scan's inferred layers under the overlay", () => {
+  const LAYER = {
+    asset: { version: "1.1" },
+    geometricError: 0,
+    root: {
+      refine: "REPLACE",
+      geometricError: 0,
+      boundingVolume: { box: [0, 0, 2, 4, 0, 0, 0, 4, 0, 0, 0, 1] },
+      content: { uri: "splat.glb" },
+      extras: { gaussians: 300 },
+    },
+  };
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    served = TILESET;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          new Response(JSON.stringify(url.includes("/fill/") ? LAYER : served), {
+            status: 200,
+          }),
+        ),
+      ),
+    );
+  });
+  afterEach(() => {
+    useSettings.getState().set({ inferredStyle: "hide" });
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+
+  it("draws a layer's tiles with the scan's, in its renderer, and none while Inferred is Hide", async () => {
+    useSettings.getState().set({ inferredStyle: "show" });
+    const loads: string[] = [];
+    const drawn = new Set<string>();
+    const looks: boolean[] = [];
+    const r = await rig({
+      assetId: "scan-layers",
+      extras: {
+        inferredLayers: [
+          {
+            uri: "fill/tileset.json",
+            evidence: { kind: "inferred", filler: "f", views: 1, gaussians: 300 },
+          },
+        ],
+      },
+      backend: {
+        loadLayer: (url, tile) => {
+          loads.push(new URL(tile.uri, url).pathname);
+          return Promise.resolve(`layer:${tile.uri}`);
+        },
+        setLayerLook: (_mesh, look) => void looks.push(look.highlight),
+        add: (mesh) => void drawn.add(mesh),
+        remove: (mesh) => void drawn.delete(mesh),
+      },
+    });
+    await settle(r);
+    expect(loads).toEqual(["/fill/splat.glb"]);
+    expect(drawn.has("layer:splat.glb")).toBe(true);
+    expect(r.host.status().layers).toMatchObject({ wanted: 1, drawn: 1, tiles: 1 });
+    // Highlight is a look, and a frame.
+    let before = r.renders.length;
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    await r.run(200);
+    expect(looks.at(-1)).toBe(true);
+    expect(r.renders.length).toBeGreaterThan(before);
+    // Hide: off the renderer's screen, and drawn so.
+    before = r.renders.length;
+    useSettings.getState().set({ inferredStyle: "hide" });
+    await r.run(200);
+    expect(drawn.has("layer:splat.glb")).toBe(false);
+    expect(r.host.status().layers).toMatchObject({ drawn: 0 });
+    expect(r.renders.length).toBeGreaterThan(before);
     r.host.destroy();
   });
 });

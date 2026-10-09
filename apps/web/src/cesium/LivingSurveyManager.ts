@@ -331,7 +331,10 @@ export class LivingSurveyManager {
       }),
       // Skins attach when their files load, after the asset is ready.
       onSkinsChanged(() => {
-        if (!this.#destroyed) this.#afterEntriesChanged();
+        if (this.#destroyed) return;
+        // A skin candidate replacing the rig (or giving way to it) changes which rigs belong.
+        this.reconcile();
+        this.#afterEntriesChanged();
       }),
     );
     this.reconcile();
@@ -454,6 +457,8 @@ export class LivingSurveyManager {
     for (const asset of this.#sites.loadedAssets()) {
       const rigUrl = rigUrlFor(asset.rigPath, asset.representation, asset.sourceUrl);
       if (rigUrl === null) continue;
+      // A skin candidate chosen for the scan (the skins bake-off) moves it instead of the rig.
+      if (attachedSkins().get(asset.assetId)?.variant) continue;
       live.set(asset.assetId, { slug: asset.siteSlug, siteId: asset.siteId, rigUrl });
     }
 
@@ -523,6 +528,7 @@ export class LivingSurveyManager {
     // The site may have unloaded while the rig was in flight.
     const tileset = this.#sites.tilesetFor(candidate.siteId, "gaussian-splat");
     if (tileset === null || this.#entries.has(assetId)) return;
+    if (attachedSkins().get(assetId)?.variant) return;
 
     // A rigged site draws from the aggregated snapshot the deformer was built and verified
     // on (the CPU path rewrites it from a captured packed buffer, and the measured-bytes

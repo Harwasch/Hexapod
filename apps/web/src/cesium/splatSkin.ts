@@ -17,13 +17,17 @@
  * - **skin ids** (RGBA32UI, 1024 texels a row, four splats a texel): the skin of every splat
  *   index, 0 for none.
  * - **weights** (RGBA32UI, 1024 texels a row, one splat a texel): the splat's row of
- *   `skin.bin` -- sixteen signed bytes, byte `k` handle `k + 1`'s weight.
+ *   `skin.bin` -- sixteen signed bytes, byte `k` handle `k + 1`'s weight. A file of wide rows
+ *   (a skin of more than 16 handles) has a second such texture for bytes 16..31.
  * - **handles** (RGBA32F, 1024 texels a row, `TEXELS_PER_SKIN` a skin): texel 0 is
  *   `(moving, handle count, 0, 0)`, then three texels per handle, `Z_j`'s rows **folded into
  *   the baked frame** the shader sees (`foldHandle`): `A_b = L·A·L⁻¹`,
  *   `t_b = L·(t − A·o) − A_b·b` for the bake `B = (L, b)` and the rest origin `o`, so the
  *   shader's whole job is `Σ w_j (A_b x_b + t_b)`. Rewritten when a driver sets handles;
- *   only the rows of the skins that changed are uploaded.
+ *   only the rows of the skins that changed are uploaded. A limbs skin's leaf flutter
+ *   (`limbWind.ts`) takes 16 more texels from `FLUTTER_TEXEL` (97): plane waves folded into
+ *   the baked frame (`foldFlutter`), added per splat by the share in its row's last byte. Every
+ *   other skin's texels there stay zero, and the shader adds nothing for it.
  *
  * **Covariances.** The part also gives the chain its linear part `Σ_j w_j A_b,j`, so each
  * splat's covariance is drawn through `J = I + Σ_j w_j A_j` (the patch's
@@ -33,23 +37,33 @@
  * changes (`support[].radius` in `skin.json`), which is the regime wind drives.
  *
  * **Not re-sorted**: the sorter orders by rest positions, as on the rig's GPU path.
+ *
+ * **Two drivers at once.** A skin's handles are what its driver set (`setInstanceHandles`: the
+ * wind, telemetry) plus an overlay (`setInstanceOverlay`: a poke, `skinPoke.ts`), so a poked
+ * branch still sways and the wind lets go of nothing the poke holds.
  */
 
-import { checksumPositions } from "@twin/world";
+import { checksumPositions, LIMB_FLUTTER_FLOATS, LIMB_FLUTTER_WAVES } from "@twin/world";
 import type { Cesium3DTileset, Scene } from "cesium";
 
 import { createLogger } from "@/lib/log";
 import { loadMaterials, materialsRefOf, type MaterialTable } from "@/lib/skinMaterials";
 import {
   HANDLE_FLOATS,
+  MAX_SKIN_HANDLES,
   loadSkin,
   rowWeight,
-  skinRefOf,
+  skinFloats,
   tileSkin,
   type SkinDoc,
   type SkinEntry,
+  type SkinRef,
 } from "@/lib/skin";
+import { skinRefFor, variantsOf } from "@/lib/variants";
+import { onPickChange, pickedVariant, useVariants, type VariantStatus } from "@/state/variants";
 
+import { cesiumPickSource } from "./sceneSelect/cesiumPickSource";
+import { CESIUM_PRIORITY, pickSourceOf, registerPickSource } from "./sceneSelect/pickSources";
 import { invertAffine, unbakePositions, type Mat4 } from "./splatFrames";
 import { cesiumMotionTextures } from "./splatGpuTextures";
 import type { MotionTextureFactory, OwnedTexture } from "./splatGpuMotion";
@@ -77,17 +91,30 @@ export const SKIN_IDS_PER_TEXEL = 4;
 export const SPLATS_PER_SKIN_ID_ROW = SKIN_TEXTURE_WIDTH * SKIN_IDS_PER_TEXEL;
 /** Splats a row of the weight texture holds. */
 export const SPLATS_PER_WEIGHT_ROW = SKIN_TEXTURE_WIDTH;
-/** Handle-texture texels per skin: a header, then three per handle (16 at most). */
-export const TEXELS_PER_SKIN = 64;
+/** Handle-texture texels per skin: a header, then three per handle (`MAX_SKIN_HANDLES`). */
+export const TEXELS_PER_SKIN = 128;
+/**
+ * Where a limbs skin's leaf flutter starts in its texels: after the header and 32 handles. A
+ * header `(on, the row byte of the splat's share, waves, 0)`, then per component (along,
+ * across, up) `LIMB_FLUTTER_WAVES` waves `(κ, φ)` (the component is `Σ cos(κ·x + φ)`), then
+ * per component the vector a share of 1 moves along. Zero (off) for every other skin.
+ */
+export const FLUTTER_TEXEL = 1 + 3 * MAX_SKIN_HANDLES;
 /** Floats a handle texel holds. */
 const FLOATS_PER_TEXEL = 4;
 /** How far two tiles' bakes may differ and still share the folded handles. */
 const BAKE_TOLERANCE = 1e-9;
 
-/** The shader side: a displacement and its linear part (`splatSkinJacobian`). */
-export function skinGlsl(scale: number): string {
+/**
+ * The shader side: a displacement and its linear part (`splatSkinJacobian`). `wide`: the file's
+ * rows are two texels (a second weight texture, `u_skinWeights2`).
+ */
+export function skinGlsl(scale: number, wide = false): string {
   const width = String(SKIN_TEXTURE_WIDTH - 1);
   const shift = String(Math.log2(SKIN_TEXTURE_WIDTH));
+  const second = wide
+    ? `texelFetch(u_skinWeights2, ivec2(int(splatIndex & ${width}u), int(splatIndex >> ${shift}u)), 0)`
+    : "uvec4(0u)";
   return `
 // The skin's linear part at the splat splatSkinMotion last ran for: what the Jacobian returns.
 mat3 splatSkinLinear = mat3(0.0);
@@ -96,10 +123,12 @@ vec4 splatSkinTexel(int index) {
     return texelFetch(u_skinHandles, ivec2(index & ${width}, index >> ${shift}), 0);
 }
 
-float splatSkinWeight(uvec4 words, int k) {
-    uint word = k < 4 ? words.x : (k < 8 ? words.y : (k < 12 ? words.z : words.w));
-    // Byte k & 3 of the word, sign-extended: an int8 weight.
-    return float(int(word << uint(24 - 8 * (k & 3))) >> 24) * ${scale.toPrecision(9)};
+float splatSkinWeight(uvec4 words, uvec4 words2, int k) {
+    uvec4 row = k < 16 ? words : words2;
+    int kk = k & 15;
+    uint word = kk < 4 ? row.x : (kk < 8 ? row.y : (kk < 12 ? row.z : row.w));
+    // Byte kk & 3 of the word, sign-extended: an int8 weight.
+    return float(int(word << uint(24 - 8 * (kk & 3))) >> 24) * ${scale.toPrecision(9)};
 }
 
 vec3 splatSkinMotion(uint splatIndex, vec3 position) {
@@ -125,14 +154,15 @@ vec3 splatSkinMotion(uint splatIndex, vec3 position) {
         ivec2(int(splatIndex & ${width}u), int(splatIndex >> ${shift}u)),
         0
     );
+    uvec4 words2 = handles > 17 ? ${second} : uvec4(0u);
     vec4 xh = vec4(position, 1.0);
     vec3 delta = vec3(0.0);
     mat3 linear = mat3(0.0);
-    for (int j = 0; j < ${String(16)}; j++) {
+    for (int j = 0; j < ${String(MAX_SKIN_HANDLES)}; j++) {
         if (j >= handles) {
             break;
         }
-        float w = j == 0 ? 1.0 : splatSkinWeight(words, j - 1);
+        float w = j == 0 ? 1.0 : splatSkinWeight(words, words2, j - 1);
         if (w == 0.0) {
             continue;
         }
@@ -143,6 +173,23 @@ vec3 splatSkinMotion(uint splatIndex, vec3 position) {
         delta += w * vec3(dot(r0, xh), dot(r1, xh), dot(r2, xh));
         // mat3 is column-major: column c holds row entries (r0[c], r1[c], r2[c]).
         linear += w * mat3(r0.x, r1.x, r2.x, r0.y, r1.y, r2.y, r0.z, r1.z, r2.z);
+    }
+    // A limbs skin's leaf flutter (limbWind.ts): plane waves after the handles, the splat's
+    // share in its row's last byte. A translation per splat: the covariance is untouched.
+    vec4 flutter = splatSkinTexel(base + ${String(FLUTTER_TEXEL)});
+    if (flutter.x > 0.5) {
+        int byteAt = int(flutter.y);
+        float share = splatSkinWeight(words, byteAt >= 16 ? ${second} : uvec4(0u), byteAt);
+        if (share > 0.0) {
+            for (int c = 0; c < 3; c++) {
+                float v = 0.0;
+                for (int k = 0; k < ${String(LIMB_FLUTTER_WAVES)}; k++) {
+                    vec4 wave = splatSkinTexel(base + ${String(FLUTTER_TEXEL + 1)} + c * ${String(LIMB_FLUTTER_WAVES)} + k);
+                    v += cos(dot(wave.xyz, position) + wave.w);
+                }
+                delta += share * v * splatSkinTexel(base + ${String(FLUTTER_TEXEL + 1 + 3 * LIMB_FLUTTER_WAVES)} + c).xyz;
+            }
+        }
     }
     splatSkinLinear = linear;
     return delta;
@@ -204,6 +251,85 @@ export function foldHandle(
 }
 
 /**
+ * A limbs skin's flutter (`LIMB_FLUTTER_FLOATS` numbers at `at`, rest frame, as
+ * `limbWind.ts` writes them) folded into the baked frame: each wave `κ·x + φ` with `x` the
+ * rest position becomes `κ_b·x_b + φ_b` (`κ_b = Mᵀκ`, `φ_b = φ + κ·m` for the un-bake
+ * `x = M·x_b + m`), each vector `o` becomes `L·o`. Writes `LIMB_FLUTTER_FLOATS / 4` texels.
+ */
+export function foldFlutter(
+  flutter: ArrayLike<number>,
+  at: number,
+  bake: Mat4,
+  inverse: Mat4,
+  out: Float32Array,
+  outAt: number,
+): void {
+  const l = (r: number, c: number): number => bake[c * 4 + r] ?? 0;
+  const li = (r: number, c: number): number => inverse[c * 4 + r] ?? 0;
+  const m = [inverse[12] ?? 0, inverse[13] ?? 0, inverse[14] ?? 0];
+  for (let k = 0; k < 4; k += 1) out[outAt + k] = flutter[at + k] ?? 0;
+  const waves = 3 * LIMB_FLUTTER_WAVES;
+  for (let w = 0; w < waves; w += 1) {
+    const i = at + 4 + w * 4;
+    const o = outAt + 4 + w * 4;
+    const k = [flutter[i] ?? 0, flutter[i + 1] ?? 0, flutter[i + 2] ?? 0];
+    for (let c = 0; c < 3; c += 1)
+      out[o + c] = li(0, c) * (k[0] ?? 0) + li(1, c) * (k[1] ?? 0) + li(2, c) * (k[2] ?? 0);
+    const phase =
+      (flutter[i + 3] ?? 0) +
+      (k[0] ?? 0) * (m[0] ?? 0) +
+      (k[1] ?? 0) * (m[1] ?? 0) +
+      (k[2] ?? 0) * (m[2] ?? 0);
+    out[o + 3] = phase - 2 * Math.PI * Math.floor(phase / (2 * Math.PI));
+  }
+  for (let c = 0; c < 3; c += 1) {
+    const i = at + 4 + waves * 4 + c * 4;
+    const o = outAt + 4 + waves * 4 + c * 4;
+    const v = [flutter[i] ?? 0, flutter[i + 1] ?? 0, flutter[i + 2] ?? 0];
+    for (let r = 0; r < 3; r += 1)
+      out[o + r] = l(r, 0) * (v[0] ?? 0) + l(r, 1) * (v[1] ?? 0) + l(r, 2) * (v[2] ?? 0);
+    out[o + 3] = 0;
+  }
+}
+
+/** Whether `driven` (a skin's handles as set) carries a limbs skin's flutter, switched on. */
+export function carriesFlutter(driven: ArrayLike<number>, handles: number): boolean {
+  const at = handles * HANDLE_FLOATS;
+  return driven.length >= at + LIMB_FLUTTER_FLOATS && (driven[at] ?? 0) > 0.5;
+}
+
+/** The flutter offset the shader adds for one splat from the texels at `base` (drawn frame). */
+function flutterAt(
+  texel: (index: number) => number[],
+  base: number,
+  words: ArrayLike<number>,
+  scale: number,
+  position: readonly [number, number, number],
+  words2?: ArrayLike<number>,
+): [number, number, number] {
+  const out: [number, number, number] = [0, 0, 0];
+  const head = texel(base + FLUTTER_TEXEL);
+  if ((head[0] ?? 0) < 0.5) return out;
+  const share = rowWeight(words, 0, Math.round(head[1] ?? 0), scale, words2);
+  if (!(share > 0)) return out;
+  for (let c = 0; c < 3; c += 1) {
+    let v = 0;
+    for (let k = 0; k < LIMB_FLUTTER_WAVES; k += 1) {
+      const wave = texel(base + FLUTTER_TEXEL + 1 + c * LIMB_FLUTTER_WAVES + k);
+      v += Math.cos(
+        (wave[0] ?? 0) * position[0] +
+          (wave[1] ?? 0) * position[1] +
+          (wave[2] ?? 0) * position[2] +
+          (wave[3] ?? 0),
+      );
+    }
+    const dir = texel(base + FLUTTER_TEXEL + 1 + 3 * LIMB_FLUTTER_WAVES + c);
+    for (let r = 0; r < 3; r += 1) out[r] = (out[r] ?? 0) + share * v * (dir[r] ?? 0);
+  }
+  return out;
+}
+
+/**
  * What the shader computes for one splat, from the same texture contents, in float64:
  * the displacement and the linear part. A reference for the tests.
  */
@@ -213,6 +339,7 @@ export function evaluateSkinMotion(
   words: ArrayLike<number>,
   scale: number,
   position: readonly [number, number, number],
+  words2?: ArrayLike<number>,
 ): { displacement: [number, number, number]; linear: number[] } {
   const texel = (index: number): number[] =>
     [0, 1, 2, 3].map((k) => handlesTexture[index * FLOATS_PER_TEXEL + k] ?? 0);
@@ -223,8 +350,8 @@ export function evaluateSkinMotion(
   const head = texel(base);
   if ((head[0] ?? 0) < 0.5) return { displacement, linear };
   const handles = head[1] ?? 0;
-  for (let j = 0; j < Math.min(handles, 16); j += 1) {
-    const w = j === 0 ? 1 : rowWeight(words, 0, j - 1, scale);
+  for (let j = 0; j < Math.min(handles, MAX_SKIN_HANDLES); j += 1) {
+    const w = j === 0 ? 1 : rowWeight(words, 0, j - 1, scale, words2);
     if (w === 0) continue;
     for (let r = 0; r < 3; r += 1) {
       const row = texel(base + 1 + 3 * j + r);
@@ -239,6 +366,8 @@ export function evaluateSkinMotion(
         linear[r * 3 + c] = (linear[r * 3 + c] ?? 0) + w * (row[c] ?? 0);
     }
   }
+  const flutter = flutterAt(texel, base, words, scale, position, words2);
+  for (let r = 0; r < 3; r += 1) displacement[r] = (displacement[r] ?? 0) + (flutter[r] ?? 0);
   return { displacement, linear };
 }
 
@@ -247,6 +376,7 @@ interface TileData {
   readonly bake: readonly number[];
   readonly skins: Uint32Array | undefined;
   readonly words: Uint32Array | undefined;
+  readonly words2: Uint32Array | undefined;
 }
 
 /** What `sync` did, for diagnostics and tests. */
@@ -270,16 +400,23 @@ export class SplatSkinning implements SplatMotionPart {
   #context: unknown;
   #ids = new Uint32Array(SPLATS_PER_SKIN_ID_ROW);
   #words = new Uint32Array(SPLATS_PER_WEIGHT_ROW * 4);
+  /** The second texel of a wide row (bytes 16..31), only for a file of wide rows. */
+  #words2: Uint32Array | undefined;
   #idTexture: OwnedTexture | undefined;
   #weightTexture: OwnedTexture | undefined;
+  #weightTexture2: OwnedTexture | undefined;
   #handleTexture: OwnedTexture | undefined;
   #idRows = 0;
   #weightRows = 0;
+  #weightTexture2Rows = 0;
   /** Splat indices written since the last upload, `[start, end)`. */
   #dirty: [number, number] | undefined;
   readonly #handles: Float32Array;
   /** Per skin id, its handles as last set (rest frame), for re-folding under a new bake. */
   readonly #driven = new Map<number, Float64Array>();
+  /** Per skin id, what its driver set (`setHandles`) and what is laid over it (a poke). */
+  readonly #base = new Map<number, Float64Array>();
+  readonly #overlay = new Map<number, Float64Array>();
   /** Skin ids whose texels changed since the last upload. */
   readonly #handlesDirty = new Set<number>();
   #handleTextureDirty = true;
@@ -295,6 +432,11 @@ export class SplatSkinning implements SplatMotionPart {
   /** Off draws every splat at rest; the part stays installed. */
   enabled = true;
   /**
+   * The bake-off candidate this skin is (`extras.variants.skins`'s name), or null for the scan's
+   * own: a candidate moves its scan instead of a Living Survey rig (`LivingSurveyManager`).
+   */
+  variant: string | null = null;
+  /**
    * Fitted materials by instance (`materials.json`, `lib/skinMaterials.ts`), once loaded: what
    * a driver reads over its property priors. Empty while absent.
    */
@@ -307,6 +449,7 @@ export class SplatSkinning implements SplatMotionPart {
     this.#handles = new Float32Array(
       SKIN_TEXTURE_WIDTH * handleTextureRows(doc.maxId) * FLOATS_PER_TEXEL,
     );
+    if (doc.rowWords === 8) this.#words2 = new Uint32Array(SPLATS_PER_WEIGHT_ROW * 4);
   }
 
   /** The skin id each splat index carries now. */
@@ -314,9 +457,14 @@ export class SplatSkinning implements SplatMotionPart {
     return splatIndex < this.#covered ? (this.#ids[splatIndex] ?? 0) : 0;
   }
 
-  /** The weight row each splat index carries now (four words). */
+  /** The weight row each splat index carries now (four words; eight in a file of wide rows). */
   wordsAt(splatIndex: number): Uint32Array {
-    return this.#words.slice(splatIndex * 4, splatIndex * 4 + 4);
+    const first = this.#words.slice(splatIndex * 4, splatIndex * 4 + 4);
+    if (!this.#words2) return first;
+    const out = new Uint32Array(8);
+    out.set(first);
+    out.set(this.#words2.subarray(splatIndex * 4, splatIndex * 4 + 4), 4);
+    return out;
   }
 
   /** The handle texels as they would be uploaded, for tests. */
@@ -390,13 +538,15 @@ export class SplatSkinning implements SplatMotionPart {
     const vertex = this.#factory.vertexDestination;
     shaderBuilder.addUniform("highp usampler2D", "u_skinIds", vertex);
     shaderBuilder.addUniform("highp usampler2D", "u_skinWeights", vertex);
+    if (this.#words2) shaderBuilder.addUniform("highp usampler2D", "u_skinWeights2", vertex);
     shaderBuilder.addUniform("highp sampler2D", "u_skinHandles", vertex);
     shaderBuilder.addUniform("float", "u_skinActive", vertex);
     shaderBuilder.addUniform("float", "u_skinMaxId", vertex);
     shaderBuilder.addUniform("float", "u_skinCovered", vertex);
-    shaderBuilder.addVertexLines(skinGlsl(this.doc.scale));
+    shaderBuilder.addVertexLines(skinGlsl(this.doc.scale, this.#words2 !== undefined));
     uniformMap.u_skinIds = () => this.#idTexture;
     uniformMap.u_skinWeights = () => this.#weightTexture;
+    if (this.#words2) uniformMap.u_skinWeights2 = () => this.#weightTexture2;
     uniformMap.u_skinHandles = () => this.#handleTexture;
     uniformMap.u_skinActive = () => (this.#drawActive() ? 1 : 0);
     uniformMap.u_skinMaxId = () => this.doc.maxId;
@@ -421,24 +571,57 @@ export class SplatSkinning implements SplatMotionPart {
 
   /**
    * Sets skin `skinId`'s handles: `handles` holds `Z_j` row-major (12 numbers a handle, rest
-   * frame, about the skin's origin) for `j = 0..m−1`; fewer leave the rest at rest. `null`
-   * puts the skin back at rest. The driver's whole interface (wind, telemetry, a slider).
+   * frame, about the skin's origin) for `j = 0..m−1`, and for a limbs skin its flutter after
+   * them (`skinFloats`); fewer leave the rest at rest. `null` puts the skin back at rest. The
+   * driver's whole interface (wind, telemetry, a slider).
    */
   setHandles(skinId: number, handles: ArrayLike<number> | null): void {
+    this.#setLayer(this.#base, skinId, handles);
+  }
+
+  /**
+   * Lays `handles` over skin `skinId`'s (what a poke adds to what the wind set: the two sum),
+   * or `null` to take the overlay away. The same rest frame and layout as `setHandles`.
+   */
+  setOverlay(skinId: number, handles: ArrayLike<number> | null): void {
+    this.#setLayer(this.#overlay, skinId, handles);
+  }
+
+  /** `setOverlay` for the skin of instance `instanceId`. False when it has none. */
+  setInstanceOverlay(instanceId: number, handles: ArrayLike<number> | null): boolean {
+    const skin = this.doc.byInstance.get(instanceId);
+    if (!skin) return false;
+    this.setOverlay(skin.id, handles);
+    return true;
+  }
+
+  #setLayer(layer: Map<number, Float64Array>, skinId: number, handles: ArrayLike<number> | null) {
     const skin = this.doc.byId.get(skinId);
     if (!skin) return;
     // The same handles again (a driver ticking at a held clock) change nothing: no version
     // bump, so a dedicated renderer does not regenerate and re-sort for them.
-    const current = this.#driven.get(skinId);
+    const current = layer.get(skinId);
     if (handles === null) {
       if (current === undefined) return;
-      this.#driven.delete(skinId);
+      layer.delete(skinId);
     } else {
-      const copy = new Float64Array(skin.handles * HANDLE_FLOATS);
+      // 12·m numbers, and a limbs skin's flutter after them.
+      const copy = new Float64Array(skinFloats(skin));
       for (let i = 0; i < Math.min(copy.length, handles.length); i += 1) copy[i] = handles[i] ?? 0;
       if (current?.every((v, i) => Object.is(v, copy[i]))) return;
-      this.#driven.set(skinId, copy);
+      layer.set(skinId, copy);
     }
+    // What is drawn: the driver's handles plus the overlay (a new array each time).
+    const base = this.#base.get(skinId);
+    const over = this.#overlay.get(skinId);
+    if (base === undefined && over === undefined) this.#driven.delete(skinId);
+    else if (over === undefined) this.#driven.set(skinId, base ?? new Float64Array(0));
+    else if (base === undefined) this.#driven.set(skinId, over);
+    else
+      this.#driven.set(
+        skinId,
+        base.map((v, i) => v + (over[i] ?? 0)),
+      );
     this.#motionVersion += 1;
     this.#writeSkin(skin);
     this.#ensureTextures();
@@ -452,16 +635,27 @@ export class SplatSkinning implements SplatMotionPart {
     return true;
   }
 
-  /** The handles instance `instanceId`'s skin was last set to (rest frame), or null at rest. */
+  /**
+   * The handles instance `instanceId`'s driver last set (rest frame), or null at rest; an
+   * overlay (`setInstanceOverlay`) is not included.
+   */
   instanceHandles(instanceId: number): Float64Array | null {
     const skin = this.doc.byInstance.get(instanceId);
-    const driven = skin ? this.#driven.get(skin.id) : undefined;
+    const driven = skin ? this.#base.get(skin.id) : undefined;
     return driven ? driven.slice() : null;
   }
 
-  /** Every skin back at rest. */
+  /** What is laid over instance `instanceId`'s handles (a poke), or null. */
+  instanceOverlay(instanceId: number): Float64Array | null {
+    const skin = this.doc.byInstance.get(instanceId);
+    const over = skin ? this.#overlay.get(skin.id) : undefined;
+    return over ? over.slice() : null;
+  }
+
+  /** Every skin back at rest, overlays included. */
   rest(): void {
-    for (const id of [...this.#driven.keys()]) this.setHandles(id, null);
+    for (const id of [...this.#base.keys()]) this.setHandles(id, null);
+    for (const id of [...this.#overlay.keys()]) this.setOverlay(id, null);
   }
 
   /**
@@ -495,6 +689,7 @@ export class SplatSkinning implements SplatMotionPart {
     if (!keep) {
       this.#ids.fill(0);
       this.#words.fill(0);
+      this.#words2?.fill(0);
       this.#mark(0, Math.max(this.#covered, numSplats));
       this.#placed.clear();
     } else {
@@ -524,6 +719,7 @@ export class SplatSkinning implements SplatMotionPart {
       if (data.skins !== undefined && data.words !== undefined) {
         this.#ids.set(data.skins, tile.start);
         this.#words.set(data.words, tile.start * 4);
+        if (data.words2) this.#words2?.set(data.words2, tile.start * 4);
         this.#mark(tile.start, tile.start + tile.count);
       } else {
         this.#clear(tile.start, tile.count);
@@ -540,18 +736,29 @@ export class SplatSkinning implements SplatMotionPart {
 
   destroy(): void {
     this.uninstall();
-    for (const texture of [this.#idTexture, this.#weightTexture, this.#handleTexture]) {
+    for (const texture of [
+      this.#idTexture,
+      this.#weightTexture,
+      this.#weightTexture2,
+      this.#handleTexture,
+    ]) {
       if (texture && !texture.isDestroyed()) texture.destroy();
     }
     this.#idTexture = undefined;
     this.#weightTexture = undefined;
+    this.#weightTexture2 = undefined;
     this.#handleTexture = undefined;
   }
 
   #tileData(tile: SnapshotTile, positions: Float32Array): TileData {
     const cached = this.#cache.get(tile.content);
     if (cached && sameMatrix(cached.bake, tile.bake)) return cached;
-    const none: TileData = { bake: Array.from(tile.bake), skins: undefined, words: undefined };
+    const none: TileData = {
+      bake: Array.from(tile.bake),
+      skins: undefined,
+      words: undefined,
+      words2: undefined,
+    };
     const inverse = invertAffine(tile.bake);
     if (inverse === undefined) return none;
     const reference = this.#bake;
@@ -572,6 +779,7 @@ export class SplatSkinning implements SplatMotionPart {
       bake: Array.from(tile.bake),
       skins: fits ? decoded.skins : undefined,
       words: fits ? decoded.words : undefined,
+      words2: fits ? decoded.words2 : undefined,
     };
     this.#cache.set(tile.content, data);
     return data;
@@ -598,6 +806,16 @@ export class SplatSkinning implements SplatMotionPart {
           base + (1 + 3 * j) * FLOATS_PER_TEXEL,
         );
       }
+      if (carriesFlutter(driven, skin.handles)) {
+        foldFlutter(
+          driven,
+          skin.handles * HANDLE_FLOATS,
+          bake,
+          inverse,
+          this.#handles,
+          base + FLUTTER_TEXEL * FLOATS_PER_TEXEL,
+        );
+      }
     }
     this.#handlesDirty.add(skin.id);
   }
@@ -605,6 +823,7 @@ export class SplatSkinning implements SplatMotionPart {
   #clear(start: number, count: number): void {
     this.#ids.fill(0, start, start + count);
     this.#words.fill(0, start * 4, (start + count) * 4);
+    this.#words2?.fill(0, start * 4, (start + count) * 4);
     this.#mark(start, start + count);
   }
 
@@ -627,6 +846,11 @@ export class SplatSkinning implements SplatMotionPart {
       );
       grown.set(this.#words);
       this.#words = grown;
+      if (this.#words2) {
+        const second = new Uint32Array(grown.length);
+        second.set(this.#words2);
+        this.#words2 = second;
+      }
     }
   }
 
@@ -682,6 +906,33 @@ export class SplatSkinning implements SplatMotionPart {
       );
       uploaded = true;
     }
+    const second = this.#words2;
+    if (second) {
+      if (
+        this.#weightTexture2 === undefined ||
+        this.#weightTexture2.isDestroyed() ||
+        this.#weightTexture2Rows !== weightRows
+      ) {
+        this.#weightTexture2?.destroy();
+        this.#weightTexture2 = this.#factory.createUintQuads(
+          context,
+          SKIN_TEXTURE_WIDTH,
+          weightRows,
+          second,
+        );
+        this.#weightTexture2Rows = weightRows;
+        uploaded = true;
+      } else if (dirty !== undefined) {
+        uploadRows(
+          this.#weightTexture2,
+          second,
+          dirty,
+          SPLATS_PER_WEIGHT_ROW,
+          SPLATS_PER_WEIGHT_ROW * 4,
+        );
+        uploaded = true;
+      }
+    }
     this.#dirty = undefined;
     const handleRows = handleTextureRows(this.doc.maxId);
     if (
@@ -726,6 +977,7 @@ export class SplatSkinning implements SplatMotionPart {
   #drawActive(): boolean {
     if (!this.enabled || this.#driven.size === 0) return false;
     if (!this.#idTexture || !this.#weightTexture || !this.#handleTexture) return false;
+    if (this.#words2 && !this.#weightTexture2) return false;
     if (this.#generation < 0 || this.#bake === undefined) return false;
     const primitive = this.#primitive;
     if (!primitive) return false;
@@ -802,10 +1054,18 @@ function skinsChanged(): void {
 export type LoadSkin = typeof loadSkin;
 
 /**
- * Lets `tileset`'s objects move by their skins, when its root declares `extras.skin`: the
- * files are fetched once and the part joins the splat primitive's motion chain, synced each
- * frame. Returns the disposer. A tileset without a skin, or an engine without the hook, costs
- * nothing. Drivers find the part with `skinningOf(assetId)`.
+ * Lets `tileset`'s objects move by their skins, when its root declares `extras.skin` or offers
+ * skins variants (`extras.variants.skins`, lib/variants.ts): the files are fetched and the part
+ * joins the splat primitive's motion chain, synced each frame. Returns the disposer. A tileset
+ * without a skin, or an engine without the hook, costs nothing. Drivers find the part with
+ * `skinningOf(assetId)`.
+ *
+ * Which skin is the pick's (`state/variants.ts`): Today's `extras.skin`, or a variant's
+ * `skin.json` and `skin.bin`. Picking another loads it and replaces the part; the drivers
+ * follow the attached parts (`onSkinsChanged`: the wind makes a driver for the new one, and
+ * keeps blowing), and a dedicated renderer rebinds its tiles to the new document
+ * (scanMotion.ts). The scan's fitted materials (`extras.materials`) are keyed by instance,
+ * not by skin, and go with whichever skin is drawn.
  */
 export function attachSkin(
   tileset: Cesium3DTileset,
@@ -814,57 +1074,116 @@ export function attachSkin(
   factory: MotionTextureFactory | undefined = cesiumMotionTextures(),
   load: LoadSkin = loadSkin,
 ): () => void {
-  const ref = skinRefOf((tileset.root as { extras?: unknown } | undefined)?.extras);
+  const extras = (tileset.root as { extras?: unknown } | undefined)?.extras;
   const url = (tileset as unknown as { resource?: { url?: string } }).resource?.url;
-  if (!ref || !url || !factory) return () => undefined;
+  const variants = variantsOf(extras);
+  const offersVariants = variants.skins.length > 0;
+  const current = (): { ref: SkinRef | null; variant: string | null } => {
+    const picked = offersVariants ? pickedVariant(assetId, "skins", variants) : null;
+    return { ref: skinRefFor(extras, picked), variant: picked?.name ?? null };
+  };
+  if (!url || !factory || (current().ref === null && !offersVariants)) return () => undefined;
   let part: SplatSkinning | undefined;
   let disposed = false;
   const offUpdate = scene.preUpdate.addEventListener(() => {
     if (part?.sync().changed) scene.requestRender();
   });
-  load(url, ref)
-    .then((doc) => {
-      if (disposed) return;
-      const attached = new SplatSkinning(doc, factory, splatTilesetOf(tileset));
-      part = attached;
-      ATTACHED.set(assetId, attached);
-      skinsChanged();
-      const materials = materialsRefOf((tileset.root as { extras?: unknown } | undefined)?.extras);
-      if (materials) {
-        loadMaterials(url, materials)
-          .then((table) => {
-            if (disposed) return;
-            attached.materials = table;
-            log.info("skin materials attached", { asset: assetId, records: table.size });
-          })
-          .catch((error: unknown) => {
-            log.warn("skin materials did not load; objects sway on their priors", {
-              message: error instanceof Error ? error.message : String(error),
-            });
-          });
-      }
-      scene.requestRender();
-      log.info("skin attached", {
-        asset: assetId,
-        skins: doc.skins.length,
-        tiles: doc.tiles.size,
-        rows: doc.rows,
+  // A scan without objects has no pick source of CesiumJS's splats; the poke picks from one.
+  const offPick = pickSourceOf(assetId)
+    ? () => undefined
+    : registerPickSource(assetId, cesiumPickSource(tileset), CESIUM_PRIORITY);
+  const report = (status: VariantStatus | null): void => {
+    if (offersVariants) useVariants.getState().setStatus(assetId, "skins", status);
+  };
+  // The fitted materials, loaded once: what a driver reads over its priors, whichever skin.
+  let materials: MaterialTable | undefined;
+  const materialsRef = materialsRefOf(extras);
+  if (materialsRef) {
+    loadMaterials(url, materialsRef)
+      .then((table) => {
+        if (disposed) return;
+        materials = table;
+        if (part) part.materials = table;
+        log.info("skin materials attached", { asset: assetId, records: table.size });
+      })
+      .catch((error: unknown) => {
+        log.warn("skin materials did not load; objects sway on their priors", {
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
-      if (doc.issues.length > 0) log.warn("skin.json had problems", { first: doc.issues[0] });
-    })
-    .catch((error: unknown) => {
-      log.warn("skin did not load; objects stay still", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
-  return () => {
-    disposed = true;
-    offUpdate();
-    part?.destroy();
-    if (part !== undefined && ATTACHED.get(assetId) === part) {
+  }
+  /** Takes the part off the primitive and out of the drivers' reach. */
+  const detach = (): void => {
+    const was = part;
+    part = undefined;
+    if (was === undefined) return;
+    was.destroy();
+    if (ATTACHED.get(assetId) === was) {
       ATTACHED.delete(assetId);
       skinsChanged();
     }
-    part = undefined;
+  };
+  /** The skin drawn now (its uri, "" for none), and which load is the latest. */
+  let shown: string | null = null;
+  let serial = 0;
+  const follow = (): void => {
+    const { ref, variant } = current();
+    const key = ref?.uri ?? "";
+    if (key === shown) return;
+    const swapping = shown !== null;
+    shown = key;
+    const mine = ++serial;
+    if (ref === null) {
+      detach();
+      scene.requestRender();
+      report({ state: "ready" });
+      return;
+    }
+    report({ state: "loading" });
+    load(url, ref)
+      .then((doc) => {
+        if (disposed || mine !== serial) return;
+        // Replaced, not edited: the drivers key on the part (skinWind.ts, scanMotion.ts).
+        const before = part;
+        part = undefined;
+        before?.destroy();
+        const attached = new SplatSkinning(doc, factory, splatTilesetOf(tileset));
+        if (materials) attached.materials = materials;
+        attached.variant = variant;
+        part = attached;
+        ATTACHED.set(assetId, attached);
+        skinsChanged();
+        scene.requestRender();
+        report({ state: "ready" });
+        log.info("skin attached", {
+          asset: assetId,
+          variant,
+          skins: doc.skins.length,
+          tiles: doc.tiles.size,
+          rows: doc.rows,
+        });
+        if (doc.issues.length > 0) log.warn("skin.json had problems", { first: doc.issues[0] });
+      })
+      .catch((error: unknown) => {
+        if (disposed || mine !== serial) return;
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn("skin did not load; objects stay still", { variant, message });
+        // A pick that did not load is not drawn as if it had: nothing moves, and the panel says why.
+        if (swapping) {
+          detach();
+          scene.requestRender();
+        }
+        report({ state: "error", message });
+      });
+  };
+  const offVariant = offersVariants ? onPickChange(assetId, "skins", follow) : () => undefined;
+  follow();
+  return () => {
+    disposed = true;
+    offVariant();
+    offUpdate();
+    offPick();
+    detach();
+    report(null);
   };
 }

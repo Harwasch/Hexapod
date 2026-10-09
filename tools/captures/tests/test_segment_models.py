@@ -75,6 +75,23 @@ class _WordEmbedder:
         return sm.l2_normalise(np.stack(crops).reshape(len(crops), -1))
 
 
+def test_a_name_answer_is_its_first_json_object_with_a_name() -> None:
+    text = 'Sure. ```json\n{"x": 1} {"name": "  cable   spool ", "whole": true}\n```'
+    assert sm.parse_answer(text) == {"name": "cable spool", "whole": True}
+    assert sm.parse_answer('{"name": ""}') is None
+    assert sm.parse_answer("a cable spool") is None
+
+
+def test_a_cover_answer_is_one_of_the_choices_as_written() -> None:
+    choices = ["grass", "forest floor", "hay"]
+    assert sm.parse_choice('```json\n{"cover": "Forest-Floor"}\n```', choices) == "forest floor"
+    assert sm.parse_choice('{"cover": "straw"} {"cover": "hay"}', choices) == "hay"
+    assert sm.parse_choice('{"cover": "straw"}', choices) is None
+    assert sm.parse_choice("hay", choices) is None
+    assert "{choices}" in sm.COVER_PROMPT
+    assert '{"cover"' in sm.COVER_PROMPT.format(choices="a, b")
+
+
 def test_l2_normalise_gives_unit_rows_and_keeps_zero_rows() -> None:
     x = sm.l2_normalise(np.array([[3.0, 4.0], [0.0, 0.0]]))
     assert x.dtype == np.float32

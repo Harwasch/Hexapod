@@ -2,6 +2,9 @@ import { create } from "zustand";
 
 import { indexCategories, matchCategory, type CategoryIndex } from "@/lib/categories";
 import { parseQuery, searchInstances, withDescendants, type Instance } from "@/lib/instances";
+import { selectionLabel } from "@/lib/sceneSelect";
+
+import { canExtend, currentTask, discard, record, touched, type UndoStep } from "./history";
 
 /** What the highlight is of, so the panel can mark it and a second click clears it. */
 export type Focus =
@@ -57,6 +60,8 @@ interface InstancesState {
   setMotionGap: (assetId: string, gap: RendererGap | null) => void;
   setTable: (assetId: string, table: { instances: Instance[] } | null) => void;
   setQuery: (assetId: string, query: string) => void;
+  // What changes `hidden` (below, up to `reset`) is one undoable step each (`state/history.ts`,
+  // `changeHidden`); the query and the highlight are not recorded.
   /** Hides or shows instances with everything below them (`withDescendants`). */
   setHidden: (assetId: string, ids: readonly number[], hidden: boolean) => void;
   /** Hides or shows objects: their members (`SceneObject.members`). */
@@ -72,7 +77,7 @@ interface InstancesState {
   highlight: (assetId: string, ids: readonly number[]) => void;
   /** Highlights a category, an object or the query's matches; the same again (or null) clears. */
   toggleFocus: (assetId: string, focus: Focus | null) => void;
-  /** Nothing hidden, nothing highlighted. */
+  /** Nothing hidden, nothing highlighted (undo brings back what was hidden). */
   reset: (assetId: string) => void;
   setDimOthers: (dim: boolean) => void;
 }
@@ -102,6 +107,223 @@ function withGap(
   }
   if (current?.renderer === gap.renderer && current.reason === gap.reason) return gaps;
   return { ...gaps, [assetId]: gap };
+}
+
+// ---- Undo --------------------------------------------------------------------------------
+
+/**
+ * A second change of the same thing this soon after the first (an eye flicked off and on)
+ * folds into one step: the net change, or none when it came back to where it was.
+ */
+export const TOGGLE_COALESCE_MS = 800;
+
+/** One undoable change of a scan's hidden set: the exact sets before and after. */
+interface HiddenStep extends UndoStep {
+  assetId: string;
+  /** The table it is of: a reloaded scan's ids are another scan's, and the step dies. */
+  table: readonly Instance[];
+  before: ReadonlySet<number>;
+  after: ReadonlySet<number>;
+  /** What was changed ("objects:3", "category:trees"), for folding a quick repeat in. */
+  key: string;
+  at: number;
+  task: number;
+}
+
+let lastHidden: HiddenStep | null = null;
+
+function sameMembers(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** What a person calls instance `id`: its object's name as the panel lists it, else the card's. */
+function instanceName(entry: AssetInstances, id: number): string {
+  const object = entry.index.objects.get(id);
+  if (object) return capitalise(object.name);
+  const instance = entry.instances.find((i) => i.id === id);
+  // Not in the file: an object painted in this browser (lib/customSets.ts).
+  if (!instance) return "Painted object";
+  return selectionLabel(instance, id, entry.index.categoryOf.get(id));
+}
+
+function namesOf(entry: AssetInstances, ids: readonly number[]): string {
+  const [only] = ids;
+  return ids.length === 1 && only !== undefined
+    ? instanceName(entry, only)
+    : `${ids.length.toLocaleString()} objects`;
+}
+
+/** Some objects in words: "Pumpkin 3", "Trees" (all of them), "3 objects in Trees". */
+function objectsName(entry: AssetInstances, objectIds: readonly number[]): string {
+  const objects = objectIds.flatMap((id) => entry.index.objects.get(id) ?? []);
+  const [first] = objects;
+  if (!first) return `${objectIds.length.toLocaleString()} objects`;
+  if (objects.length === 1) return capitalise(first.name);
+  const group = entry.index.groups.find((g) => g.category.id === first.category);
+  if (!group || objects.some((o) => o.category !== first.category))
+    return `${objects.length.toLocaleString()} objects`;
+  return objects.length === group.objects.length
+    ? group.category.name
+    : `${objects.length.toLocaleString()} objects in ${group.category.name}`;
+}
+
+/** Of `ids`, those whose parent is not among them: the tops of what they cover. */
+function topsOf(entry: AssetInstances, ids: ReadonlySet<number>): number[] {
+  const parentOf = new Map(entry.instances.map((i) => [i.id, i.parent]));
+  return [...ids].filter((id) => {
+    const parent = parentOf.get(id);
+    return parent === null || parent === undefined || !ids.has(parent);
+  });
+}
+
+/** The tops of what is wholly drawn with `hidden` hidden: drawn, and all below it too. */
+function wholeShownTops(entry: AssetInstances, hidden: ReadonlySet<number>): number[] {
+  const children = new Map<number, number[]>();
+  for (const i of entry.instances) {
+    if (i.parent === null) continue;
+    const list = children.get(i.parent) ?? [];
+    list.push(i.id);
+    children.set(i.parent, list);
+  }
+  const whole = new Map<number, boolean>();
+  const isWhole = (id: number): boolean => {
+    const known = whole.get(id);
+    if (known !== undefined) return known;
+    const value = !hidden.has(id) && (children.get(id) ?? []).every(isWhole);
+    whole.set(id, value);
+    return value;
+  };
+  return entry.instances
+    .filter((i) => isWhole(i.id) && (i.parent === null || !isWhole(i.parent)))
+    .map((i) => i.id);
+}
+
+/**
+ * A change of the hidden set in words, from what it did: for a change made by ids (the
+ * selection card's Hide and Show only, through `setHidden`) or by several actions in one
+ * gesture ("Show only" is show all, then hide the rest).
+ */
+function describeHiddenChange(
+  entry: AssetInstances,
+  before: ReadonlySet<number>,
+  after: ReadonlySet<number>,
+): string {
+  const added = new Set([...after].filter((id) => !before.has(id)));
+  const removed = new Set([...before].filter((id) => !after.has(id)));
+  if (added.size === 0) {
+    const shownTops = topsOf(entry, removed);
+    return after.size === 0 && shownTops.length > 1
+      ? "Show all objects"
+      : `Show ${namesOf(entry, shownTops)}`;
+  }
+  const hiddenTops = topsOf(entry, added);
+  if (removed.size === 0 && hiddenTops.length === 1) return `Hide ${namesOf(entry, hiddenTops)}`;
+  const shown = wholeShownTops(entry, after);
+  if (shown.length > 0 && shown.length < hiddenTops.length)
+    return `Show only ${namesOf(entry, shown)}`;
+  return removed.size === 0 ? `Hide ${namesOf(entry, hiddenTops)}` : "Change what is shown";
+}
+
+function putHidden(assetId: string, hidden: ReadonlySet<number>): void {
+  useInstances.setState((s) => patch(s, assetId, () => ({ hidden })));
+}
+
+/**
+ * Records that `assetId`'s hidden set went from `before` to `after`: a step of its own, or
+ * folded into the last one when it continues it -- the same gesture (one task), or the same
+ * thing changed again within `TOGGLE_COALESCE_MS`. `label` null describes the change.
+ */
+function noteHidden(
+  entry: AssetInstances,
+  assetId: string,
+  key: string,
+  label: string | null,
+  before: ReadonlySet<number>,
+  after: ReadonlySet<number>,
+): void {
+  const now = Date.now();
+  const task = currentTask();
+  const last = lastHidden;
+  if (
+    last &&
+    canExtend(last) &&
+    last.assetId === assetId &&
+    last.table === entry.instances &&
+    (last.task === task || (last.key === key && now - last.at < TOGGLE_COALESCE_MS))
+  ) {
+    const gesture = last.task === task && last.key !== key;
+    Object.assign(last, { after, at: now, task, key });
+    last.label =
+      gesture || label === null ? describeHiddenChange(entry, last.before, after) : label;
+    if (sameMembers(last.before, after)) {
+      discard(last);
+      lastHidden = null;
+    } else {
+      touched(last);
+    }
+    return;
+  }
+  const step: HiddenStep = {
+    label: label ?? describeHiddenChange(entry, before, after),
+    scope: "site",
+    assetId,
+    table: entry.instances,
+    before,
+    after,
+    key,
+    at: now,
+    task,
+    alive: () => useInstances.getState().assets[assetId]?.instances === step.table,
+    undo: () => putHidden(assetId, step.before),
+    redo: () => putHidden(assetId, step.after),
+  };
+  record(step);
+  lastHidden = step;
+}
+
+/**
+ * Sets `assetId`'s hidden set to what `change` makes of it (null: leave it) as one undoable
+ * step; a change that changes nothing is neither made nor recorded.
+ */
+function changeHidden(
+  assetId: string,
+  key: string,
+  label: ((entry: AssetInstances) => string) | null,
+  change: (current: AssetInstances) => ReadonlySet<number> | null,
+): void {
+  const current = useInstances.getState().assets[assetId];
+  if (!current) return;
+  const hidden = change(current);
+  if (hidden === null || sameMembers(hidden, current.hidden)) return;
+  putHidden(assetId, hidden);
+  noteHidden(current, assetId, key, label ? label(current) : null, current.hidden, hidden);
+}
+
+/** `hidden` with `ids` added (`hide`) or taken out. */
+function withIds(
+  hidden: ReadonlySet<number>,
+  ids: Iterable<number>,
+  hide: boolean,
+): ReadonlySet<number> {
+  const next = new Set(hidden);
+  for (const id of ids) {
+    if (hide) next.add(id);
+    else next.delete(id);
+  }
+  return next;
+}
+
+/** "Hide 12 matches for “pumpkin”". */
+function matchesLabel(verb: string, entry: AssetInstances): string {
+  const n = entry.matches.length;
+  return `${verb} ${n.toLocaleString()} ${n === 1 ? "match" : "matches"} for “${entry.query.trim()}”`;
 }
 
 /** Whether two highlights are of the same thing (a second click on it clears it). */
@@ -217,60 +439,57 @@ export const useInstances = create<InstancesState>()((set) => ({
       }),
     ),
   setHidden: (assetId, ids, hidden) =>
-    set((s) =>
-      patch(s, assetId, (current) => {
-        const next = new Set(current.hidden);
-        for (const id of withDescendants(current, ids)) {
-          if (hidden) next.add(id);
-          else next.delete(id);
-        }
-        return { hidden: next };
-      }),
+    changeHidden(assetId, `ids:${String(ids[0])}:${String(ids.length)}`, null, (current) =>
+      withIds(current.hidden, withDescendants(current, ids), hidden),
     ),
   setObjectsHidden: (assetId, objectIds, hidden) =>
-    set((s) =>
-      patch(s, assetId, (current) => {
-        const next = new Set(current.hidden);
-        for (const id of membersOf(current.index, objectIds)) {
-          if (hidden) next.add(id);
-          else next.delete(id);
-        }
-        return { hidden: next };
-      }),
+    changeHidden(
+      assetId,
+      `objects:${objectIds.join(",")}`,
+      (entry) => `${hidden ? "Hide" : "Show"} ${objectsName(entry, objectIds)}`,
+      (current) => withIds(current.hidden, membersOf(current.index, objectIds), hidden),
     ),
   setCategoryHidden: (assetId, categoryId, hidden) =>
-    set((s) =>
-      patch(s, assetId, (current) => {
+    changeHidden(
+      assetId,
+      `category:${categoryId}`,
+      (entry) => {
+        const group = entry.index.groups.find((g) => g.category.id === categoryId);
+        return `${hidden ? "Hide" : "Show"} ${group?.category.name ?? "a category"}`;
+      },
+      (current) => {
         const group = current.index.groups.find((g) => g.category.id === categoryId);
-        if (!group) return {};
-        const next = new Set(current.hidden);
-        for (const id of group.members) {
-          if (hidden) next.add(id);
-          else next.delete(id);
-        }
-        return { hidden: next };
-      }),
+        return group ? withIds(current.hidden, group.members, hidden) : null;
+      },
     ),
   hideMatches: (assetId) =>
-    set((s) =>
-      patch(s, assetId, (current) => {
-        if (current.matches.length === 0) return {};
-        const next = new Set(current.hidden);
-        for (const id of membersOf(current.index, current.matches)) next.add(id);
-        return { hidden: next };
-      }),
+    changeHidden(
+      assetId,
+      "matches",
+      (entry) => matchesLabel("Hide", entry),
+      (current) =>
+        current.matches.length === 0
+          ? null
+          : withIds(current.hidden, membersOf(current.index, current.matches), true),
     ),
   showOnlyMatches: (assetId) =>
-    set((s) =>
-      patch(s, assetId, (current) => {
-        if (current.matches.length === 0) return {};
+    changeHidden(
+      assetId,
+      "matches",
+      (entry) => matchesLabel("Show only", entry),
+      (current) => {
+        if (current.matches.length === 0) return null;
         const keep = new Set(membersOf(current.index, current.matches));
-        return {
-          hidden: new Set(current.instances.filter((i) => !keep.has(i.id)).map((i) => i.id)),
-        };
-      }),
+        return new Set(current.instances.filter((i) => !keep.has(i.id)).map((i) => i.id));
+      },
     ),
-  showAll: (assetId) => set((s) => patch(s, assetId, () => ({ hidden: EMPTY }))),
+  showAll: (assetId) =>
+    changeHidden(
+      assetId,
+      "all",
+      () => "Show all objects",
+      () => EMPTY,
+    ),
   highlight: (assetId, ids) =>
     set((s) =>
       patch(s, assetId, (current) =>
@@ -291,7 +510,14 @@ export const useInstances = create<InstancesState>()((set) => ({
           : { highlighted: EMPTY, focus: null };
       }),
     ),
-  reset: (assetId) =>
-    set((s) => patch(s, assetId, () => ({ hidden: EMPTY, highlighted: EMPTY, focus: null }))),
+  reset: (assetId) => {
+    changeHidden(
+      assetId,
+      "reset",
+      () => "Reset objects",
+      () => EMPTY,
+    );
+    set((s) => patch(s, assetId, () => ({ highlighted: EMPTY, focus: null })));
+  },
   setDimOthers: (dimOthers) => set({ dimOthers }),
 }));

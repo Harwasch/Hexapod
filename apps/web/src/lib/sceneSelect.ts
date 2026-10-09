@@ -10,9 +10,16 @@
  * offered. A click chooses the whole object first, the top of the chain, and each click again
  * on it one level finer (`drillIndex`): a cable spool, then one of its planks.
  *
- * A painted area is matched against every instance, at every level, by intersection over union
- * in splats weighted by opacity, counting only what is visible from the camera (an instance's
- * hidden back does not count against it): the best match is selected, and below
+ * A painted area selects the whole objects it falls on (`paintPick`): each painted splat stands
+ * for its top-level object (`topLevels`: the highest instance above it that is neither ground
+ * cover nor the scene itself), and the objects that hold a meaningful share of the stroke are
+ * selected -- a short stroke on a spool's top selects the spool, one across two pumpkins both,
+ * and a sliver of a neighbour under the brush's edge nothing (`PAINT_SLIVER_SHARE`). `[` then
+ * steps down to the parts of them the stroke covers (`paintLevels`). A stroke only over the
+ * ground, and every stroke on a scan whose instances have no hierarchy, is matched as before
+ * by intersection over union in splats weighted by opacity, counting only what is visible from
+ * the camera, against combinations of instances at whatever levels fit (`bestSet`): the set of
+ * instances from disjoint subtrees whose union best matches the painted area. Below
  * `PAINT_MIN_IOU` the painted splats themselves can become an object of their own
  * (`customSets.ts`). While a stroke is painted the match is kept up to date from an index of
  * the view (`paintIndex`), which walks only the painted cells.
@@ -28,11 +35,39 @@ export const NEAR_SHARE = 0.15;
 export const NEAR_DEPTH = 0.25;
 /**
  * A top-level instance with more than this share of a scan's splats is the scene itself, not
- * an object in it: a click starts one level below it.
+ * an object in it: a click, and the brush, start one level below it -- unless the file says it
+ * is a thing (`sceneShareOf`).
  */
 export const WHOLE_SCENE_SHARE = 0.5;
 /** Below this, a painted area is offered as an object of its own. */
 export const PAINT_MIN_IOU = 0.5;
+/**
+ * An object under the brush that holds less than this share of the stroke, and less than a dab
+ * of the brush (`dabCells`), is a sliver at the stroke's edge and is not selected
+ * (`paintPick`). The stroke is measured in its painted cells, each shared among the objects
+ * drawn in it by their weight, so a dense object does not outweigh a sparse one beside it.
+ */
+export const PAINT_SLIVER_SHARE = 0.1;
+/** The brush's default radius (CSS px) and cells (CSS px): `dabCells`' defaults. */
+const DEFAULT_BRUSH_PX = 18;
+const DEFAULT_CELL_PX = 3;
+/**
+ * A painted area's best set drops members that add little, the least first, while its IoU
+ * stays within this share of the best's: a sliver of a neighbour under the brush's edge is not
+ * a part. A share, not a difference, so a member that is half of a loosely painted set stays.
+ */
+export const PAINT_SET_GAIN = 0.02;
+/**
+ * Then members that share an ancestor become that ancestor, the deepest first, while the IoU
+ * stays within this share of what it was: the whole spool rather than its three parts when the
+ * spool is as good, its parts when the spool also holds ground nobody painted.
+ */
+export const PAINT_PARENT_SLACK = 0.03;
+/**
+ * While a stroke is painted, the match shown is kept until another's IoU is better by more
+ * than this share, so two near-equal answers do not take turns at every preview (`steadySet`).
+ */
+export const PAINT_STEADY = 0.03;
 
 /** The instance, its parent, … up to the top level; cycles and unknown ids end the chain. */
 export function chainOf(doc: Pick<InstancesDoc, "byId">, id: number): number[] {
@@ -108,6 +143,19 @@ export function splatShares(
   if (total > 0) for (const [id, splats] of out) out.set(id, splats / total);
   shares.set(doc, out);
   return out;
+}
+
+/**
+ * An instance's share of the scan as the scene rule reads it (`WHOLE_SCENE_SHARE`): its
+ * `splatShares`, but 0 for one the file calls a thing (§3b's `kind`). Such files keep the
+ * ground out of their objects and have no root for the scene, so a thing is never the scene
+ * however much of the scan it is: the spool of a close capture is 57% of its splats.
+ */
+export function sceneShareOf(
+  doc: Pick<InstancesDoc, "instances" | "byId">,
+): (id: number) => number {
+  const all = splatShares(doc);
+  return (id) => (doc.byId.get(id)?.kind === "thing" ? 0 : (all.get(id) ?? 0));
 }
 
 /**
@@ -192,6 +240,11 @@ export interface PaintSample {
   ids: ArrayLike<number>;
   weights: ArrayLike<number>;
   painted: ArrayLike<number>;
+  /**
+   * Per splat, its screen cell, which the stroke's cover is measured in (`PaintSums.cover`);
+   * without it every splat is a cell of its own.
+   */
+  cells?: ArrayLike<number>;
 }
 
 export interface PaintMatch {
@@ -200,10 +253,78 @@ export interface PaintMatch {
 }
 
 /**
- * The instance (any level) whose visible splats best match the painted ones, by intersection
- * over union in weight; null when nothing painted carries an instance.
+ * What a painted area met, per instance at every level: the sums every match is made from,
+ * the same whether gathered over every visible splat (`paintSums`) or through the view's index
+ * (`paintSumsIndexed`). Weights are opacities summed in doubles, exact however grouped.
  */
-export function bestByIoU(doc: Pick<InstancesDoc, "byId">, sample: PaintSample): PaintMatch | null {
+export interface PaintSums {
+  /** Weight of the painted splats (visible and under the brush), with an instance or not. */
+  painted: number;
+  /** The instances the painted splats carry, at every level (each with its chain), ascending. */
+  ids: Uint32Array;
+  /** Per entry of `ids`: its painted weight and its visible weight, with everything below it. */
+  inter: Float64Array;
+  visible: Float64Array;
+  /** Per entry, its parent's entry, or -1 at the top of its chain. */
+  parent: Int32Array;
+  /** The visible weight of any instance, painted or not (0 off screen). */
+  visibleOf: (id: number) => number;
+  /**
+   * Per entry, the painted cells it covers, with everything below it: each painted cell is
+   * shared among the splats drawn in it by weight, so a cell counts once however many splats
+   * it holds, and a cell half unlabelled gives its instances half (`paintPick`).
+   */
+  cover: Float64Array;
+  /** The painted cells with any visible splat, with an instance or not. */
+  cells: number;
+}
+
+/** `id`'s entry in `ids` (ascending), or -1. */
+function entryIn(ids: Uint32Array, id: number): number {
+  let lo = 0;
+  let hi = ids.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const at = ids[mid] ?? 0;
+    if (at === id) return mid;
+    if (at < id) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
+}
+
+/** The sums of the instances `ids` (ascending) met, from per-id lookups. */
+function sumsOf(
+  ids: Uint32Array,
+  interOf: (id: number) => number,
+  visibleOf: (id: number) => number,
+  parentOf: (id: number) => number,
+  coverOf: (id: number) => number,
+  painted: number,
+  cells: number,
+): PaintSums {
+  const n = ids.length;
+  const inter = new Float64Array(n);
+  const visible = new Float64Array(n);
+  const parent = new Int32Array(n);
+  const cover = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    const id = ids[k] ?? 0;
+    inter[k] = interOf(id);
+    visible[k] = visibleOf(id);
+    cover[k] = coverOf(id);
+    const up = parentOf(id);
+    parent[k] = up > 0 ? entryIn(ids, up) : -1;
+  }
+  return { painted, ids, inter, visible, parent, visibleOf, cover, cells };
+}
+
+/**
+ * The sums of a painted area over every visible splat (`sample`). The hierarchy is the one the
+ * chains on screen give, leaf by leaf in id order: each instance's parent is the next on the
+ * first chain that holds it (`paintIndex` reads it so too).
+ */
+export function paintSums(doc: Pick<InstancesDoc, "byId">, sample: PaintSample): PaintSums {
   const chains = new Map<number, number[]>();
   const chain = (id: number): number[] => {
     let c = chains.get(id);
@@ -229,40 +350,634 @@ export function bestByIoU(doc: Pick<InstancesDoc, "byId">, sample: PaintSample):
       if (isPainted) inter.set(up, (inter.get(up) ?? 0) + w);
     }
   }
-  const ids = [...inter.keys()].sort((x, y) => x - y);
-  return bestOf(
-    ids,
+  const parents = new Map<number, number>();
+  for (const leaf of [...chains.keys()].sort((a, b) => a - b)) {
+    const c = chains.get(leaf) ?? [];
+    for (let k = 0; k < c.length; k++) {
+      const id = c[k] ?? 0;
+      if (!parents.has(id)) parents.set(id, c[k + 1] ?? 0);
+    }
+  }
+  // The stroke's cover: per painted cell its weight, and each leaf's share of it.
+  const cellWeight = new Map<number, number>();
+  const cellLeaves = new Map<number, Map<number, number>>();
+  for (let i = 0; i < n; i++) {
+    const w = sample.weights[i] ?? 0;
+    if (w <= 0 || (sample.painted[i] ?? 0) === 0) continue;
+    const c = sample.cells ? (sample.cells[i] ?? 0) : i;
+    cellWeight.set(c, (cellWeight.get(c) ?? 0) + w);
+    const id = sample.ids[i] ?? 0;
+    if (id === 0 || chain(id).length === 0) continue;
+    let leaves = cellLeaves.get(c);
+    if (!leaves) {
+      leaves = new Map();
+      cellLeaves.set(c, leaves);
+    }
+    leaves.set(id, (leaves.get(id) ?? 0) + w);
+  }
+  const cover = new Map<number, number>();
+  for (const [c, leaves] of cellLeaves) {
+    const total = cellWeight.get(c) ?? 0;
+    for (const [leaf, w] of leaves) {
+      for (const up of chain(leaf)) cover.set(up, (cover.get(up) ?? 0) + w / total);
+    }
+  }
+  return sumsOf(
+    Uint32Array.from(inter.keys()).sort(),
     (id) => inter.get(id) ?? 0,
     (id) => visible.get(id) ?? 0,
+    (id) => parents.get(id) ?? 0,
+    (id) => cover.get(id) ?? 0,
     painted,
+    cellWeight.size,
   );
 }
 
 /**
- * The best of the instances a painted area met (`ids`, ascending), by intersection over union
- * of their painted weight (`interOf`) and visible weight (`visibleOf`) with `painted`. In id
+ * The single instance (any level) whose visible splats best match the painted ones, by
+ * intersection over union in weight; null when nothing painted carries an instance. In id
  * order, so the same sums give the same choice however they were gathered; of two as good, the
  * smaller id.
  */
-function bestOf(
-  ids: Iterable<number>,
-  interOf: (id: number) => number,
-  visibleOf: (id: number) => number,
-  painted: number,
-): PaintMatch | null {
+export function bestSingle(sums: PaintSums): PaintMatch | null {
   let best: PaintMatch | null = null;
-  for (const id of ids) {
-    const i = interOf(id);
-    const union = painted + visibleOf(id) - i;
+  for (let k = 0; k < sums.ids.length; k++) {
+    const i = sums.inter[k] ?? 0;
+    const union = sums.painted + (sums.visible[k] ?? 0) - i;
     const iou = union > 0 ? i / union : 0;
-    if (!best || iou > best.iou + 1e-9) best = { id, iou };
+    if (!best || iou > best.iou + 1e-9) best = { id: sums.ids[k] ?? 0, iou };
   }
   return best;
 }
 
+/** `bestSingle` of the painted splats of `sample`. */
+export function bestByIoU(doc: Pick<InstancesDoc, "byId">, sample: PaintSample): PaintMatch | null {
+  return bestSingle(paintSums(doc, sample));
+}
+
+/** A painted area's best combination of instances (`bestSet`). */
+export interface PaintSetMatch {
+  /**
+   * The members, from disjoint subtrees (none holds another), the largest on screen first
+   * (ascending ids among equals): one id when a single instance is the best match.
+   */
+  ids: number[];
+  iou: number;
+}
+
+/** Rounds of the search (`bestSet`) at most; it settles in a handful. */
+const SET_ROUNDS = 64;
+
+/** The entries of `parent` by depth, deepest first (ascending within a depth): children first. */
+function byDepth(parent: Int32Array): Int32Array {
+  const n = parent.length;
+  const depth = new Int32Array(n).fill(-1);
+  let deepest = 0;
+  const path: number[] = [];
+  for (let k = 0; k < n; k++) {
+    path.length = 0;
+    let at = k;
+    while (at >= 0 && depth[at] === -1 && path.length <= n) {
+      path.push(at);
+      at = parent[at] ?? -1;
+    }
+    let d = at >= 0 ? (depth[at] ?? 0) : -1;
+    for (let q = path.length - 1; q >= 0; q--) depth[path[q] ?? 0] = ++d;
+    if (d > deepest) deepest = d;
+  }
+  const starts = new Int32Array(deepest + 2);
+  for (let k = 0; k < n; k++) {
+    const slot = deepest - (depth[k] ?? 0) + 1;
+    starts[slot] = (starts[slot] ?? 0) + 1;
+  }
+  for (let d = 1; d < starts.length; d++) starts[d] = (starts[d] ?? 0) + (starts[d - 1] ?? 0);
+  const order = new Int32Array(n);
+  for (let k = 0; k < n; k++) {
+    const slot = deepest - (depth[k] ?? 0);
+    const at = starts[slot] ?? 0;
+    order[at] = k;
+    starts[slot] = at + 1;
+  }
+  return order;
+}
+
+/**
+ * The combination of instances whose union best matches the painted area, by intersection over
+ * union: a set from disjoint subtrees, at whatever levels fit. With disjoint members the union's
+ * painted and visible weights are the members' sums, so a set's IoU is
+ * `Σinter / (painted + Σvisible − Σinter)`.
+ *
+ * Found exactly, not greedily: a greedy search that takes the best single instance first can
+ * never trade a parent for its children (a spool that also holds ground nobody painted, against
+ * the two flanges that were). The best ratio is found by Dinkelbach's method from the best
+ * single instance's IoU λ: the antichain maximising `Σ (inter − λ·(visible − inter))` is read
+ * off the hierarchy bottom-up (an instance, or the best of its children, whichever is more),
+ * and its IoU is the next λ, until it stops rising -- a few passes over the instances met.
+ *
+ * Then the answer is made as simple as it can be at little cost: members that add little are
+ * dropped (`gain`), and members that share an ancestor become that ancestor when it is about
+ * as good (`slack`), each a share of the IoU; both 0 give the best set itself. Deterministic: the same sums give the
+ * same set.
+ */
+export function bestSet(
+  sums: PaintSums,
+  { gain = PAINT_SET_GAIN, slack = PAINT_PARENT_SLACK }: { gain?: number; slack?: number } = {},
+): PaintSetMatch | null {
+  const { inter, visible, parent, painted } = sums;
+  const n = sums.ids.length;
+  if (n === 0) return null;
+  const iouOf = (i: number, v: number): number => {
+    const union = painted + v - i;
+    return union > 0 ? i / union : 0;
+  };
+  const order = byDepth(parent);
+  // From the best single instance (`bestSingle`'s).
+  let members: number[] = [];
+  let best = -1;
+  for (let k = 0; k < n; k++) {
+    const j = iouOf(inter[k] ?? 0, visible[k] ?? 0);
+    if (j > best + 1e-9) {
+      best = j;
+      members = [k];
+    }
+  }
+  const value = new Float64Array(n);
+  const below = new Float64Array(n);
+  const whole = new Uint8Array(n);
+  const open = new Uint8Array(n);
+  for (let round = 0; round < SET_ROUNDS; round++) {
+    const lambda = best;
+    below.fill(0);
+    for (let o = 0; o < n; o++) {
+      const k = order[o] ?? 0;
+      const i = inter[k] ?? 0;
+      const own = i - lambda * ((visible[k] ?? 0) - i);
+      const parts = below[k] ?? 0;
+      // As good as its parts: the instance itself, one member instead of several.
+      const self = own >= parts - 1e-12 * (Math.abs(own) + Math.abs(parts));
+      whole[k] = self ? 1 : 0;
+      const v = self ? own : parts;
+      value[k] = v;
+      const up = parent[k] ?? -1;
+      if (up >= 0 && v > 0) below[up] = (below[up] ?? 0) + v;
+    }
+    // Read from the top: an instance taken whole, or its children's best.
+    const next: number[] = [];
+    let i = 0;
+    let v = 0;
+    for (let o = n - 1; o >= 0; o--) {
+      const k = order[o] ?? 0;
+      const up = parent[k] ?? -1;
+      const reached = (up < 0 || (open[up] === 1 && whole[up] === 0)) && (value[k] ?? 0) > 0;
+      open[k] = reached ? 1 : 0;
+      if (reached && whole[k] === 1) {
+        next.push(k);
+        i += inter[k] ?? 0;
+        v += visible[k] ?? 0;
+      }
+    }
+    const j = iouOf(i, v);
+    if (!(j > best + 1e-12)) break;
+    best = j;
+    members = next.sort((a, b) => a - b);
+  }
+  let i = 0;
+  let v = 0;
+  for (const k of members) {
+    i += inter[k] ?? 0;
+    v += visible[k] ?? 0;
+  }
+  // Members that add little go, the least first (as each adds to the best set), while the set
+  // stays within `gain` of the best.
+  if (members.length > 1) {
+    const without = new Float64Array(n);
+    for (const k of members) without[k] = iouOf(i - (inter[k] ?? 0), v - (visible[k] ?? 0));
+    const least = members
+      .filter((k) => (without[k] ?? 0) >= best * (1 - gain))
+      .sort((a, b) => (without[b] ?? 0) - (without[a] ?? 0) || a - b);
+    const gone = new Set<number>();
+    for (const k of least) {
+      if (gone.size === members.length - 1) break;
+      const i2 = i - (inter[k] ?? 0);
+      const v2 = v - (visible[k] ?? 0);
+      if (iouOf(i2, v2) < best * (1 - gain)) break;
+      gone.add(k);
+      i = i2;
+      v = v2;
+    }
+    if (gone.size > 0) members = members.filter((k) => !gone.has(k));
+  }
+  // Members that share an ancestor become it, the deepest first in one pass, while the set
+  // stays within `slack` of what it was. Per ancestor, the members it holds and their sums.
+  const floor = iouOf(i, v) * (1 - slack);
+  const held = new Int32Array(n);
+  const heldInter = new Float64Array(n);
+  const heldVisible = new Float64Array(n);
+  for (const m of members) {
+    for (let up = parent[m] ?? -1; up >= 0; up = parent[up] ?? -1) {
+      held[up] = (held[up] ?? 0) + 1;
+      heldInter[up] = (heldInter[up] ?? 0) + (inter[m] ?? 0);
+      heldVisible[up] = (heldVisible[up] ?? 0) + (visible[m] ?? 0);
+    }
+  }
+  const merged = new Uint8Array(n);
+  let merges = 0;
+  for (let o = 0; o < n && members.length > 1; o++) {
+    const up = order[o] ?? 0;
+    if ((held[up] ?? 0) < 2) continue;
+    const i2 = i - (heldInter[up] ?? 0) + (inter[up] ?? 0);
+    const v2 = v - (heldVisible[up] ?? 0) + (visible[up] ?? 0);
+    if (iouOf(i2, v2) < floor) continue;
+    merged[up] = 1;
+    merges++;
+    // What holds it now holds it in place of its members.
+    const count = 1 - (held[up] ?? 0);
+    const di = (inter[up] ?? 0) - (heldInter[up] ?? 0);
+    const dv = (visible[up] ?? 0) - (heldVisible[up] ?? 0);
+    for (let above = parent[up] ?? -1; above >= 0; above = parent[above] ?? -1) {
+      held[above] = (held[above] ?? 0) + count;
+      heldInter[above] = (heldInter[above] ?? 0) + di;
+      heldVisible[above] = (heldVisible[above] ?? 0) + dv;
+    }
+    i = i2;
+    v = v2;
+  }
+  if (merges > 0) {
+    // Each member, or the highest ancestor it was merged into.
+    const out = new Set<number>();
+    for (const m of members) {
+      let top = m;
+      for (let up = parent[m] ?? -1; up >= 0; up = parent[up] ?? -1) if (merged[up]) top = up;
+      out.add(top);
+    }
+    members = [...out].sort((a, b) => a - b);
+  }
+  i = 0;
+  v = 0;
+  for (const k of members) {
+    i += inter[k] ?? 0;
+    v += visible[k] ?? 0;
+  }
+  return {
+    ids: largestFirst(
+      sums,
+      members.map((k) => sums.ids[k] ?? 0),
+    ),
+    iou: iouOf(i, v),
+  };
+}
+
+/**
+ * Members in a combination's order: the largest on screen first, ascending ids among equals.
+ * The view does not change while a stroke is painted, so neither does the order.
+ */
+function largestFirst(sums: PaintSums, ids: readonly number[]): number[] {
+  return [...ids].sort((a, b) => sums.visibleOf(b) - sums.visibleOf(a) || a - b);
+}
+
+/** `bestSet` of the painted splats of `sample`. */
+export function bestSetByIoU(
+  doc: Pick<InstancesDoc, "byId">,
+  sample: PaintSample,
+): PaintSetMatch | null {
+  return bestSet(paintSums(doc, sample));
+}
+
+/** The IoU of the union of `ids` (disjoint instances, met or not) with the painted area. */
+export function setIoU(sums: PaintSums, ids: readonly number[]): number {
+  let i = 0;
+  let v = 0;
+  for (const id of ids) {
+    const k = entryIn(sums.ids, id);
+    if (k >= 0) i += sums.inter[k] ?? 0;
+    v += sums.visibleOf(id);
+  }
+  const union = sums.painted + v - i;
+  return union > 0 ? i / union : 0;
+}
+
+/**
+ * The match to show while a stroke goes on: `bestSet`, unless what was shown (`shown`, its
+ * members) is still within `slack` (a share) of it, which is then kept with its IoU now -- two
+ * near-equal answers do not take turns at every preview, and what is lit when the stroke ends
+ * is what it selects.
+ */
+export function steadySet(
+  sums: PaintSums,
+  shown: readonly number[] | null,
+  slack = PAINT_STEADY,
+): PaintSetMatch | null {
+  const next = bestSet(sums);
+  if (!next || !shown || shown.length === 0 || sameMembers(next.ids, shown)) return next;
+  const kept = setIoU(sums, shown);
+  return kept < next.iou * (1 - slack) ? next : { ids: largestFirst(sums, shown), iou: kept };
+}
+
+/** Whether two lists hold the same ids, in any order. */
+export function sameMembers(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((id) => set.has(id));
+}
+
+/** The categories the ground is filed under: Ground & soil, Grass & ground cover, Paths & roads. */
+const GROUND_CATEGORIES: ReadonlySet<string> = new Set(["ground", "grass", "paths"]);
+
+/**
+ * Whether a top-level instance is the scan's ground rather than an object on it: a cover
+ * class (`kind: "ground"`, docs/SCENE_OBJECTS.md §3b), or an instance nobody named that is
+ * filed under the ground's categories -- in today's files, which name nothing and say no
+ * `kind`, the ground regions; in the variants, the class-free pass's leftovers, things by
+ * `kind` but tagged "ground" (on the spool, concept first's instance 3 lies on the spool's
+ * own surface, a quarter of a stroke across it). What a file names is a thing, whatever its
+ * category: ground first files a "Camping chair" under Ground & soil.
+ */
+function isGroundCover(instance: Instance | undefined): boolean {
+  if (!instance) return false;
+  if (instance.kind === "ground") return true;
+  return instance.name === undefined && GROUND_CATEGORIES.has(instance.category ?? "");
+}
+
+/** What each instance of a scan stands for under the brush (`topLevels`). */
+export interface TopLevels {
+  /**
+   * Per instance id (to the document's `maxId`), the top-level object it is part of: the
+   * highest instance on its chain that is not the scene itself (`WHOLE_SCENE_SHARE`, as a
+   * click passes it over, `sceneShareOf`), or for the ground the cover class at the top of its
+   * chain. 0 for ids the file does not list, and for the scene's own splats: a root that is
+   * most of the scan, with parts below it, is no object.
+   */
+  top: Uint32Array;
+  /**
+   * Per instance id, 1 when it is ground (`isGroundCover` of the top of its chain: a cover
+   * class and its regions, or an instance nobody named in a ground category, and its parts).
+   */
+  ground: Uint8Array;
+  /** Whether no instance has a parent: nothing above the parts, so the brush matches by overlap. */
+  flat: boolean;
+}
+
+const tops = new WeakMap<object, TopLevels>();
+
+/** Each instance's top-level object and whether it is ground (`TopLevels`), once per document. */
+export function topLevels(doc: Pick<InstancesDoc, "instances" | "byId" | "maxId">): TopLevels {
+  const known = tops.get(doc);
+  if (known) return known;
+  const span = doc.maxId + 1;
+  const top = new Uint32Array(span);
+  const ground = new Uint8Array(span);
+  const share = sceneShareOf(doc);
+  const parents = new Set<number>();
+  for (const instance of doc.instances) if (instance.parent !== null) parents.add(instance.parent);
+  for (const instance of doc.instances) {
+    const id = instance.id;
+    if (id >= span) continue;
+    const chain = chainOf(doc, id);
+    const root = chain[chain.length - 1] ?? id;
+    if (isGroundCover(doc.byId.get(root))) {
+      ground[id] = 1;
+      top[id] = root;
+      continue;
+    }
+    let k = chain.length - 1;
+    while (k > 0 && share(chain[k] ?? 0) > WHOLE_SCENE_SHARE) k--;
+    const at = chain[k] ?? id;
+    top[id] = k === 0 && parents.has(at) && share(at) > WHOLE_SCENE_SHARE ? 0 : at;
+  }
+  const out = { top, ground, flat: parents.size === 0 };
+  tops.set(doc, out);
+  return out;
+}
+
+/** What a painted area selects (`paintPick`). */
+export interface PaintPick {
+  /** The members, the largest share of the stroke first (ascending ids among equals). */
+  ids: number[];
+  /** Their union's intersection over union with the painted area. */
+  iou: number;
+  /**
+   * How they were chosen: "objects", the whole objects the stroke fell on; "ground", the best
+   * overlap among the ground's instances (the stroke fell on the ground only); "overlap", the
+   * best overlap among every instance (a scan whose instances have no hierarchy).
+   */
+  rule: "objects" | "ground" | "overlap";
+}
+
+/** The cells one dab of a brush of `radiusPx` covers, in cells of `cellPx` (both CSS px). */
+export function dabCells(radiusPx = DEFAULT_BRUSH_PX, cellPx = DEFAULT_CELL_PX): number {
+  return (Math.PI * radiusPx * radiusPx) / (cellPx * cellPx);
+}
+
+/** How `paintPick` and `paintLevels` tell a meaningful part of a stroke from a sliver. */
+export interface SliverRule {
+  /** `PAINT_SLIVER_SHARE` by default. */
+  share?: number;
+  /** A dab of the brush, in cells (`dabCells`); a dab of the default brush by default. */
+  minCells?: number;
+}
+
+/**
+ * Of `entries` (of `sums`), those holding a meaningful part of `total` cells: at least `share`
+ * of it, or `minCells`. When none does, those within `share` of the largest: a stroke over
+ * many small things is not over nothing.
+ */
+function meaningful(
+  sums: PaintSums,
+  entries: readonly number[],
+  total: number,
+  share: number,
+  minCells: number,
+): number[] {
+  const { cover } = sums;
+  const kept = entries.filter(
+    (k) => (cover[k] ?? 0) >= share * total || (cover[k] ?? 0) >= minCells,
+  );
+  if (kept.length > 0) return kept;
+  let most = 0;
+  for (const k of entries) most = Math.max(most, cover[k] ?? 0);
+  return entries.filter((k) => (cover[k] ?? 0) > 0 && (cover[k] ?? 0) >= share * most);
+}
+
+/** Entries the largest share of the stroke first, ascending ids among equals. */
+function byCover(sums: PaintSums): (a: number, b: number) => number {
+  return (a, b) =>
+    (sums.cover[b] ?? 0) - (sums.cover[a] ?? 0) || (sums.ids[a] ?? 0) - (sums.ids[b] ?? 0);
+}
+
+/** `sums` with only the entries `keep` holds (a parent left out is the top of its chain). */
+function subSums(sums: PaintSums, keep: (k: number) => boolean): PaintSums {
+  const n = sums.ids.length;
+  const at = new Int32Array(n).fill(-1);
+  const entries: number[] = [];
+  for (let k = 0; k < n; k++) {
+    if (!keep(k)) continue;
+    at[k] = entries.length;
+    entries.push(k);
+  }
+  const m = entries.length;
+  const ids = new Uint32Array(m);
+  const inter = new Float64Array(m);
+  const visible = new Float64Array(m);
+  const cover = new Float64Array(m);
+  const parent = new Int32Array(m);
+  for (let j = 0; j < m; j++) {
+    const k = entries[j] ?? 0;
+    ids[j] = sums.ids[k] ?? 0;
+    inter[j] = sums.inter[k] ?? 0;
+    visible[j] = sums.visible[k] ?? 0;
+    cover[j] = sums.cover[k] ?? 0;
+    const up = sums.parent[k] ?? -1;
+    parent[j] = up >= 0 ? (at[up] ?? -1) : -1;
+  }
+  return { ...sums, ids, inter, visible, cover, parent };
+}
+
+/**
+ * What a painted area (`sums`) selects on a scan (`levels`, its `topLevels`): the whole
+ * objects it falls on. Each painted splat stands for its top-level object, and an object is
+ * selected when it holds at least `share` of the stroke's cover (its painted cells with an
+ * object or ground, `PaintSums.cover`), or `minCells` of it -- so touching any meaningful part
+ * of a spool's top selects the spool, a stroke across two pumpkins selects both, and a sliver
+ * of a neighbour under the brush's edge is left out. Objects come before the ground: the
+ * ground under and around them is not selected with them.
+ *
+ * A stroke on the ground only is matched by overlap among the ground's instances (`bestSet`,
+ * held steady on `shown` as while painting, `steadySet`): the cover regions under it. So is
+ * every stroke on a scan whose instances have no hierarchy (`TopLevels.flat`), among all of
+ * them. Null when nothing painted carries an object.
+ */
+export function paintPick(
+  sums: PaintSums,
+  levels: TopLevels,
+  {
+    share = PAINT_SLIVER_SHARE,
+    minCells = dabCells(),
+    shown = null,
+  }: SliverRule & { shown?: readonly number[] | null } = {},
+): PaintPick | null {
+  const n = sums.ids.length;
+  if (n === 0) return null;
+  if (levels.flat) {
+    const match = steadySet(sums, shown);
+    return match && { ...match, rule: "overlap" };
+  }
+  const { cover } = sums;
+  const things: number[] = [];
+  let thingCover = 0;
+  let groundCover = 0;
+  for (let k = 0; k < n; k++) {
+    const id = sums.ids[k] ?? 0;
+    // A top-level object's entry holds the cover of everything below it.
+    if (id >= levels.top.length || levels.top[id] !== id) continue;
+    const c = cover[k] ?? 0;
+    if (levels.ground[id]) groundCover += c;
+    else if (c > 0) {
+      things.push(k);
+      thingCover += c;
+    }
+  }
+  let chosen = things.filter(
+    (k) => (cover[k] ?? 0) >= share * (thingCover + groundCover) || (cover[k] ?? 0) >= minCells,
+  );
+  // Slivers of many objects and less ground than them: still the objects.
+  if (chosen.length === 0 && thingCover > groundCover)
+    chosen = meaningful(sums, things, thingCover, share, Infinity);
+  if (chosen.length > 0) {
+    const ids = chosen.sort(byCover(sums)).map((k) => sums.ids[k] ?? 0);
+    return { ids, iou: setIoU(sums, ids), rule: "objects" };
+  }
+  const onGround = subSums(sums, (k) => levels.ground[sums.ids[k] ?? 0] === 1);
+  const held = shown?.every((id) => levels.ground[id] === 1) ? shown : null;
+  const match = steadySet(onGround, held);
+  return match && { ...match, rule: "ground" };
+}
+
+/** At most this many levels below what the stroke selected (the files have four at most). */
+const MAX_LEVELS = 32;
+
+/**
+ * The levels `[` steps down through from the objects a stroke selected (`ids`, of `sums`),
+ * coarsest first: `ids`, then in place of each member the parts of it the stroke covers -- its
+ * children holding a meaningful part of what the stroke put on it, weighed as `paintPick`
+ * weighs objects (when none does, those within the share of the largest) -- then theirs,
+ * until only parts with nothing painted below them are left. A member with no painted part
+ * stays as it is. Each level is ordered the largest share of the stroke first.
+ */
+export function paintLevels(
+  sums: PaintSums,
+  ids: readonly number[],
+  { share = PAINT_SLIVER_SHARE, minCells = dabCells() }: SliverRule = {},
+): number[][] {
+  const n = sums.ids.length;
+  // Each entry's painted children, as linked lists.
+  const first = new Int32Array(n).fill(-1);
+  const next = new Int32Array(n).fill(-1);
+  for (let k = n - 1; k >= 0; k--) {
+    const up = sums.parent[k] ?? -1;
+    if (up < 0 || !((sums.cover[k] ?? 0) > 0)) continue;
+    next[k] = first[up] ?? -1;
+    first[up] = k;
+  }
+  const order = byCover(sums);
+  let level = ids.map((id) => entryIn(sums.ids, id)).filter((k) => k >= 0);
+  const out = [level.map((k) => sums.ids[k] ?? 0)];
+  for (let depth = 0; depth < MAX_LEVELS; depth++) {
+    const below: number[] = [];
+    let changed = false;
+    for (const m of level) {
+      const parts: number[] = [];
+      for (let c = first[m] ?? -1; c >= 0; c = next[c] ?? -1) parts.push(c);
+      if (parts.length === 0) {
+        below.push(m);
+        continue;
+      }
+      below.push(...meaningful(sums, parts, sums.cover[m] ?? 0, share, minCells));
+      changed = true;
+    }
+    if (!changed) break;
+    level = below.sort(order);
+    out.push(level.map((k) => sums.ids[k] ?? 0));
+  }
+  return out;
+}
+
+/**
+ * The instances above every one of `ids`, the lowest first: the chain of what they are parts
+ * of together ("of Spool"). Empty when they share none.
+ */
+export function commonChain(doc: Pick<InstancesDoc, "byId">, ids: readonly number[]): number[] {
+  let common: number[] | null = null;
+  for (const id of ids) {
+    const above = chainOf(doc, id).slice(1);
+    common = common === null ? above : common.filter((up) => above.includes(up));
+  }
+  return common ?? [];
+}
+
+/** At most this many members are named in a combination's name, and in this many characters. */
+const COMBINATION_NAMES = 3;
+const COMBINATION_CHARS = 48;
+
+/**
+ * What a combination is called (its members' `names`, in its order; `whole`, what they are
+ * parts of together, or null): "Top flange + drum + Bottom flange (of Spool)", or when that
+ * would be too long or says a name twice, "4 parts of Spool" or "4 objects".
+ */
+export function combinationLabel(names: readonly string[], whole: string | null): string {
+  const joined = names.join(" + ");
+  if (
+    names.length <= COMBINATION_NAMES &&
+    new Set(names).size === names.length &&
+    joined.length <= COMBINATION_CHARS
+  )
+    return whole ? `${joined} (of ${whole})` : joined;
+  const count = String(names.length);
+  return whole ? `${count} parts of ${whole}` : `${count} objects`;
+}
+
 /**
  * A view's visible splats by screen cell, to match a painted area while it is painted
- * (`bestByIoUIndexed`): `bestByIoU` over every splat on screen is too slow to run as a stroke
+ * (`paintSumsIndexed`): `paintSums` over every splat on screen is too slow to run as a stroke
  * moves (the camp has 22.6 M). Built once per view; a match then costs the painted cells and
  * the instances they hold.
  */
@@ -279,6 +994,11 @@ export interface PaintIndex {
   cellSplats: Uint32Array;
   /** Per instance id (any level), the weight of its visible splats with everything below it. */
   visible: Float64Array;
+  /**
+   * Per instance id on a chain on screen, its parent there: the next on the first chain (in
+   * leaf id order) that holds it, 0 at the top (`paintSums` reads the hierarchy so too).
+   */
+  parents: Uint32Array;
   /** Per leaf id on screen that the file lists, its chain (`chainOf`). */
   chains: ReadonlyMap<number, readonly number[]>;
 }
@@ -353,16 +1073,24 @@ export function paintIndex(
     cellWeights[c] = total;
   }
   start[cells] = e;
-  // Rolled up each leaf's chain.
+  // Rolled up each leaf's chain, and each instance's parent on the first chain that holds it.
   const chains = new Map<number, number[]>();
   const rolled = new Float64Array(span);
+  const parents = new Uint32Array(span);
+  const placed = new Uint8Array(span);
   for (let leaf = 1; leaf < span; leaf++) {
     const w = leaves[leaf] ?? 0;
     if (w === 0) continue;
     const chain = chainOf(doc, leaf);
     if (chain.length === 0) continue;
     chains.set(leaf, chain);
-    for (const up of chain) rolled[up] = (rolled[up] ?? 0) + w;
+    for (let k = 0; k < chain.length; k++) {
+      const up = chain[k] ?? 0;
+      rolled[up] = (rolled[up] ?? 0) + w;
+      if (placed[up]) continue;
+      placed[up] = 1;
+      parents[up] = chain[k + 1] ?? 0;
+    }
   }
   return {
     cols: screen.cols,
@@ -373,53 +1101,80 @@ export function paintIndex(
     cellWeights,
     cellSplats,
     visible: rolled,
+    parents,
     chains,
   };
 }
 
 /**
- * `bestByIoU` of the splats under `mask` (the view's brush) through the view's index: the same
- * match, walking only the painted cells and the instances they hold.
+ * `paintSums` of the splats under `mask` (the view's brush) through the view's index: the same
+ * sums, walking only the painted cells and the instances they hold.
  */
-export function bestByIoUIndexed(
-  index: PaintIndex,
-  mask: Pick<BrushMask, "data">,
-): PaintMatch | null {
-  const { start, ids, weights, cellWeights, visible } = index;
+export function paintSumsIndexed(index: PaintIndex, mask: Pick<BrushMask, "data">): PaintSums {
+  const { start, ids, weights, cellWeights, visible, parents } = index;
   const span = visible.length;
-  // Per leaf id, its painted weight; ids are dense, so arrays beat maps here by far.
+  // Per leaf id, its painted weight and cover; ids are dense, so arrays beat maps here by far.
   const leaves = new Float64Array(span);
+  const leafCover = new Float64Array(span);
   const touched: number[] = [];
   let painted = 0;
+  let covered = 0;
   const cells = Math.min(mask.data.length, index.cols * index.rows);
   for (let c = 0; c < cells; c++) {
     if (!mask.data[c]) continue;
-    painted += cellWeights[c] ?? 0;
+    const total = cellWeights[c] ?? 0;
+    if (!(total > 0)) continue;
+    painted += total;
+    covered++;
     const end = start[c + 1] ?? 0;
     for (let e = start[c] ?? 0; e < end; e++) {
       const id = ids[e] ?? 0;
       if (id === 0 || id >= span) continue;
+      const w = weights[e] ?? 0;
       const before = leaves[id] ?? 0;
       if (before === 0) touched.push(id);
-      leaves[id] = before + (weights[e] ?? 0);
+      leaves[id] = before + w;
+      leafCover[id] = (leafCover[id] ?? 0) + w / total;
     }
   }
   const inter = new Float64Array(span);
+  const cover = new Float64Array(span);
   const met: number[] = [];
   for (const leaf of touched) {
     const w = leaves[leaf] ?? 0;
+    const share = leafCover[leaf] ?? 0;
     for (const up of index.chains.get(leaf) ?? []) {
       const before = inter[up] ?? 0;
       if (before === 0) met.push(up);
       inter[up] = before + w;
+      cover[up] = (cover[up] ?? 0) + share;
     }
   }
-  return bestOf(
+  return sumsOf(
     Uint32Array.from(met).sort(),
     (id) => inter[id] ?? 0,
-    (id) => visible[id] ?? 0,
+    (id) => (id > 0 && id < span ? (visible[id] ?? 0) : 0),
+    (id) => parents[id] ?? 0,
+    (id) => cover[id] ?? 0,
     painted,
+    covered,
   );
+}
+
+/** `bestByIoU` of the splats under `mask`, through the view's index. */
+export function bestByIoUIndexed(
+  index: PaintIndex,
+  mask: Pick<BrushMask, "data">,
+): PaintMatch | null {
+  return bestSingle(paintSumsIndexed(index, mask));
+}
+
+/** `bestSetByIoU` of the splats under `mask`, through the view's index. */
+export function bestSetByIoUIndexed(
+  index: PaintIndex,
+  mask: Pick<BrushMask, "data">,
+): PaintSetMatch | null {
+  return bestSet(paintSumsIndexed(index, mask));
 }
 
 /** How many visible splats are under `mask`, through the view's index. */

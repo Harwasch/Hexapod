@@ -16,19 +16,39 @@
  * `skin.json`'s `tiles` maps each tile checksum to run-length `[skin, count, ...]` pairs in the
  * tile's own gaussian order (0: no skin; `tileRuns.ts`) and `row`, where the tile's skinned
  * splats' rows start in `skin.bin`: 16 bytes a skinned splat, byte `k` the int8 weight of
- * handle `k + 1` (times `weights.scale`), in the tile's order.
+ * handle `k + 1` (times `weights.scale`), in the tile's order. A file whose `weights.rowBytes`
+ * is 32 (a skin of more than 16 handles: a big tree, docs/SCENE_OBJECTS.md §9) takes two
+ * texels a splat. A skin of one handle (a rigid object: only the constant handle) takes no
+ * rows at all.
+ *
+ * A **limbs skin** (`method.name` `limbs`, docs/SCENE_OBJECTS.md §9) is a plant's rig carried
+ * in this format: handle `j` is limb `j`, each skin entry carries a `limbs` block (the plant's
+ * wind and one record per limb, `@twin/world`'s `LimbSkinSource`) for its driver
+ * (`limbWind.ts`), and the last byte of every row -- which no weight uses, a row of `b` bytes
+ * holding at most `b − 1` -- is the splat's leaf flutter share. Its driven handles carry the
+ * frame's flutter after the `12·m` numbers (`skinFloats`).
  */
 
-import { decodeRuns, runsLength, tileRunsIssue } from "@twin/world";
+import {
+  decodeRuns,
+  LIMB_FLUTTER_FLOATS,
+  runsLength,
+  tileRunsIssue,
+  type LimbHandle,
+  type LimbSkinSource,
+} from "@twin/world";
 
 import { resolveBeside, type Vec3 } from "./instances";
+import { jsonBytes, scanPayloads } from "./payloadCache";
 
 export const SKIN_FORMAT = "hexapod.skin";
 export const SKIN_VERSION = 1;
 /** Bytes of one splat's weight row: one RGBA32UI texel. */
 export const SKIN_ROW_BYTES = 16;
-/** Handles a skin may have, the constant one included. */
-export const MAX_SKIN_HANDLES = 16;
+/** ... or two texels, in a file with a skin of more than 16 handles. */
+export const SKIN_WIDE_ROW_BYTES = 32;
+/** Handles a skin may have, the constant one included (16 in a file of one-texel rows). */
+export const MAX_SKIN_HANDLES = 32;
 
 /** `root.extras.skin`. */
 export interface SkinRef {
@@ -60,6 +80,30 @@ export interface SkinEntry {
   support: SkinSupport[];
   /** What a modal driver needs (`dynamics`), when the file carries it. */
   dynamics?: SkinDynamics;
+  /**
+   * What the skin carries of the object it moves (a variant's skin, skin_variants.py): its
+   * name, behaviour and property scores, for a viewer whose `instances.json` does not list it
+   * (a scan with none: the wind's prior and the poke read these).
+   */
+  traits?: SkinTraits;
+  /** The handle policy's stiffness class (`rigid`, `firm`, `plant`, `tree`), when recorded. */
+  stiffnessClass?: string;
+  /**
+   * A limbs skin's own driver data (`skin.json`'s `limbs`, docs/SCENE_OBJECTS.md §9): its
+   * handles are a plant's limbs, swayed by `@twin/world`'s `limbWind.ts`, not eigenmodes. Only
+   * in a document whose `method.name` is `limbs`, and only when the block is whole.
+   */
+  limbs?: LimbSkinSource;
+}
+
+/** `method.name` of a limbs skin's document. */
+export const LIMBS_METHOD = "limbs";
+
+export interface SkinTraits {
+  label?: string;
+  category?: string;
+  behaviour?: string;
+  properties?: Record<string, number>;
 }
 
 /**
@@ -81,13 +125,17 @@ export interface SkinTile {
 }
 
 export interface SkinDoc {
+  /** `method.name`: how the weights were made (`simplicits-rkpm`, `limbs`, ...), or null. */
+  method: string | null;
   skins: SkinEntry[];
   byId: ReadonlyMap<number, SkinEntry>;
   byInstance: ReadonlyMap<number, SkinEntry>;
   maxId: number;
   tiles: ReadonlyMap<string, SkinTile>;
-  /** `skin.bin` as words: four a row. */
+  /** `skin.bin` as words: `rowWords` a row. */
   words: Uint32Array;
+  /** 4 (one texel a splat) or 8 (two: a file with a skin of more than 16 handles). */
+  rowWords: 4 | 8;
   rows: number;
   /** A stored byte times this is the weight. */
   scale: number;
@@ -132,6 +180,7 @@ function skinOf(raw: unknown): SkinEntry | null {
       }))
     : [];
   const dynamics = dynamicsOf(r.dynamics, handles as number);
+  const traits = traitsOf(r.traits);
   return {
     id: id as number,
     instance: instance as number,
@@ -141,7 +190,138 @@ function skinOf(raw: unknown): SkinEntry | null {
     eigenvalues,
     support,
     ...(dynamics ? { dynamics } : {}),
+    ...(traits ? { traits } : {}),
+    ...(typeof r.class === "string" ? { stiffnessClass: r.class } : {}),
   };
+}
+
+function traitsOf(raw: unknown): SkinTraits | undefined {
+  const r = raw as Record<string, unknown> | null | undefined;
+  if (typeof r !== "object" || r === null) return undefined;
+  const out: SkinTraits = {};
+  if (typeof r.label === "string") out.label = r.label;
+  if (typeof r.category === "string") out.category = r.category;
+  if (typeof r.behaviour === "string") out.behaviour = r.behaviour;
+  if (typeof r.properties === "object" && r.properties !== null) {
+    const properties: Record<string, number> = {};
+    for (const [k, v] of Object.entries(r.properties as Record<string, unknown>))
+      if (typeof v === "number" && Number.isFinite(v)) properties[k] = v;
+    out.properties = properties;
+  }
+  return out;
+}
+
+function positive(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** One limb of a limbs skin (`limbs.handles[j − 1]`), or null when any field is unusable. */
+function limbHandleOf(raw: unknown, handles: number): LimbHandle | null {
+  const r = raw as Record<string, unknown> | null | undefined;
+  if (typeof r !== "object" || r === null) return null;
+  const pivot = vec3(r.pivot);
+  const direction = vec3(r.direction);
+  const samplePoint = vec3(r.samplePoint);
+  const frequencyHz = positive(r.frequencyHz);
+  const gain = typeof r.gain === "number" && Number.isFinite(r.gain) ? r.gain : null;
+  const parent = r.parent;
+  if (!pivot || !direction || !samplePoint || frequencyHz === null || gain === null) return null;
+  if (!Number.isInteger(r.key) || (r.key as number) < 0) return null;
+  if (!Number.isInteger(parent) || (parent as number) < 0 || (parent as number) >= handles)
+    return null;
+  const damping = finite(r.damping, Number.NaN);
+  if (!(damping >= 0 && damping < 1)) return null;
+  return {
+    key: r.key as number,
+    pivot,
+    parent: parent as number,
+    level: Math.max(0, Math.round(finite(r.level))),
+    spanM: Math.max(0, finite(r.spanM)),
+    frequencyHz,
+    damping,
+    tree: r.tree === true,
+    gain,
+    limitRad: positive(r.limitRad) ?? Number.POSITIVE_INFINITY,
+    direction,
+    samplePoint,
+    widthM: Math.max(0, finite(r.widthM)),
+    heightM: Math.max(0, finite(r.heightM)),
+    staticTipM: Math.max(0, finite(r.staticTipM)),
+    flutterM: Math.max(0, finite(r.flutterM)),
+  };
+}
+
+/**
+ * A limbs skin's `limbs` block (written by `skin_methods.fit_limbs_from_rig`): the plant's wind
+ * (seed, reference speed, turbulence, gusts, seasons, flutter) and one record per learned
+ * handle, trunk first. Undefined when anything the driver needs is missing or malformed: such
+ * a skin is not swayed (and never as eigenmodes).
+ */
+function limbsOf(
+  raw: unknown,
+  handles: number,
+  origin: Vec3,
+  rowBytes: number,
+): LimbSkinSource | undefined {
+  const r = raw as Record<string, unknown> | null | undefined;
+  if (typeof r !== "object" || r === null) return undefined;
+  const wind = r.wind as Record<string, unknown> | undefined;
+  const turbulence = wind?.turbulence as Record<string, unknown> | undefined;
+  const gust = wind?.gust as Record<string, unknown> | undefined;
+  const winter = (r.seasons as { winter?: Record<string, unknown> } | undefined)?.winter;
+  const list = r.handles;
+  if (!Array.isArray(list) || list.length !== handles - 1) return undefined;
+  const limbs = list.map((h) => limbHandleOf(h, handles));
+  if (limbs.some((h) => h === null)) return undefined;
+  const seed = r.seed;
+  const reference = positive(r.referenceSpeedMps);
+  const leaf = positive(r.leafSizeM);
+  const lengthScale = positive(wind?.lengthScaleM);
+  if (!Number.isInteger(seed) || reference === null || leaf === null || lengthScale === null)
+    return undefined;
+  const along = finite(turbulence?.along, Number.NaN);
+  const across = finite(turbulence?.across, Number.NaN);
+  if (!(along >= 0) || !(across >= 0)) return undefined;
+  return {
+    origin,
+    seed: seed as number,
+    referenceSpeedMps: reference,
+    leafSizeM: leaf,
+    turbulence: { along, across },
+    lengthScaleM: lengthScale,
+    gust: {
+      strength: Math.max(0, finite(gust?.strength)),
+      variance: Math.max(0, finite(gust?.variance)),
+      frequencyPerMin: positive(gust?.frequencyPerMin) ?? 1,
+      durationS: positive(gust?.durationS) ?? 1,
+    },
+    canopyAdvection: Math.max(0, finite(wind?.canopyAdvection, 0.3)),
+    winter: {
+      dampingScale: positive(winter?.dampingScale) ?? 1,
+      branchFrequencyScale: positive(winter?.branchFrequencyScale) ?? 1,
+      flutterScale: Math.max(0, finite(winter?.flutterScale)),
+    },
+    flutterReferenceM: Math.max(
+      0,
+      finite((r.flutter as Record<string, unknown> | undefined)?.referenceM),
+    ),
+    // The row's last byte: no weight uses it (a row of b bytes holds at most b − 1).
+    flutterByte: rowBytes - 1,
+    handles: limbs as LimbHandle[],
+  };
+}
+
+/**
+ * Numbers a skin's driven handles take: `12·m`, and a limbs skin's flutter after them
+ * (`LIMB_FLUTTER_FLOATS`, `limbWind.ts`).
+ */
+export function skinFloats(skin: Pick<SkinEntry, "handles" | "limbs">): number {
+  return skin.handles * HANDLE_FLOATS + (skin.limbs ? LIMB_FLUTTER_FLOATS : 0);
+}
+
+/** Whether a skin's splats take rows of `skin.bin`: one of a single handle has no weights. */
+export function takesRows(skin: Pick<SkinEntry, "handles"> | undefined): boolean {
+  return (skin?.handles ?? 0) > 1;
 }
 
 function upperOf(value: unknown, m: number): number[] | null {
@@ -175,16 +355,33 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
   if (doc?.format !== SKIN_FORMAT || doc.version !== SKIN_VERSION) return null;
   if (!Array.isArray(doc.skins)) return null;
   const weights = doc.weights as Record<string, unknown> | undefined;
-  if (weights?.dtype !== "int8" || weights.rowBytes !== SKIN_ROW_BYTES) return null;
+  if (weights?.dtype !== "int8") return null;
+  if (weights.rowBytes !== SKIN_ROW_BYTES && weights.rowBytes !== SKIN_WIDE_ROW_BYTES) return null;
+  const rowBytes = weights.rowBytes;
+  const rowWords = rowBytes === SKIN_WIDE_ROW_BYTES ? 8 : 4;
+  const methodName = (doc.method as { name?: unknown } | undefined)?.name;
+  const method = typeof methodName === "string" ? methodName : null;
   const issues: string[] = [];
   const skins: SkinEntry[] = [];
   const byId = new Map<number, SkinEntry>();
   const byInstance = new Map<number, SkinEntry>();
   for (const entry of doc.skins as unknown[]) {
     const skin = skinOf(entry);
-    if (!skin) {
-      issues.push("a skin without an id, instance, handles (1..16) and origin was skipped");
+    if (!skin || skin.handles > rowBytes) {
+      issues.push(
+        `a skin without an id, instance, handles (1..${String(rowBytes)}) and origin was skipped`,
+      );
       continue;
+    }
+    if (method === LIMBS_METHOD && skin.handles > 1) {
+      const limbs = limbsOf(
+        (entry as { limbs?: unknown }).limbs,
+        skin.handles,
+        skin.origin,
+        rowBytes,
+      );
+      if (limbs) skin.limbs = limbs;
+      else issues.push(`skin ${String(skin.id)}'s limbs are incomplete; it is not swayed`);
     }
     if (byId.has(skin.id)) {
       issues.push(`skin ${String(skin.id)} is listed twice; the first is kept`);
@@ -196,8 +393,8 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
   }
   let maxId = 0;
   for (const skin of skins) maxId = Math.max(maxId, skin.id);
-  const rows = Math.floor(blob.byteLength / SKIN_ROW_BYTES);
-  const words = new Uint32Array(blob, 0, rows * 4);
+  const rows = Math.floor(blob.byteLength / rowBytes);
+  const words = new Uint32Array(blob, 0, rows * rowWords);
   const tiles = new Map<string, SkinTile>();
   const entries = doc.tiles;
   if (typeof entries === "object" && entries !== null && !Array.isArray(entries)) {
@@ -211,7 +408,8 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
       const runs = Int32Array.from(v?.skins as number[]);
       const row = v?.row;
       let skinned = 0;
-      for (let i = 0; i < runs.length; i += 2) if ((runs[i] ?? 0) > 0) skinned += runs[i + 1] ?? 0;
+      for (let i = 0; i < runs.length; i += 2)
+        if (takesRows(byId.get(runs[i] ?? 0))) skinned += runs[i + 1] ?? 0;
       if (!Number.isInteger(row) || (row as number) < 0 || (row as number) + skinned > rows) {
         issues.push(`${key}: its rows are not in skin.bin`);
         continue;
@@ -222,12 +420,14 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
     issues.push("tiles must be an object keyed by tile checksum");
   }
   return {
+    method,
     skins,
     byId,
     byInstance,
     maxId,
     tiles,
     words,
+    rowWords,
     rows,
     scale: finite(weights.scale, 1 / 127),
     issues,
@@ -238,8 +438,10 @@ export function parseSkin(raw: unknown, blob: ArrayBuffer): SkinDoc | null {
 export interface TileSkin {
   /** The skin id of every gaussian (0: none). */
   skins: Uint32Array;
-  /** Four words a gaussian: its row of `skin.bin`, zeros where it has no skin. */
+  /** Four words a gaussian: its row of `skin.bin` (weights 1..16), zeros where it has none. */
   words: Uint32Array;
+  /** In a file of wide rows, the second texel (weights 17..32), four words a gaussian. */
+  words2?: Uint32Array;
 }
 
 /** The skins and rows of the tile whose checksum is `checksum`, or undefined. */
@@ -249,34 +451,65 @@ export function tileSkin(doc: SkinDoc, checksum: string): TileSkin | undefined {
   const count = runsLength(tile.runs);
   const skins = decodeRuns(tile.runs, new Uint32Array(count));
   const words = new Uint32Array(count * 4);
+  const wide = doc.rowWords === 8;
+  const words2 = wide ? new Uint32Array(count * 4) : undefined;
+  const stride = doc.rowWords;
   let row = tile.row;
+  let last = -1;
+  let rows = false;
   for (let i = 0; i < count; i += 1) {
-    if (skins[i] === 0) continue;
-    words.set(doc.words.subarray(row * 4, row * 4 + 4), i * 4);
+    const id = skins[i] ?? 0;
+    if (id === 0) continue;
+    if (id !== last) {
+      last = id;
+      rows = takesRows(doc.byId.get(id));
+    }
+    if (!rows) continue;
+    words.set(doc.words.subarray(row * stride, row * stride + 4), i * 4);
+    if (words2) words2.set(doc.words.subarray(row * stride + 4, row * stride + 8), i * 4);
     row += 1;
   }
-  return { skins, words };
+  return words2 ? { skins, words, words2 } : { skins, words };
 }
 
-/** Weight `k` (handle `k + 1`) of a splat's row, as the shader decodes it. */
-export function rowWeight(words: ArrayLike<number>, at: number, k: number, scale: number): number {
-  const word = words[at * 4 + (k >> 2)] ?? 0;
-  const byte = (word >>> (8 * (k & 3))) & 0xff;
+/**
+ * Weight `k` (handle `k + 1`) of a splat's row, as the shader decodes it: from `words` (four a
+ * splat) for `k < 16`, from `words2` (a wide row's second texel) beyond.
+ */
+export function rowWeight(
+  words: ArrayLike<number>,
+  at: number,
+  k: number,
+  scale: number,
+  words2?: ArrayLike<number>,
+): number {
+  const source = k < 16 ? words : words2;
+  if (!source) return 0;
+  const kk = k & 15;
+  const word = source[at * 4 + (kk >> 2)] ?? 0;
+  const byte = (word >>> (8 * (kk & 3))) & 0xff;
   return (byte >= 128 ? byte - 256 : byte) * scale;
 }
 
-/** Fetches and reads a scan's `skin.json` and its weights. Throws when either is missing. */
-export async function loadSkin(tilesetUrl: string, ref: SkinRef): Promise<SkinDoc> {
+/**
+ * Fetches and reads a scan's `skin.json` and its weights. Throws when either is missing. Kept
+ * in memory once read (lib/payloadCache.ts): picking a motion method again is instant.
+ */
+export function loadSkin(tilesetUrl: string, ref: SkinRef): Promise<SkinDoc> {
   const url = resolveBeside(tilesetUrl, ref.uri);
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`skin answered ${String(response.status)}`);
-  const raw = (await response.json()) as { weights?: { file?: unknown } };
-  const file = typeof raw.weights?.file === "string" ? raw.weights.file : "skin.bin";
-  const binary = await fetch(resolveBeside(url, file));
-  if (!binary.ok) throw new Error(`skin weights answered ${String(binary.status)}`);
-  const doc = parseSkin(raw, await binary.arrayBuffer());
-  if (!doc) throw new Error("skin: not a hexapod.skin v1 document");
-  return doc;
+  return scanPayloads.get(url, async () => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`skin answered ${String(response.status)}`);
+    const text = await response.text();
+    const raw = JSON.parse(text) as { weights?: { file?: unknown } };
+    const file = typeof raw.weights?.file === "string" ? raw.weights.file : "skin.bin";
+    const binary = await fetch(resolveBeside(url, file));
+    if (!binary.ok) throw new Error(`skin weights answered ${String(binary.status)}`);
+    const weights = await binary.arrayBuffer();
+    const doc = parseSkin(raw, weights);
+    if (!doc) throw new Error("skin: not a hexapod.skin v1 document");
+    return { value: doc, bytes: weights.byteLength + jsonBytes(text) };
+  });
 }
 
 // ---- Handles -----------------------------------------------------------------------------

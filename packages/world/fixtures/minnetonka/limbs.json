@@ -1,0 +1,677 @@
+{
+ "about": "skin_methods.limb_rig of packages/world/fixtures/minnetonka/rig.json with motion_params.derive_sidecar(rig, tree_height_m=6): what limbWind.test.ts holds limbHandlesFromRig to (tools/captures/tests/test_skin_limbs.py writes it with UPDATE_LIMB_FIXTURE=1)",
+ "handles": [
+  {
+   "key": 1,
+   "pivot": [
+    -0.019,
+    0.0396,
+    0.3574
+   ],
+   "parent": 0,
+   "level": 0,
+   "spanM": 5.4709,
+   "frequencyHz": 0.9798,
+   "damping": 0.086,
+   "tree": true,
+   "direction": [
+    0.136258,
+    0.104912,
+    0.985103
+   ],
+   "samplePoint": [
+    0.142417,
+    -0.344562,
+    3.056138
+   ],
+   "widthM": 4.0411,
+   "heightM": 5.4653,
+   "staticTipM": 0.0651678,
+   "flutterM": 0.006
+  },
+  {
+   "key": 6,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 3.3049,
+   "frequencyHz": 1.2596,
+   "damping": 0.106,
+   "tree": false,
+   "direction": [
+    -0.127569,
+    0.09374,
+    0.98739
+   ],
+   "samplePoint": [
+    -0.778139,
+    0.280126,
+    3.225204
+   ],
+   "widthM": 2.1201,
+   "heightM": 3.2632,
+   "staticTipM": 0.0937021,
+   "flutterM": 0.006
+  },
+  {
+   "key": 7,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 2.9129,
+   "frequencyHz": 1.357,
+   "damping": 0.106,
+   "tree": false,
+   "direction": [
+    0.142951,
+    0.520891,
+    0.841569
+   ],
+   "samplePoint": [
+    0.131754,
+    0.758342,
+    2.794754
+   ],
+   "widthM": 1.8122,
+   "heightM": 2.7517,
+   "staticTipM": 0.0741475,
+   "flutterM": 0.006
+  },
+  {
+   "key": 8,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 2.3042,
+   "frequencyHz": 1.5583,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.290599,
+    -0.854784,
+    0.429996
+   ],
+   "samplePoint": [
+    -0.623875,
+    -1.41525,
+    2.038725
+   ],
+   "widthM": 1.9696,
+   "heightM": 0.9908,
+   "staticTipM": 0.0645493,
+   "flutterM": 0.006
+  },
+  {
+   "key": 9,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 3.2141,
+   "frequencyHz": 1.2805,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.327409,
+    -0.709291,
+    0.624267
+   ],
+   "samplePoint": [
+    -0.434083,
+    -1.023708,
+    2.8209
+   ],
+   "widthM": 1.4423,
+   "heightM": 2.7415,
+   "staticTipM": 0.135908,
+   "flutterM": 0.006
+  },
+  {
+   "key": 10,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 2.935,
+   "frequencyHz": 1.351,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.26859,
+    -0.465731,
+    0.843181
+   ],
+   "samplePoint": [
+    -0.5913,
+    -1.19313,
+    2.74641
+   ],
+   "widthM": 1.8048,
+   "heightM": 2.4747,
+   "staticTipM": 0.0723233,
+   "flutterM": 0.006
+  },
+  {
+   "key": 11,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 3.5714,
+   "frequencyHz": 1.2033,
+   "damping": 0.106,
+   "tree": false,
+   "direction": [
+    0.11951,
+    -0.424127,
+    0.897682
+   ],
+   "samplePoint": [
+    0.412041,
+    -1.488538,
+    3.137431
+   ],
+   "widthM": 2.3304,
+   "heightM": 3.0308,
+   "staticTipM": 0.111021,
+   "flutterM": 0.006
+  },
+  {
+   "key": 12,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 2.7534,
+   "frequencyHz": 1.4029,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.341834,
+    -0.698995,
+    0.628137
+   ],
+   "samplePoint": [
+    -0.803114,
+    -1.396171,
+    2.398871
+   ],
+   "widthM": 1.9246,
+   "heightM": 1.7295,
+   "staticTipM": 0.0703007,
+   "flutterM": 0.006
+  },
+  {
+   "key": 13,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 1.5201,
+   "frequencyHz": 1.9918,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.732129,
+    -0.478986,
+    0.484314
+   ],
+   "samplePoint": [
+    -0.983933,
+    -0.665567,
+    1.9019
+   ],
+   "widthM": 1.1129,
+   "heightM": 0.7362,
+   "staticTipM": 0.0418938,
+   "flutterM": 0.006
+  },
+  {
+   "key": 14,
+   "pivot": [
+    -0.0065,
+    -0.0203,
+    1.3479
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 3.4843,
+   "frequencyHz": 1.2209,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    0.61666,
+    0.002239,
+    0.787227
+   ],
+   "samplePoint": [
+    1.3628,
+    0.34312,
+    2.87505
+   ],
+   "widthM": 2.1486,
+   "heightM": 2.7429,
+   "staticTipM": 0.0949917,
+   "flutterM": 0.006
+  },
+  {
+   "key": 15,
+   "pivot": [
+    -0.0458,
+    -0.0549,
+    1.5857
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 2.4361,
+   "frequencyHz": 1.508,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    0.622407,
+    -0.251599,
+    0.741153
+   ],
+   "samplePoint": [
+    1.428329,
+    -0.756457,
+    2.644929
+   ],
+   "widthM": 1.8128,
+   "heightM": 1.7601,
+   "staticTipM": 0.0603513,
+   "flutterM": 0.006
+  },
+  {
+   "key": 17,
+   "pivot": [
+    -0.0458,
+    -0.0549,
+    1.5857
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 3.3929,
+   "frequencyHz": 1.2402,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.258865,
+    -0.087684,
+    0.961925
+   ],
+   "samplePoint": [
+    -0.550638,
+    -0.245315,
+    3.3776
+   ],
+   "widthM": 0.8783,
+   "heightM": 3.2637,
+   "staticTipM": 0.0822512,
+   "flutterM": 0.006
+  },
+  {
+   "key": 18,
+   "pivot": [
+    -0.0458,
+    -0.0549,
+    1.5857
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 4.2508,
+   "frequencyHz": 1.0858,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    0.038793,
+    0.070388,
+    0.996765
+   ],
+   "samplePoint": [
+    0.775848,
+    0.018371,
+    3.978
+   ],
+   "widthM": 1.7999,
+   "heightM": 4.237,
+   "staticTipM": 0.112386,
+   "flutterM": 0.006
+  },
+  {
+   "key": 19,
+   "pivot": [
+    -0.0458,
+    -0.0549,
+    1.5857
+   ],
+   "parent": 1,
+   "level": 1,
+   "spanM": 3.3111,
+   "frequencyHz": 1.2582,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    0.531385,
+    -0.061504,
+    0.844895
+   ],
+   "samplePoint": [
+    0.844386,
+    -0.576793,
+    3.410129
+   ],
+   "widthM": 1.7297,
+   "heightM": 3.0117,
+   "staticTipM": 0.0831639,
+   "flutterM": 0.006
+  },
+  {
+   "key": 21,
+   "pivot": [
+    0.0577,
+    0.4507,
+    1.7033
+   ],
+   "parent": 3,
+   "level": 2,
+   "spanM": 2.4358,
+   "frequencyHz": 1.5081,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    0.036334,
+    -0.175551,
+    0.9838
+   ],
+   "samplePoint": [
+    0.00585,
+    0.09148,
+    2.9687
+   ],
+   "widthM": 0.5962,
+   "heightM": 2.3963,
+   "staticTipM": 0.0624787,
+   "flutterM": 0.006
+  },
+  {
+   "key": 42,
+   "pivot": [
+    -0.275,
+    -0.7145,
+    1.7872
+   ],
+   "parent": 5,
+   "level": 2,
+   "spanM": 2.4912,
+   "frequencyHz": 1.4882,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.236155,
+    -0.300302,
+    0.924148
+   ],
+   "samplePoint": [
+    -0.468,
+    -1.105344,
+    3.138544
+   ],
+   "widthM": 0.7481,
+   "heightM": 2.3022,
+   "staticTipM": 0.0620934,
+   "flutterM": 0.006
+  },
+  {
+   "key": 45,
+   "pivot": [
+    0.6059,
+    -1.4829,
+    1.9207
+   ],
+   "parent": 7,
+   "level": 2,
+   "spanM": 2.5534,
+   "frequencyHz": 1.4667,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.263105,
+    -0.194333,
+    0.944992
+   ],
+   "samplePoint": [
+    0.0956,
+    -1.98411,
+    3.23518
+   ],
+   "widthM": 0.8678,
+   "heightM": 2.4129,
+   "staticTipM": 0.0675459,
+   "flutterM": 0.006
+  },
+  {
+   "key": 57,
+   "pivot": [
+    -0.0643,
+    1.1774,
+    2.1013
+   ],
+   "parent": 3,
+   "level": 2,
+   "spanM": 1.2172,
+   "frequencyHz": 2.2707,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    0.724095,
+    0.087821,
+    0.684086
+   ],
+   "samplePoint": [
+    0.444033,
+    1.2466,
+    2.639933
+   ],
+   "widthM": 0.8814,
+   "heightM": 0.8327,
+   "staticTipM": 0.0332883,
+   "flutterM": 0.006
+  },
+  {
+   "key": 61,
+   "pivot": [
+    0.6767,
+    -1.4597,
+    2.095
+   ],
+   "parent": 7,
+   "level": 2,
+   "spanM": 2.4925,
+   "frequencyHz": 1.4877,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.366975,
+    0.16088,
+    0.916213
+   ],
+   "samplePoint": [
+    0.008478,
+    -1.130667,
+    3.383333
+   ],
+   "widthM": 0.9721,
+   "heightM": 2.2837,
+   "staticTipM": 0.0598239,
+   "flutterM": 0.006
+  },
+  {
+   "key": 87,
+   "pivot": [
+    -1.2297,
+    0.1519,
+    2.5966
+   ],
+   "parent": 2,
+   "level": 2,
+   "spanM": 1.371,
+   "frequencyHz": 2.1169,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    0.477253,
+    -0.782073,
+    0.400738
+   ],
+   "samplePoint": [
+    -1.008533,
+    -0.631967,
+    3.0141
+   ],
+   "widthM": 1.0722,
+   "heightM": 0.5494,
+   "staticTipM": 0.0422238,
+   "flutterM": 0.006
+  },
+  {
+   "key": 124,
+   "pivot": [
+    -0.77,
+    1.0409,
+    3.0946
+   ],
+   "parent": 2,
+   "level": 2,
+   "spanM": 1.2211,
+   "frequencyHz": 2.2665,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.342394,
+    -0.434693,
+    0.832952
+   ],
+   "samplePoint": [
+    -1.2307,
+    0.338975,
+    3.718875
+   ],
+   "widthM": 1.0123,
+   "heightM": 0.9945,
+   "staticTipM": 0.0262191,
+   "flutterM": 0.006
+  },
+  {
+   "key": 151,
+   "pivot": [
+    1.162,
+    -0.0107,
+    3.6703
+   ],
+   "parent": 13,
+   "level": 2,
+   "spanM": 0.8969,
+   "frequencyHz": 2.719,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.235807,
+    0.643314,
+    0.728383
+   ],
+   "samplePoint": [
+    1.027933,
+    0.333133,
+    4.136167
+   ],
+   "widthM": 0.577,
+   "heightM": 0.6533,
+   "staticTipM": 0.0231364,
+   "flutterM": 0.006
+  },
+  {
+   "key": 170,
+   "pivot": [
+    1.1364,
+    -0.676,
+    3.8579
+   ],
+   "parent": 14,
+   "level": 2,
+   "spanM": 0.8359,
+   "frequencyHz": 2.8345,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    -0.233294,
+    -0.403538,
+    0.884721
+   ],
+   "samplePoint": [
+    0.926033,
+    -0.959433,
+    4.378
+   ],
+   "widthM": 0.367,
+   "heightM": 0.7395,
+   "staticTipM": 0.0213931,
+   "flutterM": 0.006
+  },
+  {
+   "key": 195,
+   "pivot": [
+    0.6699,
+    -0.7907,
+    4.8349
+   ],
+   "parent": 13,
+   "level": 2,
+   "spanM": 0.798,
+   "frequencyHz": 2.9132,
+   "damping": 0.0755,
+   "tree": false,
+   "direction": [
+    0.350511,
+    0.883358,
+    0.311161
+   ],
+   "samplePoint": [
+    0.9496,
+    -0.0858,
+    5.0832
+   ],
+   "widthM": 0.7049,
+   "heightM": 0.2483,
+   "staticTipM": 0.0286145,
+   "flutterM": 0.006
+  }
+ ]
+}

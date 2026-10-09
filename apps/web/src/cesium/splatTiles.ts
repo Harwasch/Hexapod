@@ -115,15 +115,21 @@ function bakeOf(content: SplatTileContent | undefined): Mat4 | undefined {
  * The tiles of an incremental primitive, from their slot ranges: each must lie inside the
  * high-water mark and have its own baked positions where its slots are (sampled, bit for
  * bit), as in the aggregated case. Ranges need not touch: a freed range draws nothing.
+ *
+ * A companion's tiles (an inferred layer the primitive draws in its own sort,
+ * `SplatPrimitive.companions`) are left out: they are not the scan's -- no object ids, no
+ * skin, nothing to pick or collide with -- and their slots draw as they are.
  */
 function slotTiles(
   slots: NonNullable<SplatPrimitive["_tileSlots"]>,
   positions: Float32Array,
   numSplats: number,
+  owner: unknown,
 ): SnapshotTilesResult {
   if (slots.size === 0) return { kind: "wait", reason: "tiles", detail: "no tiles selected" };
   const tiles: SnapshotTile[] = [];
   for (const [tile, slot] of slots) {
+    if (tile.tileset !== undefined && tile.tileset !== owner) continue;
     const content = tile.content;
     const bake = bakeOf(content);
     if (bake === undefined) {
@@ -162,7 +168,7 @@ export function snapshotTiles(
 ): SnapshotTilesResult {
   // Incremental mode (patched engine): each tile says where its slots are.
   const slots = primitive._tileSlots;
-  if (slots !== undefined) return slotTiles(slots, positions, numSplats);
+  if (slots !== undefined) return slotTiles(slots, positions, numSplats, tileset);
   const selected = primitive._selectedTileSet;
   let list: SplatTile[];
   if (selected !== undefined) {

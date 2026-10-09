@@ -2,7 +2,10 @@
  * The wind driver of scene-object skins (step C1, docs/SCENE_OBJECTS.md §4): per skinned
  * instance, the anchored modal model of `@twin/world`'s `skinWind.ts`, advanced on the scene
  * clock and written through the skin part's one driver interface,
- * `setInstanceHandles(instanceId, Z)` (`splatSkin.ts`).
+ * `setInstanceHandles(instanceId, Z)` (`splatSkin.ts`). A limbs skin (`skin.limbs`,
+ * docs/SCENE_OBJECTS.md §9) is swayed instead by its plant's own per-limb model
+ * (`limbWind.ts`: the Living Survey rig's sway, limb for limb, and its leaf flutter), and a
+ * skin of a limbs document without its limbs block is not swayed at all.
  *
  * Which instances sway, and how, is a material per instance: its property prior
  * (`materialPrior`: behaviour `in-place` sways, `movable` does not; vegetation is soft, damped
@@ -15,18 +18,22 @@
  */
 
 import {
+  limbHandles,
+  limbWindFromSettings,
+  limbWindModel,
   materialPrior,
   mergeMaterial,
   skinWindFromSettings,
   skinWindModel,
   SkinWindOscillator,
+  type LimbWindModel,
   type SkinMaterial,
   type SkinWindField,
   type WindSettings,
 } from "@twin/world";
 
 import type { Instance } from "@/lib/instances";
-import type { SkinDoc, SkinEntry } from "@/lib/skin";
+import { LIMBS_METHOD, skinFloats, type SkinDoc, type SkinEntry } from "@/lib/skin";
 import type { MaterialTable } from "@/lib/skinMaterials";
 import { useInstances } from "@/state/instances";
 
@@ -59,9 +66,16 @@ export function describeFromStore(assetId: string): DescribeInstance {
 
 interface Driven {
   readonly skin: SkinEntry;
+  /** What the skin itself carries of its object (a variant's skin), when the store has none. */
+  readonly own: InstanceTraits | undefined;
   traits: InstanceTraits | undefined;
   material: SkinMaterial | undefined;
   oscillator: SkinWindOscillator | undefined;
+  /**
+   * A limbs skin's driver (`limbWind.ts`): the plant's own per-limb model, stateless, built
+   * once. Its handles are limbs, never eigenmodes.
+   */
+  limbs: LimbWindModel | undefined;
   buffer: Float64Array;
   /** The part holds handles for it (not `null`). */
   displaced: boolean;
@@ -75,6 +89,20 @@ export interface SkinWindTick {
   readonly driven: number;
   /** Something changed on screen: a render is owed. */
   readonly changed: boolean;
+}
+
+/**
+ * The traits a skin carries itself (`skin.json`'s `traits`, a variant's skin): what the prior
+ * reads when the scan's `instances.json` does not list the instance (the Minnetonka tree has
+ * none). The store's record wins whenever there is one.
+ */
+export function skinTraitsOf(skin: Pick<SkinEntry, "traits">): InstanceTraits | undefined {
+  const t = skin.traits;
+  if (!t) return undefined;
+  return {
+    properties: t.properties ?? {},
+    behaviour: (t.behaviour ?? "in-place") as Instance["behaviour"],
+  };
 }
 
 /** Drives every skin of one scan's skin part. */
@@ -98,10 +126,12 @@ export class SkinWindDriver {
     this.#claimed = claimed;
     this.#skins = target.doc.skins.map((skin) => ({
       skin,
+      own: skin.traits ? skinTraitsOf(skin) : undefined,
       traits: undefined,
       material: undefined,
       oscillator: undefined,
-      buffer: new Float64Array(skin.handles * 12),
+      limbs: skin.limbs ? limbWindModel(skin.limbs) : undefined,
+      buffer: new Float64Array(skinFloats(skin)),
       displaced: false,
     }));
   }
@@ -126,7 +156,7 @@ export class SkinWindDriver {
     let driven = 0;
     let changed = false;
     for (const d of this.#skins) {
-      const traits = this.#describe(d.skin.instance);
+      const traits = this.#describe(d.skin.instance) ?? d.own;
       if (refresh || traits !== d.traits || d.material === undefined) this.#resolve(d, traits);
       if (this.#claimed(d.skin.instance)) {
         // Another driver writes these handles now: drop the state, write nothing.
@@ -134,9 +164,11 @@ export class SkinWindDriver {
         d.displaced = false;
         continue;
       }
-      const oscillator = d.material?.wind ? d.oscillator : undefined;
-      if (oscillator) driven += 1;
-      if (calm || !oscillator) {
+      // A limbs skin sways by its plant's own model; any other by its eigenmodes.
+      const limbs = d.material?.wind ? d.limbs : undefined;
+      const oscillator = d.material?.wind && !limbs ? d.oscillator : undefined;
+      if (oscillator || limbs) driven += 1;
+      if (calm || (!oscillator && !limbs)) {
         d.oscillator?.reset();
         if (d.displaced) {
           this.target.setInstanceHandles(d.skin.instance, null);
@@ -145,8 +177,14 @@ export class SkinWindDriver {
         }
         continue;
       }
-      oscillator.advance(this.#field, settings, t);
-      this.target.setInstanceHandles(d.skin.instance, oscillator.handles(t, d.buffer));
+      if (limbs) {
+        // Stateless: the frame is a function of the scene time, as the rig's is.
+        const living = limbWindFromSettings(wind, limbs.source);
+        this.target.setInstanceHandles(d.skin.instance, limbHandles(limbs, t, living, d.buffer));
+      } else if (oscillator) {
+        oscillator.advance(this.#field, settings, t);
+        this.target.setInstanceHandles(d.skin.instance, oscillator.handles(t, d.buffer));
+      }
       d.displaced = true;
       moving += 1;
       changed = true;
@@ -180,7 +218,9 @@ export class SkinWindDriver {
       before.drag === material.drag;
     d.material = material;
     if (same && d.oscillator) return;
-    const dynamics = d.skin.dynamics;
+    // A limbs skin's handles are limbs: its dynamics are the poke's, never an eigen-sway's.
+    const dynamics =
+      d.skin.limbs || this.target.doc.method === LIMBS_METHOD ? undefined : d.skin.dynamics;
     const model = dynamics
       ? skinWindModel(
           {

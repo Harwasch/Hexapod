@@ -33,7 +33,7 @@ oversubscribed CPU, torch's threads spin and everything is 5-30x slower.
 from __future__ import annotations
 
 import io
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -561,9 +561,11 @@ class Sam2LargeMasks(Sam2Masks):
 
 @dataclass
 class Sam2BoxMasks:
-    """SAM 2.1 prompted with boxes (`segment_ground_first`'s refine pass): per box, one mask
-    (SAM's single answer to a box, which is not ambiguous) at the image's size, and SAM's
-    predicted IoU for it."""
+    """SAM 2.1 prompted with boxes (`segment_ground_first`'s refine pass). `box_masks`: per
+    box, SAM's single answer (`multimask_output=False`) and its predicted IoU.
+    `box_candidates`: for one box, that answer and SAM's three multimask answers (whole,
+    part, subpart), so the caller can choose by what it knows of the object; all from one
+    image embedding."""
 
     model: str = SAM2_LARGE_MODEL
     device: str | None = None
@@ -572,13 +574,12 @@ class Sam2BoxMasks:
     def name(self) -> str:
         return f"sam2-box:{self.model}"
 
-    def box_masks(self, rgb: np.ndarray, boxes: np.ndarray) -> list[tuple[np.ndarray, float]]:
-        """`boxes` (k, 4) pixels `x0, y0, x1, y1` -> per box `(mask (h, w) bool, score)`."""
+    def _ask(
+        self, rgb: np.ndarray, boxes: np.ndarray, multimask: tuple[bool, ...]
+    ) -> list[list[tuple[np.ndarray, float]]]:
+        """Per box, the answers of each `multimask` setting in turn (one or three each)."""
         import torch
 
-        boxes = np.asarray(boxes, np.float64).reshape(-1, 4)
-        if boxes.shape[0] == 0:
-            return []
         processor, model, device = _sam2(self.model, _device(self.device))
         h, w = rgb.shape[:2]
         inputs = processor(images=np.ascontiguousarray(rgb, np.uint8), return_tensors="pt")
@@ -586,14 +587,39 @@ class Sam2BoxMasks:
         side = pixel_values.shape[-1]  # SAM's input is a stretched square (1024)
         scaled = boxes * np.array([side / w, side / h, side / w, side / h])
         prompt = torch.tensor(scaled[None], dtype=torch.float32, device=device)
+        out: list[list[tuple[np.ndarray, float]]] = [[] for _ in range(len(boxes))]
         with torch.inference_mode():
             embeddings = model.get_image_embeddings(pixel_values)
-            out = model(image_embeddings=embeddings, input_boxes=prompt, multimask_output=False)
-        low = out.pred_masks[0][:, :1].float()  # (k, 1, 256, 256)
-        scores = out.iou_scores[0][:, 0].float().cpu().numpy()
-        full = torch.nn.functional.interpolate(low, size=(h, w), mode="bilinear")[:, 0] > 0
-        masks = full.cpu().numpy()
-        return [(masks[i], float(np.clip(scores[i], 0.0, 1.0))) for i in range(len(boxes))]
+            for many in multimask:
+                answer = model(
+                    image_embeddings=embeddings, input_boxes=prompt, multimask_output=many
+                )
+                low = answer.pred_masks[0].float()  # (k, 1 or 3, 256, 256)
+                scores = answer.iou_scores[0].float().cpu().numpy()
+                k, m = low.shape[:2]
+                full = (
+                    torch.nn.functional.interpolate(
+                        low.reshape(k * m, 1, *low.shape[2:]), size=(h, w), mode="bilinear"
+                    )[:, 0]
+                    > 0
+                )
+                masks = full.cpu().numpy().reshape(k, m, h, w)
+                for i in range(k):
+                    for j in range(m):
+                        score = float(np.clip(scores[i, j], 0.0, 1.0))
+                        out[i].append((masks[i, j], score))
+        return out
+
+    def box_masks(self, rgb: np.ndarray, boxes: np.ndarray) -> list[tuple[np.ndarray, float]]:
+        """`boxes` (k, 4) pixels `x0, y0, x1, y1` -> per box `(mask (h, w) bool, score)`."""
+        boxes = np.asarray(boxes, np.float64).reshape(-1, 4)
+        if boxes.shape[0] == 0:
+            return []
+        return [answers[0] for answers in self._ask(rgb, boxes, (False,))]
+
+    def box_candidates(self, rgb: np.ndarray, box: np.ndarray) -> list[tuple[np.ndarray, float]]:
+        """One box -> SAM's single answer, then its three multimask answers."""
+        return self._ask(rgb, np.asarray(box, np.float64).reshape(1, 4), (False, True))[0]
 
 
 # --- Qwen3-VL ----------------------------------------------------------------------------------
@@ -610,8 +636,18 @@ NAME_PROMPT = (
 )
 
 
-def parse_answer(text: str) -> dict[str, Any] | None:
-    """The first JSON object in a model's answer, with `name` a non-empty string; else None."""
+#: What a kind of ground is asked (two crops of it: in its surroundings, the rest dimmed;
+#: then a close look). `{choices}`: the ground-cover names, comma separated.
+COVER_PROMPT = (
+    "The two pictures show the ground in a 3D scan of an outdoor place: first one kind of "
+    "ground cover in its surroundings (everything else dimmed), then a close look at it. "
+    "Which of these is it: {choices}? Answer with JSON only, no other text: "
+    '{{"cover": one of those, exactly as written}}'
+)
+
+
+def _json_objects(text: str) -> Iterator[dict[str, Any]]:
+    """The JSON objects in a model's answer, in order (one inside another is found too)."""
     import json
 
     start = text.find("{")
@@ -624,12 +660,34 @@ def parse_answer(text: str) -> dict[str, Any] | None:
                     found = json.loads(text[start : end + 1])
                 except ValueError:
                     break
-                name = found.get("name") if isinstance(found, dict) else None
-                if isinstance(name, str) and name.strip():
-                    found["name"] = " ".join(name.strip().split())[:60]
-                    return found
+                if isinstance(found, dict):
+                    yield found
                 break
         start = text.find("{", start + 1)
+
+
+def parse_answer(text: str) -> dict[str, Any] | None:
+    """The first JSON object in a model's answer, with `name` a non-empty string; else None."""
+    for found in _json_objects(text):
+        name = found.get("name")
+        if isinstance(name, str) and name.strip():
+            found["name"] = " ".join(name.strip().split())[:60]
+            return found
+    return None
+
+
+def _plain(text: str) -> str:
+    return " ".join(text.lower().replace("-", " ").split())
+
+
+def parse_choice(text: str, choices: Sequence[str]) -> str | None:
+    """The `cover` of the first JSON object in a model's answer that is one of `choices`
+    (any case, spacing or hyphens), as written in `choices`; else None."""
+    wanted = {_plain(c): c for c in choices}
+    for found in _json_objects(text):
+        cover = found.get("cover")
+        if isinstance(cover, str) and _plain(cover) in wanted:
+            return wanted[_plain(cover)]
     return None
 
 
@@ -695,6 +753,16 @@ class QwenNamer:
         """Per object, its answer to `NAME_PROMPT` about its crops (None when it gave none
         that parses)."""
         return [parse_answer(self.ask(images, NAME_PROMPT)) if images else None for images in crops]
+
+    def choose_cover(
+        self, crops: list[list[np.ndarray]], choices: Sequence[str]
+    ) -> list[str | None]:
+        """Per kind of ground, which of `choices` it is (`COVER_PROMPT` about its crops; None
+        when it answered none of them)."""
+        prompt = COVER_PROMPT.format(choices=", ".join(choices))
+        return [
+            parse_choice(self.ask(images, prompt), choices) if images else None for images in crops
+        ]
 
 
 # --- SigLIP 2 -------------------------------------------------------------------------------

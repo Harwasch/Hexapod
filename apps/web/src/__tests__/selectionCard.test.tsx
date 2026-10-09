@@ -31,23 +31,29 @@ import { useInstances } from "@/state/instances";
 import { bindDockRules, rightDockBusy, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
 import { bindOneSelection } from "@/state/oneSelection";
-import { selectedId, useSceneSelect } from "@/state/sceneSelect";
+import { selectedId, selectedIds, useSceneSelect } from "@/state/sceneSelect";
 import { useSelection } from "@/state/selection";
 import { useUi } from "@/state/ui";
 
 const ASSET = "yard";
 
 const box = { min: [0, 0, 0], max: [1, 1, 1] };
-/** A conifer (2) whose branch is 3, in a forest floor (1): a click's chain, leaf first. */
+/**
+ * A conifer (2) whose branch is 3 and trunk 4, in a forest floor (1): a click's chain, leaf
+ * first; a shrub (5) beside it. One tile of six splats: two of the branch, three of the trunk,
+ * one of the shrub.
+ */
 const DOC = parseInstances({
   format: "hexapod.instances",
   version: 1,
   instances: [
     { id: 1, bounds: box, splats: 900, tags: [{ label: "forest floor", score: 0.6 }] },
     { id: 2, parent: 1, bounds: box, splats: 400, tags: [{ label: "conifer", score: 0.6 }] },
-    { id: 3, parent: 2, bounds: box, splats: 100 },
+    { id: 3, parent: 2, bounds: box, splats: 100, tags: [{ label: "branch", score: 0.6 }] },
+    { id: 4, parent: 2, bounds: box, splats: 60, tags: [{ label: "trunk", score: 0.6 }] },
+    { id: 5, bounds: box, splats: 30, tags: [{ label: "shrub", score: 0.6 }] },
   ],
-  tiles: {},
+  tiles: { "fnv1a32:6:0000abcd": [3, 2, 4, 3, 5, 1] },
 })!;
 
 // The scan as if its tileset were in the scene: its document, and a sphere to fly to.
@@ -223,6 +229,123 @@ describe("the object card", () => {
     const hide = vi.spyOn(controller, "hide");
     await user.click(within(card).getByRole("button", { name: "Hide" }));
     expect(hide).toHaveBeenCalled();
+  });
+
+  it("names a combination the brush chose, acts on all of it, and keeps it as an object", async () => {
+    const user = userEvent.setup();
+    touchScreen(false);
+    stageScan();
+    act(() => useSceneSelect.getState().selectSet(ASSET, { ids: [3, 4], iou: 0.87 }, [2, 1], null));
+    const fly = vi.fn();
+    const flying = new SceneSelectController(viewer() as never, { ownKeys: false, fly });
+    try {
+      render(wrap(<ObjectCard controller={flying} />));
+      const card = screen.getByTestId("selection-card");
+      const label = within(card).getByTestId("object-label");
+      expect(label).toHaveTextContent("Branch + Trunk (of Conifer)");
+      expect(label).toHaveAttribute("data-ids", "3 4");
+      expect(card).toHaveTextContent("87% overlap with the painted area");
+      // The combination is the finest level; the conifer and the floor are above it.
+      expect(within(card).getByTestId("object-candidates")).toHaveTextContent("3 of 3");
+      // Both members lit, Hide hides both.
+      expect([...(useInstances.getState().assets[ASSET]?.highlighted ?? [])].sort()).toEqual([
+        3, 4,
+      ]);
+      await user.click(within(card).getByRole("button", { name: "Show only" }));
+      expect([...(useInstances.getState().assets[ASSET]?.hidden ?? [])]).toEqual([5]);
+      await user.click(within(card).getByRole("button", { name: "Fly to" }));
+      expect(fly).toHaveBeenCalledTimes(1);
+      await user.click(within(card).getByRole("button", { name: /Save as object/ }));
+      // Kept as an object of its own, by its members' splats, and selected.
+      const kept = useSceneSelect.getState().customOf(ASSET);
+      expect(kept.map((set) => [set.name, set.tiles, set.splats])).toEqual([
+        ["Branch + Trunk (of Conifer)", { "fnv1a32:6:0000abcd": [0, 5] }, 5],
+      ]);
+      expect(selectedIds(useSceneSelect.getState())).toEqual([6]);
+      await waitFor(() =>
+        expect(within(card).getByTestId("object-label")).toHaveTextContent(
+          "Branch + Trunk (of Conifer)",
+        ),
+      );
+      expect(within(card).queryByRole("button", { name: /Save as object/ })).toBeNull();
+      act(() => useSceneSelect.getState().selectSet(ASSET, { ids: [3, 5], iou: 0.6 }, [], null));
+      await user.click(within(card).getByRole("button", { name: "Hide" }));
+      expect([...(useInstances.getState().assets[ASSET]?.hidden ?? [])].sort()).toEqual([3, 5]);
+      expect(selectedIds(useSceneSelect.getState())).toEqual([]);
+    } finally {
+      flying.destroy();
+      for (const set of useSceneSelect.getState().customOf(ASSET))
+        act(() => useSceneSelect.getState().removeCustom(ASSET, set.key));
+    }
+  });
+
+  it("names the objects a stroke fell on, says them as it is painted, and steps down to their parts", async () => {
+    const user = userEvent.setup();
+    touchScreen(false);
+    stageScan();
+    act(() => useSceneSelect.getState().setMode("paint"));
+    act(() =>
+      useSceneSelect.getState().setPaint({
+        ids: [2, 5],
+        best: 2,
+        iou: 0.2,
+        painted: 40,
+        rule: "objects",
+        live: true,
+      }),
+    );
+    render(wrap(<ObjectCard controller={controller} />));
+    expect(screen.getByTestId("object-paint-hint")).toHaveTextContent(
+      "Under the stroke: Conifer + Shrub · 40 splats.",
+    );
+    // The stroke ends: the objects, then the parts of them it covers.
+    act(() => {
+      useSceneSelect.getState().setPaint({
+        ids: [2, 5],
+        best: 2,
+        iou: 0.2,
+        painted: 40,
+        rule: "objects",
+      });
+      useSceneSelect.getState().selectLevels(
+        ASSET,
+        [
+          { ids: [2, 5], iou: 0.2, objects: true },
+          { ids: [3, 4, 5], iou: 0.4, objects: true },
+        ],
+        null,
+      );
+    });
+    const card = screen.getByTestId("selection-card");
+    const label = within(card).getByTestId("object-label");
+    expect(label).toHaveTextContent("Conifer + Shrub");
+    expect(label).toHaveAttribute("data-ids", "2 5");
+    // Whole objects under a stroke are no match to the painted area: no overlap is said.
+    expect(card).not.toHaveTextContent("overlap with the painted area");
+    expect(within(card).getByTestId("object-candidates")).toHaveTextContent("1 of 2");
+    expect([...(useInstances.getState().assets[ASSET]?.highlighted ?? [])].sort()).toEqual([
+      2, 3, 4, 5,
+    ]);
+    // `[` (the previous candidate): the parts painted, as one.
+    await user.click(within(card).getByRole("button", { name: "Previous candidate" }));
+    expect(label).toHaveTextContent("Branch + Trunk + Shrub");
+    expect(selectedIds(useSceneSelect.getState())).toEqual([3, 4, 5]);
+    expect(within(card).getByTestId("object-candidates")).toHaveTextContent("2 of 2");
+    await user.click(within(card).getByRole("button", { name: "Next candidate" }));
+    expect(label).toHaveTextContent("Conifer + Shrub");
+    // A match by overlap still says how well it matches.
+    act(() =>
+      useSceneSelect.getState().setPaint({
+        ids: [3, 4],
+        best: 3,
+        iou: 0.87,
+        painted: 40,
+        rule: "ground",
+      }),
+    );
+    expect(screen.getByTestId("object-paint-hint")).toHaveTextContent(
+      "Best match: 2 parts, 87% overlap · 40 splats.",
+    );
   });
 
   it("paints with Shift, Alt and the wheel at a desk, and with buttons on a touch screen", async () => {

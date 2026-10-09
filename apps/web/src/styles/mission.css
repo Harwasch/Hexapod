@@ -223,6 +223,11 @@ a.mc-link {
   overscroll-behavior: contain;
   /* Dense text over the map and the panels under it: nearly opaque, like the command box. */
   background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  /* So nearly opaque that a blur behind it cannot be seen, yet the blur is paid for with a
+     full-panel pass on every hover, scroll and animation frame, and on every repaint of the
+     scan under it: none, which looks the same. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .mc-project__menu-head,
@@ -1466,6 +1471,9 @@ a.mc-link {
   overflow: auto;
   border-radius: 20px;
   background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  /* Too opaque for a blur behind it to show (see .mc-project__menu): none. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   animation: status-log-in var(--motion-base) var(--ease-out);
 }
 

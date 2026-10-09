@@ -36,6 +36,17 @@ import type { SceneEvents } from "./types";
 const log = createLogger("layers");
 /** How often a resting camera inside a scan checks whether the world has finished loading. */
 const WORLD_SETTLE_POLL_MS = 500;
+/**
+ * Above this camera altitude (m) the photorealistic world gives way to the whole globe
+ * (`setCameraAltitude`)...
+ */
+const ORBIT_ABOVE_M = 400_000;
+/** ...and it comes back below this, once its tiles for the view are in. */
+const ORBIT_BELOW_M = 250_000;
+/** The world keeps loading the view while hidden below this altitude (m), ready to take over. */
+const ORBIT_PRELOAD_BELOW_M = 1_500_000;
+/** The world takes over after this long below ORBIT_BELOW_M even if its tiles are not all in. */
+const ORBIT_HANDOVER_MS = 1_500;
 
 type Handle =
   | { kind: "imagery"; layer: ImageryLayer }
@@ -70,6 +81,12 @@ export class LayerManager {
   private worldSettleTimer: ReturnType<typeof setInterval> | null = null;
   private worldSse = 16;
   private worldPixelRatio = 1;
+  /** Seen from orbit: the world tileset is hidden and the globe drawn whole (`setCameraAltitude`). */
+  private orbit = false;
+  /** When the camera came down out of orbit, while the world's tiles for the view load. */
+  private handoverSince: number | null = null;
+  private handoverTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastAltitude = Number.POSITIVE_INFINITY;
   private performance: PerformanceManager | null = null;
 
   /** Lets the world tileset report its loading and memory to the adaptive quality policy. */
@@ -287,6 +304,59 @@ export class LayerManager {
     this.scene.requestRender();
   }
 
+  /**
+   * The camera's altitude above the ground (m), as it moves: from orbit the earth is the globe,
+   * not the photorealistic world. The world's coarsest tiles are what it shows from out there,
+   * and while they load -- at startup, and through the middle of every long fly-to -- the
+   * planet was a polyhedron: straight segments for a horizon, pieces missing. The globe is a
+   * smooth ellipsoid with its atmosphere from the first frame, and costs a few dozen tiles.
+   *
+   * Above ORBIT_ABOVE_M the world tileset is hidden and the globe drawn whole; below
+   * ORBIT_BELOW_M the world takes over again once its tiles for the view are in (it keeps
+   * loading, hidden, from ORBIT_PRELOAD_BELOW_M down), or after ORBIT_HANDOVER_MS regardless.
+   */
+  setCameraAltitude(altitude: number, now = performance.now()): void {
+    this.lastAltitude = altitude;
+    const world = this.worldTileset;
+    if (world) world.preloadWhenHidden = altitude < ORBIT_PRELOAD_BELOW_M;
+    if (altitude > ORBIT_ABOVE_M) {
+      this.handoverSince = null;
+      this.setOrbit(true);
+      return;
+    }
+    if (!this.orbit || altitude >= ORBIT_BELOW_M) {
+      this.handoverSince = null;
+      return;
+    }
+    this.handoverSince ??= now;
+    const ready = !world || world.tilesLoaded || now - this.handoverSince >= ORBIT_HANDOVER_MS;
+    if (ready) {
+      this.handoverSince = null;
+      this.setOrbit(false);
+      return;
+    }
+    // A camera that stops while the world loads sends no more altitudes; ask again shortly.
+    this.handoverTimer ??= setTimeout(() => {
+      this.handoverTimer = null;
+      this.setCameraAltitude(this.lastAltitude);
+    }, WORLD_SETTLE_POLL_MS / 2);
+  }
+
+  /** Whether the earth is drawn as the whole globe, seen from orbit (`setCameraAltitude`). */
+  get orbitView(): boolean {
+    return this.orbit;
+  }
+
+  private setOrbit(orbit: boolean): void {
+    if (this.orbit === orbit) return;
+    this.orbit = orbit;
+    const entry = this.worldTilesetId ? this.entries.get(this.worldTilesetId) : undefined;
+    const world = this.worldTileset;
+    if (world && entry) world.show = entry.visible && !orbit;
+    this.clipping.setOrbit(orbit);
+    this.scene.requestRender();
+  }
+
   /** Google Photorealistic tileset when loaded (drives the world mode + clipping). */
   get worldTileset(): Cesium3DTileset | null {
     // A direct reference: the entry's handle is assigned only after the async load returns,
@@ -415,6 +485,7 @@ export class LayerManager {
         this.worldTilesetId = layer.id;
         this.worldTilesetRef = created;
         created.debugFreezeFrame = this.worldFrozen;
+        created.preloadWhenHidden = this.lastAltitude < ORBIT_PRELOAD_BELOW_M;
         this.clipping.setWorldTileset(created);
         this.applyWorldScreenSpaceError(this.worldSse, this.worldPixelRatio);
         // The idle refinement waits for the world's tiles too, and its memory counts.
@@ -468,10 +539,13 @@ export class LayerManager {
       case "terrain":
         if (entry.visible) this.scene.setTerrain(handle.terrain);
         break;
-      case "tileset":
-        handle.tileset.show = entry.visible;
-        if (entry.layer.source.type === "google-photorealistic") this.applyWorldMode(entry.visible);
+      case "tileset": {
+        const world = entry.layer.source.type === "google-photorealistic";
+        // The world is not drawn from orbit, where the globe is the earth (`setCameraAltitude`).
+        handle.tileset.show = entry.visible && !(world && this.orbit);
+        if (world) this.applyWorldMode(entry.visible);
         break;
+      }
       case "mvt":
         handle.provider.show = entry.visible;
         break;
@@ -535,6 +609,8 @@ export class LayerManager {
   destroy(): void {
     if (this.worldSettleTimer) clearInterval(this.worldSettleTimer);
     this.worldSettleTimer = null;
+    if (this.handoverTimer !== null) clearTimeout(this.handoverTimer);
+    this.handoverTimer = null;
     for (const entry of this.entries.values()) this.dispose(entry);
     this.entries.clear();
   }

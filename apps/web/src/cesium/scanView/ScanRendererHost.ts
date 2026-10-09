@@ -30,15 +30,25 @@
  * frame is drawn when the motion handed to the renderer changed (`ScanMotionLink.update`) or a
  * split object moved -- so at rest, with nothing moving, still nothing is drawn.
  *
+ * So are its inferred layers (scanLayers.ts: a fill method's rebuilt surfaces, an image model's
+ * fill): streamed from the same view into the same renderer as the scan's tiles, so they are
+ * sorted with its splats -- splats write no depth, and a layer CesiumJS drew under the overlay
+ * was painted over by every measured splat behind it.
+ *
  * A scan seen from afar (SiteManager's far view: drawn small, not engaged) is the same session
  * as the scan up close -- `ScanTarget.far` is not part of its key, so zooming out and back in
  * never restarts the renderer (no reload, no flash) -- drawn with a quarter of the budget
  * (`FAR_BUDGET_SHARE`) and nothing culled for size (quality.ts), and with no objects to select.
  *
- * Under the WebGPU trial a scan with objects or motion is drawn with WebGL2 (PlayCanvas's
- * default renderer): the modifiers that hide, highlight and move them are GLSL only for now
- * (playcanvasBackend.ts, `WorkBufferModifier`), and the readouts say so
- * (`WEBGL2_FOR_OBJECTS_NOTICE`).
+ * The interface comes first (uiActivity.ts): while it holds the view -- a popover open over the
+ * map, a control just used or pointed at -- and the camera is still, frames the camera did not
+ * ask for are drawn at most every `HELD_FRAME_MS` (overlayFrames.ts), the cut is re-planned at
+ * most every `HELD_REPLAN_MS`, and tile work is paced to the interface (tileWork.ts).
+ *
+ * Under the WebGPU trial a scan with objects, motion or inferred layers is drawn with WebGL2
+ * (PlayCanvas's default renderer): the modifiers that hide, highlight and move them, and that
+ * draw a layer's look, are GLSL only for now (playcanvasBackend.ts, `WorkBufferModifier`), and
+ * the readouts say so (`WEBGL2_FOR_OBJECTS_NOTICE`).
  */
 
 import {
@@ -54,9 +64,11 @@ import {
 } from "cesium";
 
 import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
+import { inferredLayersOf } from "@/lib/inferred";
 import { instancesRefOf } from "@/lib/instances";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import { createLogger, describeError } from "@/lib/log";
+import { variantsOf } from "@/lib/variants";
 import { useSceneObjects } from "@/state/sceneObjects";
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
@@ -65,12 +77,14 @@ import { parseTileset, type TileNode } from "@/view/tiles";
 import { uniformScale } from "../placement";
 import { DEDICATED_PRIORITY, registerPickSource } from "../sceneSelect/pickSources";
 import { inverseScaledTransformation } from "../tilesetScale";
+import { HELD_REPLAN_MS } from "../uiActivity";
 import { FrameMeter, type FrameReading } from "./frameMeter";
 import { Handover } from "./handover";
 import { OverlayFrames, OverlayInputs, type FrameOutcome } from "./overlayFrames";
 import { scanPose } from "./pose";
 import { globePixelRatio, maxShDegree, overlayPixelRatio, type GlobeResolution } from "./quality";
 import { linkScanInstances } from "./scanInstances";
+import { LAYER_BUDGET_SHARE, ScanLayers, type ScanLayersStatus } from "./scanLayers";
 import { declaresMotion, declaresObjects, ScanMotionLink } from "./scanMotion";
 import { ScanObjects } from "./scanObjects";
 import { countOverlayDraw } from "./stats";
@@ -101,6 +115,25 @@ const MAX_STREAMED = 10_000_000;
 /** How long after the camera last moved it counts as resting: the frame drawn then is the
  *  full-resolution one (quality.ts cuts resolution while it moves). */
 const MOTION_SETTLE_MS = 200;
+/**
+ * How long the camera must be still (ms) before the cut may refine past the motion budget, to
+ * the device's ceiling: long enough that a pause inside a gesture does not fetch a still
+ * view's detail only to drop it again.
+ */
+export const REST_AFTER_MS = 600;
+/**
+ * How many times its motion budget a still view may hold, within the device's ceiling
+ * (lib/detail.ts `deviceSplatCeiling`): the ceiling itself on a desktop, 6M at its 3M budget,
+ * and nothing more on a phone (whose ceiling is its budget). On the Camp scan a still view
+ * spends all of 4.5M from 80 m in and leaves coarse tiles in view that have finer ones under
+ * them -- p95 screen error 6 px at 50 m, 10 at 30 m, 20 at 15 m, 29 at 8 m; 6M brings those
+ * to 4, 6, 12 and 12 px. (Its levels each hold about a fourteenth of the gaussians of the
+ * level below at twice the error, so a close view would need 10 to 18M to be under 2 px
+ * everywhere.) The motion budget can already grow to the ceiling while frames stay fast
+ * (lib/splatBudget.ts); a still view draws once, so holding it there costs memory and one
+ * sort, not frame time.
+ */
+export const REST_GROWTH = 2;
 /** Most gaussians put on screen per re-plan (~4M a second at REPLAN_MS): tiles that land
  *  together go up over a few frames instead of all in one. */
 const MAX_SHOWN_PER_UPDATE = 600_000;
@@ -207,7 +240,7 @@ export async function findNativeLod(
 export const NATIVE_SOG_FOR_SCANS_WITH_OBJECTS = false;
 
 /** What the readouts say when the WebGPU trial draws a scan with WebGL2 for its objects. */
-export const WEBGL2_FOR_OBJECTS_NOTICE = "WebGL2 for scans with objects or motion";
+export const WEBGL2_FOR_OBJECTS_NOTICE = "WebGL2 for scans with objects, motion or inferred fill";
 
 /** The scan tileset's root extras (what it declares: instances, skin, objects, ...). */
 function rootExtrasOf(tileset: Cesium3DTileset): unknown {
@@ -221,11 +254,30 @@ function rootTransformArray(tileset: Cesium3DTileset): number[] {
 }
 
 /**
+ * Whether a scan declares objects with ids (`instances.json`, or objects variants to pick from,
+ * lib/variants.ts): what its tiles must carry ids for.
+ */
+export function declaresInstances(extras: unknown): boolean {
+  return instancesRefOf(extras) !== null || variantsOf(extras).objects.length > 0;
+}
+
+/** Whether a scan declares inferred layers: Today's, or fill methods to pick from. */
+export function declaresInferred(extras: unknown): boolean {
+  return inferredLayersOf(extras).length > 0 || variantsOf(extras).fill.length > 0;
+}
+
+/**
  * Whether a scan declares anything only a GLSL modifier draws: objects (`instances.json`,
- * split objects) or motion (a skin, telemetry). The WebGPU trial draws such a scan with WebGL2.
+ * objects variants, split objects), motion (a skin, skins variants, telemetry) or inferred
+ * layers (their look, scanView/layerLook.ts). The WebGPU trial draws such a scan with WebGL2.
  */
 export function declaresObjectsOrMotion(extras: unknown): boolean {
-  return instancesRefOf(extras) !== null || declaresMotion(extras) || declaresObjects(extras);
+  return (
+    declaresInstances(extras) ||
+    declaresMotion(extras) ||
+    declaresObjects(extras) ||
+    declaresInferred(extras)
+  );
 }
 
 /**
@@ -285,6 +337,8 @@ export interface ScanRendererStatus {
   motion: { updates: number; skinned: number; redrawn: number } | null;
   /** Split objects drawn beside the scan (scanObjects.ts). */
   objects: number;
+  /** The scan's inferred layers this renderer draws with it (scanLayers.ts), or null. */
+  layers: ScanLayersStatus | null;
   /** Whether the renderer shows what it was last asked for (`ScanBackend.settled`). */
   settled: boolean;
   /** Whether it draws the scan as seen from afar (`ScanTarget.far`). */
@@ -311,6 +365,7 @@ interface Session {
     | "meter"
     | "motion"
     | "objects"
+    | "layers"
     | "settled"
     | "far"
   >;
@@ -318,6 +373,7 @@ interface Session {
   instances(): { tiles: number; matched: number } | null;
   motion(): ScanRendererStatus["motion"];
   objects(): number;
+  layers(): ScanLayersStatus | null;
   settled(): boolean;
   /** Fetches what a camera at `pose` will draw (a flight's destination); null forgets it. */
   prefetch(pose: CameraPose | null): void;
@@ -335,6 +391,11 @@ export interface ScanRendererOptions {
   backends?: (kind: Exclude<SplatRendererKind, "cesium">) => Promise<BackendModule>;
   /** Keeps each drawn frame readable after it is shown (harnesses read pixels back). */
   preserveDrawingBuffer?: boolean;
+  /**
+   * Whether the interface holds the view now (uiActivity.ts `UiActivity.holding`): with the
+   * camera still, the overlay then draws and streams at the interface's pace.
+   */
+  holding?: () => boolean;
 }
 
 /** A renderer's module: what `loadBackend` fetches (tests hand the host their own). */
@@ -486,6 +547,7 @@ export class ScanRendererHost {
 
   private readonly backends: (kind: Exclude<SplatRendererKind, "cesium">) => Promise<BackendModule>;
   private readonly preserveDrawingBuffer: boolean;
+  private readonly holding: () => boolean;
 
   constructor(
     private readonly viewer: HostViewer,
@@ -493,6 +555,7 @@ export class ScanRendererHost {
   ) {
     this.backends = options.backends ?? loadBackend;
     this.preserveDrawingBuffer = options.preserveDrawingBuffer === true;
+    this.holding = options.holding ?? (() => false);
     hosts.add(this);
   }
 
@@ -568,6 +631,7 @@ export class ScanRendererHost {
       instances: session?.instances() ?? null,
       motion: session?.motion() ?? null,
       objects: session?.objects() ?? 0,
+      layers: session?.layers() ?? null,
       settled: session?.settled() ?? true,
       far: session?.far() ?? false,
       error: inner.error ?? this.lastError,
@@ -626,6 +690,50 @@ export class ScanRendererHost {
         this.starting = null;
         this.sync();
       });
+  }
+
+  /**
+   * The view from a camera at `position` looking along `direction`, in the scan's frame
+   * (`toLocal` and `toWorld` its two ways): what the scan's tiles, and its layers', are planned
+   * for.
+   */
+  private viewFrom(
+    toLocal: Matrix4,
+    toWorld: Matrix4,
+    position: Cartesian3,
+    direction: Cartesian3,
+    up: Cartesian3,
+    eye: [number, number, number],
+    height: number,
+  ): View {
+    const { viewer } = this;
+    const camera = viewer.camera;
+    const culling = camera.frustum.computeCullingVolume(position, direction, up);
+    const fovy = (camera.frustum as { fovy?: number }).fovy ?? Math.PI / 3;
+    // The middle of the view, in the scan's frame: its finest tiles go there first.
+    const forward = Matrix4.multiplyByPointAsVector(toLocal, direction, new Cartesian3());
+    Cartesian3.normalize(forward, forward);
+    const aspect = viewer.canvas.clientWidth / Math.max(1, height);
+    const centre = new Cartesian3();
+    const sphere = new BoundingSphere();
+    return {
+      eye,
+      projection: height / (2 * Math.tan(fovy / 2)),
+      centre: {
+        forward: [forward.x, forward.y, forward.z],
+        halfDiagonal: Math.atan(Math.tan(fovy / 2) * Math.hypot(1, aspect)),
+      },
+      visible: (bounds) => {
+        Matrix4.multiplyByPoint(
+          toWorld,
+          Cartesian3.fromArray(bounds.center, 0, centre),
+          sphere.center,
+        );
+        // A tile's radius is in the scan's frame: `scale` metres a unit under a runtime scale.
+        sphere.radius = bounds.radius * uniformScale(toWorld);
+        return culling.computeVisibility(sphere) !== Intersect.OUTSIDE;
+      },
+    };
   }
 
   /** What the globe renders at now: the overlay's resolution follows it (quality.ts). */
@@ -846,8 +954,25 @@ export class ScanRendererHost {
      *  (A far view draws too little for its frame times to move the adaptive budget.) */
     const drawBudget = (): number =>
       far ? Math.round(adaptive.budget * FAR_BUDGET_SHARE) : adaptive.budget;
-    /** Tiles kept: the full budget's share whether near or far, so zooming in finds them. */
-    const cacheBudget = (): number => streamedFor(adaptive.budget) * CACHE_FACTOR;
+    /** The camera has been still for `REST_AFTER_MS`: the view may refine to `restBudget`. */
+    let resting = false;
+    /**
+     * What the cut may hold now: the motion budget, or at rest `REST_GROWTH` times it, within
+     * the device's ceiling (lib/detail.ts `deviceSplatCeiling`; a phone's is its budget). A
+     * still overlay draws nothing, so what a still view holds costs memory and one sort, not
+     * frame time; the next move plans with the motion budget again and swaps back to the
+     * ancestors kept loaded. A step on the motion budget rather than the ceiling, so it scales
+     * with what this device's frames have shown it can draw. Not the renderer's own budget:
+     * PlayCanvas re-copies and re-sorts every splat when that changes, and the tile cut is
+     * what decides what it draws.
+     */
+    const restBudget = (): number =>
+      Math.max(adaptive.budget, Math.min(adaptive.ceiling, adaptive.budget * REST_GROWTH));
+    const planBudget = (): number => (resting && !far ? restBudget() : drawBudget());
+    /** Tiles kept: the full budget's share whether near or far, so zooming in finds them, and
+     *  at least what a still view refines to. */
+    const cacheBudget = (): number =>
+      Math.max(streamedFor(adaptive.budget) * CACHE_FACTOR, streamedFor(restBudget()));
     if (far) backend.setBudget(drawBudget());
     const handover = new Handover<unknown>({
       add: (mesh) => backend.add(mesh),
@@ -879,10 +1004,17 @@ export class ScanRendererHost {
       },
     );
     let arrived = true;
-    /** Hands the renderer and the streamer what may be drawn now (`drawBudget`). */
+    /** Hands the renderer and the streamer what may be drawn now (`drawBudget`, `planBudget`). */
     const applyBudget = (): void => {
       backend.setBudget(drawBudget());
-      streamer.setBudget(streamedFor(drawBudget()), cacheBudget());
+      streamer.setBudget(streamedFor(planBudget()), cacheBudget());
+      arrived = true;
+    };
+    /** The camera came to rest, or moved again: the cut is planned again under its budget. */
+    const rest = (next: boolean): void => {
+      if (next === resting) return;
+      resting = next;
+      streamer.setBudget(streamedFor(planBudget()), cacheBudget());
       arrived = true;
     };
     // A tile arrived or failed, a deferred swap is due, a failed tile may be tried again.
@@ -908,12 +1040,29 @@ export class ScanRendererHost {
       return handed || moved;
     };
 
+    // The scan's inferred layers, drawn here so they are sorted with its splats (scanLayers.ts).
+    const layers = target.assetId
+      ? new ScanLayers<unknown>(
+          backend,
+          target.assetId,
+          url,
+          extras,
+          rootTransformArray(target.tileset),
+          {
+            arrived: () => {
+              arrived = true;
+              wake.frame("layers");
+            },
+            changed: () => wake.frame("layers"),
+            budget: () => streamedFor(planBudget()) * LAYER_BUDGET_SHARE,
+          },
+        )
+      : null;
+
     const toLocal = new Matrix4();
     const toWorld = new Matrix4();
     const lastEye = new Cartesian3(Number.NaN, 0, 0);
     const lastDirection = new Cartesian3();
-    const scratchCentre = new Cartesian3();
-    const scratchSphere = new BoundingSphere();
     let lastPlan = 0;
     // Motion frames, for the adaptive budget and the resolution: the camera moved since the
     // last frame drawn.
@@ -925,38 +1074,20 @@ export class ScanRendererHost {
     const meter = new FrameMeter();
     const handheld = isHandheld();
     const inputs = new OverlayInputs();
+    work.holding = () => this.holding() && performance.now() - lastMotionAt >= MOTION_SETTLE_MS;
     const inputSize = (): { width: number; height: number; pixelRatio: number } => ({
       width: viewer.canvas.clientWidth,
       height: viewer.canvas.clientHeight,
       pixelRatio: globePixelRatio(this.globeResolution()),
     });
 
-    /** The view from a camera at `position` looking along `direction`, in the scan's frame. */
     const viewFrom = (
       position: Cartesian3,
       direction: Cartesian3,
       up: Cartesian3,
       eye: [number, number, number],
       height: number,
-    ): View => {
-      const camera = viewer.camera;
-      const culling = camera.frustum.computeCullingVolume(position, direction, up);
-      const fovy = (camera.frustum as { fovy?: number }).fovy ?? Math.PI / 3;
-      return {
-        eye,
-        projection: height / (2 * Math.tan(fovy / 2)),
-        visible: (bounds) => {
-          Matrix4.multiplyByPoint(
-            toWorld,
-            Cartesian3.fromArray(bounds.center, 0, scratchCentre),
-            scratchSphere.center,
-          );
-          // A tile's radius is in the scan's frame: `scale` metres a unit under a runtime scale.
-          scratchSphere.radius = bounds.radius * uniformScale(toWorld);
-          return culling.computeVisibility(scratchSphere) !== Intersect.OUTSIDE;
-        },
-      };
-    };
+    ): View => this.viewFrom(toLocal, toWorld, position, direction, up, eye, height);
 
     const frame = (): FrameOutcome => {
       const tileset = target.tileset;
@@ -979,6 +1110,13 @@ export class ScanRendererHost {
       // globe's, at most (quality.ts).
       const moving = now - lastMotionAt < MOTION_SETTLE_MS;
       work.moving = moving;
+      // The interface holds a still view (uiActivity.ts): the cut is re-planned less often
+      // (and tiles are made at the interface's pace, `work.holding`), so the menu over it
+      // keeps its frames.
+      const replanMs = !moving && this.holding() ? HELD_REPLAN_MS : REPLAN_MS;
+      // Still long enough: the cut may refine to the rest budget. Moving: back to the motion
+      // budget at once, so the first re-plan of a gesture swaps the surplus out.
+      rest(now - lastMotionAt >= REST_AFTER_MS);
       const size = inputSize();
       const pose = {
         ...scanPose(viewer.camera, toLocal, {
@@ -992,7 +1130,12 @@ export class ScanRendererHost {
       // Frames while tiles arrive are slowed by their uploads, not by what is drawn: only a
       // steady view's motion frames say what the GPU can sort and blend -- and only one that
       // follows another motion frame, now that a resting overlay draws nothing in between.
-      const steady = motion && streamer.loading === 0 && lastMotionFrameAt > 0;
+      // Nor one still drawing a still view's surplus, which the first re-plan takes away.
+      const steady =
+        motion &&
+        streamer.loading === 0 &&
+        lastMotionFrameAt > 0 &&
+        streamer.drawnGaussians <= adaptive.budget;
       let budgetMoved = false;
       if (steady && adaptive.frame(now - lastMotionFrameAt, drawn)) {
         applyBudget();
@@ -1002,17 +1145,23 @@ export class ScanRendererHost {
       lastMotionFrameAt = motion ? now : 0;
       let replanAt: number | null = null;
       if (arrived || moved) {
-        if (now - lastPlan >= REPLAN_MS) {
+        if (now - lastPlan >= replanMs) {
           lastPlan = now;
           arrived = false;
           Cartesian3.clone(camera.positionWC, lastEye);
           Cartesian3.clone(camera.directionWC, lastDirection);
-          streamer.update(
-            viewFrom(camera.positionWC, camera.directionWC, camera.upWC, pose.eye, pose.height),
+          const view = viewFrom(
+            camera.positionWC,
+            camera.directionWC,
+            camera.upWC,
+            pose.eye,
+            pose.height,
           );
+          streamer.update(view);
+          layers?.update(view);
         } else {
           // Held back by the throttle: re-planned once it allows, camera moving or not.
-          replanAt = lastPlan + REPLAN_MS;
+          replanAt = lastPlan + replanMs;
         }
       }
       // The drivers' motion as it is now (`changed` may have handed it already).
@@ -1026,6 +1175,9 @@ export class ScanRendererHost {
       frames += 1;
       const deadlines = [
         moving ? lastMotionAt + MOTION_SETTLE_MS : null,
+        // The view the budget held back is refined once the camera has been still a moment;
+        // one the budget did not hold back has nothing more to show.
+        !resting && streamer.limited ? lastMotionAt + REST_AFTER_MS : null,
         replanAt,
         step.nextAt,
         // Work the renderer held back (a moving object's throttled re-sort): its last pose is
@@ -1044,6 +1196,7 @@ export class ScanRendererHost {
       root = await backend.load(url, tree.root);
     } catch (reason) {
       streamer.stop();
+      layers?.stop();
       motionLink?.dispose();
       throw reason;
     }
@@ -1067,6 +1220,8 @@ export class ScanRendererHost {
         draw: frame,
         failed,
       },
+      undefined,
+      this.holding,
     );
     wake.frame = (reason) => driver.wake(reason);
     driver.wake("start");
@@ -1107,6 +1262,7 @@ export class ScanRendererHost {
         unlinkInstances();
         motionLink?.dispose();
         objects.stop();
+        layers?.stop();
         unwatchPoses();
         driver.stop();
         work.stop();
@@ -1141,6 +1297,7 @@ export class ScanRendererHost {
       instances: () => backend.instanceTiles?.() ?? null,
       motion: () => motionStatus(motionLink, backend),
       objects: () => objects.count,
+      layers: () => layers?.status() ?? null,
       settled: () => backend.settled?.() ?? true,
       meter: (now) => meter.reading(now),
       status: () => ({
@@ -1178,7 +1335,7 @@ export class ScanRendererHost {
   ): Promise<SessionCore | null> {
     if (!backend.streamNative) return null;
     const extras = rootExtrasOf(target.tileset);
-    if (!NATIVE_SOG_FOR_SCANS_WITH_OBJECTS && target.assetId && instancesRefOf(extras) !== null) {
+    if (!NATIVE_SOG_FOR_SCANS_WITH_OBJECTS && target.assetId && declaresInstances(extras)) {
       return null;
     }
     const lodUrl = await findNativeLod(tilesetUrl, extras);
@@ -1191,10 +1348,30 @@ export class ScanRendererHost {
     if (far) applyBudget();
     const { viewer } = this;
     const toLocal = new Matrix4();
+    const toWorld = new Matrix4();
     const handheld = isHandheld();
     const lastEye = new Cartesian3(Number.NaN, 0, 0);
     const lastDirection = new Cartesian3();
     const inputs = new OverlayInputs();
+    // The scan's inferred layers are tiles of their own, streamed here as in any session.
+    let layersArrived = true;
+    const layers = target.assetId
+      ? new ScanLayers<unknown>(
+          backend,
+          target.assetId,
+          tilesetUrl,
+          extras,
+          rootTransformArray(target.tileset),
+          {
+            arrived: () => {
+              layersArrived = true;
+              wake.frame("layers");
+            },
+            changed: () => wake.frame("layers"),
+            budget: () => budget * LAYER_BUDGET_SHARE,
+          },
+        )
+      : null;
     const inputSize = (): { width: number; height: number; pixelRatio: number } => ({
       width: viewer.canvas.clientWidth,
       height: viewer.canvas.clientHeight,
@@ -1203,12 +1380,14 @@ export class ScanRendererHost {
     let lastMotionAt = 0;
     let frames = 0;
     const meter = new FrameMeter();
+    work.holding = () => this.holding() && performance.now() - lastMotionAt >= MOTION_SETTLE_MS;
     // Streaming and sorting are the renderer's: it asks for a frame when it has new detail or
     // a new order (`hooks.frameWanted`); the camera, the canvas and the settle are this one's.
     const frame = (): FrameOutcome => {
       const tileset = target.tileset;
       if (tileset.isDestroyed()) return { again: false, by: null };
-      inverseScaledTransformation(tileset.root.computedTransform, toLocal);
+      Matrix4.clone(tileset.root.computedTransform, toWorld);
+      inverseScaledTransformation(toWorld, toLocal);
       const camera = viewer.camera;
       const now = performance.now();
       const motion =
@@ -1223,11 +1402,26 @@ export class ScanRendererHost {
       work.moving = moving;
       const size = inputSize();
       const ratio = overlayPixelRatio(this.globeResolution(), { handheld, moving });
-      const drawStart = performance.now();
-      backend.render({
+      const pose = {
         ...scanPose(camera, toLocal, { width: size.width, height: size.height, pixelRatio: ratio }),
         farView: far,
-      });
+      };
+      if (layers && (motion || layersArrived)) {
+        layersArrived = false;
+        layers.update(
+          this.viewFrom(
+            toLocal,
+            toWorld,
+            camera.positionWC,
+            camera.directionWC,
+            camera.upWC,
+            pose.eye,
+            pose.height,
+          ),
+        );
+      }
+      const drawStart = performance.now();
+      backend.render(pose);
       if (motion) meter.record(drawStart, performance.now() - drawStart);
       countOverlayDraw(canvas, ratio);
       inputs.commit(camera, size, tileset.root.computedTransform);
@@ -1258,6 +1452,8 @@ export class ScanRendererHost {
         },
         failed,
       },
+      undefined,
+      this.holding,
     );
     wake.frame = (reason) => driver.wake(reason);
     driver.wake("start");
@@ -1273,6 +1469,7 @@ export class ScanRendererHost {
       instances: () => null,
       motion: () => null,
       objects: () => objects.count,
+      layers: () => layers?.status() ?? null,
       settled: () => backend.settled?.() ?? true,
       meter: (now) => meter.reading(now),
       // The renderer chooses its own level of detail from its own camera.
@@ -1288,6 +1485,7 @@ export class ScanRendererHost {
         unlinkInstances();
         motionLink?.dispose();
         objects.stop();
+        layers?.stop();
         unwatchPoses();
         driver.stop();
         work.stop();

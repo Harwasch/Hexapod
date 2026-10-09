@@ -20,6 +20,8 @@
 
 import { decodeRuns, runsLength, tileRunsIssue } from "@twin/world";
 
+import { jsonBytes, scanPayloads } from "./payloadCache";
+
 export type Vec3 = readonly [number, number, number];
 
 export const INSTANCES_FORMAT = "hexapod.instances";
@@ -60,6 +62,12 @@ export interface Instance {
    * any tag.
    */
   name?: string;
+  /**
+   * What the file says it is, when it says (docs/SCENE_OBJECTS.md §3b): "thing", or "ground"
+   * (a ground cover class or a region of one). The brush reads it (lib/sceneSelect.ts
+   * `topLevels`).
+   */
+  kind?: string;
 }
 
 export interface EmbeddingRef {
@@ -147,6 +155,7 @@ function instanceOf(raw: unknown): Instance | null {
     views: Math.max(0, Math.round(finite(r.views))),
     ...(typeof r.category === "string" && r.category !== "" ? { category: r.category } : {}),
     ...(typeof r.name === "string" && r.name.trim() !== "" ? { name: r.name.trim() } : {}),
+    ...(typeof r.kind === "string" && r.kind !== "" ? { kind: r.kind } : {}),
   };
 }
 
@@ -237,13 +246,20 @@ export function resolveBeside(tilesetUrl: string, uri: string): string {
   return resolved.href;
 }
 
-/** Fetches and reads a scan's `instances.json`. Throws when it is missing or not one. */
-export async function loadInstances(tilesetUrl: string, ref: InstancesRef): Promise<InstancesDoc> {
-  const response = await fetch(resolveBeside(tilesetUrl, ref.uri));
-  if (!response.ok) throw new Error(`instances answered ${String(response.status)}`);
-  const doc = parseInstances(await response.json());
-  if (!doc) throw new Error("instances: not a hexapod.instances v1 document");
-  return doc;
+/**
+ * Fetches and reads a scan's `instances.json`. Throws when it is missing or not one. Kept in
+ * memory once read (lib/payloadCache.ts): picking an objects method again is instant.
+ */
+export function loadInstances(tilesetUrl: string, ref: InstancesRef): Promise<InstancesDoc> {
+  const url = resolveBeside(tilesetUrl, ref.uri);
+  return scanPayloads.get(url, async () => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`instances answered ${String(response.status)}`);
+    const text = await response.text();
+    const doc = parseInstances(JSON.parse(text));
+    if (!doc) throw new Error("instances: not a hexapod.instances v1 document");
+    return { value: doc, bytes: jsonBytes(text) };
+  });
 }
 
 // ---- Hierarchy ---------------------------------------------------------------------------

@@ -38,13 +38,14 @@ import { SplatMotionGate } from "./splatMotionGate";
 import { installCameraPickHook } from "./cameraPickHook";
 import { installSplatDecoder } from "./splatDecoder";
 import { installSplatSorter } from "./splatSorter";
-import { UiActivity } from "./uiActivity";
+import { holdGlobeRenders, UiActivity } from "./uiActivity";
 import {
   prefetchScanDestination,
   ScanRendererHost,
   type ScanRendererStatus,
 } from "./scanView/ScanRendererHost";
 import { SceneSelectController } from "./sceneSelect/SceneSelectController";
+import { SkinPokeController } from "./skinPoke";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
@@ -107,6 +108,8 @@ export class CesiumSceneManager {
   readonly selection: SelectionManager;
   /** Selecting a scan's objects in the scene: click, cycle, paint (cesium/sceneSelect). */
   readonly sceneSelect: SceneSelectController;
+  /** Poking and dragging objects that move by skins (cesium/skinPoke.ts). */
+  readonly poke: SkinPokeController;
   readonly measurement: MeasurementManager;
   /** Two points on a scan, for the Set real size tool (features/inspector/RealSize.tsx). */
   readonly scaleMeasure: ScaleMeasure;
@@ -210,7 +213,13 @@ export class CesiumSceneManager {
     // before the first frame (splatDecoder.ts).
     this.uninstallSplatDecoder = installSplatDecoder(interfaceBusy);
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
-    this.scanRenderer = new ScanRendererHost(this.viewer);
+    // A popover over the map, or a control in use, holds the redraws nobody on screen asked
+    // for -- the globe's and the splat overlay's -- while the camera is still (uiActivity.ts).
+    // Never an animation: the wind keeps its every frame (the Methods panel is open while the
+    // motion methods are compared).
+    const holding = (): boolean => this.uiActivity.holding && !this.performance.isAnimating;
+    this.unsubscribe.push(holdGlobeRenders(scene, holding));
+    this.scanRenderer = new ScanRendererHost(this.viewer, { holding });
     // A dedicated splat renderer that throws while drawing is retired on the spot, and the
     // globe carries on (overlayFrames.ts); the scan it drew is gone from the view, so say why.
     this.scanRenderer.onFailure = (message) =>
@@ -255,6 +264,9 @@ export class CesiumSceneManager {
       ownKeys: false,
       fly: (sphere) => this.camera.flyToObject(sphere),
     });
+    // A press on a skinned object while the poke tool is on grabs it; anything else is the
+    // camera's or the click's as before.
+    this.poke = new SkinPokeController(this.viewer, { enabled: () => this.selectionWanted() });
     // One click, one answer: an object of a scan under the cursor first, else the cards.
     this.selection.setClickClaim((position) => this.sceneSelect.click(position.x, position.y));
     this.measurement = new MeasurementManager(this.viewer, this.events);
@@ -271,6 +283,8 @@ export class CesiumSceneManager {
       // A photographic scan close up is shown in its own colours (PerformanceManager
       // setGradeSuppressed): within a few hundred metres of a splat site that is on screen.
       this.events.on("camera", (pose) => {
+        // From orbit the earth is the whole globe rather than the photorealistic world.
+        this.layers.setCameraAltitude(pose.altitude);
         const splat = this.sites.activeRepresentation === "gaussian-splat";
         this.performance.setGradeSuppressed(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M);
         this.selection.setHoverEnabled(!(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M));
@@ -315,6 +329,7 @@ export class CesiumSceneManager {
 
     const home = options.home ?? { longitude: -110, latitude: 35, height: 18_000_000 };
     this.camera.setView(home.longitude, home.latitude, home.height);
+    this.layers.setCameraAltitude(home.height);
 
     this.unsubscribe.push(
       scene.renderError.addEventListener((_scene: Scene, error: unknown) => {
@@ -560,6 +575,7 @@ export class CesiumSceneManager {
     this.areas.destroy();
     this.selection.destroy();
     this.sceneSelect.destroy();
+    this.poke.destroy();
     this.living.destroy();
     this.sites.destroy();
     this.collider.destroy();

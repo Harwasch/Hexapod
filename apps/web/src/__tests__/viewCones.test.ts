@@ -1,10 +1,16 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 
-import { describe, expect, it } from "vitest";
+import { Event, type Cesium3DTileset } from "cesium";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  attachLayerViewCones,
+  COMPANION_SLOT_VECS,
+  CompanionViewCones,
+  companionSlots,
+  inCompanionSlots,
   SplatViewCones,
   viewConesEnabled,
   type SplatVertexVisibility,
@@ -193,6 +199,133 @@ describe("the vertexVisibility hook", () => {
   it("does nothing on an engine without the accessor", () => {
     const hook = new SplatViewCones(META, new Uint8Array(cellCount(META) * 4), gpu);
     expect(hook.install({ isDestroyed: () => false })).toBe(false);
+  });
+
+  it("fades a companion's splats on the scan's primitive, by its own grid, in its slots alone", () => {
+    const layer = { name: "layer" };
+    const scan = { name: "scan" };
+    const hook = new CompanionViewCones(META, new Uint8Array(cellCount(META) * 4), gpu, layer);
+    const other = new CompanionViewCones(META, new Uint8Array(cellCount(META) * 4), gpu, layer);
+    const { lines, uniforms } = build(hook as unknown as SplatViewCones);
+    // Named for itself: two layers' parts (and the scan's own cones) share one shader.
+    expect(hook.visibilityFunction).not.toBe(other.visibilityFunction);
+    expect(lines).toContain(`float ${hook.visibilityFunction}(uint splatIndex, vec3 position)`);
+    expect(lines).not.toContain("float splatViewConeVisibility(");
+    const bake = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 0, 0, 1];
+    interface Tile {
+      tileset: unknown;
+      content: { _lastSplatTransform?: number[] };
+    }
+    const scanBake = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1];
+    const primitive = {
+      vertexVisibility: undefined as SplatVertexVisibility | undefined,
+      _tileSlots: new Map<Tile, { start: number; count: number }>([
+        [
+          { tileset: scan, content: { _lastSplatTransform: scanBake } },
+          { start: 0, count: 50 },
+        ],
+        [
+          { tileset: layer, content: { _lastSplatTransform: bake } },
+          { start: 50, count: 10 },
+        ],
+      ]),
+      isDestroyed: () => false,
+    };
+    expect(hook.install(primitive)).toBe(true);
+    const key = (name: string): string =>
+      Object.keys(uniforms).find((k) => k.startsWith(name)) ?? name;
+    expect(uniforms[key("u_coneActive_")]?.()).toBe(1);
+    expect(uniforms[key("u_coneSlots_")]?.()).toEqual([
+      { vec4: [50, 60, 0, 0] },
+      { vec4: [0, 0, 0, 0] },
+      { vec4: [0, 0, 0, 0] },
+      { vec4: [0, 0, 0, 0] },
+    ]);
+    // The layer's own bake, not the scan tile's that comes first.
+    const expected = gridFromModel(META, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -10, 0, 0, 1]);
+    const value = uniforms[key("u_coneFromModel_")]?.() as { mat4: number[] };
+    value.mat4.forEach((v, i) => expect(v).toBeCloseTo(expected[i] ?? Number.NaN, 12));
+    // Its slots gone (Hide): it acts on nothing.
+    primitive._tileSlots = new Map([
+      [
+        { tileset: scan, content: {} },
+        { start: 0, count: 50 },
+      ],
+    ]);
+    expect(uniforms[key("u_coneActive_")]?.()).toBe(0);
+    hook.destroy();
+    expect(primitive.vertexVisibility).toBeUndefined();
+  });
+
+  it("fetches a layer's cones once CesiumJS shows it, and hooks them where its tiles are drawn", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        asked.push(url);
+        return Promise.resolve(new Response(gzipSync(new Uint8Array(cellCount(META) * 4))));
+      }),
+    );
+    try {
+      const own = {
+        vertexVisibility: undefined as SplatVertexVisibility | undefined,
+        isDestroyed: () => false,
+      };
+      const tileset = {
+        root: { extras: { viewCones: META } },
+        resource: { url: "https://tiles.example/fill/tileset.json" },
+        show: false,
+        gaussianSplatPrimitive: own,
+        tileLoad: new Event(),
+      } as unknown as Cesium3DTileset;
+      const host = {
+        vertexVisibility: undefined as SplatVertexVisibility | undefined,
+        isDestroyed: () => false,
+      };
+      let drawnByHost = false;
+      const cones = attachLayerViewCones(tileset, () => (drawnByHost ? host : undefined), gpu);
+      cones.sync();
+      // Hidden (another renderer draws the scan, and the layer): nothing fetched.
+      expect(asked).toEqual([]);
+      (tileset as { show: boolean }).show = true;
+      cones.sync();
+      expect(asked).toEqual(["https://tiles.example/fill/viewcones.bin"]);
+      await vi.waitFor(() => expect(visibilityChainOf(own)?.parts).toHaveLength(1));
+      expect(host.vertexVisibility).toBeUndefined();
+      // Drawn by the scan's primitive: a part there, within the layer's slots.
+      drawnByHost = true;
+      cones.sync();
+      expect(visibilityChainOf(host)?.parts[0]).toBeInstanceOf(CompanionViewCones);
+      drawnByHost = false;
+      cones.sync();
+      expect(host.vertexVisibility).toBeUndefined();
+      cones.sync();
+      expect(asked).toHaveLength(1);
+      cones.dispose();
+      expect(own.vertexVisibility).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("packs a companion's slot ranges two to a vector, merged where they touch", () => {
+    const layer = {};
+    const slots = new Map([
+      [{ tileset: layer }, { start: 30, count: 10 }],
+      [{ tileset: {} }, { start: 0, count: 30 }],
+      [{ tileset: layer }, { start: 40, count: 5 }],
+      [{ tileset: layer }, { start: 100, count: 1 }],
+    ]);
+    const packed = companionSlots({ _tileSlots: slots }, new Set([layer]));
+    expect(packed.vecs).toHaveLength(COMPANION_SLOT_VECS);
+    expect(packed.vecs[0]).toEqual([30, 45, 100, 101]);
+    expect(packed.count).toBe(2);
+    expect(packed.overflow).toBe(0);
+    expect(inCompanionSlots(packed.vecs, 44)).toBe(true);
+    expect(inCompanionSlots(packed.vecs, 45)).toBe(false);
+    expect(inCompanionSlots(packed.vecs, 100)).toBe(true);
+    expect(inCompanionSlots(packed.vecs, 10)).toBe(false);
+    expect(companionSlots(undefined, new Set([layer])).count).toBe(0);
   });
 
   it("is on unless the page says ?viewCones=off", () => {

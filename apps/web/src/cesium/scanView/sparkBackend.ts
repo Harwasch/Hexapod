@@ -23,6 +23,10 @@
  * rule (scanInstances.ts). A change has Spark regenerate only the tiles holding what changed.
  * Spark sorts what its generators output, so a moved splat is sorted where it is drawn.
  *
+ * An inferred layer's tile (`loadLayer`, scanLayers.ts) is a mesh like any other, sorted with
+ * the scan's, but bound to none of its objects and left out of picking; its world modifier
+ * draws its look (layerLook.ts), generated again as the eye moves past its view cones' step.
+ *
  * Drawn on demand: Spark has no loop of its own -- it sorts in a worker when a frame is drawn
  * and the view or the splats changed -- and says when a sort it started has finished
  * (`onDirty`), which is when the host draws the frame that shows it (overlayFrames.ts); what
@@ -42,6 +46,14 @@ import { gunzip, spzPickDataOf } from "@/lib/spzPositions";
 import { loadSplatTile } from "@/view/sparkStream";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
+import {
+  coneEye,
+  eyeMoved,
+  LAYER_LOOK_GLSL,
+  layerUniforms,
+  type LayerCones,
+  type LayerLook,
+} from "./layerLook";
 import type { InstanceStyle } from "./scanInstances";
 import { MOTION_TEXTURE_WIDTH, SCAN_MOTION_GLSL, type ScanMotion } from "./scanMotion";
 import type { BackendHooks, ScanBackend, ScanPose } from "./types";
@@ -58,7 +70,8 @@ ${SCAN_MOTION_GLSL}
 void hexapodSparkModify(
     int index, inout vec3 center, inout vec3 scales, inout vec4 quaternion, inout vec4 rgba,
     bool hasIds, bool hasSkin, highp usampler2D ids, highp usampler2D skins,
-    highp usampler2D weights, highp sampler2D uInstanceState, vec4 uInstanceParams,
+    highp usampler2D weights, bool wide, highp usampler2D weights2,
+    highp sampler2D uInstanceState, vec4 uInstanceParams,
     vec4 uInstanceTint, vec4 uInstanceDim, highp sampler2D handles, highp usampler2D slots,
     highp sampler2D poses, vec4 motion, vec4 extra) {
     ivec2 at = ivec2(index % ${String(SPARK_SPLATS_WIDTH)}, index / ${String(SPARK_SPLATS_WIDTH)});
@@ -68,7 +81,8 @@ void hexapodSparkModify(
         mat3 linear = mat3(0.0);
         if (hasSkin) {
             hexapodSkinMotion(handles, texelFetch(skins, at, 0).r, texelFetch(weights, at, 0),
-                              motion, extra.x, center, delta, linear);
+                              wide ? texelFetch(weights2, at, 0) : uvec4(0u), motion, extra.x,
+                              center, delta, linear);
         }
         if (hasIds) {
             hexapodRigidMotion(slots, poses, id, motion, center, delta, linear);
@@ -101,6 +115,60 @@ void hexapodSparkModify(
 }
 `;
 
+/** The dyno uniforms one inferred layer's tile reads its look from (layerLook.ts). */
+function layerDynos() {
+  return {
+    frame: dyno.dynoMat4(new THREE.Matrix4()),
+    tint: dyno.dynoVec4(new THREE.Vector4()),
+    pattern: dyno.dynoVec4(new THREE.Vector4()),
+    cones: dyno.dynoSampler2D(new THREE.DataTexture(new Uint8Array(4), 1, 1)),
+    grid: dyno.dynoVec4(new THREE.Vector4()),
+    dims: dyno.dynoVec4(new THREE.Vector4(1, 1, 1, 1)),
+    eye: dyno.dynoVec4(new THREE.Vector4()),
+  };
+}
+
+/**
+ * An inferred layer's tile's world modifier: its look on the colour (`LAYER_LOOK_GLSL`), with
+ * the splat's centre in the world -- the scan's frame, where it is placed.
+ */
+function layerModifier(
+  uniforms: ReturnType<typeof layerDynos>,
+  instances: {
+    params: dyno.DynoVec4<THREE.Vector4, string>;
+    dim: dyno.DynoVec4<THREE.Vector4, string>;
+  },
+): dyno.Dyno<{ gsplat: typeof dyno.Gsplat }, { gsplat: typeof dyno.Gsplat }> {
+  return dyno.dynoBlock({ gsplat: dyno.Gsplat }, { gsplat: dyno.Gsplat }, ({ gsplat }) => {
+    if (!gsplat) throw new Error("No gsplat input");
+    const look = new dyno.Dyno({
+      inTypes: {
+        gsplat: dyno.Gsplat,
+        frame: "mat4",
+        tint: "vec4",
+        pattern: "vec4",
+        cones: "sampler2D",
+        grid: "vec4",
+        dims: "vec4",
+        eye: "vec4",
+        params: "vec4",
+        dim: "vec4",
+      },
+      outTypes: { gsplat: dyno.Gsplat },
+      globals: () => [LAYER_LOOK_GLSL],
+      statements: ({ inputs, outputs }) => {
+        const out = String(outputs.gsplat);
+        const i = (name: keyof typeof inputs): string => String(inputs[name]);
+        return [
+          `${out} = ${i("gsplat")};`,
+          `${out}.rgba = hexapodLayerColor(${i("gsplat")}.center, ${i("gsplat")}.rgba, ${i("frame")}, ${i("tint")}, ${i("pattern")}, ${i("cones")}, ${i("grid")}, ${i("dims")}, ${i("eye")}, hexapodLayerDim(${i("params")}, ${i("dim")}));`,
+        ];
+      },
+    });
+    return { gsplat: look.apply({ gsplat, ...uniforms, ...instances }).gsplat };
+  });
+}
+
 /** One tile's binding to the scan's objects. */
 interface SparkTile {
   checksum: string;
@@ -114,6 +182,8 @@ interface SparkTile {
   skinDoc: SkinDoc | null;
   skins: THREE.DataTexture | null;
   weights: THREE.DataTexture | null;
+  /** A wide row's second texel (a file with a skin of more than 16 handles). */
+  weights2: THREE.DataTexture | null;
   skinSet: ReadonlySet<number>;
   /** Whether it has a modifier (built from its textures as they are now). */
   modified: boolean;
@@ -233,8 +303,10 @@ export function createBackend(
     const ids = dyno.dynoUsampler2D(tile.ids ?? emptySplats);
     const skins = dyno.dynoUsampler2D(tile.skins ?? emptySplats);
     const weights = dyno.dynoUsampler2D(tile.weights ?? emptyUint);
+    const weights2 = dyno.dynoUsampler2D(tile.weights2 ?? emptyUint);
     const hasIds = tile.ids !== null;
     const hasSkin = tile.skins !== null;
+    const wide = hasSkin && tile.weights2 !== null;
     return dyno.dynoBlock({ gsplat: dyno.Gsplat }, { gsplat: dyno.Gsplat }, ({ gsplat }) => {
       if (!gsplat) throw new Error("No gsplat input");
       const rule = new dyno.Dyno({
@@ -243,6 +315,7 @@ export function createBackend(
           ids: "usampler2D",
           skins: "usampler2D",
           weights: "usampler2D",
+          weights2: "usampler2D",
           state: "sampler2D",
           params: "vec4",
           tint: "vec4",
@@ -260,7 +333,7 @@ export function createBackend(
           const i = (name: keyof typeof inputs): string => String(inputs[name]);
           return [
             `${out} = ${i("gsplat")};`,
-            `hexapodSparkModify(${i("gsplat")}.index, ${out}.center, ${out}.scales, ${out}.quaternion, ${out}.rgba, ${String(hasIds)}, ${String(hasSkin)}, ${i("ids")}, ${i("skins")}, ${i("weights")}, ${i("state")}, ${i("params")}, ${i("tint")}, ${i("dim")}, ${i("handles")}, ${i("slots")}, ${i("poses")}, ${i("motion")}, ${i("extra")});`,
+            `hexapodSparkModify(${i("gsplat")}.index, ${out}.center, ${out}.scales, ${out}.quaternion, ${out}.rgba, ${String(hasIds)}, ${String(hasSkin)}, ${i("ids")}, ${i("skins")}, ${i("weights")}, ${String(wide)}, ${i("weights2")}, ${i("state")}, ${i("params")}, ${i("tint")}, ${i("dim")}, ${i("handles")}, ${i("slots")}, ${i("poses")}, ${i("motion")}, ${i("extra")});`,
           ];
         },
       });
@@ -270,6 +343,7 @@ export function createBackend(
           ids,
           skins,
           weights,
+          weights2,
           state,
           params,
           tint,
@@ -313,9 +387,11 @@ export function createBackend(
       if (fits) for (const id of found.skins) if (id !== 0) skinSet.add(id);
       tile.skins?.dispose();
       tile.weights?.dispose();
+      tile.weights2?.dispose();
       const skinned = fits && skinSet.size > 0;
       tile.skins = skinned ? splatTexture(tile.count, 1, found.skins) : null;
       tile.weights = skinned ? splatTexture(tile.count, 4, found.words) : null;
+      tile.weights2 = skinned && found.words2 ? splatTexture(tile.count, 4, found.words2) : null;
       tile.skinSet = skinSet;
       replaced = true;
     }
@@ -351,6 +427,8 @@ export function createBackend(
       params.value.set(0, 0, 0, 0);
     }
     for (const [mesh, tile] of tiles) bind(mesh, tile);
+    // A layer's tiles are dimmed with the rest while an object is highlighted (layerLook.ts).
+    for (const mesh of layers.keys()) mesh.updateVersion();
   };
 
   /** Puts `data` in the shared table behind `uniform`, in a new texture when it grew. */
@@ -402,9 +480,100 @@ export function createBackend(
     }
   };
 
+  /**
+   * The tiles of inferred layers (scanLayers.ts): bound to none of the scan's objects, each
+   * with its own world modifier reading its layer's look (layerLook.ts) from dyno uniforms,
+   * and the eye it was last worked out from.
+   */
+  const layers = new Map<
+    SplatMesh,
+    {
+      look: LayerLook;
+      uniforms: ReturnType<typeof layerDynos>;
+      lastEye: number[] | null;
+      centre: number[];
+    }
+  >();
+  /** Each layer's view cones, uploaded once whatever number of its tiles are drawn. */
+  const coneTextures = new Map<LayerCones, THREE.DataTexture>();
+  const emptyCones = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  emptyCones.needsUpdate = true;
+  /** The eye of the last frame drawn (the scan's frame): a layer added later starts from it. */
+  let lastPoseEye: [number, number, number] | null = null;
+
+  const coneTexture = (cones: LayerCones | null): THREE.DataTexture => {
+    if (!cones) return emptyCones;
+    let texture = coneTextures.get(cones);
+    if (!texture) {
+      texture = new THREE.DataTexture(
+        cones.data,
+        cones.data.length / 4 / cones.height,
+        cones.height,
+        THREE.RGBAFormat,
+        THREE.UnsignedByteType,
+      );
+      texture.needsUpdate = true;
+      coneTextures.set(cones, texture);
+    }
+    return texture;
+  };
+
+  const releaseCones = (cones: LayerCones | null): void => {
+    if (!cones) return;
+    for (const state of layers.values()) if (state.look.cones === cones) return;
+    coneTextures.get(cones)?.dispose();
+    coneTextures.delete(cones);
+  };
+
+  /** Sets a layer's uniforms from its look, and the eye (the scan's frame). */
+  const writeLook = (
+    uniforms: ReturnType<typeof layerDynos>,
+    look: LayerLook,
+    eye: readonly number[],
+  ): void => {
+    const values = layerUniforms(look);
+    uniforms.frame.value.fromArray(values.frame);
+    uniforms.tint.value.fromArray(values.tint);
+    uniforms.pattern.value.fromArray(values.pattern);
+    uniforms.cones.value = coneTexture(look.cones);
+    uniforms.grid.value.fromArray(values.grid);
+    uniforms.dims.value.fromArray(values.dims);
+    uniforms.eye.value.fromArray(coneEye(look, eye));
+  };
+
   const backend: ScanBackend<SplatMesh> = {
     name: "spark",
     loadFactor: 1,
+    loadLayer: async (tilesetUrl, tile, signal) => {
+      const { mesh } = await loadSplatTile(tilesetUrl, tile, {
+        lod: false,
+        extSplats: true,
+        signal,
+      });
+      if (mesh.maxSh > hooks.maxShDegree) {
+        mesh.maxSh = hooks.maxShDegree;
+        mesh.updateGenerator();
+      }
+      return mesh;
+    },
+    setLayerLook: (mesh, look) => {
+      let state = layers.get(mesh);
+      const previous = state?.look.cones ?? null;
+      if (!state) {
+        const uniforms = layerDynos();
+        state = { look, uniforms, lastEye: null, centre: [0, 0, 0] };
+        const box = mesh.getBoundingBox(true);
+        if (!box.isEmpty()) state.centre = box.getCenter(new THREE.Vector3()).toArray();
+        layers.set(mesh, state);
+        mesh.worldModifier = layerModifier(uniforms, { params, dim });
+        mesh.updateGenerator();
+      }
+      state.look = look;
+      state.lastEye = lastPoseEye ? [...lastPoseEye] : null;
+      writeLook(state.uniforms, look, lastPoseEye ?? [0, 0, 0]);
+      mesh.updateVersion();
+      if (previous !== look.cones) releaseCones(previous);
+    },
     load: async (tilesetUrl, tile, signal) => {
       const { mesh, bytes } = await loadSplatTile(tilesetUrl, tile, {
         lod: false,
@@ -443,6 +612,7 @@ export function createBackend(
           skinDoc: null,
           skins: null,
           weights: null,
+          weights2: null,
           skinSet: new Set(),
           modified: false,
           placement: null,
@@ -463,10 +633,16 @@ export function createBackend(
     },
     dispose: (mesh) => {
       shown.delete(mesh);
+      const layer = layers.get(mesh);
+      if (layer) {
+        layers.delete(mesh);
+        releaseCones(layer.look.cones);
+      }
       const tile = tiles.get(mesh);
       tile?.ids?.dispose();
       tile?.skins?.dispose();
       tile?.weights?.dispose();
+      tile?.weights2?.dispose();
       tiles.delete(mesh);
       mesh.dispose();
     },
@@ -551,6 +727,15 @@ export function createBackend(
       camera.near = pose.near;
       camera.far = pose.far;
       camera.updateProjectionMatrix();
+      // A layer's fade follows the eye: its tiles are generated again (and sorted) once the
+      // eye has moved enough to show (layerLook.ts `eyeMoved`).
+      lastPoseEye = pose.eye;
+      for (const [mesh, layer] of layers) {
+        if (!layer.look.cones || !eyeMoved(layer.lastEye, pose.eye, layer.centre)) continue;
+        layer.lastEye = [...pose.eye];
+        layer.uniforms.eye.value.fromArray(coneEye(layer.look, pose.eye));
+        mesh.updateVersion();
+      }
       drawing = true;
       try {
         renderer.render(scene, camera);
@@ -563,8 +748,13 @@ export function createBackend(
         tile.ids?.dispose();
         tile.skins?.dispose();
         tile.weights?.dispose();
+        tile.weights2?.dispose();
       }
       tiles.clear();
+      layers.clear();
+      for (const texture of coneTextures.values()) texture.dispose();
+      coneTextures.clear();
+      emptyCones.dispose();
       stateTexture?.dispose();
       for (const uniform of [handles, slots, poses]) uniform.value.dispose();
       emptyUint.dispose();

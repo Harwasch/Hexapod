@@ -267,6 +267,109 @@ def test_a_manifest_that_does_not_match_its_directory_is_refused(tmp_path: Path)
         attach.read_manifest(out)
 
 
+# --- variants (the bake-offs) -----------------------------------------------------------
+
+#: A scan three bake-offs have registered on: objects, fills and skins.
+SHARED_VARIANTS: dict[str, Any] = {
+    "objects": [
+        {"name": "feature-fields", "label": "B", "instances": "variants/objects/ff/i.json"}
+    ],
+    "fill": [
+        {"name": "vace-1-3b", "inferredLayers": [{"uri": "variants/fill/vace-1-3b/t.json"}]},
+        {"name": "lama-baseline", "inferredLayers": []},
+    ],
+    "skins": [
+        {"name": "freeform", "skin": "variants/skins/freeform/skin.json"},
+        {"name": "someone-else", "skin": "variants/skins/someone-else/skin.json"},
+        {"name": "tetfem-stiff", "skin": "variants/skins/tetfem-stiff/skin.json"},
+    ],
+}
+
+
+def test_without_variant_takes_off_one_entry_and_keeps_every_other_byte_for_byte() -> None:
+    before = json.dumps(SHARED_VARIANTS, sort_keys=True)
+    out = attach.without_variant(SHARED_VARIANTS, "skins", "freeform")
+    assert json.dumps(SHARED_VARIANTS, sort_keys=True) == before  # the input is not changed
+    assert json.dumps(out["objects"]) == json.dumps(SHARED_VARIANTS["objects"])
+    assert json.dumps(out["fill"]) == json.dumps(SHARED_VARIANTS["fill"])
+    assert [e["name"] for e in out["skins"]] == ["someone-else", "tetfem-stiff"]
+    # The system's key goes only when nothing is left in it; the others stay.
+    out = attach.without_variant(out, "skins", "someone-else")
+    out = attach.without_variant(out, "skins", "tetfem-stiff")
+    assert "skins" not in out
+    assert json.dumps(out, sort_keys=True) == json.dumps(
+        {k: v for k, v in SHARED_VARIANTS.items() if k != "skins"}, sort_keys=True
+    )
+    # A name that is not there changes nothing; with_variant puts an entry back.
+    assert attach.without_variant(SHARED_VARIANTS, "skins", "absent") == SHARED_VARIANTS
+    back = attach.with_variant(out, "skins", SHARED_VARIANTS["skins"][0])
+    assert back["skins"] == [SHARED_VARIANTS["skins"][0]]
+    # Null only when no system at all is left.
+    only = {"skins": [{"name": "freeform", "skin": "s.json"}]}
+    assert attach.changed_variants(only, [("without", "skins", "freeform")]) is None
+    assert attach.changed_variants(SHARED_VARIANTS, [("without", "skins", "freeform")])
+
+
+def test_a_withdrawal_stages_nothing_and_anything_else_that_does_is_refused(tmp_path: Path) -> None:
+    written = attach.write_manifest(
+        tmp_path, asset_id=ASSET, based_on=CURRENT, withdraw=[("skins", "freeform")]
+    )
+    assert written["files"] == [] and attach.read_manifest(tmp_path) == written
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(attach.AttachError, match="nothing to attach"):
+        attach.write_manifest(empty, asset_id=ASSET, based_on=CURRENT)
+    # An instances or fill publish with nothing staged is refused, even with extras.
+    with pytest.raises(attach.AttachError, match="nothing to attach"):
+        attach.write_manifest(
+            empty, asset_id=ASSET, based_on=CURRENT, extras={"instances": {"uri": "i.json"}}
+        )
+    # A withdrawal is that and nothing else.
+    with pytest.raises(attach.AttachError, match="stages nothing"):
+        attach.write_manifest(
+            empty,
+            asset_id=ASSET,
+            based_on=CURRENT,
+            extras={"instances": None},
+            withdraw=[("skins", "freeform")],
+        )
+
+
+def test_variants_are_never_sent_as_a_value_computed_before_the_request(tmp_path: Path) -> None:
+    # A whole `variants` from earlier would erase what other bake-offs attached since.
+    out = instances_dir(tmp_path)
+    with pytest.raises(attach.AttachError, match="without a variant to register or withdraw"):
+        attach.write_manifest(
+            out, asset_id=ASSET, based_on=CURRENT, extras={"variants": SHARED_VARIANTS}
+        )
+    with pytest.raises(attach.AttachError, match="without a variant to register or withdraw"):
+        attach.write_manifest(out, asset_id=ASSET, based_on=CURRENT, extras={"variants": None})
+
+
+def test_a_withdrawal_merges_into_the_tileset_as_it_is_at_the_request(
+    api: StubApi, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attach.write_manifest(
+        tmp_path,
+        asset_id=ASSET,
+        based_on=CURRENT,
+        extras={"variants": {"skins": []}},  # a stale preview: replaced at the request
+        withdraw=[("skins", "freeform"), ("skins", "tetfem-stiff")],
+    )
+    tileset = {"root": {"extras": {"gaussians": 5, "variants": SHARED_VARIANTS}}}
+    api.on("GET", "/tileset.json", (200, tileset))
+    api.on("POST", f"/api/v1/assets/{ASSET}/sidecars", (200, attachment()))
+    resolved = {"assetId": ASSET, "url": f"{api.url}/tileset.json"}
+    monkeypatch.setattr(attach, "resolve_asset", lambda asset_id, api=None: resolved)
+    attach.attach(tmp_path, api=api.url, s3=StubS3(), bucket="b", write_token="t")
+    (post,) = [r for r in api.requests if r["method"] == "POST"]
+    assert post["body"]["files"] == []
+    sent = post["body"]["extras"]["variants"]
+    assert json.dumps(sent["objects"]) == json.dumps(SHARED_VARIANTS["objects"])
+    assert json.dumps(sent["fill"]) == json.dumps(SHARED_VARIANTS["fill"])
+    assert sent["skins"] == [SHARED_VARIANTS["skins"][1]]
+
+
 def test_the_rules_are_the_apis() -> None:
     """The API decides; these only fail earlier. Read from its source, so they cannot drift."""
     source = API_SIDECARS.read_text()

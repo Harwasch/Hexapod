@@ -49,8 +49,8 @@ import json
 import math
 import os
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -59,6 +59,7 @@ from scipy.spatial import cKDTree
 from kaolin_rkpm import SimplicitsRKPM
 
 __all__ = [
+    "Fitter",
     "Skin",
     "TileSplats",
     "build",
@@ -70,6 +71,7 @@ __all__ = [
     "link_skin",
     "local_jacobians",
     "node_count",
+    "owners_of",
     "quantise",
     "read_tiles",
     "skin_owners",
@@ -89,13 +91,21 @@ FORMULA = (
 SKINNED = ("in-place", "movable")
 #: Bytes a splat's weight row takes: one RGBA32UI texel.
 ROW_BYTES = 16
+#: A file with any skin over `MAX_HANDLES` takes two texels a row (`build`, `row_bytes`).
+WIDE_ROW_BYTES = 32
 #: Handles an object may have, the constant one included (the learned ones fill a row).
 MIN_HANDLES = 8
 MAX_HANDLES = ROW_BYTES
+#: ... and in a file of wide rows.
+MAX_WIDE_HANDLES = WIDE_ROW_BYTES
 #: int8 steps per unit weight.
 QUANT = 127
 #: Integration points for the eigenproblem, at most.
 FIT_POINTS = 4000
+#: Splats the basis (its nodes and integration points) is chosen from, at most: a seeded random
+#: subset of a bigger object's. Farthest point sampling over two million splats (the Minnetonka
+#: tree) was most of a fifteen-minute fit; the weights are still evaluated at every splat.
+FIT_POOL = 120_000
 #: Kernel nodes: an eighth of the splats, within these.
 NODES_MIN = 48
 NODES_MAX = 600
@@ -221,29 +231,62 @@ class Skin:
     anchor_gram: np.ndarray  # (m, m): the same over its anchor splats (`anchor_mask`)
     anchor_splats: int
     anchor_band: float  # metres above its lowest splat
+    #: Another method's weight field (skin_methods.py): positions (tileset frame) to the raw
+    #: learned weights, (n, handles − 1), before `norm`. None: the RKPM `model`'s.
+    evaluate: Callable[[np.ndarray], np.ndarray] | None = None
+    #: What `skin.json` records of the skin beyond the contract's fields (its method's own
+    #: numbers, the handle policy's class), merged into its entry.
+    extra: dict = field(default_factory=dict)
+    #: A limbs skin's leaf flutter weight (skin_methods.fit_limbs_from_rig): positions to a
+    #: share in [0, 1], written into the last byte of the splat's row (`FLUTTER_BYTE`), which
+    #: no weight uses (a row of `b` bytes holds at most `b − 1` learned weights). None: no
+    #: flutter, the byte stays 0.
+    flutter: Callable[[np.ndarray], np.ndarray] | None = None
 
     def weights(self, positions: np.ndarray) -> np.ndarray:
         """Learned weights at `positions` (tileset frame), (n, handles − 1), normalised."""
-        if len(positions) == 0:
-            return np.zeros((0, self.handles - 1))
+        if len(positions) == 0 or self.handles <= 1:
+            return np.zeros((len(positions), max(self.handles - 1, 0)))
+        if self.evaluate is not None:
+            return self.evaluate(np.asarray(positions, np.float64)) * self.norm[None, :]
         return self.model.forward(self.model._offset_scale(positions)) * self.norm[None, :]
 
     def weight_gradients(self, positions: np.ndarray) -> np.ndarray:
-        """`∇w` of the learned weights at `positions`, (n, handles − 1, 3), per metre."""
+        """`∇w` of the learned weights at `positions`, (n, handles − 1, 3), per metre (central
+        differences for a method without an analytic gradient)."""
+        if self.evaluate is not None or self.model is None:
+            step = 1e-4 * self.scale
+            out = np.zeros((len(positions), self.handles - 1, 3))
+            for axis in range(3):
+                offset = np.zeros(3)
+                offset[axis] = step
+                out[:, :, axis] = (
+                    self.weights(positions + offset) - self.weights(positions - offset)
+                ) / (2 * step)
+            return out
         g = self.model.grad(self.model._offset_scale(positions))
         g = g / (self.model.bb_max - self.model.bb_min)[None, None]
         return g * self.norm[None, :, None]
 
 
-def fit_skin(points: np.ndarray, index: int, instance: int, *, seed: int = 0) -> Skin:
-    """The skin of one object from its splat centres (tileset frame, metres)."""
+def fit_skin(
+    points: np.ndarray,
+    index: int,
+    instance: int,
+    *,
+    seed: int = 0,
+    handles: int | None = None,
+) -> Skin:
+    """The skin of one object from its splat centres (tileset frame, metres); `handles` (the
+    constant one included) overrides `handle_count`, a handle policy's choice."""
     started = time.perf_counter()
     points = np.asarray(points, np.float64)
     low, high = points.min(0), points.max(0)
     centre = (low + high) / 2
     half = float(max((high - low).max() / 2, 1e-3))
     pad = half * 1.02
-    handles = handle_count(float(np.linalg.norm(high - low)))
+    if handles is None:
+        handles = handle_count(float(np.linalg.norm(high - low)))
     nodes = node_count(len(points))
     handles = max(2, min(handles, nodes - 1))
     model = SimplicitsRKPM(
@@ -254,8 +297,12 @@ def fit_skin(points: np.ndarray, index: int, instance: int, *, seed: int = 0) ->
         bb_max=centre + pad,
         seed=seed,
     )
+    pool = fit_pool(points, seed)
+    model.init(pool, np.ones(len(pool)), np.full(len(pool), POISSON))
     n = len(points)
-    model.init(points, np.ones(n), np.full(n, POISSON))
+    # The normalisation, supports and Grams over the pool too: the same statistics of the
+    # same fields, without evaluating them at millions of splats twice.
+    points = pool
     learned = model.num_handles
     raw = model.forward(model._offset_scale(points))
     peak = np.abs(raw).argmax(0)
@@ -287,6 +334,14 @@ def fit_skin(points: np.ndarray, index: int, instance: int, *, seed: int = 0) ->
         anchor_splats=anchors,
         anchor_band=band,
     )
+
+
+def fit_pool(points: np.ndarray, seed: int = 0) -> np.ndarray:
+    """The splats a basis is built from: all of them, or `FIT_POOL` of them at random (seeded)."""
+    if len(points) <= FIT_POOL:
+        return points
+    keep = np.random.default_rng(seed).choice(len(points), FIT_POOL, replace=False)
+    return points[np.sort(keep)]
 
 
 def anchor_mask(points: np.ndarray) -> tuple[np.ndarray, float]:
@@ -335,9 +390,10 @@ def _upper(matrix: np.ndarray) -> list[float]:
 # ------------------------------------------------------------------------- quantise, deform
 
 
-def quantise(weights: np.ndarray) -> np.ndarray:
-    """Learned weights (n, ≤ 16) to int8 rows (n, 16): `round(127·w)`, clipped, rest 0."""
-    rows = np.zeros((len(weights), ROW_BYTES), np.int8)
+def quantise(weights: np.ndarray, row_bytes: int = ROW_BYTES) -> np.ndarray:
+    """Learned weights (n, ≤ row_bytes) to int8 rows (n, row_bytes): `round(127·w)`, clipped,
+    rest 0."""
+    rows = np.zeros((len(weights), row_bytes), np.int8)
     q = np.clip(np.round(np.asarray(weights) * QUANT), -QUANT, QUANT)
     rows[:, : q.shape[1]] = q.astype(np.int8)
     return rows
@@ -514,16 +570,61 @@ class Built:
     clipped: int  # weights beyond ±1 at evaluation, clipped by the int8 rows
 
 
+#: Fits one object: (points, skin id, instance id, seed) to its `Skin` (`fit_skin`'s shape).
+Fitter = Callable[..., "Skin"]
+
+#: What `method` says by default: the FreeForm/RKPM basis of `fit_skin`.
+DEFAULT_METHOD = {
+    "name": "simplicits-rkpm",
+    "source": "NVIDIA Kaolin (Apache-2.0), vendored in tools/captures/kaolin_rkpm.py",
+    "material": {"uniform": True, "poisson": POISSON},
+}
+
+
+def owners_of(instances: Sequence[dict], chosen: Sequence[int]) -> np.ndarray:
+    """Per id, the chosen instance it belongs to (itself or an ancestor), or 0: a bake-off's
+    own choice of objects, whatever their behaviour says (`skin_owners` reads behaviour)."""
+    by_id = {int(i["id"]): i for i in instances}
+    top = max(by_id, default=0)
+    owner = np.zeros(top + 1, np.int64)
+    wanted = {int(c) for c in chosen}
+    for k in by_id:
+        at: int | None = k
+        found = 0
+        while at is not None and at in by_id:
+            if at in wanted:
+                found = at  # the coarsest chosen one on the chain wins
+            parent = by_id[at].get("parent")
+            at = None if parent is None else int(parent)
+        owner[k] = found
+    return owner
+
+
 def build(
     tiles: Sequence[TileSplats],
     instances: Sequence[dict],
     *,
     only: Sequence[int] | None = None,
     log: bool = False,
+    fit: Fitter | None = None,
+    owner: np.ndarray | None = None,
+    method: dict | None = None,
+    listed: str = "all",
 ) -> Built:
     """`skin.json` and `skin.bin` for these tiles and instances (`only`: skin just these
-    owners, the rest stay unskinned -- for small fixtures)."""
-    owner = skin_owners(instances)
+    owners, the rest stay unskinned -- for small fixtures).
+
+    For other methods and handle policies (skin_variants.py): `fit` fits one object (default
+    `fit_skin`), `owner` gives each id its skin's owner (default `skin_owners`, by behaviour),
+    `method` is what the document says made it. A skin of one handle (the constant: a rigid
+    object) takes no rows of `skin.bin`. A file with any skin over `MAX_HANDLES` handles is
+    written with rows of `WIDE_ROW_BYTES` (two texels a splat). `listed`: "all" lists every
+    tile (the default), "skinned" only the tiles that hold a skinned splat -- what a scan of
+    hundreds of tiles with a few objects skinned wants; an unlisted tile's splats have no skin.
+    """
+    fit = fit or fit_skin
+    if owner is None:
+        owner = skin_owners(instances)
     if only is not None:
         owner = np.where(np.isin(owner, list(only)), owner, 0)
     by_owner: dict[int, list[np.ndarray]] = {}
@@ -539,7 +640,7 @@ def build(
         points = np.unique(np.concatenate(by_owner[k]).astype(np.float64), axis=0)
         if len(points) < 4:
             continue
-        skin = fit_skin(points, len(skins) + 1, k, seed=k)
+        skin = fit(points, len(skins) + 1, k, seed=k)
         skins.append(skin)
         skin_of_instance[k] = skin.index
         if log:
@@ -548,6 +649,9 @@ def build(
                 f"{skin.nodes} nodes, {skin.seconds:.1f} s",
                 flush=True,
             )
+    row_bytes = WIDE_ROW_BYTES if any(s.handles > MAX_HANDLES for s in skins) else ROW_BYTES
+    # Per skin id (0: none): whether its splats take rows (a rigid skin has no weights).
+    takes_rows = np.array([False] + [s.handles > 1 for s in skins])
     rows: list[np.ndarray] = []
     row = 0
     clipped = 0
@@ -555,32 +659,36 @@ def build(
     for tile in sorted(tiles, key=lambda t: t.checksum):
         own = owner[np.clip(tile.ids, 0, owner.size - 1)] * (tile.ids < owner.size)
         which = skin_of_instance[own]
-        block = np.zeros((tile.ids.size, ROW_BYTES), np.int8)
+        if listed == "skinned" and not (which > 0).any():
+            continue
+        block = np.zeros((tile.ids.size, row_bytes), np.int8)
         for s in np.unique(which[which > 0]):
             skin = skins[int(s) - 1]
+            if skin.handles <= 1:
+                continue
             at = which == s
-            w = skin.weights(tile.positions[at].astype(np.float64))
+            positions = tile.positions[at].astype(np.float64)
+            w = skin.weights(positions)
             clipped += int((np.abs(w) > 1.0 + 0.5 / QUANT).sum())
-            block[at] = quantise(w)
-        tile_rows = block[which > 0]
+            block[at] = quantise(w, row_bytes)
+            if skin.flutter is not None:
+                share = np.clip(np.asarray(skin.flutter(positions), np.float64), 0.0, 1.0)
+                block[at, row_bytes - 1] = np.round(share * QUANT).astype(np.int8)
+        tile_rows = block[takes_rows[which]]
         tile_doc[tile.checksum] = {"skins": _rle(which), "row": row}
         rows.append(tile_rows)
         row += len(tile_rows)
-    blob = (np.concatenate(rows) if rows else np.zeros((0, ROW_BYTES), np.int8)).tobytes()
+    blob = (np.concatenate(rows) if rows else np.zeros((0, row_bytes), np.int8)).tobytes()
     document = {
         "format": FORMAT,
         "version": VERSION,
         "frame": FRAME,
         "formula": FORMULA,
-        "method": {
-            "name": "simplicits-rkpm",
-            "source": "NVIDIA Kaolin (Apache-2.0), vendored in tools/captures/kaolin_rkpm.py",
-            "material": {"uniform": True, "poisson": POISSON},
-        },
+        "method": method or DEFAULT_METHOD,
         "weights": {
             "file": "skin.bin",
             "dtype": "int8",
-            "rowBytes": ROW_BYTES,
+            "rowBytes": row_bytes,
             "scale": 1.0 / QUANT,
             "rows": row,
         },
@@ -607,12 +715,14 @@ def build(
                         "gram": _upper(s.anchor_gram),
                     },
                 },
+                **s.extra,
             }
             for s in skins
         ],
         "tiles": tile_doc,
         "tilesEncoding": "rle [skin, count, ...] in the tile's own order (0: no skin); "
-        "skinned splats take consecutive rows of skin.bin from `row`",
+        "skinned splats take consecutive rows of skin.bin from `row` (a skin of one handle "
+        "takes none)",
     }
     return Built(document, blob, skins, clipped)
 
@@ -637,12 +747,16 @@ def link_skin(tileset: Path, count: int, uri: str = "skin.json") -> None:
 def decode_tiles(document: dict, blob: bytes) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """Per tile checksum, every splat's skin id and int8 row (zeros where unskinned): what the
     viewer decodes, for round-trip checks."""
-    rows = np.frombuffer(blob, np.int8).reshape(-1, ROW_BYTES)
+    row_bytes = int(document["weights"].get("rowBytes", ROW_BYTES))
+    rows = np.frombuffer(blob, np.int8).reshape(-1, row_bytes)
+    handles = np.zeros(1 + max((int(s["id"]) for s in document["skins"]), default=0), np.int64)
+    for s in document["skins"]:
+        handles[int(s["id"])] = int(s["handles"])
     out: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for checksum, entry in document["tiles"].items():
         which = decode_runs(entry["skins"])
-        block = np.zeros((which.size, ROW_BYTES), np.int8)
-        skinned = which > 0
+        block = np.zeros((which.size, row_bytes), np.int8)
+        skinned = handles[np.clip(which, 0, handles.size - 1)] > 1
         start = int(entry["row"])
         block[skinned] = rows[start : start + int(skinned.sum())]
         out[checksum] = (which, block)

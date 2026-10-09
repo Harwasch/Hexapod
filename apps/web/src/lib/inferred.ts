@@ -60,6 +60,65 @@ export function resolveLayerUrl(tilesetUrl: string, uri: string): string {
   return resolved.href;
 }
 
+/**
+ * How inferred layers are drawn (a viewer's setting, `inferredStyle`): as they are, marked
+ * unmistakably (`INFERRED_HIGHLIGHT`), or not at all. The measured splats are never touched.
+ */
+export type InferredStyle = "show" | "highlight" | "hide";
+
+/** Every style, in the order the viewer offers them. */
+export const INFERRED_STYLES: readonly InferredStyle[] = ["show", "highlight", "hide"];
+
+export const INFERRED_STYLE_LABELS: Record<InferredStyle, string> = {
+  show: "Show",
+  highlight: "Highlight",
+  hide: "Hide",
+};
+
+/** The one line that says what inferred is, wherever it can be seen. */
+export const INFERRED_LEGEND = "Inferred: generated where no camera saw. Not measured.";
+
+/** The purple accent of inferred content, sRGB (the legend's swatch is the same colour). */
+export const INFERRED_PURPLE = "#b36bff";
+
+/**
+ * What Highlight does to an inferred splat (cesium/inferredLayers.ts): its colour pulled toward
+ * the purple (`tint`: `INFERRED_PURPLE` as the splats' own colours are stored, by `a`), every
+ * other band of `stripeM` metres across the layer darkened to `stripeDark`, and its opacity
+ * times `opacity` -- so a fill reads as hatched, see-through purple whatever colour it was
+ * painted.
+ */
+export const INFERRED_HIGHLIGHT = {
+  tint: [0.7, 0.42, 1.0, 0.7] as const,
+  stripeM: 0.35,
+  stripeDark: 0.45,
+  opacity: 0.8,
+};
+
+/**
+ * What Highlight does to one inferred splat's colour (straight alpha) at `position` (metres, in
+ * its layer's frame): the reference every renderer's shader follows (`INFERRED_COLOR_GLSL`, the
+ * overlay's `LAYER_LOOK_GLSL`), for tests. As painted when `highlight` is off.
+ */
+export function inferredHighlightColor(
+  color: readonly [number, number, number, number],
+  position: readonly [number, number, number],
+  highlight: boolean,
+): [number, number, number, number] {
+  if (!highlight) return [color[0], color[1], color[2], color[3]];
+  const { tint, stripeM, stripeDark, opacity } = INFERRED_HIGHLIGHT;
+  const along = (position[0] + position[1] + position[2]) * 0.57735027;
+  const band = along / stripeM - Math.floor(along / stripeM);
+  const shade = band < 0.5 ? 1 : stripeDark;
+  const mix = (c: number, t: number): number => (c + (t - c) * tint[3]) * shade;
+  return [
+    mix(color[0], tint[0]),
+    mix(color[1], tint[1]),
+    mix(color[2], tint[2]),
+    color[3] * opacity,
+  ];
+}
+
 /** One line for a reader: what painted it and from how much. */
 export function describeEvidence(e: InferredEvidence): string {
   const confidence = Math.round(e.meanConfidence * 100);
