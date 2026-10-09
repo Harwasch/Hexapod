@@ -57,6 +57,14 @@ const timing: Middleware = {
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+/** Pilot land records are private to the deployment, including reads. */
+function needsToken(request: Request): boolean {
+  const path = new URL(request.url).pathname;
+  return (
+    !SAFE_METHODS.has(request.method) || path === "/api/v1/land" || path.startsWith("/api/v1/land/")
+  );
+}
+
 /**
  * Attaches the write token to mutating API calls, and notices when one is demanded.
  *
@@ -74,7 +82,7 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export const auth: Middleware = {
   onRequest({ request }) {
     const token = useSettings.getState().writeToken.trim();
-    if (token && !SAFE_METHODS.has(request.method)) {
+    if (token && needsToken(request)) {
       request.headers.set("Authorization", `Bearer ${token}`);
     }
     return request;
@@ -82,7 +90,7 @@ export const auth: Middleware = {
   onResponse({ request, response }) {
     // The affordance appears on a 401 and never before it: with no token configured
     // server-side the API leaves writes open, and local development must need no prompt.
-    if (response.status === 401 && !SAFE_METHODS.has(request.method)) {
+    if (response.status === 401 && needsToken(request)) {
       useUi.getState().setWriteTokenPrompt(true);
     }
     return response;

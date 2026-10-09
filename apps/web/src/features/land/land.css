@@ -1,0 +1,299 @@
+.land-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.land-workspace h3 {
+  font-size: 25px;
+  line-height: 1.15;
+  margin: 8px 0 12px;
+  font-weight: 560;
+  letter-spacing: -0.04em;
+}
+.land-workspace h4 {
+  font-size: 12px;
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.land-workspace p {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  color: var(--text-secondary, #b4bbb3);
+}
+.land-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 10px;
+  color: var(--accent-strong);
+}
+.land-intro {
+  padding: 6px 0;
+}
+.land-workspace button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.land-workspace button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.land-workspace button:focus-visible,
+.land-workspace input:focus-visible,
+.land-workspace textarea:focus-visible,
+.land-workspace select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.land-methods {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.land-methods > button {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  text-align: left;
+  border: 1px solid #81968333;
+  border-radius: 12px;
+  background: #a5c4a507;
+  padding: 15px 12px;
+  min-height: 66px;
+}
+.land-methods > button:hover {
+  background: #a5c4a518;
+  border-color: #a5c4a555;
+}
+.land-methods > button > svg:first-child {
+  color: var(--accent-strong);
+  flex-shrink: 0;
+}
+.land-methods span,
+.land-library button span {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+}
+.land-methods strong,
+.land-library strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.land-methods small,
+.land-library small {
+  color: var(--text-secondary, #adb5a9);
+  font-size: 11px;
+}
+.land-workspace .land-footnote {
+  font-size: 11px;
+  color: var(--text-secondary, #adb5a9);
+  line-height: 1.6;
+}
+.land-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.land-width {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.land-width > div {
+  display: flex;
+  gap: 8px;
+}
+.land-width input {
+  min-width: 0;
+  width: 100%;
+}
+.land-width small {
+  color: var(--text-secondary, #adb5a9);
+  font-size: 11px;
+}
+.land-workspace input,
+.land-workspace textarea,
+.land-workspace select {
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--control-border);
+  background: #00000020;
+  border-radius: 8px;
+  padding: 10px;
+}
+.land-workspace select option {
+  color: #eee;
+  background: #222;
+}
+.land-name {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+.land-name input {
+  font-size: 20px;
+  letter-spacing: -0.025em;
+}
+.land-name textarea {
+  resize: vertical;
+  font-size: 13px;
+  min-height: 65px;
+}
+.land-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.land-actions button,
+.land-history button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--control-border);
+  background: #a5c4a508;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 8px 11px;
+  font-size: 12px;
+}
+.land-actions .land-primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--on-accent-fill);
+  font-weight: 600;
+}
+.land-place-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.land-place-heading button {
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: transparent;
+}
+.land-workspace .land-title {
+  margin: -10px 0 0;
+}
+.land-metrics {
+  display: flex;
+  gap: 30px;
+  padding: 18px 0;
+  border-top: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+}
+.land-metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.land-metrics strong {
+  font-size: 21px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.land-metrics span {
+  font-size: 11px;
+  color: var(--text-secondary, #adb5a9);
+}
+.land-source {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12px;
+}
+.land-source svg {
+  flex-shrink: 0;
+  color: var(--accent-strong);
+}
+.land-source > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.land-source strong {
+  font-weight: 500;
+}
+.land-source span,
+.land-source small {
+  font-size: 11px;
+  color: var(--text-secondary, #adb5a9);
+}
+.land-library {
+  border-top: 1px solid var(--divider);
+  padding-top: 17px;
+}
+.land-library h4 {
+  display: flex;
+  justify-content: space-between;
+}
+.land-library button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 8px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+.land-library button:hover,
+.land-library .is-selected {
+  background: #a5c4a512;
+  border-color: var(--control-border);
+}
+.land-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 8px 0;
+  font-size: 12px;
+}
+.land-error,
+.land-notice {
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 12px;
+  border-radius: 8px;
+  background: #d9aa6410;
+  border: 1px solid #d9aa6433;
+}
+.land-error {
+  color: var(--danger);
+}
+.land-notice button {
+  background: none;
+  border: 0;
+  text-decoration: underline;
+}
+.land-history {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.land-history > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-left: 1px solid var(--control-border);
+  padding-left: 12px;
+  font-size: 12px;
+}
+.land-history small {
+  font-size: 10px;
+  color: var(--text-secondary, #adb5a9);
+}
+.land-file-input {
+  display: none;
+}

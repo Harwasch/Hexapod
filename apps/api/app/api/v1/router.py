@@ -11,6 +11,7 @@ from app.api.v1 import (
     captures,
     ion,
     jobs,
+    land,
     layers,
     live,
     phone,
@@ -46,3 +47,4 @@ api_v1.include_router(live.router)
 api_v1.include_router(artifacts.router)
 api_v1.include_router(recipes.router)
 api_v1.include_router(storage.router)
+api_v1.include_router(land.router)

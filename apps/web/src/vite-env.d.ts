@@ -11,6 +11,7 @@ declare global {
   }
 
   interface ImportMetaEnv {
+  readonly VITE_ENABLE_LAND_EXPLORATION?: string;
     readonly VITE_CESIUM_ION_ACCESS_TOKEN?: string;
     readonly VITE_DEFAULT_SPLAT_ASSET_ID?: string;
     readonly VITE_DEFAULT_MESH_ASSET_ID?: string;

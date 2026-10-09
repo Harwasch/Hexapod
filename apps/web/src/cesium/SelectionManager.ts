@@ -227,6 +227,14 @@ export class SelectionManager {
     let picked: unknown;
     try {
       picked = await this.scene.pickAsync(position);
+      // The active study boundary is context, not the inspected feature. Look
+      // through its fill/outline so it cannot cover a creek, pole, or other data.
+      if (isEntityPick(picked) && picked.id.id.startsWith("land-boundary:")) {
+        const beneath: unknown[] = this.scene.drillPick(position, 32);
+        picked = beneath.find(
+          (candidate) => !isEntityPick(candidate) || !candidate.id.id.startsWith("land-boundary:"),
+        );
+      }
     } catch {
       picked = undefined;
     }
@@ -251,6 +259,7 @@ export class SelectionManager {
       isEntityPick(picked) &&
       typeof picked.id.id === "string" &&
       (picked.id.id.startsWith(AREA_HANDLE_PREFIX) ||
+        picked.id.id.startsWith("land-boundary:") ||
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
       return;
@@ -523,7 +532,9 @@ export class SelectionManager {
       // camera is currently moving or merely paused between two mouse events of a drag.
       if (!this.enabled || !this.hoverEnabled || this.camera.isMoving || this.pointerHeld) return;
       const picked: unknown = this.scene.pick(this.hoverPosition);
-      const interactive = picked instanceof Cesium3DTileFeature || isEntityPick(picked);
+      const interactive =
+        picked instanceof Cesium3DTileFeature ||
+        (isEntityPick(picked) && !picked.id.id.startsWith("land-boundary:"));
       this.viewer.canvas.style.cursor = interactive ? "pointer" : "";
     }, HOVER_REST_MS);
   }

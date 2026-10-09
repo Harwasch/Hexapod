@@ -1,8 +1,9 @@
-import { Layers, Plus, Ruler, Settings2, type LucideIcon } from "lucide-react";
+import { LandPlot, Layers, Plus, Ruler, Settings2, type LucideIcon } from "lucide-react";
 
 import { GlassButton, GlassPanel, GlassTooltip } from "@twin/ui";
 
 import { HOTKEYS, hotkeyKeys, type HotkeyId } from "@/app/hotkeys";
+import { env } from "@/app/env";
 import { useUi, type ToolPanel } from "@/state/ui";
 
 interface Tool {
@@ -19,6 +20,9 @@ interface Tool {
  * Saved views are in the site switcher; the developer console is in Settings › Advanced.
  */
 const TOOLS: readonly Tool[] = [
+  ...(env.landExplorationEnabled
+    ? [{ id: "land" as const, label: "Land", icon: LandPlot, hotkey: "land" as const }]
+    : []),
   { id: "layers", label: "Layers", icon: Layers, hotkey: "layers" },
   { id: "measure", label: "Measure", icon: Ruler, hotkey: "measure" },
   { id: "add", label: "Add", icon: Plus, hotkey: "captures" },

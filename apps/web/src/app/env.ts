@@ -34,6 +34,7 @@ export interface AppEnv {
   offlineCatalogUrl: string | undefined;
   photorealisticEnabled: boolean;
   devToolsEnabled: boolean;
+  landExplorationEnabled: boolean;
   /**
    * Whether Living Survey motion may run in the splat vertex shader (the engine patch's
    * `vertexMotion` hook) instead of CPU texture rewrites. On by default, and then each viewer's
@@ -55,6 +56,7 @@ export function readEnv(source: ImportMetaEnv = import.meta.env): AppEnv {
     // On unless switched off: the ion token in use must have access to Google's tiles.
     photorealisticEnabled: flag(source.VITE_ENABLE_PHOTOREALISTIC, true),
     devToolsEnabled: source.DEV || flag(source.VITE_ENABLE_DEV_TOOLS),
+    landExplorationEnabled: flag(source.VITE_ENABLE_LAND_EXPLORATION),
     splatGpuMotion: flag(source.VITE_SPLAT_GPU_MOTION, true),
     isDev: source.DEV,
   };

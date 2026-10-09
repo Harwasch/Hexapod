@@ -16,6 +16,7 @@ from app.models.enums import (
     UploadStatus,
 )
 from app.models.job import Artifact, Job, JobStep
+from app.models.land import LandArea, LandBoundaryRevision
 from app.models.layer import Layer
 from app.models.plan import Plan, PlanRevision
 from app.models.site import Site
@@ -34,6 +35,8 @@ __all__ = [
     "GeorefMethod",
     "Job",
     "JobStep",
+    "LandArea",
+    "LandBoundaryRevision",
     "Layer",
     "LayerCategory",
     "LayerSourceType",

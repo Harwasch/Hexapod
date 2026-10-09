@@ -121,7 +121,7 @@ export class CesiumSceneManager {
   readonly tokenState: TokenState;
   private geocoderInstance: Geocoder;
   private destroyed = false;
-  private interactionMode: "select" | "measure" | "explore" = "select";
+  private interactionMode: "select" | "measure" | "explore" | "land" = "select";
   private exploring = false;
   private insideScan = false;
   private scanAltitude = Number.POSITIVE_INFINITY;
@@ -551,7 +551,7 @@ export class CesiumSceneManager {
   }
 
   /** Measuring and exploring take over the pointer; selection yields. */
-  setInteractionMode(mode: "select" | "measure" | "explore"): void {
+  setInteractionMode(mode: "select" | "measure" | "explore" | "land"): void {
     this.interactionMode = mode;
     this.selection.setEnabled(this.selectionWanted());
     if (mode !== "measure") this.measurement.stop();

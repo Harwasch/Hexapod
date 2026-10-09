@@ -60,6 +60,7 @@ export const HOTKEYS = {
   planView: { combo: "2", label: "Plan view", group: "Views" },
   fleetView: { combo: "3", label: "Fleet view", group: "Views" },
   layers: { combo: "l", label: "Layers", group: "Tools" },
+  land: { combo: "shift+l", label: "Explore land", group: "Tools" },
   measure: { combo: "m", label: "Measure", group: "Tools" },
   captures: { combo: "u", label: "Add: upload a capture", group: "Tools" },
   compare: { combo: "c", label: "Compare layers", group: "Tools" },

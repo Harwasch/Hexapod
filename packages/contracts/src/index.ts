@@ -94,6 +94,12 @@ export type PlanRevisionRecord = Schemas["PlanRevisionRead"];
 export type PlanClarification = Schemas["Clarification"];
 export type PlanAnswerValue = string | number | boolean;
 export type GroundOutline = Schemas["Outline"];
+export type LandArea = Schemas["LandRead"];
+export type LandCreate = Schemas["LandCreate"];
+export type LandRevise = Schemas["LandRevise"];
+export type BoundarySource = Schemas["BoundarySource"];
+export type BoundaryRevision = Schemas["BoundaryRevisionRead"];
+export type BoundaryResult = Schemas["BoundaryResult"];
 export type OutlineRequest = Schemas["OutlineRequest"];
 
 /** Captures: an upload session and the source files it is made of. */

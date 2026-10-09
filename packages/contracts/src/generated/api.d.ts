@@ -506,6 +506,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Areas */
+        get: operations["list_areas_api_v1_land_get"];
+        put?: never;
+        /** Create Area */
+        post: operations["create_area_api_v1_land_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Area */
+        get: operations["get_area_api_v1_land__land_id__get"];
+        /** Revise Area */
+        put: operations["revise_area_api_v1_land__land_id__put"];
+        post?: never;
+        /** Delete Area */
+        delete: operations["delete_area_api_v1_land__land_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Area Revisions */
+        get: operations["area_revisions_api_v1_land__land_id__revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/corridor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make Corridor */
+        post: operations["make_corridor_api_v1_land_corridor_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Operate */
+        post: operations["operate_api_v1_land_operations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/layers": {
         parameters: {
             query?: never;
@@ -1176,6 +1264,66 @@ export interface components {
             /** File */
             file: string;
         };
+        /** BoundaryOperation */
+        BoundaryOperation: {
+            /** Left */
+            left: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "union" | "difference" | "intersection";
+            /** Right */
+            right: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+        };
+        /** BoundaryResult */
+        BoundaryResult: {
+            /** Aream2 */
+            areaM2: number;
+            /** Boundary */
+            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Perimeterm */
+            perimeterM: number;
+        };
+        /** BoundaryRevisionRead */
+        BoundaryRevisionRead: {
+            /** Boundary */
+            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Note */
+            note: string;
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["BoundarySource"];
+        };
+        /** BoundarySource */
+        BoundarySource: {
+            /** Attribution */
+            attribution?: string | null;
+            /** Label */
+            label: string;
+            /**
+             * Meaning
+             * @default study-area
+             * @enum {string}
+             */
+            meaning?: "study-area" | "recorded-parcel" | "physical-feature";
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "drawn" | "imported" | "parcel" | "mapped-feature" | "imagery" | "corridor";
+            /** Observedat */
+            observedAt?: string | null;
+            /** Recordid */
+            recordId?: string | null;
+            /** Url */
+            url?: string | null;
+        };
         /** BoundingBox */
         BoundingBox: {
             /** East */
@@ -1689,6 +1837,22 @@ export interface components {
             /** Value */
             value: string;
         };
+        /**
+         * CorridorRequest
+         * @description Total corridor width, not distance on each side of the centreline.
+         */
+        CorridorRequest: {
+            /**
+             * Cap
+             * @default round
+             * @enum {string}
+             */
+            cap?: "round" | "flat" | "square";
+            /** Coordinates */
+            coordinates: number[][];
+            /** Widthm */
+            widthM: number;
+        };
         /** CrsMetadata */
         CrsMetadata: {
             /** Horizontal */
@@ -1985,6 +2149,70 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+        };
+        /** LandCreate */
+        LandCreate: {
+            /** Boundary */
+            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Name */
+            name: string;
+            source: components["schemas"]["BoundarySource"];
+        };
+        /** LandRead */
+        LandRead: {
+            /** Aream2 */
+            areaM2: number;
+            /** Boundary */
+            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Description */
+            description: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Perimeterm */
+            perimeterM: number;
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["BoundarySource"];
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** LandRevise */
+        LandRevise: {
+            /** Boundary */
+            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Expectedrevision */
+            expectedRevision: number;
+            /** Name */
+            name: string;
+            /**
+             * Note
+             * @default Boundary revised
+             */
+            note?: string;
+            source: components["schemas"]["BoundarySource"];
         };
         /**
          * LayerCategory
@@ -3669,6 +3897,10 @@ export type SchemaAssetScaleUpdate = components['schemas']['AssetScaleUpdate'];
 export type SchemaAssetUpdate = components['schemas']['AssetUpdate'];
 export type SchemaAttribution = components['schemas']['Attribution'];
 export type SchemaBodyUploadThumbnailApiV1SitesSiteIdThumbnailPost = components['schemas']['Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post'];
+export type SchemaBoundaryOperation = components['schemas']['BoundaryOperation'];
+export type SchemaBoundaryResult = components['schemas']['BoundaryResult'];
+export type SchemaBoundaryRevisionRead = components['schemas']['BoundaryRevisionRead'];
+export type SchemaBoundarySource = components['schemas']['BoundarySource'];
 export type SchemaBoundingBox = components['schemas']['BoundingBox'];
 export type SchemaBusyWindow = components['schemas']['BusyWindow'];
 export type SchemaCameraBookmarkCreate = components['schemas']['CameraBookmarkCreate'];
@@ -3692,6 +3924,7 @@ export type SchemaCesiumIonSource = components['schemas']['CesiumIonSource'];
 export type SchemaCesiumIonTerrainSource = components['schemas']['CesiumIonTerrainSource'];
 export type SchemaClarification = components['schemas']['Clarification'];
 export type SchemaClarificationOption = components['schemas']['ClarificationOption'];
+export type SchemaCorridorRequest = components['schemas']['CorridorRequest'];
 export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
 export type SchemaCzmlSource = components['schemas']['CzmlSource'];
 export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];
@@ -3708,6 +3941,9 @@ export type SchemaJobRead = components['schemas']['JobRead'];
 export type SchemaJobRetry = components['schemas']['JobRetry'];
 export type SchemaJobStepLog = components['schemas']['JobStepLog'];
 export type SchemaJobStepRead = components['schemas']['JobStepRead'];
+export type SchemaLandCreate = components['schemas']['LandCreate'];
+export type SchemaLandRead = components['schemas']['LandRead'];
+export type SchemaLandRevise = components['schemas']['LandRevise'];
 export type SchemaLayerCategory = components['schemas']['LayerCategory'];
 export type SchemaLayerCreate = components['schemas']['LayerCreate'];
 export type SchemaLayerRead = components['schemas']['LayerRead'];
@@ -5690,6 +5926,479 @@ export interface operations {
             };
             /** @description Object storage is not configured */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_areas_api_v1_land_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_area_api_v1_land_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LandCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_area_api_v1_land__land_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revise_area_api_v1_land__land_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LandRevise"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_area_api_v1_land__land_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    area_revisions_api_v1_land__land_id__revisions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundaryRevisionRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    make_corridor_api_v1_land_corridor_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorridorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundaryResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    operate_api_v1_land_operations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BoundaryOperation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundaryResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -242,6 +242,24 @@ describe("the chunked uploader", () => {
 });
 
 describe("the write token", () => {
+  it("authenticates private land reads while keeping public catalog reads anonymous", async () => {
+    useSettings.getState().set({ writeToken: "land-token" });
+    const onRequest = auth.onRequest as (input: {
+      request: Request;
+    }) => Promise<Request | undefined> | Request | undefined;
+    for (const path of ["/api/v1/land?limit=50", "/api/v1/land/area-id/revisions"]) {
+      expect(
+        (await onRequest({ request: new Request(`https://api.invalid${path}`) }))?.headers.get(
+          "Authorization",
+        ),
+      ).toBe("Bearer land-token");
+    }
+    expect(
+      (await onRequest({ request: new Request("https://api.invalid/api/v1/sites") }))?.headers.get(
+        "Authorization",
+      ),
+    ).toBeNull();
+  });
   it("rides on writes, stays off reads, and is asked for only after a 401", async () => {
     useSettings.getState().set({ writeToken: "s3cret" });
     const read = new Request("https://api.invalid/api/v1/captures");

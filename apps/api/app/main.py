@@ -133,7 +133,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.api_cors_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         # Authorization carries the write token, so the preflight has to allow it or
         # every browser write fails before it is sent.
         allow_headers=["Content-Type", "Accept", "Authorization"],
