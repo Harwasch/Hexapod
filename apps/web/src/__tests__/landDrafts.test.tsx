@@ -184,3 +184,25 @@ it("recovers a draft as a separate area when its original land has been deleted"
   await waitFor(() => expect(useLand.getState().draft?.name).toBe(draft.name));
   expect(useLand.getState().active).toBeNull();
 });
+
+it.each(["split", "difference"] as const)(
+  "recovers the %s operation with its original boundary",
+  async (operation) => {
+    const first = render(<LandDraftRecovery scope="pilot" />);
+    act(() => {
+      useLand.getState().propose(draft);
+      if (operation === "difference") useLand.getState().setBoundaryOperation(operation);
+      useLand.getState().begin(operation === "split" ? "split" : "draw");
+      useLand.getState().addPoint([0.5, -0.1]);
+      useLand.getState().addPoint([0.5, 1.1]);
+    });
+    first.unmount();
+    useLand.getState().clear();
+    render(<LandDraftRecovery scope="pilot" />);
+    fireEvent.click(screen.getByRole("button", { name: "Resume drawing" }));
+    await waitFor(() => expect(useLand.getState().points).toHaveLength(2));
+    expect(useLand.getState().draft).toEqual(draft);
+    expect(useLand.getState().mode).toBe(operation === "split" ? "split" : "draw");
+    expect(useLand.getState().boundaryOperation).toBe(operation === "split" ? null : "difference");
+  },
+);

@@ -6,7 +6,7 @@ from typing import Any
 
 from geoalchemy2 import Geometry
 from pydantic import TypeAdapter
-from sqlalchemy import ColumnElement, cast, func, select
+from sqlalchemy import ColumnElement, cast, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.land import LandArea, LandBoundaryRevision
@@ -16,6 +16,8 @@ from app.schemas.land import (
     BoundaryResult,
     BoundaryRevisionRead,
     BoundarySource,
+    BoundarySplit,
+    BoundarySplitResult,
     CorridorRequest,
     LandCreate,
     LandRead,
@@ -216,3 +218,55 @@ def operate(db: Session, payload: BoundaryOperation) -> BoundaryResult:
             func.ST_SetSRID(func.ST_GeomFromGeoJSON(payload.right.model_dump_json()), 4326),
         ),
     )
+
+
+def split_boundary(db: Session, payload: BoundarySplit) -> BoundarySplitResult:
+    """Preview a planar GeoJSON cut; only an explicit land save changes a record."""
+    rows = db.execute(
+        text("""
+        WITH cut AS (
+            SELECT ST_Split(
+                ST_Force2D(ST_SetSRID(ST_GeomFromGeoJSON(:boundary), 4326)),
+                ST_Force2D(ST_SetSRID(ST_GeomFromGeoJSON(:line), 4326))
+            ) AS geom
+        ), pieces AS (
+            SELECT (ST_Dump(ST_CollectionExtract(geom, 3))).geom AS geom FROM cut
+        )
+        SELECT ST_AsGeoJSON(geom, 15), ST_Area(geom::geography),
+               ST_Perimeter(geom::geography), ST_NPoints(geom)
+        FROM pieces ORDER BY ST_AsEWKB(ST_Normalize(geom)) LIMIT 101
+        """),
+        {
+            "boundary": payload.boundary.model_dump_json(),
+            "line": json.dumps({"type": "LineString", "coordinates": payload.coordinates}),
+        },
+    ).all()
+    original_parts = 1 if payload.boundary.type == "Polygon" else len(payload.boundary.coordinates)
+    if len(rows) <= original_parts:
+        raise InvalidInputError(
+            "The line did not divide the land. Draw from outside one edge to outside another."
+        )
+    if len(rows) > 100 or sum(row[3] for row in rows) > 20_000:
+        raise InvalidInputError("This cut creates too many pieces or vertices. Use a simpler line.")
+    parts = [
+        BoundaryResult(
+            boundary=FOOTPRINT.validate_json(geometry), area_m2=area, perimeter_m=perimeter
+        )
+        for geometry, area, perimeter, _ in rows
+    ]
+    selection = None
+    if payload.keep_parts is not None:
+        indices = sorted(set(payload.keep_parts))
+        if indices[-1] >= len(parts):
+            raise InvalidInputError("A selected part is not in this split preview.")
+        geometries = [parts[index].boundary.model_dump(mode="json") for index in indices]
+        # Merge adjacent selected pieces before validating the result. A MultiPolygon
+        # whose members share a cut edge would otherwise be invalid.
+        collection = func.ST_SetSRID(
+            func.ST_GeomFromGeoJSON(
+                json.dumps({"type": "GeometryCollection", "geometries": geometries})
+            ),
+            4326,
+        )
+        selection = _result(db, func.ST_UnaryUnion(collection))
+    return BoundarySplitResult(parts=parts, selection=selection)

@@ -13,6 +13,8 @@ from app.schemas.land import (
     BoundaryOperation,
     BoundaryResult,
     BoundaryRevisionRead,
+    BoundarySplit,
+    BoundarySplitResult,
     CorridorRequest,
     LandCreate,
     LandRead,
@@ -58,6 +60,14 @@ def make_corridor(
 def operate(payload: BoundaryOperation, db: DbSession, workspace: WorkspaceDep) -> BoundaryResult:
     workspace.require("owner", "editor")
     return land.operate(db, payload)
+
+
+@router.post("/split", response_model=BoundarySplitResult)
+def split_boundary(
+    payload: BoundarySplit, db: DbSession, workspace: WorkspaceDep
+) -> BoundarySplitResult:
+    workspace.require("owner", "editor")
+    return land.split_boundary(db, payload)
 
 
 @router.get("/{land_id}", response_model=LandRead)

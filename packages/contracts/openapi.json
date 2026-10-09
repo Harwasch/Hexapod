@@ -1736,6 +1736,94 @@
         "title": "BoundarySource",
         "type": "object"
       },
+      "BoundarySplit": {
+        "additionalProperties": false,
+        "properties": {
+          "boundary": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "coordinates": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 2,
+              "type": "array"
+            },
+            "maxItems": 2000,
+            "minItems": 2,
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "keepParts": {
+            "anyOf": [
+              {
+                "items": {
+                  "exclusiveMaximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keepparts"
+          }
+        },
+        "required": [
+          "boundary",
+          "coordinates"
+        ],
+        "title": "BoundarySplit",
+        "type": "object"
+      },
+      "BoundarySplitResult": {
+        "additionalProperties": false,
+        "properties": {
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/BoundaryResult"
+            },
+            "title": "Parts",
+            "type": "array"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoundaryResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "title": "BoundarySplitResult",
+        "type": "object"
+      },
       "BoundingBox": {
         "additionalProperties": false,
         "properties": {
@@ -21737,6 +21825,101 @@
         "summary": "Download",
         "tags": [
           "land solar"
+        ]
+      }
+    },
+    "/api/v1/land/split": {
+      "post": {
+        "operationId": "split_boundary_api_v1_land_split_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BoundarySplit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundarySplitResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Split Boundary",
+        "tags": [
+          "land"
         ]
       }
     },

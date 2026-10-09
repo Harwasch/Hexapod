@@ -33,6 +33,7 @@ export function LandBridge() {
         );
       }
       controller.setMode(mode);
+      controller.setSnapping(state.snapEnabled);
       const boundary = state.draft?.boundary ?? state.active?.boundary ?? null;
       const editing = mode === "edit";
       if (boundary !== shownBoundary || state.points !== shownPoints || editing !== shownEditing) {

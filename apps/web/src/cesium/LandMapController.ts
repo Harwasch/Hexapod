@@ -4,6 +4,7 @@ import {
   Cartographic,
   Color,
   ColorMaterialProperty,
+  ConstantPositionProperty,
   Entity,
   HeightReference,
   Math as CesiumMath,
@@ -16,6 +17,7 @@ import type { Footprint } from "@twin/contracts";
 import { boundsOf, polygonsOf } from "@twin/geo";
 
 import { useLandContext } from "@/state/landContext";
+import { nearestBoundaryPoint } from "@/features/land/boundarySnap";
 
 import type { LandMode, LandPoint } from "@/state/land";
 
@@ -33,6 +35,8 @@ export class LandMapController {
   private mode: LandMode = "browse";
   private dragging: { polygon: number; ring: number; vertex: number } | null = null;
   private cameraInputs = true;
+  private snapEnabled = true;
+  private snapMarker: Entity | null = null;
   private readonly release = () => this.finishDrag();
 
   constructor(
@@ -51,13 +55,62 @@ export class LandMapController {
     const world = hit ?? viewer.camera.pickEllipsoid(position, scene.globe.ellipsoid);
     if (!world) return null;
     const at = Cartographic.fromCartesian(world);
-    return [CesiumMath.toDegrees(at.longitude), CesiumMath.toDegrees(at.latitude)];
+    const point: LandPoint = [
+      CesiumMath.toDegrees(at.longitude),
+      CesiumMath.toDegrees(at.latitude),
+    ];
+    const target =
+      this.snapEnabled && this.footprint && this.mode !== "pick" && this.mode !== "candidates"
+        ? nearestBoundaryPoint(this.footprint, point, this.dragging)
+        : null;
+    if (target) {
+      const height = scene.globe.getHeight(Cartographic.fromDegrees(...target)) ?? 0;
+      const world = Cartesian3.fromDegrees(...target, height);
+      const screen = scene.cartesianToCanvasCoordinates(world);
+      if (screen && Math.hypot(screen.x - position.x, screen.y - position.y) <= 12) {
+        this.showSnap(target);
+        return target;
+      }
+    }
+    this.showSnap(null);
+    return point;
+  }
+
+  setSnapping(enabled: boolean): void {
+    this.snapEnabled = enabled;
+    if (!enabled) this.showSnap(null);
+  }
+
+  private showSnap(point: LandPoint | null): void {
+    if (!point && !this.snapMarker) return;
+    if (point && this.snapMarker) {
+      this.snapMarker.position = new ConstantPositionProperty(Cartesian3.fromDegrees(...point));
+      this.host.scene.requestRender();
+      return;
+    }
+    if (this.snapMarker) this.host.viewer.entities.remove(this.snapMarker);
+    this.snapMarker = point
+      ? this.host.viewer.entities.add({
+          id: `${PREFIX}snap`,
+          position: Cartesian3.fromDegrees(...point),
+          point: {
+            pixelSize: 17,
+            color: Color.TRANSPARENT,
+            outlineColor: Color.GOLD,
+            outlineWidth: 3,
+            heightReference: HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        })
+      : null;
+    if (!this.host.isDestroyed) this.host.scene.requestRender();
   }
 
   setMode(mode: LandMode): void {
     if (this.mode === mode) return;
     this.finishDrag();
     this.mode = mode;
+    this.showSnap(null);
     this.handler?.destroy();
     this.handler = null;
     const canvas = this.host.scene.canvas;
@@ -113,9 +166,9 @@ export class LandMapController {
       this.host.scene.screenSpaceCameraController.enableInputs = false;
     }, ScreenSpaceEventType.LEFT_DOWN);
     handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
-      if (!this.dragging || !this.footprint) return;
+      if (this.mode === "edit" && !this.dragging) return;
       const point = this.ground(event.endPosition);
-      if (!point) return;
+      if (!point || !this.dragging || !this.footprint) return;
       const copy = structuredClone(this.footprint);
       const { polygon, ring, vertex } = this.dragging;
       const coordinates = polygonsOf(copy)[polygon]?.[ring];
@@ -130,6 +183,7 @@ export class LandMapController {
   private finishDrag(): void {
     if (!this.dragging) return;
     this.dragging = null;
+    this.showSnap(null);
     this.host.scene.screenSpaceCameraController.enableInputs = this.cameraInputs;
     if (this.footprint) this.change(this.footprint);
   }
@@ -216,6 +270,7 @@ export class LandMapController {
   destroy(): void {
     this.finishDrag();
     this.handler?.destroy();
+    this.showSnap(null);
     this.entities.forEach((entity) => this.host.viewer.entities.remove(entity));
     this.host.scene.canvas.style.cursor = "";
     window.removeEventListener("pointerup", this.release);

@@ -789,3 +789,9 @@
 .land-view-list { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 12px; }
 .land-view-list > li { border-top: 1px solid #465565; padding-top: 10px; display: grid; gap: 6px; overflow-wrap: anywhere; }
 .land-saved-views input { min-width: 0; max-width: 100%; box-sizing: border-box; }
+
+.land-snap-toggle { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
+.land-snap-toggle input { width: 18px; height: 18px; }
+.land-snap-toggle small { flex-basis: 100%; color: var(--text-muted); }
+.land-split-pieces label { display: flex; align-items: center; flex: 1; gap: 8px; min-width: 0; min-height: 44px; padding: 4px 8px; cursor: pointer; }
+.land-split-pieces input { width: 18px; height: 18px; flex-shrink: 0; }

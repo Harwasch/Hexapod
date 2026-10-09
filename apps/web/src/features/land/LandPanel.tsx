@@ -31,6 +31,7 @@ import { WriteTokenField } from "../captures/WriteTokenField";
 import { createCorridor, createLand, reviseLand, useBoundaryHistory, useLandAreas } from "./api";
 import { LandDraftRecovery } from "./LandDraftRecovery";
 import { LandBoundaryImport } from "./LandBoundaryImport";
+import { LandBoundarySplit } from "./LandBoundarySplit";
 import "./land.css";
 import { LandWorkspaceResizer } from "./LandWorkspaceResizer";
 import { LandCandidatePicker } from "./LandCandidatePicker";
@@ -63,9 +64,8 @@ export function LandPanel() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const history = useBoundaryHistory(open && historyOpen ? (state.active?.id ?? null) : null);
   const [busy, setBusy] = useState(false);
-  const [combination, setCombination] = useState<"union" | "difference" | "intersection" | null>(
-    null,
-  );
+  const combination = state.boundaryOperation;
+  const setCombination = state.setBoundaryOperation;
   const { corridorWidth: width, corridorUnit: unit } = state;
   const fileInput = useRef<HTMLInputElement>(null);
   const operation = useRef(0);
@@ -343,6 +343,19 @@ export function LandPanel() {
         )}
 
         <LandCandidatePicker key={state.session} />
+        {visible &&
+          (mode === "draw" || mode === "corridor" || mode === "split" || mode === "edit") && (
+            <label className="land-snap-toggle">
+              <input
+                type="checkbox"
+                checked={state.snapEnabled}
+                onChange={(event) => state.setSnapEnabled(event.target.checked)}
+              />
+              Snap to this boundary
+              <small>A gold ring marks an exact edge or corner within reach of the pointer.</small>
+            </label>
+          )}
+        {mode === "split" && draft && <LandBoundarySplit key={`${scope}:${state.session}`} />}
 
         {(mode === "draw" || mode === "corridor" || mode === "pick") && (
           <div className="land-selection">
@@ -509,6 +522,9 @@ export function LandPanel() {
                   </p>
                 )}
                 <div className="land-actions" aria-label="Combine boundary shapes">
+                  <button type="button" disabled={!scene || busy} onClick={() => begin("split")}>
+                    Split with a line
+                  </button>
                   {(
                     [
                       ["union", "Add an area"],

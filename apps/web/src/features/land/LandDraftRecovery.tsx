@@ -10,7 +10,7 @@ import { importBoundary } from "./geometry";
 
 const PREFIX = "living-world-land-draft:";
 interface SavedDraft {
-  version: 2;
+  version: 3;
   draft: LandCreate | null;
   sketch: LandSketch | null;
   activeId: string | null;
@@ -23,15 +23,20 @@ function readDraft(key: string): SavedDraft | null {
     const text = localStorage.getItem(key);
     if (!text || text.length > 4_000_000) return null;
     const value = JSON.parse(text) as Omit<SavedDraft, "version"> & { version: number };
-    if (value.version !== 1 && value.version !== 2) return null;
+    if (![1, 2, 3].includes(value.version)) return null;
     if (value.draft) {
       if (typeof value.draft.name !== "string" || !value.draft.source) return null;
       importBoundary(JSON.stringify(value.draft.boundary));
     }
-    const sketch = value.version === 2 ? value.sketch : null;
+    const sketch = value.version >= 2 ? value.sketch : null;
     if (sketch) {
       if (
-        !["draw", "corridor"].includes(sketch.mode) ||
+        !["draw", "corridor", "split"].includes(sketch.mode) ||
+        (sketch.mode === "split" && !value.draft) ||
+        (sketch.operation != null &&
+          (sketch.mode !== "draw" ||
+            !value.draft ||
+            !["union", "difference", "intersection"].includes(sketch.operation))) ||
         !Array.isArray(sketch.points) ||
         !sketch.points.length ||
         sketch.points.length > 2000 ||
@@ -54,7 +59,7 @@ function readDraft(key: string): SavedDraft | null {
     if (value.activeId != null && typeof value.activeId !== "string") return null;
     if (value.activeId && (!Number.isInteger(value.revision) || (value.revision ?? 0) < 1))
       return null;
-    return { ...value, version: 2, draft: value.draft ?? null, sketch: sketch ?? null };
+    return { ...value, version: 3, draft: value.draft ?? null, sketch: sketch ?? null };
   } catch {
     return null;
   }
@@ -72,10 +77,11 @@ export function LandDraftRecovery({ scope }: { scope: string }) {
   useEffect(() => {
     const store = () => {
       if (pending.current || landScope() !== scope) return;
-      const { draft, active, mode, points, corridorWidth, corridorUnit } = useLand.getState();
+      const { draft, active, mode, points, corridorWidth, corridorUnit, boundaryOperation } =
+        useLand.getState();
       const sketch: LandSketch | null =
-        (mode === "draw" || mode === "corridor") && points.length
-          ? { mode, points, width: corridorWidth, unit: corridorUnit }
+        (mode === "draw" || mode === "corridor" || mode === "split") && points.length
+          ? { mode, points, width: corridorWidth, unit: corridorUnit, operation: boundaryOperation }
           : null;
       try {
         if (!draft && !sketch) localStorage.removeItem(key);
@@ -83,7 +89,7 @@ export function LandDraftRecovery({ scope }: { scope: string }) {
           localStorage.setItem(
             key,
             JSON.stringify({
-              version: 2,
+              version: 3,
               draft,
               sketch,
               activeId: active?.id ?? null,
@@ -101,12 +107,13 @@ export function LandDraftRecovery({ scope }: { scope: string }) {
         next.points !== previous.points ||
         next.mode !== previous.mode ||
         next.corridorWidth !== previous.corridorWidth ||
+        next.boundaryOperation !== previous.boundaryOperation ||
         next.corridorUnit !== previous.corridorUnit
       ) {
         // A deliberate new edit replaces the previous recoverable draft.
         if (
           (next.draft && next.draft !== previous.draft) ||
-          ((next.mode === "draw" || next.mode === "corridor") &&
+          ((next.mode === "draw" || next.mode === "corridor" || next.mode === "split") &&
             next.points.length &&
             next.points !== previous.points)
         ) {
@@ -185,9 +192,13 @@ export function LandDraftRecovery({ scope }: { scope: string }) {
       <strong>
         Resume{" "}
         {saved.sketch
-          ? saved.sketch.mode === "corridor"
-            ? "your corridor"
-            : "your drawing"
+          ? saved.sketch.mode === "split"
+            ? "your boundary split"
+            : saved.sketch.operation
+              ? "your boundary composition"
+              : saved.sketch.mode === "corridor"
+                ? "your corridor"
+                : "your drawing"
           : saved.draft?.name}
       </strong>
       <p>

@@ -1482,6 +1482,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Split Boundary */
+        post: operations["split_boundary_api_v1_land_split_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/layers": {
         parameters: {
             query?: never;
@@ -2847,6 +2864,21 @@ export interface components {
             recordId?: string | null;
             /** Url */
             url?: string | null;
+        };
+        /** BoundarySplit */
+        BoundarySplit: {
+            /** Boundary */
+            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Coordinates */
+            coordinates: number[][];
+            /** Keepparts */
+            keepParts?: number[] | null;
+        };
+        /** BoundarySplitResult */
+        BoundarySplitResult: {
+            /** Parts */
+            parts: components["schemas"]["BoundaryResult"][];
+            selection?: components["schemas"]["BoundaryResult"] | null;
         };
         /** BoundingBox */
         BoundingBox: {
@@ -8493,6 +8525,8 @@ export type SchemaBoundaryOperation = components['schemas']['BoundaryOperation']
 export type SchemaBoundaryResult = components['schemas']['BoundaryResult'];
 export type SchemaBoundaryRevisionRead = components['schemas']['BoundaryRevisionRead'];
 export type SchemaBoundarySource = components['schemas']['BoundarySource'];
+export type SchemaBoundarySplit = components['schemas']['BoundarySplit'];
+export type SchemaBoundarySplitResult = components['schemas']['BoundarySplitResult'];
 export type SchemaBoundingBox = components['schemas']['BoundingBox'];
 export type SchemaBusyWindow = components['schemas']['BusyWindow'];
 export type SchemaCameraBookmarkCreate = components['schemas']['CameraBookmarkCreate'];
@@ -15463,6 +15497,68 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                     "application/zip": string;
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    split_boundary_api_v1_land_split_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BoundarySplit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundarySplitResult"];
                 };
             };
             /** @description Missing or wrong write token */

@@ -8,10 +8,10 @@ Apply **all migrations through the current Alembic head**, not just the first la
 
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
-| Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
+| Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, reviewed line splitting, boundary edge/corner snapping, geospatial imports, revisions, reviewed-draft and unfinished-operation recovery | Broader cadastral coverage, snapping to external mapped features, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, linked map/list feature inspection with source evidence, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
-| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
+| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | Verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool; browser draft recovery, workflow-state conflict review and lost-save reconciliation | Fleet execution integration, richer step geometry editing and full acceptance evaluation |
@@ -21,6 +21,12 @@ Apply **all migrations through the current Alembic head**, not just the first la
 Land exploration is independent of mission planning. The selected land persists while a
 person inspects features, follows evidence, compares scenarios, and eventually chooses an
 action. Existing selection and planning interactions are not the design constraint.
+
+The warehouse-roof/solar example illustrates extensibility; it is not a required first-class
+product workflow. Dedicated roof reconstruction, roof surveying and fitted panel layouts are
+outside this feature's completion criteria. Existing solar calculations are optional tools
+within the general investigation/scenario framework. Prioritize open-ended, evidence-based
+research over a catalog of special-purpose product flows.
 
 Coverage: global baseline with deeper U.S. integrations. Data sources: open data only.
 Existing configured model and compute services can still be used. A physical outline,
@@ -382,7 +388,8 @@ Land exploration must work without a mission, machine, site, or operational proj
   visible while navigating Overview, Investigations, Scenarios, and Assets. Evidence opens
   alongside its finding without losing the conversation, map position, or active layers.
 - Prototype four complete journeys: home with neighboring parcels and exclusions; a
-  100-foot transmission corridor; ranch restoration; warehouse rooftop solar. Include
+  100-foot transmission corridor; ranch restoration; a user-defined investigation using
+  reusable analysis tools. Include
   first use, ambiguous selection, loading, incomplete coverage, errors, and returning users.
 - Use a shared artifact vocabulary for map layers, charts, tables, timelines, documents,
   images, comparisons, and downloadable analysis. Every artifact has a title, provenance,
@@ -547,7 +554,7 @@ large outputs remain interactive through pagination, tiling and progressive load
 | Ecology | Combine habitat, observations, remote sensing and surveys; distinguish observed species from potential habitat; protect obscured sensitive locations and honor record-level licenses |
 | Restoration | Estimate cover/change at supported resolution; define reference ecosystem, targets, treatments, costs and monitoring; request field/imagery evidence where species-level estimates are unsupported; compare versioned restoration scenarios |
 | Infrastructure | Import/detect candidate features, deduplicate, confirm identities and maintain asset geometry, attributes, inspections and change history; connect to existing renderable catalog assets without conflating the two models |
-| Solar and economics | Model usable roof area, exclusions, tilt/orientation, irradiance, shading, system losses, costs, tariffs and financing; calculate reproducible generation/cash flow/NPV/payback and sensitivity; show missing assumptions and user edits |
+| User-defined analysis | Compose reusable source, geometry, calculation and scenario tools in response to the user’s question; retain assumptions, provenance, units, uncertainty and reproducibility. Solar economics is one optional example, not a dedicated roof-analysis requirement |
 
 Domain tools share the evidence/artifact/scenario framework. New analyses register input
 schemas, algorithms, provenance requirements and renderers rather than introducing another
@@ -1789,3 +1796,35 @@ The complete feature remains in progress. The original checkout and deployment r
 Final checks for this increment: all seven land Chromium regression tests pass; targeted web
 lint and the production build pass. The build retains the existing PlayCanvas worker-module
 externalization warnings. The isolated preview API was restarted with the new source endpoint.
+
+
+## Implemented increment: reviewed boundary splitting and snapping
+
+`POST /land/split` previews the pieces produced by a drawn cut line. It preserves exclusions
+and disconnected land, bounds inputs/results, rejects a cut that does not divide the land,
+and returns measured area/perimeter for each part. Explicit `keepParts` selection merges
+adjacent retained pieces into a valid boundary. Neither preview nor selection writes a land
+record; the user reviews and saves the resulting draft through the normal revision flow.
+
+The editor exposes Split with a line, selectable mapped pieces, focus controls, cancellation,
+and undo after applying a choice. Original saved land remains unchanged. Responses arriving
+after the line, draft, session or identity changes cannot replace current work. Browser draft
+version 3 preserves both unfinished split lines and union/difference/intersection intent;
+older drawing/corridor captures remain readable. Restored splits require another preview and
+explicit piece selection.
+
+An optional Snap to this boundary control finds nearby corners/edges, including hole rings
+and disconnected polygons. A gold ring marks the target within 12 screen pixels. Dragging
+excludes the moved vertex and its incident edges so it does not stick to its former position.
+This snaps to the current GeoJSON boundary, not unseen parcel boundaries or imagery features.
+
+Validation: 14 land backend tests, 19 focused frontend tests and all seven land Chromium
+regressions pass. API type/lint checks, web type/lint checks and production build pass. The
+existing PlayCanvas worker-module externalization build warnings remain. The real Chromium/API
+check used the public National Mall software fixture: a near-corner click snapped exactly to
+[-77.045, 38.891], a two-point cut survived reload, and retaining one of two parts changed the
+draft while the saved record remained byte-for-byte unchanged. Desktop and 390px mobile checks
+reported no page errors or unintended overflow. The follow-up layout gives selection labels
+44px touch targets and uses the standard primary action styling. Screenshots were inspected.
+Artifacts: `/tmp/land-split-result.json`, `/tmp/land-split-desktop.png`,
+`/tmp/land-split-mobile.png`. No migration is needed; the isolated preview API was restarted.

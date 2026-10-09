@@ -98,3 +98,29 @@ class BoundaryResult(CamelModel):
     boundary: Footprint
     area_m2: float
     perimeter_m: float
+
+
+class BoundarySplit(CamelModel):
+    boundary: Footprint
+    coordinates: Annotated[list[Position], Field(min_length=2, max_length=2000)]
+    keep_parts: list[Annotated[int, Field(ge=0, lt=100)]] | None = Field(
+        default=None, min_length=1, max_length=100
+    )
+
+    @field_validator("boundary")
+    @classmethod
+    def bounded_boundary(cls, boundary: Footprint) -> Footprint:
+        return LandCreate.bounded_boundary(boundary)
+
+    @field_validator("coordinates")
+    @classmethod
+    def valid_line(cls, points: list[list[float]]) -> list[list[float]]:
+        CorridorRequest.valid_line(points)
+        if any(abs(a[0] - b[0]) > 180 for a, b in pairwise(points)):
+            raise ValueError("split antimeridian-crossing cuts into separate operations")
+        return points
+
+
+class BoundarySplitResult(CamelModel):
+    parts: list[BoundaryResult]
+    selection: BoundaryResult | None = None

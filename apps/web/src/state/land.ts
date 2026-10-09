@@ -4,16 +4,20 @@ import type { Footprint, LandArea, LandCreate } from "@twin/contracts";
 
 import { recordAction } from "./history";
 
-export type LandMode = "browse" | "draw" | "corridor" | "pick" | "candidates" | "edit";
+export type LandMode = "browse" | "draw" | "corridor" | "split" | "pick" | "candidates" | "edit";
+export type BoundaryOperation = "union" | "difference" | "intersection";
 export type LandPoint = [number, number];
 export interface LandSketch {
-  mode: "draw" | "corridor";
+  mode: "draw" | "corridor" | "split";
+  operation?: BoundaryOperation | null;
   points: LandPoint[];
   width: number;
   unit: "ft" | "m";
 }
 
 interface LandState {
+  snapEnabled: boolean;
+  setSnapEnabled: (enabled: boolean) => void;
   session: number;
   active: LandArea | null;
   draft: LandCreate | null;
@@ -21,6 +25,8 @@ interface LandState {
   points: LandPoint[];
   corridorWidth: number;
   corridorUnit: "ft" | "m";
+  boundaryOperation: BoundaryOperation | null;
+  setBoundaryOperation: (operation: BoundaryOperation | null) => void;
   setCorridorWidth: (width: number) => void;
   setCorridorUnit: (unit: "ft" | "m") => void;
   restoreSketch: (sketch: LandSketch, draft: LandCreate | null) => void;
@@ -39,6 +45,8 @@ interface LandState {
 
 /** The land under investigation is independent of the map's inspected feature. */
 export const useLand = create<LandState>()((set, get) => ({
+  snapEnabled: true,
+  setSnapEnabled: (snapEnabled) => set({ snapEnabled }),
   session: 0,
   active: null,
   draft: null,
@@ -46,6 +54,8 @@ export const useLand = create<LandState>()((set, get) => ({
   points: [],
   corridorWidth: 100,
   corridorUnit: "ft",
+  boundaryOperation: null,
+  setBoundaryOperation: (boundaryOperation) => set({ boundaryOperation }),
   setCorridorWidth: (corridorWidth) => set({ corridorWidth }),
   setCorridorUnit: (corridorUnit) =>
     set((state) => ({
@@ -62,6 +72,7 @@ export const useLand = create<LandState>()((set, get) => ({
       points: sketch.points,
       corridorWidth: sketch.width,
       corridorUnit: sketch.unit,
+      boundaryOperation: sketch.operation ?? null,
       error: null,
       session: state.session + 1,
     })),
@@ -70,6 +81,7 @@ export const useLand = create<LandState>()((set, get) => ({
     set((s) => ({
       active,
       draft: null,
+      boundaryOperation: null,
       mode: "browse",
       points: [],
       error: null,
@@ -78,10 +90,15 @@ export const useLand = create<LandState>()((set, get) => ({
   begin: (mode) =>
     set((s) => ({
       mode,
+      boundaryOperation: mode === "draw" ? s.boundaryOperation : null,
       points: [],
       error: null,
       session:
-        mode === "draw" || mode === "corridor" || mode === "pick" || mode === "candidates"
+        mode === "draw" ||
+        mode === "corridor" ||
+        mode === "split" ||
+        mode === "pick" ||
+        mode === "candidates"
           ? s.session + 1
           : s.session,
     })),
@@ -116,7 +133,14 @@ export const useLand = create<LandState>()((set, get) => ({
     );
   },
   propose: (draft) =>
-    set((s) => ({ draft, mode: "browse", points: [], error: null, session: s.session + 1 })),
+    set((s) => ({
+      draft,
+      mode: "browse",
+      points: [],
+      boundaryOperation: null,
+      error: null,
+      session: s.session + 1,
+    })),
   updateBoundary: (boundary) => {
     const previous = get().draft;
     if (!previous) return;
@@ -140,7 +164,14 @@ export const useLand = create<LandState>()((set, get) => ({
   },
   updateDraft: (patch) => set((s) => ({ draft: s.draft ? { ...s.draft, ...patch } : null })),
   cancel: () =>
-    set((s) => ({ draft: null, mode: "browse", points: [], error: null, session: s.session + 1 })),
+    set((s) => ({
+      draft: null,
+      mode: "browse",
+      points: [],
+      boundaryOperation: null,
+      error: null,
+      session: s.session + 1,
+    })),
   clear: () =>
     set((s) => ({
       active: null,
@@ -149,6 +180,7 @@ export const useLand = create<LandState>()((set, get) => ({
       points: [],
       corridorWidth: 100,
       corridorUnit: "ft",
+      boundaryOperation: null,
       error: null,
       session: s.session + 1,
     })),

@@ -174,3 +174,53 @@ def test_cross_origin_boundary_revision_preflight() -> None:
         )
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == "https://world.example"
+
+
+def test_split_preserves_holes_and_merges_kept_pieces(client: TestClient) -> None:
+    outer = polygon()
+    outer["coordinates"].append(
+        [
+            [-122.138, 47.642],
+            [-122.136, 47.642],
+            [-122.136, 47.644],
+            [-122.138, 47.644],
+            [-122.138, 47.642],
+        ]
+    )
+    saved = client.post("/api/v1/land", json={**BODY, "boundary": outer}).json()
+    payload = {"boundary": outer, "coordinates": [[-122.135, 47.63], [-122.135, 47.66]]}
+    preview = client.post("/api/v1/land/split", json=payload)
+    assert preview.status_code == 200, preview.text
+    parts = preview.json()["parts"]
+    assert len(parts) == 2 and preview.json()["selection"] is None
+    assert sum(part["areaM2"] for part in parts) == pytest.approx(saved["areaM2"], rel=1e-6)
+    assert sorted(len(part["boundary"]["coordinates"]) for part in parts) == [1, 2]
+    chosen = client.post("/api/v1/land/split", json={**payload, "keepParts": [0]}).json()
+    assert chosen["selection"]["areaM2"] == pytest.approx(parts[0]["areaM2"], rel=1e-6)
+    all_parts = client.post("/api/v1/land/split", json={**payload, "keepParts": [0, 1]}).json()
+    assert all_parts["selection"]["areaM2"] == pytest.approx(saved["areaM2"], rel=1e-6)
+    assert client.get(f"/api/v1/land/{saved['id']}").json() == saved
+    assert client.post("/api/v1/land/split", json={**payload, "keepParts": [2]}).status_code == 422
+
+
+def test_split_rejects_missed_cut_and_keeps_disconnected_land(client: TestClient) -> None:
+    a, b = polygon(), polygon(-122.12, -122.11)
+    boundary = {"type": "MultiPolygon", "coordinates": [a["coordinates"], b["coordinates"]]}
+    missed = client.post(
+        "/api/v1/land/split",
+        json={"boundary": boundary, "coordinates": [[-122.125, 47.63], [-122.125, 47.66]]},
+    )
+    assert missed.status_code == 422 and "did not divide" in missed.text
+    split = client.post(
+        "/api/v1/land/split",
+        json={"boundary": boundary, "coordinates": [[-122.135, 47.63], [-122.135, 47.66]]},
+    )
+    assert split.status_code == 200, split.text
+    assert len(split.json()["parts"]) == 3
+    for coordinates in ([[0, 0], [0, 0]], [[179, 0], [-179, 0]], [[0, 91], [1, 91]]):
+        assert (
+            client.post(
+                "/api/v1/land/split", json={"boundary": a, "coordinates": coordinates}
+            ).status_code
+            == 422
+        )
