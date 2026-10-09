@@ -962,6 +962,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/features/requests/{request_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Created Request */
+        get: operations["created_request_api_v1_land__land_id__features_requests__request_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/investigations": {
         parameters: {
             query?: never;
@@ -3783,6 +3800,11 @@ export interface components {
              * Format: uuid
              */
             requestKey?: string;
+        };
+        /** FeatureRequestRead */
+        FeatureRequestRead: {
+            current: components["schemas"]["LandFeatureRead"];
+            original: components["schemas"]["LandFeatureCreate"];
         };
         /** FindingDisposition */
         FindingDisposition: {
@@ -7960,6 +7982,7 @@ export type SchemaFeatureGeometryRead = components['schemas']['FeatureGeometryRe
 export type SchemaFeatureGeometryRequest = components['schemas']['FeatureGeometryRequest'];
 export type SchemaFeatureInspectionCreate = components['schemas']['FeatureInspectionCreate'];
 export type SchemaFeatureInspectionRead = components['schemas']['FeatureInspectionRead'];
+export type SchemaFeatureRequestRead = components['schemas']['FeatureRequestRead'];
 export type SchemaFindingDisposition = components['schemas']['FindingDisposition'];
 export type SchemaFindingRead = components['schemas']['FindingRead'];
 export type SchemaGalleryOutput = components['schemas']['GalleryOutput'];
@@ -12535,6 +12558,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeatureBatchPreview"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    created_request_api_v1_land__land_id__features_requests__request_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                request_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeatureRequestRead"];
                 };
             };
             /** @description Missing or wrong write token */

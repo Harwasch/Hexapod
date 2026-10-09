@@ -11,6 +11,14 @@ import { useSelection } from "@/state/selection";
 import { useUi } from "@/state/ui";
 import { InventoryGeometryEditor } from "./InventoryGeometryEditor";
 
+import { InventoryConflictReview } from "./InventoryConflictReview";
+import {
+  downloadAssetDraft,
+  parseInventoryDraft,
+  sameAssetContent,
+  type InventoryDraftSnapshot,
+} from "./inventoryDraft";
+import type { InventoryShape } from "./inventoryGeometry";
 import { InventoryImport } from "./InventoryImport";
 import { LandInspectionForm } from "./LandInspectionForm";
 
@@ -18,8 +26,11 @@ type Feature = components["schemas"]["LandFeatureRead"];
 type FeatureDraft = components["schemas"]["LandFeatureCreate"];
 
 export function LandInventory({ land }: { land: LandArea }) {
-  const scope = useLandScope(),
-    canEdit = useLandCanEdit(),
+  const scope = useLandScope();
+  return <Inventory key={`${scope}:${land.id}`} land={land} scope={scope} />;
+}
+function Inventory({ land, scope }: { land: LandArea; scope: string }) {
+  const canEdit = useLandCanEdit(),
     ready = useLandAccessReady();
   const cache = useQueryClient(),
     scene = useScene();
@@ -32,6 +43,53 @@ export function LandInventory({ land }: { land: LandArea }) {
   const [editing, setEditing] = useState<Feature | null>(null);
   const [geometryEditing, setGeometryEditing] = useState(false);
   const [revisionNote, setRevisionNote] = useState("");
+  const [working, setWorking] = useState<InventoryShape | null>(null);
+  const [concurrent, setConcurrent] = useState<Feature | null>(null);
+  const storage = `living-world-land-draft:${encodeURIComponent(scope)}:inventory:${land.id}`;
+  const [recovery, setRecovery] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(storage);
+    } catch {
+      return null;
+    }
+  });
+  const [storageError, setStorageError] = useState(false);
+  useEffect(() => {
+    if (!draft) return;
+    const value: InventoryDraftSnapshot = {
+      version: 1,
+      landId: land.id,
+      boundaryRevision: land.revision,
+      draft,
+      editing,
+      revisionNote,
+      working: geometryEditing ? working : null,
+    };
+    let failed = false,
+      cancelled = false;
+    try {
+      localStorage.setItem(storage, JSON.stringify(value));
+    } catch {
+      failed = true;
+    }
+    queueMicrotask(() => {
+      if (!cancelled) setStorageError(failed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft, editing, revisionNote, working, geometryEditing, storage, land.id, land.revision]);
+  function clearRecovery() {
+    setRecovery(null);
+    setNotice(null);
+    try {
+      localStorage.removeItem(storage);
+      setStorageError(false);
+    } catch {
+      setStorageError(true);
+    }
+  }
+
   const activeSection = useLandContext((state) => state.section);
   const panel = useUi((state) => state.activePanel);
   const picker = useLandContext((state) => state.pointPicker);
@@ -53,6 +111,7 @@ export function LandInventory({ land }: { land: LandArea }) {
   const [lookupKind, setLookupKind] = useState<"line" | "building">("building");
   const [useInspected, setUseInspected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const ticket = useRef(0);
   useEffect(
@@ -225,8 +284,103 @@ export function LandInventory({ land }: { land: LandArea }) {
       source: { method: "drawn", meaning: "physical-feature", label: "User-picked map location" },
     });
   };
+  const recover = async () => {
+    if (!recovery || !canEdit) return;
+    const current = ++ticket.current;
+    setBusy(true);
+    setError(null);
+    try {
+      const value = parseInventoryDraft(recovery, land.id);
+      let baseline = value.editing;
+      let latest: Feature | null = null;
+      let creationRecorded = false;
+      if (baseline)
+        latest = await unwrap(
+          api.GET("/api/v1/land/{land_id}/features/{feature_id}", {
+            params: { path: { land_id: land.id, feature_id: baseline.id } },
+          }),
+        );
+      else {
+        try {
+          const saved = await unwrap(
+            api.GET("/api/v1/land/{land_id}/features/requests/{request_key}", {
+              params: { path: { land_id: land.id, request_key: value.draft.requestKey ?? "" } },
+            }),
+          );
+          latest = saved.current;
+          creationRecorded = sameAssetContent(saved.original, value.draft);
+          baseline = { ...saved.current, ...saved.original, revision: 1 };
+        } catch (cause) {
+          if (!(cause instanceof ApiError && cause.status === 404)) throw cause;
+        }
+      }
+      if (current !== ticket.current) return;
+      if (latest)
+        cache.setQueryData(
+          ["land-inventory-record", scope, land.id, land.revision, latest.id],
+          latest,
+        );
+      if (
+        latest &&
+        !value.working &&
+        (creationRecorded ||
+          (latest.requestKey === value.draft.requestKey && sameAssetContent(latest, value.draft)))
+      ) {
+        clearRecovery();
+        useLandContext.getState().selectInventory(latest.id);
+        setNotice(
+          "This draft was already saved. Opened the saved asset without creating another revision.",
+        );
+        return;
+      }
+      setDraft(value.draft);
+      setEditing(baseline);
+      setRevisionNote(value.revisionNote);
+      setWorking(value.working);
+      setGeometryEditing(Boolean(value.working));
+      setConcurrent(latest && latest.revision !== baseline?.revision ? latest : null);
+      setRecovery(null);
+      if (latest) useLandContext.getState().selectInventory(latest.id);
+      if (value.boundaryRevision !== land.revision)
+        setError(
+          "Recovered against a newer land boundary. Review the location and any geometry changes before saving.",
+        );
+      frame(value.draft.geometry);
+    } catch (cause) {
+      if (current === ticket.current) setError(describeError(cause));
+    } finally {
+      if (current === ticket.current) setBusy(false);
+    }
+  };
+  const checkLatest = async () => {
+    if (!editing) return;
+    const current = ++ticket.current;
+    setBusy(true);
+    setError(null);
+    try {
+      const latest = await unwrap(
+        api.GET("/api/v1/land/{land_id}/features/{feature_id}", {
+          params: { path: { land_id: land.id, feature_id: editing.id } },
+        }),
+      );
+      if (current === ticket.current) {
+        cache.setQueryData(
+          ["land-inventory-record", scope, land.id, land.revision, latest.id],
+          latest,
+        );
+        void refresh();
+        setConcurrent(latest.revision !== editing.revision ? latest : null);
+        if (latest.revision === editing.revision)
+          setError("This draft already uses the latest saved revision.");
+      }
+    } catch (cause) {
+      if (current === ticket.current) setError(describeError(cause));
+    } finally {
+      if (current === ticket.current) setBusy(false);
+    }
+  };
   const save = async () => {
-    if (!draft || geometryEditing || !canEdit || busy) return;
+    if (!draft || geometryEditing || concurrent || !canEdit || busy) return;
     const current = ++ticket.current;
     setBusy(true);
     setError(null);
@@ -249,6 +403,9 @@ export function LandInventory({ land }: { land: LandArea }) {
             }),
           );
       if (ticket.current === current) {
+        clearRecovery();
+        setWorking(null);
+        setConcurrent(null);
         setDraft(null);
         setEditing(null);
         useLandContext.getState().selectInventory(feature.id);
@@ -279,6 +436,27 @@ export function LandInventory({ land }: { land: LandArea }) {
           {error}
         </p>
       )}
+      {!draft && notice && <p role="status">{notice}</p>}
+      {storageError && (
+        <p role="alert">
+          This browser could not update the asset recovery copy. Keep this page open or download the
+          draft.
+        </p>
+      )}
+      {recovery && canEdit && (
+        <div className="land-actions">
+          <p>An unfinished asset draft is available in this browser.</p>
+          <button type="button" disabled={busy} onClick={() => void recover()}>
+            Recover asset draft
+          </button>
+          <button type="button" onClick={() => downloadAssetDraft(recovery)}>
+            Download saved asset draft
+          </button>
+          <button type="button" disabled={busy} onClick={clearRecovery}>
+            Discard saved asset draft
+          </button>
+        </div>
+      )}
       {catalog.isError && (
         <p role="alert">
           Inventory could not be loaded.{" "}
@@ -303,7 +481,7 @@ export function LandInventory({ land }: { land: LandArea }) {
           </button>
         </p>
       )}
-      {canEdit && !draft && (
+      {canEdit && !draft && !recovery && (
         <div className="land-actions">
           <button
             type="button"
@@ -322,8 +500,8 @@ export function LandInventory({ land }: { land: LandArea }) {
           </button>
         </p>
       )}
-      {!draft && <InventoryImport land={land} />}
-      {canEdit && !draft && (
+      {!draft && !recovery && <InventoryImport land={land} />}
+      {canEdit && !draft && !recovery && (
         <details>
           <summary>Add a mapped or inspected feature</summary>
           <label className="land-name">
@@ -463,15 +641,51 @@ export function LandInventory({ land }: { land: LandArea }) {
                 landId={land.id}
                 boundaryRevision={land.revision}
                 geometry={draft.geometry}
+                initialShape={working}
+                onDraft={setWorking}
                 onApply={(geometry) => {
                   setDraft({ ...draft, geometry });
                   setGeometryEditing(false);
+                  setWorking(null);
                 }}
-                onCancel={() => setGeometryEditing(false)}
+                onCancel={() => {
+                  setGeometryEditing(false);
+                  setWorking(null);
+                }}
               />
             ) : (
-              <button type="button" onClick={() => setGeometryEditing(true)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setWorking(null);
+                  setGeometryEditing(true);
+                }}
+              >
                 Edit shape and location
+              </button>
+            )}
+            {concurrent && editing && (
+              <InventoryConflictReview
+                key={concurrent.revision}
+                baseline={editing}
+                draft={draft}
+                current={concurrent}
+                working={Boolean(working)}
+                onResolve={(merged, keepWorking) => {
+                  setDraft(merged);
+                  setEditing(concurrent);
+                  setConcurrent(null);
+                  setError(null);
+                  if (!keepWorking) {
+                    setWorking(null);
+                    setGeometryEditing(false);
+                  }
+                }}
+              />
+            )}
+            {editing && (
+              <button type="button" onClick={() => void checkLatest()}>
+                Check for newer asset revision
               </button>
             )}
             {editing && (
@@ -493,7 +707,12 @@ export function LandInventory({ land }: { land: LandArea }) {
             )}
             <div className="land-actions">
               <button
-                disabled={busy || geometryEditing || (Boolean(editing) && !revisionNote.trim())}
+                disabled={
+                  busy ||
+                  geometryEditing ||
+                  Boolean(concurrent) ||
+                  (Boolean(editing) && !revisionNote.trim())
+                }
                 type="submit"
               >
                 {editing ? "Save feature revision" : "Add to inventory"}
@@ -503,12 +722,31 @@ export function LandInventory({ land }: { land: LandArea }) {
                 onClick={() => {
                   ticket.current++;
                   setBusy(false);
+                  clearRecovery();
+                  setWorking(null);
+                  setConcurrent(null);
                   setDraft(null);
                   setEditing(null);
                   setGeometryEditing(false);
                 }}
               >
-                Cancel
+                Discard asset draft
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  downloadAssetDraft({
+                    version: 1,
+                    landId: land.id,
+                    boundaryRevision: land.revision,
+                    draft,
+                    editing,
+                    revisionNote,
+                    working,
+                  })
+                }
+              >
+                Download asset draft
               </button>
             </div>
           </fieldset>
@@ -566,7 +804,12 @@ export function LandInventory({ land }: { land: LandArea }) {
           <p className="land-footnote">
             Revision {selected.revision} · source: {selected.source.label}
           </p>
-          {canEdit && !draft && (
+          {selected.externalRef && (
+            <p className="land-footnote">
+              Dataset: {selected.externalRef.namespace} · record: {selected.externalRef.recordId}
+            </p>
+          )}
+          {canEdit && !draft && !recovery && (
             <button
               type="button"
               onClick={() => {

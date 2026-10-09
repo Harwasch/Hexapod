@@ -21,12 +21,16 @@ export function InventoryGeometryEditor({
   landId,
   boundaryRevision,
   geometry,
+  initialShape,
+  onDraft,
   onApply,
   onCancel,
 }: {
   landId: string;
   boundaryRevision: number;
   geometry: LandMapGeometry;
+  initialShape?: InventoryShape | null;
+  onDraft?: (shape: InventoryShape) => void;
   onApply: (geometry: LandMapGeometry) => void;
   onCancel: () => void;
 }) {
@@ -40,8 +44,11 @@ export function InventoryGeometryEditor({
     past: InventoryShape[];
     present: InventoryShape;
     future: InventoryShape[];
-  }>(() => ({ past: [], present: openInventoryShape(geometry), future: [] }));
+  }>(() => ({ past: [], present: initialShape ?? openInventoryShape(geometry), future: [] }));
   const draft = history.present;
+  useEffect(() => {
+    onDraft?.(draft);
+  }, [draft, onDraft]);
   const [part, setPart] = useState(0),
     [ring, setRing] = useState(0),
     [offset, setOffset] = useState(0);

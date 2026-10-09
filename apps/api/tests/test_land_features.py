@@ -197,3 +197,25 @@ def test_geometry_preview_rejects_invalid_shapes_and_revisions_preserve_geometry
     history = client.get(f"{path}/{feature['id']}/revisions").json()
     assert history[0]["note"] == "Corrected the mapped position using field notes"
     assert history[1]["content"]["geometry"] == feature["geometry"]
+
+
+def test_creation_request_recovery_keeps_original_and_current_records(client: TestClient) -> None:
+    land = client.post("/api/v1/land", json=BODY).json()
+    path = f"/api/v1/land/{land['id']}/features"
+    request_key = str(uuid.uuid4())
+    payload = {**FEATURE, "requestKey": request_key}
+    feature = client.post(path, json=payload).json()
+    revised = client.put(
+        f"{path}/{feature['id']}",
+        json={**payload, "status": "confirmed", "expectedRevision": 1, "note": "Identity checked"},
+    )
+    assert revised.status_code == 200, revised.text
+    recovered = client.get(f"{path}/requests/{request_key}")
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["current"]["revision"] == 2
+    assert recovered.json()["current"]["status"] == "confirmed"
+    assert recovered.json()["original"]["status"] == "candidate"
+    other = client.post("/api/v1/land", json={**BODY, "name": "Other land"}).json()
+    assert (
+        client.get(f"/api/v1/land/{other['id']}/features/requests/{request_key}").status_code == 404
+    )

@@ -115,6 +115,11 @@ class LandFeatureRead(LandFeatureCreate):
     updated_at: datetime
 
 
+class FeatureRequestRead(CamelModel):
+    current: LandFeatureRead
+    original: LandFeatureCreate
+
+
 class LandFeatureRevisionRead(CamelModel):
     revision: int
     content: LandFeatureCreate

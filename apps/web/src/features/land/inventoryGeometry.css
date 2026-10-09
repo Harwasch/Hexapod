@@ -45,3 +45,20 @@
   border: 0;
   padding: 0;
 }
+
+.inventory-conflict {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+.inventory-conflict pre {
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.land-inventory-record p {
+  overflow-wrap: anywhere;
+}

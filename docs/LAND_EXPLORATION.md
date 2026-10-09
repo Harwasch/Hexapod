@@ -12,7 +12,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
-| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts | Individual asset draft recovery, broader detection and asset catalog linkage |
+| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation | Broader detection and asset catalog linkage |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
@@ -1413,3 +1413,48 @@ edits/boundary changes, duplicate policies, scoped receipts and concurrent impor
 frontend inventory/editor/import tests pass. API lint/format/type checks, web type checking,
 targeted lint and the production build pass. All seven land selection/action browser regression
 tests pass after updating the import-history fixture. No production deployment was performed.
+
+
+## Implemented increment: asset draft recovery and concurrent edits
+
+Individual asset drafts now recover after reload, scoped to identity/workspace and land.
+The recovery copy includes fields, original revision, revision note and unfinished geometry,
+including blank coordinates. Blank values round-trip as unfinished inputs rather than zero.
+Undo history stays session-local, while the current working shape persists. Save/discard
+clears the recovery copy; local-storage failures are visible and drafts can be downloaded.
+Recovery is size-bounded and validates geometry structure and land scope before rendering.
+A changed land boundary is reported and geometry still requires a fresh preview.
+
+Recovered revisions and an explicit "Check for newer asset revision" action read the latest
+private asset. The merge preserves another editor's changes to fields the current user did
+not edit. Conflicting fields require choosing saved or draft values before saving is enabled.
+Unfinished geometry counts as a pending edit when the saved geometry changed. The reviewed
+merge updates the expected revision; another concurrent write still produces a 409. Newer
+saved geometry and fields are reflected in the selected record, and dataset identity is
+visible beside the record's source.
+
+A private read-only request lookup returns both the original creation content and current
+asset. This lets a recovered creation distinguish an unsaved request from a save whose
+response was lost. A matching completed creation opens the current record even if another
+editor subsequently revised it; it does not create another asset or revision. If the local
+contents changed after that creation, they recover as edits against the original revision.
+Lost revision responses are recognized when the current request key and normalized contents
+match. Optional source defaults are normalized before comparison, avoiding false mismatches
+between an omitted field and the API's explicit default/null representation.
+
+Validation: 13 focused backend inventory/import tests and 13 frontend inventory/import/
+geometry/recovery tests pass. API lint/format/type checks, web type checking/targeted lint and
+production build pass. All seven land selection/action browser regressions pass. A real
+Chromium/API test on the public National Mall software fixture recovered an unfinished line
+without changing its blank longitude, completed its preview, reviewed a concurrent name
+conflict, saved the merged revision and deliberately dropped a successful creation response.
+After reload, recovery opened that saved creation with exactly one POST and no second write.
+Desktop and 390px phone checks found no unintended overflow or page exceptions. The
+normalization check was also tested against a creation subsequently changed by another editor.
+
+The browser fixture revised asset `71d73d47-6e97-516d-b19b-c4ae2600c4eb` to revision 5 and
+recovered creation `79f811f6-8f99-5287-8369-2f6068c9f8e4`. Local artifacts:
+`/tmp/land-inventory-recovery-browser-result.json`,
+`/tmp/land-inventory-recovery-desktop.png`, `/tmp/land-inventory-recovery-mobile.png`.
+This increment needs no new migration beyond 0024. Production remains untouched; the overall
+feature still has the remaining capabilities and acceptance work listed at the top.

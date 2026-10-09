@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.land import LandArea
 from app.models.land_feature import LandFeature, LandFeatureBatch
 from app.models.workspace import Workspace
-from app.schemas.land_feature_batches import FeatureBatchRequest
+from app.schemas.land_feature_batches import FeatureBatchRead, FeatureBatchRequest
 from app.services import land_feature_batches, land_features
 from app.services.errors import NotFoundError
 from tests.test_land import BODY
@@ -180,7 +180,7 @@ def test_concurrent_imports_serialize_retries_and_external_identities(
     db.rollback()
     payload = FeatureBatchRequest.model_validate(batch())
 
-    def run(request: FeatureBatchRequest):
+    def run(request: FeatureBatchRequest) -> FeatureBatchRead:
         with factory() as session:
             return land_feature_batches.create(session, workspace_id, land_id, request)
 

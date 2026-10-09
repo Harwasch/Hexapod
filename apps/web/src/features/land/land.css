@@ -149,6 +149,8 @@
   flex-wrap: wrap;
 }
 .land-actions button,
+.land-inventory-inputs > button,
+.inventory-conflict > button,
 .land-inventory-record > button,
 .land-measurement-row > button,
 .land-history button {

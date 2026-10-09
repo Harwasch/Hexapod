@@ -7,7 +7,12 @@ from sqlalchemy import select
 
 from app.api.deps import DbSession
 from app.api.workspace_deps import WorkspaceDep
-from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureBatch
+from app.models.land_feature import (
+    FeatureInspection,
+    LandFeature,
+    LandFeatureBatch,
+    LandFeatureRevision,
+)
 from app.schemas.land_feature_batches import (
     FeatureBatchPreview,
     FeatureBatchRead,
@@ -18,6 +23,7 @@ from app.schemas.land_features import (
     FeatureGeometryRequest,
     FeatureInspectionCreate,
     FeatureInspectionRead,
+    FeatureRequestRead,
     LandFeatureCreate,
     LandFeatureRead,
     LandFeatureRevise,
@@ -102,6 +108,23 @@ def imported_batch(
     land_id: uuid.UUID, import_id: uuid.UUID, db: DbSession, scope: WorkspaceDep
 ) -> FeatureBatchRead:
     return land_feature_batches.read(land_feature_batches.scoped(db, scope.id, land_id, import_id))
+
+
+@router.get("/requests/{request_key}", response_model=FeatureRequestRead)
+def created_request(
+    land_id: uuid.UUID, request_key: uuid.UUID, db: DbSession, scope: WorkspaceDep
+) -> FeatureRequestRead:
+    identifier = uuid.uuid5(land_id, f"feature/{request_key}")
+    row = land_features.scoped(db, scope.id, land_id, identifier)
+    original = db.scalars(
+        select(LandFeatureRevision).where(
+            LandFeatureRevision.feature_id == identifier, LandFeatureRevision.revision == 1
+        )
+    ).one()
+    return FeatureRequestRead(
+        current=land_features.read(db, row),
+        original=LandFeatureCreate.model_validate(original.content),
+    )
 
 
 @router.get("/{feature_id}", response_model=LandFeatureRead)

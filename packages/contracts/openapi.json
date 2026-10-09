@@ -4791,6 +4791,23 @@
         "title": "FeatureInspectionRead",
         "type": "object"
       },
+      "FeatureRequestRead": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/LandFeatureRead"
+          },
+          "original": {
+            "$ref": "#/components/schemas/LandFeatureCreate"
+          }
+        },
+        "required": [
+          "current",
+          "original"
+        ],
+        "title": "FeatureRequestRead",
+        "type": "object"
+      },
       "FindingDisposition": {
         "additionalProperties": false,
         "properties": {
@@ -24485,6 +24502,111 @@
           }
         ],
         "summary": "Imported Batch",
+        "tags": [
+          "land inventory"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/features/requests/{request_key}": {
+      "get": {
+        "operationId": "created_request_api_v1_land__land_id__features_requests__request_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureRequestRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Created Request",
         "tags": [
           "land inventory"
         ]
