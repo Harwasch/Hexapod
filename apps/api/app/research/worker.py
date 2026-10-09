@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.analysis.raster_runner import RasterCancelledError
 from app.analysis.raster_runner import run as run_raster
 from app.analysis.terrain import SPEC as TERRAIN_SPEC
+from app.analysis.vegetation import SPEC as VEGETATION_SPEC
 from app.analysis.worldcover import SPEC as COVER_SPEC
 from app.config import Settings
 from app.models.land import LandArea, LandBoundaryRevision
@@ -179,8 +180,11 @@ class ResearchWorker:
         cancelled: threading.Event | None = None,
     ) -> dict[str, Any]:
         categorical = request.dataset == "esa-worldcover-2021"
-        spec = COVER_SPEC if categorical else TERRAIN_SPEC
-        key = "raster/" + hashlib.sha256(request.model_dump_json().encode()).hexdigest()
+        vegetation = request.dataset == "sentinel-2-ndvi"
+        spec = VEGETATION_SPEC if vegetation else COVER_SPEC if categorical else TERRAIN_SPEC
+        # Preserve keys for pre-period terrain/cover runs resumed after this upgrade.
+        canonical = request.model_dump_json(exclude=None if vegetation else {"periods"})
+        key = "raster/" + hashlib.sha256(canonical.encode()).hexdigest()
         if key in state["sources"]:
             return dict(state["sources"][key])
         identifier = uuid.uuid5(run_id, key)
@@ -193,7 +197,9 @@ class ResearchWorker:
                 state,
                 kind="analysis",
                 payload={
-                    "message": "Reading mapped land-cover classes inside the selected boundary."
+                    "message": "Reading dated satellite reflectance and checking local cloud/quality masks."
+                    if vegetation
+                    else "Reading mapped land-cover classes inside the selected boundary."
                     if categorical
                     else "Reading surface elevation and calculating slope inside the selected boundary."
                 },
@@ -236,6 +242,9 @@ class ResearchWorker:
                 attribution=source.attribution,
                 record_id=source.id,
                 retrieved_at=row.created_at,
+                observed_at=datetime.fromisoformat(source.catalog_datetime.replace("Z", "+00:00"))
+                if vegetation and source.catalog_datetime
+                else None,
                 excerpt=json.dumps(
                     {
                         "source": source.model_dump(mode="json"),
@@ -250,7 +259,23 @@ class ResearchWorker:
                 "The clipped output and source version are preserved; these are not surveyed site measurements.",
             )
             ids.append(queue.save_evidence(db, run_id, token, f"{key}/{source.id}", item))
-        if categorical:
+        if vegetation:
+            series = metadata.vegetation
+            if series is None:
+                raise ValueError("The vegetation processor omitted its temporal coverage metadata.")
+            observed = sum(item.valid_cells > 0 for item in series.observations)
+            summary = (
+                f"{observed} of {len(series.observations)} requested windows have clear land NDVI samples. "
+                f"{series.common_cells} grid cells are valid in every observation "
+                f"({(series.common_coverage_fraction or 0) * 100:.1f}% of boundary cells)."
+            )
+            if series.mean_change is not None:
+                summary += (
+                    f" First-to-last mean NDVI difference: {series.mean_change:+.3f}, "
+                    f"using {series.change_cells} cells valid at both endpoints."
+                )
+            summary += " This is a vegetation signal, not species cover or proof of ecological improvement."
+        elif categorical:
             if not metadata.valid_cells:
                 summary = "No valid 2021 land-cover samples fall inside this boundary at the analysis resolution."
             else:
@@ -292,12 +317,14 @@ class ResearchWorker:
             FindingContent(
                 title=spec.name,
                 summary=summary,
-                category="ecology" if categorical else "physical",
+                category="ecology" if categorical or vegetation else "physical",
                 evidence_ids=ids,
                 confidence="supported" if metadata.valid_cells else "uncertain",
                 uncertainty=" ".join(metadata.warnings)[:3000],
                 suggested_questions=[
-                    "What field observations would help assess restoration opportunities in these mapped classes?"
+                    "How do season, cloud coverage and field observations affect this vegetation comparison?"
+                    if vegetation
+                    else "What field observations would help assess restoration opportunities in these mapped classes?"
                     if categorical
                     else "Where are the steepest sampled areas, and what would field measurements need to verify?"
                 ],
@@ -309,7 +336,11 @@ class ResearchWorker:
             token,
             key,
             ArtifactContent(
-                title="Land cover in 2021" if categorical else "Surface elevation and slope",
+                title="Vegetation through time"
+                if vegetation
+                else "Land cover in 2021"
+                if categorical
+                else "Surface elevation and slope",
                 method=metadata.method,
                 evidence_ids=ids,
                 output=RasterOutput(kind="raster", raster_id=identifier),
@@ -802,6 +833,7 @@ class ResearchWorker:
                     prompt = json.dumps(
                         {
                             "question": question,
+                            "currentDate": datetime.now(UTC).date().isoformat(),
                             "conversation": conversation,
                             "savedScenarios": saved_scenarios,
                             "inventoryFeatures": saved_features,

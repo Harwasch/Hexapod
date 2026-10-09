@@ -25,6 +25,7 @@ import {
 } from "./researchApi";
 import { ResearchArtifactView } from "./ResearchArtifacts";
 import { LandDocumentViewer } from "./LandDocumentViewer";
+import { VegetationStart } from "./VegetationStart";
 import "./research.css";
 
 function eventText(event: ResearchEvent): string {
@@ -126,7 +127,7 @@ export function LandResearch({ land }: { land: LandArea }) {
     investigationId: string;
     key: string;
     revision: number;
-    dataset: string;
+    signature: string;
   } | null>(null);
   const pendingArchive = useRef<{ investigationId: string; key: string; revision: number } | null>(
     null,
@@ -204,22 +205,35 @@ export function LandResearch({ land }: { land: LandArea }) {
       setBusy(false);
     }
   };
-  const analyzeRaster = async (dataset: "cop-dem-glo-30" | "esa-worldcover-2021") => {
+  const analyzeRaster = async (
+    dataset: "cop-dem-glo-30" | "esa-worldcover-2021" | "sentinel-2-ndvi",
+    periods?: components["schemas"]["VegetationPeriod"][],
+  ) => {
     if (!canEdit) return;
+    const analysis: components["schemas"]["RasterRequest"] = {
+      dataset,
+      resolutionM: dataset === "esa-worldcover-2021" ? 10 : dataset === "sentinel-2-ndvi" ? 20 : 30,
+      maxDimension: 512,
+      ...(periods ? { periods } : {}),
+    };
+    const signature = JSON.stringify(analysis);
+    const title =
+      dataset === "sentinel-2-ndvi"
+        ? "Vegetation through time"
+        : dataset === "esa-worldcover-2021"
+          ? "Land cover in 2021"
+          : "Surface elevation and slope";
     setBusy(true);
     setError(null);
     try {
       let operation = pendingTerrain.current;
-      if (operation?.revision !== land.revision || operation.dataset !== dataset) {
-        const investigation = await beginInvestigation(
-          land,
-          dataset === "esa-worldcover-2021" ? "Land cover in 2021" : "Surface elevation and slope",
-        );
+      if (operation?.revision !== land.revision || operation.signature !== signature) {
+        const investigation = await beginInvestigation(land, title);
         operation = {
           investigationId: investigation.id,
           key: crypto.randomUUID(),
           revision: land.revision,
-          dataset,
+          signature,
         };
         pendingTerrain.current = operation;
       }
@@ -229,15 +243,13 @@ export function LandResearch({ land }: { land: LandArea }) {
           body: {
             kind: "raster",
             question:
-              dataset === "esa-worldcover-2021"
-                ? "Analyze the broad land-cover classes mapped in 2021 inside this land."
-                : "Analyze surface elevation and slope inside this land.",
+              dataset === "sentinel-2-ndvi"
+                ? "Compare dated vegetation signals on common clear cells inside this land."
+                : dataset === "esa-worldcover-2021"
+                  ? "Analyze the broad land-cover classes mapped in 2021 inside this land."
+                  : "Analyze surface elevation and slope inside this land.",
             requestKey: operation.key,
-            analysis: {
-              dataset,
-              resolutionM: dataset === "esa-worldcover-2021" ? 10 : 30,
-              maxDimension: 512,
-            },
+            analysis,
           },
         }),
       );
@@ -396,6 +408,11 @@ export function LandResearch({ land }: { land: LandArea }) {
           {busy ? "Starting…" : "Analyze land cover"}
         </button>
       </div>
+      <VegetationStart
+        disabled={busy || running || !ready || !canEdit}
+        busy={busy}
+        onStart={(periods) => void analyzeRaster("sentinel-2-ndvi", periods)}
+      />
       <div className="land-terrain-start">
         <strong>A place with a past</strong>
         <p className="land-footnote">

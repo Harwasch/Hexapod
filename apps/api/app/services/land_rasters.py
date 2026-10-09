@@ -93,7 +93,7 @@ def save(
         run_id=run.id,
         land_id=land.id,
         boundary_revision=investigation.boundary_revision,
-        request=request.model_dump(),
+        request=request.model_dump(mode="json"),
         metadata_json=result.metadata.model_dump(mode="json"),
         sha256=hashlib.sha256(result.data).hexdigest(),
         byte_size=len(result.data),
@@ -161,14 +161,18 @@ def tile(db: Session, row: LandRaster, band: int, z: int, x: int, y: int) -> byt
     else:
         if definition.minimum is None or definition.maximum is None:
             return transparent_tile()
+        low = (
+            definition.display_minimum
+            if definition.display_minimum is not None
+            else definition.minimum
+        )
         high = (
-            definition.maximum
-            if definition.maximum > definition.minimum
-            else definition.minimum + 1
+            definition.display_maximum
+            if definition.display_maximum is not None
+            else definition.maximum
         )
-        normalized = np.where(
-            valid, (destination - definition.minimum) / (high - definition.minimum), 0
-        )
+        high = high if high > low else low + 1
+        normalized = np.where(valid, (destination - low) / (high - low), 0)
         indices = np.clip(normalized * 255, 0, 255).astype(np.uint8)
         palette = np.array(
             [cmap.get(definition.palette)[index] for index in range(256)], dtype=np.uint8

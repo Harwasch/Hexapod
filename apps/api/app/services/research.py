@@ -17,6 +17,7 @@ from app.models.research import (
     ResearchMessage,
     ResearchRun,
 )
+from app.schemas.land_rasters import RasterRequest
 from app.schemas.research import (
     EvidenceRead,
     FindingRead,
@@ -134,13 +135,16 @@ def create_run(
             existing.question != payload.question
             or existing.kind != payload.kind
             or ResearchBudget.model_validate(existing.budget) != payload.budget
-            or existing.analysis != (payload.analysis.model_dump() if payload.analysis else None)
+            or (RasterRequest.model_validate(existing.analysis) if existing.analysis else None)
+            != payload.analysis
         ):
             raise ConflictError(
                 "This request key was already used for a different research request."
             )
         return RunRead.model_validate(existing)
-    run = ResearchRun(investigation_id=identifier, **payload.model_dump())
+    fields = payload.model_dump()
+    fields["analysis"] = payload.analysis.model_dump(mode="json") if payload.analysis else None
+    run = ResearchRun(investigation_id=identifier, **fields)
     db.add(run)
     db.flush()
     db.add(ResearchMessage(investigation_id=identifier, role="user", content=payload.question))

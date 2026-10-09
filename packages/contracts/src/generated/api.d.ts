@@ -5620,6 +5620,10 @@ export interface components {
         RasterBand: {
             /** Classes */
             classes?: components["schemas"]["RasterClass"][];
+            /** Displaymaximum */
+            displayMaximum?: number | null;
+            /** Displayminimum */
+            displayMinimum?: number | null;
             /** Histogramcounts */
             histogramCounts: number[];
             /** Histogramedges */
@@ -5638,7 +5642,7 @@ export interface components {
              * Palette
              * @enum {string}
              */
-            palette: "viridis" | "magma" | "categorical";
+            palette: "viridis" | "magma" | "rdylgn" | "categorical";
             /** Percentiles */
             percentiles: {
                 [key: string]: number;
@@ -5693,6 +5697,7 @@ export interface components {
             sources: components["schemas"]["RasterSource"][];
             /** Validcells */
             validCells: number;
+            vegetation?: components["schemas"]["VegetationTimeline"] | null;
             /** Warnings */
             warnings: string[];
             /** Width */
@@ -5718,13 +5723,15 @@ export interface components {
              * @default cop-dem-glo-30
              * @enum {string}
              */
-            dataset?: "cop-dem-glo-30" | "esa-worldcover-2021";
+            dataset?: "cop-dem-glo-30" | "esa-worldcover-2021" | "sentinel-2-ndvi";
             /**
              * Maxdimension
              * @default 512
              * @enum {integer}
              */
             maxDimension?: 256 | 512 | 1024;
+            /** Periods */
+            periods?: components["schemas"]["VegetationPeriod"][];
             /**
              * Resolutionm
              * @default 30
@@ -5750,8 +5757,12 @@ export interface components {
         RasterSource: {
             /** Attribution */
             attribution: string;
+            /** Band */
+            band?: string | null;
             /** Catalogdatetime */
             catalogDatetime: string | null;
+            /** Catalogsha256 */
+            catalogSha256?: string | null;
             /**
              * Catalogurl
              * Format: uri
@@ -5772,6 +5783,12 @@ export interface components {
             licenseUrl: string;
             /** Observationperiod */
             observationPeriod: string;
+            /** Offset */
+            offset?: number | null;
+            /** Purpose */
+            purpose?: string | null;
+            /** Scale */
+            scale?: number | null;
             /**
              * Url
              * Format: uri
@@ -6767,6 +6784,64 @@ export interface components {
             /** Uploadid */
             uploadId: string;
         };
+        /** VegetationObservation */
+        VegetationObservation: {
+            /** Acquiredat */
+            acquiredAt: string | null;
+            /** Band */
+            band: number;
+            /** Candidatecount */
+            candidateCount: number;
+            /** Catalogtruncated */
+            catalogTruncated: boolean;
+            /** Commonmeanndvi */
+            commonMeanNdvi: number | null;
+            /** Coveragefraction */
+            coverageFraction: number | null;
+            /** Explanation */
+            explanation: string;
+            /** Meanndvi */
+            meanNdvi: number | null;
+            period: components["schemas"]["VegetationPeriod"];
+            /** Qualitycandidatesexamined */
+            qualityCandidatesExamined: number;
+            /** Qualitycounts */
+            qualityCounts: {
+                [key: string]: number;
+            };
+            /** Sceneid */
+            sceneId: string | null;
+            /** Validcells */
+            validCells: number;
+        };
+        /** VegetationPeriod */
+        VegetationPeriod: {
+            /**
+             * Enddate
+             * Format: date
+             */
+            endDate: string;
+            /**
+             * Startdate
+             * Format: date
+             */
+            startDate: string;
+        };
+        /** VegetationTimeline */
+        VegetationTimeline: {
+            /** Changeband */
+            changeBand?: number | null;
+            /** Changecells */
+            changeCells: number;
+            /** Commoncells */
+            commonCells: number;
+            /** Commoncoveragefraction */
+            commonCoverageFraction: number | null;
+            /** Meanchange */
+            meanChange: number | null;
+            /** Observations */
+            observations: components["schemas"]["VegetationObservation"][];
+        };
         /** VersionReference */
         VersionReference: {
             /**
@@ -7095,6 +7170,9 @@ export type SchemaTimelineEntry = components['schemas']['TimelineEntry'];
 export type SchemaTimelineOutput = components['schemas']['TimelineOutput'];
 export type SchemaUploadStatus = components['schemas']['UploadStatus'];
 export type SchemaUploadWindow = components['schemas']['UploadWindow'];
+export type SchemaVegetationObservation = components['schemas']['VegetationObservation'];
+export type SchemaVegetationPeriod = components['schemas']['VegetationPeriod'];
+export type SchemaVegetationTimeline = components['schemas']['VegetationTimeline'];
 export type SchemaVersionReference = components['schemas']['VersionReference'];
 export type SchemaWmsSource = components['schemas']['WmsSource'];
 export type SchemaWmtsSource = components['schemas']['WmtsSource'];

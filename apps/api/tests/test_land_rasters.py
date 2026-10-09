@@ -74,6 +74,11 @@ def test_raster_run_saves_cited_private_cog_tiles_samples_and_revision(
 ) -> None:
     land, inv, run, body = start(client)
     endpoint = f"/api/v1/research/investigations/{inv}/runs"
+    # Requests saved before dated analyses had no periods field; retries remain compatible.
+    legacy = db.get(ResearchRun, uuid.UUID(run["id"]))
+    assert legacy is not None and legacy.analysis is not None
+    legacy.analysis = {key: value for key, value in legacy.analysis.items() if key != "periods"}
+    db.commit()
     assert client.post(endpoint, json=body).json()["id"] == run["id"]
     assert client.post(endpoint, json={**body, "analysis": None}).status_code == 422
     assert client.post(endpoint, json={**body, "kind": "overview"}).status_code == 422

@@ -24,7 +24,9 @@ def run(
     with tempfile.TemporaryDirectory(prefix="land-raster-") as temporary:
         directory = Path(temporary)
         (directory / "input.json").write_text(
-            json.dumps({"boundary": boundary.model_dump(), "request": request.model_dump()})
+            json.dumps(
+                {"boundary": boundary.model_dump(), "request": request.model_dump(mode="json")}
+            )
         )
         started = time.monotonic()
         with subprocess.Popen(  # noqa: S603 -- fixed processor, generated working directory, typed data only
@@ -37,7 +39,9 @@ def run(
                 if cancelled is not None and cancelled.is_set():
                     process.kill()
                     raise RasterCancelledError()
-                if time.monotonic() - started > 90:
+                if time.monotonic() - started > (
+                    165 if request.dataset == "sentinel-2-ndvi" else 90
+                ):
                     process.kill()
                     raise ValueError(
                         "Raster analysis reached its processing time limit. Try a smaller area."

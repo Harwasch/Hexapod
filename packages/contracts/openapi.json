@@ -10758,6 +10758,28 @@
             "title": "Classes",
             "type": "array"
           },
+          "displayMaximum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Displaymaximum"
+          },
+          "displayMinimum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Displayminimum"
+          },
           "histogramCounts": {
             "items": {
               "type": "integer"
@@ -10819,6 +10841,7 @@
             "enum": [
               "viridis",
               "magma",
+              "rdylgn",
               "categorical"
             ],
             "title": "Palette",
@@ -10998,7 +11021,7 @@
             "items": {
               "$ref": "#/components/schemas/RasterSource"
             },
-            "maxItems": 8,
+            "maxItems": 40,
             "title": "Sources",
             "type": "array"
           },
@@ -11006,6 +11029,16 @@
             "minimum": 0.0,
             "title": "Validcells",
             "type": "integer"
+          },
+          "vegetation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VegetationTimeline"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "warnings": {
             "items": {
@@ -11069,7 +11102,8 @@
             "default": "cop-dem-glo-30",
             "enum": [
               "cop-dem-glo-30",
-              "esa-worldcover-2021"
+              "esa-worldcover-2021",
+              "sentinel-2-ndvi"
             ],
             "title": "Dataset",
             "type": "string"
@@ -11083,6 +11117,14 @@
             ],
             "title": "Maxdimension",
             "type": "integer"
+          },
+          "periods": {
+            "items": {
+              "$ref": "#/components/schemas/VegetationPeriod"
+            },
+            "maxItems": 6,
+            "title": "Periods",
+            "type": "array"
           },
           "resolutionM": {
             "default": 30,
@@ -11154,6 +11196,17 @@
             "title": "Attribution",
             "type": "string"
           },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          },
           "catalogDatetime": {
             "anyOf": [
               {
@@ -11164,6 +11217,17 @@
               }
             ],
             "title": "Catalogdatetime"
+          },
+          "catalogSha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogsha256"
           },
           "catalogUrl": {
             "format": "uri",
@@ -11212,6 +11276,39 @@
           "observationPeriod": {
             "title": "Observationperiod",
             "type": "string"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scale"
           },
           "url": {
             "format": "uri",
@@ -14119,6 +14216,217 @@
           "nextPartNumber"
         ],
         "title": "UploadWindow",
+        "type": "object"
+      },
+      "VegetationObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "acquiredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acquiredat"
+          },
+          "band": {
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Band",
+            "type": "integer"
+          },
+          "candidateCount": {
+            "minimum": 0.0,
+            "title": "Candidatecount",
+            "type": "integer"
+          },
+          "catalogTruncated": {
+            "title": "Catalogtruncated",
+            "type": "boolean"
+          },
+          "commonMeanNdvi": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commonmeanndvi"
+          },
+          "coverageFraction": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coveragefraction"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "meanNdvi": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meanndvi"
+          },
+          "period": {
+            "$ref": "#/components/schemas/VegetationPeriod"
+          },
+          "qualityCandidatesExamined": {
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Qualitycandidatesexamined",
+            "type": "integer"
+          },
+          "qualityCounts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Qualitycounts",
+            "type": "object"
+          },
+          "sceneId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sceneid"
+          },
+          "validCells": {
+            "minimum": 0.0,
+            "title": "Validcells",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "period",
+          "band",
+          "sceneId",
+          "acquiredAt",
+          "candidateCount",
+          "catalogTruncated",
+          "qualityCandidatesExamined",
+          "validCells",
+          "coverageFraction",
+          "meanNdvi",
+          "commonMeanNdvi",
+          "qualityCounts",
+          "explanation"
+        ],
+        "title": "VegetationObservation",
+        "type": "object"
+      },
+      "VegetationPeriod": {
+        "additionalProperties": false,
+        "properties": {
+          "endDate": {
+            "format": "date",
+            "title": "Enddate",
+            "type": "string"
+          },
+          "startDate": {
+            "format": "date",
+            "title": "Startdate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "startDate",
+          "endDate"
+        ],
+        "title": "VegetationPeriod",
+        "type": "object"
+      },
+      "VegetationTimeline": {
+        "additionalProperties": false,
+        "properties": {
+          "changeBand": {
+            "anyOf": [
+              {
+                "maximum": 7.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changeband"
+          },
+          "changeCells": {
+            "minimum": 0.0,
+            "title": "Changecells",
+            "type": "integer"
+          },
+          "commonCells": {
+            "minimum": 0.0,
+            "title": "Commoncells",
+            "type": "integer"
+          },
+          "commonCoverageFraction": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commoncoveragefraction"
+          },
+          "meanChange": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meanchange"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/VegetationObservation"
+            },
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Observations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "observations",
+          "commonCells",
+          "commonCoverageFraction",
+          "changeCells",
+          "meanChange"
+        ],
+        "title": "VegetationTimeline",
         "type": "object"
       },
       "VersionReference": {

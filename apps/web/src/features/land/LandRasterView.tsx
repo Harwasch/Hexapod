@@ -7,11 +7,12 @@ import { describeError } from "@/lib/log";
 import { useLandContext } from "@/state/landContext";
 import { useLandScope, useLandAccessReady } from "@/state/landIdentity";
 import { useLand } from "@/state/land";
+import { VegetationTimelineView } from "./VegetationTimelineView";
 import { useSelection } from "@/state/selection";
 
 type Sample = components["schemas"]["RasterSample"];
-const number = (value: number | null | undefined) =>
-  value == null ? "No data" : value.toLocaleString(undefined, { maximumFractionDigits: 1 });
+const number = (value: number | null | undefined, digits = 1) =>
+  value == null ? "No data" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
 
 export function LandRasterView({ id }: { id: string }) {
   const scope = useLandScope();
@@ -106,20 +107,39 @@ export function LandRasterView({ id }: { id: string }) {
     );
   const metadata = raster.metadata;
   const categorical = band.palette === "categorical";
-  const mapName = categorical ? "land-cover" : "terrain";
+  const vegetation = metadata.vegetation;
+  const mapName = vegetation ? "vegetation" : categorical ? "land-cover" : "terrain";
+  const measurement = (value: number | null | undefined) => number(value, vegetation ? 3 : 1);
+  const chooseBand = (index: number) => {
+    setChosenBand(index);
+    if (shown) show(index);
+  };
   return (
     <section
       className="land-raster"
-      aria-label={categorical ? "Land-cover analysis" : "Terrain analysis"}
+      aria-label={
+        vegetation
+          ? "Vegetation analysis"
+          : categorical
+            ? "Land-cover analysis"
+            : "Terrain analysis"
+      }
     >
       <p className="land-footnote">
-        {categorical ? "ESA WorldCover 2021" : "Copernicus GLO-30"} · {number(metadata.resolutionM)}{" "}
-        m analysis grid · boundary {raster.boundaryRevision}
+        {vegetation
+          ? "Sentinel-2 Collection 1"
+          : categorical
+            ? "ESA WorldCover 2021"
+            : "Copernicus GLO-30"}{" "}
+        · {number(metadata.resolutionM)} m analysis grid · boundary {raster.boundaryRevision}
       </p>
       {raster.stale && (
         <p className="land-notice">
           This map uses an older boundary. Run this analysis again for your current land.
         </p>
+      )}
+      {vegetation && (
+        <VegetationTimelineView series={vegetation} band={chosenBand} onChoose={chooseBand} />
       )}
       <label className="land-name">
         Map measurement
@@ -127,8 +147,7 @@ export function LandRasterView({ id }: { id: string }) {
           value={chosenBand}
           onChange={(event) => {
             const value = Number(event.target.value);
-            setChosenBand(value);
-            if (shown) show(value);
+            chooseBand(value);
           }}
         >
           {metadata.bands.map((item) => (
@@ -188,19 +207,19 @@ export function LandRasterView({ id }: { id: string }) {
             <div>
               <dt>Minimum</dt>
               <dd>
-                {number(band.minimum)} {band.minimum !== null && band.unit}
+                {measurement(band.minimum)} {band.minimum !== null && band.unit}
               </dd>
             </div>
             <div>
               <dt>Mean</dt>
               <dd>
-                {number(band.mean)} {band.mean !== null && band.unit}
+                {measurement(band.mean)} {band.mean !== null && band.unit}
               </dd>
             </div>
             <div>
               <dt>Maximum</dt>
               <dd>
-                {number(band.maximum)} {band.maximum !== null && band.unit}
+                {measurement(band.maximum)} {band.maximum !== null && band.unit}
               </dd>
             </div>
           </dl>
@@ -209,10 +228,10 @@ export function LandRasterView({ id }: { id: string }) {
               <div className={`land-raster-ramp ${band.palette}`} aria-hidden="true" />
               <p className="land-raster-scale">
                 <span>
-                  {number(band.minimum)} {band.unit}
+                  {measurement(band.displayMinimum ?? band.minimum)} {band.unit}
                 </span>
                 <span>
-                  {number(band.maximum)} {band.unit}
+                  {measurement(band.displayMaximum ?? band.maximum)} {band.unit}
                 </span>
               </p>
             </>
@@ -249,7 +268,7 @@ export function LandRasterView({ id }: { id: string }) {
             scene?.camera.flyToRectangle(w, s, e, n);
           }}
         >
-          {categorical ? "Frame land cover" : "Frame terrain"}
+          {vegetation ? "Frame vegetation" : categorical ? "Frame land cover" : "Frame terrain"}
         </button>
         <button type="button" disabled={busy} onClick={() => void download()}>
           Download GeoTIFF
@@ -297,7 +316,7 @@ export function LandRasterView({ id }: { id: string }) {
                 {item.palette === "categorical"
                   ? ((item.classes ?? []).find((value) => value.code === sample.values[index])
                       ?.label ?? "No data")
-                  : number(sample.values[index])}{" "}
+                  : measurement(sample.values[index])}{" "}
                 {item.palette !== "categorical" && sample.values[index] != null && item.unit}
               </p>
             ))}
@@ -314,7 +333,7 @@ export function LandRasterView({ id }: { id: string }) {
               <div key={key}>
                 <dt>{key} percentile</dt>
                 <dd>
-                  {number(value)} {band.unit}
+                  {measurement(value)} {band.unit}
                 </dd>
               </div>
             ))}

@@ -11,7 +11,7 @@ from pathlib import Path
 
 def main() -> None:
     resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
-    resource.setrlimit(resource.RLIMIT_CPU, (75, 75))
+    resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
     resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024**2, 32 * 1024**2))
     resource.setrlimit(resource.RLIMIT_NOFILE, (96, 96))
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -28,8 +28,14 @@ def main() -> None:
         payload = json.loads((directory / "input.json").read_text())
         boundary: Footprint = TypeAdapter(Footprint).validate_python(payload["boundary"])
         request = RasterRequest.model_validate(payload["request"])
+        if request.dataset != "sentinel-2-ndvi":
+            resource.setrlimit(resource.RLIMIT_CPU, (75, 75))
         with httpx.Client(headers={"User-Agent": "LivingWorld-LandAnalysis/1.0"}) as client:
-            if request.dataset == "esa-worldcover-2021":
+            if request.dataset == "sentinel-2-ndvi":
+                from app.analysis.vegetation import analyze as analyze_vegetation
+
+                result = analyze_vegetation(boundary, request, client)
+            elif request.dataset == "esa-worldcover-2021":
                 from app.analysis.worldcover import analyze as analyze_cover
 
                 result = analyze_cover(boundary, request, client)

@@ -9,7 +9,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
-| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover raster calculation and private map tiles | Time-series/imagery datasets and broader compute tools, agent evaluations and live model validation |
+| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
@@ -961,3 +961,63 @@ remain untouched; the complete feature is still in progress.
 
 All seven land browser journeys also passed, including selection/import/corridor behavior,
 mission handoff, unfinished sketch recovery and the new one-Escape cancellation regression.
+
+## Implemented increment: dated satellite vegetation comparisons
+
+Users can choose one to six observation months and create a durable vegetation investigation
+for the saved boundary revision. The research agent's typed `analyze_raster` tool can request
+one to six chronological, nonoverlapping windows of up to 31 days. This uses public Sentinel-2
+Collection 1 L2A imagery through Element 84 Earth Search v1; it requires no imagery API key.
+The source collection and public bucket are pinned, and source redirects or arbitrary band
+URLs are not accepted. Existing terrain and land-cover retry/checkpoint keys remain compatible.
+
+Each window queries at most 25 scenes, ranks boundary overlap and catalog cloud fraction,
+then examines up to three local scene-classification masks. It selects one acquisition with
+the most usable land samples among those candidates. This is a bounded single-scene sample,
+not a monthly composite, tile mosaic or exhaustive best-image search. Every result exposes
+its actual acquisition date, candidate counts, truncation, quality counts and usable coverage.
+Missing observations remain missing. A large area spanning satellite tiles may have partial
+coverage; the UI and agent must not present that partial sample as complete coverage.
+
+Red and near-infrared bands use their explicit source scale and offset before calculating
+NDVI. Nearest samples on a common local metric grid avoid interpolating cloudy reflectance
+into clear cells. Grid spacing is at least 20 m, with polygon/hole cell-center masking and
+explicit coarsening when dimension limits require it. Only scene classes 4 and 5 contribute;
+water, cloud, shadows, snow, defective pixels, unclassified pixels and invalid reflectance
+are excluded. NDVI does not identify species, percent species cover, biomass, habitat quality
+or restoration success. Season, weather, observation date and processing differences can
+change this signal without establishing a cause.
+
+The timeline compares the same cells valid in every selected observation. Each acquisition
+also exposes its separate all-usable-cells mean. The first-to-last change layer uses cells
+valid at both endpoints and reports that denominator separately. Map colors have fixed
+ranges across dates, and exact values remain available in the timeline and point sampling.
+Users can switch between observation/change maps, frame them, adjust opacity, reopen saved
+results and download a private multiband GeoTIFF. Exports preserve masks, units, acquisition
+metadata, calculation method, warnings, source URLs, catalog hashes, source version headers,
+reflectance scale/offset and attribution. The existing workspace authorization, raster quota,
+immutable storage, cancellation and worker fencing apply.
+
+The fixed processor has a 128 MiB download budget, bounded HTTP request count, 140-second
+analysis budget, 165-second subprocess deadline, 120 CPU seconds, 2 GiB memory limit and
+16 MiB output limit. Earlier datasets retain their existing shorter processing limits.
+This increment needs no database migration beyond the existing raster storage schema.
+
+Validation: 26 backend regression tests passed across actual synthetic raster reads,
+reflectance offsets, local mask selection, common-cell comparisons, missing observations,
+GeoTIFF metadata, dated worker persistence, private tile/download routes and legacy retry
+compatibility. Full API typing (259 files), lint and formatting passed. Eleven focused web
+tests cover calendar windows, month editing, common versus per-date means, missing trends,
+map band selection and existing raster behavior. Web typing, targeted lint and production
+build passed. A live browser/API/worker run over the public National Mall software fixture
+selected actual acquisitions from July 2024 and July 2025. It preserved 12 source records,
+compared 842 common clear cells (68.3% of boundary grid cells), and produced 90 successful
+private map-tile responses. Band switching, opacity, reload, GeoTIFF checksum and embedded
+metadata verification passed. The saved raster is `ff7aab11-efb1-52f6-b995-63c9388b0b83`;
+its SHA-256 is `66f9cfc1683e9f33e10db61636532b8baa6fd6be8660f4a6650db180fb313ebd`.
+The observed +0.1196 NDVI difference is a result for this fixture and these acquisitions,
+not evidence of ecological improvement. Desktop and 390-pixel mobile screenshots were
+inspected. A discovered native-select/grid overflow was fixed, then both page and panel
+horizontal-overflow checks passed with no browser errors. No production deployment was made.
+Live AI selection of this tool still requires configured model credentials; this environment
+has none attached. The complete feature remains in progress.
