@@ -61,6 +61,7 @@ def fetch_json(
     params: dict[str, str | int | float | bool],
     *,
     method: Literal["GET", "POST"] = "GET",
+    encoding: Literal["form", "json"] = "form",
 ) -> tuple[dict[str, Any], str]:
     # Only registry endpoints are fetched. Redirects cannot turn a trusted endpoint
     # into an arbitrary URL, and response size is bounded even without Content-Length.
@@ -68,7 +69,8 @@ def fetch_json(
         method,
         spec.endpoint,
         params=params if method == "GET" else None,
-        data=params if method == "POST" else None,
+        data=params if method == "POST" and encoding == "form" else None,
+        json=params if method == "POST" and encoding == "json" else None,
         follow_redirects=False,
         timeout=25,
     ) as response:

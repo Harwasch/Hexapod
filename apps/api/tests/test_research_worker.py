@@ -33,6 +33,10 @@ def transport(request):
                 },
             },
         )
+    if request.url.host == "sdmdataaccess.sc.egov.usda.gov":
+        return httpx.Response(200, json={"Table": []})
+    if request.url.host == "hazards.fema.gov":
+        return httpx.Response(200, json={"type": "FeatureCollection", "features": []})
     return httpx.Response(200, json={"count": 0, "results": [], "endOfRecords": True})
 
 
@@ -65,7 +69,7 @@ def test_provider_outage_is_partial_not_empty(client, sessions):
     events = client.get(f"/api/v1/research/runs/{run['id']}/events").json()
     assert [event["payload"]["status"] for event in events if event["kind"] == "source"] == [
         "unavailable"
-    ] * 3
+    ] * 5
 
 
 class TestModel:

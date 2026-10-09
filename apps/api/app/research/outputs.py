@@ -9,6 +9,8 @@ from app.schemas.research import (
     ChartOutput,
     ChartSeries,
     FindingContent,
+    MapFeature,
+    MapOutput,
     TableColumn,
     TableOutput,
 )
@@ -21,11 +23,7 @@ def overview_outputs(
 ) -> tuple[FindingContent | None, list[ArtifactContent]]:
     if not ids or result.status != "available":
         return None, []
-    category = {
-        "usgs-elevation": "physical",
-        "nasa-power": "energy",
-        "gbif-occurrences": "ecology",
-    }[result.provider]
+    category = SOURCES[result.provider].domain
     finding = FindingContent.model_validate(
         {
             "title": SOURCES[result.provider].name,
@@ -42,7 +40,9 @@ def overview_outputs(
                 "gbif-occurrences": [
                     "Which observations are recent and which need field verification?"
                 ],
-            }[result.provider],
+                "usda-soils": ["What field tests would check these mapped soil properties?"],
+                "fema-flood-zones": ["What effective maps and amendments apply to this land?"],
+            }.get(result.provider, []),
         }
     )
     artifacts: list[ArtifactContent] = []
@@ -106,6 +106,76 @@ def overview_outputs(
                             )
                         }
                         for r in records
+                    ],
+                ),
+            )
+        )
+
+    if result.provider == "usda-soils":
+        artifacts.append(
+            ArtifactContent(
+                title="Soil map-unit components at the sample point",
+                method="Major components of the soil survey map unit at a representative point; map-unit "
+                "proportions are not land-wide measurements.",
+                evidence_ids=ids,
+                output=TableOutput(
+                    kind="table",
+                    columns=[
+                        TableColumn(key="muname", label="Mapped soil unit"),
+                        TableColumn(key="compname", label="Component"),
+                        TableColumn(key="comppct_r", label="Map-unit component", unit="%"),
+                        TableColumn(key="drainagecl", label="Drainage class"),
+                        TableColumn(key="hydgrp", label="Hydrologic group"),
+                        TableColumn(
+                            key="slope_r", label="Representative component slope", unit="%"
+                        ),
+                    ],
+                    rows=result.data["records"],
+                ),
+            )
+        )
+    if result.provider == "fema-flood-zones":
+        records = result.data["records"]
+        artifacts.append(
+            ArtifactContent(
+                title="Flood zones intersecting the land",
+                method="Returned FEMA NFHL polygons clipped to the pinned land boundary. Geodesic "
+                "intersection areas, WGS 84. Polygons may overlap; do not sum them as total coverage.",
+                evidence_ids=ids,
+                output=MapOutput(
+                    kind="map",
+                    unit="m²",
+                    legend="Mapped zone intersections; not a forecast or complete flood-risk assessment.",
+                    features=[
+                        MapFeature(
+                            label=f"Zone {row['zone']} · {row['subtype']}",
+                            geometry=row["geometry"],
+                            value=row["intersectedAreaM2"],
+                        )
+                        for row in records
+                    ],
+                ),
+            )
+        )
+        artifacts.append(
+            ArtifactContent(
+                title="Flood-map intersection records",
+                method="Each row is one returned mapped polygon clipped to the land; overlaps and incomplete "
+                "coverage are possible.",
+                evidence_ids=ids,
+                output=TableOutput(
+                    kind="table",
+                    columns=[
+                        TableColumn(key="zone", label="Zone"),
+                        TableColumn(key="subtype", label="Zone description"),
+                        TableColumn(key="specialFloodHazard", label="Special flood hazard area"),
+                        TableColumn(key="intersectedAreaM2", label="Intersection area", unit="m²"),
+                        TableColumn(key="mapId", label="FIRM database"),
+                        TableColumn(key="recordId", label="Flood-area record"),
+                    ],
+                    rows=[
+                        {key: value for key, value in row.items() if key != "geometry"}
+                        for row in records
                     ],
                 ),
             )

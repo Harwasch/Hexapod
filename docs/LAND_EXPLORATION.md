@@ -194,6 +194,21 @@ smoke calculated, saved, reloaded and reopened a solar scenario without page exc
 horizontal overflow. The development preview had no imagery catalog; this smoke does not
 establish imagery availability. Full domain workflows and deployment remain outstanding.
 
+## Implemented increment: mapped soils and flood-zone intersections
+
+The source registry and bounded overview now include USDA Soil Data Access and FEMA NFHL.
+USDA queries a representative point and reports major soil-map-unit components, drainage,
+hydrologic group and representative slope with clear map-unit limitations. FEMA polygons
+are clipped to the pinned boundary, retain exclusions, and produce cited map/table outputs
+with geodesic intersection areas. Overlapping polygons are not summed into a coverage claim.
+Empty, uncovered and unavailable results remain distinct; detailed geometry is bounded.
+
+Thirteen source/worker/search tests pass. A live USDA request returned the Alderwood map
+unit and component metadata near the development fixture after a maintenance period ended.
+FEMA returned HTTP 503 from its public service, so its live integration remains unverified;
+fixture tests validate clipping, exclusions and output contracts. The overview preserves
+this outage as unavailable rather than interpreting it as no flood risk.
+
 ## Validation
 
 Backend: `tests/test_land.py` covers persistence without missions/sites, revision history,

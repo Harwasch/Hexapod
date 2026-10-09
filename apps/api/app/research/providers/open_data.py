@@ -16,6 +16,7 @@ from app.research.providers.base import (
     evidence,
     fetch_json,
 )
+from app.research.providers.us_land import US_SOURCES, flood_zones, soils
 from app.schemas.research import EvidenceContent
 
 SOURCES = {
@@ -53,6 +54,8 @@ SOURCES = {
         endpoint="https://api.gbif.org/v1/occurrence/search",
     ),
 }
+
+SOURCES.update(US_SOURCES)
 
 
 def elevation(context: SourceContext, client: httpx.Client) -> SourceResult:
@@ -248,7 +251,13 @@ def occurrences(context: SourceContext, client: httpx.Client) -> SourceResult:
     )
 
 
-ADAPTERS = {"usgs-elevation": elevation, "nasa-power": climate, "gbif-occurrences": occurrences}
+ADAPTERS = {
+    "usgs-elevation": elevation,
+    "nasa-power": climate,
+    "gbif-occurrences": occurrences,
+    "usda-soils": soils,
+    "fema-flood-zones": flood_zones,
+}
 
 
 def retrieve(provider: str, context: SourceContext, client: httpx.Client) -> SourceResult:
