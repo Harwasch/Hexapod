@@ -4,7 +4,7 @@ import uuid
 
 from geoalchemy2.shape import from_shape
 from shapely.geometry import shape
-from sqlalchemy import func, null, select
+from sqlalchemy import and_, func, null, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.land import LandArea
@@ -115,25 +115,57 @@ def read(db: Session, row: LandFeature) -> LandFeatureRead:
     )
 
 
-def reject_duplicate_source(
+def duplicate_source(
     db: Session, land_id: uuid.UUID, payload: LandFeatureCreate, excluding: uuid.UUID
-) -> None:
-    # Exact source record duplicates become a reviewable conflict, never a second asset.
+) -> uuid.UUID | None:
+    matches = []
     if payload.source.record_id and payload.source.url:
-        duplicate = db.scalar(
-            select(LandFeature.id).where(
-                LandFeature.land_id == land_id,
-                LandFeature.id != excluding,
+        matches.append(
+            and_(
                 LandFeature.content["source"]["record_id"].astext == payload.source.record_id,
                 LandFeature.content["source"]["url"].astext == str(payload.source.url),
             )
         )
-        if duplicate:
-            raise ConflictError(f"This source record is already in the inventory ({duplicate}).")
+    if payload.external_ref:
+        matches.append(
+            and_(
+                LandFeature.content["external_ref"]["namespace"].astext
+                == payload.external_ref.namespace,
+                LandFeature.content["external_ref"]["record_id"].astext
+                == payload.external_ref.record_id,
+            )
+        )
+    if not matches:
+        return None
+    duplicates = list(
+        db.scalars(
+            select(LandFeature.id)
+            .where(LandFeature.land_id == land_id, LandFeature.id != excluding, or_(*matches))
+            .limit(2)
+        )
+    )
+    if len(duplicates) > 1:
+        raise ConflictError(
+            "The source and external identity refer to different saved assets. Review their identities."
+        )
+    return duplicates[0] if duplicates else None
+
+
+def reject_duplicate_source(
+    db: Session, land_id: uuid.UUID, payload: LandFeatureCreate, excluding: uuid.UUID
+) -> None:
+    duplicate = duplicate_source(db, land_id, payload, excluding)
+    if duplicate:
+        raise ConflictError(f"This source record is already in the inventory ({duplicate}).")
 
 
 def create(
-    db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID, payload: LandFeatureCreate
+    db: Session,
+    workspace_id: uuid.UUID,
+    land_id: uuid.UUID,
+    payload: LandFeatureCreate,
+    *,
+    commit: bool = True,
 ) -> LandFeatureRead:
     get_land(db, workspace_id, land_id)
     db.execute(select(LandArea.id).where(LandArea.id == land_id).with_for_update())
@@ -146,7 +178,10 @@ def create(
                 LandFeatureRevision.feature_id == identifier, LandFeatureRevision.revision == 1
             )
         )
-        if original is None or original.content != content:
+        if (
+            original is None
+            or LandFeatureCreate.model_validate(original.content).model_dump(mode="json") != content
+        ):
             raise ConflictError("This inventory request was already used with different details.")
         return read(db, existing)
     validate_evidence(db, land_id, payload.evidence_ids)
@@ -163,7 +198,10 @@ def create(
     db.add(
         LandFeatureRevision(feature_id=row.id, revision=1, content=content, note="Feature recorded")
     )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return read(db, row)
 
 

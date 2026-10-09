@@ -6,7 +6,7 @@ from datetime import datetime
 from itertools import pairwise
 from typing import Literal
 
-from pydantic import Field, TypeAdapter, model_validator
+from pydantic import Field, TypeAdapter, field_validator, model_validator
 from shapely import force_2d, get_num_coordinates
 from shapely.geometry import mapping, shape
 
@@ -54,6 +54,23 @@ class FeatureGeometryRead(FeatureGeometryRequest):
     perimeter_m: float | None
 
 
+class FeatureExternalRef(CamelModel):
+    namespace: str = Field(min_length=1, max_length=150)
+    record_id: str = Field(min_length=1, max_length=200)
+
+    @field_validator("namespace", "record_id")
+    @classmethod
+    def nonempty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("external identity must not be blank")
+        return value.strip()
+
+    @field_validator("namespace")
+    @classmethod
+    def normalized_namespace(cls, value: str) -> str:
+        return value.casefold()
+
+
 class LandFeatureCreate(CamelModel):
     request_key: uuid.UUID = Field(default_factory=uuid.uuid4)
     name: str = Field(min_length=1, max_length=200)
@@ -64,6 +81,7 @@ class LandFeatureCreate(CamelModel):
     description: str = Field(default="", max_length=5000)
     attributes: dict[str, str | float | bool | None] = Field(default_factory=dict, max_length=100)
     evidence_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+    external_ref: FeatureExternalRef | None = None
 
     @model_validator(mode="after")
     def bounded_feature(self) -> LandFeatureCreate:

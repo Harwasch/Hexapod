@@ -26,7 +26,12 @@ from app.models.land_document import (
     LandDocumentOcr,
     LandDocumentPage,
 )
-from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureRevision
+from app.models.land_feature import (
+    FeatureInspection,
+    LandFeature,
+    LandFeatureBatch,
+    LandFeatureRevision,
+)
 from app.models.land_image_registration import LandImageRegistration, LandImageRegistrationBlob
 from app.models.land_raster import LandRaster, LandRasterBlob
 from app.models.land_solar import LandSolar, LandSolarBlob
@@ -76,6 +81,7 @@ __all__ = [
     "LandDocumentOcr",
     "LandDocumentPage",
     "LandFeature",
+    "LandFeatureBatch",
     "LandFeatureRevision",
     "LandImageRegistration",
     "LandImageRegistrationBlob",

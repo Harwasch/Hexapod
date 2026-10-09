@@ -12,7 +12,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
-| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews | Batch imports, inventory draft recovery, broader detection and asset catalog linkage |
+| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts | Individual asset draft recovery, broader detection and asset catalog linkage |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
@@ -1359,3 +1359,57 @@ Local validation artifacts: `/tmp/land-inventory-geometry-browser-result.json`,
 `/tmp/land-inventory-geometry-desktop.png`, `/tmp/land-inventory-geometry-mobile.png`.
 No schema migration is needed for this increment. Batch import and inventory draft
 recovery remain unfinished; the overall feature remains in progress and undeployed.
+
+
+## Implemented increment: reviewed batch asset imports
+
+Inventory accepts GeoJSON and CSV point files up to 5 MiB. Users review names, categories,
+record IDs, per-row parsing errors and dropped-property warnings, select rows, and preview
+candidate locations and outside-boundary distances before saving. GeoJSON polygons retain
+holes and multipart areas. MultiPoint and MultiLineString inputs explicitly expand into
+individual assets with stable part IDs. Unsupported geometries and non-WGS-84 CRS are
+reported; no reprojection or inferred coordinate order is claimed. CSV column mapping
+supports quoted fields, escaped quotes and embedded newlines. Limits are 200 assets,
+20,000 vertices per asset, 100,000 vertices per batch and an 8 MiB normalized API payload.
+Topology is validated by the API before preview or save; invalid selected topology must
+be corrected in the source or excluded from the reviewed batch.
+
+The default dataset namespace is the SHA-256 fingerprint of the original uploaded file.
+A named dataset and explicit record-ID column support deduplication across changed files;
+a shared namespace cannot be selected for rows relying on positional fallback IDs.
+External namespace comparisons are case-insensitive, record IDs case-sensitive. Existing
+source URL/record identities remain supported. Single-asset writes and batch imports
+apply the same duplicate checks. Imported features start as candidates and never replace
+existing assets or automatically confirm their identity.
+
+Migration **0024** adds private import receipts. A land row lock serializes concurrent
+imports and individual feature writes. Selected creates and the receipt commit in one
+transaction; late failure rolls everything back. Retry identity derives from the batch
+request and row IDs. Reusing a request with changed input conflicts; retrying the original
+request returns its original receipt, even after asset edits or a boundary revision.
+Different requests for the same dataset records skip existing assets. Receipt history
+retains row-to-asset links, dispositions, boundary revision, filename and the client-supplied
+original-file fingerprint. The original upload bytes are not retained on the server.
+
+Unfinished imports, mapping, selections, edits and request keys recover in the same browser,
+scoped to identity/workspace and land. Editing inputs invalidates the preview. A failed save
+keeps the request key for an exact retry; saving clears the recovered draft. Storage quota
+failure is visible. Boundary changes require a new review. The selection E2E fixture now
+mocks the new import-history endpoint explicitly rather than returning unrelated land rows.
+
+A Chromium/API smoke on the public National Mall software fixture recovered an edited
+upload after reload, rejected an invalid row, preserved a polygon hole, expanded multipart
+points, identified an outside-land asset, and created five candidates while skipping one
+in-file duplicate. Reimporting the same bytes created no assets and skipped all six valid
+rows. Desktop and 390px phone checks reported no page errors or unintended layout overflow;
+receipt history reopened after reload. The successful receipts are
+`e6da938c-250e-5896-af63-ae480c4341fd` and `a23daafc-9f23-5f90-a2fa-63af8159073b`.
+Local artifacts: `/tmp/land-inventory-import-browser-result.json`,
+`/tmp/land-inventory-import-desktop.png`, `/tmp/land-inventory-import-mobile.png`.
+
+Migration 0024 upgraded, downgraded and upgraded on the isolated test database, and upgraded
+the preview database. Twelve focused backend tests cover previews, rollback, exact retries after
+edits/boundary changes, duplicate policies, scoped receipts and concurrent imports. Nine
+frontend inventory/editor/import tests pass. API lint/format/type checks, web type checking,
+targeted lint and the production build pass. All seven land selection/action browser regression
+tests pass after updating the import-history fixture. No production deployment was performed.

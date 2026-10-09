@@ -25,6 +25,7 @@ async function landApi(page: Page) {
       path.endsWith("/surveys") ||
       path.endsWith("/solar-assessments") ||
       path.endsWith("/features") ||
+      path.endsWith("/features/imports") ||
       path.endsWith("/actions") ||
       path.endsWith("/documents") ||
       path.endsWith("/documents/links")

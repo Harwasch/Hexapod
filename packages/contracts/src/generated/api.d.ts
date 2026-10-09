@@ -910,6 +910,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/features/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Imports */
+        get: operations["imports_api_v1_land__land_id__features_imports_get"];
+        put?: never;
+        /** Import Features */
+        post: operations["import_features_api_v1_land__land_id__features_imports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/features/imports/{import_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Imported Batch */
+        get: operations["imported_batch_api_v1_land__land_id__features_imports__import_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/features/imports/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Preview */
+        post: operations["import_preview_api_v1_land__land_id__features_imports_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/investigations": {
         parameters: {
             query?: never;
@@ -3543,6 +3595,96 @@ export interface components {
             /** Url */
             url?: string | null;
         };
+        /** FeatureBatchItem */
+        FeatureBatchItem: {
+            feature: components["schemas"]["LandFeatureCreate"];
+            /** Rowid */
+            rowId: string;
+        };
+        /** FeatureBatchPreview */
+        FeatureBatchPreview: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Rows */
+            rows: components["schemas"]["FeatureBatchRow"][];
+        };
+        /** FeatureBatchRead */
+        FeatureBatchRead: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey: string;
+            /** Rows */
+            rows: components["schemas"]["FeatureBatchRow"][];
+            /** Sourcefilesha256 */
+            sourceFileSha256: string;
+            /** Sourcelabel */
+            sourceLabel: string;
+        };
+        /** FeatureBatchRequest */
+        FeatureBatchRequest: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey: string;
+            /** Rows */
+            rows: components["schemas"]["FeatureBatchItem"][];
+            /**
+             * Skipduplicates
+             * @default true
+             */
+            skipDuplicates?: boolean;
+            /** Sourcefilesha256 */
+            sourceFileSha256: string;
+            /** Sourcelabel */
+            sourceLabel: string;
+        };
+        /** FeatureBatchRow */
+        FeatureBatchRow: {
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "created" | "existing" | "duplicate-in-file";
+            /**
+             * Featureid
+             * Format: uuid
+             */
+            featureId: string;
+            geometryPreview?: components["schemas"]["FeatureGeometryRead"] | null;
+            /** Name */
+            name: string;
+            /** Rowid */
+            rowId: string;
+        };
+        /** FeatureExternalRef */
+        FeatureExternalRef: {
+            /** Namespace */
+            namespace: string;
+            /** Recordid */
+            recordId: string;
+        };
         /** FeatureGeometryRead */
         FeatureGeometryRead: {
             /** Aream2 */
@@ -4533,6 +4675,7 @@ export interface components {
             description?: string;
             /** Evidenceids */
             evidenceIds?: string[];
+            externalRef?: components["schemas"]["FeatureExternalRef"] | null;
             /** Geometry */
             geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
             /** Name */
@@ -4577,6 +4720,7 @@ export interface components {
             distanceM: number;
             /** Evidenceids */
             evidenceIds?: string[];
+            externalRef?: components["schemas"]["FeatureExternalRef"] | null;
             /** Geometry */
             geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
             /**
@@ -4633,6 +4777,7 @@ export interface components {
             evidenceIds?: string[];
             /** Expectedrevision */
             expectedRevision: number;
+            externalRef?: components["schemas"]["FeatureExternalRef"] | null;
             /** Geometry */
             geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
             /** Name */
@@ -7805,6 +7950,12 @@ export type SchemaDocumentSearchHit = components['schemas']['DocumentSearchHit']
 export type SchemaEcologyRequest = components['schemas']['EcologyRequest'];
 export type SchemaEventRead = components['schemas']['EventRead'];
 export type SchemaEvidenceRead = components['schemas']['EvidenceRead'];
+export type SchemaFeatureBatchItem = components['schemas']['FeatureBatchItem'];
+export type SchemaFeatureBatchPreview = components['schemas']['FeatureBatchPreview'];
+export type SchemaFeatureBatchRead = components['schemas']['FeatureBatchRead'];
+export type SchemaFeatureBatchRequest = components['schemas']['FeatureBatchRequest'];
+export type SchemaFeatureBatchRow = components['schemas']['FeatureBatchRow'];
+export type SchemaFeatureExternalRef = components['schemas']['FeatureExternalRef'];
 export type SchemaFeatureGeometryRead = components['schemas']['FeatureGeometryRead'];
 export type SchemaFeatureGeometryRequest = components['schemas']['FeatureGeometryRequest'];
 export type SchemaFeatureInspectionCreate = components['schemas']['FeatureInspectionCreate'];
@@ -12132,6 +12283,258 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeatureGeometryRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    imports_api_v1_land__land_id__features_imports_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeatureBatchRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    import_features_api_v1_land__land_id__features_imports_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeatureBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeatureBatchRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    imported_batch_api_v1_land__land_id__features_imports__import_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                import_id: string;
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeatureBatchRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    import_preview_api_v1_land__land_id__features_imports_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeatureBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeatureBatchPreview"];
                 };
             };
             /** @description Missing or wrong write token */

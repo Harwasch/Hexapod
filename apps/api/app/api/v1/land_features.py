@@ -7,7 +7,12 @@ from sqlalchemy import select
 
 from app.api.deps import DbSession
 from app.api.workspace_deps import WorkspaceDep
-from app.models.land_feature import FeatureInspection, LandFeature
+from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureBatch
+from app.schemas.land_feature_batches import (
+    FeatureBatchPreview,
+    FeatureBatchRead,
+    FeatureBatchRequest,
+)
 from app.schemas.land_features import (
     FeatureGeometryRead,
     FeatureGeometryRequest,
@@ -18,7 +23,7 @@ from app.schemas.land_features import (
     LandFeatureRevise,
     LandFeatureRevisionRead,
 )
-from app.services import land_features
+from app.services import land_feature_batches, land_features
 from app.services.land import get_land
 
 router = APIRouter(prefix="/land/{land_id}/features", tags=["land inventory"])
@@ -56,6 +61,47 @@ def geometry_preview(
     land_id: uuid.UUID, payload: FeatureGeometryRequest, db: DbSession, scope: WorkspaceDep
 ) -> FeatureGeometryRead:
     return land_features.preview_geometry(db, scope.id, land_id, payload)
+
+
+@router.post("/imports/preview", response_model=FeatureBatchPreview)
+def import_preview(
+    land_id: uuid.UUID, payload: FeatureBatchRequest, db: DbSession, scope: WorkspaceDep
+) -> FeatureBatchPreview:
+    return land_feature_batches.preview(db, scope.id, land_id, payload)
+
+
+@router.post("/imports", response_model=FeatureBatchRead, status_code=201)
+def import_features(
+    land_id: uuid.UUID, payload: FeatureBatchRequest, db: DbSession, scope: WorkspaceDep
+) -> FeatureBatchRead:
+    scope.require("owner", "editor")
+    return land_feature_batches.create(db, scope.id, land_id, payload)
+
+
+@router.get("/imports", response_model=list[FeatureBatchRead])
+def imports(
+    land_id: uuid.UUID,
+    db: DbSession,
+    scope: WorkspaceDep,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> list[FeatureBatchRead]:
+    get_land(db, scope.id, land_id)
+    rows = db.scalars(
+        select(LandFeatureBatch)
+        .where(LandFeatureBatch.land_id == land_id)
+        .order_by(LandFeatureBatch.created_at.desc(), LandFeatureBatch.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [land_feature_batches.read(row) for row in rows]
+
+
+@router.get("/imports/{import_id}", response_model=FeatureBatchRead)
+def imported_batch(
+    land_id: uuid.UUID, import_id: uuid.UUID, db: DbSession, scope: WorkspaceDep
+) -> FeatureBatchRead:
+    return land_feature_batches.read(land_feature_batches.scoped(db, scope.id, land_id, import_id))
 
 
 @router.get("/{feature_id}", response_model=LandFeatureRead)

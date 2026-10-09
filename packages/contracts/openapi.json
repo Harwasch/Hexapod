@@ -4302,6 +4302,221 @@
         "title": "EvidenceRead",
         "type": "object"
       },
+      "FeatureBatchItem": {
+        "additionalProperties": false,
+        "properties": {
+          "feature": {
+            "$ref": "#/components/schemas/LandFeatureCreate"
+          },
+          "rowId": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Rowid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rowId",
+          "feature"
+        ],
+        "title": "FeatureBatchItem",
+        "type": "object"
+      },
+      "FeatureBatchPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureBatchRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "boundaryRevision",
+          "rows"
+        ],
+        "title": "FeatureBatchPreview",
+        "type": "object"
+      },
+      "FeatureBatchRead": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureBatchRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "sourceFileSha256": {
+            "title": "Sourcefilesha256",
+            "type": "string"
+          },
+          "sourceLabel": {
+            "title": "Sourcelabel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "landId",
+          "boundaryRevision",
+          "requestKey",
+          "sourceFileSha256",
+          "sourceLabel",
+          "rows",
+          "createdAt"
+        ],
+        "title": "FeatureBatchRead",
+        "type": "object"
+      },
+      "FeatureBatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "minimum": 1.0,
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureBatchItem"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Rows",
+            "type": "array"
+          },
+          "skipDuplicates": {
+            "default": true,
+            "title": "Skipduplicates",
+            "type": "boolean"
+          },
+          "sourceFileSha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sourcefilesha256",
+            "type": "string"
+          },
+          "sourceLabel": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Sourcelabel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestKey",
+          "boundaryRevision",
+          "sourceFileSha256",
+          "sourceLabel",
+          "rows"
+        ],
+        "title": "FeatureBatchRequest",
+        "type": "object"
+      },
+      "FeatureBatchRow": {
+        "additionalProperties": false,
+        "properties": {
+          "disposition": {
+            "enum": [
+              "created",
+              "existing",
+              "duplicate-in-file"
+            ],
+            "title": "Disposition",
+            "type": "string"
+          },
+          "featureId": {
+            "format": "uuid",
+            "title": "Featureid",
+            "type": "string"
+          },
+          "geometryPreview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeatureGeometryRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rowId": {
+            "title": "Rowid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rowId",
+          "featureId",
+          "name",
+          "disposition"
+        ],
+        "title": "FeatureBatchRow",
+        "type": "object"
+      },
+      "FeatureExternalRef": {
+        "additionalProperties": false,
+        "properties": {
+          "namespace": {
+            "maxLength": 150,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "recordId": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Recordid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "recordId"
+        ],
+        "title": "FeatureExternalRef",
+        "type": "object"
+      },
       "FeatureGeometryRead": {
         "additionalProperties": false,
         "properties": {
@@ -7082,6 +7297,16 @@
             "title": "Evidenceids",
             "type": "array"
           },
+          "externalRef": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeatureExternalRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "geometry": {
             "discriminator": {
               "mapping": {
@@ -7206,6 +7431,16 @@
             "maxItems": 100,
             "title": "Evidenceids",
             "type": "array"
+          },
+          "externalRef": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeatureExternalRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "geometry": {
             "discriminator": {
@@ -7354,6 +7589,16 @@
             "minimum": 1.0,
             "title": "Expectedrevision",
             "type": "integer"
+          },
+          "externalRef": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeatureExternalRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "geometry": {
             "discriminator": {
@@ -23805,6 +24050,441 @@
           }
         ],
         "summary": "Geometry Preview",
+        "tags": [
+          "land inventory"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/features/imports": {
+      "get": {
+        "operationId": "imports_api_v1_land__land_id__features_imports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FeatureBatchRead"
+                  },
+                  "title": "Response Imports Api V1 Land  Land Id  Features Imports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Imports",
+        "tags": [
+          "land inventory"
+        ]
+      },
+      "post": {
+        "operationId": "import_features_api_v1_land__land_id__features_imports_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeatureBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureBatchRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Import Features",
+        "tags": [
+          "land inventory"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/features/imports/preview": {
+      "post": {
+        "operationId": "import_preview_api_v1_land__land_id__features_imports_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeatureBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureBatchPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Import Preview",
+        "tags": [
+          "land inventory"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/features/imports/{import_id}": {
+      "get": {
+        "operationId": "imported_batch_api_v1_land__land_id__features_imports__import_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Import Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureBatchRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Imported Batch",
         "tags": [
           "land inventory"
         ]

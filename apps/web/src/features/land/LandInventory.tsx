@@ -11,6 +11,7 @@ import { useSelection } from "@/state/selection";
 import { useUi } from "@/state/ui";
 import { InventoryGeometryEditor } from "./InventoryGeometryEditor";
 
+import { InventoryImport } from "./InventoryImport";
 import { LandInspectionForm } from "./LandInspectionForm";
 
 type Feature = components["schemas"]["LandFeatureRead"];
@@ -321,6 +322,7 @@ export function LandInventory({ land }: { land: LandArea }) {
           </button>
         </p>
       )}
+      {!draft && <InventoryImport land={land} />}
       {canEdit && !draft && (
         <details>
           <summary>Add a mapped or inspected feature</summary>
@@ -581,6 +583,7 @@ export function LandInventory({ land }: { land: LandArea }) {
                   description: selected.description,
                   attributes: selected.attributes,
                   evidenceIds: selected.evidenceIds,
+                  externalRef: selected.externalRef,
                 });
               }}
             >
