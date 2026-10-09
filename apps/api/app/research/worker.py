@@ -36,6 +36,8 @@ from app.research import inventory as inventory_research
 from app.research import queue
 from app.research.documents import retrieve as retrieve_documents
 from app.research.ecology_outputs import ecology_outputs
+from app.research.focus import model_context as focus_context
+from app.research.focus import read_geometry as read_focus_geometry
 from app.research.model import (
     ActionDraftAction,
     ArchiveImageAction,
@@ -47,6 +49,7 @@ from app.research.model import (
     DocumentSearchAction,
     EvidenceReadAction,
     FindingAction,
+    FocusGeometryAction,
     InventoryReadAction,
     MappedAssetProposeAction,
     MappedAssetSearchAction,
@@ -1003,6 +1006,7 @@ class ResearchWorker:
             context = SourceContext(FOOTPRINT.validate_python(boundary.boundary))
             budget = ResearchBudget.model_validate(run.budget)
             kind, question = run.kind, run.question
+            focus_snapshot = run.focus_snapshot
             analysis_request = (
                 TypeAdapter(RasterRequest | SolarRequest | EcologyRequest).validate_python(
                     run.analysis
@@ -1255,6 +1259,7 @@ class ResearchWorker:
                     prompt = json.dumps(
                         {
                             "question": question,
+                            "focusedMapFeature": focus_context(focus_snapshot, boundary_revision),
                             "currentDate": datetime.now(UTC).date().isoformat(),
                             "conversation": conversation,
                             "savedResearchEvidence": saved_research_evidence,
@@ -1303,6 +1308,10 @@ class ResearchWorker:
                     if isinstance(action, RetrieveAction):
                         self._source(db, run_id, token, action.provider, context, client, state)
                         result = f"Retrieved {action.provider}; see retrieved source data."
+                    elif isinstance(action, FocusGeometryAction):
+                        result = json.dumps(
+                            read_focus_geometry(focus_snapshot, action.offset, action.count)
+                        )
                     elif isinstance(action, EvidenceReadAction):
                         current = queue.locked(db, run_id, token)
                         queue.validate_citations(db, current, [action.evidence_id])

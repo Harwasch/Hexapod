@@ -70,6 +70,8 @@ class ResearchRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     budget: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    focus: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    focus_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     checkpoint: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -80,6 +82,10 @@ class ResearchRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def focus_label(self) -> str | None:
+        return str(self.focus_snapshot["feature"]["label"]) if self.focus_snapshot else None
 
 
 class ResearchEvent(Base):

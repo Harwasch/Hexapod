@@ -13288,6 +13288,28 @@
         "title": "ResearchBudget",
         "type": "object"
       },
+      "ResearchFocusReference": {
+        "additionalProperties": false,
+        "properties": {
+          "artifactId": {
+            "format": "uuid",
+            "title": "Artifactid",
+            "type": "string"
+          },
+          "featureIndex": {
+            "maximum": 1999.0,
+            "minimum": 0.0,
+            "title": "Featureindex",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifactId",
+          "featureIndex"
+        ],
+        "title": "ResearchFocusReference",
+        "type": "object"
+      },
       "ResearchPage": {
         "additionalProperties": false,
         "properties": {
@@ -13665,6 +13687,16 @@
           "budget": {
             "$ref": "#/components/schemas/ResearchBudget"
           },
+          "focus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchFocusReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "kind": {
             "default": "investigation",
             "enum": [
@@ -13751,6 +13783,27 @@
               }
             ],
             "title": "Finishedat"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchFocusReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "focusLabel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focuslabel"
           },
           "id": {
             "format": "uuid",

@@ -12,7 +12,8 @@ import { api, unwrap } from "@/api/client";
 import { boundsOf } from "@twin/geo";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
-import { useLandAccessReady, useLandScope, useLandCanEdit } from "@/state/landIdentity";
+import { useLandAccessReady, useLandScope, useLandCanEdit, landScope } from "@/state/landIdentity";
+import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import {
   beginInvestigation,
@@ -134,9 +135,17 @@ export function LandResearch({ land }: { land: LandArea }) {
   const [tab, setTab] = useState<"overview" | "conversation" | "visuals">("overview");
   const question = useLandContext((state) => state.researchQuestion);
   const setQuestion = useLandContext((state) => state.setResearchQuestion);
+  const focus = useLandContext((state) => state.researchFocus);
+  const lifetime = useRef(0);
   const questionInput = useRef<HTMLTextAreaElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    lifetime.current += 1;
+    return () => {
+      lifetime.current += 1;
+    };
+  }, [land.id, scope]);
   const [evidence, setEvidence] = useState<LandEvidence | null>(null);
   const [showDismissed, setShowDismissed] = useState(false);
   const [newTopic, setNewTopic] = useState(false);
@@ -151,6 +160,8 @@ export function LandResearch({ land }: { land: LandArea }) {
     question: string;
     key: string;
     budget: components["schemas"]["ResearchBudget"];
+    focus: components["schemas"]["ResearchFocusReference"] | null;
+    session: number;
   } | null>(null);
   const pendingTerrain = useRef<{
     investigationId: string;
@@ -321,17 +332,36 @@ export function LandResearch({ land }: { land: LandArea }) {
     }
   };
   const ask = async () => {
-    if (!canEdit || !question.trim()) return;
+    if (!canEdit || busy || !question.trim()) return;
+    const session = useLand.getState().session;
+    const generation = lifetime.current;
+    const current = () =>
+      lifetime.current === generation &&
+      landScope() === scope &&
+      useLand.getState().session === session;
+    const reference = focus
+      ? { artifactId: focus.artifactId, featureIndex: focus.featureIndex }
+      : null;
     setBusy(true);
     setError(null);
     try {
       let operation = pending.current;
       if (
         operation?.question !== question ||
+        operation.session !== session ||
+        JSON.stringify(operation.focus) !== JSON.stringify(reference) ||
         (selected && operation.investigationId !== selected && !newTopic)
       ) {
         const id = selected && !newTopic ? selected : (await beginInvestigation(land, question)).id;
-        operation = { investigationId: id, question, key: crypto.randomUUID(), budget };
+        if (!current()) return;
+        operation = {
+          investigationId: id,
+          question,
+          key: crypto.randomUUID(),
+          budget,
+          focus: reference,
+          session,
+        };
         pending.current = operation;
       }
       await startResearch(
@@ -340,18 +370,24 @@ export function LandResearch({ land }: { land: LandArea }) {
         "investigation",
         operation.key,
         operation.budget,
+        operation.focus,
       );
+      if (!current()) return;
       setChosen(operation.investigationId);
-      setQuestion("");
+      const context = useLandContext.getState();
+      if (context.researchQuestion === operation.question && context.researchFocus === focus) {
+        setQuestion("");
+        context.setResearchFocus(null);
+      }
       setNewTopic(false);
       setOffset(0);
       setTab("conversation");
       pending.current = null;
       await refresh();
     } catch (cause) {
-      setError(describeError(cause));
+      if (current()) setError(describeError(cause));
     } finally {
-      setBusy(false);
+      if (lifetime.current === generation) setBusy(false);
     }
   };
   const viewEvidence = async (id: string | undefined) => {
@@ -775,6 +811,16 @@ export function LandResearch({ land }: { land: LandArea }) {
         }}
       >
         <label htmlFor="land-question">Follow your curiosity</label>
+        {focus && (
+          <div className="land-notice land-question-focus">
+            <span>
+              Asking about <strong>{focus.label}</strong>
+            </span>
+            <button type="button" onClick={() => useLandContext.getState().setResearchFocus(null)}>
+              Clear question focus
+            </button>
+          </div>
+        )}
         <textarea
           id="land-question"
           ref={questionInput}

@@ -28,6 +28,8 @@ export interface LandRasterLayer {
 export type LandWorkspaceSection =
   "discover" | "records" | "inventory" | "ecology" | "scenarios" | "actions";
 export interface LandContextState {
+  researchFocus: { artifactId: string; featureIndex: number; label: string } | null;
+  setResearchFocus: (focus: LandContextState["researchFocus"]) => void;
   selectedMapFeature: { layerId: string; featureId: string; origin: "map" | "list" } | null;
   selectMapFeature: (layerId: string, featureId: string, origin?: "map" | "list") => void;
   clearMapSelection: () => void;
@@ -63,6 +65,8 @@ export interface LandContextState {
 }
 
 export const useLandContext = create<LandContextState>((set, get) => ({
+  researchFocus: null,
+  setResearchFocus: (researchFocus) => set({ researchFocus }),
   selectedMapFeature: null,
   selectMapFeature: (layerId, featureId, origin = "list") => {
     const state = get(),
@@ -186,6 +190,7 @@ export const useLandContext = create<LandContextState>((set, get) => ({
     })),
   clear: () =>
     set({
+      researchFocus: null,
       selectedMapFeature: null,
       inventoryVisible: true,
       pointPicker: null,

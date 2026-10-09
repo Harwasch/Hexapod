@@ -64,11 +64,12 @@ export function startResearch(
   kind: "overview" | "investigation",
   requestKey: string,
   budget?: components["schemas"]["ResearchBudget"],
+  focus?: components["schemas"]["ResearchFocusReference"] | null,
 ) {
   return unwrap(
     api.POST("/api/v1/research/investigations/{investigation_id}/runs", {
       params: { path: { investigation_id: id } },
-      body: { question, kind, requestKey, budget },
+      body: { question, kind, requestKey, budget, focus },
     }),
   );
 }

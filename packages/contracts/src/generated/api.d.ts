@@ -6956,6 +6956,16 @@ export interface components {
              */
             maxWebSearches?: number;
         };
+        /** ResearchFocusReference */
+        ResearchFocusReference: {
+            /**
+             * Artifactid
+             * Format: uuid
+             */
+            artifactId: string;
+            /** Featureindex */
+            featureIndex: number;
+        };
         /** ResearchPage */
         ResearchPage: {
             /** Limit */
@@ -7074,6 +7084,7 @@ export interface components {
             /** Analysis */
             analysis?: components["schemas"]["RasterRequest"] | components["schemas"]["SolarRequest"] | components["schemas"]["EcologyRequest"] | null;
             budget?: components["schemas"]["ResearchBudget"];
+            focus?: components["schemas"]["ResearchFocusReference"] | null;
             /**
              * Kind
              * @default investigation
@@ -7104,6 +7115,9 @@ export interface components {
             error: string | null;
             /** Finishedat */
             finishedAt: string | null;
+            focus?: components["schemas"]["ResearchFocusReference"] | null;
+            /** Focuslabel */
+            focusLabel?: string | null;
             /**
              * Id
              * Format: uuid
@@ -8718,6 +8732,7 @@ export type SchemaRepresentation = components['schemas']['Representation'];
 export type SchemaResearchArtifactDetail = components['schemas']['ResearchArtifactDetail'];
 export type SchemaResearchArtifactRead = components['schemas']['ResearchArtifactRead'];
 export type SchemaResearchBudget = components['schemas']['ResearchBudget'];
+export type SchemaResearchFocusReference = components['schemas']['ResearchFocusReference'];
 export type SchemaResearchPage = components['schemas']['ResearchPage'];
 export type SchemaResearchStatus = components['schemas']['ResearchStatus'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];

@@ -219,6 +219,20 @@ def test_private_research_and_events_follow_workspace_membership(
         "/api/v1/workspaces", headers=headers(token("bob")), json={"name": "Other"}
     ).json()["id"]
     bob = headers(token("bob"), other)
+    _, bob_inv, _, _ = start(client, bob)
+    assert (
+        client.post(
+            f"/api/v1/research/investigations/{bob_inv['id']}/runs",
+            headers=bob,
+            json={
+                "requestKey": str(uuid.uuid4()),
+                "question": "Inspect a private map",
+                "focus": {"artifactId": str(aid), "featureIndex": 0},
+            },
+        ).status_code
+        == 404
+    )
+    db.rollback()
     for path in (
         f"/land/{land['id']}/investigations",
         f"/research/investigations/{inv['id']}",

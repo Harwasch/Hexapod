@@ -39,6 +39,11 @@ class InvestigationRead(InvestigationCreate):
     stale: bool
 
 
+class ResearchFocusReference(CamelModel):
+    artifact_id: uuid.UUID
+    feature_index: int = Field(ge=0, le=1999)
+
+
 class RunCreate(CamelModel):
     request_key: uuid.UUID
     kind: Literal["overview", "investigation", "raster", "archive", "solar", "ecology"] = (
@@ -47,9 +52,12 @@ class RunCreate(CamelModel):
     question: str = Field(min_length=1, max_length=10_000)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     analysis: RasterRequest | SolarRequest | EcologyRequest | None = None
+    focus: ResearchFocusReference | None = None
 
     @model_validator(mode="after")
     def analysis_request(self) -> RunCreate:
+        if self.focus is not None and self.kind != "investigation":
+            raise ValueError("A map feature focus requires an investigation run.")
         if (self.kind == "raster") != isinstance(self.analysis, RasterRequest):
             raise ValueError("Raster runs require raster analysis parameters.")
         if (self.kind == "solar") != isinstance(self.analysis, SolarRequest):
@@ -65,6 +73,8 @@ class RunRead(CamelModel):
     question: str
     kind: Literal["overview", "investigation", "raster", "archive", "solar", "ecology"]
     analysis: RasterRequest | SolarRequest | EcologyRequest | None = None
+    focus: ResearchFocusReference | None = None
+    focus_label: str | None = None
     status: Literal["queued", "running", "succeeded", "partial", "failed", "cancelled"]
     budget: ResearchBudget
     attempt: int

@@ -67,6 +67,25 @@ export function LandMapSelection({ land }: { land: LandArea }) {
       <div className="land-actions">
         <button
           type="button"
+          disabled={!artifactId || !/^\d+$/.test(feature.id) || Number(feature.id) > 1999}
+          onClick={() => {
+            if (!artifactId) return;
+            const context = useLandContext.getState();
+            context.setResearchFocus({
+              artifactId,
+              featureIndex: Number(feature.id),
+              label: feature.label,
+            });
+            if (!context.researchQuestion.trim())
+              context.setResearchQuestion("What can you tell me about this feature?");
+            context.setSection("discover");
+            requestAnimationFrame(() => document.getElementById("land-question")?.focus());
+          }}
+        >
+          Ask about this feature
+        </button>
+        <button
+          type="button"
           disabled={!scene}
           onClick={() => {
             const bounds = researchMapBounds([feature]);

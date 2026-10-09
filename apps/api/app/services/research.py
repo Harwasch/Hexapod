@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -22,19 +23,22 @@ from app.schemas.land_ecology import EcologyRequest
 from app.schemas.land_rasters import RasterRequest
 from app.schemas.land_solar import SolarRequest
 from app.schemas.research import (
+    ArtifactContent,
     EvidenceRead,
     FindingRead,
     InvestigationCreate,
     InvestigationDetail,
     InvestigationRead,
+    MapOutput,
     MessageRead,
     ResearchArtifactRead,
     ResearchBudget,
+    ResearchFocusReference,
     ResearchPage,
     RunCreate,
     RunRead,
 )
-from app.services.errors import ConflictError, NotFoundError
+from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.land import get_land
 
 TERMINAL = {"succeeded", "partial", "failed", "cancelled"}
@@ -126,7 +130,7 @@ def list_investigations(
 def create_run(
     db: Session, workspace_id: uuid.UUID, identifier: uuid.UUID, payload: RunCreate
 ) -> RunRead:
-    investigation(db, workspace_id, identifier, lock=True)
+    target = investigation(db, workspace_id, identifier, lock=True)
     existing = db.scalar(
         select(ResearchRun).where(
             ResearchRun.investigation_id == identifier,
@@ -138,6 +142,8 @@ def create_run(
             existing.question != payload.question
             or existing.kind != payload.kind
             or ResearchBudget.model_validate(existing.budget) != payload.budget
+            or (ResearchFocusReference.model_validate(existing.focus) if existing.focus else None)
+            != payload.focus
             or (
                 TypeAdapter(RasterRequest | SolarRequest | EcologyRequest).validate_python(
                     existing.analysis
@@ -153,13 +159,68 @@ def create_run(
         return RunRead.model_validate(existing)
     fields = payload.model_dump()
     fields["analysis"] = payload.analysis.model_dump(mode="json") if payload.analysis else None
+    fields["focus"] = payload.focus.model_dump(mode="json") if payload.focus else None
     run = ResearchRun(investigation_id=identifier, **fields)
     db.add(run)
     db.flush()
+    if payload.focus:
+        pin_research_focus(db, target, run, payload.focus)
     db.add(ResearchMessage(investigation_id=identifier, role="user", content=payload.question))
     event(db, run, "queued", {"kind": payload.kind})
     db.commit()
     return RunRead.model_validate(run)
+
+
+def pin_research_focus(
+    db: Session, target: Investigation, run: ResearchRun, focus: ResearchFocusReference
+) -> None:
+    """Resolve a same-land reference and copy immutable evidence in the run transaction."""
+    source = db.execute(
+        select(ResearchArtifact, Investigation)
+        .join(ResearchRun, ResearchRun.id == ResearchArtifact.run_id)
+        .join(Investigation, Investigation.id == ResearchRun.investigation_id)
+        .where(ResearchArtifact.id == focus.artifact_id, Investigation.land_id == target.land_id)
+    ).first()
+    if source is None:
+        raise NotFoundError("research map", focus.artifact_id)
+    artifact, source_investigation = source
+    content = ArtifactContent.model_validate(artifact.content)
+    if not isinstance(content.output, MapOutput) or focus.feature_index >= len(
+        content.output.features
+    ):
+        raise InvalidInputError("The selected map feature is unavailable.")
+    evidence_ids = []
+    for original_id in dict.fromkeys(content.evidence_ids):
+        original = db.scalar(
+            select(Evidence)
+            .join(ResearchRun, ResearchRun.id == Evidence.run_id)
+            .where(
+                Evidence.id == original_id, ResearchRun.investigation_id == source_investigation.id
+            )
+        )
+        if original is None:
+            raise InvalidInputError("The selected feature's source evidence is unavailable.")
+        copied = Evidence(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            source_key=f"focus/{original_id}",
+            content=deepcopy(original.content),
+        )
+        db.add(copied)
+        evidence_ids.append(str(copied.id))
+    run.focus_snapshot = {
+        "artifactId": str(artifact.id),
+        "featureIndex": focus.feature_index,
+        "title": content.title,
+        "method": content.method,
+        "feature": content.output.features[focus.feature_index].model_dump(
+            mode="json", by_alias=True
+        ),
+        "unit": content.output.unit,
+        "legend": content.output.legend,
+        "boundaryRevision": source_investigation.boundary_revision,
+        "evidenceIds": evidence_ids,
+    }
 
 
 def get_run(

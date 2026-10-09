@@ -9,7 +9,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, reviewed line splitting, boundary edge/corner snapping, geospatial imports, revisions, reviewed-draft and unfinished-operation recovery | Broader cadastral coverage, snapping to external mapped features, large/dateline corridor handling |
-| Research | Durable worker, resumable authenticated live progress with incremental polling fallback, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, linked map/list feature inspection with source evidence, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
+| Research | Durable worker, resumable authenticated live progress with incremental polling fallback, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, linked map/list feature inspection with source evidence and pinned agent follow-ups, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | Verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
@@ -1865,3 +1865,65 @@ no page errors or unintended overflow occurred. Artifacts: `/tmp/land-live-resea
 
 Targeted web lint and production build also pass. The existing PlayCanvas worker-module
 externalization warnings remain. No schema migration or deployment is part of this increment.
+
+
+## Implemented increment: grounded map-feature questions
+
+The selected-feature inspector now offers Ask about this feature. It preserves an existing
+question, moves to Discover, focuses the question field, and shows a removable feature reference.
+Submission sends only an artifact ID and feature index. A pending request retains that reference
+and its request key for retry; a newer question or selection is preserved when an earlier request
+finishes. Late responses cannot change another land/session's research selection.
+
+The API resolves the reference from a stored map output belonging to the same land, including
+outputs from another investigation of that land. It rejects other-land/workspace references,
+non-map outputs and invalid indices. In the run transaction it pins the exact feature, value,
+unit, method, legend and source boundary revision, and copies the original evidence snapshots
+into the destination investigation. Citation validation therefore remains scoped to that
+investigation. Retrying a successfully queued request reuses the original snapshot even if the
+source later becomes unavailable; changing the focus with the same request key is a conflict.
+
+The worker receives the pinned context and a flag when its source boundary differs from the
+investigation's boundary. Small geometries are included directly; larger ones are omitted
+explicitly and read through a bounded coordinate-page tool that preserves GeoJSON index paths,
+hole rings, closure vertices and disconnected parts. Agent guidance distinguishes research
+outputs from verified parcel boundaries or measurements and requires reading source evidence.
+Specialist analyses remain optional and driven by the user's question.
+
+Migration 0028 adds nullable focus reference/snapshot columns. The isolated preview API and
+research worker now run this implementation. No production deployment or original checkout
+change is included.
+
+Validation: 15 research API/worker tests and 16 focused web tests pass. They cover same-land
+cross-investigation references, exact evidence copies, citation validation, idempotency,
+other-land/workspace rejection, geometry paging and a real worker with a deterministic model
+fixture. Web checks cover lost-response retries, preserving a newer question/selection, map
+linking and streaming regressions. API lint/format/type checks and web type/lint checks pass.
+A real Chromium/Cesium check on the public National Mall software fixture selected mapped
+features, inspected a source and submitted the exact focus reference from the phone layout.
+The map results and queue response were explicitly synthetic; no research findings were
+written by this check. Desktop/390px phone screenshots were inspected, with no page errors or
+unintended overflow. Artifacts: `/tmp/land-research-focus-result.json`,
+`/tmp/land-research-focus-desktop.png`, `/tmp/land-research-focus-mobile.png`.
+
+## Broader acceptance checkpoint
+
+Before the grounded-follow-up increment, the full web suite passed 1,136 tests with four failures
+in the child-process bundle checker caused by sandbox process-spawn denial. All five tests in
+that file passed when rerun with the required process permissions; the actual production-bundle
+check also passed. This verifies all 1,140 tests across those runs, not one uninterrupted green
+run. The full API suite passed 760 tests, failed one orphan-process check and skipped nine
+real-S3 tests because TEST_S3_ENDPOINT_URL was unset. The orphan recipe had exited but remained
+a zombie under the container's PID 1. Updating the test's process-liveness check to recognize
+that state made the targeted test pass; production worker behavior was unchanged. Subsequent
+focused test results are recorded above.
+
+Live model and identity-provider acceptance and real-S3 integration remain unverified in this
+environment. The full feature remains in progress as described in the current-status table.
+Roof reconstruction, surveying or fitted-panel layouts are not completion requirements.
+
+The grounded-follow-up increment also passes all seven land Chromium regressions and the
+production build (with the existing PlayCanvas worker-module externalization warnings).
+The test database passed a 0028 → 0027 → 0028 migration roundtrip; both isolated test and
+preview databases are now at 0028. The final desktop/phone interaction check was rerun after
+the focus-chip layout adjustment and again reported no errors or unintended overflow.
