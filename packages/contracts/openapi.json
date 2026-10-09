@@ -8333,6 +8333,13 @@
             "minimum": 1.0,
             "title": "Maxsteps",
             "type": "integer"
+          },
+          "maxWebSearches": {
+            "default": 6,
+            "maximum": 30.0,
+            "minimum": 0.0,
+            "title": "Maxwebsearches",
+            "type": "integer"
           }
         },
         "title": "ResearchBudget",

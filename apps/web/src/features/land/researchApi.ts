@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { LandArea } from "@twin/contracts";
+import type { components, LandArea } from "@twin/contracts";
 import { api, unwrap } from "@/api/client";
 import { useLandScope, useLandAccessReady } from "@/state/landIdentity";
 
@@ -63,11 +63,12 @@ export function startResearch(
   question: string,
   kind: "overview" | "investigation",
   requestKey: string,
+  budget?: components["schemas"]["ResearchBudget"],
 ) {
   return unwrap(
     api.POST("/api/v1/research/investigations/{investigation_id}/runs", {
       params: { path: { investigation_id: id } },
-      body: { question, kind, requestKey },
+      body: { question, kind, requestKey, budget },
     }),
   );
 }

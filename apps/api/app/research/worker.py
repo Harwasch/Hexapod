@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -26,10 +27,12 @@ from app.research.model import (
     ResearchDecision,
     ResearchModel,
     RetrieveAction,
+    SearchAction,
 )
 from app.research.outputs import overview_outputs
 from app.research.providers.base import SourceContext, SourceResult
 from app.research.providers.open_data import SOURCES, retrieve
+from app.research.search import ClaudeResearchSearch, ResearchSearch
 from app.schemas.geojson import Footprint
 from app.schemas.research import EvidenceContent, ResearchBudget
 from app.services.errors import InvalidInputError
@@ -66,11 +69,13 @@ class ResearchWorker:
         *,
         model: ResearchModel | None = None,
         client: httpx.Client | None = None,
+        searcher: ResearchSearch | None = None,
     ) -> None:
         self.sessions = sessions
         self.settings = settings
         self.model = model
         self.client = client
+        self.searcher = searcher
 
     def _keep_alive(self, run_id: uuid.UUID, token: uuid.UUID, stopped: threading.Event) -> None:
         while not stopped.wait(5):
@@ -183,6 +188,74 @@ class ResearchWorker:
         queue.checkpoint(db, run_id, token, state)
         return value
 
+    def _search(
+        self,
+        db: Session,
+        run_id: uuid.UUID,
+        token: uuid.UUID,
+        action: SearchAction,
+        context: SourceContext,
+        state: dict[str, Any],
+        budget: ResearchBudget,
+    ) -> str:
+        key = (
+            "search/"
+            + hashlib.sha256(
+                json.dumps([action.query, sorted(action.domains)]).encode()
+            ).hexdigest()
+        )
+        if key in state["sources"]:
+            return "This query is already available in retrieved sources."
+        cached = state.get("pending_search")
+        if cached and cached["key"] == key:
+            result = unpack(cached["result"])
+        else:
+            searcher = self.searcher
+            if searcher is None and self.settings.anthropic_api_key:
+                searcher = ClaudeResearchSearch(self.settings)
+            if searcher is None:
+                raise InvalidInputError("Public-source search is not configured.")
+            searches = min(2, budget.max_web_searches - state.get("web_searches", 0))
+            allocation = min(2000, budget.max_output_tokens - state["output_tokens"])
+            if searches <= 0 or allocation < 500:
+                raise InvalidInputError("The public-source search budget is exhausted.")
+            previous_tokens = state["output_tokens"]
+            previous_searches = state.get("web_searches", 0)
+            state["output_tokens"] += allocation
+            state["web_searches"] = previous_searches + searches
+            queue.checkpoint(
+                db, run_id, token, state, kind="search", payload={"query": action.query}
+            )
+            db.rollback()
+            try:
+                response = searcher.search(
+                    action.query, context.geometry.bounds, allocation, searches, action.domains
+                )
+            except Exception as error:
+                raise InvalidInputError(
+                    "Public-source search was unavailable. "
+                    "Try a registered source or finish with existing evidence."
+                ) from error
+            state["output_tokens"] = previous_tokens + response.output_tokens
+            state["web_searches"] = previous_searches + response.searches
+            result = response.result
+            state["pending_search"] = {"key": key, "result": pack(result)}
+            queue.checkpoint(db, run_id, token, state)
+        ids = [
+            queue.save_evidence(db, run_id, token, f"{key}/{item_key}", item)
+            for item_key, item in result.evidence
+        ]
+        state["sources"][key] = {
+            "provider": result.provider,
+            "status": result.status,
+            "summary": result.summary,
+            "evidenceIds": [str(identifier) for identifier in ids],
+            "data": result.data,
+        }
+        state.pop("pending_search", None)
+        queue.checkpoint(db, run_id, token, state)
+        return result.summary
+
     def _execute(self, run_id: uuid.UUID, token: uuid.UUID, client: httpx.Client) -> None:
         with self.sessions() as db:
             run = queue.locked(db, run_id, token)
@@ -289,6 +362,8 @@ class ResearchWorker:
                             "retrieved": state["sources"],
                             "previousActions": state["actions"][-20:],
                             "remainingSteps": budget.max_steps - state["steps"],
+                            "remainingWebSearches": budget.max_web_searches
+                            - state.get("web_searches", 0),
                         },
                         default=str,
                     )
@@ -310,6 +385,8 @@ class ResearchWorker:
                     if isinstance(action, RetrieveAction):
                         self._source(db, run_id, token, action.provider, context, client, state)
                         result = f"Retrieved {action.provider}; see retrieved source data."
+                    elif isinstance(action, SearchAction):
+                        result = self._search(db, run_id, token, action, context, state, budget)
                     elif isinstance(action, FindingAction):
                         identifier = queue.save_finding(
                             db, run_id, token, output_key, action.finding

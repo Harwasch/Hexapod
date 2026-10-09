@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, BookOpen, Pin, Search, Square, X } from "lucide-react";
-import type { LandArea, LandEvidence, LandFinding, ResearchEvent } from "@twin/contracts";
+import type {
+  components,
+  LandArea,
+  LandEvidence,
+  LandFinding,
+  ResearchEvent,
+} from "@twin/contracts";
 import { api, unwrap } from "@/api/client";
 import { boundsOf } from "@twin/geo";
 import { useScene } from "@/cesium/SceneContext";
@@ -20,7 +26,8 @@ import { ResearchArtifactView } from "./ResearchArtifacts";
 import "./research.css";
 
 function eventText(event: ResearchEvent): string {
-  const value = event.payload.message ?? event.payload.title ?? event.payload.provider;
+  const value =
+    event.payload.message ?? event.payload.title ?? event.payload.provider ?? event.payload.query;
   return typeof value === "string" ? value : "";
 }
 
@@ -81,7 +88,18 @@ export function LandResearch({ land }: { land: LandArea }) {
   const [evidence, setEvidence] = useState<LandEvidence | null>(null);
   const [showDismissed, setShowDismissed] = useState(false);
   const [newTopic, setNewTopic] = useState(false);
-  const pending = useRef<{ investigationId: string; question: string; key: string } | null>(null);
+  const [budget, setBudget] = useState<components["schemas"]["ResearchBudget"]>({
+    maxSteps: 16,
+    maxSeconds: 180,
+    maxOutputTokens: 12000,
+    maxWebSearches: 6,
+  });
+  const pending = useRef<{
+    investigationId: string;
+    question: string;
+    key: string;
+    budget: components["schemas"]["ResearchBudget"];
+  } | null>(null);
   const lastRun = detail.data?.runs.at(-1);
   const running = lastRun?.status === "queued" || lastRun?.status === "running";
   const progress = useQuery({
@@ -161,7 +179,7 @@ export function LandResearch({ land }: { land: LandArea }) {
         (selected && operation.investigationId !== selected && !newTopic)
       ) {
         const id = selected && !newTopic ? selected : (await beginInvestigation(land, question)).id;
-        operation = { investigationId: id, question, key: crypto.randomUUID() };
+        operation = { investigationId: id, question, key: crypto.randomUUID(), budget };
         pending.current = operation;
       }
       await startResearch(
@@ -169,6 +187,7 @@ export function LandResearch({ land }: { land: LandArea }) {
         operation.question,
         "investigation",
         operation.key,
+        operation.budget,
       );
       setChosen(operation.investigationId);
       setQuestion("");
@@ -447,7 +466,24 @@ export function LandResearch({ land }: { land: LandArea }) {
           {detail.data?.messages.map((message) => (
             <article key={message.id} data-role={message.role}>
               <span>{message.role === "user" ? "You" : "Land research"}</span>
-              <p>{message.content}</p>
+              <p>
+                {message.content
+                  .split(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi)
+                  .map((part, index) =>
+                    index % 2 === 1 ? (
+                      <button
+                        key={`${index}:${part}`}
+                        type="button"
+                        className="land-evidence-link"
+                        onClick={() => void viewEvidence(part)}
+                      >
+                        Source {Math.ceil(index / 2)}
+                      </button>
+                    ) : (
+                      part
+                    ),
+                  )}
+              </p>
             </article>
           ))}
         </div>
@@ -514,6 +550,37 @@ export function LandResearch({ land }: { land: LandArea }) {
           onChange={(event) => setQuestion(event.target.value)}
           rows={3}
         />
+        <details className="land-budget">
+          <summary>Research limits</summary>
+          <label className="land-name">
+            Time budget
+            <select
+              value={budget.maxSeconds}
+              onChange={(event) => setBudget({ ...budget, maxSeconds: Number(event.target.value) })}
+            >
+              <option value={60}>1 minute</option>
+              <option value={180}>3 minutes</option>
+              <option value={600}>10 minutes</option>
+            </select>
+          </label>
+          <label className="land-name">
+            Public web searches
+            <select
+              value={budget.maxWebSearches}
+              onChange={(event) =>
+                setBudget({ ...budget, maxWebSearches: Number(event.target.value) })
+              }
+            >
+              <option value={0}>Registered data sources only</option>
+              <option value={6}>Up to 6 searches</option>
+              <option value={12}>Up to 12 searches</option>
+            </select>
+          </label>
+          <p className="land-footnote">
+            Search may find useful leads outside the registered datasets. Each source still needs a
+            location match and appropriate reuse rights.
+          </p>
+        </details>
         <div>
           <label>
             <input

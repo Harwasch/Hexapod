@@ -4101,6 +4101,11 @@ export interface components {
              * @default 16
              */
             maxSteps?: number;
+            /**
+             * Maxwebsearches
+             * @default 6
+             */
+            maxWebSearches?: number;
         };
         /** ResearchPage */
         ResearchPage: {

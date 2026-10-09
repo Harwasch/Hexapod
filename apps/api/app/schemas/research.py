@@ -11,6 +11,7 @@ from app.schemas.geojson import Footprint, MapGeometry
 
 
 class ResearchBudget(CamelModel):
+    max_web_searches: int = Field(default=6, ge=0, le=30)
     max_steps: int = Field(default=16, ge=1, le=100)
     max_seconds: int = Field(default=180, ge=10, le=1800)
     max_output_tokens: int = Field(default=12_000, ge=500, le=100_000)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -57,7 +58,12 @@ def claim(
 
 
 def locked(db: Session, run_id: uuid.UUID, token: uuid.UUID) -> ResearchRun:
-    run = db.scalar(select(ResearchRun).where(ResearchRun.id == run_id).with_for_update())
+    run = db.scalar(
+        select(ResearchRun)
+        .where(ResearchRun.id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if (
         run is None
         or run.status != "running"
@@ -86,7 +92,7 @@ def checkpoint(
     payload: dict[str, Any] | None = None,
 ) -> None:
     run = locked(db, run_id, token)
-    run.checkpoint = state
+    run.checkpoint = deepcopy(state)
     event(db, run, kind, payload or {})
     db.commit()
 

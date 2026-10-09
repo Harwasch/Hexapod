@@ -150,6 +150,23 @@ Public parcel/OSM service smoke results establish those adapters at tested locat
 universal coverage. Full domain workflows and broader analytical infrastructure remain
 outstanding. No production changes have been made.
 
+## Implemented increment: public-source discovery
+
+The agent can now issue bounded public-web searches through the configured model provider's
+server-side search tool. It retains provider-returned citation excerpts separately from
+metadata-only leads, with unresolved land relevance and explicit reuse-rights limitations.
+The application does not fetch arbitrary model-generated URLs. Search queries, reserved
+budgets and exact result snapshots are checkpointed; replay deduplicates evidence. Search
+and time limits are editable in the investigation UI, including disabling public search.
+Conversation evidence references now open the source inspector.
+
+New recovery tests also exposed and fixed mutable JSON checkpoint aliasing and stale
+identity-map lease checks: checkpoint values are copied, and lease fencing refreshes the
+locked database row before authorizing a write. Fifteen research/search tests pass, with
+backend type checks and frontend type/lint checks. Live model/search calls remain unverified
+without a configured model key. Search discovery does not complete the planned analytical,
+historical, rights, restoration, infrastructure or financial workflows.
+
 ## Validation
 
 Backend: `tests/test_land.py` covers persistence without missions/sites, revision history,

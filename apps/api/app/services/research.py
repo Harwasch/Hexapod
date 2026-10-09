@@ -25,6 +25,7 @@ from app.schemas.research import (
     InvestigationRead,
     MessageRead,
     ResearchArtifactRead,
+    ResearchBudget,
     ResearchPage,
     RunCreate,
     RunRead,
@@ -132,7 +133,7 @@ def create_run(
         if (
             existing.question != payload.question
             or existing.kind != payload.kind
-            or existing.budget != payload.budget.model_dump()
+            or ResearchBudget.model_validate(existing.budget) != payload.budget
         ):
             raise ConflictError(
                 "This request key was already used for a different research request."
