@@ -13,7 +13,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
-| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery | Saved archive imagery/georeferencing and deeper instrument/parcel lineage evaluation |
+| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots | Archive georeferencing and AI visual inspection and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
 ## Product direction
@@ -839,3 +839,36 @@ Validation: 36 focused land UI tests, full web typing and affected-file lint pas
 selection/action browser journeys passed, including two new reload-and-continue drawing
 journeys (the original four and two recovery tests were run separately after correcting the
 shared fixture's onboarding reset). No API/schema/deployment change is required.
+
+
+## Implemented increment: immutable archive-image evidence
+
+Migration `0020` adds private image metadata and separate original/display blobs attached
+to existing source evidence. Editors can save the registered archive preview once; repeated
+saves reuse that snapshot. The exact downloaded bytes retain their SHA-256, ETag and
+Last-Modified values. A separate checksummed PNG applies EXIF orientation, removes embedded
+metadata and defines a stable pixel coordinate system for subsequent analysis. Source
+attribution and reuse terms remain on the evidence. These are preview snapshots, not the
+full-resolution archive masters; the current USGS catalog thumbnail is too small for fine
+map-label reading and precise control-point work.
+
+The fixed downloader accepts only saved registered-source image URLs, rejects redirects,
+and bounds source bytes/time. Image decoding runs in a fixed subprocess with memory, CPU,
+wall-time, pixel and output limits; it accepts only single-frame JPEG/PNG/WebP. Metadata and
+bytes require workspace access, writes recheck membership after external work, and storage
+quota/duplicate checks serialize together. Deleting the land cascades to these images.
+`LAND_ARCHIVE_WORKSPACE_QUOTA_BYTES` defaults to 512 MiB including both copies.
+
+The gallery saves images, displays private snapshots after reload, exposes checksums in
+provenance details, and downloads exact original preview bytes. Its object URLs are revoked
+when the source is left. Provider outages preserve the original-source link and do not stop
+viewing already saved images.
+
+Validation: 15 archive-image/archive/migration tests passed, including schema round trips,
+model/schema agreement, original-byte checksums, EXIF orientation, unsupported/oversized
+images, redirect refusal, quotas, repeat saves, workspace isolation and role revocation.
+Full API lint/format/type checks (248 files), six gallery UI tests, web typing/lint and a
+production build passed. A live public National Mall browser journey saved a 960×640 Commons
+photo and a 200×245 USGS map preview, verified the downloaded original checksum, and reopened
+both saved images with their public hosts deliberately unavailable. Desktop/mobile screenshots
+were inspected; no page errors or horizontal overflow were observed. No deployment was made.

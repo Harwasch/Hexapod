@@ -13,6 +13,7 @@ from app.api.v1 import (
     jobs,
     land,
     land_actions,
+    land_archive_images,
     land_documents,
     land_features,
     land_rasters,
@@ -56,6 +57,7 @@ api_v1.include_router(recipes.router)
 api_v1.include_router(storage.router)
 api_v1.include_router(land.router)
 api_v1.include_router(land_rasters.router)
+api_v1.include_router(land_archive_images.router)
 api_v1.include_router(workspaces.router)
 api_v1.include_router(research.router)
 

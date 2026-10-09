@@ -101,6 +101,115 @@
         "title": "ArcGisMapServerSource",
         "type": "object"
       },
+      "ArchiveImageRead": {
+        "additionalProperties": false,
+        "properties": {
+          "byteSize": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 16777216.0,
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "evidenceId": {
+            "format": "uuid",
+            "title": "Evidenceid",
+            "type": "string"
+          },
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 8192.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "normalization": {
+            "const": "oriented-rgba-png-v1",
+            "default": "oriented-rgba-png-v1",
+            "title": "Normalization",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "sourceByteSize": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 5242880.0,
+            "title": "Sourcebytesize",
+            "type": "integer"
+          },
+          "sourceEtag": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceetag"
+          },
+          "sourceLastModified": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcelastmodified"
+          },
+          "sourceMediaType": {
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ],
+            "title": "Sourcemediatype",
+            "type": "string"
+          },
+          "sourceSha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sourcesha256",
+            "type": "string"
+          },
+          "sourceUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Sourceurl",
+            "type": "string"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 8192.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sha256",
+          "sourceSha256",
+          "byteSize",
+          "sourceByteSize",
+          "width",
+          "height",
+          "sourceMediaType",
+          "sourceUrl",
+          "evidenceId",
+          "createdAt"
+        ],
+        "title": "ArchiveImageRead",
+        "type": "object"
+      },
       "ArchiveMedia": {
         "additionalProperties": false,
         "properties": {
@@ -24045,6 +24154,400 @@
         "summary": "Get Evidence",
         "tags": [
           "land research"
+        ]
+      }
+    },
+    "/api/v1/research/evidence/{evidence_id}/image": {
+      "get": {
+        "operationId": "get_api_v1_research_evidence__evidence_id__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ArchiveImageRead"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Api V1 Research Evidence  Evidence Id  Image Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get",
+        "tags": [
+          "land archive images"
+        ]
+      },
+      "post": {
+        "operationId": "capture_api_v1_research_evidence__evidence_id__image_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveImageRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Capture",
+        "tags": [
+          "land archive images"
+        ]
+      }
+    },
+    "/api/v1/research/evidence/{evidence_id}/image/original": {
+      "get": {
+        "operationId": "original_api_v1_research_evidence__evidence_id__image_original_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Original",
+        "tags": [
+          "land archive images"
+        ]
+      }
+    },
+    "/api/v1/research/evidence/{evidence_id}/image/preview": {
+      "get": {
+        "operationId": "preview_api_v1_research_evidence__evidence_id__image_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Preview",
+        "tags": [
+          "land archive images"
         ]
       }
     },

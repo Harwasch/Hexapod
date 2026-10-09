@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
 from typing import Literal
 
 from pydantic import Field, HttpUrl, field_validator
@@ -44,3 +46,22 @@ class ArchiveMedia(CamelModel):
         else:
             raise ValueError("This archive preview host is not registered.")
         return value
+
+
+class ArchiveImageMetadata(CamelModel):
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    byte_size: int = Field(gt=0, le=16 * 1024 * 1024)
+    source_byte_size: int = Field(gt=0, le=5 * 1024 * 1024)
+    width: int = Field(gt=0, le=8192)
+    height: int = Field(gt=0, le=8192)
+    source_media_type: Literal["image/jpeg", "image/png", "image/webp"]
+    source_url: HttpUrl
+    source_etag: str | None = Field(default=None, max_length=500)
+    source_last_modified: str | None = Field(default=None, max_length=500)
+    normalization: Literal["oriented-rgba-png-v1"] = "oriented-rgba-png-v1"
+
+
+class ArchiveImageRead(ArchiveImageMetadata):
+    evidence_id: uuid.UUID
+    created_at: datetime

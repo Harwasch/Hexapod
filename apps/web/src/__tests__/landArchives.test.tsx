@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
-import type { LandEvidence } from "@twin/contracts";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { components, LandEvidence } from "@twin/contracts";
 import { api } from "@/api/client";
 import { ArchiveGallery } from "@/features/land/ArchiveGallery";
 import { useLandContext } from "@/state/landContext";
@@ -72,6 +72,9 @@ function mount(evidence: LandEvidence[] = [photo, sheet], onAsk = vi.fn()) {
   );
   return onAsk;
 }
+beforeEach(() => {
+  vi.spyOn(api, "GET").mockResolvedValue({ data: null, response: new Response() });
+});
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -89,7 +92,10 @@ it("uses saved metadata with date uncertainty and creator/license attribution", 
   fireEvent.click(screen.getByText("Dates, attribution and interpretation"));
   expect(screen.getByText("Upload dates are not event dates.")).toBeVisible();
   expect(screen.getByText(/public archive and may change/)).toBeVisible();
-  expect(get).not.toHaveBeenCalled();
+  expect(get).not.toHaveBeenCalledWith(
+    "/api/v1/research/evidence/{evidence_id}",
+    expect.anything(),
+  );
 });
 it("navigates sources and keeps attribution and source links when a preview fails", () => {
   mount();
@@ -130,10 +136,73 @@ it("preserves the question draft and opens research with the saved evidence refe
   expect(onAsk).toHaveBeenCalledOnce();
 });
 it("loads a source through the private evidence API when it is outside the current results page", async () => {
-  const get = vi.spyOn(api, "GET").mockResolvedValue({ data: photo, response: new Response() });
+  const get = vi.spyOn(api, "GET").mockImplementation(((path: string) =>
+    Promise.resolve({
+      data: path.endsWith("/image") ? null : photo,
+      response: new Response(),
+    })) as typeof api.GET);
   mount([]);
   expect(await screen.findByText("circa 1890–1895")).toBeVisible();
   expect(get).toHaveBeenCalledWith("/api/v1/research/evidence/{evidence_id}", {
     params: { path: { evidence_id: "photo" } },
   });
+});
+
+const savedImage: components["schemas"]["ArchiveImageRead"] = {
+  evidenceId: "photo",
+  createdAt: "2026-10-09T12:00:00Z",
+  width: 640,
+  height: 480,
+  sha256: "a".repeat(64),
+  sourceSha256: "b".repeat(64),
+  byteSize: 100,
+  sourceByteSize: 80,
+  sourceMediaType: "image/jpeg",
+  sourceUrl: photo.media!.previewUrl,
+};
+it("saves a private image snapshot and restores its preview and provenance", async () => {
+  const createUrl = vi.fn(() => "blob:saved-preview"),
+    revoke = vi.fn();
+  const previousCreate = Object.getOwnPropertyDescriptor(URL, "createObjectURL"),
+    previousRevoke = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
+  URL.createObjectURL = createUrl;
+  URL.revokeObjectURL = revoke;
+  try {
+    vi.spyOn(api, "GET").mockImplementation(((path: string) =>
+      Promise.resolve({
+        data: path.endsWith("/preview") ? new Blob(["preview"], { type: "image/png" }) : null,
+        response: new Response(),
+      })) as typeof api.GET);
+    const post = vi
+      .spyOn(api, "POST")
+      .mockResolvedValue({ data: savedImage, response: new Response() });
+    mount();
+    const save = screen.getByRole("button", { name: "Save image to workspace" });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(screen.getByRole("img")).toHaveAttribute("src", "blob:saved-preview"),
+    );
+    expect(post).toHaveBeenCalledWith(
+      "/api/v1/research/evidence/{evidence_id}/image",
+      expect.objectContaining({
+        params: { path: { evidence_id: "photo" } },
+      }),
+    );
+    expect(screen.getByText(/640 × 480 pixels/)).toBeVisible();
+    fireEvent.click(screen.getByText("Saved image provenance"));
+    expect(screen.getByText(savedImage.sourceSha256)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Next source" }));
+    expect(revoke).toHaveBeenCalledWith("blob:saved-preview");
+    fireEvent.click(screen.getByRole("button", { name: "Previous source" }));
+    // A persisted snapshot is the source for this gallery entry; the original remote URL is never overwritten.
+    await waitFor(() => expect(createUrl).toHaveBeenCalledTimes(2));
+    expect(photo.media!.previewUrl).toMatch(/^https:/);
+  } finally {
+    cleanup();
+    if (previousCreate) Object.defineProperty(URL, "createObjectURL", previousCreate);
+    else Reflect.deleteProperty(URL, "createObjectURL");
+    if (previousRevoke) Object.defineProperty(URL, "revokeObjectURL", previousRevoke);
+    else Reflect.deleteProperty(URL, "revokeObjectURL");
+  }
 });

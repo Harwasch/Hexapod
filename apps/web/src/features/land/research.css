@@ -428,3 +428,10 @@
   line-height: 1.5;
   margin-top: 6px;
 }
+
+.land-archive-storage {
+  margin: 0.65rem 0;
+}
+.land-archive-storage code {
+  overflow-wrap: anywhere;
+}

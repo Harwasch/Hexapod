@@ -1392,6 +1392,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research/evidence/{evidence_id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_v1_research_evidence__evidence_id__image_get"];
+        put?: never;
+        /** Capture */
+        post: operations["capture_api_v1_research_evidence__evidence_id__image_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/evidence/{evidence_id}/image/original": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Original */
+        get: operations["original_api_v1_research_evidence__evidence_id__image_original_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/evidence/{evidence_id}/image/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview */
+        get: operations["preview_api_v1_research_evidence__evidence_id__image_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research/findings/{finding_id}": {
         parameters: {
             query?: never;
@@ -1802,6 +1854,51 @@ export interface components {
              * Format: uri
              */
             url: string;
+        };
+        /** ArchiveImageRead */
+        ArchiveImageRead: {
+            /** Bytesize */
+            byteSize: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Evidenceid
+             * Format: uuid
+             */
+            evidenceId: string;
+            /** Height */
+            height: number;
+            /**
+             * Normalization
+             * @default oriented-rgba-png-v1
+             * @constant
+             */
+            normalization?: "oriented-rgba-png-v1";
+            /** Sha256 */
+            sha256: string;
+            /** Sourcebytesize */
+            sourceByteSize: number;
+            /** Sourceetag */
+            sourceEtag?: string | null;
+            /** Sourcelastmodified */
+            sourceLastModified?: string | null;
+            /**
+             * Sourcemediatype
+             * @enum {string}
+             */
+            sourceMediaType: "image/jpeg" | "image/png" | "image/webp";
+            /** Sourcesha256 */
+            sourceSha256: string;
+            /**
+             * Sourceurl
+             * Format: uri
+             */
+            sourceUrl: string;
+            /** Width */
+            width: number;
         };
         /** ArchiveMedia */
         ArchiveMedia: {
@@ -6589,6 +6686,7 @@ export interface components {
 export type SchemaActionConstraint = components['schemas']['ActionConstraint'];
 export type SchemaActionMissionCreate = components['schemas']['ActionMissionCreate'];
 export type SchemaArcGisMapServerSource = components['schemas']['ArcGisMapServerSource'];
+export type SchemaArchiveImageRead = components['schemas']['ArchiveImageRead'];
 export type SchemaArchiveMedia = components['schemas']['ArchiveMedia'];
 export type SchemaArtifactKind = components['schemas']['ArtifactKind'];
 export type SchemaArtifactRead = components['schemas']['ArtifactRead'];
@@ -13181,6 +13279,248 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EvidenceRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_api_v1_research_evidence__evidence_id__image_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveImageRead"] | null;
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    capture_api_v1_research_evidence__evidence_id__image_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveImageRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    original_api_v1_research_evidence__evidence_id__image_original_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_api_v1_research_evidence__evidence_id__image_preview_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "image/png": string;
                 };
             };
             /** @description Missing or wrong write token */
