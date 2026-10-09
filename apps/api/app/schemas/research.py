@@ -11,6 +11,7 @@ from app.schemas.geojson import Footprint, MapGeometry
 from app.schemas.land_archives import ArchiveMedia
 from app.schemas.land_documents import DocumentLocator
 from app.schemas.land_ecology import EcologyRequest
+from app.schemas.land_features import InventoryLocator
 from app.schemas.land_rasters import RasterRequest
 from app.schemas.land_solar import SolarRequest
 from app.schemas.land_surveys import SurveyLocator
@@ -86,6 +87,7 @@ class EvidenceContent(CamelModel):
     url: HttpUrl | None = None
     document: DocumentLocator | None = None
     survey: SurveyLocator | None = None
+    inventory: InventoryLocator | None = None
     media: ArchiveMedia | None = None
     license: str = Field(min_length=1, max_length=1000)
     attribution: str = Field(min_length=1, max_length=2000)
@@ -100,8 +102,15 @@ class EvidenceContent(CamelModel):
 
     @model_validator(mode="after")
     def source_locator(self) -> EvidenceContent:
-        if self.url is None and self.document is None and self.survey is None:
-            raise ValueError("evidence needs a source URL, immutable document page or field survey")
+        if (
+            self.url is None
+            and self.document is None
+            and self.survey is None
+            and self.inventory is None
+        ):
+            raise ValueError(
+                "evidence needs a source URL, immutable document page, field survey or inventory snapshot"
+            )
         return self
 
 

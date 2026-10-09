@@ -108,7 +108,7 @@ function Inventory({ land, scope }: { land: LandArea; scope: string }) {
   }, [active, scene, pickOwner]);
   const [candidates, setCandidates] = useState<LandCandidate[]>([]);
   const [lookupMessage, setLookupMessage] = useState("");
-  const [lookupKind, setLookupKind] = useState<"line" | "building">("building");
+  const [lookupKind, setLookupKind] = useState<"line" | "building" | "point">("building");
   const [useInspected, setUseInspected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -226,7 +226,11 @@ function Inventory({ land, scope }: { land: LandArea; scope: string }) {
     setDraft({
       requestKey: crypto.randomUUID(),
       name: candidate.label,
-      category: lookupKind === "building" ? "building" : "other",
+      category: candidate.properties?.power ? "power"
+        : candidate.properties?.building ? "building"
+        : candidate.properties?.waterway ? "water"
+        : candidate.properties?.highway || candidate.properties?.railway ? "transport"
+        : candidate.geometry.type === "Point" ? "equipment" : "other",
       geometry: candidate.geometry,
       source: candidate.source,
       status: "candidate",
@@ -512,6 +516,7 @@ function Inventory({ land, scope }: { land: LandArea; scope: string }) {
             >
               <option value="building">Buildings</option>
               <option value="line">Lines, roads and waterways</option>
+              <option value="point">Poles, towers and equipment</option>
             </select>
           </label>
           <label className="land-dismissed">

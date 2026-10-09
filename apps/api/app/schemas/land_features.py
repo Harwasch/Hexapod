@@ -155,3 +155,11 @@ class FeatureInspectionRead(FeatureInspectionCreate):
     feature_revision: int
     recorded_by: str
     created_at: datetime
+
+
+class InventoryLocator(CamelModel):
+    land_id: uuid.UUID
+    feature_id: uuid.UUID
+    revision: int = Field(ge=1)
+    section: Literal["overview", "geometry", "attributes", "inspections"]
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")

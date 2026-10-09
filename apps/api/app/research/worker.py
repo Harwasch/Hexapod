@@ -32,6 +32,7 @@ from app.models.land_solar import LandSolar
 from app.models.land_survey import LandSurvey
 from app.models.research import Evidence, Investigation, ResearchMessage, ResearchRun
 from app.models.scenario import LandScenario, LandScenarioRevision
+from app.research import inventory as inventory_research
 from app.research import queue
 from app.research.documents import retrieve as retrieve_documents
 from app.research.ecology_outputs import ecology_outputs
@@ -46,6 +47,9 @@ from app.research.model import (
     DocumentSearchAction,
     EvidenceReadAction,
     FindingAction,
+    InventoryReadAction,
+    MappedAssetProposeAction,
+    MappedAssetSearchAction,
     MultimodalResearchModel,
     RasterAction,
     ResearchDecision,
@@ -67,15 +71,19 @@ from app.research.providers.open_data import OVERVIEW_SOURCES, SOURCES, retrieve
 from app.research.providers.taxonomy import match as match_taxon
 from app.research.scenarios import read as read_scenario
 from app.research.search import ClaudeResearchSearch, ResearchSearch
-from app.schemas.geojson import Footprint
+from app.schemas.geojson import Footprint, Point
 from app.schemas.land_ecology import EcologyRequest, TaxonQuery
+from app.schemas.land_features import InventoryLocator
 from app.schemas.land_rasters import RasterMetadata, RasterRequest
+from app.schemas.land_selection import CandidateRequest, LandCandidate
 from app.schemas.land_solar import SolarMetadata, SolarRequest
 from app.schemas.land_surveys import SurveyLocator
 from app.schemas.research import (
     ArtifactContent,
     EvidenceContent,
     FindingContent,
+    MapFeature,
+    MapOutput,
     RasterOutput,
     ResearchBudget,
     SolarOutput,
@@ -84,12 +92,13 @@ from app.schemas.scenarios import ScenarioCreate
 from app.services import (
     land_actions,
     land_archive_images,
+    land_features,
     land_rasters,
     land_solar,
     land_surveys,
     scenarios,
 )
-from app.services.errors import InvalidInputError, NotFoundError
+from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 
 log = logging.getLogger("twin.research")
 FOOTPRINT: TypeAdapter[Footprint] = TypeAdapter(Footprint)
@@ -551,6 +560,87 @@ class ResearchWorker:
         }
         state["sources"][provider] = value
         state.pop("pending_source", None)
+        queue.checkpoint(db, run_id, token, state)
+        return value
+
+    def _mapped_assets(
+        self,
+        db: Session,
+        run_id: uuid.UUID,
+        token: uuid.UUID,
+        request: CandidateRequest,
+        context: SourceContext,
+        client: httpx.Client,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        key = "mapped-assets/" + hashlib.sha256(request.model_dump_json().encode()).hexdigest()
+        if key in state["sources"]:
+            return state["sources"][key]  # type: ignore[no-any-return]
+        cached = state.get("pending_mapped_assets")
+        if cached and cached["key"] == key:
+            result = unpack(cached["result"])
+        else:
+            db.rollback()
+            with self.sessions() as source_db:
+                result = inventory_research.mapped_search(source_db, context, request, client)
+            state["pending_mapped_assets"] = {"key": key, "result": pack(result)}
+            queue.checkpoint(
+                db,
+                run_id,
+                token,
+                state,
+                kind="source",
+                payload={
+                    "provider": "mapped-assets",
+                    "status": result.status,
+                    "message": result.summary,
+                },
+            )
+        ids = [
+            queue.save_evidence(db, run_id, token, f"{key}/{identifier}", item)
+            for identifier, item in result.evidence
+        ]
+        candidates = result.data["candidates"]
+        for candidate, evidence_id in zip(candidates, ids, strict=True):
+            candidate["evidenceId"] = str(evidence_id)
+        artifact_id = None
+        if ids:
+            features = [
+                LandCandidate.model_validate(json.loads(item.excerpt)["candidate"])
+                for _, item in result.evidence
+            ]
+            artifact_id = queue.save_artifact(
+                db,
+                run_id,
+                token,
+                key + "/map",
+                ArtifactContent(
+                    title="Mapped asset candidates",
+                    method=result.data["limitations"],
+                    evidence_ids=ids,
+                    output=MapOutput(
+                        kind="map",
+                        features=[
+                            MapFeature(label=candidate.label, geometry=candidate.geometry)
+                            for candidate in features
+                        ],
+                        legend=(
+                            "Community-mapped physical features; review identity, location and completeness "
+                            "before recording them."
+                        ),
+                    ),
+                ),
+            )
+        value = {
+            "provider": "mapped-assets",
+            "status": result.status,
+            "summary": result.summary,
+            "data": result.data,
+            "evidenceIds": [str(identifier) for identifier in ids],
+            "artifactId": str(artifact_id) if artifact_id else None,
+        }
+        state["sources"][key] = value
+        state.pop("pending_mapped_assets", None)
         queue.checkpoint(db, run_id, token, state)
         return value
 
@@ -1426,6 +1516,132 @@ class ResearchWorker:
                         }
                         queue.checkpoint(db, run_id, token, state)
                         result = "Field survey page retrieved with immutable source citation."
+                    elif isinstance(action, MappedAssetSearchAction):
+                        mapped_request = CandidateRequest(
+                            kind=action.source_kind,
+                            point=action.point or Point(coordinates=list(context.point)),
+                            radius_m=action.radius_m,
+                        )
+                        self._mapped_assets(
+                            db, run_id, token, mapped_request, context, client, state
+                        )
+                        result = (
+                            "Mapped asset search completed; inspect retained candidate sources and coverage "
+                            "limits."
+                        )
+                    elif isinstance(action, MappedAssetProposeAction):
+                        current = queue.locked(db, run_id, token)
+                        queue.validate_citations(db, current, [action.evidence_id])
+                        mapped_evidence = db.get(Evidence, action.evidence_id)
+                        if mapped_evidence is None:
+                            raise InvalidInputError("The mapped candidate is unavailable.")
+                        feature_request = inventory_research.mapped_feature(
+                            mapped_evidence.content,
+                            uuid.uuid5(run_id, output_key),
+                            action.evidence_id,
+                            action.name,
+                            action.category,
+                            action.description,
+                        )
+                        db.execute(
+                            select(LandArea.id).where(LandArea.id == land_id).with_for_update()
+                        )
+                        feature_identifier = uuid.uuid5(
+                            land_id, f"feature/{feature_request.request_key}"
+                        )
+                        duplicate = land_features.duplicate_source(
+                            db, land_id, feature_request, feature_identifier
+                        )
+                        if duplicate:
+                            saved_feature = land_features.read(
+                                db, land_features.scoped(db, workspace_id, land_id, duplicate)
+                            )
+                        else:
+                            saved_feature = land_features.create(
+                                db, workspace_id, land_id, feature_request, commit=False
+                            )
+                        result = json.dumps(
+                            {
+                                "featureId": str(saved_feature.id),
+                                "revision": saved_feature.revision,
+                                "status": saved_feature.status,
+                                "existingUnchanged": bool(duplicate),
+                                "intersectsLand": saved_feature.intersects_land,
+                                "distanceM": saved_feature.distance_m,
+                                "note": (
+                                    "Review this candidate in Assets. No existing identity or revision was changed."
+                                ),
+                            }
+                        )
+                    elif isinstance(action, InventoryReadAction):
+                        key = (
+                            "inventory/"
+                            + hashlib.sha256(action.model_dump_json().encode()).hexdigest()
+                        )
+                        if key not in state["sources"]:
+                            pending = state.get("pending_inventory")
+                            if pending and pending["key"] == key:
+                                data = pending["data"]
+                            else:
+                                data = inventory_research.read(
+                                    db,
+                                    workspace_id,
+                                    land_id,
+                                    action.feature_id,
+                                    action.revision,
+                                    action.section,
+                                    action.offset,
+                                    action.count,
+                                    action.as_of,
+                                )
+                                # Freeze the page before save_evidence commits. A retry must
+                                # never pair an older citation with a newly edited asset.
+                                state["pending_inventory"] = {"key": key, "data": data}
+                                queue.checkpoint(db, run_id, token, state)
+                            inventory_ids = []
+                            if action.feature_id:
+                                excerpt = json.dumps(data, ensure_ascii=False)
+                                digest = hashlib.sha256(excerpt.encode()).hexdigest()
+                                inventory_item = EvidenceContent(
+                                    provider="private-inventory",
+                                    title=f"{data['name']} · revision {data['revision']} · {action.section}",
+                                    inventory=InventoryLocator(
+                                        land_id=land_id,
+                                        feature_id=action.feature_id,
+                                        revision=data["revision"],
+                                        section=action.section,
+                                        sha256=digest,
+                                    ),
+                                    license=(
+                                        "Private workspace asset record; no public redistribution permission inferred."
+                                    ),
+                                    attribution="Workspace inventory and recorded inspections",
+                                    retrieved_at=datetime.now(UTC),
+                                    excerpt=excerpt,
+                                    spatial_relevance="unresolved",
+                                    snapshot_hash=digest,
+                                    relevance_note=(
+                                        "A saved asset revision and bounded data page. Boundary relationship metrics "
+                                        "refer to the stated current land revision; records do not independently "
+                                        "verify "
+                                        "condition, surveyed accuracy or ownership."
+                                    ),
+                                )
+                                inventory_ids.append(
+                                    str(queue.save_evidence(db, run_id, token, key, inventory_item))
+                                )
+                            state["sources"][key] = {
+                                "provider": "private-inventory",
+                                "status": "available",
+                                "data": data,
+                                "evidenceIds": inventory_ids,
+                            }
+                            state.pop("pending_inventory", None)
+                            queue.checkpoint(db, run_id, token, state)
+                        result = (
+                            "Inventory page read. Preserve revision and asOf when following nextOffset; cite "
+                            "the returned evidence for specific asset records."
+                        )
                     elif isinstance(action, ScenarioReadAction):
                         key = (
                             "saved-scenario/"
@@ -1540,7 +1756,7 @@ class ResearchWorker:
                         )
                         queue.finish(db, run_id, token, "succeeded", action.summary + citations)
                         return
-                except (ValueError, NotFoundError) as error:
+                except (ValueError, NotFoundError, ConflictError) as error:
                     db.rollback()
                     result = str(error)[:1000]
                 state["actions"].append({"action": action.kind, "result": result})

@@ -89,6 +89,17 @@ export function EvidenceView({
           Open cited field survey
         </button>
       )}
+      {evidence.inventory && (
+        <div className="land-actions">
+          <p>Saved asset revision {evidence.inventory.revision} · {evidence.inventory.section}</p>
+          <button
+            type="button"
+            onClick={() => useLandContext.getState().selectInventory(evidence.inventory?.featureId ?? null)}
+          >
+            Open current asset
+          </button>
+        </div>
+      )}
       {evidence.url && (
         <a href={evidence.url} target="_blank" rel="noopener noreferrer">
           Open original source <ArrowUpRight size={14} />

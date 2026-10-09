@@ -11,7 +11,7 @@ from app.schemas.land import BoundarySource
 
 class CandidateRequest(CamelModel):
     point: Point
-    kind: Literal["parcel", "line", "building"]
+    kind: Literal["parcel", "line", "building", "point"]
     radius_m: float = Field(default=250, gt=0, le=2000, allow_inf_nan=False)
 
 

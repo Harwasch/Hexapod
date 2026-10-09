@@ -12,7 +12,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
-| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation | Broader detection and asset catalog linkage |
+| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
@@ -1458,3 +1458,58 @@ recovered creation `79f811f6-8f99-5287-8369-2f6068c9f8e4`. Local artifacts:
 `/tmp/land-inventory-recovery-desktop.png`, `/tmp/land-inventory-recovery-mobile.png`.
 This increment needs no new migration beyond 0024. Production remains untouched; the overall
 feature still has the remaining capabilities and acceptance work listed at the top.
+
+
+## Implemented increment: agent inventory research and mapped point assets
+
+The research agent can now search OpenStreetMap building ways, line ways and infrastructure
+nodes near an explicit point or the pinned boundary's representative point. Each query is
+limited to 2 km and the existing bounded provider response. Point lookup also appears in
+Assets as "Poles, towers and equipment". Results retain node/way identities, source URLs,
+physical-feature meaning and category tags. A search is not a complete inventory; building
+relations are not queried, and provider outages remain distinct from empty results.
+
+Research retains at most 20 complete candidate snapshots of at most 29,000 characters each,
+reports omitted candidates and source truncation, and publishes an evidence-linked map.
+Oversized geometry is omitted explicitly rather than clipped into a different candidate.
+The agent may propose a retained source as an unconfirmed asset: the server checks the
+snapshot hash and source identity, takes its exact geometry, validates investigation scope,
+and preserves the OpenStreetMap external identity. Existing matching records are returned
+unchanged, including confirmed status and revision. Proposals and their tool checkpoint
+commit together; this tool cannot confirm, revise, retire or dispatch an asset.
+
+The agent can page private inventory metadata, then read a specific revision's overview,
+geometry, attributes or inspections. Geometry pages retain polygon parts, exclusion rings,
+vertex indices and closing coordinates. Inspection pages preserve units, feature revision
+and an explicit recording cutoff; oversized measurement payloads are marked omitted. Each
+specific read creates a private citation containing the exact bounded page, revision and
+hash. The source viewer distinguishes that saved revision from its "Open current asset"
+action. Inventory records do not independently establish surveyed accuracy, condition or
+ownership, and boundary relationship metrics identify the current land revision they use.
+
+Inventory pages and mapped source snapshots are checkpointed before saving evidence. Retry
+therefore preserves the retrieved page after a concurrent edit, and resumes publication of
+a mapped source without a second provider request or duplicate asset. Cross-land asset
+reads and evidence from another investigation cannot be used to copy candidates.
+
+Validation: nine new inventory research tests pass, including scripted agent search/map/
+proposal/read, confirmed duplicate preservation, foreign-land/evidence rejection, exact
+geometry/hash checks, inspection pagination, source outage/empty distinction, and both
+inventory and mapped-source interruption recovery. Existing research, selection, inventory
+and batch-import regression suites also pass. API lint, formatting and type checks, web
+type checking and targeted lint, generated contracts and the production web build pass.
+All seven land browser regressions pass. A desktop and 390px phone browser check verified
+the point lookup option, power category inference and editable candidate preview with no
+page exceptions or unintended overflow. Its clearly labeled synthetic source was supplied
+by a browser route; no inventory record was written. Screenshots were visually inspected.
+
+A live request using the public National Mall software fixture returned `unavailable` from
+the source adapter; live point retrieval is not verified. Model decisions were scripted in
+tests because this environment has no configured model credentials. These limits are not
+claims of successful live AI acceptance. Local validation artifacts:
+`/tmp/land-agent-inventory-public-source.json`,
+`/tmp/land-agent-inventory-ui-result.json`,
+`/tmp/land-agent-inventory-ui-desktop.png`, `/tmp/land-agent-inventory-ui-mobile.png`.
+The isolated preview API and worker were restarted with this code. No new migration beyond
+0024 is required. Production and the original checkout remain untouched; the full feature
+is still in progress.

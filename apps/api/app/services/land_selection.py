@@ -142,12 +142,19 @@ def candidates(db: Session, request: CandidateRequest, client: httpx.Client) -> 
                     '["railway"]',
                 ]
                 if request.kind == "line"
+                else [
+                    '["power"]',
+                    '["man_made"~"^(mast|tower|water_tower|water_well)$"]',
+                    '["amenity"="charging_station"]',
+                ]
+                if request.kind == "point"
                 else ['["building"]']
             )
             around = f"(around:{request.radius_m},{lat},{lon})"
+            element_type = "node" if request.kind == "point" else "way"
             query = (
                 "[out:json][timeout:20];("
-                + "".join(f"way{selector}{around};" for selector in selectors)
+                + "".join(f"{element_type}{selector}{around};" for selector in selectors)
                 + ");out geom 50;"
             )
             raw, _ = fetch_json(client, OSM, {"data": query}, method="POST")
@@ -159,7 +166,11 @@ def candidates(db: Session, request: CandidateRequest, client: httpx.Client) -> 
                     [point["lon"], point["lat"]] for point in element.get("geometry", [])
                 ]
                 try:
-                    if request.kind == "building":
+                    if request.kind == "point":
+                        geometry = GEOMETRY.validate_python(
+                            {"type": "Point", "coordinates": [element["lon"], element["lat"]]}
+                        )
+                    elif request.kind == "building":
                         geometry = GEOMETRY.validate_python(
                             {"type": "Polygon", "coordinates": [coordinates]}
                         )
@@ -175,20 +186,24 @@ def candidates(db: Session, request: CandidateRequest, client: httpx.Client) -> 
                         tags.get("name")
                         or tags.get("ref")
                         or tags.get("power")
+                        or tags.get("man_made")
+                        or tags.get("amenity")
                         or tags.get("waterway")
                         or tags.get("highway")
                         or "Mapped building"
                     )
                     result.append(
                         LandCandidate(
-                            id=f"osm/way/{identifier}",
+                            id=f"osm/{element_type}/{identifier}",
                             label=str(label).replace("_", " ")[:300],
                             geometry=geometry,
                             distance_m=_distance(db, geometry, request),
                             source=BoundarySource(
                                 method="mapped-feature",
                                 label="OpenStreetMap mapped feature",
-                                url=HttpUrl(f"https://www.openstreetmap.org/way/{identifier}"),
+                                url=HttpUrl(
+                                    f"https://www.openstreetmap.org/{element_type}/{identifier}"
+                                ),
                                 record_id=identifier,
                                 attribution=OSM.attribution + " (ODbL)",
                                 meaning="physical-feature",
@@ -197,6 +212,8 @@ def candidates(db: Session, request: CandidateRequest, client: httpx.Client) -> 
                                 key: str(tags[key])
                                 for key in (
                                     "power",
+                                    "man_made",
+                                    "amenity",
                                     "voltage",
                                     "building",
                                     "waterway",

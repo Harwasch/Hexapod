@@ -1941,7 +1941,8 @@
             "enum": [
               "parcel",
               "line",
-              "building"
+              "building",
+              "point"
             ],
             "title": "Kind",
             "type": "string"
@@ -4159,6 +4160,16 @@
             "title": "Id",
             "type": "string"
           },
+          "inventory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryLocator"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "license": {
             "maxLength": 1000,
             "minLength": 1,
@@ -5426,6 +5437,50 @@
           "warnings"
         ],
         "title": "ImageRegistrationResult",
+        "type": "object"
+      },
+      "InventoryLocator": {
+        "additionalProperties": false,
+        "properties": {
+          "featureId": {
+            "format": "uuid",
+            "title": "Featureid",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "section": {
+            "enum": [
+              "overview",
+              "geometry",
+              "attributes",
+              "inspections"
+            ],
+            "title": "Section",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "landId",
+          "featureId",
+          "revision",
+          "section",
+          "sha256"
+        ],
+        "title": "InventoryLocator",
         "type": "object"
       },
       "InvestigationCreate": {

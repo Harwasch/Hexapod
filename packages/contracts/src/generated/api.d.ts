@@ -2759,7 +2759,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "parcel" | "line" | "building";
+            kind: "parcel" | "line" | "building" | "point";
             point: components["schemas"]["Point"];
             /**
              * Radiusm
@@ -3576,6 +3576,7 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            inventory?: components["schemas"]["InventoryLocator"] | null;
             /** License */
             license: string;
             media?: components["schemas"]["ArchiveMedia"] | null;
@@ -4043,6 +4044,28 @@ export interface components {
             transform: number[];
             /** Warnings */
             warnings: string[];
+        };
+        /** InventoryLocator */
+        InventoryLocator: {
+            /**
+             * Featureid
+             * Format: uuid
+             */
+            featureId: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Section
+             * @enum {string}
+             */
+            section: "overview" | "geometry" | "attributes" | "inspections";
+            /** Sha256 */
+            sha256: string;
         };
         /** InvestigationCreate */
         InvestigationCreate: {
@@ -7997,6 +8020,7 @@ export type SchemaImageControlPoint = components['schemas']['ImageControlPoint']
 export type SchemaImageRegistrationCreate = components['schemas']['ImageRegistrationCreate'];
 export type SchemaImageRegistrationRead = components['schemas']['ImageRegistrationRead'];
 export type SchemaImageRegistrationResult = components['schemas']['ImageRegistrationResult'];
+export type SchemaInventoryLocator = components['schemas']['InventoryLocator'];
 export type SchemaInvestigationCreate = components['schemas']['InvestigationCreate'];
 export type SchemaInvestigationDetail = components['schemas']['InvestigationDetail'];
 export type SchemaInvestigationRead = components['schemas']['InvestigationRead'];
