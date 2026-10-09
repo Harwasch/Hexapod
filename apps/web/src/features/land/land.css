@@ -571,3 +571,86 @@
   grid-column: 1 / -1;
   justify-self: end;
 }
+
+.land-workspace-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  backdrop-filter: blur(16px);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 5px;
+  border-radius: 12px;
+  background: #18291ff2;
+  border: 1px solid var(--control-border);
+  margin: 12px 0 20px;
+}
+.land-workspace-tabs button {
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  min-height: 42px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.land-workspace-tabs button[aria-selected="true"] {
+  background: #a5c4a526;
+  color: var(--text-primary);
+}
+.land-action-workspace,
+.land-action-form,
+.land-action-review {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.land-action-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  min-width: 0;
+}
+.land-action-form legend {
+  font-size: 13px;
+  padding: 0 6px;
+}
+.land-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.land-action-grid input {
+  width: 100%;
+  min-width: 0;
+}
+.land-action-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid var(--control-border);
+  padding: 12px 0;
+}
+.land-action-step details > * + * {
+  margin-top: 12px;
+}
+.land-action-sequence {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-left: 22px;
+}
+.land-action-sequence li > span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.land-action-feature {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--control-border);
+}

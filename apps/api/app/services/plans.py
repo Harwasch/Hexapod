@@ -33,15 +33,19 @@ def _body_columns(body: PlanBody) -> dict[str, object]:
 def list_plans(db: Session, project_id: str) -> list[Plan]:
     stmt = (
         select(Plan)
-        .where(Plan.project_id == project_id)
+        .where(Plan.project_id == project_id, Plan.workspace_id.is_(None))
         .options(selectinload(Plan.revisions))
         .order_by(Plan.created_at)
     )
     return list(db.scalars(stmt).all())
 
 
-def get_plan(db: Session, plan_id: uuid.UUID) -> Plan:
-    stmt = select(Plan).where(Plan.id == plan_id).options(selectinload(Plan.revisions))
+def get_plan(db: Session, plan_id: uuid.UUID, *, workspace_id: uuid.UUID | None = None) -> Plan:
+    stmt = (
+        select(Plan)
+        .where(Plan.id == plan_id, Plan.workspace_id == workspace_id)
+        .options(selectinload(Plan.revisions))
+    )
     plan = db.scalars(stmt).first()
     if plan is None:
         raise NotFoundError("plan", plan_id)
@@ -69,10 +73,13 @@ def _snapshot(plan: Plan) -> dict[str, object]:
     }
 
 
-def create_plan(db: Session, payload: PlanCreate) -> Plan:
+def create_plan(
+    db: Session, payload: PlanCreate, *, workspace_id: uuid.UUID | None = None, commit: bool = True
+) -> Plan:
     if payload.site_id is not None and db.get(Site, payload.site_id) is None:
         raise NotFoundError("site", payload.site_id)
     plan = Plan(
+        workspace_id=workspace_id,
         project_id=payload.project_id,
         site_id=payload.site_id,
         status="scheduled",
@@ -82,8 +89,11 @@ def create_plan(db: Session, payload: PlanCreate) -> Plan:
     db.add(plan)
     db.flush()
     plan.revisions.append(PlanRevision(revision=1, note="Approved", snapshot=_snapshot(plan)))
-    db.commit()
-    return get_plan(db, plan.id)
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    return get_plan(db, plan.id, workspace_id=workspace_id)
 
 
 def revise_plan(db: Session, plan_id: uuid.UUID, payload: PlanRevise) -> Plan:

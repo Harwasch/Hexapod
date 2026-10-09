@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import type {
+  components,
   BoundaryRevision,
   Footprint,
   LandArea,
@@ -21,7 +22,8 @@ async function landApi(page: Page) {
     if (
       path.endsWith("/investigations") ||
       path.endsWith("/scenarios") ||
-      path.endsWith("/features")
+      path.endsWith("/features") ||
+      path.endsWith("/actions")
     ) {
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
       return;
@@ -270,4 +272,123 @@ test("select a mapped transmission line and preview a described corridor", async
   await app.getByRole("button", { name: "Preview my instruction" }).click();
   await expect(app.getByLabel("Name this land")).toHaveValue("Transmission line 9");
   await expect(app.getByText("Corridor along Transmission line 9", { exact: true })).toBeVisible();
+});
+
+test("review and schedule an action, then preserve that mission when revising", async ({ app }) => {
+  const records = await landApi(app);
+  const boundary: Footprint = {
+    type: "Polygon",
+    coordinates: [
+      [
+        [-122.136, 47.644],
+        [-122.134, 47.644],
+        [-122.134, 47.646],
+        [-122.136, 47.646],
+        [-122.136, 47.644],
+      ],
+    ],
+  };
+  records.saved.push({
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Action field",
+    description: "",
+    boundary,
+    source: { method: "drawn", label: "Fixture" },
+    revision: 1,
+    areaM2: 10000,
+    perimeterM: 400,
+    createdAt: "2026-10-09T00:00:00Z",
+    updatedAt: "2026-10-09T00:00:00Z",
+  });
+  type Action = components["schemas"]["LandActionRead"];
+  type Draft = components["schemas"]["LandActionCreate"];
+  let action: Action | null = null;
+  const versions: Action[] = [];
+  const requests: string[] = [];
+  await app.route("**/api/v1/land/*/actions{,/**,?*}", async (route) => {
+    const request = route.request(),
+      path = new URL(request.url()).pathname;
+    let result: unknown;
+    if (request.method() === "POST" && path.endsWith("/approve") && action) {
+      requests.push("approve");
+      action = {
+        ...action,
+        status: "approved",
+        approvedBy: "operator",
+        approvedAt: "2026-10-09T00:00:00Z",
+        approvalNote: "Reviewed",
+      };
+      versions[0] = action;
+      result = action;
+    } else if (path.endsWith("/mission") && action) {
+      if (request.method() === "POST") {
+        requests.push("schedule");
+        action = {
+          ...action,
+          status: "scheduled",
+          missionId: "33333333-3333-4333-8333-333333333333",
+        };
+        versions[0] = action;
+      }
+      result = {
+        id: action.missionId,
+        status: "scheduled",
+        startDate: action.startDate,
+        endDate: action.startDate,
+      };
+    } else if (request.method() === "POST" || request.method() === "PUT") {
+      requests.push(request.method() === "POST" ? "draft" : "revise");
+      const payload = request.postDataJSON() as Draft;
+      action = {
+        ...payload,
+        id: "22222222-2222-4222-8222-222222222222",
+        landId: records.saved[0]?.id ?? "",
+        revision: versions.length + 1,
+        status: "draft",
+        staleReasons: [],
+        totalKnownCost: 0,
+        uncostedSteps: 1,
+        effectiveBoundary: boundary,
+        approvedBy: null,
+        approvedAt: null,
+        approvalNote: null,
+        missionId: null,
+        createdAt: "2026-10-09T00:00:00Z",
+        updatedAt: "2026-10-09T00:00:00Z",
+      };
+      versions.unshift(action);
+      result = action;
+    } else result = path.endsWith("/revisions") ? versions : action ? [action] : [];
+    await route.fulfill({ json: result });
+  });
+  await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+  await app.getByTestId("tool-land").click();
+  await app.getByRole("button", { name: /Action field/ }).click();
+  await app.getByRole("tab", { name: "Actions", exact: true }).click();
+  const actions = app.getByRole("region", { name: "Land actions" });
+  await actions.getByRole("button", { name: "Plan an action", exact: true }).click();
+  await actions.getByLabel("Action title", { exact: true }).fill("Baseline survey");
+  await actions.getByLabel("Outcome to achieve", { exact: true }).fill("Measure native cover");
+  await actions.getByLabel("Step 1 name", { exact: true }).fill("Survey quadrats");
+  await actions
+    .getByLabel("Step 1 success measure", { exact: true })
+    .fill("Five recorded quadrats");
+  await actions.getByRole("button", { name: "Save action draft", exact: true }).click();
+  await expect(actions.getByRole("article", { name: "Action review" })).toBeVisible();
+  expect(requests).toEqual(["draft"]);
+  await actions.getByLabel("Review note", { exact: true }).fill("Reviewed work area and access");
+  await actions.getByRole("button", { name: "Approve revision 1", exact: true }).click();
+  await actions.getByLabel("Scheduling note", { exact: true }).fill("Schedule the reviewed survey");
+  expect(requests).toEqual(["draft", "approve"]);
+  await actions.getByRole("button", { name: "Schedule approved action", exact: true }).click();
+  await expect(actions.getByText(/Mission scheduled for/)).toBeVisible();
+  await actions.getByRole("button", { name: "Revise action", exact: true }).click();
+  await actions.getByLabel("Action title", { exact: true }).fill("Survey and follow-up");
+  await actions.getByRole("button", { name: "Save action revision", exact: true }).click();
+  await expect(
+    actions.getByRole("button", { name: "Approve revision 2", exact: true }),
+  ).toBeDisabled();
+  expect(versions[1]?.status).toBe("scheduled");
+  expect(versions[0]?.missionId).toBeNull();
+  expect(requests).toEqual(["draft", "approve", "schedule", "revise"]);
 });

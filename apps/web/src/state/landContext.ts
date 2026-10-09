@@ -13,7 +13,10 @@ export interface LandContextLayer {
   features: LandContextFeature[];
   selectedIds?: string[];
 }
+export type LandWorkspaceSection = "discover" | "inventory" | "scenarios" | "actions";
 interface LandContextState {
+  section: LandWorkspaceSection;
+  setSection: (section: LandWorkspaceSection) => void;
   selectedInventoryId: string | null;
   selectInventory: (id: string | null) => void;
   layers: Record<string, LandContextLayer>;
@@ -27,8 +30,11 @@ interface LandContextState {
 }
 
 export const useLandContext = create<LandContextState>((set, get) => ({
+  section: "discover",
+  setSection: (section) => set({ section }),
   selectedInventoryId: null,
-  selectInventory: (selectedInventoryId) => set({ selectedInventoryId }),
+  selectInventory: (selectedInventoryId) =>
+    set({ selectedInventoryId, ...(selectedInventoryId ? { section: "inventory" as const } : {}) }),
   layers: {},
   candidates: [],
   selectedIds: [],
@@ -69,5 +75,12 @@ export const useLandContext = create<LandContextState>((set, get) => ({
       layers: Object.fromEntries(Object.entries(state.layers).filter(([key]) => key !== id)),
       ...(id === "candidates" ? { candidates: [], selectedIds: [] } : {}),
     })),
-  clear: () => set({ layers: {}, candidates: [], selectedIds: [], selectedInventoryId: null }),
+  clear: () =>
+    set({
+      layers: {},
+      candidates: [],
+      selectedIds: [],
+      selectedInventoryId: null,
+      section: "discover",
+    }),
 }));

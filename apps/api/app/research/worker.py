@@ -17,10 +17,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.models.land import LandArea, LandBoundaryRevision
+from app.models.land_feature import LandFeature
 from app.models.research import Investigation, ResearchMessage
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.research import queue
 from app.research.model import (
+    ActionDraftAction,
     ArtifactAction,
     ClaudeResearchModel,
     CompleteAction,
@@ -38,7 +40,7 @@ from app.research.search import ClaudeResearchSearch, ResearchSearch
 from app.schemas.geojson import Footprint
 from app.schemas.research import EvidenceContent, ResearchBudget
 from app.schemas.scenarios import ScenarioCreate
-from app.services import scenarios
+from app.services import land_actions, scenarios
 from app.services.errors import InvalidInputError
 
 log = logging.getLogger("twin.research")
@@ -311,6 +313,22 @@ class ResearchWorker:
                     .limit(10)
                 )
             ]
+            saved_features = [
+                {
+                    "id": str(feature.id),
+                    "revision": feature.revision,
+                    "name": feature.content["name"],
+                    "category": feature.content["category"],
+                    "status": feature.content["status"],
+                    "source": feature.content["source"],
+                }
+                for feature in db.scalars(
+                    select(LandFeature)
+                    .where(LandFeature.land_id == land_id)
+                    .order_by(LandFeature.updated_at.desc())
+                    .limit(20)
+                )
+            ]
             conversation = [
                 {"role": message.role, "content": message.content} for message in reversed(history)
             ]
@@ -386,6 +404,7 @@ class ResearchWorker:
                             "question": question,
                             "conversation": conversation,
                             "savedScenarios": saved_scenarios,
+                            "inventoryFeatures": saved_features,
                             "boundaryRevision": boundary_revision,
                             "bounds": context.geometry.bounds,
                             "sourcesAvailable": [asdict(source) for source in SOURCES.values()],
@@ -443,6 +462,36 @@ class ResearchWorker:
                                 "revision": scenario.revision,
                                 "inputs": scenario.inputs.model_dump(mode="json"),
                                 "result": scenario.result.model_dump(mode="json"),
+                            }
+                        )
+                    elif isinstance(action, ActionDraftAction):
+                        current = queue.locked(db, run_id, token)
+                        action_citations = [
+                            *action.draft.evidence_ids,
+                            *[
+                                identifier
+                                for constraint in action.draft.constraints
+                                for identifier in constraint.evidence_ids
+                            ],
+                        ]
+                        queue.validate_citations(db, current, action_citations)
+                        draft = action.draft.model_copy(
+                            update={
+                                "request_key": uuid.uuid5(run_id, output_key),
+                                "boundary_revision": boundary_revision,
+                            }
+                        )
+                        saved_action = land_actions.create(
+                            db, workspace_id, land_id, principal_id, draft, commit=False
+                        )
+                        result = json.dumps(
+                            {
+                                "actionId": str(saved_action.id),
+                                "revision": saved_action.revision,
+                                "status": saved_action.status,
+                                "staleReasons": saved_action.stale_reasons,
+                                "knownCost": saved_action.total_known_cost,
+                                "uncostedSteps": saved_action.uncosted_steps,
                             }
                         )
                     elif isinstance(action, FindingAction):

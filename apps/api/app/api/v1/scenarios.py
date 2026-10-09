@@ -10,6 +10,7 @@ from app.api.workspace_deps import WorkspaceDep
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.schemas.scenarios import ScenarioCreate, ScenarioRead, ScenarioResult, ScenarioRevise
 from app.services import scenarios
+from app.services.errors import NotFoundError
 from app.services.land import get_land
 
 router = APIRouter(prefix="/land/{land_id}/scenarios", tags=["land scenarios"])
@@ -52,9 +53,24 @@ def listing(
 
 @router.get("/{scenario_id}", response_model=ScenarioRead)
 def get(
-    land_id: uuid.UUID, scenario_id: uuid.UUID, db: DbSession, scope: WorkspaceDep
+    land_id: uuid.UUID,
+    scenario_id: uuid.UUID,
+    db: DbSession,
+    scope: WorkspaceDep,
+    revision: int | None = Query(None, ge=1),
 ) -> ScenarioRead:
-    return scenarios.read(db, scenarios.scoped(db, scope.id, land_id, scenario_id))
+    row = scenarios.scoped(db, scope.id, land_id, scenario_id)
+    if revision is None:
+        return scenarios.read(db, row)
+    snapshot = db.scalar(
+        select(LandScenarioRevision).where(
+            LandScenarioRevision.scenario_id == scenario_id,
+            LandScenarioRevision.revision == revision,
+        )
+    )
+    if snapshot is None:
+        raise NotFoundError("scenario revision", revision)
+    return scenarios.read(db, row, snapshot)
 
 
 @router.put("/{scenario_id}", response_model=ScenarioRead)

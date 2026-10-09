@@ -31,7 +31,13 @@ function eventText(event: ResearchEvent): string {
   return typeof value === "string" ? value : "";
 }
 
-function EvidenceView({ evidence, onClose }: { evidence: LandEvidence; onClose: () => void }) {
+export function EvidenceView({
+  evidence,
+  onClose,
+}: {
+  evidence: LandEvidence;
+  onClose: () => void;
+}) {
   return (
     <section className="land-evidence" aria-label="Source evidence">
       <div className="land-place-heading">
@@ -128,6 +134,7 @@ export function LandResearch({ land }: { land: LandArea }) {
   useEffect(() => {
     if (!lastRun?.id || (lastRun?.status !== "succeeded" && lastRun?.status !== "partial")) return;
     void cache.invalidateQueries({ queryKey: ["land-scenarios", scope, land.id] });
+    void cache.invalidateQueries({ queryKey: ["land-actions", scope, land.id] });
   }, [lastRun?.id, lastRun?.status, cache, scope, land.id]);
   const refresh = () => cache.invalidateQueries({ queryKey: ["land-research", scope] });
   useEffect(() => {

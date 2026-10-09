@@ -10,11 +10,11 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft recovery | Broader cadastral coverage, snapping/splitting, unfinished drawing recovery, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts and scenarios | Broader sources, isolated raster/compute tools, agent evaluations and live model validation |
-| Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel | Membership UI, saved views, deeper accessibility/performance verification |
+| Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
 | Historical and rights workflows | Public search leads and cited research framework | Archive georeferencing, document ingestion, page citations and instrument/parcel lineage |
-| Action planning | Existing mission APIs remain available | Versioned evidence-to-action composer and private mission handoff |
+| Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
 ## Product direction
 
@@ -312,6 +312,59 @@ reopens the persisted record after reload. A separate real-Cesium check verifies
 the filled polygon reopens its inventory record after the panel is fully closed. Removing
 explicit polygon height/reference restores ground-fill rendering and picking; existing
 desktop drawing, mobile import and described-corridor browser journeys all pass. Live-source coverage is separate from this fixture.
+
+## Implemented increment: reviewed land actions and private missions
+
+Migration `0016` adds land actions and versioned snapshots. Each snapshot pins its boundary,
+optional scenario, inventory revisions and evidence. Exclusions produce a stored effective
+work area; explicit step footprints must fall inside that area. Step dependencies must finish
+before dependent work starts. Costs retain their basis, unknown costs remain unestimated,
+and constraints require an explicit resolution before approval or scheduling.
+
+The Actions workspace starts from a blank objective or a saved solar/restoration scenario.
+It provides editable steps, dates/durations, resources, cost assumptions, success measures,
+source selection, inventory references and polygon exclusions. Restoration scenario seeds
+include treatment and monitoring costs; year-to-day conversion and placeholder durations
+are stated for review. Review shows the sequence, unresolved constraints, known and missing
+costs, referenced evidence/scenario results, work area and revision history. Approval records
+the exact version. A later edit creates a new unapproved revision; earlier approvals and
+scheduled missions remain attached to their earlier snapshots.
+
+Scheduling is a separate user action. The existing plan model now has nullable workspace
+ownership: legacy public plans keep null ownership and existing behavior. Land-derived
+missions carry their workspace, are read only through scoped action routes, and cannot be
+listed, read, changed or deleted through public plan endpoints. They begin as scheduled;
+this does not dispatch equipment. The mission carries fixed polygon geometry, exclusions,
+steps and source-action metadata. Machine-hour estimates remain unknown and are explicitly
+identified as unestimated in the legacy plan representation. Downgrading workspace ownership
+is blocked while private missions exist, preventing an accidental privacy downgrade.
+
+The research agent's typed `create_action_draft` tool saves only drafts. Its bounded context
+includes known scenario and inventory identifiers/revisions; citations are checked before
+persistence. Draft writes share the worker's fenced transaction/checkpoint and stable request
+key. The tool surface cannot approve, schedule or dispatch actions. Live model behavior still
+requires configured credentials; deterministic worker fixtures verify the draft transition.
+
+The land workspace now separates Discover, Assets, Scenarios and Actions into keyboard
+navigable tabs that preserve mounted component state while switching. Selecting an inventory
+feature on the map opens Assets. Tabs stay accessible while scrolling a long action review.
+
+Validation: action tests cover immutable history, approval/scheduling gates, stale boundaries
+and scenario inputs, polygon exclusions, dependency/cost validation, idempotent scheduling,
+workspace isolation and public-route privacy. Existing mission tests pass. Component checks
+verify that edits submit only writable fields, save does not approve, and stale/unresolved
+work cannot be approved. A browser journey against the isolated API verifies draft creation, explicit approval,
+scheduling, reload, and a new unapproved revision that retains the previous scheduled mission;
+desktop and expanded mobile layouts have no page errors or horizontal overflow. A permanent
+Playwright action journey verifies the UI's separate draft/approve/schedule/revise requests.
+
+The combined feature regression run passes 61 backend tests and 47 frontend tests. All five
+migration checks pass, including upgrade/downgrade and model/schema comparison. Migration
+comparison now recognizes extension-owned tables through PostgreSQL's catalog, preventing
+PostGIS tiger/topology tables on the search path from becoming proposed drops. A private-plan
+downgrade guard is tested separately. Existing drawing, mobile import and corridor browser
+journeys pass, as do web type checks, lint and the production build. This is increment-level
+validation; the full domain and release acceptance matrix is still incomplete.
 
 ## Full implementation plan
 

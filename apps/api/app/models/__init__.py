@@ -17,6 +17,7 @@ from app.models.enums import (
 )
 from app.models.job import Artifact, Job, JobStep
 from app.models.land import LandArea, LandBoundaryRevision
+from app.models.land_action import LandAction, LandActionRevision
 from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureRevision
 from app.models.layer import Layer
 from app.models.plan import Plan, PlanRevision
@@ -51,6 +52,8 @@ __all__ = [
     "Investigation",
     "Job",
     "JobStep",
+    "LandAction",
+    "LandActionRevision",
     "LandArea",
     "LandBoundaryRevision",
     "LandFeature",
