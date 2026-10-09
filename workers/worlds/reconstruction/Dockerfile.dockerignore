@@ -1,0 +1,15 @@
+**
+!workers/
+!workers/worlds/
+!workers/worlds/reconstruction/
+!workers/worlds/reconstruction/**
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.venv*
+**/tests
+**/*.safetensors
+**/*.pt
+**/*.pth
+**/.env*
+**/data

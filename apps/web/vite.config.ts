@@ -149,6 +149,8 @@ export default defineConfig({
         // The scan viewer: one splat on its own, rendered with Spark (three.js), not the
         // globe. Also free of CesiumJS, which e2e asserts the same way.
         view: resolve(import.meta.dirname, "view.html"),
+        // A separate neural-world product on the same host, with no globe dependency.
+        worlds: resolve(import.meta.dirname, "worlds.html"),
       },
       output: {
         codeSplitting: {

@@ -1,0 +1,24 @@
+# Upstream Matrix3 published Torch2.10 environment, isolated from other models.
+torch==2.10.0
+torchvision==0.25.0
+numpy==2.2.6
+diffusers==0.36.0
+transformers==4.57.3
+accelerate==1.12.0
+safetensors==0.7.0
+huggingface-hub==0.36.0
+pillow==11.3.0
+einops==0.8.1
+easydict==1.13
+ftfy==6.3.1
+sentencepiece==0.2.1
+opencv-python-headless==4.10.0.84
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+scipy==1.15.3
+trimesh==4.11.2
+ninja==1.13.0
+packaging==25.0
+setuptools==80.9.0
+psutil==7.2.2
+pandas==2.3.3

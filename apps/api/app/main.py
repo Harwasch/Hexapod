@@ -27,6 +27,7 @@ from app.services.errors import (
 from app.services.ratelimit import RateLimited, RateLimits
 from app.services.urls import UrlValidationError
 from app.storage import StorageUnavailableError
+from app.worlds.lifecycle import worlds_lifespan
 
 logger = logging.getLogger("twin.api")
 
@@ -121,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "set the custom domain the public bucket is served on."
             )
     app = FastAPI(
+        lifespan=worlds_lifespan,
         title=settings.app_name,
         version="1.0.0",
         description=API_DESCRIPTION,

@@ -1,0 +1,2 @@
+# mmcv1.7.2 setup.py imports pkg_resources, removed in setuptools82.
+setuptools==80.9.0
