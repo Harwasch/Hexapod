@@ -135,6 +135,16 @@ it("preserves the question draft and opens research with the saved evidence refe
   expect(useLandContext.getState().researchQuestion).toContain("(evidence photo)");
   expect(onAsk).toHaveBeenCalledOnce();
 });
+it("requests pixel inspection while keeping visible details distinct from catalog claims", () => {
+  const onAsk = mount();
+  fireEvent.click(screen.getByRole("button", { name: "Inspect this image" }));
+  expect(useLandContext.getState().researchQuestion).toContain("(evidence photo)");
+  expect(useLandContext.getState().researchQuestion).toContain("Use the image pixels");
+  expect(useLandContext.getState().researchQuestion).toContain(
+    "distinguish visible details from catalog claims",
+  );
+  expect(onAsk).toHaveBeenCalledOnce();
+});
 it("loads a source through the private evidence API when it is outside the current results page", async () => {
   const get = vi.spyOn(api, "GET").mockImplementation(((path: string) =>
     Promise.resolve({

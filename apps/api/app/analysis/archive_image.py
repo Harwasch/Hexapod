@@ -10,11 +10,35 @@ import warnings
 from pathlib import Path
 
 from PIL import Image, ImageOps
+from PIL import __version__ as pillow_version
 
 MAX_SOURCE_BYTES = 5 * 1024 * 1024
 MAX_PREVIEW_BYTES = 16 * 1024 * 1024
 MAX_PIXELS = 8_000_000
 FORMATS = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+
+
+def vision_preview(data: bytes) -> tuple[bytes, dict[str, str | int]]:
+    if not 0 < len(data) <= MAX_PREVIEW_BYTES:
+        raise ValueError("Invalid saved image size.")
+    with Image.open(io.BytesIO(data)) as source:
+        if source.format != "PNG" or source.width * source.height > MAX_PIXELS:
+            raise ValueError("Expected a bounded canonical PNG snapshot.")
+        source.thumbnail((1568, 1568), Image.Resampling.LANCZOS)
+        rgba = source.convert("RGBA")
+        background = Image.new("RGB", rgba.size, "white")
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        output = io.BytesIO()
+        background.save(output, format="JPEG", quality=85)
+        value = output.getvalue()
+        if len(value) > 2 * 1024 * 1024:
+            raise ValueError("The vision input exceeds its 2 MiB limit.")
+        return value, {
+            "width": background.width,
+            "height": background.height,
+            "algorithm": "fit-1568-white-jpeg85-v1",
+            "pillowVersion": pillow_version,
+        }
 
 
 def normalize(data: bytes) -> tuple[bytes, dict[str, str | int]]:
@@ -54,8 +78,10 @@ def main() -> None:
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     directory = Path(sys.argv[1])
     try:
-        preview, metadata = normalize((directory / "source").read_bytes())
-        (directory / "preview.png").write_bytes(preview)
+        vision = len(sys.argv) > 2 and sys.argv[2] == "vision"
+        processor = vision_preview if vision else normalize
+        preview, metadata = processor((directory / "source").read_bytes())
+        (directory / ("vision.jpg" if vision else "preview.png")).write_bytes(preview)
         (directory / "result.json").write_text(json.dumps(metadata))
     except Exception:
         (directory / "result.json").write_text(

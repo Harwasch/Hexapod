@@ -13,7 +13,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
-| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots | Archive georeferencing and AI visual inspection and deeper instrument/parcel lineage evaluation |
+| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots and bounded agent visual inspection | Archive georeferencing and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
 ## Product direction
@@ -872,3 +872,32 @@ production build passed. A live public National Mall browser journey saved a 960
 photo and a 200×245 USGS map preview, verified the downloaded original checksum, and reopened
 both saved images with their public hosts deliberately unavailable. Desktop/mobile screenshots
 were inspected; no page errors or horizontal overflow were observed. No deployment was made.
+
+
+## Implemented increment: agent visual inspection of archive evidence
+
+The research agent can request `inspect_archive_image` for source evidence in its current
+investigation. The tool saves or reuses the immutable preview, prepares a bounded visual
+input, and attaches actual image pixels to subsequent model decisions. Two images can be
+attached at once; selecting a third replaces the oldest attached image. Each input records
+its evidence ID, canonical snapshot hash, derived-image hash, processor recipe/version and
+dimensions. Derivatives preserve aspect ratio, fit within 1568 pixels, flatten transparency
+onto white and stay under 2 MiB. The model adapter sends actual JPEG image blocks alongside
+the research context. The gallery's “Inspect this image” action prepares a source-specific
+question and focuses the conversation.
+
+Image tools validate investigation citations before any retrieval and require a live worker
+lease before saving bytes or checkpoints. Recovery reuses saved source pixels and verifies
+that the regenerated derivative exactly matches its pinned metadata; changed processing
+requires a new run. Model instructions separate visible details from catalog date/location
+claims and explicitly address low resolution and untrusted text inside images. No unsupported
+visual interpretation is substituted when the model lacks image capability or credentials.
+
+Validation: 31 image/research/archive regression tests passed; 15 affected image tests were
+then rerun after tightening streaming deadline checks. These cover actual pixel attachment,
+provider payload encoding, citation persistence, cancellation during retrieval, recovery
+without redownload, foreign-evidence refusal, attachment count, aspect ratio/transparency,
+processor hash mismatches and small-chunk download deadlines. API lint/format/type checks
+(249 files), seven gallery UI tests, web typing/lint and build passed. Model responses were
+controlled test fixtures: live AI interpretation remains unvalidated because this environment
+has no configured model credentials. No production deployment was made.

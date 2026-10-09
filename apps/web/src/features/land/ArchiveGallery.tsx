@@ -191,6 +191,18 @@ function ArchiveCard({
         >
           Ask about this source
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            const state = useLandContext.getState();
+            state.setResearchQuestion(
+              `${state.researchQuestion ? state.researchQuestion + "\n\n" : ""}Visually inspect archive image ${media.title} (evidence ${id}). Use the image pixels, distinguish visible details from catalog claims, and explain what the image resolution cannot establish about this land.`,
+            );
+            onAsk?.();
+          }}
+        >
+          Inspect this image
+        </button>
       </div>
       <details>
         <summary>Dates, attribution and interpretation</summary>

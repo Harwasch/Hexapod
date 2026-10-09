@@ -21,15 +21,17 @@ from app.analysis.terrain import SPEC as TERRAIN_SPEC
 from app.analysis.worldcover import SPEC as COVER_SPEC
 from app.config import Settings
 from app.models.land import LandArea, LandBoundaryRevision
+from app.models.land_archive_image import LandArchiveImage, LandArchiveImageBlob
 from app.models.land_document import LandDocument, LandDocumentLink
 from app.models.land_feature import LandFeature
 from app.models.land_raster import LandRaster
-from app.models.research import Investigation, ResearchMessage
+from app.models.research import Evidence, Investigation, ResearchMessage, ResearchRun
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.research import queue
 from app.research.documents import retrieve as retrieve_documents
 from app.research.model import (
     ActionDraftAction,
+    ArchiveImageAction,
     ArtifactAction,
     ClaudeResearchModel,
     CompleteAction,
@@ -37,8 +39,10 @@ from app.research.model import (
     DocumentReadAction,
     DocumentSearchAction,
     FindingAction,
+    MultimodalResearchModel,
     RasterAction,
     ResearchDecision,
+    ResearchImage,
     ResearchModel,
     RetrieveAction,
     ScenarioAction,
@@ -59,7 +63,7 @@ from app.schemas.research import (
     ResearchBudget,
 )
 from app.schemas.scenarios import ScenarioCreate
-from app.services import land_actions, land_rasters, scenarios
+from app.services import land_actions, land_archive_images, land_rasters, scenarios
 from app.services.errors import InvalidInputError, NotFoundError
 
 log = logging.getLogger("twin.research")
@@ -497,6 +501,105 @@ class ResearchWorker:
         queue.checkpoint(db, run_id, token, state)
         return result.summary
 
+    def _image(
+        self,
+        db: Session,
+        run_id: uuid.UUID,
+        token: uuid.UUID,
+        workspace_id: uuid.UUID,
+        evidence_id: uuid.UUID,
+        client: httpx.Client,
+        state: dict[str, Any],
+    ) -> str:
+        run = queue.locked(db, run_id, token)
+        queue.validate_citations(db, run, [evidence_id])
+        evidence = land_archive_images.scoped_evidence(db, workspace_id, evidence_id)
+        media = land_archive_images.media(evidence)
+        row = db.get(LandArchiveImage, evidence_id)
+        if row is None:
+            db.rollback()
+            snapshot = land_archive_images.retrieve(media, client)
+            # Image persistence and checkpoint publication require the still-live run lease.
+            queue.locked(db, run_id, token)
+            row = land_archive_images.save(
+                db,
+                workspace_id,
+                evidence_id,
+                snapshot,
+                self.settings.land_archive_workspace_quota_bytes,
+            )
+            queue.checkpoint(db, run_id, token, state)
+        blob = db.get(LandArchiveImageBlob, evidence_id)
+        if blob is None:
+            raise InvalidInputError("The saved archive image is unavailable.")
+        metadata = land_archive_images.read(row)
+        preview = blob.preview
+        db.rollback()
+        _data, vision = land_archive_images.vision_input(preview)
+        image = {
+            "evidenceId": str(evidence_id),
+            "snapshotSha256": metadata.sha256,
+            "vision": vision,
+        }
+        previous_images = [
+            item for item in state.get("images", []) if item["evidenceId"] != str(evidence_id)
+        ]
+        state["images"] = [*previous_images[-1:], image]
+        state["sources"][f"image/{evidence_id}"] = {
+            "provider": "saved-archive-image",
+            "status": "available",
+            "summary": "Saved image pixels are attached to subsequent model decisions; inspect only legible details.",
+            "evidenceIds": [str(evidence_id)],
+            "data": {
+                "media": media.model_dump(mode="json"),
+                "snapshot": metadata.model_dump(mode="json"),
+                "vision": vision,
+            },
+        }
+        queue.checkpoint(db, run_id, token, state, kind="image", payload=image)
+        return "The saved archive image is ready for visual inspection; its evidence ID and checksums are recorded."
+
+    def _model_images(
+        self,
+        db: Session,
+        run_id: uuid.UUID,
+        token: uuid.UUID,
+        workspace_id: uuid.UUID,
+        state: dict[str, Any],
+    ) -> list[ResearchImage]:
+        references = state.get("images", [])
+        if len(references) > 2:
+            raise InvalidInputError("At most two archive images can be inspected at once.")
+        result = []
+        for reference in references:
+            evidence_id = uuid.UUID(reference["evidenceId"])
+            queue.validate_citations(db, queue.locked(db, run_id, token), [evidence_id])
+            land_archive_images.scoped_evidence(db, workspace_id, evidence_id)
+            row = db.get(LandArchiveImage, evidence_id)
+            blob = db.get(LandArchiveImageBlob, evidence_id)
+            if (
+                row is None
+                or blob is None
+                or row.metadata_json["sha256"] != reference["snapshotSha256"]
+            ):
+                raise InvalidInputError(
+                    "The inspected image snapshot no longer matches this research run."
+                )
+            preview = blob.preview
+            db.rollback()
+            data, vision = land_archive_images.vision_input(preview)
+            if vision != reference["vision"]:
+                raise InvalidInputError(
+                    "The image processor version changed. Start a new investigation run."
+                )
+            result.append(
+                ResearchImage(evidence_id, reference["snapshotSha256"], str(vision["sha256"]), data)
+            )
+        if result:
+            queue.locked(db, run_id, token)
+            db.rollback()
+        return result
+
     def _execute(
         self,
         run_id: uuid.UUID,
@@ -600,6 +703,19 @@ class ResearchWorker:
             conversation = [
                 {"role": message.role, "content": message.content} for message in reversed(history)
             ]
+            archive_sources = [
+                {"evidenceId": str(item.id), "media": item.content["media"]}
+                for item in db.scalars(
+                    select(Evidence)
+                    .join(ResearchRun, ResearchRun.id == Evidence.run_id)
+                    .where(
+                        ResearchRun.investigation_id == investigation.id,
+                        Evidence.content["media"].astext.is_not(None),
+                    )
+                    .order_by(Evidence.created_at.desc())
+                    .limit(30)
+                )
+            ]
             state = dict(run.checkpoint) or {
                 "sources": {},
                 "steps": 0,
@@ -690,6 +806,8 @@ class ResearchWorker:
                             "savedScenarios": saved_scenarios,
                             "inventoryFeatures": saved_features,
                             "landDocuments": saved_documents,
+                            "archiveSources": archive_sources,
+                            "attachedArchiveImages": state.get("images", []),
                             "userRecordedDocumentRelationships": document_relationships,
                             "boundaryRevision": boundary_revision,
                             "bounds": context.geometry.bounds,
@@ -702,7 +820,15 @@ class ResearchWorker:
                         },
                         default=str,
                     )
-                    response = model.decide(prompt, allocation)
+                    image_inputs = self._model_images(db, run_id, token, workspace_id, state)
+                    if image_inputs:
+                        if not isinstance(model, MultimodalResearchModel):
+                            raise InvalidInputError(
+                                "The configured research model cannot inspect images."
+                            )
+                        response = model.decide_with_images(prompt, allocation, image_inputs)
+                    else:
+                        response = model.decide(prompt, allocation)
                     state["output_tokens"] = previous_tokens + response.output_tokens
                     decision = response.decision
                     state["pending_action"] = decision.model_dump(mode="json")
@@ -722,6 +848,14 @@ class ResearchWorker:
                         result = f"Retrieved {action.provider}; see retrieved source data."
                     elif isinstance(action, SearchAction):
                         result = self._search(db, run_id, token, action, context, state, budget)
+                    elif isinstance(action, ArchiveImageAction):
+                        if not isinstance(model, MultimodalResearchModel):
+                            raise InvalidInputError(
+                                "The configured research model cannot inspect images."
+                            )
+                        result = self._image(
+                            db, run_id, token, workspace_id, action.evidence_id, client, state
+                        )
                     elif isinstance(action, RasterAction):
                         raster_result = self._raster(
                             db,

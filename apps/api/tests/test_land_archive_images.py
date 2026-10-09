@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -191,3 +192,26 @@ def test_image_access_follows_workspace_and_member_roles(
         )
     assert client.delete(f"/api/v1/workspaces/members/{bob_id}", headers=owner).status_code == 204
     assert client.get(endpoint + "/preview", headers=viewer).status_code == 404
+
+
+def test_download_deadline_checks_small_stream_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    steps = iter([0.0, 26.0])
+    monkeypatch.setattr(images, "time", SimpleNamespace(monotonic=lambda: next(steps)))
+    yielded: list[int] = []
+
+    class SlowStream(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            for index in range(3):
+                yielded.append(index)
+                yield b"a"
+
+    with (
+        httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=SlowStream()))
+        ) as client,
+        pytest.raises(InvalidInputError, match="download limits"),
+    ):
+        images.retrieve(source(), client)
+    assert yielded == [0]

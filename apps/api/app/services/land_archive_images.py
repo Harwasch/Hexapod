@@ -62,12 +62,15 @@ def retrieve(source: ArchiveMedia, client: httpx.Client) -> ImageSnapshot:
             "GET",
             str(source.preview_url),
             follow_redirects=False,
+            headers={"Accept-Encoding": "identity"},
             timeout=httpx.Timeout(10, read=5),
         ) as response:
             response.raise_for_status()
+            if response.headers.get("content-encoding", "identity").lower() != "identity":
+                raise ValueError("Archive image downloads require an unencoded response.")
             if int(response.headers.get("content-length", "0")) > MAX_SOURCE_BYTES:
                 raise ValueError("This archive preview exceeds the 5 MiB limit.")
-            for chunk in response.iter_bytes(chunk_size=64 * 1024):
+            for chunk in response.iter_bytes():
                 data.extend(chunk)
                 if len(data) > MAX_SOURCE_BYTES or time.monotonic() - started > 25:
                     raise ValueError(
@@ -172,3 +175,38 @@ def read(row: LandArchiveImage) -> ArchiveImageRead:
     return ArchiveImageRead(
         evidence_id=row.evidence_id, created_at=row.created_at, **row.metadata_json
     )
+
+
+def vision_input(preview: bytes) -> tuple[bytes, dict[str, str | int]]:
+    """Reproducible bounded derivative. Callers pin and verify its checksum on resume."""
+    with tempfile.TemporaryDirectory(prefix="land-archive-vision-") as temporary:
+        directory = Path(temporary)
+        (directory / "source").write_bytes(preview)
+        try:
+            result = subprocess.run(  # noqa: S603 -- fixed image processor; no executable user input
+                [sys.executable, "-m", "app.analysis.archive_image", str(directory), "vision"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=12,
+                check=False,
+                env={
+                    "PATH": "/usr/bin:/bin",
+                    "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+                },
+            )
+        except subprocess.TimeoutExpired as error:
+            raise InvalidInputError(
+                "The image input exceeded its processing time limit."
+            ) from error
+        metadata_file, output = directory / "result.json", directory / "vision.jpg"
+        if result.returncode or not metadata_file.is_file() or metadata_file.stat().st_size > 4096:
+            raise InvalidInputError("The saved image could not be prepared for visual inspection.")
+        metadata = json.loads(metadata_file.read_text())
+        if "error" in metadata or not output.is_file() or output.stat().st_size > 2 * 1024 * 1024:
+            raise InvalidInputError(
+                "The saved image could not be prepared within its vision limits."
+            )
+        data = output.read_bytes()
+        metadata["sha256"] = hashlib.sha256(data).hexdigest()
+        return data, metadata
