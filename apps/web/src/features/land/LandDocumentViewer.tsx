@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { describeError } from "@/lib/log";
 import { useLandScope, useLandAccessReady, useLandCanEdit } from "@/state/landIdentity";
+import { LandDocumentOcr } from "./LandDocumentOcr";
+import { LandDocumentImage } from "./LandDocumentImage";
 
 export function LandDocumentViewer({
   landId,
@@ -11,6 +13,8 @@ export function LandDocumentViewer({
   pinnedHash,
   onPageChange,
   onUploaded,
+  pinnedOcrId,
+  onOcrSelected,
 }: {
   landId: string;
   documentId: string;
@@ -18,6 +22,8 @@ export function LandDocumentViewer({
   pinnedHash?: string;
   onPageChange?: (page: number) => void;
   onUploaded?: () => Promise<unknown>;
+  pinnedOcrId?: string;
+  onOcrSelected?: (id: string) => void;
 }) {
   const scope = useLandScope(),
     ready = useLandAccessReady();
@@ -195,11 +201,19 @@ export function LandDocumentViewer({
             </label>
           )}
           {content.isError && <p role="alert">The extracted page could not be loaded.</p>}
+          {document.data.mediaType === "application/pdf" && document.data.pageCount > 0 && (
+            <LandDocumentImage
+              key={`image:${documentId}:${page}`}
+              landId={landId}
+              documentId={documentId}
+              page={page}
+            />
+          )}
           {content.data && (
             <>
               <pre className="land-page-text">
                 {content.data.text ||
-                  "No readable text was extracted from this page. Review the original or provide an OCR text version."}
+                  "No native text was extracted from this page. Review the original image or machine reading below."}
               </pre>
               {content.data.truncated && (
                 <p className="land-notice">
@@ -209,6 +223,16 @@ export function LandDocumentViewer({
             </>
           )}
           {error && <p role="alert">{error}</p>}
+          {document.data.mediaType === "application/pdf" && document.data.pageCount > 0 && (
+            <LandDocumentOcr
+              key={`ocr:${documentId}:${page}`}
+              landId={landId}
+              documentId={documentId}
+              page={page}
+              pinnedId={page === initialPage ? pinnedOcrId : undefined}
+              onSelected={onOcrSelected}
+            />
+          )}
           <div className="land-actions">
             <button
               type="button"

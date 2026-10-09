@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
 from app.models.workspace import Workspace
 from app.schemas.land_features import FeatureInspectionCreate
@@ -11,7 +14,7 @@ from app.services import land_features
 from app.services.errors import NotFoundError
 from tests.test_land import BODY
 
-FEATURE = {
+FEATURE: dict[str, Any] = {
     "name": "Transmission pole",
     "category": "power",
     "geometry": {"type": "Point", "coordinates": [-122.135, 47.645, 20]},
@@ -26,7 +29,9 @@ FEATURE = {
 }
 
 
-def test_feature_identity_revision_inspection_and_private_scope(client, db):
+def test_feature_identity_revision_inspection_and_private_scope(
+    client: TestClient, db: Session
+) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     path = f"/api/v1/land/{land['id']}/features"
     payload = {**FEATURE, "requestKey": str(uuid.uuid4())}
@@ -77,7 +82,7 @@ def test_feature_identity_revision_inspection_and_private_scope(client, db):
         land_features.scoped(db, private.id, uuid.UUID(land["id"]), uuid.UUID(feature["id"]))
 
 
-def test_feature_outside_boundary_is_explicit_and_evidence_is_checked(client):
+def test_feature_outside_boundary_is_explicit_and_evidence_is_checked(client: TestClient) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     path = f"/api/v1/land/{land['id']}/features"
     response = client.post(
@@ -91,7 +96,7 @@ def test_feature_outside_boundary_is_explicit_and_evidence_is_checked(client):
     )
 
 
-def test_inspections_need_units_and_timezone():
+def test_inspections_need_units_and_timezone() -> None:
     with pytest.raises(ValidationError, match="unit"):
         FeatureInspectionCreate(
             observed_at="2026-10-09T00:00:00Z",
@@ -105,7 +110,7 @@ def test_inspections_need_units_and_timezone():
         )
 
 
-def test_revision_cannot_duplicate_another_source_record(client):
+def test_revision_cannot_duplicate_another_source_record(client: TestClient) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     path = f"/api/v1/land/{land['id']}/features"
     assert client.post(path, json=FEATURE).status_code == 201
@@ -119,7 +124,7 @@ def test_revision_cannot_duplicate_another_source_record(client):
     assert client.get(f"{path}/{second['id']}").json()["revision"] == 1
 
 
-def test_inventory_rejects_nonfinite_numeric_attributes():
+def test_inventory_rejects_nonfinite_numeric_attributes() -> None:
     from app.schemas.land_features import LandFeatureCreate
 
     with pytest.raises(ValidationError, match="finite"):

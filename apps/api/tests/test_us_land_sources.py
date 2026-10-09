@@ -15,8 +15,8 @@ from tests.test_land import BODY
 CONTEXT = SourceContext(Polygon.model_validate(BODY["boundary"]))
 
 
-def test_soil_point_components_are_not_parcel_coverage():
-    def respond(request):
+def test_soil_point_components_are_not_parcel_coverage() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         assert request.method == "POST"
         assert "WktWgs84('POINT (" in body["query"]
@@ -37,12 +37,13 @@ def test_soil_point_components_are_not_parcel_coverage():
     assert result.data["records"][0]["comppct_r"] == 65
     assert "not this land" in result.evidence[0][1].relevance_note
     finding, artifacts = overview_outputs(result, [uuid.uuid4()])
+    assert finding is not None
     assert finding.category == "physical"
     assert artifacts[0].output.kind == "table"
     assert "map-unit" in artifacts[0].method
 
 
-def test_flood_zones_are_clipped_to_land_and_preserve_holes():
+def test_flood_zones_are_clipped_to_land_and_preserve_holes() -> None:
     footprint = {
         **BODY["boundary"],
         "coordinates": [
@@ -74,11 +75,12 @@ def test_flood_zones_are_clipped_to_land_and_preserve_holes():
     assert record["intersectedAreaM2"] > 0
     assert result.evidence[0][1].spatial_relevance == "intersects"
     finding, artifacts = overview_outputs(result, [uuid.uuid4()])
+    assert finding is not None
     assert finding.category == "hazards"
     assert [artifact.output.kind for artifact in artifacts] == ["map", "table"]
 
 
-def test_outage_empty_and_outside_coverage_remain_distinct():
+def test_outage_empty_and_outside_coverage_remain_distinct() -> None:
     with httpx.Client(
         transport=httpx.MockTransport(
             lambda request: httpx.Response(200, text="<html>Maintenance</html>")

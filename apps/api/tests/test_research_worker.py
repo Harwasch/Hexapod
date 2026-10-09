@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 
 import httpx
+from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.models.research import ResearchRun
@@ -16,7 +18,7 @@ from tests.test_land import BODY
 from tests.test_research import start
 
 
-def transport(request):
+def transport(request: httpx.Request) -> httpx.Response:
     if request.url.host == "epqs.nationalmap.gov":
         return httpx.Response(
             200,
@@ -40,7 +42,9 @@ def transport(request):
     return httpx.Response(200, json={"count": 0, "results": [], "endOfRecords": True})
 
 
-def test_overview_runs_without_a_model_and_publishes_cited_outputs(client, db, sessions):
+def test_overview_runs_without_a_model_and_publishes_cited_outputs(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
     _, inv, _run, _ = start(client)
     with httpx.Client(transport=httpx.MockTransport(transport)) as http:
         worker = ResearchWorker(sessions, Settings(_env_file=None), client=http)
@@ -59,7 +63,9 @@ def test_overview_runs_without_a_model_and_publishes_cited_outputs(client, db, s
     assert len(detail["messages"]) == 2
 
 
-def test_provider_outage_is_partial_not_empty(client, sessions):
+def test_provider_outage_is_partial_not_empty(
+    client: TestClient, sessions: sessionmaker[Session]
+) -> None:
     _, inv, run, _ = start(client)
     with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(503))) as http:
         assert ResearchWorker(sessions, Settings(_env_file=None), client=http).run_once()
@@ -75,7 +81,8 @@ def test_provider_outage_is_partial_not_empty(client, sessions):
 class TestModel:
     __test__ = False
 
-    def decide(self, context, max_tokens):
+    def decide(self, context: str, max_tokens: int) -> DecisionResult:
+        action: CompleteAction | RetrieveAction
         state = json.loads(context)
         if not state["retrieved"]:
             action = RetrieveAction(kind="retrieve_source", provider="usgs-elevation")
@@ -91,9 +98,12 @@ class TestModel:
         )
 
 
-def test_model_uses_tools_and_retains_citations(client, db, sessions):
+def test_model_uses_tools_and_retains_citations(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
     _, inv, run, _ = start(client)
     row = db.scalar(select(ResearchRun).where(ResearchRun.id == run["id"]))
+    assert row is not None
     row.kind = "investigation"
     db.commit()
     with httpx.Client(transport=httpx.MockTransport(transport)) as http:
@@ -107,9 +117,12 @@ def test_model_uses_tools_and_retains_citations(client, db, sessions):
     assert "123.4 m" in detail["messages"][-1]["content"]
 
 
-def test_missing_model_is_explicit(client, db, sessions):
+def test_missing_model_is_explicit(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
     _, _inv, run, _ = start(client)
     row = db.scalar(select(ResearchRun).where(ResearchRun.id == run["id"]))
+    assert row is not None
     row.kind = "investigation"
     db.commit()
     assert ResearchWorker(sessions, Settings(_env_file=None)).run_once()
@@ -119,7 +132,7 @@ def test_missing_model_is_explicit(client, db, sessions):
     assert "not configured" in result["error"]
 
 
-def test_gbif_preserves_record_license_and_excludes_generalized_and_outside():
+def test_gbif_preserves_record_license_and_excludes_generalized_and_outside() -> None:
     record = {
         "key": 1,
         "scientificName": "Example species",
@@ -149,6 +162,7 @@ def test_gbif_preserves_record_license_and_excludes_generalized_and_outside():
     assert result.status == "available"
     assert len(result.evidence) == 1
     assert result.evidence[0][1].license == record["license"]
+    assert result.evidence[0][1].observed_at is not None
     assert result.evidence[0][1].observed_at.year == 2000
     assert "decimalLongitude" not in result.evidence[0][1].excerpt
     assert "not proof" in result.evidence[0][1].relevance_note
@@ -156,7 +170,7 @@ def test_gbif_preserves_record_license_and_excludes_generalized_and_outside():
     assert result.data["excludedLicense"] == 1
 
 
-def test_redirects_are_not_followed():
+def test_redirects_are_not_followed() -> None:
     with httpx.Client(
         transport=httpx.MockTransport(
             lambda request: httpx.Response(302, headers={"Location": "http://127.0.0.1/private"})

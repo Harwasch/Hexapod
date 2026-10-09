@@ -9,20 +9,36 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import DbSession, SettingsDep
 from app.api.workspace_deps import WorkspaceDep
-from app.models.land_document import LandDocument, LandDocumentBlob, LandDocumentLink
+from app.models.land_document import (
+    LandDocument,
+    LandDocumentBlob,
+    LandDocumentLink,
+    LandDocumentOcr,
+)
 from app.schemas.land_documents import (
     DocumentLinkCreate,
     DocumentLinkRead,
+    DocumentOcrCapabilities,
+    DocumentOcrRead,
+    DocumentOcrRequest,
     DocumentPageRead,
     DocumentSearchHit,
     LandDocumentCreate,
     LandDocumentRead,
 )
-from app.services import land_documents
+from app.services import document_ocr, land_documents
 from app.services.errors import NotFoundError
 from app.services.land import get_land
 
 router = APIRouter(prefix="/land/{land_id}/documents", tags=["land documents"])
+
+
+@router.get("/ocr-capabilities", response_model=DocumentOcrCapabilities)
+def ocr_capabilities(
+    land_id: uuid.UUID, db: DbSession, scope: WorkspaceDep
+) -> DocumentOcrCapabilities:
+    get_land(db, scope.id, land_id)
+    return document_ocr.capabilities()
 
 
 @router.post("", response_model=LandDocumentRead, status_code=201)
@@ -172,3 +188,58 @@ def page(
     land_id: uuid.UUID, document_id: uuid.UUID, page: int, db: DbSession, scope: WorkspaceDep
 ) -> DocumentPageRead:
     return land_documents.page(db, land_documents.scoped(db, scope.id, land_id, document_id), page)
+
+
+@router.get("/{document_id}/pages/{page}/ocr", response_model=list[DocumentOcrRead])
+def page_ocr(
+    land_id: uuid.UUID, document_id: uuid.UUID, page: int, db: DbSession, scope: WorkspaceDep
+) -> list[DocumentOcrRead]:
+    document = land_documents.scoped(db, scope.id, land_id, document_id)
+    land_documents.page(db, document, page)
+    return [
+        document_ocr.read(row)
+        for row in db.scalars(
+            select(LandDocumentOcr)
+            .where(LandDocumentOcr.document_id == document_id, LandDocumentOcr.page == page)
+            .order_by(LandDocumentOcr.created_at)
+        )
+    ]
+
+
+@router.post("/{document_id}/pages/{page}/ocr", response_model=DocumentOcrRead)
+def run_ocr(
+    land_id: uuid.UUID,
+    document_id: uuid.UUID,
+    page: int,
+    payload: DocumentOcrRequest,
+    db: DbSession,
+    scope: WorkspaceDep,
+) -> DocumentOcrRead:
+    scope.require("owner", "editor")
+    return document_ocr.extract(db, scope.id, land_id, document_id, page, payload.language)
+
+
+@router.get("/{document_id}/ocr/{ocr_id}", response_model=DocumentOcrRead)
+def get_ocr(
+    land_id: uuid.UUID,
+    document_id: uuid.UUID,
+    ocr_id: uuid.UUID,
+    db: DbSession,
+    scope: WorkspaceDep,
+) -> DocumentOcrRead:
+    return document_ocr.read(document_ocr.scoped(db, scope.id, land_id, document_id, ocr_id))
+
+
+@router.get(
+    "/{document_id}/pages/{page}/image",
+    responses={200: {"content": {"image/png": {"schema": {"type": "string", "format": "binary"}}}}},
+)
+def page_image(
+    land_id: uuid.UUID, document_id: uuid.UUID, page: int, db: DbSession, scope: WorkspaceDep
+) -> Response:
+    data = document_ocr.preview(db, scope.id, land_id, document_id, page)
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )

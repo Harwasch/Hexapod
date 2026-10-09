@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.models.research import ResearchRun
@@ -48,7 +50,7 @@ PAYLOAD = {
 }
 
 
-def test_only_verified_result_citations_become_evidence():
+def test_only_verified_result_citations_become_evidence() -> None:
     result = search_result(PAYLOAD, "historical maps")
     assert len(result.data["leads"]) == 2
     assert len(result.evidence) == 1
@@ -71,10 +73,17 @@ def test_only_verified_result_citations_become_evidence():
 
 
 class Searcher:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = 0
 
-    def search(self, query, bounds, max_tokens, max_searches, domains):
+    def search(
+        self,
+        query: str,
+        bounds: tuple[float, ...],
+        max_tokens: int,
+        max_searches: int,
+        domains: list[str],
+    ) -> SearchResponse:
         self.calls += 1
         assert max_searches <= 2 and max_tokens <= 2000
         assert len(bounds) == 4
@@ -82,7 +91,8 @@ class Searcher:
 
 
 class Model:
-    def decide(self, context, max_tokens):
+    def decide(self, context: str, max_tokens: int) -> DecisionResult:
+        action: CompleteAction | SearchAction
         state = json.loads(context)
         if not state["retrieved"]:
             action = SearchAction(
@@ -100,9 +110,12 @@ class Model:
         )
 
 
-def test_worker_discovers_evidence_and_preserves_budget_and_citations(client, db, sessions):
+def test_worker_discovers_evidence_and_preserves_budget_and_citations(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
     _, inv, run, _ = start(client)
     row = db.scalar(select(ResearchRun).where(ResearchRun.id == run["id"]))
+    assert row is not None
     row.kind = "investigation"
     db.commit()
     searcher = Searcher()
@@ -116,9 +129,13 @@ def test_worker_discovers_evidence_and_preserves_budget_and_citations(client, db
     assert detail["evidence"][0]["id"] in detail["messages"][-1]["content"]
 
 
-def test_search_replay_is_idempotent_and_exhausted_budget_blocks_network(client, db, sessions):
+def test_search_replay_is_idempotent_and_exhausted_budget_blocks_network(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
     _, _, _run, _ = start(client)
-    run_id, token = queue.claim(db)
+    claimed = queue.claim(db)
+    assert claimed is not None
+    run_id, token = claimed
     context = SourceContext(Polygon.model_validate(BODY["boundary"]))
     searcher = Searcher()
     worker = ResearchWorker(sessions, Settings(_env_file=None), searcher=searcher)
@@ -141,9 +158,13 @@ def test_search_replay_is_idempotent_and_exhausted_budget_blocks_network(client,
     assert searcher.calls == 1
 
 
-def test_checkpoint_updates_nested_state_and_fences_a_cached_run(client, db, sessions):
+def test_checkpoint_updates_nested_state_and_fences_a_cached_run(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
     start(client)
-    run_id, token = queue.claim(db)
+    claimed = queue.claim(db)
+    assert claimed is not None
+    run_id, token = claimed
     cached = queue.locked(db, run_id, token)
     db.commit()
     state = {"nested": {"tokens": 1}}
@@ -152,6 +173,7 @@ def test_checkpoint_updates_nested_state_and_fences_a_cached_run(client, db, ses
     queue.checkpoint(db, run_id, token, state)
     with sessions() as other:
         persisted = other.get(ResearchRun, run_id)
+        assert persisted is not None
         assert persisted.checkpoint == {"nested": {"tokens": 200}}
         persisted.status = "cancelled"
         other.commit()

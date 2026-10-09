@@ -28,6 +28,7 @@ from app.research.model import (
     ArtifactAction,
     ClaudeResearchModel,
     CompleteAction,
+    DocumentOcrAction,
     DocumentReadAction,
     DocumentSearchAction,
     FindingAction,
@@ -225,6 +226,7 @@ class ResearchWorker:
                     document_id=action.document_id,
                     first_page=action.first_page,
                     count=action.count,
+                    ocr_id=action.ocr_id,
                 )
             state["pending_documents"] = {"key": key, "result": pack(result)}
             queue.checkpoint(db, run_id, token, state)
@@ -525,6 +527,32 @@ class ResearchWorker:
                     elif isinstance(action, (DocumentSearchAction, DocumentReadAction)):
                         result = self._documents(
                             db, run_id, token, workspace_id, land_id, action, state
+                        )
+                    elif isinstance(action, DocumentOcrAction):
+                        from app.services import document_ocr
+
+                        ocr = document_ocr.extract(
+                            db,
+                            workspace_id,
+                            land_id,
+                            action.document_id,
+                            action.page,
+                            action.language,
+                            commit=False,
+                        )
+                        result = self._documents(
+                            db,
+                            run_id,
+                            token,
+                            workspace_id,
+                            land_id,
+                            DocumentReadAction(
+                                kind="read_document_pages",
+                                document_id=action.document_id,
+                                first_page=action.page,
+                                ocr_id=ocr.id,
+                            ),
+                            state,
                         )
                     elif isinstance(action, ScenarioAction):
                         current = queue.locked(db, run_id, token)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,13 +20,15 @@ from app.schemas.research import (
 )
 from app.services.errors import InvalidInputError
 from tests.test_land import BODY
-from tests.test_workspaces import headers
+from tests.test_workspaces import IdentityClient, headers
 from tests.test_workspaces import identity_client as _identity_client
 
 oidc_client = _identity_client
 
 
-def start(client, headers=None):
+def start(
+    client: TestClient, headers: dict[str, str] | None = None
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     land = client.post("/api/v1/land", json=BODY, headers=headers).json()
     inv = client.post(
         f"/api/v1/land/{land['id']}/investigations",
@@ -42,7 +45,7 @@ def start(client, headers=None):
     return land, inv, run.json(), body
 
 
-def evidence():
+def evidence() -> EvidenceContent:
     return EvidenceContent(
         provider="fixture",
         title="Reference survey",
@@ -56,7 +59,7 @@ def evidence():
     )
 
 
-def finding(evidence_id):
+def finding(evidence_id: uuid.UUID) -> FindingContent:
     return FindingContent(
         title="Woodland survey",
         summary="A survey documents woodland.",
@@ -67,7 +70,9 @@ def finding(evidence_id):
     )
 
 
-def test_research_pins_revision_idempotency_cancel_and_stream(client: TestClient, db: Session):
+def test_research_pins_revision_idempotency_cancel_and_stream(
+    client: TestClient, db: Session
+) -> None:
     land, inv, run, body = start(client)
     endpoint = f"/api/v1/research/investigations/{inv['id']}"
     assert client.post(endpoint + "/runs", json=body).json()["id"] == run["id"]
@@ -114,19 +119,22 @@ def test_research_pins_revision_idempotency_cancel_and_stream(client: TestClient
     assert len(db.scalars(select(Finding)).all()) == 1
 
 
-def test_expired_worker_is_fenced_and_checkpoints_survive(client: TestClient, db: Session):
+def test_expired_worker_is_fenced_and_checkpoints_survive(client: TestClient, db: Session) -> None:
     start(client)
     claimed = queue.claim(db)
     assert claimed
     run_id, first = claimed
     queue.checkpoint(db, run_id, first, {"completedSources": ["survey"]})
     run = db.get(ResearchRun, run_id)
+    assert run is not None
     run.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
     db.commit()
     reclaimed = queue.claim(db)
     assert reclaimed and reclaimed[0] == run_id and reclaimed[1] != first
     second = reclaimed[1]
-    assert db.get(ResearchRun, run_id).checkpoint == {"completedSources": ["survey"]}
+    stored_run = db.get(ResearchRun, run_id)
+    assert stored_run is not None
+    assert stored_run.checkpoint == {"completedSources": ["survey"]}
     with pytest.raises(queue.LeaseLostError):
         queue.heartbeat(db, run_id, first)
     assert queue.claim(db) is None
@@ -135,13 +143,17 @@ def test_expired_worker_is_fenced_and_checkpoints_survive(client: TestClient, db
     assert queue.claim(db) is None
 
 
-def test_citations_must_belong_to_the_investigation(client: TestClient, db: Session):
+def test_citations_must_belong_to_the_investigation(client: TestClient, db: Session) -> None:
     start(client)
-    first_id, first_lease = queue.claim(db)
+    claimed = queue.claim(db)
+    assert claimed is not None
+    first_id, first_lease = claimed
     eid = queue.save_evidence(db, first_id, first_lease, "survey", evidence())
     queue.finish(db, first_id, first_lease, "succeeded", "Done")
     start(client)
-    other_id, other_lease = queue.claim(db)
+    claimed = queue.claim(db)
+    assert claimed is not None
+    other_id, other_lease = claimed
     with pytest.raises(InvalidInputError):
         queue.save_finding(db, other_id, other_lease, "foreign", finding(eid))
     db.rollback()
@@ -163,7 +175,9 @@ def test_citations_must_belong_to_the_investigation(client: TestClient, db: Sess
     assert not db.scalars(select(Finding)).all()
 
 
-def test_private_research_and_events_follow_workspace_membership(oidc_client, db: Session):
+def test_private_research_and_events_follow_workspace_membership(
+    oidc_client: IdentityClient, db: Session
+) -> None:
     client, token = oidc_client
     alice = headers(token())
     workspace = client.post("/api/v1/workspaces", headers=alice, json={"name": "Private"}).json()[
@@ -171,7 +185,9 @@ def test_private_research_and_events_follow_workspace_membership(oidc_client, db
     ]
     alice = headers(token(), workspace)
     land, inv, _run, _ = start(client, alice)
-    run_id, lease = queue.claim(db)
+    claimed = queue.claim(db)
+    assert claimed is not None
+    run_id, lease = claimed
     eid = queue.save_evidence(db, run_id, lease, "survey", evidence())
     fid = queue.save_finding(db, run_id, lease, "finding", finding(eid))
     other = client.post(
@@ -196,7 +212,7 @@ def test_private_research_and_events_follow_workspace_membership(oidc_client, db
     )
 
 
-def test_overview_is_idempotent_per_boundary_revision(client: TestClient):
+def test_overview_is_idempotent_per_boundary_revision(client: TestClient) -> None:
     area = client.post("/api/v1/land", json=BODY).json()
     url = f"/api/v1/land/{area['id']}/overview"
     first = client.post(url, json={"boundaryRevision": 1})

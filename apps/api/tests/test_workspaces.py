@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
+from typing import Any, Protocol
 
 import jwt
 import pytest
@@ -19,8 +20,15 @@ ISSUER = "https://identity.example.test/"
 AUDIENCE = "land-api"
 
 
+class TokenFactory(Protocol):
+    def __call__(self, subject: str = "alice", **overrides: Any) -> str: ...
+
+
+IdentityClient = tuple[TestClient, TokenFactory]
+
+
 @pytest.fixture
-def identity_client(db: Session, monkeypatch: pytest.MonkeyPatch):
+def identity_client(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[IdentityClient]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwk = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
     jwk.update(kid="test", use="sig", alg="RS256")
@@ -42,7 +50,7 @@ def identity_client(db: Session, monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides[_db] = get_db
 
-    def token(subject="alice", **overrides):
+    def token(subject: str = "alice", **overrides: Any) -> str:
         now = int(time.time())
         claims = {"sub": subject, "iss": ISSUER, "aud": AUDIENCE, "iat": now, "exp": now + 300}
         claims.update(overrides)
@@ -53,14 +61,14 @@ def identity_client(db: Session, monkeypatch: pytest.MonkeyPatch):
     jwks_client.cache_clear()
 
 
-def headers(token, workspace=None):
+def headers(token: str, workspace: str | None = None) -> dict[str, str]:
     result = {"Authorization": "Bearer " + token}
     if workspace:
         result["X-Workspace-ID"] = workspace
     return result
 
 
-def test_workspace_isolation_roles_and_revision_reads(identity_client):
+def test_workspace_isolation_roles_and_revision_reads(identity_client: IdentityClient) -> None:
     client, token = identity_client
     alice = headers(token())
     bob = headers(token("bob"))
@@ -144,7 +152,7 @@ def test_workspace_isolation_roles_and_revision_reads(identity_client):
     )
 
 
-def test_oidc_rejects_invalid_claims_and_pilot_bypass(identity_client):
+def test_oidc_rejects_invalid_claims_and_pilot_bypass(identity_client: IdentityClient) -> None:
     client, token = identity_client
     assert client.get("/api/v1/workspaces").status_code == 401
     for invalid in (
@@ -167,7 +175,7 @@ def test_oidc_rejects_invalid_claims_and_pilot_bypass(identity_client):
     )
 
 
-def test_oidc_requires_complete_secure_configuration():
+def test_oidc_requires_complete_secure_configuration() -> None:
     with pytest.raises(ValueError, match="requires issuer"):
         Settings(_env_file=None, land_auth_mode="oidc")
     with pytest.raises(ValueError, match="HTTPS"):

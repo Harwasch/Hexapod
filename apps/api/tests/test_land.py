@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import uuid
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +14,7 @@ from app.main import create_app
 from app.models.land import LandBoundaryRevision
 
 
-def polygon(west: float = -122.14, east: float = -122.13) -> dict:
+def polygon(west: float = -122.14, east: float = -122.13) -> dict[str, Any]:
     return {
         "type": "Polygon",
         "coordinates": [
@@ -22,7 +23,7 @@ def polygon(west: float = -122.14, east: float = -122.13) -> dict:
     }
 
 
-BODY = {
+BODY: dict[str, Any] = {
     "name": "My land",
     "description": "An independent study area",
     "boundary": polygon(),
@@ -127,7 +128,7 @@ def test_corridor_width_is_total_width_in_metres(client: TestClient) -> None:
 )
 def test_corridor_rejects_degenerate_or_unsupported_extents(
     client: TestClient,
-    coordinates: list,
+    coordinates: list[list[float]],
     width: float,
 ) -> None:
     response = client.post(

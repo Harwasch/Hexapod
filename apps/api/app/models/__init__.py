@@ -22,6 +22,7 @@ from app.models.land_document import (
     LandDocument,
     LandDocumentBlob,
     LandDocumentLink,
+    LandDocumentOcr,
     LandDocumentPage,
 )
 from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureRevision
@@ -65,6 +66,7 @@ __all__ = [
     "LandDocument",
     "LandDocumentBlob",
     "LandDocumentLink",
+    "LandDocumentOcr",
     "LandDocumentPage",
     "LandFeature",
     "LandFeatureRevision",

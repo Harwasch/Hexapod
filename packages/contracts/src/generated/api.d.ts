@@ -684,6 +684,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/documents/{document_id}/ocr/{ocr_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Ocr */
+        get: operations["get_ocr_api_v1_land__land_id__documents__document_id__ocr__ocr_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/documents/{document_id}/pages/{page}": {
         parameters: {
             query?: never;
@@ -695,6 +712,41 @@ export interface paths {
         get: operations["page_api_v1_land__land_id__documents__document_id__pages__page__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/documents/{document_id}/pages/{page}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page Image */
+        get: operations["page_image_api_v1_land__land_id__documents__document_id__pages__page__image_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/documents/{document_id}/pages/{page}/ocr": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page Ocr */
+        get: operations["page_ocr_api_v1_land__land_id__documents__document_id__pages__page__ocr_get"];
+        put?: never;
+        /** Run Ocr */
+        post: operations["run_ocr_api_v1_land__land_id__documents__document_id__pages__page__ocr_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -713,6 +765,23 @@ export interface paths {
         put?: never;
         /** Link */
         post: operations["link_api_v1_land__land_id__documents_links_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/documents/ocr-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ocr Capabilities */
+        get: operations["ocr_capabilities_api_v1_land__land_id__documents_ocr_capabilities_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2763,10 +2832,70 @@ export interface components {
              * Format: uuid
              */
             landId: string;
+            /** Ocrid */
+            ocrId?: string | null;
             /** Page */
             page: number;
             /** Sha256 */
             sha256: string;
+        };
+        /** DocumentOcrCapabilities */
+        DocumentOcrCapabilities: {
+            /** Available */
+            available: boolean;
+            /** Languages */
+            languages: string[];
+            /** Reason */
+            reason: string;
+        };
+        /** DocumentOcrRead */
+        DocumentOcrRead: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Documentid
+             * Format: uuid
+             */
+            documentId: string;
+            /** Engine */
+            engine: string;
+            /** Engineversion */
+            engineVersion: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Language */
+            language: string;
+            /** Meanwordconfidence */
+            meanWordConfidence: number | null;
+            /** Page */
+            page: number;
+            /** Rendermaxpixels */
+            renderMaxPixels: number;
+            /** Sha256 */
+            sha256: string;
+            /** Text */
+            text: string;
+            /** Textsha256 */
+            textSha256: string;
+            /** Truncated */
+            truncated: boolean;
+            /** Warnings */
+            warnings: string[];
+        };
+        /** DocumentOcrRequest */
+        DocumentOcrRequest: {
+            /**
+             * Language
+             * @default eng
+             * @enum {string}
+             */
+            language?: "eng" | "spa" | "fra" | "deu";
         };
         /** DocumentOutput */
         DocumentOutput: {
@@ -2803,6 +2932,8 @@ export interface components {
             documentId: string;
             /** Excerpt */
             excerpt: string;
+            /** Ocrid */
+            ocrId?: string | null;
             /** Page */
             page: number;
             /** Title */
@@ -6169,6 +6300,9 @@ export type SchemaCzmlSource = components['schemas']['CzmlSource'];
 export type SchemaDocumentLinkCreate = components['schemas']['DocumentLinkCreate'];
 export type SchemaDocumentLinkRead = components['schemas']['DocumentLinkRead'];
 export type SchemaDocumentLocator = components['schemas']['DocumentLocator'];
+export type SchemaDocumentOcrCapabilities = components['schemas']['DocumentOcrCapabilities'];
+export type SchemaDocumentOcrRead = components['schemas']['DocumentOcrRead'];
+export type SchemaDocumentOcrRequest = components['schemas']['DocumentOcrRequest'];
 export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
 export type SchemaDocumentPageRead = components['schemas']['DocumentPageRead'];
 export type SchemaDocumentSearchHit = components['schemas']['DocumentSearchHit'];
@@ -9363,6 +9497,68 @@ export interface operations {
             };
         };
     };
+    get_ocr_api_v1_land__land_id__documents__document_id__ocr__ocr_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                document_id: string;
+                land_id: string;
+                ocr_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentOcrRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     page_api_v1_land__land_id__documents__document_id__pages__page__get: {
         parameters: {
             query?: never;
@@ -9385,6 +9581,197 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentPageRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    page_image_api_v1_land__land_id__documents__document_id__pages__page__image_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                document_id: string;
+                land_id: string;
+                page: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "image/png": string;
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    page_ocr_api_v1_land__land_id__documents__document_id__pages__page__ocr_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                document_id: string;
+                land_id: string;
+                page: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentOcrRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    run_ocr_api_v1_land__land_id__documents__document_id__pages__page__ocr_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                document_id: string;
+                land_id: string;
+                page: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DocumentOcrRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentOcrRead"];
                 };
             };
             /** @description Missing or wrong write token */
@@ -9512,6 +9899,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentLinkRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    ocr_capabilities_api_v1_land__land_id__documents_ocr_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentOcrCapabilities"];
                 };
             };
             /** @description Missing or wrong write token */

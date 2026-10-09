@@ -13,7 +13,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
-| Historical and rights workflows | Private PDF/text originals, bounded page extraction, exact private citations, record search, dated document relationships and agent retrieval | OCR, archive imagery/georeferencing and deeper instrument/parcel lineage evaluation |
+| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships and agent retrieval | Archive imagery/georeferencing and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
 ## Product direction
@@ -649,3 +649,40 @@ the original, prepared a page-specific question, reloaded and found the page thr
 desktop/mobile checks reported no browser errors or horizontal overflow. The migration
 rollback test now ends its read transaction before running DDL on another connection.
 Live model behavior still needs configured model credentials. No deployment occurred.
+
+## Implemented increment: scanned records and original-page inspection
+
+Migration `0018` stores immutable page/language OCR readings separately from native PDF
+text. Originals and earlier citations remain unchanged. Tesseract reads a single PDF page
+rendered by Poppler at a maximum dimension of 2,400 pixels; output is capped at 20,000
+characters. The disposable process has memory, CPU, file-size and wall-time limits, and
+invokes fixed tools with validated scalar arguments. Unsupported engines/languages or
+processing limits produce an explicit error while preserving the original.
+
+The original page can be viewed and zoomed in the Records/evidence viewer through a private
+PNG endpoint. Image blobs are revoked when the viewer closes. OCR shows its engine version,
+original and extracted-text hashes, extraction date, language, truncation and word-confidence
+score. The score is explicitly not a calibrated probability of correctness. Users can select
+an extraction for a question; machine text stays labeled as unverified. Text search includes
+OCR and opens the exact matching extraction. Repeated extraction requests return the existing
+immutable reading. The agent's `ocr_document_page` tool returns the same private page evidence
+and pins the extraction ID; its writes join the worker's fenced checkpoint transaction.
+
+The API image now includes Poppler and Tesseract with English, Spanish, French and German
+language data; the UI exposes only installed supported languages. API CI installs the English
+runtime and exercises an image-only PDF. The local runtime has English installed, so only
+English OCR has been exercised here. Other languages require their installed data packs.
+
+Validation includes real OCR and private PNG rendering, immutable retries, unchanged original
+bytes/native text, searchable extraction IDs, cross-land denial and a typed agent OCR fixture.
+The local browser journey uploads an image-only synthetic PDF, views the original, reads it
+with OCR, prepares a question pinned to that extraction, and finds it again after reload.
+Desktop/mobile checks report no browser errors or horizontal overflow. A duplicate React key
+between the image and OCR components was caught in this journey and corrected.
+
+Full API static checking exposed missing annotations in earlier land-feature tests. Those
+tests now use typed clients, sessions, model-tool unions and explicit assertions for optional
+results; no type-checking exclusions were added. `mypy .` passes all 226 API source files,
+and full API lint/format checks pass. Migration checks and the focused frontend tests pass.
+This extends the records workflow; it does not complete raster analysis, archives, domain
+analysis, fleet integration or the full acceptance/handoff plan.

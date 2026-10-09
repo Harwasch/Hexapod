@@ -708,3 +708,32 @@
   border-top: 1px solid var(--control-border);
   padding-top: 14px;
 }
+
+.land-document-image figure {
+  margin: 12px 0;
+}
+.land-document-image img {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: white;
+  border-radius: 8px;
+}
+.land-document-image figcaption {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.land-ocr {
+  border-top: 1px solid var(--border);
+  margin-top: 18px;
+  padding-top: 12px;
+}
+.land-ocr .land-footnote {
+  overflow-wrap: anywhere;
+}
+.land-page-viewport {
+  overflow: auto;
+  max-height: 60vh;
+  border-radius: 8px;
+}

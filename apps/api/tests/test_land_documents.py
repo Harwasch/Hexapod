@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import io
 import uuid
+from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.workspace import Workspace
 from app.schemas.land_documents import LandDocumentCreate
@@ -17,7 +20,13 @@ from tests.test_land import BODY
 TEXT = b"Deed recorded in 1890. Mineral rights are reserved.\fA later amendment may change access rights."
 
 
-def initiate(client, land_id, data=TEXT, media_type="text/plain", **overrides):
+def initiate(
+    client: TestClient,
+    land_id: str,
+    data: bytes = TEXT,
+    media_type: str = "text/plain",
+    **overrides: Any,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
     payload = {
         "title": "Historic deed",
         "filename": "deed.txt" if media_type == "text/plain" else "deed.pdf",
@@ -36,7 +45,13 @@ def initiate(client, land_id, data=TEXT, media_type="text/plain", **overrides):
     return path, payload, result.json()
 
 
-def upload(client, land_id, data=TEXT, media_type="text/plain", **overrides):
+def upload(
+    client: TestClient,
+    land_id: str,
+    data: bytes = TEXT,
+    media_type: str = "text/plain",
+    **overrides: Any,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
     path, payload, document = initiate(client, land_id, data, media_type, **overrides)
     response = client.put(
         f"{path}/{document['id']}/content",
@@ -47,7 +62,7 @@ def upload(client, land_id, data=TEXT, media_type="text/plain", **overrides):
     return path, payload, response.json()
 
 
-def pdf(with_text=True):
+def pdf(with_text: bool = True) -> bytes:
     writer = PdfWriter()
     page = writer.add_blank_page(width=300, height=300)
     if with_text:
@@ -69,7 +84,9 @@ def pdf(with_text=True):
     return buffer.getvalue()
 
 
-def test_private_immutable_originals_pages_idempotency_and_search(client, db):
+def test_private_immutable_originals_pages_idempotency_and_search(
+    client: TestClient, db: Session
+) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     path, payload, document = upload(client, land["id"])
     assert document["status"] == "ready" and document["pageCount"] == 2
@@ -102,7 +119,7 @@ def test_private_immutable_originals_pages_idempotency_and_search(client, db):
     )
 
 
-def test_pdf_extraction_scans_corruption_truncation_and_upload_bounds(client):
+def test_pdf_extraction_scans_corruption_truncation_and_upload_bounds(client: TestClient) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     path, _, document = upload(client, land["id"], pdf(), "application/pdf")
     assert document["status"] == "ready", document
@@ -120,7 +137,7 @@ def test_pdf_extraction_scans_corruption_truncation_and_upload_bounds(client):
     assert client.get(f"{path}/{pending['id']}/content").status_code == 404
 
 
-def test_document_relationships_pin_existing_pages_and_stay_in_land(client):
+def test_document_relationships_pin_existing_pages_and_stay_in_land(client: TestClient) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     path, _, source = upload(client, land["id"])
     _, _, target = upload(
@@ -149,7 +166,7 @@ def test_document_relationships_pin_existing_pages_and_stay_in_land(client):
     assert len(client.get(path + "/links").json()) == 1
 
 
-def test_pending_uploads_reserve_workspace_quota(client, db):
+def test_pending_uploads_reserve_workspace_quota(client: TestClient, db: Session) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     _path, payload, document = initiate(client, land["id"])
     from app.models.workspace import PILOT_WORKSPACE_ID
@@ -166,9 +183,10 @@ def test_pending_uploads_reserve_workspace_quota(client, db):
     assert document["status"] == "awaiting-upload"
 
 
+@pytest.mark.parametrize("use_ocr", [False, True])
 def test_agent_cites_exact_private_document_page_without_inventing_a_public_url(
-    client, db, sessions
-):
+    client: TestClient, db: Session, sessions: sessionmaker[Session], use_ocr: bool
+) -> None:
     import json
 
     from sqlalchemy import select
@@ -178,6 +196,7 @@ def test_agent_cites_exact_private_document_page_without_inventing_a_public_url(
     from app.research.model import (
         CompleteAction,
         DecisionResult,
+        DocumentOcrAction,
         DocumentReadAction,
         FindingAction,
         ResearchDecision,
@@ -187,17 +206,33 @@ def test_agent_cites_exact_private_document_page_without_inventing_a_public_url(
     from tests.test_research import start
 
     land, investigation, run, _ = start(client)
-    _path, _payload, document = upload(client, land["id"])
+    if use_ocr:
+        from app.services import document_ocr
+
+        if not document_ocr.capabilities().available:
+            pytest.skip("OCR engine unavailable")
+    _path, _payload, document = upload(
+        client,
+        land["id"],
+        pdf() if use_ocr else TEXT,
+        "application/pdf" if use_ocr else "text/plain",
+    )
     row = db.scalar(select(ResearchRun).where(ResearchRun.id == run["id"]))
+    assert row is not None
     row.kind = "investigation"
     db.commit()
 
     class Model:
-        def decide(self, context, max_tokens):
+        def decide(self, context: str, max_tokens: int) -> DecisionResult:
+            action: CompleteAction | DocumentOcrAction | DocumentReadAction | FindingAction
             state = json.loads(context)
             if not state["previousActions"]:
                 assert state["landDocuments"][0]["id"] == document["id"]
-                action = DocumentReadAction(kind="read_document_pages", document_id=document["id"])
+                action = (
+                    DocumentOcrAction(kind="ocr_document_page", document_id=document["id"], page=1)
+                    if use_ocr
+                    else DocumentReadAction(kind="read_document_pages", document_id=document["id"])
+                )
             else:
                 source = next(iter(state["retrieved"].values()))
                 identifier = source["evidenceIds"][0]
@@ -236,4 +271,91 @@ def test_agent_cites_exact_private_document_page_without_inventing_a_public_url(
         evidence["document"]["page"] == 1 and evidence["document"]["sha256"] == document["sha256"]
     )
     assert evidence["spatialRelevance"] == "unresolved"
-    assert "Mineral rights" in evidence["excerpt"]
+    if use_ocr:
+        reading = client.get(
+            f"/api/v1/land/{land['id']}/documents/{document['id']}/ocr/{evidence['document']['ocrId']}"
+        ).json()
+        assert evidence["excerpt"] == reading["text"]
+        assert "1890" in evidence["excerpt"]
+    else:
+        assert "Mineral rights" in evidence["excerpt"]
+    assert bool(evidence["document"]["ocrId"]) == use_ocr
+
+
+def test_scanned_pdf_ocr_is_private_immutable_searchable_and_citable(
+    client: TestClient, db: Session
+) -> None:
+    from PIL import Image, ImageDraw, ImageFont
+
+    from app.models.workspace import PILOT_WORKSPACE_ID
+    from app.research.documents import retrieve
+    from app.services import document_ocr
+
+    if not document_ocr.capabilities().available:
+        pytest.skip("Install Poppler and Tesseract with English language data for OCR integration")
+    image = Image.new("RGB", (1400, 400), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (60, 80), "MINERAL RIGHTS RESERVED", fill="black", font=ImageFont.load_default(size=55)
+    )
+    draw.text((60, 180), "Recorded in 1890", fill="black", font=ImageFont.load_default(size=45))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PDF")
+    original = buffer.getvalue()
+    land = client.post("/api/v1/land", json=BODY).json()
+    path, _, document = upload(client, land["id"], original, "application/pdf")
+    assert document["status"] == "needs-ocr"
+    url = f"{path}/{document['id']}/pages/1/ocr"
+    response = client.post(url, json={"language": "eng"})
+    assert response.status_code == 200, response.text
+    ocr = response.json()
+    assert "MINERAL RIGHTS RESERVED" in ocr["text"]
+    assert ocr["sha256"] == hashlib.sha256(original).hexdigest()
+    assert ocr["textSha256"] == hashlib.sha256(ocr["text"].encode()).hexdigest()
+    assert ocr["engine"] == "Tesseract" and ocr["warnings"]
+    assert client.post(url, json={"language": "eng"}).json() == ocr
+    assert len(client.get(url).json()) == 1
+    assert client.get(f"{path}/{document['id']}/pages/1").json()["text"] == ""
+    assert client.get(f"{path}/{document['id']}/content").content == original
+    preview = client.get(f"{path}/{document['id']}/pages/1/image")
+    assert preview.status_code == 200 and preview.content.startswith(b"\x89PNG")
+    assert preview.headers["cache-control"] == "private, no-store"
+    hits = client.get(path + "/search", params={"q": "MINERAL"}).json()
+    assert hits[0]["ocrId"] == ocr["id"]
+    found = retrieve(db, PILOT_WORKSPACE_ID, uuid.UUID(land["id"]), query="MINERAL")
+    citation = found.evidence[0][1]
+    assert citation.document is not None
+    assert str(citation.document.ocr_id) == ocr["id"]
+    assert "Machine OCR" in citation.relevance_note
+    assert found.data["pages"][0]["extraction"] == "machine-ocr"
+    other = client.post("/api/v1/land", json={**BODY, "name": "Other land"}).json()
+    assert (
+        client.get(
+            f"/api/v1/land/{other['id']}/documents/{document['id']}/ocr/{ocr['id']}"
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(url.replace("/pages/1/", "/pages/2/"), json={"language": "eng"}).status_code
+        == 404
+    )
+    assert client.post(url, json={"language": "eng;cat"}).status_code == 422
+
+
+def test_ocr_unavailable_does_not_change_the_original(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.schemas.land_documents import DocumentOcrCapabilities
+    from app.services import document_ocr
+
+    monkeypatch.setattr(
+        document_ocr,
+        "capabilities",
+        lambda: DocumentOcrCapabilities(available=False, languages=[], reason="Missing OCR engine"),
+    )
+    land = client.post("/api/v1/land", json=BODY).json()
+    original = pdf(False)
+    path, _, document = upload(client, land["id"], original, "application/pdf")
+    response = client.post(f"{path}/{document['id']}/pages/1/ocr", json={"language": "eng"})
+    assert response.status_code == 422
+    assert client.get(f"{path}/{document['id']}/content").content == original

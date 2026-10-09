@@ -24,7 +24,9 @@ export function LandDocuments({ land }: { land: LandArea }) {
   const cache = useQueryClient();
   const [offset, setOffset] = useState(0),
     [linkOffset, setLinkOffset] = useState(0);
-  const [selected, setSelected] = useState<{ id: string; page: number } | null>(null);
+  const [selected, setSelected] = useState<{ id: string; page: number; ocrId?: string } | null>(
+    null,
+  );
   const [query, setQuery] = useState(""),
     [search, setSearch] = useState("");
   const [searchOffset, setSearchOffset] = useState(0);
@@ -396,12 +398,15 @@ export function LandDocuments({ land }: { land: LandArea }) {
         <div className="land-candidates">
           {results.data?.map((hit) => (
             <button
-              key={`${hit.documentId}:${hit.page}`}
+              key={`${hit.documentId}:${hit.page}:${hit.ocrId ?? "native"}`}
               type="button"
-              onClick={() => setSelected({ id: hit.documentId, page: hit.page })}
+              onClick={() =>
+                setSelected({ id: hit.documentId, page: hit.page, ocrId: hit.ocrId ?? undefined })
+              }
             >
               <strong>
                 {hit.title} · page {hit.page}
+                {hit.ocrId ? " · machine OCR" : ""}
               </strong>
               <span>{hit.excerpt}</span>
             </button>
@@ -478,8 +483,10 @@ export function LandDocuments({ land }: { land: LandArea }) {
             landId={land.id}
             documentId={selected.id}
             initialPage={selected.page}
-            onPageChange={(page) => setSelected({ ...selected, page })}
+            onPageChange={(page) => setSelected({ id: selected.id, page })}
             onUploaded={refresh}
+            pinnedOcrId={selected.ocrId}
+            onOcrSelected={(ocrId) => setSelected({ ...selected, ocrId })}
           />
         </div>
       )}
@@ -489,7 +496,7 @@ export function LandDocuments({ land }: { land: LandArea }) {
             type="button"
             onClick={() => {
               const context = useLandContext.getState();
-              const prompt = `Investigate document ${selected.id}, page ${selected.page}. Explain what it says about this land, trace any related records, and distinguish historical statements from rights or conditions that are established today. Cite the exact pages and flag missing evidence.`;
+              const prompt = `Investigate document ${selected.id}, page ${selected.page}${selected.ocrId ? `, OCR extraction ${selected.ocrId} (unverified machine reading)` : ""}. Explain what it says about this land, trace any related records, and distinguish historical statements from rights or conditions that are established today. Cite the exact pages and flag missing evidence.`;
               context.setResearchQuestion(
                 [context.researchQuestion, prompt].filter(Boolean).join("\n\n"),
               );

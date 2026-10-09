@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.scenarios import analyze
 from app.models.workspace import Workspace
@@ -12,7 +15,7 @@ from app.services import scenarios
 from app.services.errors import InvalidInputError, NotFoundError
 from tests.test_land import BODY
 
-SOLAR = {
+SOLAR: dict[str, Any] = {
     "kind": "solar",
     "usableRoofAreaM2": 100,
     "moduleEfficiency": 0.2,
@@ -39,7 +42,7 @@ SOLAR = {
     "currency": "USD",
     "assumptions": "Deterministic test assumptions",
 }
-RESTORATION = {
+RESTORATION: dict[str, Any] = {
     "kind": "restoration",
     "referenceEcosystem": "Native meadow",
     "surveyDate": "2026-01-01",
@@ -72,14 +75,17 @@ RESTORATION = {
 }
 
 
-def test_solar_cash_flow_units_financing_and_sensitivity():
+def test_solar_cash_flow_units_financing_and_sensitivity() -> None:
     result = analyze(SolarInputs.model_validate(SOLAR), 10000)
     assert result.summary["capacityKwDc"] == 20
     assert result.summary["firstYearGenerationKwh"] == 20000
     assert result.rows[1]["netCashFlow"] == 3900
     assert result.summary["netPresentValue"] == 29000
     assert result.summary["paybackYear"] == 3
-    assert result.sensitivity[0]["netPresentValue"] < result.summary["netPresentValue"]
+    lower_npv = result.sensitivity[0]["netPresentValue"]
+    base_npv = result.summary["netPresentValue"]
+    assert isinstance(lower_npv, int | float) and isinstance(base_npv, int | float)
+    assert lower_npv < base_npv
     financed = analyze(
         SolarInputs.model_validate({**SOLAR, "financedFraction": 0.5, "loanInterestRate": 0}), 10000
     )
@@ -103,7 +109,7 @@ def test_solar_cash_flow_units_financing_and_sensitivity():
         SolarInputs.model_validate({**SOLAR, "discountRate": float("nan")})
 
 
-def test_restoration_cover_costs_and_invalid_surveys():
+def test_restoration_cover_costs_and_invalid_surveys() -> None:
     result = analyze(RestorationInputs.model_validate(RESTORATION), 20000)
     assert result.summary["areaHa"] == 2
     assert result.rows[0]["baselineHa"] == 0.4
@@ -118,7 +124,9 @@ def test_restoration_cover_costs_and_invalid_surveys():
         analyze(RestorationInputs.model_validate(RESTORATION), 100)
 
 
-def test_scenario_revisions_are_pinned_private_and_immutable(client, db):
+def test_scenario_revisions_are_pinned_private_and_immutable(
+    client: TestClient, db: Session
+) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     path = f"/api/v1/land/{land['id']}/scenarios"
     payload = {
@@ -167,7 +175,9 @@ def test_scenario_revisions_are_pinned_private_and_immutable(client, db):
         scenarios.scoped(db, private.id, uuid.UUID(land["id"]), uuid.UUID(scenario["id"]))
 
 
-def test_research_agent_creates_a_reproducible_scenario(client, db, sessions):
+def test_research_agent_creates_a_reproducible_scenario(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
     import json
 
     from sqlalchemy import select
@@ -180,11 +190,13 @@ def test_research_agent_creates_a_reproducible_scenario(client, db, sessions):
 
     land, _inv, run, _ = start(client)
     row = db.scalar(select(ResearchRun).where(ResearchRun.id == run["id"]))
+    assert row is not None
     row.kind = "investigation"
     db.commit()
 
     class Model:
-        def decide(self, context, max_tokens):
+        def decide(self, context: str, max_tokens: int) -> DecisionResult:
+            action: CompleteAction | ScenarioAction
             state = json.loads(context)
             action = (
                 ScenarioAction(

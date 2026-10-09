@@ -69,6 +69,7 @@ FROM ubuntu:24.04 AS runtime
 # one (tools/pipeline/video.py says why).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3.12 ca-certificates colmap \
+    poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa tesseract-ocr-fra tesseract-ocr-deu \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # uid 1000 is the stock image's `ubuntu` user; the worker's volume was written as uid 1000

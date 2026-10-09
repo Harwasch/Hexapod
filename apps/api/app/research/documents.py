@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.research.providers.base import SourceResult
 from app.schemas.land_documents import DocumentLocator
 from app.schemas.research import EvidenceContent
-from app.services import land_documents
+from app.services import document_ocr, land_documents
 
 
 def retrieve(
@@ -21,9 +22,21 @@ def retrieve(
     document_id: uuid.UUID | None = None,
     first_page: int = 1,
     count: int = 1,
+    ocr_id: uuid.UUID | None = None,
 ) -> SourceResult:
-    records = []
-    if query is not None:
+    records: list[dict[str, Any]] = []
+    if ocr_id is not None and document_id is not None:
+        ocr = document_ocr.read(document_ocr.scoped(db, workspace_id, land_id, document_id, ocr_id))
+        records = [
+            {
+                "document_id": document_id,
+                "page": ocr.page,
+                "excerpt": ocr.text,
+                "truncated": ocr.truncated,
+                "ocr_id": ocr.id,
+            }
+        ]
+    elif query is not None:
         records = [
             hit.model_dump() for hit in land_documents.search(db, workspace_id, land_id, query)
         ]
@@ -52,7 +65,9 @@ def retrieve(
             continue
         meta = document.metadata_json
         excerpt = record["excerpt"]
-        key = f"{document.id}/page/{record['page']}/{hashlib.sha256(excerpt.encode()).hexdigest()[:16]}"
+        extraction_id = record.get("ocr_id")
+        passage_hash = hashlib.sha256(excerpt.encode()).hexdigest()[:16]
+        key = f"{document.id}/page/{record['page']}/{extraction_id or 'native'}/{passage_hash}"
         result.evidence.append(
             (
                 key,
@@ -65,6 +80,7 @@ def retrieve(
                         document_id=document.id,
                         page=record["page"],
                         sha256=document.sha256,
+                        ocr_id=extraction_id,
                     ),
                     license=meta["license"],
                     attribution=meta["source_note"],
@@ -73,7 +89,12 @@ def retrieve(
                     excerpt=excerpt,
                     snapshot_hash=document.sha256,
                     spatial_relevance="unresolved",
-                    relevance_note=meta["relevance_note"],
+                    relevance_note=meta["relevance_note"][:1800]
+                    + (
+                        " Machine OCR; verify names, numbers and rights language against the original."
+                        if extraction_id
+                        else ""
+                    ),
                 ),
             )
         )
@@ -86,6 +107,8 @@ def retrieve(
                 "documentDate": meta.get("document_date"),
                 "recordedDate": meta.get("recorded_date"),
                 "recordingNumber": meta.get("recording_number"),
+                "extraction": "machine-ocr" if extraction_id else "native-text",
+                "ocrId": str(extraction_id) if extraction_id else None,
             }
         )
     return result

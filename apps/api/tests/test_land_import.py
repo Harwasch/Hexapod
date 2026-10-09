@@ -3,12 +3,15 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from collections.abc import Mapping
+from pathlib import Path
 
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 from pyogrio.raw import write
 from pyproj import Transformer
-from shapely.geometry import Polygon, mapping, shape
+from shapely.geometry import LinearRing, Polygon, mapping, shape
 from shapely.ops import transform
 
 from app.services.errors import InvalidInputError
@@ -20,7 +23,7 @@ POLYGON = Polygon(
 )
 
 
-def archive(files):
+def archive(files: Mapping[str, str | bytes]) -> bytes:
     result = io.BytesIO()
     with zipfile.ZipFile(result, "w") as target:
         for name, content in files.items():
@@ -28,16 +31,16 @@ def archive(files):
     return result.getvalue()
 
 
-def test_projected_geojson_preserves_exclusion():
+def test_projected_geojson_preserves_exclusion() -> None:
     projected = transform(Transformer.from_crs(4326, 3857, always_xy=True).transform, POLYGON)
     result = import_boundary(json.dumps(mapping(projected)).encode(), "land.geojson", "EPSG:3857")
-    assert result.status == "ready"
+    assert result.status == "ready" and result.boundary is not None
     assert shape(result.boundary.model_dump()).symmetric_difference(POLYGON).area < 1e-12
     assert result.warnings and result.source_crs == "EPSG:3857"
 
 
-def test_kml_kmz_preserve_holes_and_reject_external_entities():
-    def coordinates(ring):
+def test_kml_kmz_preserve_holes_and_reject_external_entities() -> None:
+    def coordinates(ring: LinearRing) -> str:
         return " ".join(f"{x},{y},0" for x, y in ring.coords)
 
     kml = f"""<kml xmlns="http://www.opengis.net/kml/2.2"><Placemark><Polygon>
@@ -46,7 +49,7 @@ def test_kml_kmz_preserve_holes_and_reject_external_entities():
     </Polygon></Placemark></kml>""".encode()
     for data, name in [(kml, "land.kml"), (archive({"doc.kml": kml}), "land.kmz")]:
         result = import_boundary(data, name)
-        assert result.status == "ready"
+        assert result.status == "ready" and result.boundary is not None
         assert shape(result.boundary.model_dump()).equals(POLYGON)
     with pytest.raises(InvalidInputError):
         import_boundary(
@@ -56,15 +59,15 @@ def test_kml_kmz_preserve_holes_and_reject_external_entities():
         import_boundary(archive({"../doc.kml": kml}), "land.kmz")
 
 
-def test_repair_requires_explicit_preview():
+def test_repair_requires_explicit_preview() -> None:
     invalid = b'{"type":"Polygon","coordinates":[[[0,0],[1,1],[0,1],[1,0],[0,0]]]}'
     assert import_boundary(invalid, "land.json").status == "needs-repair"
     repaired = import_boundary(invalid, "land.json", repair=True)
-    assert repaired.status == "ready" and repaired.warnings
+    assert repaired.status == "ready" and repaired.warnings and repaired.boundary is not None
     assert shape(repaired.boundary.model_dump()).is_valid
 
 
-def test_shapefile_requires_crs_and_reprojects(tmp_path):
+def test_shapefile_requires_crs_and_reprojects(tmp_path: Path) -> None:
     projected = transform(Transformer.from_crs(4326, 3857, always_xy=True).transform, POLYGON)
     path = tmp_path / "land.shp"
     write(
@@ -78,14 +81,14 @@ def test_shapefile_requires_crs_and_reprojects(tmp_path):
     )
     files = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
     result = import_boundary(archive(files), "land.zip")
-    assert result.status == "ready"
+    assert result.status == "ready" and result.boundary is not None
     assert shape(result.boundary.model_dump()).symmetric_difference(POLYGON).area < 1e-12
     files.pop("land.prj")
     assert import_boundary(archive(files), "land.zip").status == "needs-crs"
     assert import_boundary(archive(files), "land.zip", "EPSG:3857").status == "ready"
 
 
-def test_geopackage_layer_choice(tmp_path):
+def test_geopackage_layer_choice(tmp_path: Path) -> None:
     path = tmp_path / "land.gpkg"
     for layer in ("east", "west"):
         write(
@@ -101,10 +104,14 @@ def test_geopackage_layer_choice(tmp_path):
     result = import_boundary(path.read_bytes(), "land.gpkg")
     assert result.status == "choose-layer" and set(result.layers) == {"east", "west"}
     result = import_boundary(path.read_bytes(), "land.gpkg", layer="west")
-    assert result.status == "ready" and shape(result.boundary.model_dump()).equals(POLYGON)
+    assert (
+        result.status == "ready"
+        and result.boundary is not None
+        and shape(result.boundary.model_dump()).equals(POLYGON)
+    )
 
 
-def test_import_endpoint_enforces_format_and_returns_review(client):
+def test_import_endpoint_enforces_format_and_returns_review(client: TestClient) -> None:
     response = client.post(
         "/api/v1/land/import", files={"file": ("land.json", json.dumps(mapping(POLYGON)))}
     )

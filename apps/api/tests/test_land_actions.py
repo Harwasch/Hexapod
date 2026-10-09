@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
+from alembic.config import Config
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from shapely.geometry import shape
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.workspace import Workspace
 from app.schemas.land_actions import LandActionCreate
@@ -12,7 +16,7 @@ from app.services import land_actions
 from app.services.errors import NotFoundError
 from tests.test_land import BODY
 
-ACTION = {
+ACTION: dict[str, Any] = {
     "title": "Restore the west meadow",
     "objective": "Establish native vegetation and monitor cover",
     "boundaryRevision": 1,
@@ -41,7 +45,7 @@ ACTION = {
 }
 
 
-def setup_action(client):
+def setup_action(client: TestClient) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, Any]]:
     land = client.post("/api/v1/land", json=BODY).json()
     path = f"/api/v1/land/{land['id']}/actions"
     body = {**ACTION, "requestKey": str(uuid.uuid4())}
@@ -50,7 +54,9 @@ def setup_action(client):
     return land, path, body, response.json()
 
 
-def test_action_review_immutable_history_and_private_mission_handoff(client, db, alembic_config):
+def test_action_review_immutable_history_and_private_mission_handoff(
+    client: TestClient, db: Session, alembic_config: Config
+) -> None:
     land, path, body, action = setup_action(client)
     assert action["totalKnownCost"] == 500 and action["uncostedSteps"] == 1
     assert client.post(path, json=body).json()["id"] == action["id"]
@@ -121,7 +127,9 @@ def test_action_review_immutable_history_and_private_mission_handoff(client, db,
         land_actions.scoped(db, private.id, uuid.UUID(land["id"]), uuid.UUID(action["id"]))
 
 
-def test_actions_reject_stale_boundary_invalid_links_and_conflicting_revisions(client):
+def test_actions_reject_stale_boundary_invalid_links_and_conflicting_revisions(
+    client: TestClient,
+) -> None:
     land, path, body, action = setup_action(client)
     identifier = f"{path}/{action['id']}"
     changed = client.put(
@@ -159,7 +167,7 @@ def test_actions_reject_stale_boundary_invalid_links_and_conflicting_revisions(c
     )
 
 
-def test_action_exclusions_and_step_footprints_survive_mission_handoff(client):
+def test_action_exclusions_and_step_footprints_survive_mission_handoff(client: TestClient) -> None:
     land = client.post("/api/v1/land", json=BODY).json()
     path = f"/api/v1/land/{land['id']}/actions"
     exclusion = {
@@ -184,7 +192,7 @@ def test_action_exclusions_and_step_footprints_survive_mission_handoff(client):
     assert client.post(path, json=bad).status_code == 422
 
 
-def test_action_dependency_cycles_and_cost_basis_are_validated():
+def test_action_dependency_cycles_and_cost_basis_are_validated() -> None:
     body = {**ACTION, "steps": [dict(item) for item in ACTION["steps"]]}
     body["steps"][0]["dependsOn"] = ["plant"]
     with pytest.raises(ValidationError, match="prerequisites"):
@@ -195,7 +203,9 @@ def test_action_dependency_cycles_and_cost_basis_are_validated():
         LandActionCreate.model_validate(body)
 
 
-def test_action_preserves_scenario_revision_and_detects_changed_assumptions(client):
+def test_action_preserves_scenario_revision_and_detects_changed_assumptions(
+    client: TestClient,
+) -> None:
     from tests.test_scenarios import SOLAR
 
     land = client.post("/api/v1/land", json=BODY).json()
@@ -228,7 +238,9 @@ def test_action_preserves_scenario_revision_and_detects_changed_assumptions(clie
     )
 
 
-def test_agent_can_save_an_action_draft_but_cannot_approve_or_schedule(client, db, sessions):
+def test_agent_can_save_an_action_draft_but_cannot_approve_or_schedule(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
     import json
 
     from sqlalchemy import select
@@ -246,11 +258,13 @@ def test_agent_can_save_an_action_draft_but_cannot_approve_or_schedule(client, d
 
     land, _investigation, run, _ = start(client)
     row = db.scalar(select(ResearchRun).where(ResearchRun.id == run["id"]))
+    assert row is not None
     row.kind = "investigation"
     db.commit()
 
     class Model:
-        def decide(self, context, max_tokens):
+        def decide(self, context: str, max_tokens: int) -> DecisionResult:
+            action: ActionDraftAction | CompleteAction
             state = json.loads(context)
             assert "inventoryFeatures" in state
             action = (

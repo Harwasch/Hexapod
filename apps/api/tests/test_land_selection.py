@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.schemas.geojson import LineString, Point, Polygon
@@ -12,7 +13,7 @@ from app.services.land_selection import candidates, interpret
 from tests.test_land import BODY
 
 
-def line(identifier="line-1"):
+def line(identifier: str = "line-1") -> LandCandidate:
     return LandCandidate(
         id=identifier,
         label="Transmission line",
@@ -22,7 +23,7 @@ def line(identifier="line-1"):
     )
 
 
-def test_grounded_corridor_width_and_ambiguity():
+def test_grounded_corridor_width_and_ambiguity() -> None:
     settings = Settings(_env_file=None)
     first = line()
     result = interpret(
@@ -58,7 +59,7 @@ def test_grounded_corridor_width_and_ambiguity():
         )
 
 
-def test_parcel_candidates_keep_holes_and_provenance(db):
+def test_parcel_candidates_keep_holes_and_provenance(db: Session) -> None:
     geometry = BODY["boundary"]
     request = CandidateRequest(point=Point(coordinates=[-122.135, 47.645]), kind="parcel")
     with httpx.Client(
@@ -82,8 +83,8 @@ def test_parcel_candidates_keep_holes_and_provenance(db):
     assert result.candidates[0].distance_m == 0
 
 
-def test_no_parcel_coverage_does_not_call_provider(db):
-    def reject(request):
+def test_no_parcel_coverage_does_not_call_provider(db: Session) -> None:
+    def reject(request: httpx.Request) -> httpx.Response:
         pytest.fail("Uncovered region must not query the Washington provider")
 
     with httpx.Client(transport=httpx.MockTransport(reject)) as client:
@@ -93,8 +94,8 @@ def test_no_parcel_coverage_does_not_call_provider(db):
     assert result.status == "uncovered" and not result.candidates
 
 
-def test_osm_uses_bounded_post_and_retains_mapped_feature_meaning(db):
-    def answer(request):
+def test_osm_uses_bounded_post_and_retains_mapped_feature_meaning(db: Session) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert b"timeout%3A20" in request.content
         return httpx.Response(
@@ -124,7 +125,7 @@ def test_osm_uses_bounded_post_and_retains_mapped_feature_meaning(db):
     assert result.candidates[0].properties["voltage"] == "230000"
 
 
-def test_unsupported_local_exclusion_is_not_silently_ignored():
+def test_unsupported_local_exclusion_is_not_silently_ignored() -> None:
     candidate = LandCandidate(
         id="parcel",
         label="Parcel",

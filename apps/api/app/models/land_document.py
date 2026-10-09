@@ -66,6 +66,26 @@ class LandDocumentPage(Base):
     truncated: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class LandDocumentOcr(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "land_document_ocr"
+    __table_args__ = (
+        UniqueConstraint("document_id", "page", "language"),
+        Index(
+            "ix_land_document_ocr_text_search",
+            "text",
+            postgresql_using="gin",
+            postgresql_ops={"text": "gin_trgm_ops"},
+        ),
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("land_documents.id", ondelete="CASCADE"), index=True
+    )
+    page: Mapped[int] = mapped_column(Integer)
+    language: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str] = mapped_column(Text)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
 class LandDocumentLink(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "land_document_links"
     __table_args__ = (UniqueConstraint("land_id", "request_key"),)

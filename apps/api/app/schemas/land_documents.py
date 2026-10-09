@@ -64,6 +64,7 @@ class DocumentSearchHit(CamelModel):
     page: int
     excerpt: str
     truncated: bool
+    ocr_id: uuid.UUID | None = None
 
 
 class DocumentLinkCreate(CamelModel):
@@ -93,3 +94,31 @@ class DocumentLocator(CamelModel):
     document_id: uuid.UUID
     page: int = Field(ge=1, le=500)
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    ocr_id: uuid.UUID | None = None
+
+
+class DocumentOcrRequest(CamelModel):
+    language: Literal["eng", "spa", "fra", "deu"] = "eng"
+
+
+class DocumentOcrCapabilities(CamelModel):
+    available: bool
+    languages: list[str]
+    reason: str
+
+
+class DocumentOcrRead(CamelModel):
+    id: uuid.UUID
+    document_id: uuid.UUID
+    page: int
+    language: str
+    text: str
+    sha256: str
+    text_sha256: str
+    engine: str
+    engine_version: str
+    render_max_pixels: int
+    mean_word_confidence: float | None
+    truncated: bool
+    warnings: list[str]
+    created_at: datetime

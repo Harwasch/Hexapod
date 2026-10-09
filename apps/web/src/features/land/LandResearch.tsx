@@ -73,6 +73,7 @@ export function EvidenceView({
           documentId={evidence.document.documentId}
           initialPage={evidence.document.page}
           pinnedHash={evidence.document.sha256}
+          pinnedOcrId={evidence.document.ocrId ?? undefined}
         />
       )}
       {evidence.url && (

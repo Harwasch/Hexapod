@@ -10,7 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import Uuid, delete, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
 from app.models.land import LandArea
@@ -18,6 +18,7 @@ from app.models.land_document import (
     LandDocument,
     LandDocumentBlob,
     LandDocumentLink,
+    LandDocumentOcr,
     LandDocumentPage,
 )
 from app.models.workspace import Workspace
@@ -211,27 +212,46 @@ def search(
     offset: int = 0,
 ) -> list[DocumentSearchHit]:
     get_land(db, workspace_id, land_id)
+    passages = union_all(
+        select(
+            LandDocumentPage.document_id,
+            LandDocumentPage.page,
+            LandDocumentPage.text,
+            LandDocumentPage.truncated,
+            literal(None, type_=Uuid).label("ocr_id"),
+        ),
+        select(
+            LandDocumentOcr.document_id,
+            LandDocumentOcr.page,
+            LandDocumentOcr.text,
+            LandDocumentOcr.content["truncated"].as_boolean(),
+            LandDocumentOcr.id,
+        ),
+    ).subquery()
     rows = db.execute(
-        select(LandDocument, LandDocumentPage)
-        .join(LandDocumentPage, LandDocumentPage.document_id == LandDocument.id)
-        .where(
-            LandDocument.land_id == land_id, LandDocumentPage.text.icontains(query, autoescape=True)
+        select(
+            LandDocument, passages.c.page, passages.c.text, passages.c.truncated, passages.c.ocr_id
         )
-        .order_by(LandDocument.created_at.desc(), LandDocument.id, LandDocumentPage.page)
+        .join(passages, passages.c.document_id == LandDocument.id)
+        .where(LandDocument.land_id == land_id, passages.c.text.icontains(query, autoescape=True))
+        .order_by(
+            LandDocument.created_at.desc(), LandDocument.id, passages.c.page, passages.c.ocr_id
+        )
         .limit(limit)
         .offset(offset)
     )
     hits = []
-    for document, record in rows:
-        index = record.text.casefold().find(query.casefold())
+    for document, page_number, page_text, truncated, ocr_id in rows:
+        index = page_text.casefold().find(query.casefold())
         start = max(0, index - 300)
         hits.append(
             DocumentSearchHit(
                 document_id=document.id,
                 title=document.metadata_json["title"],
-                page=record.page,
-                excerpt=record.text[start : start + 1500],
-                truncated=record.truncated,
+                page=page_number,
+                excerpt=page_text[start : start + 1500],
+                truncated=truncated,
+                ocr_id=ocr_id,
             )
         )
     return hits
