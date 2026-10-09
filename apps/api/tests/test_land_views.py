@@ -42,6 +42,12 @@ def test_saved_view_idempotency_rename_conflicts_and_boundary_notice(client: Tes
     response = client.post(path, json=body)
     assert response.status_code == 201, response.text
     view = response.json()
+    assert client.post(path + "/recover", json=body).json()["id"] == view["id"]
+    assert (
+        client.post(path + "/recover", json={**body, "name": "Different capture"}).status_code
+        == 409
+    )
+    assert client.post(path + "/recover", json=payload()).status_code == 404
     assert client.post(path, json=body).json()["id"] == view["id"]
     assert client.post(path, json={**body, "name": "Different"}).status_code == 409
     assert len(client.get(path).json()) == 1
@@ -59,6 +65,7 @@ def test_saved_view_idempotency_rename_conflicts_and_boundary_notice(client: Tes
     )
     assert client.delete(f"{path}/{view['id']}?expected_revision=1").status_code == 409
     assert client.post(path, json=body).json()["name"] == "Renamed"
+    assert client.post(path + "/recover", json=body).json()["name"] == "Renamed"
     assert (
         client.put(f"/api/v1/land/{land['id']}", json={**BODY, "expectedRevision": 1}).status_code
         == 200

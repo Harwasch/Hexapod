@@ -6,6 +6,12 @@ import { api } from "@/api/client";
 import { LandSavedViews } from "@/features/land/LandSavedViews";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
+import {
+  parseViewCapture,
+  serializeViewCapture,
+  viewDraftKey,
+} from "@/features/land/landViewDraft";
+import { landScope } from "@/state/landIdentity";
 import { useViewer } from "@/state/viewer";
 const { flyTo } = vi.hoisted(() => ({ flyTo: vi.fn() }));
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => ({ camera: { flyTo } }) }));
@@ -79,11 +85,12 @@ function show() {
       <LandSavedViews land={land} />
     </QueryClientProvider>,
   );
-  fireEvent.click(screen.getByText("Saved exploration views"));
+  fireEvent.click(screen.getByText(/Saved exploration views/));
 }
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  localStorage.clear();
   flyTo.mockClear();
   useLand.getState().clear();
   useLandContext.getState().clear();
@@ -156,4 +163,78 @@ it("does not move the camera when the user changes land during a slow open", asy
   finish?.({ data: opened, response: new Response() });
   await waitFor(() => expect(screen.getByRole("button", { name: "Open Study" })).toBeEnabled());
   expect(flyTo).not.toHaveBeenCalled();
+});
+
+it("reconciles a recovered save without another creation request or camera change", async () => {
+  const capture = {
+    name: "Study",
+    requestKey: "55555555-5555-4555-8555-555555555555",
+    state: view.state,
+  };
+  localStorage.setItem(viewDraftKey(landScope(), land.id), serializeViewCapture(land.id, capture));
+  vi.spyOn(api, "GET").mockResolvedValue({ data: [view], response: new Response() });
+  const post = vi
+    .spyOn(api, "POST")
+    .mockResolvedValue({ data: { ...view, name: "Renamed elsewhere" }, response: new Response() });
+  show();
+  expect(post).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Recover view save" }));
+  await screen.findByText(/already saved as “Renamed elsewhere”/);
+  expect(post).toHaveBeenCalledOnce();
+  expect(post).toHaveBeenCalledWith("/api/v1/land/{land_id}/views/recover", {
+    params: { path: { land_id: land.id } },
+    body: capture,
+  });
+  expect(localStorage.getItem(viewDraftKey(landScope(), land.id))).toBeNull();
+  expect(flyTo).not.toHaveBeenCalled();
+});
+
+it("retains an unsaved capture for explicit retry after read-only recovery", async () => {
+  const capture = {
+    name: "Interrupted",
+    requestKey: "55555555-5555-4555-8555-555555555555",
+    state: view.state,
+  };
+  localStorage.setItem(viewDraftKey(landScope(), land.id), serializeViewCapture(land.id, capture));
+  vi.spyOn(api, "GET").mockResolvedValue({ data: [], response: new Response() });
+  const post = vi
+    .spyOn(api, "POST")
+    .mockResolvedValue({
+      error: { title: "Not found", status: 404 },
+      response: new Response(null, { status: 404 }),
+    });
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "Recover view save" }));
+  await screen.findByRole("button", { name: "Retry captured view save" });
+  expect(post).toHaveBeenCalledOnce();
+  expect(screen.getByRole("textbox", { name: "View name" })).toHaveValue("Interrupted");
+  expect(localStorage.getItem(viewDraftKey(landScope(), land.id))).not.toBeNull();
+});
+
+it("rejects invalid or cross-land captures without losing the downloadable original", async () => {
+  const capture = {
+    name: "Study",
+    requestKey: "55555555-5555-4555-8555-555555555555",
+    state: view.state,
+  };
+  const raw = serializeViewCapture("other-land", capture);
+  expect(() => parseViewCapture(raw, land.id)).toThrow(/other land/);
+  expect(() =>
+    parseViewCapture(
+      serializeViewCapture(land.id, {
+        ...capture,
+        state: { ...view.state, camera: { ...view.state.camera, latitude: 100 } },
+      }),
+      land.id,
+    ),
+  ).toThrow(/camera/);
+  localStorage.setItem(viewDraftKey(landScope(), land.id), raw);
+  vi.spyOn(api, "GET").mockResolvedValue({ data: [], response: new Response() });
+  const post = vi.spyOn(api, "POST");
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "Recover view save" }));
+  await screen.findByRole("alert");
+  expect(post).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Download captured view" })).toBeEnabled();
+  expect(localStorage.getItem(viewDraftKey(landScope(), land.id))).toBe(raw);
 });

@@ -10,7 +10,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
-| Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation and current inventory context | Persistent unfinished view-save recovery and broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
+| Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
@@ -1718,3 +1718,39 @@ recovered after a browser restart. Survey sketches, unsaved asset/import preview
 footprints and other temporary overlays are explicitly excluded from the saved view; their
 underlying records and independent draft recovery remain available. The overall feature is
 still in progress and nothing has been deployed.
+
+
+## Implemented increment: persistent saved-view capture recovery
+
+A captured view save is now written to identity/workspace/land-scoped browser storage before
+its creation request. On return, users explicitly recover, download or discard it. Recovery
+validates the capture version, land, request identity, finite/bounded camera coordinates, record
+references and layer settings within a 64 KB limit. Invalid captures remain downloadable and
+cannot silently overwrite a new save. Storage failures keep the captured request available in
+memory with a download; another tab's different capture is preserved rather than overwritten.
+
+`POST /land/{land_id}/views/recover` is a read-only reconciliation endpoint. It verifies the
+capture against the original request digest and returns the existing view, including a later
+rename. A matching saved capture is cleared locally without another creation request or camera
+movement. Missing captures are loaded for an explicit retry; altered captures are retained for
+review. Viewers may reconcile a previously completed save, but cannot retry an unsaved capture.
+The original request key is retained across retries. The captured layer counts and camera are
+shown independently of the current map.
+
+Validation: the four saved-view backend tests now also cover missing/reused recovery keys,
+changed payload rejection and reconciliation after rename. Six frontend tests cover retries,
+read-only recovery, unsaved capture restoration, cross-land/invalid camera rejection, retained
+original downloads and navigation races. API lint/format/type checks, web type checking/targeted
+lint, generated contracts and production build pass. No additional migration is needed beyond
+0027; the isolated preview API was restarted.
+
+A real Chromium/API check on the public National Mall fixture dropped the successful creation
+response, renamed the stored view, reloaded the browser, and recovered the capture through the
+read-only endpoint. Exactly one creation request and one reconciliation request occurred, and
+the recovered local capture was cleared. Desktop and 390px phone checks found no page exceptions
+or unintended overflow; screenshots were inspected. Synthetic view:
+`7f1ed195-d29c-4f34-9e3d-a7ec12434793`. Local artifacts:
+`/tmp/land-view-recovery-result.json`, `/tmp/land-view-recovery-desktop.png`,
+`/tmp/land-view-recovery-mobile.png`. The previous increment's restart-recovery limitation is
+resolved. Production and the original checkout remain untouched; the full feature remains in
+progress.

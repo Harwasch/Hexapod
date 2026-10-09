@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Annotated
 
@@ -11,7 +12,7 @@ from app.api.workspace_deps import WorkspaceDep
 from app.models.land_view import LandView
 from app.schemas.land_views import LandViewCreate, LandViewOpen, LandViewRead, LandViewRename
 from app.services import land_views
-from app.services.errors import ConflictError
+from app.services.errors import ConflictError, NotFoundError
 
 router = APIRouter(prefix="/land/{land_id}/views", tags=["land views"])
 
@@ -41,6 +42,26 @@ def create(
 ) -> LandViewRead:
     scope.require("owner", "editor")
     return land_views.create(db, scope.id, land_id, payload)
+
+
+@router.post("/recover", response_model=LandViewRead)
+def recover(
+    land_id: uuid.UUID, payload: LandViewCreate, db: DbSession, scope: WorkspaceDep
+) -> LandViewRead:
+    """Read-only reconciliation; a request body keeps captured context out of URL logs."""
+    land_views.area(db, scope.id, land_id)
+    row = db.scalar(
+        select(LandView).where(
+            LandView.land_id == land_id, LandView.request_key == payload.request_key
+        )
+    )
+    if row is None:
+        raise NotFoundError("saved view request", payload.request_key)
+    if row.request_sha256 != hashlib.sha256(payload.model_dump_json().encode()).hexdigest():
+        raise ConflictError(
+            "This request saved a different capture. Download your local capture and review the saved views."
+        )
+    return LandViewRead.model_validate(row)
 
 
 @router.get("/{view_id}", response_model=LandViewOpen)
