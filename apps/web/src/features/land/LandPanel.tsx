@@ -23,6 +23,7 @@ import { ApiError, api, unwrap } from "@/api/client";
 import { describeError } from "@/lib/log";
 import { fetchOsmContaining, OSM_ATTRIBUTION } from "@/missions/osm";
 import { useLand, type LandMode } from "@/state/land";
+import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 
 import { FloatingPanel } from "../shell/FloatingPanel";
@@ -58,6 +59,7 @@ export function LandPanel() {
   const catalog = useLandAreas(open);
   const [panelWidth, setPanelWidth] = useState(440);
   const [sheetSize, setSheetSize] = useState<"compact" | "expanded">("compact");
+  const pointPicker = useLandContext((s) => s.pointPicker);
   const [historyOpen, setHistoryOpen] = useState(false);
   const history = useBoundaryHistory(open && historyOpen ? (state.active?.id ?? null) : null);
   const [busy, setBusy] = useState(false);
@@ -236,7 +238,7 @@ export function LandPanel() {
       open={open}
       title="Your land"
       wide
-      className={`land-panel land-panel--${sheetSize}`}
+      className={`land-panel land-panel--${pointPicker ? "compact" : sheetSize}`}
       style={{ "--land-workspace-width": `${panelWidth}px` } as CSSProperties}
       actions={
         <button

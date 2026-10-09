@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.analysis.archive_image import MAX_PREVIEW_BYTES, MAX_SOURCE_BYTES
 from app.models.land import LandArea
 from app.models.land_archive_image import LandArchiveImage, LandArchiveImageBlob
+from app.models.land_image_registration import LandImageRegistration
 from app.models.research import Evidence, Investigation, ResearchRun
 from app.models.workspace import Workspace
 from app.schemas.land_archives import ArchiveImageMetadata, ArchiveImageRead, ArchiveMedia
@@ -141,17 +142,7 @@ def save(
     existing = db.get(LandArchiveImage, evidence_id)
     if existing is not None:
         return existing
-    used = (
-        db.scalar(
-            select(func.coalesce(func.sum(LandArchiveImage.byte_size), 0))
-            .join(Evidence, Evidence.id == LandArchiveImage.evidence_id)
-            .join(ResearchRun, ResearchRun.id == Evidence.run_id)
-            .join(Investigation, Investigation.id == ResearchRun.investigation_id)
-            .join(LandArea, LandArea.id == Investigation.land_id)
-            .where(LandArea.workspace_id == workspace_id)
-        )
-        or 0
-    )
+    used = workspace_used_bytes(db, workspace_id)
     size = len(snapshot.original) + len(snapshot.preview)
     if used + size > quota_bytes:
         raise InvalidInputError("This workspace's archive image storage allowance is full.")
@@ -210,3 +201,20 @@ def vision_input(preview: bytes) -> tuple[bytes, dict[str, str | int]]:
         data = output.read_bytes()
         metadata["sha256"] = hashlib.sha256(data).hexdigest()
         return data, metadata
+
+
+def workspace_used_bytes(db: Session, workspace_id: uuid.UUID) -> int:
+    total = 0
+    for model in (LandArchiveImage, LandImageRegistration):
+        total += int(
+            db.scalar(
+                select(func.coalesce(func.sum(model.byte_size), 0))
+                .join(Evidence, Evidence.id == model.evidence_id)
+                .join(ResearchRun, ResearchRun.id == Evidence.run_id)
+                .join(Investigation, Investigation.id == ResearchRun.investigation_id)
+                .join(LandArea, LandArea.id == Investigation.land_id)
+                .where(LandArea.workspace_id == workspace_id)
+            )
+            or 0
+        )
+    return total

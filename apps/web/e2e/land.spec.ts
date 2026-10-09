@@ -482,3 +482,20 @@ for (const kind of ["boundary", "corridor"] as const) {
     ).toBeNull();
   });
 }
+
+test("Escape cancels a ground pick before closing the land workspace", async ({ app }) => {
+  await landApi(app);
+  await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+  await app.getByTestId("tool-land").click();
+  await app.evaluate(() => {
+    const twin = (window as unknown as { __twin: { areas: { pickGround(): Promise<unknown> } } })
+      .__twin;
+    void twin.areas.pickGround();
+  });
+  await expect(app.locator(".cesium-widget canvas")).toHaveCSS("cursor", "crosshair");
+  await app.keyboard.press("Escape");
+  await expect(app.locator(".cesium-widget canvas")).not.toHaveCSS("cursor", "crosshair");
+  await expect(app.getByTestId("land-panel")).toBeVisible();
+  await app.keyboard.press("Escape");
+  await expect(app.getByTestId("land-panel")).not.toBeVisible();
+});

@@ -20,6 +20,8 @@ from app.storage import S3Storage
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or get_settings().test_database_url
 TABLES = (
+    "land_image_registration_blobs",
+    "land_image_registrations",
     "land_archive_image_blobs",
     "land_archive_images",
     "land_raster_blobs",

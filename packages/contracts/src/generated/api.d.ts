@@ -1444,6 +1444,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research/evidence/{evidence_id}/image/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_api_v1_research_evidence__evidence_id__image_registrations_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_api_v1_research_evidence__evidence_id__image_registrations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/evidence/{evidence_id}/image/registrations/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview */
+        post: operations["preview_api_v1_research_evidence__evidence_id__image_registrations_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research/findings/{finding_id}": {
         parameters: {
             query?: never;
@@ -1454,6 +1489,57 @@ export interface paths {
         get?: never;
         /** Disposition */
         put: operations["disposition_api_v1_research_findings__finding_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/image-registrations/{registration_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_v1_research_image_registrations__registration_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/image-registrations/{registration_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download */
+        get: operations["download_api_v1_research_image_registrations__registration_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/image-registrations/{registration_id}/tiles/{z}/{x}/{y}.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tile */
+        get: operations["tile_api_v1_research_image_registrations__registration_id__tiles__z___x___y__png_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -2918,6 +3004,19 @@ export interface components {
             /** Value */
             value: string;
         };
+        /** ControlPointFit */
+        ControlPointFit: {
+            /** Errorm */
+            errorM: number;
+            /** Label */
+            label: string;
+            /** Leaveoneouterrorm */
+            leaveOneOutErrorM: number | null;
+            /** Predictedlatitude */
+            predictedLatitude: number;
+            /** Predictedlongitude */
+            predictedLongitude: number;
+        };
         /**
          * CorridorRequest
          * @description Total corridor width, not distance on each side of the centreline.
@@ -3456,6 +3555,100 @@ export interface components {
             mode: "pilot" | "oidc";
             /** Principalid */
             principalId: string;
+        };
+        /** ImageControlPoint */
+        ImageControlPoint: {
+            /** Imagex */
+            imageX: number;
+            /** Imagey */
+            imageY: number;
+            /** Label */
+            label: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+        };
+        /** ImageRegistrationCreate */
+        ImageRegistrationCreate: {
+            /** Imagesha256 */
+            imageSha256: string;
+            /** Name */
+            name: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes?: string;
+            /** Points */
+            points: components["schemas"]["ImageControlPoint"][];
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey: string;
+        };
+        /** ImageRegistrationRead */
+        ImageRegistrationRead: {
+            /** Bytesize */
+            byteSize: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Displayheight */
+            displayHeight: number;
+            /** Displaywidth */
+            displayWidth: number;
+            /**
+             * Evidenceid
+             * Format: uuid
+             */
+            evidenceId: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            request: components["schemas"]["ImageRegistrationCreate"];
+            result: components["schemas"]["ImageRegistrationResult"];
+            /** Sha256 */
+            sha256: string;
+        };
+        /** ImageRegistrationResult */
+        ImageRegistrationResult: {
+            /**
+             * Algorithm
+             * @default affine-aeqd-v1
+             * @constant
+             */
+            algorithm?: "affine-aeqd-v1";
+            /** Approximatemperpixel */
+            approximateMPerPixel: number;
+            /** Bounds */
+            bounds: number[];
+            /** Controlpointcoverage */
+            controlPointCoverage: number;
+            /** Crs */
+            crs: string;
+            footprint: components["schemas"]["Polygon"];
+            /** Imageheight */
+            imageHeight: number;
+            /** Imagewidth */
+            imageWidth: number;
+            /** Leaveoneoutrmsm */
+            leaveOneOutRmsM: number | null;
+            /** Maximumerrorm */
+            maximumErrorM: number;
+            /** Points */
+            points: components["schemas"]["ControlPointFit"][];
+            /** Rmserrorm */
+            rmsErrorM: number;
+            /** Transform */
+            transform: number[];
+            /** Warnings */
+            warnings: string[];
         };
         /** InvestigationCreate */
         InvestigationCreate: {
@@ -6733,6 +6926,7 @@ export type SchemaChartOutput = components['schemas']['ChartOutput'];
 export type SchemaChartSeries = components['schemas']['ChartSeries'];
 export type SchemaClarification = components['schemas']['Clarification'];
 export type SchemaClarificationOption = components['schemas']['ClarificationOption'];
+export type SchemaControlPointFit = components['schemas']['ControlPointFit'];
 export type SchemaCorridorRequest = components['schemas']['CorridorRequest'];
 export type SchemaCoverClass = components['schemas']['CoverClass'];
 export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
@@ -6760,6 +6954,10 @@ export type SchemaGooglePhotorealisticSource = components['schemas']['GooglePhot
 export type SchemaGroundSample = components['schemas']['GroundSample'];
 export type SchemaHealthStatus = components['schemas']['HealthStatus'];
 export type SchemaIdentityRead = components['schemas']['IdentityRead'];
+export type SchemaImageControlPoint = components['schemas']['ImageControlPoint'];
+export type SchemaImageRegistrationCreate = components['schemas']['ImageRegistrationCreate'];
+export type SchemaImageRegistrationRead = components['schemas']['ImageRegistrationRead'];
+export type SchemaImageRegistrationResult = components['schemas']['ImageRegistrationResult'];
 export type SchemaInvestigationCreate = components['schemas']['InvestigationCreate'];
 export type SchemaInvestigationDetail = components['schemas']['InvestigationDetail'];
 export type SchemaInvestigationRead = components['schemas']['InvestigationRead'];
@@ -13561,6 +13759,197 @@ export interface operations {
             };
         };
     };
+    listing_api_v1_research_evidence__evidence_id__image_registrations_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRegistrationRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_api_v1_research_evidence__evidence_id__image_registrations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageRegistrationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRegistrationRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_api_v1_research_evidence__evidence_id__image_registrations_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageRegistrationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRegistrationResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     disposition_api_v1_research_findings__finding_id__put: {
         parameters: {
             query?: never;
@@ -13585,6 +13974,191 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FindingRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_api_v1_research_image_registrations__registration_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                registration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRegistrationRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    download_api_v1_research_image_registrations__registration_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                registration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "image/tiff": string;
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    tile_api_v1_research_image_registrations__registration_id__tiles__z___x___y__png_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                registration_id: string;
+                x: number;
+                y: number;
+                z: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "image/png": string;
                 };
             };
             /** @description Missing or wrong write token */

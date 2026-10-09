@@ -104,14 +104,19 @@ export class AreaEditor {
       const handler = new ScreenSpaceEventHandler(canvas);
       const finish = (result: Awaited<ReturnType<AreaEditor["pickGround"]>>) => {
         handler.destroy();
-        window.removeEventListener("keydown", onKey);
+        window.removeEventListener("keydown", onKey, true);
         canvas.style.cursor = "";
         this.pick = null;
         this.events.emit("ground-pick-mode", false);
         resolve(result);
       };
       const onKey = (event: KeyboardEvent) => {
-        if (event.key === "Escape") finish(null);
+        if (event.key === "Escape") {
+          // Consume the pick cancellation before the shell handles Escape as a panel close.
+          event.preventDefault();
+          event.stopPropagation();
+          finish(null);
+        }
       };
       handler.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
         const ground = this.ground(e.position);
@@ -123,7 +128,7 @@ export class AreaEditor {
           y: e.position.y / canvas.clientHeight,
         });
       }, ScreenSpaceEventType.LEFT_CLICK);
-      window.addEventListener("keydown", onKey);
+      window.addEventListener("keydown", onKey, true);
       canvas.style.cursor = "crosshair";
       this.pick = () => finish(null);
       this.events.emit("ground-pick-mode", true);

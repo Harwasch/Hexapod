@@ -14,6 +14,7 @@ export interface LandContextLayer {
   selectedIds?: string[];
 }
 export interface LandRasterLayer {
+  kind?: "archive-alignment";
   categorical?: boolean;
   id: string;
   band: number;
@@ -23,6 +24,8 @@ export interface LandRasterLayer {
 }
 export type LandWorkspaceSection = "discover" | "records" | "inventory" | "scenarios" | "actions";
 interface LandContextState {
+  pointPicker: string | null;
+  setPointPicker: (id: string | null) => void;
   researchQuestion: string;
   setResearchQuestion: (question: string) => void;
   section: LandWorkspaceSection;
@@ -45,6 +48,8 @@ interface LandContextState {
 }
 
 export const useLandContext = create<LandContextState>((set, get) => ({
+  pointPicker: null,
+  setPointPicker: (pointPicker) => set({ pointPicker }),
   researchQuestion: "",
   setResearchQuestion: (researchQuestion) => set({ researchQuestion }),
   section: "discover",
@@ -117,6 +122,7 @@ export const useLandContext = create<LandContextState>((set, get) => ({
     })),
   clear: () =>
     set({
+      pointPicker: null,
       layers: {},
       rasters: {},
       rasterErrors: {},

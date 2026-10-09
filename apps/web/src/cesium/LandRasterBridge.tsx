@@ -37,7 +37,11 @@ export function LandRasterBridge() {
       const auth = JSON.stringify(headers);
       for (const [id, current] of rendered) {
         const next = rasters[id];
-        if (current.definition.band === next?.band && current.auth === auth) {
+        if (
+          current.definition.band === next?.band &&
+          current.definition.kind === next.kind &&
+          current.auth === auth
+        ) {
           current.layer.alpha = next.opacity;
           current.definition = next;
           continue;
@@ -70,7 +74,10 @@ export function LandRasterBridge() {
         const [west = 0, south = 0, east = 0, north = 0] = definition.bounds;
         const provider = new UrlTemplateImageryProvider({
           url: new Resource({
-            url: `${env.apiBaseUrl}/api/v1/land/rasters/${definition.id}/tiles/${definition.band}/{z}/{x}/{y}.png`,
+            url:
+              definition.kind === "archive-alignment"
+                ? `${env.apiBaseUrl}/api/v1/research/image-registrations/${definition.id}/tiles/{z}/{x}/{y}.png`
+                : `${env.apiBaseUrl}/api/v1/land/rasters/${definition.id}/tiles/${definition.band}/{z}/{x}/{y}.png`,
             headers,
           }),
           tilingScheme: new GeographicTilingScheme(),

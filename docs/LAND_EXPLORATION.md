@@ -13,7 +13,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
-| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots and bounded agent visual inspection | Archive georeferencing and deeper instrument/parcel lineage evaluation |
+| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
 ## Product direction
@@ -901,3 +901,63 @@ processor hash mismatches and small-chunk download deadlines. API lint/format/ty
 (249 files), seven gallery UI tests, web typing/lint and build passed. Model responses were
 controlled test fixtures: live AI interpretation remains unvalidated because this environment
 has no configured model credentials. No production deployment was made.
+
+
+## Implemented increment: historical-map alignment
+
+Migration `0021` adds immutable image registrations and private georeferenced display
+rasters. Each registration pins the saved image SHA-256, four to thirty labelled pixel/map
+point pairs, a request key, notes, the affine transform and local projection, densified
+footprint, fit diagnostics, and the exact output GeoTIFF hash. Repeating a request returns
+the same saved registration; reusing its key with different inputs returns 409. Refining a
+saved alignment creates another record and preserves earlier records and source images.
+This workflow accepts saved historical map sheets; it does not treat oblique photographs
+or catalog bounding boxes as georeferenced imagery.
+
+The fixed calculation fits an affine transform in a regional azimuthal-equidistant
+projection. It checks point uniqueness, image bounds, rank/conditioning, geographic extent,
+and extrapolation. Fit RMS, maximum residual, leave-one-out RMS and individual errors are
+reported along with the image fraction enclosed by the control points. Warnings identify
+sparse coverage, large residuals, mirrored fits and low-resolution previews. Small residuals
+measure internal agreement, not surveyed positional accuracy, title, or legal boundaries.
+Dateline crossings and polar/large regional images require a separate projection workflow.
+
+The raster processor is a fixed subprocess with memory, CPU, file-size and wall-time bounds.
+It preserves RGBA transparency and image-edge coordinates while fitting the display raster
+to 1024 pixels on its longer side. Workspace storage accounting includes both image
+snapshots and aligned rasters under the same serialized quota. The list, metadata, tiles
+and GeoTIFF download enforce workspace access; viewers can inspect and check proposed fits,
+and editors/owners can save. Private responses do not enter shared caches. Land deletion
+cascades through images, registrations and their bytes.
+
+The archive gallery now offers an alignment editor with image point markers, one-shot
+Cesium map picks, typed coordinates, editable matches, fit review, notes, and paged saved
+alignments. Complete unfinished matches recover from browser storage scoped to identity,
+workspace, evidence and image checksum; sign-out clears them with other land drafts.
+Late previews cannot overwrite an edited draft. Saved overlays have show/hide, framing,
+opacity and download controls and use authenticated geographic tiles in the existing
+bounded raster layer stack. The mobile sheet makes room for the map during a pick and
+returns to its prior size afterwards. Escape now cancels a one-shot ground pick before
+the shell handles another Escape as a panel close.
+
+Validation: 21 focused backend tests passed across numerical fits, actual subprocess
+rendering, archive quota integration, private API access, tile/download bytes, immutable
+retries, cascades, migration round trips and model/schema agreement. Full API typing
+(257 files), lint and formatting passed. Eighteen focused frontend tests cover matches,
+fit invalidation, draft recovery, late-response rejection, map-pick cancellation, archive
+regressions and private tile routing. Web type checking, targeted lint and production
+build passed.
+
+A live browser/API check used deliberately synthetic point correspondences over the public
+National Mall fixture. It exercised an actual globe pick, fit review, save, 53 successful
+tile responses, opacity changes, GeoTIFF checksum verification, reload/draft recovery and
+expanded-mobile cancellation without page errors or horizontal overflow. The saved test
+registration is `f571634e-10b3-503e-a7ef-e6b7ccc0eb73`. Its 0.015 m fit RMS and 0.061 m
+leave-one-out RMS describe the synthetic correspondences only, not the historical sheet's
+true geographic accuracy. The underlying USGS snapshot is only 200 by 245 pixels, so this
+check does not establish precise historical feature matching. Screenshots were inspected
+at desktop and 390-pixel mobile widths. Production/deployment and the original checkout
+remain untouched; the complete feature is still in progress.
+
+All seven land browser journeys also passed, including selection/import/corridor behavior,
+mission handoff, unfinished sketch recovery and the new one-Escape cancellation regression.

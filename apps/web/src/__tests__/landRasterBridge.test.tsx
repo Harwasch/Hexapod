@@ -97,3 +97,20 @@ it("carries workspace credentials in headers and rebuilds private tiles after to
   useLandIdentity.getState().setSession("later-test-token", "alice");
   expect(fixture.requests).toHaveLength(2);
 });
+it("routes archive overlays through the private alignment tiles and rebuilds when the layer kind changes", () => {
+  const layer = {
+    id: "saved-map",
+    band: 1,
+    bounds: [-77.05, 38.88, -77.04, 38.89],
+    attribution: "USGS public domain",
+    opacity: 0.6,
+  };
+  useLandContext.getState().setRaster(layer);
+  render(<LandRasterBridge />);
+  useLandContext.getState().setRaster({ ...layer, kind: "archive-alignment" });
+  expect(fixture.requests).toHaveLength(2);
+  expect(fixture.requests[1]?.url.url).toContain(
+    "/research/image-registrations/saved-map/tiles/{z}/{x}/{y}.png",
+  );
+  expect(fixture.remove).toHaveBeenCalledOnce();
+});

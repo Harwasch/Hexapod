@@ -3323,6 +3323,49 @@
         "title": "ClarificationOption",
         "type": "object"
       },
+      "ControlPointFit": {
+        "additionalProperties": false,
+        "properties": {
+          "errorM": {
+            "minimum": 0.0,
+            "title": "Errorm",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "leaveOneOutErrorM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leaveoneouterrorm"
+          },
+          "predictedLatitude": {
+            "title": "Predictedlatitude",
+            "type": "number"
+          },
+          "predictedLongitude": {
+            "title": "Predictedlongitude",
+            "type": "number"
+          }
+        },
+        "required": [
+          "label",
+          "predictedLongitude",
+          "predictedLatitude",
+          "errorM",
+          "leaveOneOutErrorM"
+        ],
+        "title": "ControlPointFit",
+        "type": "object"
+      },
       "CorridorRequest": {
         "additionalProperties": false,
         "description": "Total corridor width, not distance on each side of the centreline.",
@@ -4647,6 +4690,257 @@
           "mode"
         ],
         "title": "IdentityRead",
+        "type": "object"
+      },
+      "ImageControlPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "imageX": {
+            "maximum": 8192.0,
+            "minimum": 0.0,
+            "title": "Imagex",
+            "type": "number"
+          },
+          "imageY": {
+            "maximum": 8192.0,
+            "minimum": 0.0,
+            "title": "Imagey",
+            "type": "number"
+          },
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          }
+        },
+        "required": [
+          "label",
+          "imageX",
+          "imageY",
+          "longitude",
+          "latitude"
+        ],
+        "title": "ImageControlPoint",
+        "type": "object"
+      },
+      "ImageRegistrationCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "imageSha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Imagesha256",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Notes",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ImageControlPoint"
+            },
+            "maxItems": 30,
+            "minItems": 4,
+            "title": "Points",
+            "type": "array"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestKey",
+          "name",
+          "imageSha256",
+          "points"
+        ],
+        "title": "ImageRegistrationCreate",
+        "type": "object"
+      },
+      "ImageRegistrationRead": {
+        "additionalProperties": false,
+        "properties": {
+          "byteSize": {
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "displayHeight": {
+            "title": "Displayheight",
+            "type": "integer"
+          },
+          "displayWidth": {
+            "title": "Displaywidth",
+            "type": "integer"
+          },
+          "evidenceId": {
+            "format": "uuid",
+            "title": "Evidenceid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ImageRegistrationCreate"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ImageRegistrationResult"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "evidenceId",
+          "request",
+          "result",
+          "sha256",
+          "byteSize",
+          "displayWidth",
+          "displayHeight",
+          "createdAt"
+        ],
+        "title": "ImageRegistrationRead",
+        "type": "object"
+      },
+      "ImageRegistrationResult": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "const": "affine-aeqd-v1",
+            "default": "affine-aeqd-v1",
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "approximateMPerPixel": {
+            "exclusiveMinimum": 0.0,
+            "title": "Approximatemperpixel",
+            "type": "number"
+          },
+          "bounds": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds",
+            "type": "array"
+          },
+          "controlPointCoverage": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Controlpointcoverage",
+            "type": "number"
+          },
+          "crs": {
+            "title": "Crs",
+            "type": "string"
+          },
+          "footprint": {
+            "$ref": "#/components/schemas/Polygon"
+          },
+          "imageHeight": {
+            "title": "Imageheight",
+            "type": "integer"
+          },
+          "imageWidth": {
+            "title": "Imagewidth",
+            "type": "integer"
+          },
+          "leaveOneOutRmsM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leaveoneoutrmsm"
+          },
+          "maximumErrorM": {
+            "minimum": 0.0,
+            "title": "Maximumerrorm",
+            "type": "number"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ControlPointFit"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "rmsErrorM": {
+            "minimum": 0.0,
+            "title": "Rmserrorm",
+            "type": "number"
+          },
+          "transform": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 6,
+            "minItems": 6,
+            "title": "Transform",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "crs",
+          "transform",
+          "imageWidth",
+          "imageHeight",
+          "footprint",
+          "bounds",
+          "rmsErrorM",
+          "maximumErrorM",
+          "leaveOneOutRmsM",
+          "controlPointCoverage",
+          "approximateMPerPixel",
+          "points",
+          "warnings"
+        ],
+        "title": "ImageRegistrationResult",
         "type": "object"
       },
       "InvestigationCreate": {
@@ -24551,6 +24845,336 @@
         ]
       }
     },
+    "/api/v1/research/evidence/{evidence_id}/image/registrations": {
+      "get": {
+        "operationId": "listing_api_v1_research_evidence__evidence_id__image_registrations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ImageRegistrationRead"
+                  },
+                  "title": "Response Listing Api V1 Research Evidence  Evidence Id  Image Registrations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Listing",
+        "tags": [
+          "land image alignment"
+        ]
+      },
+      "post": {
+        "operationId": "create_api_v1_research_evidence__evidence_id__image_registrations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageRegistrationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageRegistrationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create",
+        "tags": [
+          "land image alignment"
+        ]
+      }
+    },
+    "/api/v1/research/evidence/{evidence_id}/image/registrations/preview": {
+      "post": {
+        "operationId": "preview_api_v1_research_evidence__evidence_id__image_registrations_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageRegistrationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageRegistrationResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Preview",
+        "tags": [
+          "land image alignment"
+        ]
+      }
+    },
     "/api/v1/research/findings/{finding_id}": {
       "put": {
         "operationId": "disposition_api_v1_research_findings__finding_id__put",
@@ -24653,6 +25277,326 @@
         "summary": "Disposition",
         "tags": [
           "land research"
+        ]
+      }
+    },
+    "/api/v1/research/image-registrations/{registration_id}": {
+      "get": {
+        "operationId": "get_api_v1_research_image_registrations__registration_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "registration_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Registration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageRegistrationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get",
+        "tags": [
+          "land image alignment"
+        ]
+      }
+    },
+    "/api/v1/research/image-registrations/{registration_id}/download": {
+      "get": {
+        "operationId": "download_api_v1_research_image_registrations__registration_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "registration_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Registration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/tiff": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Download",
+        "tags": [
+          "land image alignment"
+        ]
+      }
+    },
+    "/api/v1/research/image-registrations/{registration_id}/tiles/{z}/{x}/{y}.png": {
+      "get": {
+        "operationId": "tile_api_v1_research_image_registrations__registration_id__tiles__z___x___y__png_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "registration_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Registration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "z",
+            "required": true,
+            "schema": {
+              "title": "Z",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "x",
+            "required": true,
+            "schema": {
+              "title": "X",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "y",
+            "required": true,
+            "schema": {
+              "title": "Y",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Tile",
+        "tags": [
+          "land image alignment"
         ]
       }
     },

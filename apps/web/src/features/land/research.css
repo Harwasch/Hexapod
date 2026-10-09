@@ -435,3 +435,131 @@
 .land-archive-storage code {
   overflow-wrap: anywhere;
 }
+
+.land-alignment {
+  border-top: 1px solid var(--control-border);
+  margin-top: 16px;
+  padding-top: 12px;
+}
+.land-alignment > label,
+.land-saved-alignment > label,
+.land-alignment-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  font-size: 12px;
+}
+.land-alignment input:not([type="range"]),
+.land-alignment textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--surface-2, #ffffff0a);
+  color: inherit;
+  font: inherit;
+}
+.land-alignment textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+.land-alignment-image-wrap {
+  padding: 12px;
+  background: #00000025;
+  border-radius: 8px;
+}
+.land-alignment .land-alignment-image {
+  display: block;
+  position: relative;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: crosshair;
+  touch-action: manipulation;
+}
+.land-alignment .land-alignment-image img {
+  width: 100%;
+  height: auto;
+  border-radius: 0;
+  pointer-events: none;
+}
+.land-alignment-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid white;
+  background: #195b54;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  box-shadow: 0 1px 4px #0009;
+}
+.land-alignment-marker.is-pending {
+  background: #a2450a;
+}
+.land-alignment-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  min-width: 0;
+  margin: 10px 0;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+}
+.land-alignment-fields legend {
+  font-size: 12px;
+}
+.land-alignment-points {
+  list-style: none;
+  padding: 0;
+}
+.land-alignment-points li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--control-border);
+  font-size: 12px;
+}
+.land-alignment-points span {
+  display: block;
+  margin: 5px 0;
+  font-variant-numeric: tabular-nums;
+}
+.land-alignment-fit {
+  padding: 12px;
+  background: #ffffff06;
+  border-radius: 8px;
+  margin: 12px 0;
+  font-size: 12px;
+}
+.land-alignment-fit > dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.land-alignment-fit dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.land-alignment-fit ul {
+  padding-left: 16px;
+  line-height: 1.5;
+}
+.land-saved-alignment {
+  border-top: 1px solid var(--control-border);
+  padding: 12px 0;
+}
+.land-saved-alignment h6 {
+  font-size: 14px;
+  margin: 0;
+}
+.land-saved-alignment code {
+  overflow-wrap: anywhere;
+}

@@ -7,6 +7,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
 import { useArchiveImage } from "./useArchiveImage";
+import { ArchiveMapAlignment } from "./ArchiveMapAlignment";
 
 function ArchiveCard({
   id,
@@ -204,6 +205,15 @@ function ArchiveCard({
           Inspect this image
         </button>
       </div>
+      {media.kind === "historical-map" && archived.metadata && archived.url && (
+        <ArchiveMapAlignment
+          id={id}
+          image={archived.metadata}
+          url={archived.url}
+          title={media.title}
+          attribution={evidence.attribution}
+        />
+      )}
       <details>
         <summary>Dates, attribution and interpretation</summary>
         <p>{media.dateMeaning}</p>
