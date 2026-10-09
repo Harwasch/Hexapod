@@ -1,9 +1,12 @@
 import { create } from "zustand";
 
 import {
+  DEFAULT_VARIANTS,
   findVariant,
   hasVariants,
   NO_VARIANTS,
+  resolvePick,
+  TODAY_PICK,
   VARIANT_SYSTEMS,
   type ScanVariants,
   type VariantOf,
@@ -14,7 +17,10 @@ import {
 export type VariantStatus =
   { state: "loading" } | { state: "ready" } | { state: "error"; message: string };
 
-/** Per system, the name of the variant picked; a system absent is Today. */
+/**
+ * Per system, the name of the variant picked. A system absent is its default variant when it
+ * has one (`DEFAULT_VARIANTS`), else Today; Today picked over a default is `TODAY_PICK`.
+ */
 export type VariantPicks = Partial<Record<VariantSystem, string>>;
 
 /** What a loaded scan offers: its variants, and per system whether it has its own (Today). */
@@ -103,8 +109,9 @@ export const useVariants = create<VariantsState>()((set) => ({
   pick: (assetId, system, name) =>
     set((s) => {
       const current = s.picks[assetId] ?? {};
-      if ((current[system] ?? null) === name) return s;
-      const next: VariantPicks = withEntry(current, system, name ?? undefined);
+      const stored = name ?? (DEFAULT_VARIANTS[system] ? TODAY_PICK : undefined);
+      if (current[system] === stored) return s;
+      const next: VariantPicks = withEntry(current, system, stored);
       const picks =
         Object.keys(next).length > 0 ? { ...s.picks, [assetId]: next } : without(s.picks, assetId);
       writePicks(picks);
@@ -136,7 +143,11 @@ export function pickedVariant<S extends VariantSystem>(
   system: S,
   variants: ScanVariants = useVariants.getState().offered[assetId] ?? NO_VARIANTS,
 ): VariantOf<S> | null {
-  return findVariant(variants, system, useVariants.getState().picks[assetId]?.[system]);
+  return findVariant(
+    variants,
+    system,
+    resolvePick(system, useVariants.getState().picks[assetId]?.[system]),
+  );
 }
 
 /** Calls `listener` whenever `assetId`'s pick for `system` changes. Returns the unsubscriber. */

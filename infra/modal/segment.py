@@ -140,6 +140,17 @@ VARIANT_SCRIPTS: dict[str, tuple[str, ...]] = {
         "--boxes", "segment_models:Sam2BoxMasks",
         "--namer", "segment_models:QwenNamer",
     ),
+    # Concept first: Qwen names the things in view, Grounding DINO boxes each one and SAM 2.1
+    # cuts it, SigLIP 2 labels the ground's cover (all Apache-2.0). Chosen over SAM 3, whose
+    # masks came out splotchy. Run it with `views=64` (no coverage rounds): spool or pumpkin
+    # ~7 min, ~$0.13 each.
+    "concept-first-standin": (
+        "concept_scene.py",
+        "--vlm", "concept_models:QwenVocabulary",
+        "--concepts", "concept_models:GroundedSam2Concepts",
+        "--masks", "segment_models:Sam2LargeMasks",
+        "--stand-in",
+    ),
 }  # fmt: skip
 VARIANT_TIMEOUT_S = 50 * 60
 #: What a variant adds to the main process's memory: SAM 2.1 large and Qwen3-VL 4B's host

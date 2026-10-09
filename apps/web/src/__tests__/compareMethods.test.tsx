@@ -101,7 +101,7 @@ describe("Compare methods", () => {
     expect(within(objects).getByText("One object a thing.")).toBeVisible();
     expect(objects).toHaveAttribute("data-picked", "whole");
     await user.click(within(objects).getByRole("radio", { name: "Today" }));
-    expect(useVariants.getState().picks.scan?.objects).toBeUndefined();
+    expect(useVariants.getState().picks.scan?.objects).toBe(TODAY);
     expect(objects).toHaveAttribute("data-picked", TODAY);
   });
 

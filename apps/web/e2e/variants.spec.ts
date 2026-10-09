@@ -133,7 +133,7 @@ function spoolLike(variants: Record<string, Entry[]>): Record<string, Entry[]> {
         "Takes the ground out first, then splits what stands on it.",
       ],
       [
-        "concept-first",
+        "concept-first-standin",
         "B · Concept first",
         "Names what is there first, then finds each thing's splats.",
       ],

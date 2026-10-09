@@ -6,6 +6,8 @@ import { GlassButton, GlassPopover, GlassSegmentedControl } from "@twin/ui";
 
 import {
   findVariant,
+  resolvePick,
+  TODAY_PICK,
   lookFor,
   SYSTEM_LABELS,
   VARIANT_SYSTEMS,
@@ -15,7 +17,7 @@ import { useSettings } from "@/state/settings";
 import { useVariants, type OfferedVariants, type VariantStatus } from "@/state/variants";
 
 /** The value that stands for Today in a row's control (a variant's name never starts with ":"). */
-export const TODAY = ":today";
+export const TODAY = TODAY_PICK;
 
 /**
  * Segments side by side while the choices fit one line; beyond that the same radio group as a
@@ -79,7 +81,7 @@ function SystemRow({
   const status = useVariants((s) => s.status[assetId]?.[system]);
   const pick = useVariants((s) => s.pick);
   const variants = offered[system];
-  const variant = findVariant(offered, system, picked);
+  const variant = findVariant(offered, system, resolvePick(system, picked));
   const value = variant?.name ?? TODAY;
   const about = variant ? variant.about : todayAbout(system, offered.today[system]);
   const options = [
