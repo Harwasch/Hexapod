@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from app.models.land_raster import LandRaster
 from app.models.land_solar import LandSolar
 from app.models.research import Evidence, Finding, ResearchArtifact, ResearchMessage, ResearchRun
+from app.research.calculations import METHOD, calculate
+from app.schemas.calculations import CalculationOutput
 from app.schemas.research import (
     ArtifactContent,
     EvidenceContent,
@@ -175,6 +177,11 @@ def save_artifact(
     db: Session, run_id: uuid.UUID, token: uuid.UUID, key: str, content: ArtifactContent
 ) -> uuid.UUID:
     run = locked(db, run_id, token)
+    if isinstance(content.output, CalculationOutput):
+        expected = calculate(content.output.request)
+        if content.output != expected:
+            raise InvalidInputError("Calculation results must match the saved recipe exactly.")
+        content = content.model_copy(update={"method": METHOD})
     ids = content.evidence_ids[:]
     if isinstance(content.output, TimelineOutput):
         ids.extend(

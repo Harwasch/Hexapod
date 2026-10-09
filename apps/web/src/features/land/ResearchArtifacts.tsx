@@ -6,124 +6,19 @@ import { ResearchMapExplorer } from "./ResearchMapExplorer";
 import { ArchiveGallery } from "./ArchiveGallery";
 import { SolarAssessmentView } from "./SolarAssessmentView";
 import { LandRasterView } from "./LandRasterView";
-
-type Chart = Extract<ResearchArtifact["output"], { kind: "chart" }>;
-
-function ChartView({ output }: { output: Chart }) {
-  const values = output.series.flatMap((series) =>
-    series.values.filter((value): value is number => value !== null && Number.isFinite(value)),
-  );
-  const min = Math.min(0, ...values),
-    max = Math.max(0, ...values),
-    range = max - min || 1;
-  const x = (i: number) => 40 + i * (520 / Math.max(1, output.labels.length - 1));
-  const y = (value: number) => 170 - ((value - min) / range) * 145;
-  return (
-    <>
-      <svg
-        viewBox="0 0 600 215"
-        role="img"
-        aria-label={`${output.yLabel}, ${output.unit}, by ${output.xLabel}. Values are in the table below.`}
-        className="land-chart"
-      >
-        <line x1="35" x2="565" y1={y(0)} y2={y(0)} stroke="currentColor" opacity="0.25" />
-        <text x="5" y="18" fontSize="10" fill="currentColor">
-          {max.toLocaleString(undefined, { maximumFractionDigits: 1 })}
-        </text>
-        {output.series.map((series, seriesIndex) => (
-          <g
-            key={series.label}
-            className={`land-chart-series land-chart-series-${seriesIndex % 3}`}
-          >
-            {output.chartType === "line" &&
-              series.values.map((value, i) => {
-                const previous = series.values[i - 1];
-                return value !== null && previous !== null && previous !== undefined ? (
-                  <line
-                    key={i}
-                    x1={x(i - 1)}
-                    x2={x(i)}
-                    y1={y(previous)}
-                    y2={y(value)}
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  />
-                ) : null;
-              })}
-            {series.values.map((value, i) =>
-              value === null ? null : output.chartType === "bar" ? (
-                <rect
-                  key={i}
-                  x={x(i) - 10 + seriesIndex * (20 / output.series.length)}
-                  y={Math.min(y(0), y(value))}
-                  width={Math.max(1, 20 / output.series.length - 1)}
-                  height={Math.max(1, Math.abs(y(value) - y(0)))}
-                  fill="currentColor"
-                >
-                  <title>
-                    {series.label}: {output.labels[i]} · {value} {output.unit}
-                  </title>
-                </rect>
-              ) : (
-                <circle key={i} cx={x(i)} cy={y(value)} r="3" fill="currentColor">
-                  <title>
-                    {series.label}: {output.labels[i]} · {value} {output.unit}
-                  </title>
-                </circle>
-              ),
-            )}
-          </g>
-        ))}
-        {output.labels.map((label, i) =>
-          i % Math.max(1, Math.ceil(output.labels.length / 12)) === 0 ? (
-            <text key={i} x={x(i)} y="192" fontSize="9" textAnchor="middle" fill="currentColor">
-              {label.slice(0, 12)}
-            </text>
-          ) : null,
-        )}
-      </svg>
-      <p className="land-footnote">
-        {output.yLabel} · {output.unit}
-      </p>
-      <details>
-        <summary>View chart values</summary>
-        <div className="land-table-wrap" tabIndex={0} role="region" aria-label="Chart values">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">{output.xLabel}</th>
-                {output.series.map((series) => (
-                  <th key={series.label} scope="col">
-                    {series.label} ({output.unit})
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {output.labels.map((label, i) => (
-                <tr key={i}>
-                  <th scope="row">{label}</th>
-                  {output.series.map((series) => (
-                    <td key={series.label}>{series.values[i] ?? "No data"}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
-    </>
-  );
-}
+import { ChartView } from "./ResearchChart";
+import { CalculationView } from "./CalculationView";
 
 export function ResearchArtifactView({
   artifact,
   evidence,
   onAsk,
+  onEvidence,
 }: {
   artifact: ResearchArtifact;
   evidence?: LandEvidence[];
   onAsk?: () => void;
+  onEvidence?: (id: string) => void;
 }) {
   const output = artifact.output;
   return (
@@ -147,6 +42,14 @@ export function ResearchArtifactView({
         </>
       )}
       {output.kind === "raster" && <LandRasterView id={output.rasterId} />}
+      {output.kind === "calculation" && (
+        <CalculationView
+          artifact={artifact}
+          output={output}
+          evidence={evidence}
+          onEvidence={onEvidence}
+        />
+      )}
       {output.kind === "chart" && <ChartView output={output} />}
       {output.kind === "table" && (
         <div className="land-table-wrap" tabIndex={0} role="region" aria-label={artifact.title}>

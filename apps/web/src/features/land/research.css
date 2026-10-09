@@ -706,3 +706,12 @@
 .land-selected-map-feature h4 {
   margin: 6px 0;
 }
+
+.land-calculation section {
+  border-top: 1px solid var(--control-border);
+  padding-block: 0.6rem;
+}
+.land-calculation code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

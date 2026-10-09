@@ -887,16 +887,19 @@ export function LandResearch({ land }: { land: LandArea }) {
               <ResearchArtifactView
                 artifact={artifact}
                 evidence={detail.data.evidence}
+                onEvidence={(id) => void viewEvidence(id)}
                 onAsk={() => {
                   setTab("conversation");
                   requestAnimationFrame(() => questionInput.current?.focus());
                 }}
               />
-              <div className="land-actions">
-                <button type="button" onClick={() => void viewEvidence(artifact.evidenceIds[0])}>
-                  Inspect source evidence
-                </button>
-              </div>
+              {artifact.evidenceIds.length > 0 && (
+                <div className="land-actions">
+                  <button type="button" onClick={() => void viewEvidence(artifact.evidenceIds[0])}>
+                    Inspect source evidence
+                  </button>
+                </div>
+              )}
             </div>
           ))}
           {!detail.data?.artifacts.length && (

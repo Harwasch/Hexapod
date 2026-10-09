@@ -2935,6 +2935,86 @@ export interface components {
              */
             startDate: string;
         };
+        /** CalculationFormula */
+        CalculationFormula: {
+            /** Expression */
+            expression: string;
+            /** Label */
+            label: string;
+            /** Name */
+            name: string;
+            /** Unit */
+            unit: string;
+        };
+        /** CalculationInput */
+        CalculationInput: {
+            /** Basis */
+            basis: string;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Label */
+            label: string;
+            /** Name */
+            name: string;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "evidence" | "question" | "assumption";
+            /** Unit */
+            unit: string;
+            /** Values */
+            values: (number | null)[];
+        };
+        /** CalculationIssue */
+        CalculationIssue: {
+            /** Column */
+            column: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "missing" | "undefined";
+            /** Message */
+            message: string;
+            /** Row */
+            row: number;
+        };
+        /** CalculationOutput */
+        CalculationOutput: {
+            /**
+             * Engineversion
+             * @constant
+             */
+            engineVersion: "arithmetic-v1";
+            /** Issues */
+            issues?: components["schemas"]["CalculationIssue"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "calculation";
+            request: components["schemas"]["CalculationRequest"];
+            /** Requestsha256 */
+            requestSha256: string;
+            /** Rows */
+            rows: {
+                [key: string]: number | null;
+            }[];
+        };
+        /** CalculationRequest */
+        CalculationRequest: {
+            /** Formulas */
+            formulas: components["schemas"]["CalculationFormula"][];
+            /** Inputs */
+            inputs: components["schemas"]["CalculationInput"][];
+            /** Limitations */
+            limitations: string;
+            /** Purpose */
+            purpose: string;
+            /** Rowlabels */
+            rowLabels: string[];
+        };
         /** CameraBookmarkCreate */
         CameraBookmarkCreate: {
             /**
@@ -6927,7 +7007,7 @@ export interface components {
             /** Method */
             method: string;
             /** Output */
-            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["SolarOutput"] | components["schemas"]["RasterOutput"] | components["schemas"]["GalleryOutput"];
+            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["SolarOutput"] | components["schemas"]["RasterOutput"] | components["schemas"]["GalleryOutput"] | components["schemas"]["CalculationOutput"];
             /**
              * Runid
              * Format: uuid
@@ -6950,7 +7030,7 @@ export interface components {
             /** Method */
             method: string;
             /** Output */
-            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["SolarOutput"] | components["schemas"]["RasterOutput"] | components["schemas"]["GalleryOutput"];
+            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["SolarOutput"] | components["schemas"]["RasterOutput"] | components["schemas"]["GalleryOutput"] | components["schemas"]["CalculationOutput"];
             /**
              * Runid
              * Format: uuid
@@ -8570,6 +8650,11 @@ export type SchemaBoundarySplit = components['schemas']['BoundarySplit'];
 export type SchemaBoundarySplitResult = components['schemas']['BoundarySplitResult'];
 export type SchemaBoundingBox = components['schemas']['BoundingBox'];
 export type SchemaBusyWindow = components['schemas']['BusyWindow'];
+export type SchemaCalculationFormula = components['schemas']['CalculationFormula'];
+export type SchemaCalculationInput = components['schemas']['CalculationInput'];
+export type SchemaCalculationIssue = components['schemas']['CalculationIssue'];
+export type SchemaCalculationOutput = components['schemas']['CalculationOutput'];
+export type SchemaCalculationRequest = components['schemas']['CalculationRequest'];
 export type SchemaCameraBookmarkCreate = components['schemas']['CameraBookmarkCreate'];
 export type SchemaCameraBookmarkRead = components['schemas']['CameraBookmarkRead'];
 export type SchemaCandidateRequest = components['schemas']['CandidateRequest'];

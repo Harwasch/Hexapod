@@ -1987,6 +1987,270 @@
         "title": "BusyWindow",
         "type": "object"
       },
+      "CalculationFormula": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Expression",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,39}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "unit": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "expression",
+          "unit"
+        ],
+        "title": "CalculationFormula",
+        "type": "object"
+      },
+      "CalculationInput": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Basis",
+            "type": "string"
+          },
+          "evidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Evidenceids",
+            "type": "array"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9_]{0,39}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "evidence",
+              "question",
+              "assumption"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "unit": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Unit",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "maximum": 1e+100,
+                  "minimum": -1e+100,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "unit",
+          "values",
+          "origin",
+          "basis"
+        ],
+        "title": "CalculationInput",
+        "type": "object"
+      },
+      "CalculationIssue": {
+        "additionalProperties": false,
+        "properties": {
+          "column": {
+            "pattern": "^[a-z][a-z0-9_]{0,39}$",
+            "title": "Column",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "missing",
+              "undefined"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "row": {
+            "maximum": 499.0,
+            "minimum": 0.0,
+            "title": "Row",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "row",
+          "column",
+          "kind",
+          "message"
+        ],
+        "title": "CalculationIssue",
+        "type": "object"
+      },
+      "CalculationOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "engineVersion": {
+            "const": "arithmetic-v1",
+            "title": "Engineversion",
+            "type": "string"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/CalculationIssue"
+            },
+            "maxItems": 10000,
+            "title": "Issues",
+            "type": "array"
+          },
+          "kind": {
+            "const": "calculation",
+            "title": "Kind",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/CalculationRequest"
+          },
+          "requestSha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Requestsha256",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "maximum": 1e+100,
+                    "minimum": -1e+100,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "engineVersion",
+          "request",
+          "requestSha256",
+          "rows"
+        ],
+        "title": "CalculationOutput",
+        "type": "object"
+      },
+      "CalculationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "formulas": {
+            "items": {
+              "$ref": "#/components/schemas/CalculationFormula"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Formulas",
+            "type": "array"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/CalculationInput"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Inputs",
+            "type": "array"
+          },
+          "limitations": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Limitations",
+            "type": "string"
+          },
+          "purpose": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Purpose",
+            "type": "string"
+          },
+          "rowLabels": {
+            "items": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Rowlabels",
+            "type": "array"
+          }
+        },
+        "required": [
+          "purpose",
+          "limitations",
+          "rowLabels",
+          "inputs",
+          "formulas"
+        ],
+        "title": "CalculationRequest",
+        "type": "object"
+      },
       "CameraBookmarkCreate": {
         "additionalProperties": false,
         "properties": {
@@ -13163,7 +13427,6 @@
               "type": "string"
             },
             "maxItems": 100,
-            "minItems": 1,
             "title": "Evidenceids",
             "type": "array"
           },
@@ -13191,6 +13454,7 @@
           "output": {
             "discriminator": {
               "mapping": {
+                "calculation": "#/components/schemas/CalculationOutput",
                 "chart": "#/components/schemas/ChartOutput",
                 "document": "#/components/schemas/DocumentOutput",
                 "gallery": "#/components/schemas/GalleryOutput",
@@ -13226,6 +13490,9 @@
               },
               {
                 "$ref": "#/components/schemas/GalleryOutput"
+              },
+              {
+                "$ref": "#/components/schemas/CalculationOutput"
               }
             ],
             "title": "Output"
@@ -13270,7 +13537,6 @@
               "type": "string"
             },
             "maxItems": 100,
-            "minItems": 1,
             "title": "Evidenceids",
             "type": "array"
           },
@@ -13288,6 +13554,7 @@
           "output": {
             "discriminator": {
               "mapping": {
+                "calculation": "#/components/schemas/CalculationOutput",
                 "chart": "#/components/schemas/ChartOutput",
                 "document": "#/components/schemas/DocumentOutput",
                 "gallery": "#/components/schemas/GalleryOutput",
@@ -13323,6 +13590,9 @@
               },
               {
                 "$ref": "#/components/schemas/GalleryOutput"
+              },
+              {
+                "$ref": "#/components/schemas/CalculationOutput"
               }
             ],
             "title": "Output"

@@ -9,7 +9,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, reviewed line splitting, boundary and visible-feature snapping with retained drawing-guide provenance, geospatial imports, revisions, reviewed-draft and unfinished-operation recovery | Broader cadastral coverage and large/dateline corridor handling |
-| Research | Durable worker, resumable authenticated live progress with incremental polling fallback, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, linked map/list feature inspection with source evidence and pinned agent follow-ups, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
+| Research | Durable worker, resumable authenticated live progress with incremental polling fallback, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios and reproducible general arithmetic recipes, linked map/list feature inspection with source evidence and pinned agent follow-ups, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | Verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
@@ -2005,3 +2005,54 @@ The test did not save a land record. Artifacts: `/tmp/land-mapped-snap-result.js
 `/tmp/land-mapped-snap-desktop.png`, `/tmp/land-mapped-snap-mobile.png`,
 `/tmp/land-mapped-snap-provenance.png`. The isolated API and research worker were restarted with
 the updated optional source schema. No database migration or production deployment is involved.
+
+
+## Implemented increment: reproducible general calculations
+
+The agent can now use `calculate` for quantitative questions without adding a dedicated product
+flow for each use case. A saved calculation contains its purpose, limitations, labeled cases,
+unit-bearing inputs, input origins/bases and citations, ordered formulas, full-precision numeric
+results, a canonical request hash and the arithmetic engine version. Examples include comparing
+planting costs or converting measurements; this does not introduce a first-class roof feature.
+
+The interpreter supports bounded arithmetic and registered numeric functions, with shared or
+per-case inputs and references to earlier formula results. It does not execute arbitrary code.
+Recipes allow at most 500 cases, 20 inputs and 20 formulas; each expression has at most 100 AST
+nodes. Non-finite/out-of-range values, undeclared or future references, executable Python,
+attributes, subscripts and unsupported calls are rejected. Missing inputs and domain/range errors
+remain explicit result gaps, with per-cell explanations; a real zero remains zero. Units are
+labels, so conversions must be expressed in formulas. Computation verifies arithmetic, not the
+agent's transcription, source interpretation or physical assumptions.
+
+Publication recomputes the recipe and rejects altered results, hashes or issues, including the
+ordinary publish-artifact path. The saved method is server-authored. Every evidence-origin input
+requires citations included in the artifact and scoped to the investigation. Calculations based
+entirely on question inputs or declared assumptions may have no citations; other artifact kinds
+still require evidence. Lease fencing and existing output keys preserve publication recovery.
+`read_calculation` pages saved inputs/results only within the current investigation, and subsequent
+runs receive a compact catalog of the latest 20 saved calculations.
+
+Visuals shows a paged results table, optional per-result chart, inspectable input bases and
+formulas, gap explanations and exact input-source buttons. Input values and charts follow the
+same 25-case page. A JSON download retains the complete recipe, precision, all rows and citations.
+Assumption-only artifacts do not show an empty source-inspection button. The existing chart view
+was extracted for reuse, preserving its behavior. No new navigation or database migration is
+required; generated OpenAPI/TypeScript contracts include the calculation output.
+
+Validation: 44 focused API/worker tests and 15 frontend tests passed. Coverage includes malicious
+and unsupported expressions, known arithmetic, scalar broadcasting, formula dependencies,
+missing/domain/overflow results, stable hashes, page boundaries, rejected forged outputs,
+citation isolation, idempotency, a deterministic calculate/read/complete worker loop, exact input
+source selection, synchronized UI pagination, download failures and full-recipe downloads.
+API-wide lint/format/type checks, web type/lint checks, the production build and all seven land
+Chromium regressions passed. The three calculation UI tests were rerun after test typing fixes.
+The existing PlayCanvas worker-module externalization warnings remain.
+
+A Chromium check on the public National Mall software fixture used explicitly synthetic
+calculation data without writing research findings. Desktop and 390px phone screenshots were
+inspected. It verified zero versus missing values, formulas/gap explanations, per-page charts and
+inputs, a 30-row JSON download and no empty citation action. No page errors or unintended overflow
+occurred. Artifacts: `/tmp/land-calculation-result.json`, `/tmp/land-calculation-desktop.png`,
+`/tmp/land-calculation-mobile.png`. API/worker acceptance used a deterministic model fixture;
+live model credentials remain unavailable. The isolated API and worker were restarted, and the
+isolated Vite preview was restored on port 5175. The original checkout and deployment are unchanged.

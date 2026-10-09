@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import Field, HttpUrl, model_validator
 
 from app.schemas.base import CamelModel
+from app.schemas.calculations import CalculationOutput
 from app.schemas.geojson import Footprint, MapGeometry
 from app.schemas.land_archives import ArchiveMedia
 from app.schemas.land_documents import DocumentLocator
@@ -248,7 +249,8 @@ Output = Annotated[
     | TimelineOutput
     | SolarOutput
     | RasterOutput
-    | GalleryOutput,
+    | GalleryOutput
+    | CalculationOutput,
     Field(discriminator="kind"),
 ]
 
@@ -256,8 +258,24 @@ Output = Annotated[
 class ArtifactContent(CamelModel):
     title: str = Field(min_length=1, max_length=300)
     method: str = Field(min_length=1, max_length=5000)
-    evidence_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    evidence_ids: list[uuid.UUID] = Field(max_length=100)
     output: Output
+
+    @model_validator(mode="after")
+    def cited(self) -> ArtifactContent:
+        if isinstance(self.output, CalculationOutput):
+            required = {
+                identifier
+                for item in self.output.request.inputs
+                for identifier in item.evidence_ids
+            }
+            if not required.issubset(self.evidence_ids):
+                raise ValueError(
+                    "Calculation input citations must be included in artifact evidence."
+                )
+        elif not self.evidence_ids:
+            raise ValueError("Research artifacts require source evidence.")
+        return self
 
 
 class ResearchArtifactRead(ArtifactContent):

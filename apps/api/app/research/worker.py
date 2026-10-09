@@ -30,10 +30,18 @@ from app.models.land_feature import LandFeature
 from app.models.land_raster import LandRaster
 from app.models.land_solar import LandSolar
 from app.models.land_survey import LandSurvey
-from app.models.research import Evidence, Investigation, ResearchMessage, ResearchRun
+from app.models.research import (
+    Evidence,
+    Investigation,
+    ResearchArtifact,
+    ResearchMessage,
+    ResearchRun,
+)
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.research import inventory as inventory_research
 from app.research import queue
+from app.research.calculations import METHOD, calculate
+from app.research.calculations import page as calculation_page
 from app.research.documents import retrieve as retrieve_documents
 from app.research.ecology_outputs import ecology_outputs
 from app.research.focus import model_context as focus_context
@@ -42,6 +50,8 @@ from app.research.model import (
     ActionDraftAction,
     ArchiveImageAction,
     ArtifactAction,
+    CalculateAction,
+    CalculationReadAction,
     ClaudeResearchModel,
     CompleteAction,
     DocumentOcrAction,
@@ -74,6 +84,7 @@ from app.research.providers.open_data import OVERVIEW_SOURCES, SOURCES, retrieve
 from app.research.providers.taxonomy import match as match_taxon
 from app.research.scenarios import read as read_scenario
 from app.research.search import ClaudeResearchSearch, ResearchSearch
+from app.schemas.calculations import CalculationOutput
 from app.schemas.geojson import Footprint, Point
 from app.schemas.land_ecology import EcologyRequest, TaxonQuery
 from app.schemas.land_features import InventoryLocator
@@ -1157,6 +1168,25 @@ class ResearchWorker:
                     .limit(150)
                 )
             ]
+            saved_calculations = [
+                {
+                    "id": str(item.id),
+                    "title": item.content["title"],
+                    "rowCount": len(item.content["output"]["rows"]),
+                    "engineVersion": item.content["output"]["engine_version"],
+                    "issueCount": len(item.content["output"].get("issues", [])),
+                }
+                for item in db.scalars(
+                    select(ResearchArtifact)
+                    .join(ResearchRun, ResearchRun.id == ResearchArtifact.run_id)
+                    .where(
+                        ResearchRun.investigation_id == investigation.id,
+                        ResearchArtifact.content["output"]["kind"].astext == "calculation",
+                    )
+                    .order_by(ResearchArtifact.created_at.desc(), ResearchArtifact.id)
+                    .limit(20)
+                )
+            ]
             state = dict(run.checkpoint) or {
                 "sources": {},
                 "steps": 0,
@@ -1263,6 +1293,7 @@ class ResearchWorker:
                             "currentDate": datetime.now(UTC).date().isoformat(),
                             "conversation": conversation,
                             "savedResearchEvidence": saved_research_evidence,
+                            "savedCalculations": saved_calculations,
                             "savedScenarios": saved_scenarios,
                             "fieldSurveys": field_surveys,
                             "savedSolarAssessments": saved_solar,
@@ -1742,6 +1773,50 @@ class ResearchWorker:
                                 "uncostedSteps": saved_action.uncosted_steps,
                             }
                         )
+                    elif isinstance(action, CalculateAction):
+                        output = calculate(action.request)
+                        identifier = queue.save_artifact(
+                            db,
+                            run_id,
+                            token,
+                            output_key,
+                            ArtifactContent(
+                                title=action.title,
+                                method=METHOD,
+                                evidence_ids=list(
+                                    dict.fromkeys(
+                                        identifier
+                                        for item in action.request.inputs
+                                        for identifier in item.evidence_ids
+                                    )
+                                ),
+                                output=output,
+                            ),
+                        )
+                        result = json.dumps(
+                            {
+                                "artifactId": str(identifier),
+                                "issueCount": len(output.issues),
+                                "readTool": "read_calculation",
+                                "page": calculation_page(output, 0, 3),
+                            }
+                        )
+                    elif isinstance(action, CalculationReadAction):
+                        current = queue.locked(db, run_id, token)
+                        artifact = db.scalar(
+                            select(ResearchArtifact)
+                            .join(ResearchRun, ResearchRun.id == ResearchArtifact.run_id)
+                            .where(
+                                ResearchArtifact.id == action.artifact_id,
+                                ResearchRun.investigation_id == current.investigation_id,
+                            )
+                        )
+                        if artifact is None or artifact.content["output"]["kind"] != "calculation":
+                            raise InvalidInputError(
+                                "Read saved calculations from this investigation only."
+                            )
+                        output = CalculationOutput.model_validate(artifact.content["output"])
+                        result = json.dumps(calculation_page(output, action.offset, action.count))
                     elif isinstance(action, FindingAction):
                         identifier = queue.save_finding(
                             db, run_id, token, output_key, action.finding
