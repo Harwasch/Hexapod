@@ -10,7 +10,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft and unfinished-drawing recovery | Broader cadastral coverage, snapping/splitting, large/dateline corridor handling |
 | Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
-| Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
+| Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Saved views, live identity-provider acceptance, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
@@ -1619,3 +1619,48 @@ Local artifacts: `/tmp/land-action-recovery-browser-result.json`,
 `/tmp/land-action-recovery-desktop.png`, `/tmp/land-action-recovery-mobile.png`.
 The isolated preview API was restarted. Production and the original checkout remain untouched;
 the full feature is still in progress.
+
+
+## Implemented increment: workspace people and invitation links
+
+The workspace panel now exposes display profiles and owner-controlled membership management.
+Owners can change roles, explicitly remove access, create viewer/editor invitation links, and
+revoke unused links. The last owner cannot be removed or demoted; promoting another owner is
+an explicit role change. Display names are chosen by the account holder and are not represented
+as verified identities. Full account identifiers remain available to distinguish duplicate names.
+Workspace catalog refreshes synchronize changed roles and clear inaccessible selected workspaces.
+Membership mutations pin their workspace header so switching workspaces cannot redirect a write.
+
+Invitations use 256-bit random tokens, store only SHA-256 hashes, expire after 1–30 days, and
+admit one authenticated person. Owners can page through prior invitations. Acceptance and
+revocation serialize with membership changes under the workspace lock. Repeating a successful
+acceptance after a lost response returns the membership; removing the person prevents reuse.
+An existing member keeps their role and does not consume another person's invitation. OIDC
+identity is required; the shared pilot token cannot create individual profiles or redeem links.
+
+The browser receives the token in a URL fragment, removes it from the address, and keeps it in
+session storage through sign-in. API inspection and acceptance send it in a request body; tokens
+are excluded from query keys and invitation listings. A native modal provides focus containment,
+keyboard cancellation and a phone layout. The recipient reviews the workspace and role and
+explicitly joins. A missing profile is collected before acceptance. No email or external message
+is sent. Invitation creation displays its link once; after a lost creation response, the owner
+can refresh the list, revoke the uncertain invitation, and create a replacement.
+
+Migration 0026 adds workspace profiles and invitations. The test database passed a 0026 → 0025
+→ 0026 roundtrip; both test and isolated preview databases have been upgraded to 0026. The
+isolated preview API was restarted. Production and the original checkout remain untouched.
+
+Validation: seven backend workspace tests cover role isolation, last-owner protection, profile
+validation, hashed storage, expiry/revocation, retry behavior, removed-member replay, pilot
+rejection, and competing acceptances using independent database sessions. Five focused frontend
+tests cover explicit joining, redirect persistence, role changes, pinned workspace headers and
+removal/role refresh; the existing API-client/capture regression suite also passes (23 combined).
+API lint/format/type checks and generated contracts pass. Browser checks with explicitly mocked
+OIDC state and workspace responses verified role changes, link creation/revocation and explicit
+joining on desktop and a 390px phone, with no page exceptions or unintended horizontal overflow.
+Screenshots were inspected. These checks do not establish a live external identity-provider login.
+Local artifacts: `/tmp/land-workspace-ui-result.json`, `/tmp/land-workspace-desktop.png`,
+`/tmp/land-workspace-mobile.png`, `/tmp/land-workspace-invitation-mobile.png`.
+Web type checking, targeted lint and the production build pass, along with all seven land
+browser regressions. The build retains the existing PlayCanvas worker externalization warnings.
+The complete land exploration feature remains in progress.

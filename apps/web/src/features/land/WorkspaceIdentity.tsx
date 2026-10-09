@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { landUsesOidc, useLandIdentity } from "@/state/landIdentity";
 import { describeError } from "@/lib/log";
+import { WorkspaceMembers } from "./WorkspaceMembers";
+import { WorkspaceInvitation } from "./WorkspaceInvitation";
 import { initializeLandIdentity, signInToLand, signOutOfLand } from "./identity";
 
 export function WorkspaceIdentity() {
@@ -14,10 +16,18 @@ export function WorkspaceIdentity() {
     queryFn: () => unwrap(api.GET("/api/v1/workspaces")),
     enabled: landUsesOidc && Boolean(identity.accessToken),
     retry: false,
+    refetchInterval: 60_000,
   });
   useEffect(() => {
-    if (!identity.workspaceId && workspaces.data?.[0])
-      identity.selectWorkspace(workspaces.data[0].id, workspaces.data[0].role);
+    if (!workspaces.data || !identity.accessToken) return;
+    const selected =
+      workspaces.data.find((workspace) => workspace.id === identity.workspaceId) ??
+      workspaces.data[0];
+    if (
+      (selected?.id ?? null) !== identity.workspaceId ||
+      (selected?.role ?? null) !== identity.role
+    )
+      identity.selectWorkspace(selected?.id ?? null, selected?.role);
   }, [identity, workspaces.data]);
   if (!landUsesOidc) return null;
   return (
@@ -95,6 +105,12 @@ export function WorkspaceIdentity() {
               <button disabled={busy || !name.trim()}>Create</button>
             </form>
           </details>
+          {identity.workspaceId && (
+            <WorkspaceMembers
+              key={`${identity.principalId}/${identity.workspaceId}/${identity.role}`}
+              workspaceId={identity.workspaceId}
+            />
+          )}
           <button
             type="button"
             className="land-back"
@@ -132,5 +148,5 @@ export function LandIdentityBridge() {
       void cache.cancelQueries(filter).then(() => cache.removeQueries(filter));
     });
   }, [cache]);
-  return null;
+  return <WorkspaceInvitation />;
 }

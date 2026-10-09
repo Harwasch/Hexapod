@@ -49,6 +49,8 @@ TABLES = (
     "land_research_messages",
     "land_research_runs",
     "land_investigations",
+    "workspace_invitations",
+    "workspace_profiles",
     "workspace_memberships",
     "workspaces",
     "land_boundary_revisions",

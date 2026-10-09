@@ -49,7 +49,7 @@ from app.models.research import (
 )
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.models.site import Site
-from app.models.workspace import Membership, Workspace
+from app.models.workspace import Membership, Workspace, WorkspaceInvitation, WorkspaceProfile
 
 __all__ = [
     "Artifact",
@@ -108,4 +108,6 @@ __all__ = [
     "Site",
     "UploadStatus",
     "Workspace",
+    "WorkspaceInvitation",
+    "WorkspaceProfile",
 ]

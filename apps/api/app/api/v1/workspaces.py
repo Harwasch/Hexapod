@@ -2,14 +2,26 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from app.api.deps import DbSession
+from app.api.v1.workspace_invitations import router as invitation_router
 from app.api.workspace_deps import Identity, WorkspaceDep
-from app.models.workspace import PILOT_WORKSPACE_ID, Membership, Workspace
-from app.schemas.workspace import IdentityRead, MembershipWrite, WorkspaceCreate, WorkspaceRead
+from app.models.base import utcnow
+from app.models.workspace import PILOT_WORKSPACE_ID, Membership, Workspace, WorkspaceProfile
+from app.schemas.workspace import (
+    IdentityRead,
+    MemberRead,
+    MembershipWrite,
+    ProfileRead,
+    ProfileWrite,
+    WorkspaceCreate,
+    WorkspaceRead,
+)
 from app.services.errors import ConflictError, NotFoundError
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
+router.include_router(invitation_router)
 
 
 @router.get("/identity", response_model=IdentityRead)
@@ -42,11 +54,19 @@ def create_workspace(payload: WorkspaceCreate, db: DbSession, who: Identity) -> 
     return WorkspaceRead(id=row.id, name=row.name, role="owner")
 
 
-@router.get("/members", response_model=list[MembershipWrite])
-def members(db: DbSession, scope: WorkspaceDep) -> list[MembershipWrite]:
+@router.get("/members", response_model=list[MemberRead])
+def members(db: DbSession, scope: WorkspaceDep) -> list[MemberRead]:
     scope.require("owner")
-    rows = db.scalars(select(Membership).where(Membership.workspace_id == scope.id))
-    return [MembershipWrite.model_validate(row) for row in rows]
+    rows = db.execute(
+        select(Membership, WorkspaceProfile.display_name)
+        .outerjoin(WorkspaceProfile, WorkspaceProfile.principal_id == Membership.principal_id)
+        .where(Membership.workspace_id == scope.id)
+        .order_by(Membership.created_at, Membership.principal_id)
+    )
+    return [
+        MemberRead(principal_id=row.principal_id, role=row.role, display_name=name)
+        for row, name in rows
+    ]
 
 
 @router.put("/members", response_model=MembershipWrite)
@@ -97,3 +117,29 @@ def remove_member(principal_id: str, db: DbSession, scope: WorkspaceDep) -> Resp
     db.delete(row)
     db.commit()
     return Response(status_code=204)
+
+
+@router.get("/profile", response_model=ProfileRead)
+def profile(db: DbSession, who: Identity) -> ProfileRead:
+    row = db.get(WorkspaceProfile, who.id)
+    return ProfileRead(
+        principal_id=who.id,
+        mode="pilot" if who.pilot else "oidc",
+        display_name=row.display_name if row else None,
+    )
+
+
+@router.put("/profile", response_model=ProfileRead)
+def update_profile(payload: ProfileWrite, db: DbSession, who: Identity) -> ProfileRead:
+    if who.pilot:
+        raise ConflictError("Individual profiles require OIDC identity.")
+    db.execute(
+        insert(WorkspaceProfile)
+        .values(principal_id=who.id, display_name=payload.display_name)
+        .on_conflict_do_update(
+            index_elements=[WorkspaceProfile.principal_id],
+            set_={"display_name": payload.display_name, "updated_at": utcnow()},
+        )
+    )
+    db.commit()
+    return ProfileRead(principal_id=who.id, mode="oidc", display_name=payload.display_name)

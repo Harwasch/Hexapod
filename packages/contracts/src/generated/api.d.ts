@@ -2118,6 +2118,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Invitations */
+        get: operations["invitations_api_v1_workspaces_invitations_get"];
+        put?: never;
+        /** Create Invitation */
+        post: operations["create_invitation_api_v1_workspaces_invitations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/invitations/{invitation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Invitation */
+        delete: operations["revoke_invitation_api_v1_workspaces_invitations__invitation_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/invitations/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept Invitation */
+        post: operations["accept_invitation_api_v1_workspaces_invitations_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/invitations/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Inspect Invitation */
+        post: operations["inspect_invitation_api_v1_workspaces_invitations_inspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/members": {
         parameters: {
             query?: never;
@@ -2148,6 +2217,24 @@ export interface paths {
         post?: never;
         /** Remove Member */
         delete: operations["remove_member_api_v1_workspaces_members__principal_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Profile */
+        get: operations["profile_api_v1_workspaces_profile_get"];
+        /** Update Profile */
+        put: operations["update_profile_api_v1_workspaces_profile_put"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4157,6 +4244,104 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** InvitationCreate */
+        InvitationCreate: {
+            /**
+             * Expiresindays
+             * @default 7
+             */
+            expiresInDays?: number;
+            /** Label */
+            label: string;
+            /**
+             * Role
+             * @default viewer
+             * @enum {string}
+             */
+            role?: "editor" | "viewer";
+        };
+        /** InvitationCreated */
+        InvitationCreated: {
+            /** Acceptedat */
+            acceptedAt: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /** Revokedat */
+            revokedAt: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "editor" | "viewer";
+            /** Token */
+            token: string;
+        };
+        /** InvitationPreview */
+        InvitationPreview: {
+            /** Alreadymember */
+            alreadyMember: boolean;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "editor" | "viewer";
+            /** Workspacename */
+            workspaceName: string;
+        };
+        /** InvitationRead */
+        InvitationRead: {
+            /** Acceptedat */
+            acceptedAt: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /** Revokedat */
+            revokedAt: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "editor" | "viewer";
+        };
+        /** InvitationToken */
+        InvitationToken: {
+            /** Token */
+            token: string;
+        };
         /** IonAssetMetadata */
         IonAssetMetadata: {
             /** Attribution */
@@ -5267,6 +5452,18 @@ export interface components {
             /** Unit */
             unit?: string | null;
         };
+        /** MemberRead */
+        MemberRead: {
+            /** Displayname */
+            displayName?: string | null;
+            /** Principalid */
+            principalId: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "editor" | "viewer";
+        };
         /** MembershipWrite */
         MembershipWrite: {
             /** Principalid */
@@ -6003,6 +6200,23 @@ export interface components {
             status: number;
             /** Title */
             title: string;
+        };
+        /** ProfileRead */
+        ProfileRead: {
+            /** Displayname */
+            displayName?: string | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "pilot" | "oidc";
+            /** Principalid */
+            principalId: string;
+        };
+        /** ProfileWrite */
+        ProfileWrite: {
+            /** Displayname */
+            displayName: string;
         };
         /**
          * Provenance
@@ -8068,6 +8282,11 @@ export type SchemaInventoryLocator = components['schemas']['InventoryLocator'];
 export type SchemaInvestigationCreate = components['schemas']['InvestigationCreate'];
 export type SchemaInvestigationDetail = components['schemas']['InvestigationDetail'];
 export type SchemaInvestigationRead = components['schemas']['InvestigationRead'];
+export type SchemaInvitationCreate = components['schemas']['InvitationCreate'];
+export type SchemaInvitationCreated = components['schemas']['InvitationCreated'];
+export type SchemaInvitationPreview = components['schemas']['InvitationPreview'];
+export type SchemaInvitationRead = components['schemas']['InvitationRead'];
+export type SchemaInvitationToken = components['schemas']['InvitationToken'];
 export type SchemaIonAssetMetadata = components['schemas']['IonAssetMetadata'];
 export type SchemaIonReconstructionCapabilities = components['schemas']['IonReconstructionCapabilities'];
 export type SchemaIonStatus = components['schemas']['IonStatus'];
@@ -8110,6 +8329,7 @@ export type SchemaLiveStage = components['schemas']['LiveStage'];
 export type SchemaLiveState = components['schemas']['LiveState'];
 export type SchemaMapFeature = components['schemas']['MapFeature'];
 export type SchemaMapOutput = components['schemas']['MapOutput'];
+export type SchemaMemberRead = components['schemas']['MemberRead'];
 export type SchemaMembershipWrite = components['schemas']['MembershipWrite'];
 export type SchemaMessageRead = components['schemas']['MessageRead'];
 export type SchemaMissingObject = components['schemas']['MissingObject'];
@@ -8146,6 +8366,8 @@ export type SchemaPointCloudShading = components['schemas']['PointCloudShading']
 export type SchemaPolygon = components['schemas']['Polygon'];
 export type SchemaPresignedPart = components['schemas']['PresignedPart'];
 export type SchemaProblem = components['schemas']['Problem'];
+export type SchemaProfileRead = components['schemas']['ProfileRead'];
+export type SchemaProfileWrite = components['schemas']['ProfileWrite'];
 export type SchemaProvenance = components['schemas']['Provenance'];
 export type SchemaProviderRead = components['schemas']['ProviderRead'];
 export type SchemaQualityCounts = components['schemas']['QualityCounts'];
@@ -17775,6 +17997,307 @@ export interface operations {
             };
         };
     };
+    invitations_api_v1_workspaces_invitations_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_invitation_api_v1_workspaces_invitations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationCreated"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revoke_invitation_api_v1_workspaces_invitations__invitation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                invitation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    accept_invitation_api_v1_workspaces_invitations_accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationToken"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    inspect_invitation_api_v1_workspaces_invitations_inspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationToken"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationPreview"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     members_api_v1_workspaces_members_get: {
         parameters: {
             query?: never;
@@ -17792,7 +18315,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MembershipWrite"][];
+                    "application/json": components["schemas"]["MemberRead"][];
                 };
             };
             /** @description Missing or wrong write token */
@@ -17914,6 +18437,122 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    profile_api_v1_workspaces_profile_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_profile_api_v1_workspaces_profile_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileRead"];
+                };
             };
             /** @description Missing or wrong write token */
             401: {

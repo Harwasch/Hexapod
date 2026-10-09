@@ -90,7 +90,8 @@ export const auth: Middleware = {
       const identity = useLandIdentity.getState();
       if (identity.accessToken)
         request.headers.set("Authorization", `Bearer ${identity.accessToken}`);
-      if (identity.workspaceId) request.headers.set("X-Workspace-ID", identity.workspaceId);
+      if (identity.workspaceId && !request.headers.has("X-Workspace-ID"))
+        request.headers.set("X-Workspace-ID", identity.workspaceId);
       return request;
     }
     const token = useSettings.getState().writeToken.trim();
