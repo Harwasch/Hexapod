@@ -35,6 +35,8 @@ export function LandScenarios({ land }: { land: LandArea }) {
   return <Scenarios key={`${scope}:${land.id}`} land={land} scope={scope} />;
 }
 function Scenarios({ land, scope }: { land: LandArea; scope: string }) {
+  const selectedSolarId = useLandContext((state) => state.selectedSolarId);
+  const [analysisToolsOpen, setAnalysisToolsOpen] = useState(false);
   const ready = useLandAccessReady(),
     canEdit = useLandCanEdit();
   const cache = useQueryClient();
@@ -316,16 +318,45 @@ function Scenarios({ land, scope }: { land: LandArea; scope: string }) {
       <p>
         Turn evidence and your assumptions into a calculation you can inspect, revise and compare.
       </p>
-      {!inputs && !recovery && <SolarStudy land={land} onUse={useSolar} />}
       {!inputs && !recovery && canEdit && (
         <div className="land-actions">
-          <button type="button" onClick={() => begin("solar")}>
-            Solar and economics
+          <button
+            type="button"
+            onClick={() => {
+              const context = useLandContext.getState();
+              if (!context.researchQuestion.trim())
+                context.setResearchQuestion(
+                  "Help me explore possible changes to this land. Start with my goals, the constraints, and the evidence needed to compare options.",
+                );
+              context.setSection("discover");
+            }}
+          >
+            Investigate a possibility
           </button>
           <button type="button" onClick={() => begin("restoration")}>
             Restoration and cover
           </button>
         </div>
+      )}
+      {!inputs && !recovery && (
+        <details
+          open={Boolean(selectedSolarId)}
+          onToggle={(event) => setAnalysisToolsOpen(event.currentTarget.open)}
+        >
+          <summary>Additional analysis tools</summary>
+          <p>
+            Use a specialized calculation when it fits your question. These tools keep their
+            assumptions and source evidence available for review.
+          </p>
+          {(analysisToolsOpen || selectedSolarId) && <SolarStudy land={land} onUse={useSolar} />}
+          {canEdit && (
+            <div className="land-actions">
+              <button type="button" onClick={() => begin("solar")}>
+                Solar and economics
+              </button>
+            </div>
+          )}
+        </details>
       )}
       {recovery && canEdit && (
         <div className="land-notice" role="region" aria-label="Recover scenario draft">

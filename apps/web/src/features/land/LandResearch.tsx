@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, BookOpen, Pin, Search, Square, X } from "lucide-react";
 import type {
   components,
@@ -24,6 +24,7 @@ import {
   useResearchStatus,
 } from "./researchApi";
 import { ResearchArtifactView } from "./ResearchArtifacts";
+import { useResearchProgress } from "./useResearchProgress";
 import { LandDocumentViewer } from "./LandDocumentViewer";
 import { VegetationStart } from "./VegetationStart";
 import "./research.css";
@@ -91,10 +92,14 @@ export function EvidenceView({
       )}
       {evidence.inventory && (
         <div className="land-actions">
-          <p>Saved asset revision {evidence.inventory.revision} · {evidence.inventory.section}</p>
+          <p>
+            Saved asset revision {evidence.inventory.revision} · {evidence.inventory.section}
+          </p>
           <button
             type="button"
-            onClick={() => useLandContext.getState().selectInventory(evidence.inventory?.featureId ?? null)}
+            onClick={() =>
+              useLandContext.getState().selectInventory(evidence.inventory?.featureId ?? null)
+            }
           >
             Open current asset
           </button>
@@ -125,7 +130,7 @@ export function LandResearch({ land }: { land: LandArea }) {
     catalog.data?.[0]?.id ??
     null;
   const [offset, setOffset] = useState(0);
-  const detail = useInvestigation(selected, offset);
+  const detail = useInvestigation(selected, offset, 100, 10_000);
   const [tab, setTab] = useState<"overview" | "conversation" | "visuals">("overview");
   const question = useLandContext((state) => state.researchQuestion);
   const setQuestion = useLandContext((state) => state.setResearchQuestion);
@@ -158,28 +163,8 @@ export function LandResearch({ land }: { land: LandArea }) {
   );
   const lastRun = detail.data?.runs.at(-1);
   const running = lastRun?.status === "queued" || lastRun?.status === "running";
-  const progress = useQuery({
-    queryKey: ["land-research", scope, "events", lastRun?.id],
-    enabled: Boolean(lastRun) && ready,
-    queryFn: async () => {
-      const events: ResearchEvent[] = [];
-      for (let page = 0; page < 20; page++) {
-        const batch = await unwrap(
-          api.GET("/api/v1/research/runs/{run_id}/events", {
-            params: {
-              path: { run_id: lastRun?.id ?? "" },
-              query: { after: events.at(-1)?.sequence ?? 0 },
-            },
-          }),
-        );
-        events.push(...batch);
-        if (batch.length < 200) break;
-      }
-      return events;
-    },
-    retry: false,
-    refetchInterval: running ? 1500 : false,
-  });
+  const progress = useResearchProgress(lastRun?.id, running);
+  const [activityLimit, setActivityLimit] = useState(100);
 
   useEffect(() => {
     if (!lastRun?.id || (lastRun?.status !== "succeeded" && lastRun?.status !== "partial")) return;
@@ -556,11 +541,33 @@ export function LandResearch({ land }: { land: LandArea }) {
           )}
         </div>
       )}
+      {running && progress.phase !== "unavailable" && (
+        <p role="status" className="land-footnote">
+          {progress.phase === "live"
+            ? "Live research updates"
+            : progress.phase === "polling"
+              ? "Research updates periodically"
+              : (progress.message ?? "Connecting to research updates…")}
+        </p>
+      )}
+      {progress.phase === "unavailable" && (
+        <p role="alert">
+          {progress.message}{" "}
+          <button type="button" onClick={progress.retry}>
+            Retry updates
+          </button>
+        </p>
+      )}
       {progress.data && progress.data.length > 0 && (
         <details className="land-progress">
           <summary>Research activity</summary>
+          <p>
+            Showing the latest {Math.min(activityLimit, progress.data.length)} of{" "}
+            {progress.data.length} retained updates (up to 2,000).
+          </p>
           <ol>
             {progress.data
+              .slice(-activityLimit)
               .filter((event) => event.kind !== "progress" || event.payload.message)
               .map((event) => (
                 <li key={event.sequence}>
@@ -568,6 +575,11 @@ export function LandResearch({ land }: { land: LandArea }) {
                 </li>
               ))}
           </ol>
+          {activityLimit < progress.data.length && (
+            <button type="button" onClick={() => setActivityLimit((value) => value + 100)}>
+              Show earlier updates
+            </button>
+          )}
         </details>
       )}
       {tab === "overview" && (

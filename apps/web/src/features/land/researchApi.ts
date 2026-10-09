@@ -17,7 +17,7 @@ export function useInvestigations(landId: string) {
   });
 }
 
-export function useInvestigation(id: string | null, offset = 0, limit = 100) {
+export function useInvestigation(id: string | null, offset = 0, limit = 100, pollMs = 1500) {
   const scope = useLandScope();
   const ready = useLandAccessReady();
   return useQuery({
@@ -32,7 +32,7 @@ export function useInvestigation(id: string | null, offset = 0, limit = 100) {
     retry: false,
     refetchInterval: (query) =>
       query.state.data?.runs.some((run) => run.status === "queued" || run.status === "running")
-        ? 1500
+        ? pollMs
         : false,
   });
 }

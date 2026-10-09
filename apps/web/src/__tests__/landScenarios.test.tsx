@@ -69,6 +69,7 @@ it("invalidates a preview when assumptions change and preserves the create reque
   vi.spyOn(api, "GET").mockResolvedValue({ data: [], response: new Response() });
   const post = vi.spyOn(api, "POST").mockResolvedValue({ data: result, response: new Response() });
   mount();
+  fireEvent.click(screen.getByText("Additional analysis tools"));
   fireEvent.click(screen.getByRole("button", { name: "Solar and economics" }));
   fireEvent.change(screen.getByLabelText("Usable module area after exclusions (m²)"), {
     target: { value: "100" },
@@ -289,6 +290,7 @@ it("keeps the current form editable and offers a download when browser storage i
     throw new DOMException("Full", "QuotaExceededError");
   });
   mount();
+  fireEvent.click(screen.getByText("Additional analysis tools"));
   fireEvent.click(screen.getByRole("button", { name: "Solar and economics" }));
   fireEvent.change(screen.getByLabelText("Scenario name"), { target: { value: "Keep my work" } });
   await screen.findByText(

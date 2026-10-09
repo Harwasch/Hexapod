@@ -9,7 +9,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, reviewed line splitting, boundary edge/corner snapping, geospatial imports, revisions, reviewed-draft and unfinished-operation recovery | Broader cadastral coverage, snapping to external mapped features, large/dateline corridor handling |
-| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, linked map/list feature inspection with source evidence, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
+| Research | Durable worker, resumable authenticated live progress with incremental polling fallback, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, linked map/list feature inspection with source evidence, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | Verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
@@ -1828,3 +1828,40 @@ reported no page errors or unintended overflow. The follow-up layout gives selec
 44px touch targets and uses the standard primary action styling. Screenshots were inspected.
 Artifacts: `/tmp/land-split-result.json`, `/tmp/land-split-desktop.png`,
 `/tmp/land-split-mobile.png`. No migration is needed; the isolated preview API was restarted.
+
+
+## Implemented increment: live research progress and optional specialist tools
+
+Research activity now uses the authenticated API client's streaming response, carrying the
+same authorization/workspace headers as other private reads. It resumes from the last accepted
+sequence, deduplicates replays, catches up incrementally, and cancels on navigation, credential
+change or unmount. A buffering/unavailable stream falls back to incremental polling with
+bounded retry delays. Access-expired/revoked signals stop reconnection until an explicit retry
+or refreshed credentials; revoked progress is cleared. Frames are bounded to 1 MiB, UTF-8 and
+split CRLF chunks are handled, and incomplete final frames are replayed rather than accepted.
+
+The client retains up to 2,000 recent activity events, initially displays 100, and lets users
+reveal earlier retained updates. Finding/artifact events refresh the investigation with a short
+coalescing delay; terminal events refresh it immediately. The main research view's periodic
+full-detail fallback is reduced to ten seconds while event delivery supplies prompt updates.
+The durable server event history is unchanged.
+
+Following the user's scope correction, dedicated roof analysis is not a completion requirement.
+Scenarios now leads with Investigate a possibility and Restoration and cover. The general
+entry point moves to the land conversation, preserving an existing question. Solar calculations
+remain available under Additional analysis tools and are loaded only when expanded or when
+opening a saved assessment. Existing saved scenarios remain usable.
+
+Validation: seven stream/parser/hook tests and eight scenario tests pass, covering fragmented
+UTF-8, interrupted frames, cursor consistency, bounded history, reconnection, unsupported-stream
+fallback, access revocation and the existing scenario recovery flows. Web type checking passes.
+A Chromium check injected clearly synthetic research activity over the public National Mall
+fixture; the stream resumed with cursors [1, 2] and the activity appeared exactly once. Initial
+StrictMode requests both began at zero; subsequent catch-up reads used cursors 2 and 3. No
+research findings or records were written by that test. It also verified the optional solar
+entry point and general conversation routing. Desktop/390px phone screenshots were inspected;
+no page errors or unintended overflow occurred. Artifacts: `/tmp/land-live-research-result.json`,
+`/tmp/land-general-scenarios-desktop.png`, `/tmp/land-live-research-mobile.png`.
+
+Targeted web lint and production build also pass. The existing PlayCanvas worker-module
+externalization warnings remain. No schema migration or deployment is part of this increment.
