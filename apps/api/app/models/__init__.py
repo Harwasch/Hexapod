@@ -26,6 +26,7 @@ from app.models.land_document import (
     LandDocumentPage,
 )
 from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureRevision
+from app.models.land_raster import LandRaster, LandRasterBlob
 from app.models.layer import Layer
 from app.models.plan import Plan, PlanRevision
 from app.models.research import (
@@ -70,6 +71,8 @@ __all__ = [
     "LandDocumentPage",
     "LandFeature",
     "LandFeatureRevision",
+    "LandRaster",
+    "LandRasterBlob",
     "LandScenario",
     "LandScenarioRevision",
     "Layer",

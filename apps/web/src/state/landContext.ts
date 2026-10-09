@@ -13,6 +13,13 @@ export interface LandContextLayer {
   features: LandContextFeature[];
   selectedIds?: string[];
 }
+export interface LandRasterLayer {
+  id: string;
+  band: number;
+  bounds: number[];
+  attribution: string;
+  opacity: number;
+}
 export type LandWorkspaceSection = "discover" | "records" | "inventory" | "scenarios" | "actions";
 interface LandContextState {
   researchQuestion: string;
@@ -22,6 +29,11 @@ interface LandContextState {
   selectedInventoryId: string | null;
   selectInventory: (id: string | null) => void;
   layers: Record<string, LandContextLayer>;
+  rasters: Record<string, LandRasterLayer>;
+  rasterErrors: Record<string, string>;
+  setRaster: (layer: LandRasterLayer) => void;
+  removeRaster: (id: string) => void;
+  setRasterError: (id: string, message: string) => void;
   candidates: LandCandidate[];
   selectedIds: string[];
   setCandidates: (candidates: LandCandidate[]) => void;
@@ -40,6 +52,29 @@ export const useLandContext = create<LandContextState>((set, get) => ({
   selectInventory: (selectedInventoryId) =>
     set({ selectedInventoryId, ...(selectedInventoryId ? { section: "inventory" as const } : {}) }),
   layers: {},
+  rasters: {},
+  rasterErrors: {},
+  setRaster: (layer) =>
+    set((state) => ({
+      rasters: Object.fromEntries([
+        ...Object.entries(state.rasters)
+          .filter(([id]) => id !== layer.id)
+          .slice(-1),
+        [layer.id, layer],
+      ]),
+      rasterErrors: Object.fromEntries(
+        Object.entries(state.rasterErrors).filter(([id]) => id !== layer.id),
+      ),
+    })),
+  removeRaster: (id) =>
+    set((state) => ({
+      rasters: Object.fromEntries(Object.entries(state.rasters).filter(([key]) => key !== id)),
+      rasterErrors: Object.fromEntries(
+        Object.entries(state.rasterErrors).filter(([key]) => key !== id),
+      ),
+    })),
+  setRasterError: (id, message) =>
+    set((state) => ({ rasterErrors: { ...state.rasterErrors, [id]: message } })),
   candidates: [],
   selectedIds: [],
   setCandidates: (candidates) =>
@@ -82,6 +117,8 @@ export const useLandContext = create<LandContextState>((set, get) => ({
   clear: () =>
     set({
       layers: {},
+      rasters: {},
+      rasterErrors: {},
       candidates: [],
       selectedIds: [],
       selectedInventoryId: null,

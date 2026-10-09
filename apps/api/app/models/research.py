@@ -69,6 +69,7 @@ class ResearchRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     budget: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     checkpoint: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

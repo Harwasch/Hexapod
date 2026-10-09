@@ -58,6 +58,11 @@ def test_changed_versions_and_non_range_responses_are_rejected() -> None:
         pytest.raises(OSError, match="changed"),
     ):
         file.read(10)
+    with httpx.Client(transport=httpx.MockTransport(changing)) as client:
+        opener = RasterOpener(client, URL, ReadBudget())
+        opener(URL).close()
+        with pytest.raises(OSError, match="changed between reads"):
+            opener(URL)
     with (
         httpx.Client(
             transport=httpx.MockTransport(lambda request: httpx.Response(200, content=DATA))

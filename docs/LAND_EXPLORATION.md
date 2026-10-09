@@ -9,7 +9,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Capability | Current implementation | Remaining work |
 | --- | --- | --- |
 | Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft recovery | Broader cadastral coverage, snapping/splitting, unfinished drawing recovery, large/dateline corridor handling |
-| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts and scenarios | Broader sources, isolated raster/compute tools, agent evaluations and live model validation |
+| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios, isolated terrain raster calculation and private map tiles | Broader raster datasets and compute tools, agent evaluations and live model validation |
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
@@ -687,7 +687,7 @@ and full API lint/format checks pass. Migration checks and the focused frontend 
 This extends the records workflow; it does not complete raster analysis, archives, domain
 analysis, fleet integration or the full acceptance/handoff plan.
 
-## Raster input foundation (analysis/UI still pending)
+## Raster input foundation (historical increment)
 
 `app/analysis/raster_io.py` supplies a read-only range file/opener for Rasterio/GDAL.
 It accepts only registered public raster hosts, refuses redirects and auxiliary paths,
@@ -700,3 +700,62 @@ A live Copernicus GLO-30 catalog/COG check returned the requested 32×32 window 
 tests cover seeking/cache/byte buffers, changing versions, servers ignoring Range, unapproved
 URLs, auxiliary paths and download budgets. This is an input foundation only: zonal terrain
 statistics, private output tiling, map display and other raster domains remain pending.
+
+
+## Implemented increment: terrain raster analysis and map exploration
+
+Migration `0019` adds immutable, private raster metadata/bytes and typed durable analysis
+requests. **Analyze terrain** works without model credentials. The agent can request the
+same calculation through `analyze_raster`, read its results and continue an investigation
+with the saved source evidence. Both paths use the pinned boundary revision. Results from
+older boundaries remain inspectable and are labeled stale.
+
+Copernicus GLO-30 source windows are read through the bounded range transport, resampled
+bilinearly onto a local metric grid and clipped using polygon/hole cell-center inclusion.
+Surface slopes use neighboring source cells before the boundary mask, avoiding false slope
+at exclusion edges. Outputs distinguish missing data from valid zero elevation, report actual
+grid spacing and per-band coverage, and retain statistics, percentiles and distributions.
+The surface model includes buildings/vegetation and uses the source EGM2008 vertical reference;
+it is not surveyed bare-earth terrain, a geotechnical assessment or a local survey datum.
+Small areas without analysis cell centers explicitly have no reliable area summary.
+
+A fixed subprocess enforces memory, CPU, file-size and wall-time limits. Source requests are
+limited to eight tiles, 64 MiB, 256 range requests and a shared time allowance. Source validators
+are pinned across repeated opens as well as within each file. Recovery reuses committed raster
+bytes, cancellation fences late results, and source evidence/artifacts use idempotent keys.
+No generated code executes. Earth Search's explicit match count handles its extra next-page
+link after all matching items have already been returned.
+
+Each private Cloud Optimized GeoTIFF carries named/unit-bearing elevation and slope bands,
+coordinate reference, no-data values and algorithm/source/datum tags. Workspace-scoped API
+routes provide metadata, original download, point sampling and geographic PNG tiles. Every
+route checks workspace access, including images, and returns private/no-store responses.
+The default raster allowance is 2 GiB per workspace (`LAND_RASTER_WORKSPACE_QUOTA_BYTES`),
+with a 16 MiB per-output bound. Analysis extent is limited to 250 km and the requested grid
+may be coarsened to its pixel budget; multipart antimeridian analysis remains future work.
+
+The Visuals view supports measurement selection, an explicit legend, per-band coverage,
+opacity, framing, point sampling, distributions, sources/limitations and GeoTIFF download.
+The Cesium bridge uses the matching geographic tile scheme and bounded map extent, carries
+workspace credentials in request headers, replaces providers after token refresh and removes
+private layers when the land/workspace context is cleared. At most two analysis layers are
+visible together. A displayed layer retains its measurement/opacity when its view reopens.
+
+Browser verification exposed very slow low-zoom virtual-raster reads. Rendering now reprojects
+directly into a fixed 256×256 destination with bounded source arrays/warp memory. Local live
+requests at zoom levels 0, 1 and 15 completed in 74, 57 and 26 ms respectively. A public
+National Mall fixture produced 504 valid samples at 30 m spacing; a real browser loaded 50
+terrain tiles, switched bands, sampled a point, downloaded the file and reopened the saved
+analysis after reload. Desktop/mobile inspection found no page errors or horizontal overflow.
+The preview has no high-resolution basemap catalog, so this does not validate satellite imagery.
+
+Validation: the 78-test land/backend regression run passed before the final export metadata
+and tile refinements; the affected raster suite then passed (10 tests, including typed agent
+use, recovery, cancellation, quotas and private cross-workspace denial). Five migration checks
+and full API lint/format/type checking passed. The final frontend verification passed 57 focused tests across 12 files, including view
+state and token-refresh bridge checks; four existing selection/action Playwright journeys
+passed. Frontend type checking, targeted lint and the feature-enabled production build
+also passed. No live model calls were exercised because credentials remain unconfigured.
+This increment completes the initial terrain path, not the full feature. Archives,
+land-cover/time-series analysis, deeper ecology/solar, selection refinements and fleet
+execution remain in progress or planned. Production deployment remains with its owner.

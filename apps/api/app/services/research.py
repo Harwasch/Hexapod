@@ -134,6 +134,7 @@ def create_run(
             existing.question != payload.question
             or existing.kind != payload.kind
             or ResearchBudget.model_validate(existing.budget) != payload.budget
+            or existing.analysis != (payload.analysis.model_dump() if payload.analysis else None)
         ):
             raise ConflictError(
                 "This request key was already used for a different research request."

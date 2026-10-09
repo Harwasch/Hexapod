@@ -4,6 +4,8 @@ import { useScene } from "@/cesium/SceneContext";
 import { boundsOf } from "@twin/geo";
 import type { ResearchArtifact } from "@twin/contracts";
 
+import { LandRasterView } from "./LandRasterView";
+
 type Chart = Extract<ResearchArtifact["output"], { kind: "chart" }>;
 
 function ChartView({ output }: { output: Chart }) {
@@ -123,13 +125,11 @@ export function ResearchArtifactView({ artifact }: { artifact: ResearchArtifact 
       useLandContext.getState().removeLayer(artifact.id);
       return;
     }
-    useLandContext
-      .getState()
-      .setLayer({
-        id: artifact.id,
-        title: artifact.title,
-        features: output.features.map((feature, index) => ({ id: String(index), ...feature })),
-      });
+    useLandContext.getState().setLayer({
+      id: artifact.id,
+      title: artifact.title,
+      features: output.features.map((feature, index) => ({ id: String(index), ...feature })),
+    });
     const points = output.features.flatMap(({ geometry }) => {
       if (geometry.type === "Point") return [geometry.coordinates];
       if (geometry.type === "LineString") return geometry.coordinates;
@@ -159,6 +159,7 @@ export function ResearchArtifactView({ artifact }: { artifact: ResearchArtifact 
   return (
     <article className="land-artifact">
       <h4>{artifact.title}</h4>
+      {output.kind === "raster" && <LandRasterView id={output.rasterId} />}
       {output.kind === "chart" && <ChartView output={output} />}
       {output.kind === "table" && (
         <div className="land-table-wrap" tabIndex={0} role="region" aria-label={artifact.title}>

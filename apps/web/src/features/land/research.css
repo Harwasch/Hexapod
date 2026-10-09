@@ -291,3 +291,51 @@
 .land-identity:empty {
   display: none;
 }
+
+.land-raster {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.land-raster-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.land-raster-stats dt {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.land-raster-stats dd {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+.land-raster-ramp {
+  height: 12px;
+  border-radius: 6px;
+}
+.land-raster-ramp.viridis {
+  background: linear-gradient(90deg, #440154, #3b528b, #21918c, #5ec962, #fde725);
+}
+.land-raster-ramp.magma {
+  background: linear-gradient(90deg, #000004, #51127c, #b73779, #fc8961, #fcfdbf);
+}
+.land-raster-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-top: -5px;
+}
+.land-raster-opacity {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.land-raster details {
+  overflow-wrap: anywhere;
+}
+.land-terrain-start {
+  padding: 12px;
+  border: 1px solid var(--border-subtle, #ffffff20);
+  border-radius: 10px;
+}

@@ -11,6 +11,7 @@ from pydantic import Field
 from app.config import Settings
 from app.schemas.base import CamelModel
 from app.schemas.land_actions import LandActionCreate
+from app.schemas.land_rasters import RasterRequest
 from app.schemas.research import ArtifactContent, FindingContent
 from app.schemas.scenarios import ScenarioInputs
 
@@ -62,6 +63,11 @@ class ActionDraftAction(CamelModel):
     draft: LandActionCreate
 
 
+class RasterAction(CamelModel):
+    kind: Literal["analyze_raster"]
+    analysis: RasterRequest
+
+
 class FindingAction(CamelModel):
     kind: Literal["publish_finding"]
     finding: FindingContent
@@ -88,6 +94,7 @@ class ResearchDecision(CamelModel):
         | DocumentSearchAction
         | DocumentReadAction
         | DocumentOcrAction
+        | RasterAction
         | FindingAction
         | ArtifactAction
         | CompleteAction,
@@ -115,6 +122,11 @@ cover/cost comparisons. Explain every assumed input. Never invent measured roof 
 irradiation or species cover; ask for missing inputs, or explicitly label a user-requested
 hypothetical scenario. Solar resource must be plane-of-array; tilt alone does not transform
 NASA horizontal irradiation. Scenario outputs are saved for the user to edit and compare.
+Use analyze_raster for reproducible Copernicus surface-elevation and slope statistics and a
+private raster map. Describe the actual analysis resolution, valid-cell coverage and method.
+A surface model may include vegetation/buildings; it is not surveyed ground or a geotechnical
+assessment. Source catalog dates are not acquisition dates. Do not infer species composition
+or local subsurface conditions from terrain values.
 Use create_action_draft when the user asks to plan work. This only saves a draft, never
 approves, schedules or dispatches it. Use known scenario/feature identifiers and revisions;
 never invent costs, machine availability, permits, successful outcomes or measured footprints.

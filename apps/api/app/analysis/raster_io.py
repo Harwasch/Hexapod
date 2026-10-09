@@ -190,5 +190,16 @@ class RasterOpener:
         if path != self.url or mode not in ("r", "rb"):
             raise OSError("Only the registered raster can be opened, in read-only mode.")
         file = RasterHttpFile(self.client, self.url, self.budget)
+        if self.files:
+            previous = self.files[0]
+            if (file.size, file.etag, file.last_modified) != (
+                previous.size,
+                previous.etag,
+                previous.last_modified,
+            ):
+                file.close()
+                raise OSError(
+                    "The source raster changed between reads. Retry against a stable version."
+                )
         self.files.append(file)
         return file

@@ -177,3 +177,8 @@ filterwarnings = ["error::DeprecationWarning:app.*"]
 [[tool.mypy.overrides]]
 module = ["pyogrio", "pyogrio.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Rasterio's C extension has no PEP 561 marker. Analysis boundaries validate arrays/metadata explicitly.
+module = ["rasterio", "rasterio.*"]
+ignore_missing_imports = true

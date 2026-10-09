@@ -6558,6 +6558,67 @@
         "title": "LandFeatureRevisionRead",
         "type": "object"
       },
+      "LandRasterRead": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "byteSize": {
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/RasterMetadata"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RasterRequest"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "runId",
+          "landId",
+          "boundaryRevision",
+          "request",
+          "metadata",
+          "sha256",
+          "byteSize",
+          "createdAt",
+          "stale"
+        ],
+        "title": "LandRasterRead",
+        "type": "object"
+      },
       "LandRead": {
         "additionalProperties": false,
         "properties": {
@@ -10087,6 +10148,430 @@
         "title": "QualityTip",
         "type": "object"
       },
+      "RasterBand": {
+        "additionalProperties": false,
+        "properties": {
+          "histogramCounts": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Histogramcounts",
+            "type": "array"
+          },
+          "histogramEdges": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Histogramedges",
+            "type": "array"
+          },
+          "index": {
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "palette": {
+            "enum": [
+              "viridis",
+              "magma"
+            ],
+            "title": "Palette",
+            "type": "string"
+          },
+          "percentiles": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Percentiles",
+            "type": "object"
+          },
+          "standardDeviation": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standarddeviation"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "validCells": {
+            "minimum": 0.0,
+            "title": "Validcells",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "name",
+          "unit",
+          "validCells",
+          "minimum",
+          "maximum",
+          "mean",
+          "standardDeviation",
+          "percentiles",
+          "histogramEdges",
+          "histogramCounts",
+          "palette"
+        ],
+        "title": "RasterBand",
+        "type": "object"
+      },
+      "RasterMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "bands": {
+            "items": {
+              "$ref": "#/components/schemas/RasterBand"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "title": "Bands",
+            "type": "array"
+          },
+          "boundaryCells": {
+            "minimum": 0.0,
+            "title": "Boundarycells",
+            "type": "integer"
+          },
+          "bounds": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds",
+            "type": "array"
+          },
+          "coverageFraction": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coveragefraction"
+          },
+          "crs": {
+            "title": "Crs",
+            "type": "string"
+          },
+          "downloadedBytes": {
+            "minimum": 0.0,
+            "title": "Downloadedbytes",
+            "type": "integer"
+          },
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1024.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "resolutionM": {
+            "exclusiveMinimum": 0.0,
+            "title": "Resolutionm",
+            "type": "number"
+          },
+          "sampledAreaM2": {
+            "minimum": 0.0,
+            "title": "Sampledaream2",
+            "type": "number"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/RasterSource"
+            },
+            "maxItems": 8,
+            "title": "Sources",
+            "type": "array"
+          },
+          "validCells": {
+            "minimum": 0.0,
+            "title": "Validcells",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1024.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "algorithm",
+          "method",
+          "bounds",
+          "crs",
+          "resolutionM",
+          "width",
+          "height",
+          "boundaryCells",
+          "validCells",
+          "coverageFraction",
+          "sampledAreaM2",
+          "bands",
+          "sources",
+          "warnings",
+          "downloadedBytes"
+        ],
+        "title": "RasterMetadata",
+        "type": "object"
+      },
+      "RasterOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "raster",
+            "title": "Kind",
+            "type": "string"
+          },
+          "rasterId": {
+            "format": "uuid",
+            "title": "Rasterid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "rasterId"
+        ],
+        "title": "RasterOutput",
+        "type": "object"
+      },
+      "RasterRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "dataset": {
+            "const": "cop-dem-glo-30",
+            "default": "cop-dem-glo-30",
+            "title": "Dataset",
+            "type": "string"
+          },
+          "maxDimension": {
+            "default": 512,
+            "enum": [
+              256,
+              512,
+              1024
+            ],
+            "title": "Maxdimension",
+            "type": "integer"
+          },
+          "resolutionM": {
+            "default": 30,
+            "maximum": 1000.0,
+            "minimum": 30.0,
+            "title": "Resolutionm",
+            "type": "number"
+          }
+        },
+        "title": "RasterRequest",
+        "type": "object"
+      },
+      "RasterSample": {
+        "additionalProperties": false,
+        "properties": {
+          "interpretation": {
+            "title": "Interpretation",
+            "type": "string"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "resolutionM": {
+            "title": "Resolutionm",
+            "type": "number"
+          },
+          "units": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Units",
+            "type": "array"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "longitude",
+          "latitude",
+          "values",
+          "units",
+          "resolutionM",
+          "interpretation"
+        ],
+        "title": "RasterSample",
+        "type": "object"
+      },
+      "RasterSource": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "catalogDatetime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogdatetime"
+          },
+          "catalogUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Catalogurl",
+            "type": "string"
+          },
+          "etag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Etag"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "lastModified": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastmodified"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "licenseUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Licenseurl",
+            "type": "string"
+          },
+          "observationPeriod": {
+            "title": "Observationperiod",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "catalogUrl",
+          "etag",
+          "lastModified",
+          "catalogDatetime",
+          "observationPeriod",
+          "license",
+          "licenseUrl",
+          "attribution"
+        ],
+        "title": "RasterSource",
+        "type": "object"
+      },
       "RecipeGpu": {
         "additionalProperties": false,
         "description": "A stage's GPU requirement. Its presence is the only routing signal there is.",
@@ -10387,6 +10872,7 @@
                 "chart": "#/components/schemas/ChartOutput",
                 "document": "#/components/schemas/DocumentOutput",
                 "map": "#/components/schemas/MapOutput",
+                "raster": "#/components/schemas/RasterOutput",
                 "table": "#/components/schemas/TableOutput",
                 "timeline": "#/components/schemas/TimelineOutput"
               },
@@ -10407,6 +10893,9 @@
               },
               {
                 "$ref": "#/components/schemas/TimelineOutput"
+              },
+              {
+                "$ref": "#/components/schemas/RasterOutput"
               }
             ],
             "title": "Output"
@@ -10725,6 +11214,16 @@
       "RunCreate": {
         "additionalProperties": false,
         "properties": {
+          "analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RasterRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "budget": {
             "$ref": "#/components/schemas/ResearchBudget"
           },
@@ -10732,7 +11231,8 @@
             "default": "investigation",
             "enum": [
               "overview",
-              "investigation"
+              "investigation",
+              "raster"
             ],
             "title": "Kind",
             "type": "string"
@@ -10759,6 +11259,16 @@
       "RunRead": {
         "additionalProperties": false,
         "properties": {
+          "analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RasterRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "attempt": {
             "title": "Attempt",
             "type": "integer"
@@ -10807,7 +11317,8 @@
           "kind": {
             "enum": [
               "overview",
-              "investigation"
+              "investigation",
+              "raster"
             ],
             "title": "Kind",
             "type": "string"
@@ -16330,6 +16841,452 @@
         ]
       }
     },
+    "/api/v1/land/rasters/{raster_id}": {
+      "get": {
+        "operationId": "get_api_v1_land_rasters__raster_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandRasterRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
+    "/api/v1/land/rasters/{raster_id}/download": {
+      "get": {
+        "operationId": "download_api_v1_land_rasters__raster_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/tiff": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Download",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
+    "/api/v1/land/rasters/{raster_id}/sample": {
+      "get": {
+        "operationId": "sample_api_v1_land_rasters__raster_id__sample_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Longitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RasterSample"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Sample",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
+    "/api/v1/land/rasters/{raster_id}/tiles/{band}/{z}/{x}/{y}.png": {
+      "get": {
+        "operationId": "tile_api_v1_land_rasters__raster_id__tiles__band___z___x___y__png_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "band",
+            "required": true,
+            "schema": {
+              "title": "Band",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "z",
+            "required": true,
+            "schema": {
+              "title": "Z",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "x",
+            "required": true,
+            "schema": {
+              "title": "X",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "y",
+            "required": true,
+            "schema": {
+              "title": "Y",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Tile",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
     "/api/v1/land/selection/candidates": {
       "post": {
         "operationId": "selection_candidates_api_v1_land_selection_candidates_post",
@@ -20469,6 +21426,128 @@
         "summary": "Overview",
         "tags": [
           "land research"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/rasters": {
+      "get": {
+        "operationId": "listing_api_v1_land__land_id__rasters_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LandRasterRead"
+                  },
+                  "title": "Response Listing Api V1 Land  Land Id  Rasters Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Listing",
+        "tags": [
+          "land rasters"
         ]
       }
     },

@@ -8,8 +8,15 @@ from typing import Any, Literal
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.land_raster import LandRaster
 from app.models.research import Evidence, Finding, ResearchArtifact, ResearchMessage, ResearchRun
-from app.schemas.research import ArtifactContent, EvidenceContent, FindingContent, TimelineOutput
+from app.schemas.research import (
+    ArtifactContent,
+    EvidenceContent,
+    FindingContent,
+    RasterOutput,
+    TimelineOutput,
+)
 from app.services.errors import InvalidInputError
 from app.services.research import event, now
 
@@ -171,6 +178,17 @@ def save_artifact(
             identifier for entry in content.output.entries for identifier in entry.evidence_ids
         )
     validate_citations(db, run, ids)
+    if isinstance(content.output, RasterOutput):
+        raster = db.scalar(
+            select(LandRaster)
+            .join(ResearchRun, ResearchRun.id == LandRaster.run_id)
+            .where(
+                LandRaster.id == content.output.raster_id,
+                ResearchRun.investigation_id == run.investigation_id,
+            )
+        )
+        if raster is None:
+            raise InvalidInputError("Raster outputs must belong to this investigation.")
     row = db.scalar(
         select(ResearchArtifact).where(
             ResearchArtifact.run_id == run_id, ResearchArtifact.output_key == key

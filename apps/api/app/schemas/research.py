@@ -9,6 +9,7 @@ from pydantic import Field, HttpUrl, model_validator
 from app.schemas.base import CamelModel
 from app.schemas.geojson import Footprint, MapGeometry
 from app.schemas.land_documents import DocumentLocator
+from app.schemas.land_rasters import RasterRequest
 
 
 class ResearchBudget(CamelModel):
@@ -35,16 +36,24 @@ class InvestigationRead(InvestigationCreate):
 
 class RunCreate(CamelModel):
     request_key: uuid.UUID
-    kind: Literal["overview", "investigation"] = "investigation"
+    kind: Literal["overview", "investigation", "raster"] = "investigation"
     question: str = Field(min_length=1, max_length=10_000)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
+    analysis: RasterRequest | None = None
+
+    @model_validator(mode="after")
+    def analysis_request(self) -> RunCreate:
+        if (self.kind == "raster") != (self.analysis is not None):
+            raise ValueError("Raster runs require analysis parameters; other runs must omit them.")
+        return self
 
 
 class RunRead(CamelModel):
     id: uuid.UUID
     investigation_id: uuid.UUID
     question: str
-    kind: Literal["overview", "investigation"]
+    kind: Literal["overview", "investigation", "raster"]
+    analysis: RasterRequest | None = None
     status: Literal["queued", "running", "succeeded", "partial", "failed", "cancelled"]
     budget: ResearchBudget
     attempt: int
@@ -164,6 +173,11 @@ class DocumentOutput(CamelModel):
     markdown: str = Field(max_length=100_000)
 
 
+class RasterOutput(CamelModel):
+    kind: Literal["raster"]
+    raster_id: uuid.UUID
+
+
 class TimelineEntry(CamelModel):
     date: str = Field(max_length=100)
     title: str = Field(max_length=300)
@@ -177,7 +191,7 @@ class TimelineOutput(CamelModel):
 
 
 Output = Annotated[
-    TableOutput | ChartOutput | MapOutput | DocumentOutput | TimelineOutput,
+    TableOutput | ChartOutput | MapOutput | DocumentOutput | TimelineOutput | RasterOutput,
     Field(discriminator="kind"),
 ]
 

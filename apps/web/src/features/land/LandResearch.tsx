@@ -121,6 +121,9 @@ export function LandResearch({ land }: { land: LandArea }) {
     key: string;
     budget: components["schemas"]["ResearchBudget"];
   } | null>(null);
+  const pendingTerrain = useRef<{ investigationId: string; key: string; revision: number } | null>(
+    null,
+  );
   const lastRun = detail.data?.runs.at(-1);
   const running = lastRun?.status === "queued" || lastRun?.status === "running";
   const progress = useQuery({
@@ -187,6 +190,43 @@ export function LandResearch({ land }: { land: LandArea }) {
       );
       setChosen(result.investigation.id);
       setOffset(0);
+      await refresh();
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const analyzeTerrain = async () => {
+    if (!canEdit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      let operation = pendingTerrain.current;
+      if (operation?.revision !== land.revision) {
+        const investigation = await beginInvestigation(land, "Surface elevation and slope");
+        operation = {
+          investigationId: investigation.id,
+          key: crypto.randomUUID(),
+          revision: land.revision,
+        };
+        pendingTerrain.current = operation;
+      }
+      await unwrap(
+        api.POST("/api/v1/research/investigations/{investigation_id}/runs", {
+          params: { path: { investigation_id: operation.investigationId } },
+          body: {
+            kind: "raster",
+            question: "Analyze surface elevation and slope inside this land.",
+            requestKey: operation.key,
+            analysis: { dataset: "cop-dem-glo-30", resolutionM: 30, maxDimension: 512 },
+          },
+        }),
+      );
+      setChosen(operation.investigationId);
+      setOffset(0);
+      setTab("visuals");
+      pendingTerrain.current = null;
       await refresh();
     } catch (cause) {
       setError(describeError(cause));
@@ -273,6 +313,20 @@ export function LandResearch({ land }: { land: LandArea }) {
         Explore the evidence, uncover a story, or investigate an idea. Findings stay connected to
         this land.
       </p>
+      <div className="land-terrain-start">
+        <strong>Read the terrain</strong>
+        <p className="land-footnote">
+          Map surface elevation and slope from Copernicus GLO-30. Buildings and vegetation can
+          affect this model; small plots may be below its resolution.
+        </p>
+        <button
+          type="button"
+          disabled={busy || running || !ready || !canEdit}
+          onClick={() => void analyzeTerrain()}
+        >
+          {busy ? "Starting…" : "Analyze terrain"}
+        </button>
+      </div>
       {catalog.data && catalog.data.length > 0 && (
         <label className="land-name">
           Investigation

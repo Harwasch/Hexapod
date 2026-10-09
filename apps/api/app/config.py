@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     land_document_workspace_quota_bytes: int = Field(
         default=1024 * 1024 * 1024, ge=20 * 1024 * 1024
     )
+    land_raster_workspace_quota_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024, ge=16 * 1024 * 1024
+    )
     land_auth_mode: Literal["pilot", "oidc"] = "pilot"
     land_oidc_issuer: str | None = None
     land_oidc_audience: str | None = None

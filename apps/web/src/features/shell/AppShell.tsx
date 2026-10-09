@@ -4,6 +4,7 @@ import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { env } from "@/app/env";
 import { HOTKEYS } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
+import { LandRasterBridge } from "@/cesium/LandRasterBridge";
 import { LandContextBridge } from "@/cesium/LandContextBridge";
 import { LandBridge } from "@/cesium/LandBridge";
 import { LandIdentityBridge } from "../land/WorkspaceIdentity";
@@ -162,6 +163,7 @@ export function AppShell() {
           <LandIdentityBridge />
           <LandBridge />
           <LandContextBridge />
+          <LandRasterBridge />
         </>
       )}
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">

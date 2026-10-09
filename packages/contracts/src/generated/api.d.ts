@@ -911,6 +911,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/rasters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_api_v1_land__land_id__rasters_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/revisions": {
         parameters: {
             query?: never;
@@ -1043,6 +1060,74 @@ export interface paths {
         put?: never;
         /** Operate */
         post: operations["operate_api_v1_land_operations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/rasters/{raster_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_v1_land_rasters__raster_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/rasters/{raster_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download */
+        get: operations["download_api_v1_land_rasters__raster_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/rasters/{raster_id}/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sample */
+        get: operations["sample_api_v1_land_rasters__raster_id__sample_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/rasters/{raster_id}/tiles/{band}/{z}/{x}/{y}.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tile */
+        get: operations["tile_api_v1_land_rasters__raster_id__tiles__band___z___x___y__png_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3977,6 +4062,39 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /** LandRasterRead */
+        LandRasterRead: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Bytesize */
+            byteSize: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            metadata: components["schemas"]["RasterMetadata"];
+            request: components["schemas"]["RasterRequest"];
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+            /** Sha256 */
+            sha256: string;
+            /** Stale */
+            stale: boolean;
+        };
         /** LandRead */
         LandRead: {
             /** Aream2 */
@@ -5149,6 +5267,151 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** RasterBand */
+        RasterBand: {
+            /** Histogramcounts */
+            histogramCounts: number[];
+            /** Histogramedges */
+            histogramEdges: number[];
+            /** Index */
+            index: number;
+            /** Maximum */
+            maximum: number | null;
+            /** Mean */
+            mean: number | null;
+            /** Minimum */
+            minimum: number | null;
+            /** Name */
+            name: string;
+            /**
+             * Palette
+             * @enum {string}
+             */
+            palette: "viridis" | "magma";
+            /** Percentiles */
+            percentiles: {
+                [key: string]: number;
+            };
+            /** Standarddeviation */
+            standardDeviation: number | null;
+            /** Unit */
+            unit: string;
+            /** Validcells */
+            validCells: number;
+        };
+        /** RasterMetadata */
+        RasterMetadata: {
+            /** Algorithm */
+            algorithm: string;
+            /** Bands */
+            bands: components["schemas"]["RasterBand"][];
+            /** Boundarycells */
+            boundaryCells: number;
+            /** Bounds */
+            bounds: number[];
+            /** Coveragefraction */
+            coverageFraction: number | null;
+            /** Crs */
+            crs: string;
+            /** Downloadedbytes */
+            downloadedBytes: number;
+            /** Height */
+            height: number;
+            /** Method */
+            method: string;
+            /** Resolutionm */
+            resolutionM: number;
+            /** Sampledaream2 */
+            sampledAreaM2: number;
+            /** Sources */
+            sources: components["schemas"]["RasterSource"][];
+            /** Validcells */
+            validCells: number;
+            /** Warnings */
+            warnings: string[];
+            /** Width */
+            width: number;
+        };
+        /** RasterOutput */
+        RasterOutput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "raster";
+            /**
+             * Rasterid
+             * Format: uuid
+             */
+            rasterId: string;
+        };
+        /** RasterRequest */
+        RasterRequest: {
+            /**
+             * Dataset
+             * @default cop-dem-glo-30
+             * @constant
+             */
+            dataset?: "cop-dem-glo-30";
+            /**
+             * Maxdimension
+             * @default 512
+             * @enum {integer}
+             */
+            maxDimension?: 256 | 512 | 1024;
+            /**
+             * Resolutionm
+             * @default 30
+             */
+            resolutionM?: number;
+        };
+        /** RasterSample */
+        RasterSample: {
+            /** Interpretation */
+            interpretation: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Resolutionm */
+            resolutionM: number;
+            /** Units */
+            units: string[];
+            /** Values */
+            values: (number | null)[];
+        };
+        /** RasterSource */
+        RasterSource: {
+            /** Attribution */
+            attribution: string;
+            /** Catalogdatetime */
+            catalogDatetime: string | null;
+            /**
+             * Catalogurl
+             * Format: uri
+             */
+            catalogUrl: string;
+            /** Etag */
+            etag: string | null;
+            /** Id */
+            id: string;
+            /** Lastmodified */
+            lastModified: string | null;
+            /** License */
+            license: string;
+            /**
+             * Licenseurl
+             * Format: uri
+             */
+            licenseUrl: string;
+            /** Observationperiod */
+            observationPeriod: string;
+            /**
+             * Url
+             * Format: uri
+             */
+            url: string;
+        };
         /**
          * RecipeGpu
          * @description A stage's GPU requirement. Its presence is the only routing signal there is.
@@ -5263,7 +5526,7 @@ export interface components {
             /** Method */
             method: string;
             /** Output */
-            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"];
+            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["RasterOutput"];
             /**
              * Runid
              * Format: uuid
@@ -5380,13 +5643,14 @@ export interface components {
         };
         /** RunCreate */
         RunCreate: {
+            analysis?: components["schemas"]["RasterRequest"] | null;
             budget?: components["schemas"]["ResearchBudget"];
             /**
              * Kind
              * @default investigation
              * @enum {string}
              */
-            kind?: "overview" | "investigation";
+            kind?: "overview" | "investigation" | "raster";
             /** Question */
             question: string;
             /**
@@ -5397,6 +5661,7 @@ export interface components {
         };
         /** RunRead */
         RunRead: {
+            analysis?: components["schemas"]["RasterRequest"] | null;
             /** Attempt */
             attempt: number;
             budget: components["schemas"]["ResearchBudget"];
@@ -5423,7 +5688,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "overview" | "investigation";
+            kind: "overview" | "investigation" | "raster";
             /** Question */
             question: string;
             /** Startedat */
@@ -6343,6 +6608,7 @@ export type SchemaLandFeatureCreate = components['schemas']['LandFeatureCreate']
 export type SchemaLandFeatureRead = components['schemas']['LandFeatureRead'];
 export type SchemaLandFeatureRevise = components['schemas']['LandFeatureRevise'];
 export type SchemaLandFeatureRevisionRead = components['schemas']['LandFeatureRevisionRead'];
+export type SchemaLandRasterRead = components['schemas']['LandRasterRead'];
 export type SchemaLandRead = components['schemas']['LandRead'];
 export type SchemaLandRevise = components['schemas']['LandRevise'];
 export type SchemaLayerCategory = components['schemas']['LayerCategory'];
@@ -6402,6 +6668,12 @@ export type SchemaProviderRead = components['schemas']['ProviderRead'];
 export type SchemaQualityCounts = components['schemas']['QualityCounts'];
 export type SchemaQualityRoi = components['schemas']['QualityRoi'];
 export type SchemaQualityTip = components['schemas']['QualityTip'];
+export type SchemaRasterBand = components['schemas']['RasterBand'];
+export type SchemaRasterMetadata = components['schemas']['RasterMetadata'];
+export type SchemaRasterOutput = components['schemas']['RasterOutput'];
+export type SchemaRasterRequest = components['schemas']['RasterRequest'];
+export type SchemaRasterSample = components['schemas']['RasterSample'];
+export type SchemaRasterSource = components['schemas']['RasterSource'];
 export type SchemaRecipeGpu = components['schemas']['RecipeGpu'];
 export type SchemaRecipeRead = components['schemas']['RecipeRead'];
 export type SchemaRecipeStageRead = components['schemas']['RecipeStageRead'];
@@ -10700,6 +10972,69 @@ export interface operations {
             };
         };
     };
+    listing_api_v1_land__land_id__rasters_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandRasterRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     area_revisions_api_v1_land__land_id__revisions_get: {
         parameters: {
             query?: never;
@@ -11289,6 +11624,255 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BoundaryResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_api_v1_land_rasters__raster_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                raster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandRasterRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    download_api_v1_land_rasters__raster_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                raster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "image/tiff": string;
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sample_api_v1_land_rasters__raster_id__sample_get: {
+        parameters: {
+            query: {
+                latitude: number;
+                longitude: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                raster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RasterSample"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    tile_api_v1_land_rasters__raster_id__tiles__band___z___x___y__png_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                band: number;
+                raster_id: string;
+                x: number;
+                y: number;
+                z: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "image/png": string;
                 };
             };
             /** @description Missing or wrong write token */
