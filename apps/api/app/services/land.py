@@ -52,7 +52,7 @@ def _read(row: LandArea, boundary: str, area: float, perimeter: float) -> LandRe
     )
 
 
-def list_land(db: Session, limit: int, offset: int) -> list[LandRead]:
+def list_land(db: Session, workspace_id: uuid.UUID, limit: int, offset: int) -> list[LandRead]:
     statement = (
         select(
             LandArea,
@@ -60,6 +60,7 @@ def list_land(db: Session, limit: int, offset: int) -> list[LandRead]:
             func.ST_Area(func.geography(LandArea.boundary)),
             func.ST_Perimeter(func.geography(LandArea.boundary)),
         )
+        .where(LandArea.workspace_id == workspace_id)
         .order_by(LandArea.updated_at.desc(), LandArea.id)
         .limit(limit)
         .offset(offset)
@@ -70,22 +71,23 @@ def list_land(db: Session, limit: int, offset: int) -> list[LandRead]:
     ]
 
 
-def get_land(db: Session, land_id: uuid.UUID) -> LandRead:
+def get_land(db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID) -> LandRead:
     result = db.execute(
         select(
             LandArea,
             func.ST_AsGeoJSON(LandArea.boundary),
             func.ST_Area(func.geography(LandArea.boundary)),
             func.ST_Perimeter(func.geography(LandArea.boundary)),
-        ).where(LandArea.id == land_id)
+        ).where(LandArea.id == land_id, LandArea.workspace_id == workspace_id)
     ).first()
     if result is None:
         raise NotFoundError("land area", land_id)
     return _read(*result)
 
 
-def create_land(db: Session, payload: LandCreate) -> LandRead:
+def create_land(db: Session, workspace_id: uuid.UUID, payload: LandCreate) -> LandRead:
     row = LandArea(
+        workspace_id=workspace_id,
         name=payload.name,
         description=payload.description,
         boundary=footprint_to_wkb(payload.boundary),
@@ -96,12 +98,18 @@ def create_land(db: Session, payload: LandCreate) -> LandRead:
     db.flush()
     db.add(_snapshot(row, payload, "Area established"))
     db.commit()
-    return get_land(db, row.id)
+    return get_land(db, workspace_id, row.id)
 
 
-def revise_land(db: Session, land_id: uuid.UUID, payload: LandRevise) -> LandRead:
+def revise_land(
+    db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID, payload: LandRevise
+) -> LandRead:
     # Serialize writers, then compare the revision: two tabs cannot overwrite each other.
-    row = db.scalar(select(LandArea).where(LandArea.id == land_id).with_for_update())
+    row = db.scalar(
+        select(LandArea)
+        .where(LandArea.id == land_id, LandArea.workspace_id == workspace_id)
+        .with_for_update()
+    )
     if row is None:
         raise NotFoundError("land area", land_id)
     if row.revision != payload.expected_revision:
@@ -113,11 +121,13 @@ def revise_land(db: Session, land_id: uuid.UUID, payload: LandRevise) -> LandRea
     row.revision += 1
     db.add(_snapshot(row, payload, payload.note))
     db.commit()
-    return get_land(db, land_id)
+    return get_land(db, workspace_id, land_id)
 
 
-def revisions(db: Session, land_id: uuid.UUID) -> list[BoundaryRevisionRead]:
-    get_land(db, land_id)
+def revisions(
+    db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID
+) -> list[BoundaryRevisionRead]:
+    get_land(db, workspace_id, land_id)
     rows = db.scalars(
         select(LandBoundaryRevision)
         .where(LandBoundaryRevision.land_id == land_id)
@@ -126,8 +136,12 @@ def revisions(db: Session, land_id: uuid.UUID) -> list[BoundaryRevisionRead]:
     return [BoundaryRevisionRead.model_validate(row) for row in rows]
 
 
-def delete_land(db: Session, land_id: uuid.UUID) -> None:
-    row = db.get(LandArea, land_id)
+def delete_land(db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID) -> None:
+    row = db.scalar(
+        select(LandArea)
+        .where(LandArea.id == land_id, LandArea.workspace_id == workspace_id)
+        .with_for_update()
+    )
     if row is None:
         raise NotFoundError("land area", land_id)
     db.delete(row)

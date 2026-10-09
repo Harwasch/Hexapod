@@ -12,6 +12,18 @@ async function landApi(page: Page) {
   await page.route("**/api/v1/land{,/**,?*}", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (path.endsWith("/investigations")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/overview")) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ title: "Research unavailable in selection fixture", status: 503 }),
+      });
+      return;
+    }
     let body: unknown = saved;
     if (request.method() === "POST" || request.method() === "PUT") {
       const payload = request.postDataJSON() as LandCreate | LandRevise;

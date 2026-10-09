@@ -136,7 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         # Authorization carries the write token, so the preflight has to allow it or
         # every browser write fails before it is sent.
-        allow_headers=["Content-Type", "Accept", "Authorization"],
+        allow_headers=["Content-Type", "Accept", "Authorization", "X-Workspace-ID", "Last-Event-ID"],
         # A handoff-authorised response carries the next token in this header, and a
         # cross-origin phone page cannot read a header the server does not expose --
         # without this line the renewal chain silently breaks the moment the web app is

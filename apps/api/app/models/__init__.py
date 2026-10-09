@@ -19,7 +19,17 @@ from app.models.job import Artifact, Job, JobStep
 from app.models.land import LandArea, LandBoundaryRevision
 from app.models.layer import Layer
 from app.models.plan import Plan, PlanRevision
+from app.models.research import (
+    Evidence,
+    Finding,
+    Investigation,
+    ResearchArtifact,
+    ResearchEvent,
+    ResearchMessage,
+    ResearchRun,
+)
 from app.models.site import Site
+from app.models.workspace import Membership, Workspace
 
 __all__ = [
     "Artifact",
@@ -32,7 +42,10 @@ __all__ = [
     "CaptureFile",
     "CaptureKind",
     "CaptureStatus",
+    "Evidence",
+    "Finding",
     "GeorefMethod",
+    "Investigation",
     "Job",
     "JobStep",
     "LandArea",
@@ -40,11 +53,17 @@ __all__ = [
     "Layer",
     "LayerCategory",
     "LayerSourceType",
+    "Membership",
     "Plan",
     "PlanRevision",
     "Representation",
+    "ResearchArtifact",
+    "ResearchEvent",
+    "ResearchMessage",
+    "ResearchRun",
     "RunStatus",
     "ScaleSource",
     "Site",
     "UploadStatus",
+    "Workspace",
 ]

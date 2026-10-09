@@ -16,6 +16,12 @@ class LandArea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "land_areas"
 
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     boundary: Mapped[WKBElement] = mapped_column(

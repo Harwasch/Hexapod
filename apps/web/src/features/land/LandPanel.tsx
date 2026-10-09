@@ -30,6 +30,9 @@ import { WriteTokenField } from "../captures/WriteTokenField";
 import { createCorridor, createLand, reviseLand, useBoundaryHistory, useLandAreas } from "./api";
 import { importBoundary } from "./geometry";
 import "./land.css";
+import { LandResearch } from "./LandResearch";
+import { WorkspaceIdentity } from "./WorkspaceIdentity";
+import { landUsesOidc } from "@/state/landIdentity";
 
 function areaLabel(squareMetres: number): string {
   if (squareMetres < 4046.8564224) return `${Math.round(squareMetres).toLocaleString()} m²`;
@@ -215,7 +218,8 @@ export function LandPanel() {
       }}
     >
       <div className="land-workspace">
-        {tokenPrompt && (
+        <WorkspaceIdentity />
+        {tokenPrompt && !landUsesOidc && (
           <WriteTokenField
             hint="This server requires its access token to load and save land areas."
             onSaved={() => {
@@ -536,6 +540,8 @@ export function LandPanel() {
             )}
           </>
         )}
+
+        {active && !draft && mode === "browse" && <LandResearch key={active.id} land={active} />}
 
         {!draft && mode === "browse" && (
           <div className="land-library">

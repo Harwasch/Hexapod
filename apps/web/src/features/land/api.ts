@@ -2,25 +2,31 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { LandCreate, LandRevise } from "@twin/contracts";
 
+import { useLandScope, useLandAccessReady } from "@/state/landIdentity";
+
 import { api, unwrap } from "@/api/client";
 
 export function useLandAreas(enabled: boolean) {
+  const scope = useLandScope();
+  const ready = useLandAccessReady();
   return useQuery({
-    queryKey: ["land-areas"],
+    queryKey: ["land-areas", scope],
     queryFn: () => unwrap(api.GET("/api/v1/land", { params: { query: { limit: 200 } } })),
-    enabled,
+    enabled: enabled && ready,
     retry: false,
   });
 }
 
 export function useBoundaryHistory(id: string | null) {
+  const scope = useLandScope();
+  const ready = useLandAccessReady();
   return useQuery({
-    queryKey: ["land-history", id],
+    queryKey: ["land-history", id, scope],
     queryFn: () =>
       unwrap(
         api.GET("/api/v1/land/{land_id}/revisions", { params: { path: { land_id: id ?? "" } } }),
       ),
-    enabled: id !== null,
+    enabled: id !== null && ready,
     retry: false,
   });
 }

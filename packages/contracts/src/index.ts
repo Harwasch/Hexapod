@@ -157,3 +157,12 @@ export type PipelineProvider = Schemas["ProviderRead"];
 export type RunStatus = Schemas["RunStatus"];
 export type GeorefMethod = Schemas["GeorefMethod"];
 export type ScaleSource = Schemas["ScaleSource"];
+
+/** Private land exploration and persistent research. */
+export type Investigation = Schemas["InvestigationRead"];
+export type InvestigationDetail = Schemas["InvestigationDetail"];
+export type ResearchRun = Schemas["RunRead"];
+export type LandEvidence = Schemas["EvidenceRead"];
+export type LandFinding = Schemas["FindingRead"];
+export type ResearchArtifact = Schemas["ResearchArtifactRead"];
+export type ResearchEvent = Schemas["EventRead"];

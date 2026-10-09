@@ -6,6 +6,7 @@ import { env } from "@/app/env";
 import { ApiError } from "./error";
 import { recordSpan } from "@/lib/timing";
 import { useSettings } from "@/state/settings";
+import { landUsesOidc, useLandIdentity } from "@/state/landIdentity";
 import { useUi } from "@/state/ui";
 
 /** Error thrown for non-2xx responses, carrying the API's problem payload when present. */
@@ -57,12 +58,16 @@ const timing: Middleware = {
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-/** Pilot land records are private to the deployment, including reads. */
-function needsToken(request: Request): boolean {
+export function isLandRequest(request: Request): boolean {
   const path = new URL(request.url).pathname;
-  return (
-    !SAFE_METHODS.has(request.method) || path === "/api/v1/land" || path.startsWith("/api/v1/land/")
+  return ["/api/v1/land", "/api/v1/research", "/api/v1/workspaces"].some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
   );
+}
+
+/** All private workspace requests carry identity, including reads. */
+function needsToken(request: Request): boolean {
+  return !SAFE_METHODS.has(request.method) || isLandRequest(request);
 }
 
 /**
@@ -81,6 +86,13 @@ function needsToken(request: Request): boolean {
  */
 export const auth: Middleware = {
   onRequest({ request }) {
+    if (landUsesOidc && isLandRequest(request)) {
+      const identity = useLandIdentity.getState();
+      if (identity.accessToken)
+        request.headers.set("Authorization", `Bearer ${identity.accessToken}`);
+      if (identity.workspaceId) request.headers.set("X-Workspace-ID", identity.workspaceId);
+      return request;
+    }
     const token = useSettings.getState().writeToken.trim();
     if (token && needsToken(request)) {
       request.headers.set("Authorization", `Bearer ${token}`);
@@ -91,7 +103,11 @@ export const auth: Middleware = {
     // The affordance appears on a 401 and never before it: with no token configured
     // server-side the API leaves writes open, and local development must need no prompt.
     if (response.status === 401 && needsToken(request)) {
-      useUi.getState().setWriteTokenPrompt(true);
+      if (landUsesOidc && isLandRequest(request)) {
+        useLandIdentity.getState().setError("Sign in again to access this workspace.");
+      } else {
+        useUi.getState().setWriteTokenPrompt(true);
+      }
     }
     return response;
   },

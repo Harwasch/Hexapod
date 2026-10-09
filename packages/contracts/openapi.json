@@ -2580,6 +2580,96 @@
         "title": "CesiumIonTerrainSource",
         "type": "object"
       },
+      "ChartOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "chartType": {
+            "enum": [
+              "line",
+              "bar",
+              "scatter"
+            ],
+            "title": "Charttype",
+            "type": "string"
+          },
+          "kind": {
+            "const": "chart",
+            "title": "Kind",
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5000,
+            "title": "Labels",
+            "type": "array"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/ChartSeries"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Series",
+            "type": "array"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "xLabel": {
+            "title": "Xlabel",
+            "type": "string"
+          },
+          "yLabel": {
+            "title": "Ylabel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "chartType",
+          "xLabel",
+          "yLabel",
+          "unit",
+          "labels",
+          "series"
+        ],
+        "title": "ChartOutput",
+        "type": "object"
+      },
+      "ChartSeries": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxItems": 5000,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "values"
+        ],
+        "title": "ChartSeries",
+        "type": "object"
+      },
       "Clarification": {
         "additionalProperties": false,
         "description": "A question the planner asks with a structured answer: a choice (chips), a range\n(slider) or an area choice (how the ground is picked). Never free text.",
@@ -2821,6 +2911,335 @@
         "title": "CzmlSource",
         "type": "object"
       },
+      "DocumentOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "document",
+            "title": "Kind",
+            "type": "string"
+          },
+          "markdown": {
+            "maxLength": 100000,
+            "title": "Markdown",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "markdown"
+        ],
+        "title": "DocumentOutput",
+        "type": "object"
+      },
+      "EventRead": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "kind",
+          "payload",
+          "createdAt"
+        ],
+        "title": "EventRead",
+        "type": "object"
+      },
+      "EvidenceRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Attribution",
+            "type": "string"
+          },
+          "excerpt": {
+            "maxLength": 30000,
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "license": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "License",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "provider": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Provider",
+            "type": "string"
+          },
+          "publishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publishedat"
+          },
+          "recordId": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordid"
+          },
+          "relevanceNote": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Relevancenote",
+            "type": "string"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "snapshotHash": {
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshothash"
+          },
+          "spatialRelevance": {
+            "enum": [
+              "intersects",
+              "within",
+              "nearby",
+              "regional",
+              "unresolved"
+            ],
+            "title": "Spatialrelevance",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "title",
+          "url",
+          "license",
+          "attribution",
+          "retrievedAt",
+          "excerpt",
+          "spatialRelevance",
+          "relevanceNote",
+          "id",
+          "runId"
+        ],
+        "title": "EvidenceRead",
+        "type": "object"
+      },
+      "FindingDisposition": {
+        "additionalProperties": false,
+        "properties": {
+          "disposition": {
+            "enum": [
+              "visible",
+              "pinned",
+              "dismissed"
+            ],
+            "title": "Disposition",
+            "type": "string"
+          }
+        },
+        "required": [
+          "disposition"
+        ],
+        "title": "FindingDisposition",
+        "type": "object"
+      },
+      "FindingRead": {
+        "additionalProperties": false,
+        "properties": {
+          "boundary": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "category": {
+            "enum": [
+              "physical",
+              "ecology",
+              "history",
+              "rights",
+              "hazards",
+              "infrastructure",
+              "energy",
+              "coverage"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "measured",
+              "supported",
+              "inferred",
+              "uncertain"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "disposition": {
+            "enum": [
+              "visible",
+              "pinned",
+              "dismissed"
+            ],
+            "title": "Disposition",
+            "type": "string"
+          },
+          "evidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Evidenceids",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "suggestedQuestions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Suggestedquestions",
+            "type": "array"
+          },
+          "summary": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "uncertainty": {
+            "maxLength": 3000,
+            "minLength": 1,
+            "title": "Uncertainty",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "summary",
+          "category",
+          "evidenceIds",
+          "confidence",
+          "uncertainty",
+          "id",
+          "runId",
+          "disposition"
+        ],
+        "title": "FindingRead",
+        "type": "object"
+      },
       "GeoJsonSource": {
         "additionalProperties": false,
         "properties": {
@@ -2998,6 +3417,167 @@
           "objectStorageAvailable"
         ],
         "title": "HealthStatus",
+        "type": "object"
+      },
+      "IdentityRead": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "enum": [
+              "pilot",
+              "oidc"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "principalId": {
+            "title": "Principalid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principalId",
+          "mode"
+        ],
+        "title": "IdentityRead",
+        "type": "object"
+      },
+      "InvestigationCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "minimum": 1.0,
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "question": {
+            "default": "What is useful and interesting about this land?",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "boundaryRevision"
+        ],
+        "title": "InvestigationCreate",
+        "type": "object"
+      },
+      "InvestigationDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchArtifactRead"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRead"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/FindingRead"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "investigation": {
+            "$ref": "#/components/schemas/InvestigationRead"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageRead"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/ResearchPage"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunRead"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page",
+          "investigation",
+          "messages",
+          "runs",
+          "findings",
+          "evidence",
+          "artifacts"
+        ],
+        "title": "InvestigationDetail",
+        "type": "object"
+      },
+      "InvestigationRead": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "minimum": 1.0,
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "question": {
+            "default": "What is useful and interesting about this land?",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "boundaryRevision",
+          "id",
+          "landId",
+          "createdAt",
+          "stale"
+        ],
+        "title": "InvestigationRead",
         "type": "object"
       },
       "IonAssetMetadata": {
@@ -4829,6 +5409,152 @@
         "title": "LiveState",
         "type": "object"
       },
+      "MapFeature": {
+        "additionalProperties": false,
+        "properties": {
+          "boundary": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "label": {
+            "maxLength": 300,
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "label",
+          "boundary"
+        ],
+        "title": "MapFeature",
+        "type": "object"
+      },
+      "MapOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/MapFeature"
+            },
+            "maxItems": 2000,
+            "title": "Features",
+            "type": "array"
+          },
+          "kind": {
+            "const": "map",
+            "title": "Kind",
+            "type": "string"
+          },
+          "legend": {
+            "maxLength": 2000,
+            "title": "Legend",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "kind",
+          "features",
+          "legend"
+        ],
+        "title": "MapOutput",
+        "type": "object"
+      },
+      "MembershipWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "principalId": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Principalid",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "editor",
+              "viewer"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principalId",
+          "role"
+        ],
+        "title": "MembershipWrite",
+        "type": "object"
+      },
+      "MessageRead": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "content",
+          "createdAt"
+        ],
+        "title": "MessageRead",
+        "type": "object"
+      },
       "MissingObject": {
         "additionalProperties": false,
         "description": "A row whose object is not in the bucket.",
@@ -5103,6 +5829,38 @@
           "point"
         ],
         "title": "OutlineRequest",
+        "type": "object"
+      },
+      "OverviewRead": {
+        "additionalProperties": false,
+        "properties": {
+          "investigation": {
+            "$ref": "#/components/schemas/InvestigationRead"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunRead"
+          }
+        },
+        "required": [
+          "investigation",
+          "run"
+        ],
+        "title": "OverviewRead",
+        "type": "object"
+      },
+      "OverviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "minimum": 1.0,
+            "title": "Boundaryrevision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "boundaryRevision"
+        ],
+        "title": "OverviewRequest",
         "type": "object"
       },
       "PhoneCapture": {
@@ -7149,6 +7907,169 @@
         "title": "Representation",
         "type": "string"
       },
+      "ResearchArtifactRead": {
+        "additionalProperties": false,
+        "properties": {
+          "evidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Evidenceids",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Method",
+            "type": "string"
+          },
+          "output": {
+            "discriminator": {
+              "mapping": {
+                "chart": "#/components/schemas/ChartOutput",
+                "document": "#/components/schemas/DocumentOutput",
+                "map": "#/components/schemas/MapOutput",
+                "table": "#/components/schemas/TableOutput",
+                "timeline": "#/components/schemas/TimelineOutput"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TableOutput"
+              },
+              {
+                "$ref": "#/components/schemas/ChartOutput"
+              },
+              {
+                "$ref": "#/components/schemas/MapOutput"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentOutput"
+              },
+              {
+                "$ref": "#/components/schemas/TimelineOutput"
+              }
+            ],
+            "title": "Output"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "method",
+          "evidenceIds",
+          "output",
+          "id",
+          "runId"
+        ],
+        "title": "ResearchArtifactRead",
+        "type": "object"
+      },
+      "ResearchBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "maxOutputTokens": {
+            "default": 12000,
+            "maximum": 100000.0,
+            "minimum": 500.0,
+            "title": "Maxoutputtokens",
+            "type": "integer"
+          },
+          "maxSeconds": {
+            "default": 180,
+            "maximum": 1800.0,
+            "minimum": 10.0,
+            "title": "Maxseconds",
+            "type": "integer"
+          },
+          "maxSteps": {
+            "default": 16,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Maxsteps",
+            "type": "integer"
+          }
+        },
+        "title": "ResearchBudget",
+        "type": "object"
+      },
+      "ResearchPage": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "totals": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Totals",
+            "type": "object"
+          }
+        },
+        "required": [
+          "offset",
+          "limit",
+          "totals"
+        ],
+        "title": "ResearchPage",
+        "type": "object"
+      },
+      "ResearchStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "modelConfigured": {
+            "title": "Modelconfigured",
+            "type": "boolean"
+          },
+          "workerRequired": {
+            "default": true,
+            "title": "Workerrequired",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "modelConfigured",
+          "model"
+        ],
+        "title": "ResearchStatus",
+        "type": "object"
+      },
       "ResolutionMetadata": {
         "additionalProperties": false,
         "properties": {
@@ -7190,6 +8111,141 @@
           }
         },
         "title": "ResolutionMetadata",
+        "type": "object"
+      },
+      "RunCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/ResearchBudget"
+          },
+          "kind": {
+            "default": "investigation",
+            "enum": [
+              "overview",
+              "investigation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "requestKey": {
+            "format": "uuid",
+            "title": "Requestkey",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestKey",
+          "question"
+        ],
+        "title": "RunCreate",
+        "type": "object"
+      },
+      "RunRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ResearchBudget"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finishedat"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "investigationId": {
+            "format": "uuid",
+            "title": "Investigationid",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "overview",
+              "investigation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "investigationId",
+          "question",
+          "kind",
+          "status",
+          "budget",
+          "attempt",
+          "error",
+          "createdAt",
+          "startedAt",
+          "finishedAt"
+        ],
+        "title": "RunRead",
         "type": "object"
       },
       "RunStatus": {
@@ -8202,6 +9258,58 @@
         "title": "SiteUpdate",
         "type": "object"
       },
+      "SourceRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "coverage": {
+            "title": "Coverage",
+            "type": "string"
+          },
+          "documentationUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Documentationurl",
+            "type": "string"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "resolution": {
+            "title": "Resolution",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "domain",
+          "coverage",
+          "resolution",
+          "license",
+          "attribution",
+          "documentationUrl"
+        ],
+        "title": "SourceRead",
+        "type": "object"
+      },
       "StacSource": {
         "additionalProperties": false,
         "description": "Reference to a STAC item/collection. Resolution to a renderable asset happens client-side.",
@@ -8318,6 +9426,91 @@
         "title": "StorageReconciliation",
         "type": "object"
       },
+      "TableColumn": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "TableColumn",
+        "type": "object"
+      },
+      "TableOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TableColumn"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Columns",
+            "type": "array"
+          },
+          "kind": {
+            "const": "table",
+            "title": "Kind",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "maxItems": 5000,
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "columns",
+          "rows"
+        ],
+        "title": "TableOutput",
+        "type": "object"
+      },
       "TemporalExtent": {
         "additionalProperties": false,
         "properties": {
@@ -8393,6 +9586,68 @@
           "url"
         ],
         "title": "TilesUrlSource",
+        "type": "object"
+      },
+      "TimelineEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "maxLength": 100,
+            "title": "Date",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 5000,
+            "title": "Description",
+            "type": "string"
+          },
+          "evidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Evidenceids",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "title",
+          "description",
+          "evidenceIds"
+        ],
+        "title": "TimelineEntry",
+        "type": "object"
+      },
+      "TimelineOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineEntry"
+            },
+            "maxItems": 1000,
+            "title": "Entries",
+            "type": "array"
+          },
+          "kind": {
+            "const": "timeline",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "entries"
+        ],
+        "title": "TimelineOutput",
         "type": "object"
       },
       "UploadStatus": {
@@ -8566,6 +9821,54 @@
           "tileMatrixSetId"
         ],
         "title": "WmtsSource",
+        "type": "object"
+      },
+      "WorkspaceCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkspaceCreate",
+        "type": "object"
+      },
+      "WorkspaceRead": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "editor",
+              "viewer"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "id",
+          "role"
+        ],
+        "title": "WorkspaceRead",
         "type": "object"
       },
       "XyzSource": {
@@ -11326,6 +12629,23 @@
               "title": "Offset",
               "type": "integer"
             }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
           }
         ],
         "responses": {
@@ -11396,6 +12716,25 @@
       },
       "post": {
         "operationId": "create_area_api_v1_land_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -11472,6 +12811,25 @@
     "/api/v1/land/corridor": {
       "post": {
         "operationId": "make_corridor_api_v1_land_corridor_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -11548,6 +12906,25 @@
     "/api/v1/land/operations": {
       "post": {
         "operationId": "operate_api_v1_land_operations_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -11634,6 +13011,23 @@
               "title": "Land Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
           }
         ],
         "responses": {
@@ -11702,6 +13096,23 @@
               "format": "uuid",
               "title": "Land Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -11779,6 +13190,23 @@
               "title": "Land Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
           }
         ],
         "requestBody": {
@@ -11854,6 +13282,336 @@
         ]
       }
     },
+    "/api/v1/land/{land_id}/investigations": {
+      "get": {
+        "operationId": "list_investigations_api_v1_land__land_id__investigations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InvestigationRead"
+                  },
+                  "title": "Response List Investigations Api V1 Land  Land Id  Investigations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "List Investigations",
+        "tags": [
+          "land research"
+        ]
+      },
+      "post": {
+        "operationId": "create_investigation_api_v1_land__land_id__investigations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvestigationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create Investigation",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/overview": {
+      "post": {
+        "operationId": "overview_api_v1_land__land_id__overview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Overview",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
     "/api/v1/land/{land_id}/revisions": {
       "get": {
         "operationId": "area_revisions_api_v1_land__land_id__revisions_get",
@@ -11866,6 +13624,23 @@
               "format": "uuid",
               "title": "Land Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
             }
           }
         ],
@@ -13275,6 +15050,1019 @@
         ]
       }
     },
+    "/api/v1/research/evidence/{evidence_id}": {
+      "get": {
+        "operationId": "get_evidence_api_v1_research_evidence__evidence_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get Evidence",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/findings/{finding_id}": {
+      "put": {
+        "operationId": "disposition_api_v1_research_findings__finding_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "finding_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Finding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FindingDisposition"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Disposition",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/investigations/{investigation_id}": {
+      "get": {
+        "operationId": "detail_api_v1_research_investigations__investigation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "investigation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Investigation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigationDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Detail",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/investigations/{investigation_id}/runs": {
+      "post": {
+        "operationId": "start_run_api_v1_research_investigations__investigation_id__runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "investigation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Investigation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Start Run",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/runs/{run_id}": {
+      "get": {
+        "operationId": "get_run_api_v1_research_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get Run",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/runs/{run_id}/cancel": {
+      "post": {
+        "operationId": "cancel_run_api_v1_research_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Cancel Run",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/runs/{run_id}/events": {
+      "get": {
+        "operationId": "events_api_v1_research_runs__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EventRead"
+                  },
+                  "title": "Response Events Api V1 Research Runs  Run Id  Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Events",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/runs/{run_id}/stream": {
+      "get": {
+        "operationId": "stream_api_v1_research_runs__run_id__stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "last-event-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Stream",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/sources": {
+      "get": {
+        "operationId": "sources_api_v1_research_sources_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SourceRead"
+                  },
+                  "title": "Response Sources Api V1 Research Sources Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Sources",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
+    "/api/v1/research/status": {
+      "get": {
+        "operationId": "status_api_v1_research_status_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Status",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
     "/api/v1/sites": {
       "get": {
         "operationId": "list_sites_api_v1_sites_get",
@@ -14221,6 +17009,485 @@
         "summary": "Reconcile object storage against the database, in both directions",
         "tags": [
           "storage"
+        ]
+      }
+    },
+    "/api/v1/workspaces": {
+      "get": {
+        "operationId": "list_workspaces_api_v1_workspaces_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceRead"
+                  },
+                  "title": "Response List Workspaces Api V1 Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "List Workspaces",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "post": {
+        "operationId": "create_workspace_api_v1_workspaces_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create Workspace",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/api/v1/workspaces/identity": {
+      "get": {
+        "operationId": "identity_api_v1_workspaces_identity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Identity",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/api/v1/workspaces/members": {
+      "get": {
+        "operationId": "members_api_v1_workspaces_members_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MembershipWrite"
+                  },
+                  "title": "Response Members Api V1 Workspaces Members Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Members",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "put": {
+        "operationId": "set_member_api_v1_workspaces_members_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MembershipWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipWrite"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Set Member",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/api/v1/workspaces/members/{principal_id}": {
+      "delete": {
+        "operationId": "remove_member_api_v1_workspaces_members__principal_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "principal_id",
+            "required": true,
+            "schema": {
+              "title": "Principal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Remove Member",
+        "tags": [
+          "workspaces"
         ]
       }
     }

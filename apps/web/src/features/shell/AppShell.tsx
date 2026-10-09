@@ -5,6 +5,7 @@ import { env } from "@/app/env";
 import { HOTKEYS } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
 import { LandBridge } from "@/cesium/LandBridge";
+import { LandIdentityBridge } from "../land/WorkspaceIdentity";
 import { LandPanel } from "../land/LandPanel";
 import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
@@ -155,7 +156,12 @@ export function AppShell() {
   return (
     <>
       <GlobalHotkeys />
-      {env.landExplorationEnabled && <LandBridge />}
+      {env.landExplorationEnabled && (
+        <>
+          <LandIdentityBridge />
+          <LandBridge />
+        </>
+      )}
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">
         <ErrorBoundary inline label="Fleet overlay">
           <MissionOverlays />

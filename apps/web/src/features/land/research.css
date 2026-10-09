@@ -1,0 +1,293 @@
+.land-research {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-top: 1px solid var(--divider);
+  padding-top: 24px;
+}
+.land-research-heading {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.land-research-heading > div {
+  flex: 1;
+}
+.land-research-heading > svg {
+  color: var(--accent-strong);
+}
+.land-research-heading h3 {
+  font-size: 24px;
+  margin-bottom: 0;
+}
+.land-research-tabs {
+  display: flex;
+  padding: 4px;
+  gap: 4px;
+  background: #0002;
+  border-radius: 10px;
+}
+.land-research-tabs button {
+  flex: 1;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 10px 6px;
+  font-size: 12px;
+}
+.land-research-tabs button[aria-pressed="true"] {
+  background: var(--accent-fill);
+  color: var(--on-accent-fill);
+}
+.land-finding,
+.land-artifact,
+.land-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--control-border);
+  padding: 16px;
+  border-radius: 12px;
+  background: #a5c4a507;
+}
+.land-finding.is-pinned {
+  border-color: var(--accent-strong);
+}
+.land-finding h4,
+.land-artifact h4,
+.land-evidence h4 {
+  font-size: 16px;
+  margin: 0;
+  line-height: 1.35;
+}
+.land-finding-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-secondary);
+}
+.land-research details {
+  font-size: 12px;
+}
+.land-research summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.land-question {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-top: 1px solid var(--divider);
+  background: transparent;
+  padding: 12px 0 0;
+  font-size: 12px !important;
+}
+.land-question svg {
+  flex-shrink: 0;
+}
+.land-run {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.land-run > span:nth-child(2) {
+  flex: 1;
+}
+.land-run button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px;
+  background: transparent;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+}
+.land-run-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  flex-shrink: 0;
+}
+.land-run-dot.is-running {
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 4px #b6d3ac14;
+}
+.land-progress ol {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.land-progress li > span {
+  color: var(--accent-strong);
+}
+.land-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.land-ask > label {
+  font-size: 14px;
+}
+.land-ask textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.land-ask > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.land-ask > div > label,
+.land-dismissed {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+.land-ask button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--accent-fill);
+  color: var(--on-accent-fill);
+  font-size: 12px;
+}
+.land-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.land-conversation article {
+  padding: 14px;
+  border-radius: 10px;
+  background: #ffffff05;
+}
+.land-conversation article[data-role="user"] {
+  background: #a5c4a514;
+}
+.land-conversation article > span {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 10px;
+  color: var(--accent-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.land-conversation p,
+.land-document {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.land-evidence {
+  border-color: var(--accent-strong);
+}
+.land-evidence dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  font-size: 11px;
+  margin: 0;
+}
+.land-evidence dt {
+  color: var(--text-secondary);
+}
+.land-evidence dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.land-evidence blockquote {
+  margin: 0;
+  padding: 10px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  background: #0002;
+  border-radius: 6px;
+}
+.land-evidence a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-strong);
+  font-size: 12px;
+}
+.land-evidence-link {
+  border: 0;
+  background: transparent;
+  text-decoration: underline;
+  padding: 7px;
+  font-size: 11px !important;
+}
+.land-chart {
+  width: 100%;
+  height: auto;
+  color: var(--text-secondary);
+}
+.land-chart-series-0 {
+  color: var(--accent-strong);
+}
+.land-chart-series-1 {
+  color: #78bce1;
+}
+.land-chart-series-2 {
+  color: #dcb075;
+}
+.land-table-wrap {
+  overflow: auto;
+  max-height: 320px;
+  max-width: 100%;
+}
+.land-table-wrap table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+.land-table-wrap td,
+.land-table-wrap th {
+  text-align: left;
+  padding: 9px;
+  border-bottom: 1px solid var(--divider);
+  min-width: 70px;
+}
+.land-table-wrap th {
+  font-weight: 600;
+}
+.land-timeline {
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+.land-timeline time {
+  display: block;
+  font-size: 11px;
+  color: var(--accent-strong);
+}
+.land-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.land-identity:empty {
+  display: none;
+}

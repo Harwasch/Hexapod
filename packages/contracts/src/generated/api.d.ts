@@ -543,6 +543,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/investigations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Investigations */
+        get: operations["list_investigations_api_v1_land__land_id__investigations_get"];
+        put?: never;
+        /** Create Investigation */
+        post: operations["create_investigation_api_v1_land__land_id__investigations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Overview */
+        post: operations["overview_api_v1_land__land_id__overview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/revisions": {
         parameters: {
             query?: never;
@@ -801,6 +836,176 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research/evidence/{evidence_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evidence */
+        get: operations["get_evidence_api_v1_research_evidence__evidence_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Disposition */
+        put: operations["disposition_api_v1_research_findings__finding_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/investigations/{investigation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Detail */
+        get: operations["detail_api_v1_research_investigations__investigation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/investigations/{investigation_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Run */
+        post: operations["start_run_api_v1_research_investigations__investigation_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run */
+        get: operations["get_run_api_v1_research_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Run */
+        post: operations["cancel_run_api_v1_research_runs__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Events */
+        get: operations["events_api_v1_research_runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/runs/{run_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream */
+        get: operations["stream_api_v1_research_runs__run_id__stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sources */
+        get: operations["sources_api_v1_research_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_api_v1_research_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites": {
         parameters: {
             query?: never;
@@ -939,6 +1144,76 @@ export interface paths {
          */
         post: operations["reconcile_storage_api_v1_storage_reconciliation_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Workspaces */
+        get: operations["list_workspaces_api_v1_workspaces_get"];
+        put?: never;
+        /** Create Workspace */
+        post: operations["create_workspace_api_v1_workspaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Identity */
+        get: operations["identity_api_v1_workspaces_identity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Members */
+        get: operations["members_api_v1_workspaces_members_get"];
+        /** Set Member */
+        put: operations["set_member_api_v1_workspaces_members_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/members/{principal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Member */
+        delete: operations["remove_member_api_v1_workspaces_members__principal_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1797,6 +2072,36 @@ export interface components {
              */
             type: "cesium-ion-terrain";
         };
+        /** ChartOutput */
+        ChartOutput: {
+            /**
+             * Charttype
+             * @enum {string}
+             */
+            chartType: "line" | "bar" | "scatter";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "chart";
+            /** Labels */
+            labels: string[];
+            /** Series */
+            series: components["schemas"]["ChartSeries"][];
+            /** Unit */
+            unit: string;
+            /** Xlabel */
+            xLabel: string;
+            /** Ylabel */
+            yLabel: string;
+        };
+        /** ChartSeries */
+        ChartSeries: {
+            /** Label */
+            label: string;
+            /** Values */
+            values: (number | null)[];
+        };
         /**
          * Clarification
          * @description A question the planner asks with a structured answer: a choice (chips), a range
@@ -1875,6 +2180,128 @@ export interface components {
              */
             url: string;
         };
+        /** DocumentOutput */
+        DocumentOutput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "document";
+            /** Markdown */
+            markdown: string;
+        };
+        /** EventRead */
+        EventRead: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Kind */
+            kind: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Sequence */
+            sequence: number;
+        };
+        /** EvidenceRead */
+        EvidenceRead: {
+            /** Attribution */
+            attribution: string;
+            /** Excerpt */
+            excerpt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** License */
+            license: string;
+            /** Observedat */
+            observedAt?: string | null;
+            /** Provider */
+            provider: string;
+            /** Publishedat */
+            publishedAt?: string | null;
+            /** Recordid */
+            recordId?: string | null;
+            /** Relevancenote */
+            relevanceNote: string;
+            /**
+             * Retrievedat
+             * Format: date-time
+             */
+            retrievedAt: string;
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+            /** Snapshothash */
+            snapshotHash?: string | null;
+            /**
+             * Spatialrelevance
+             * @enum {string}
+             */
+            spatialRelevance: "intersects" | "within" | "nearby" | "regional" | "unresolved";
+            /** Title */
+            title: string;
+            /**
+             * Url
+             * Format: uri
+             */
+            url: string;
+        };
+        /** FindingDisposition */
+        FindingDisposition: {
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "visible" | "pinned" | "dismissed";
+        };
+        /** FindingRead */
+        FindingRead: {
+            /** Boundary */
+            boundary?: (components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "physical" | "ecology" | "history" | "rights" | "hazards" | "infrastructure" | "energy" | "coverage";
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "measured" | "supported" | "inferred" | "uncertain";
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "visible" | "pinned" | "dismissed";
+            /** Evidenceids */
+            evidenceIds: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+            /** Suggestedquestions */
+            suggestedQuestions?: string[];
+            /** Summary */
+            summary: string;
+            /** Title */
+            title: string;
+            /** Uncertainty */
+            uncertainty: string;
+        };
         /** GeoJsonSource */
         GeoJsonSource: {
             /**
@@ -1950,6 +2377,72 @@ export interface components {
             postgisVersion?: string | null;
             /** Status */
             status: string;
+        };
+        /** IdentityRead */
+        IdentityRead: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "pilot" | "oidc";
+            /** Principalid */
+            principalId: string;
+        };
+        /** InvestigationCreate */
+        InvestigationCreate: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Question
+             * @default What is useful and interesting about this land?
+             */
+            question?: string;
+            /** Title */
+            title: string;
+        };
+        /** InvestigationDetail */
+        InvestigationDetail: {
+            /** Artifacts */
+            artifacts: components["schemas"]["ResearchArtifactRead"][];
+            /** Evidence */
+            evidence: components["schemas"]["EvidenceRead"][];
+            /** Findings */
+            findings: components["schemas"]["FindingRead"][];
+            investigation: components["schemas"]["InvestigationRead"];
+            /** Messages */
+            messages: components["schemas"]["MessageRead"][];
+            page: components["schemas"]["ResearchPage"];
+            /** Runs */
+            runs: components["schemas"]["RunRead"][];
+        };
+        /** InvestigationRead */
+        InvestigationRead: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /**
+             * Question
+             * @default What is useful and interesting about this land?
+             */
+            question?: string;
+            /** Stale */
+            stale: boolean;
+            /** Title */
+            title: string;
         };
         /** IonAssetMetadata */
         IonAssetMetadata: {
@@ -2470,6 +2963,59 @@ export interface components {
             /** Stepsstarted */
             stepsStarted: number;
         };
+        /** MapFeature */
+        MapFeature: {
+            /** Boundary */
+            boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Label */
+            label: string;
+            /** Value */
+            value?: number | null;
+        };
+        /** MapOutput */
+        MapOutput: {
+            /** Features */
+            features: components["schemas"]["MapFeature"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "map";
+            /** Legend */
+            legend: string;
+            /** Unit */
+            unit?: string | null;
+        };
+        /** MembershipWrite */
+        MembershipWrite: {
+            /** Principalid */
+            principalId: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "editor" | "viewer";
+        };
+        /** MessageRead */
+        MessageRead: {
+            /** Content */
+            content: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+        };
         /**
          * MissingObject
          * @description A row whose object is not in the bucket.
@@ -2594,6 +3140,16 @@ export interface components {
             point: components["schemas"]["OutlinePoint"];
             /** Width */
             width: number;
+        };
+        /** OverviewRead */
+        OverviewRead: {
+            investigation: components["schemas"]["InvestigationRead"];
+            run: components["schemas"]["RunRead"];
+        };
+        /** OverviewRequest */
+        OverviewRequest: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
         };
         /** PhoneCapture */
         PhoneCapture: {
@@ -3354,6 +3910,68 @@ export interface components {
          * @enum {string}
          */
         Representation: "gaussian-splat" | "mesh" | "point-cloud" | "terrain" | "imagery";
+        /** ResearchArtifactRead */
+        ResearchArtifactRead: {
+            /** Evidenceids */
+            evidenceIds: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Method */
+            method: string;
+            /** Output */
+            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"];
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+            /** Title */
+            title: string;
+        };
+        /** ResearchBudget */
+        ResearchBudget: {
+            /**
+             * Maxoutputtokens
+             * @default 12000
+             */
+            maxOutputTokens?: number;
+            /**
+             * Maxseconds
+             * @default 180
+             */
+            maxSeconds?: number;
+            /**
+             * Maxsteps
+             * @default 16
+             */
+            maxSteps?: number;
+        };
+        /** ResearchPage */
+        ResearchPage: {
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Totals */
+            totals: {
+                [key: string]: number;
+            };
+        };
+        /** ResearchStatus */
+        ResearchStatus: {
+            /** Model */
+            model: string | null;
+            /** Modelconfigured */
+            modelConfigured: boolean;
+            /**
+             * Workerrequired
+             * @default true
+             */
+            workerRequired?: boolean;
+        };
         /** ResolutionMetadata */
         ResolutionMetadata: {
             /** Description */
@@ -3362,6 +3980,62 @@ export interface components {
             groundSampleDistanceM?: number | null;
             /** Pointspacingm */
             pointSpacingM?: number | null;
+        };
+        /** RunCreate */
+        RunCreate: {
+            budget?: components["schemas"]["ResearchBudget"];
+            /**
+             * Kind
+             * @default investigation
+             * @enum {string}
+             */
+            kind?: "overview" | "investigation";
+            /** Question */
+            question: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey: string;
+        };
+        /** RunRead */
+        RunRead: {
+            /** Attempt */
+            attempt: number;
+            budget: components["schemas"]["ResearchBudget"];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Error */
+            error: string | null;
+            /** Finishedat */
+            finishedAt: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Investigationid
+             * Format: uuid
+             */
+            investigationId: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "overview" | "investigation";
+            /** Question */
+            question: string;
+            /** Startedat */
+            startedAt: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "succeeded" | "partial" | "failed" | "cancelled";
         };
         /**
          * RunStatus
@@ -3682,6 +4356,28 @@ export interface components {
             /** Thumbnailurl */
             thumbnailUrl?: string | null;
         };
+        /** SourceRead */
+        SourceRead: {
+            /** Attribution */
+            attribution: string;
+            /** Coverage */
+            coverage: string;
+            /**
+             * Documentationurl
+             * Format: uri
+             */
+            documentationUrl: string;
+            /** Domain */
+            domain: string;
+            /** Id */
+            id: string;
+            /** License */
+            license: string;
+            /** Name */
+            name: string;
+            /** Resolution */
+            resolution: string;
+        };
         /**
          * StacSource
          * @description Reference to a STAC item/collection. Resolution to a renderable asset happens client-side.
@@ -3735,6 +4431,29 @@ export interface components {
             /** Truncated */
             truncated: boolean;
         };
+        /** TableColumn */
+        TableColumn: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Unit */
+            unit?: string | null;
+        };
+        /** TableOutput */
+        TableOutput: {
+            /** Columns */
+            columns: components["schemas"]["TableColumn"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "table";
+            /** Rows */
+            rows: {
+                [key: string]: string | number | boolean | null;
+            }[];
+        };
         /** TemporalExtent */
         TemporalExtent: {
             /** End */
@@ -3767,6 +4486,27 @@ export interface components {
              * Format: uri
              */
             url: string;
+        };
+        /** TimelineEntry */
+        TimelineEntry: {
+            /** Date */
+            date: string;
+            /** Description */
+            description: string;
+            /** Evidenceids */
+            evidenceIds: string[];
+            /** Title */
+            title: string;
+        };
+        /** TimelineOutput */
+        TimelineOutput: {
+            /** Entries */
+            entries: components["schemas"]["TimelineEntry"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "timeline";
         };
         /**
          * UploadStatus
@@ -3853,6 +4593,26 @@ export interface components {
              */
             url: string;
         };
+        /** WorkspaceCreate */
+        WorkspaceCreate: {
+            /** Name */
+            name: string;
+        };
+        /** WorkspaceRead */
+        WorkspaceRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "editor" | "viewer";
+        };
         /** XyzSource */
         XyzSource: {
             /** Maximumlevel */
@@ -3922,17 +4682,28 @@ export type SchemaCesiumIon3DTilesSource = components['schemas']['CesiumIon3DTil
 export type SchemaCesiumIonImagerySource = components['schemas']['CesiumIonImagerySource'];
 export type SchemaCesiumIonSource = components['schemas']['CesiumIonSource'];
 export type SchemaCesiumIonTerrainSource = components['schemas']['CesiumIonTerrainSource'];
+export type SchemaChartOutput = components['schemas']['ChartOutput'];
+export type SchemaChartSeries = components['schemas']['ChartSeries'];
 export type SchemaClarification = components['schemas']['Clarification'];
 export type SchemaClarificationOption = components['schemas']['ClarificationOption'];
 export type SchemaCorridorRequest = components['schemas']['CorridorRequest'];
 export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
 export type SchemaCzmlSource = components['schemas']['CzmlSource'];
+export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
+export type SchemaEventRead = components['schemas']['EventRead'];
+export type SchemaEvidenceRead = components['schemas']['EvidenceRead'];
+export type SchemaFindingDisposition = components['schemas']['FindingDisposition'];
+export type SchemaFindingRead = components['schemas']['FindingRead'];
 export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];
 export type SchemaGeoPosition = components['schemas']['GeoPosition'];
 export type SchemaGeorefMethod = components['schemas']['GeorefMethod'];
 export type SchemaGooglePhotorealisticSource = components['schemas']['GooglePhotorealisticSource'];
 export type SchemaGroundSample = components['schemas']['GroundSample'];
 export type SchemaHealthStatus = components['schemas']['HealthStatus'];
+export type SchemaIdentityRead = components['schemas']['IdentityRead'];
+export type SchemaInvestigationCreate = components['schemas']['InvestigationCreate'];
+export type SchemaInvestigationDetail = components['schemas']['InvestigationDetail'];
+export type SchemaInvestigationRead = components['schemas']['InvestigationRead'];
 export type SchemaIonAssetMetadata = components['schemas']['IonAssetMetadata'];
 export type SchemaIonReconstructionCapabilities = components['schemas']['IonReconstructionCapabilities'];
 export type SchemaIonStatus = components['schemas']['IonStatus'];
@@ -3957,6 +4728,10 @@ export type SchemaLiveProgress = components['schemas']['LiveProgress'];
 export type SchemaLiveSplat = components['schemas']['LiveSplat'];
 export type SchemaLiveStage = components['schemas']['LiveStage'];
 export type SchemaLiveState = components['schemas']['LiveState'];
+export type SchemaMapFeature = components['schemas']['MapFeature'];
+export type SchemaMapOutput = components['schemas']['MapOutput'];
+export type SchemaMembershipWrite = components['schemas']['MembershipWrite'];
+export type SchemaMessageRead = components['schemas']['MessageRead'];
 export type SchemaMissingObject = components['schemas']['MissingObject'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
@@ -3964,6 +4739,8 @@ export type SchemaOrphanObject = components['schemas']['OrphanObject'];
 export type SchemaOutline = components['schemas']['Outline'];
 export type SchemaOutlinePoint = components['schemas']['OutlinePoint'];
 export type SchemaOutlineRequest = components['schemas']['OutlineRequest'];
+export type SchemaOverviewRead = components['schemas']['OverviewRead'];
+export type SchemaOverviewRequest = components['schemas']['OverviewRequest'];
 export type SchemaPhoneCapture = components['schemas']['PhoneCapture'];
 export type SchemaPhoneCaptureCreate = components['schemas']['PhoneCaptureCreate'];
 export type SchemaPhoneRefine = components['schemas']['PhoneRefine'];
@@ -3999,7 +4776,13 @@ export type SchemaRecipeStageRead = components['schemas']['RecipeStageRead'];
 export type SchemaRenderConfig = components['schemas']['RenderConfig'];
 export type SchemaRenderMetadata = components['schemas']['RenderMetadata'];
 export type SchemaRepresentation = components['schemas']['Representation'];
+export type SchemaResearchArtifactRead = components['schemas']['ResearchArtifactRead'];
+export type SchemaResearchBudget = components['schemas']['ResearchBudget'];
+export type SchemaResearchPage = components['schemas']['ResearchPage'];
+export type SchemaResearchStatus = components['schemas']['ResearchStatus'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
+export type SchemaRunCreate = components['schemas']['RunCreate'];
+export type SchemaRunRead = components['schemas']['RunRead'];
 export type SchemaRunStatus = components['schemas']['RunStatus'];
 export type SchemaScaleEvidence = components['schemas']['ScaleEvidence'];
 export type SchemaScaleEvidenceInput = components['schemas']['ScaleEvidenceInput'];
@@ -4012,15 +4795,22 @@ export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
 export type SchemaSiteSummary = components['schemas']['SiteSummary'];
 export type SchemaSiteUpdate = components['schemas']['SiteUpdate'];
+export type SchemaSourceRead = components['schemas']['SourceRead'];
 export type SchemaStacSource = components['schemas']['StacSource'];
 export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
+export type SchemaTableColumn = components['schemas']['TableColumn'];
+export type SchemaTableOutput = components['schemas']['TableOutput'];
 export type SchemaTemporalExtent = components['schemas']['TemporalExtent'];
 export type SchemaTilesUrlLayerSource = components['schemas']['TilesUrlLayerSource'];
 export type SchemaTilesUrlSource = components['schemas']['TilesUrlSource'];
+export type SchemaTimelineEntry = components['schemas']['TimelineEntry'];
+export type SchemaTimelineOutput = components['schemas']['TimelineOutput'];
 export type SchemaUploadStatus = components['schemas']['UploadStatus'];
 export type SchemaUploadWindow = components['schemas']['UploadWindow'];
 export type SchemaWmsSource = components['schemas']['WmsSource'];
 export type SchemaWmtsSource = components['schemas']['WmtsSource'];
+export type SchemaWorkspaceCreate = components['schemas']['WorkspaceCreate'];
+export type SchemaWorkspaceRead = components['schemas']['WorkspaceRead'];
 export type SchemaXyzSource = components['schemas']['XyzSource'];
 export type $defs = Record<string, never>;
 export interface operations {
@@ -5941,7 +6731,9 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5997,7 +6789,9 @@ export interface operations {
     create_area_api_v1_land_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6057,7 +6851,9 @@ export interface operations {
     get_area_api_v1_land__land_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path: {
                 land_id: string;
             };
@@ -6115,7 +6911,9 @@ export interface operations {
     revise_area_api_v1_land__land_id__put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path: {
                 land_id: string;
             };
@@ -6177,7 +6975,9 @@ export interface operations {
     delete_area_api_v1_land__land_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path: {
                 land_id: string;
             };
@@ -6230,10 +7030,203 @@ export interface operations {
             };
         };
     };
+    list_investigations_api_v1_land__land_id__investigations_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_investigation_api_v1_land__land_id__investigations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvestigationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    overview_api_v1_land__land_id__overview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OverviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverviewRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     area_revisions_api_v1_land__land_id__revisions_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path: {
                 land_id: string;
             };
@@ -6291,7 +7284,9 @@ export interface operations {
     make_corridor_api_v1_land_corridor_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6351,7 +7346,9 @@ export interface operations {
     operate_api_v1_land_operations_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7453,6 +8450,616 @@ export interface operations {
             };
         };
     };
+    get_evidence_api_v1_research_evidence__evidence_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    disposition_api_v1_research_findings__finding_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FindingDisposition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FindingRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    detail_api_v1_research_investigations__investigation_id__get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                investigation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationDetail"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    start_run_api_v1_research_investigations__investigation_id__runs_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                investigation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_run_api_v1_research_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_run_api_v1_research_runs__run_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    events_api_v1_research_runs__run_id__events_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stream_api_v1_research_runs__run_id__stream_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: {
+                "last-event-id"?: number | null;
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sources_api_v1_research_sources_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    status_api_v1_research_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchStatus"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_sites_api_v1_sites_get: {
         parameters: {
             query?: never;
@@ -8167,6 +9774,356 @@ export interface operations {
             };
             /** @description Object storage is not configured */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_workspaces_api_v1_workspaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_workspace_api_v1_workspaces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    identity_api_v1_workspaces_identity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    members_api_v1_workspaces_members_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MembershipWrite"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_member_api_v1_workspaces_members_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MembershipWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MembershipWrite"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    remove_member_api_v1_workspaces_members__principal_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                principal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

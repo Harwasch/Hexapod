@@ -35,6 +35,9 @@ export interface AppEnv {
   photorealisticEnabled: boolean;
   devToolsEnabled: boolean;
   landExplorationEnabled: boolean;
+  landOidcAuthority: string | undefined;
+  landOidcClientId: string | undefined;
+  landOidcAudience: string | undefined;
   /**
    * Whether Living Survey motion may run in the splat vertex shader (the engine patch's
    * `vertexMotion` hook) instead of CPU texture rewrites. On by default, and then each viewer's
@@ -57,6 +60,9 @@ export function readEnv(source: ImportMetaEnv = import.meta.env): AppEnv {
     photorealisticEnabled: flag(source.VITE_ENABLE_PHOTOREALISTIC, true),
     devToolsEnabled: source.DEV || flag(source.VITE_ENABLE_DEV_TOOLS),
     landExplorationEnabled: flag(source.VITE_ENABLE_LAND_EXPLORATION),
+    landOidcAuthority: optionalString(source.VITE_LAND_OIDC_AUTHORITY),
+    landOidcClientId: optionalString(source.VITE_LAND_OIDC_CLIENT_ID),
+    landOidcAudience: optionalString(source.VITE_LAND_OIDC_AUDIENCE),
     splatGpuMotion: flag(source.VITE_SPLAT_GPU_MOTION, true),
     isDev: source.DEV,
   };

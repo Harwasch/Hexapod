@@ -17,9 +17,11 @@ from app.api.v1 import (
     phone,
     plans,
     recipes,
+    research,
     sites,
     storage,
     system,
+    workspaces,
 )
 from app.schemas.common import Problem
 
@@ -48,3 +50,5 @@ api_v1.include_router(artifacts.router)
 api_v1.include_router(recipes.router)
 api_v1.include_router(storage.router)
 api_v1.include_router(land.router)
+api_v1.include_router(workspaces.router)
+api_v1.include_router(research.router)
