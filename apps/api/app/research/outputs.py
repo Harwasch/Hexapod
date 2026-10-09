@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.research.providers.archives import ARCHIVE_SOURCES
 from app.research.providers.base import SourceResult
 from app.research.providers.open_data import SOURCES
 from app.schemas.research import (
@@ -9,6 +10,7 @@ from app.schemas.research import (
     ChartOutput,
     ChartSeries,
     FindingContent,
+    GalleryOutput,
     MapFeature,
     MapOutput,
     TableColumn,
@@ -46,6 +48,20 @@ def overview_outputs(
         }
     )
     artifacts: list[ArtifactContent] = []
+    if result.provider in ARCHIVE_SOURCES:
+        finding.suggested_questions = [
+            "What do these sources show about the land, and which dates and locations still need verification?"
+        ]
+        artifacts.append(
+            ArtifactContent(
+                title=SOURCES[result.provider].name,
+                method=str(result.data.get("coverageNote", "Bounded public catalog search."))
+                + " Catalog metadata and file-version references are saved; remote preview images may change. "
+                "Coordinates are catalog locations and sheet footprints, not verified image georeferencing.",
+                evidence_ids=ids,
+                output=GalleryOutput(kind="gallery", evidence_ids=ids),
+            )
+        )
     if result.provider == "nasa-power":
         for key, values in result.data["parameters"].items():
             definition = result.data["definitions"].get(key, {})

@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 from shapely.geometry import Point
 
+from app.research.providers.archives import ARCHIVE_SOURCES, commons, historical_maps
 from app.research.providers.base import (
     SourceContext,
     SourceError,
@@ -56,6 +57,8 @@ SOURCES = {
 }
 
 SOURCES.update(US_SOURCES)
+OVERVIEW_SOURCES = tuple(SOURCES)
+SOURCES.update(ARCHIVE_SOURCES)
 
 
 def elevation(context: SourceContext, client: httpx.Client) -> SourceResult:
@@ -257,6 +260,8 @@ ADAPTERS = {
     "gbif-occurrences": occurrences,
     "usda-soils": soils,
     "fema-flood-zones": flood_zones,
+    "commons-place-images": commons,
+    "usgs-historical-maps": historical_maps,
 }
 
 

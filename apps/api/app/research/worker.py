@@ -45,8 +45,9 @@ from app.research.model import (
     SearchAction,
 )
 from app.research.outputs import overview_outputs
+from app.research.providers.archives import ARCHIVE_SOURCES
 from app.research.providers.base import SourceContext, SourceResult
-from app.research.providers.open_data import SOURCES, retrieve
+from app.research.providers.open_data import OVERVIEW_SOURCES, SOURCES, retrieve
 from app.research.search import ClaudeResearchSearch, ResearchSearch
 from app.schemas.geojson import Footprint
 from app.schemas.land_rasters import RasterMetadata, RasterRequest
@@ -617,8 +618,9 @@ class ResearchWorker:
                 except ValueError as error:
                     queue.finish(db, run_id, token, "failed", str(error)[:1000])
                 return
-            if kind == "overview":
-                for provider in SOURCES:
+            if kind in {"overview", "archive"}:
+                providers = tuple(ARCHIVE_SOURCES) if kind == "archive" else OVERVIEW_SOURCES
+                for provider in providers:
                     if provider in state["sources"]:
                         continue
                     if state["steps"] >= budget.max_steps:
@@ -641,7 +643,11 @@ class ResearchWorker:
                     run_id,
                     token,
                     "partial" if missing else "succeeded",
-                    "The open-data overview is ready. Each finding links to its source and limitations."
+                    (
+                        "The archive discovery is ready. Inspect source dates, rights and land relevance."
+                        if kind == "archive"
+                        else "The open-data overview is ready. Each finding links to its source and limitations."
+                    )
                     + (
                         " Some providers were unavailable; their coverage status is retained."
                         if missing

@@ -14,6 +14,7 @@ from app.schemas.research import (
     ArtifactContent,
     EvidenceContent,
     FindingContent,
+    GalleryOutput,
     RasterOutput,
     TimelineOutput,
 )
@@ -177,7 +178,16 @@ def save_artifact(
         ids.extend(
             identifier for entry in content.output.entries for identifier in entry.evidence_ids
         )
+    if isinstance(content.output, GalleryOutput):
+        ids.extend(content.output.evidence_ids)
     validate_citations(db, run, ids)
+    if isinstance(content.output, GalleryOutput):
+        for identifier in content.output.evidence_ids:
+            item = db.get(Evidence, identifier)
+            if item is None or not item.content.get("media"):
+                raise InvalidInputError(
+                    "Gallery entries need licensed archive media from this investigation."
+                )
     if isinstance(content.output, RasterOutput):
         raster = db.scalar(
             select(LandRaster)

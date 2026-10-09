@@ -8,6 +8,7 @@ from pydantic import Field, HttpUrl, model_validator
 
 from app.schemas.base import CamelModel
 from app.schemas.geojson import Footprint, MapGeometry
+from app.schemas.land_archives import ArchiveMedia
 from app.schemas.land_documents import DocumentLocator
 from app.schemas.land_rasters import RasterRequest
 
@@ -36,7 +37,7 @@ class InvestigationRead(InvestigationCreate):
 
 class RunCreate(CamelModel):
     request_key: uuid.UUID
-    kind: Literal["overview", "investigation", "raster"] = "investigation"
+    kind: Literal["overview", "investigation", "raster", "archive"] = "investigation"
     question: str = Field(min_length=1, max_length=10_000)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     analysis: RasterRequest | None = None
@@ -52,7 +53,7 @@ class RunRead(CamelModel):
     id: uuid.UUID
     investigation_id: uuid.UUID
     question: str
-    kind: Literal["overview", "investigation", "raster"]
+    kind: Literal["overview", "investigation", "raster", "archive"]
     analysis: RasterRequest | None = None
     status: Literal["queued", "running", "succeeded", "partial", "failed", "cancelled"]
     budget: ResearchBudget
@@ -75,6 +76,7 @@ class EvidenceContent(CamelModel):
     title: str = Field(min_length=1, max_length=500)
     url: HttpUrl | None = None
     document: DocumentLocator | None = None
+    media: ArchiveMedia | None = None
     license: str = Field(min_length=1, max_length=1000)
     attribution: str = Field(min_length=1, max_length=2000)
     record_id: str | None = Field(default=None, max_length=500)
@@ -173,6 +175,11 @@ class DocumentOutput(CamelModel):
     markdown: str = Field(max_length=100_000)
 
 
+class GalleryOutput(CamelModel):
+    kind: Literal["gallery"]
+    evidence_ids: list[uuid.UUID] = Field(min_length=1, max_length=30)
+
+
 class RasterOutput(CamelModel):
     kind: Literal["raster"]
     raster_id: uuid.UUID
@@ -191,7 +198,13 @@ class TimelineOutput(CamelModel):
 
 
 Output = Annotated[
-    TableOutput | ChartOutput | MapOutput | DocumentOutput | TimelineOutput | RasterOutput,
+    TableOutput
+    | ChartOutput
+    | MapOutput
+    | DocumentOutput
+    | TimelineOutput
+    | RasterOutput
+    | GalleryOutput,
     Field(discriminator="kind"),
 ]
 

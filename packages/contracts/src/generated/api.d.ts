@@ -1803,6 +1803,54 @@ export interface components {
              */
             url: string;
         };
+        /** ArchiveMedia */
+        ArchiveMedia: {
+            /** Creator */
+            creator: string;
+            /** Datemeaning */
+            dateMeaning: string;
+            /** Description */
+            description: string;
+            /** Downloadurl */
+            downloadUrl?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "photograph" | "historical-map";
+            /** License */
+            license: string;
+            /**
+             * Licenseurl
+             * Format: uri
+             */
+            licenseUrl: string;
+            /** Location */
+            location?: (components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
+            /**
+             * Locationmeaning
+             * @enum {string}
+             */
+            locationMeaning: "catalog-coordinate" | "catalog-footprint";
+            /**
+             * Previewurl
+             * Format: uri
+             */
+            previewUrl: string;
+            /** Relevance */
+            relevance: string;
+            /** Sourcedate */
+            sourceDate?: string | null;
+            /**
+             * Sourceurl
+             * Format: uri
+             */
+            sourceUrl: string;
+            /** Sourceversion */
+            sourceVersion?: string | null;
+            /** Title */
+            title: string;
+        };
         /**
          * ArtifactKind
          * @description What a stage produced. Step logs and checkpoints are not artifacts: they are
@@ -3056,6 +3104,7 @@ export interface components {
             id: string;
             /** License */
             license: string;
+            media?: components["schemas"]["ArchiveMedia"] | null;
             /** Observedat */
             observedAt?: string | null;
             /** Provider */
@@ -3214,6 +3263,16 @@ export interface components {
             title: string;
             /** Uncertainty */
             uncertainty: string;
+        };
+        /** GalleryOutput */
+        GalleryOutput: {
+            /** Evidenceids */
+            evidenceIds: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "gallery";
         };
         /** GeoJsonSource */
         GeoJsonSource: {
@@ -5543,7 +5602,7 @@ export interface components {
             /** Method */
             method: string;
             /** Output */
-            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["RasterOutput"];
+            output: components["schemas"]["TableOutput"] | components["schemas"]["ChartOutput"] | components["schemas"]["MapOutput"] | components["schemas"]["DocumentOutput"] | components["schemas"]["TimelineOutput"] | components["schemas"]["RasterOutput"] | components["schemas"]["GalleryOutput"];
             /**
              * Runid
              * Format: uuid
@@ -5667,7 +5726,7 @@ export interface components {
              * @default investigation
              * @enum {string}
              */
-            kind?: "overview" | "investigation" | "raster";
+            kind?: "overview" | "investigation" | "raster" | "archive";
             /** Question */
             question: string;
             /**
@@ -5705,7 +5764,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "overview" | "investigation" | "raster";
+            kind: "overview" | "investigation" | "raster" | "archive";
             /** Question */
             question: string;
             /** Startedat */
@@ -6530,6 +6589,7 @@ export interface components {
 export type SchemaActionConstraint = components['schemas']['ActionConstraint'];
 export type SchemaActionMissionCreate = components['schemas']['ActionMissionCreate'];
 export type SchemaArcGisMapServerSource = components['schemas']['ArcGisMapServerSource'];
+export type SchemaArchiveMedia = components['schemas']['ArchiveMedia'];
 export type SchemaArtifactKind = components['schemas']['ArtifactKind'];
 export type SchemaArtifactRead = components['schemas']['ArtifactRead'];
 export type SchemaArtifactReference = components['schemas']['ArtifactReference'];
@@ -6594,6 +6654,7 @@ export type SchemaFeatureInspectionCreate = components['schemas']['FeatureInspec
 export type SchemaFeatureInspectionRead = components['schemas']['FeatureInspectionRead'];
 export type SchemaFindingDisposition = components['schemas']['FindingDisposition'];
 export type SchemaFindingRead = components['schemas']['FindingRead'];
+export type SchemaGalleryOutput = components['schemas']['GalleryOutput'];
 export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];
 export type SchemaGeoPosition = components['schemas']['GeoPosition'];
 export type SchemaGeorefMethod = components['schemas']['GeorefMethod'];

@@ -101,6 +101,166 @@
         "title": "ArcGisMapServerSource",
         "type": "object"
       },
+      "ArchiveMedia": {
+        "additionalProperties": false,
+        "properties": {
+          "creator": {
+            "maxLength": 2000,
+            "title": "Creator",
+            "type": "string"
+          },
+          "dateMeaning": {
+            "maxLength": 1000,
+            "title": "Datemeaning",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 3000,
+            "title": "Description",
+            "type": "string"
+          },
+          "downloadUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Downloadurl"
+          },
+          "kind": {
+            "enum": [
+              "photograph",
+              "historical-map"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "license": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "License",
+            "type": "string"
+          },
+          "licenseUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Licenseurl",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "LineString": "#/components/schemas/LineString",
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Point": "#/components/schemas/Point",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Point"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LineString"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "locationMeaning": {
+            "enum": [
+              "catalog-coordinate",
+              "catalog-footprint"
+            ],
+            "title": "Locationmeaning",
+            "type": "string"
+          },
+          "previewUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Previewurl",
+            "type": "string"
+          },
+          "relevance": {
+            "maxLength": 2000,
+            "title": "Relevance",
+            "type": "string"
+          },
+          "sourceDate": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcedate"
+          },
+          "sourceUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Sourceurl",
+            "type": "string"
+          },
+          "sourceVersion": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceversion"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "description",
+          "sourceUrl",
+          "previewUrl",
+          "creator",
+          "license",
+          "licenseUrl",
+          "dateMeaning",
+          "locationMeaning",
+          "relevance"
+        ],
+        "title": "ArchiveMedia",
+        "type": "object"
+      },
       "ArtifactKind": {
         "description": "What a stage produced. Step logs and checkpoints are not artifacts: they are\n``job_steps.log_key`` and ``job_steps.checkpoint_key``.\n\n``metadata`` was added in A7, when the worker started rowing everything it uploads.\nA stage writes JSON sidecars beside its real output \u2014 ``georef.json``,\n``source_meta.json``, ``train_metrics.json``, ``registration.json`` \u2014 and they are\ngenuinely artifacts: they are in the bucket, they are what a later stage reads, and\nan object with no row is an orphan by the console's own definition. Calling them\n``manifest`` would have been the cheaper lie.",
         "enum": [
@@ -3728,6 +3888,16 @@
             "title": "License",
             "type": "string"
           },
+          "media": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArchiveMedia"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "observedAt": {
             "anyOf": [
               {
@@ -4140,6 +4310,32 @@
           "disposition"
         ],
         "title": "FindingRead",
+        "type": "object"
+      },
+      "GalleryOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "evidenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Evidenceids",
+            "type": "array"
+          },
+          "kind": {
+            "const": "gallery",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "evidenceIds"
+        ],
+        "title": "GalleryOutput",
         "type": "object"
       },
       "GeoJsonSource": {
@@ -10936,6 +11132,7 @@
               "mapping": {
                 "chart": "#/components/schemas/ChartOutput",
                 "document": "#/components/schemas/DocumentOutput",
+                "gallery": "#/components/schemas/GalleryOutput",
                 "map": "#/components/schemas/MapOutput",
                 "raster": "#/components/schemas/RasterOutput",
                 "table": "#/components/schemas/TableOutput",
@@ -10961,6 +11158,9 @@
               },
               {
                 "$ref": "#/components/schemas/RasterOutput"
+              },
+              {
+                "$ref": "#/components/schemas/GalleryOutput"
               }
             ],
             "title": "Output"
@@ -11297,7 +11497,8 @@
             "enum": [
               "overview",
               "investigation",
-              "raster"
+              "raster",
+              "archive"
             ],
             "title": "Kind",
             "type": "string"
@@ -11383,7 +11584,8 @@
             "enum": [
               "overview",
               "investigation",
-              "raster"
+              "raster",
+              "archive"
             ],
             "title": "Kind",
             "type": "string"

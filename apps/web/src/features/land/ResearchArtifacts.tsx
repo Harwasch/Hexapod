@@ -2,8 +2,9 @@
 import { useLandContext } from "@/state/landContext";
 import { useScene } from "@/cesium/SceneContext";
 import { boundsOf } from "@twin/geo";
-import type { ResearchArtifact } from "@twin/contracts";
+import type { LandEvidence, ResearchArtifact } from "@twin/contracts";
 
+import { ArchiveGallery } from "./ArchiveGallery";
 import { LandRasterView } from "./LandRasterView";
 
 type Chart = Extract<ResearchArtifact["output"], { kind: "chart" }>;
@@ -115,7 +116,15 @@ function ChartView({ output }: { output: Chart }) {
   );
 }
 
-export function ResearchArtifactView({ artifact }: { artifact: ResearchArtifact }) {
+export function ResearchArtifactView({
+  artifact,
+  evidence,
+  onAsk,
+}: {
+  artifact: ResearchArtifact;
+  evidence?: LandEvidence[];
+  onAsk?: () => void;
+}) {
   const output = artifact.output;
   const scene = useScene();
   const shown = useLandContext((state) => Boolean(state.layers[artifact.id]));
@@ -159,6 +168,9 @@ export function ResearchArtifactView({ artifact }: { artifact: ResearchArtifact 
   return (
     <article className="land-artifact">
       <h4>{artifact.title}</h4>
+      {output.kind === "gallery" && (
+        <ArchiveGallery ids={output.evidenceIds} evidence={evidence} onAsk={onAsk} />
+      )}
       {output.kind === "raster" && <LandRasterView id={output.rasterId} />}
       {output.kind === "chart" && <ChartView output={output} />}
       {output.kind === "table" && (

@@ -104,6 +104,7 @@ export function LandResearch({ land }: { land: LandArea }) {
   const [tab, setTab] = useState<"overview" | "conversation" | "visuals">("overview");
   const question = useLandContext((state) => state.researchQuestion);
   const setQuestion = useLandContext((state) => state.setResearchQuestion);
+  const questionInput = useRef<HTMLTextAreaElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [evidence, setEvidence] = useState<LandEvidence | null>(null);
@@ -127,6 +128,9 @@ export function LandResearch({ land }: { land: LandArea }) {
     revision: number;
     dataset: string;
   } | null>(null);
+  const pendingArchive = useRef<{ investigationId: string; key: string; revision: number } | null>(
+    null,
+  );
   const lastRun = detail.data?.runs.at(-1);
   const running = lastRun?.status === "queued" || lastRun?.status === "running";
   const progress = useQuery({
@@ -248,6 +252,43 @@ export function LandResearch({ land }: { land: LandArea }) {
       setBusy(false);
     }
   };
+  const discoverArchives = async () => {
+    if (!canEdit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      let operation = pendingArchive.current;
+      if (operation?.revision !== land.revision) {
+        const investigation = await beginInvestigation(land, "Photographs and historical maps");
+        operation = {
+          investigationId: investigation.id,
+          key: crypto.randomUUID(),
+          revision: land.revision,
+        };
+        pendingArchive.current = operation;
+      }
+      await unwrap(
+        api.POST("/api/v1/research/investigations/{investigation_id}/runs", {
+          params: { path: { investigation_id: operation.investigationId } },
+          body: {
+            kind: "archive",
+            question:
+              "Discover openly licensed photographs and historical map sheets relevant to this land.",
+            requestKey: operation.key,
+          },
+        }),
+      );
+      setChosen(operation.investigationId);
+      setOffset(0);
+      setTab("visuals");
+      pendingArchive.current = null;
+      await refresh();
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
   const ask = async () => {
     if (!canEdit || !question.trim()) return;
     setBusy(true);
@@ -353,6 +394,20 @@ export function LandResearch({ land }: { land: LandArea }) {
           onClick={() => void analyzeRaster("esa-worldcover-2021")}
         >
           {busy ? "Starting…" : "Analyze land cover"}
+        </button>
+      </div>
+      <div className="land-terrain-start">
+        <strong>A place with a past</strong>
+        <p className="land-footnote">
+          Find openly licensed photographs nearby and historical USGS map sheets. Every source keeps
+          its dates, creator, reuse terms and location limitations.
+        </p>
+        <button
+          type="button"
+          disabled={busy || running || !ready || !canEdit}
+          onClick={() => void discoverArchives()}
+        >
+          {busy ? "Starting…" : "Discover photos and maps"}
         </button>
       </div>
       {catalog.data && catalog.data.length > 0 && (
@@ -600,7 +655,14 @@ export function LandResearch({ land }: { land: LandArea }) {
         <>
           {detail.data?.artifacts.map((artifact) => (
             <div key={artifact.id}>
-              <ResearchArtifactView artifact={artifact} />
+              <ResearchArtifactView
+                artifact={artifact}
+                evidence={detail.data.evidence}
+                onAsk={() => {
+                  setTab("conversation");
+                  requestAnimationFrame(() => questionInput.current?.focus());
+                }}
+              />
               <div className="land-actions">
                 <button type="button" onClick={() => void viewEvidence(artifact.evidenceIds[0])}>
                   Inspect source evidence
@@ -652,6 +714,7 @@ export function LandResearch({ land }: { land: LandArea }) {
         <label htmlFor="land-question">Follow your curiosity</label>
         <textarea
           id="land-question"
+          ref={questionInput}
           placeholder="What has changed here? What could this land become?"
           value={question}
           maxLength={10000}

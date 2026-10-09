@@ -13,7 +13,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation | Membership UI, saved views, deeper accessibility/performance verification |
 | Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
-| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships and agent retrieval | Archive imagery/georeferencing and deeper instrument/parcel lineage evaluation |
+| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery | Saved archive imagery/georeferencing and deeper instrument/parcel lineage evaluation |
 | Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
 
 ## Product direction
@@ -797,3 +797,29 @@ sampling, visible proportions and the absence of meaningless numeric summaries. 
 passed. Production
 remains unchanged; this extends the ecology evidence foundation rather than supplying species
 coverage or a restoration prescription.
+
+## Implemented increment: open archive discovery
+
+A dedicated archive investigation discovers openly licensed Commons photographs near the
+land and historical USGS topographic sheets whose catalog footprints overlap it. The
+worker saves source metadata, dates, creator attribution, license, spatial relevance and
+file-version references. It creates citation-validated gallery artifacts that reopen with
+the investigation and can seed a follow-up question referencing the precise evidence.
+
+The galleries support previous/next source, enlarged preview, source/download links,
+location/footprint overlays, and responsive viewing. Catalog coordinates may describe a
+camera or subject; sheet footprints are approximate coverage, not image georeferencing.
+Original-date text is preserved without substituting upload dates. USGS publication years
+are distinguished from surveying, revision and scanning dates. Reuse is limited to known
+CC BY/BY-SA, CC0 or public-domain records. Search bounds, excluded licenses and incomplete
+coverage remain explicit. Remote previews may change; this increment does not archive image
+bytes or visually inspect them with the model.
+
+Validation: 13 API archive/research/worker tests, full API lint/format/type checks (243
+source files), 10 focused gallery/raster UI tests, full web typing, land UI lint and a
+production build passed. A real public National Mall fixture returned 10 photographs and
+12 historical sheets, including an 1890 sheet. Browser checks verified both image providers,
+gallery navigation, map footprints, source-question focus, saved results after reload and
+mobile layout with no overflow or page errors. The unavailable-image fallback was exercised
+as well. Chromium required the environment's existing proxy CA in its test trust store;
+TLS verification remained enabled. Production/deployment remains untouched.
