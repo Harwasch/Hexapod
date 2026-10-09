@@ -263,6 +263,11 @@ export class SelectionManager {
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
       return;
+    if (isEntityPick(picked) && picked.id.id.startsWith("land-context:inventory/")) {
+      const id = picked.id.id.slice("land-context:inventory/".length).split("#")[0];
+      if (id) this.events.emit("land-feature-select", { id });
+      return;
+    }
     // A plain click is for things on the map. On the ground, or on a site's surface (its mesh,
     // or the ground under a scan's splats), it does nothing at all: no marker, no card, and
     // what is open stays open. "What's here" in the map menu is how to ask about a place.

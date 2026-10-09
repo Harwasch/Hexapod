@@ -3,6 +3,7 @@ import { Cartesian3, Color, HeightReference, PolygonHierarchy, type Entity } fro
 import { polygonsOf } from "@twin/geo";
 import { useLandContext, type LandContextLayer } from "@/state/landContext";
 import { useLand } from "@/state/land";
+import { useUi } from "@/state/ui";
 import { useLandIdentity } from "@/state/landIdentity";
 import { useScene } from "./SceneContext";
 
@@ -76,8 +77,6 @@ export function LandContextBridge() {
                       polygon.slice(1).map((ring) => new PolygonHierarchy(positions(ring))),
                     ),
                     material: color.withAlpha(0.18),
-                    height: 0,
-                    heightReference: HeightReference.CLAMP_TO_GROUND,
                   },
                   polyline: {
                     positions: positions(outer),
@@ -96,6 +95,10 @@ export function LandContextBridge() {
       }
       host.scene.requestRender();
     };
+    const offInventoryPick = host.events.on("land-feature-select", ({ id }) => {
+      useLandContext.getState().selectInventory(id);
+      useUi.getState().setPanel("land");
+    });
     const offContext = useLandContext.subscribe(sync);
     const offLand = useLand.subscribe((next, previous) => {
       if (next.active?.id !== previous.active?.id) useLandContext.getState().clear();
@@ -108,6 +111,7 @@ export function LandContextBridge() {
     });
     sync();
     return () => {
+      offInventoryPick();
       offContext();
       offLand();
       offIdentity();

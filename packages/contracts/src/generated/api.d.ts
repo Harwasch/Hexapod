@@ -543,6 +543,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/features": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_api_v1_land__land_id__features_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_api_v1_land__land_id__features_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/features/{feature_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_v1_land__land_id__features__feature_id__get"];
+        /** Revise */
+        put: operations["revise_api_v1_land__land_id__features__feature_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/features/{feature_id}/inspections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspections */
+        get: operations["inspections_api_v1_land__land_id__features__feature_id__inspections_get"];
+        put?: never;
+        /** Inspect */
+        post: operations["inspect_api_v1_land__land_id__features__feature_id__inspections_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/features/{feature_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_v1_land__land_id__features__feature_id__revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/investigations": {
         parameters: {
             query?: never;
@@ -2452,6 +2523,85 @@ export interface components {
              */
             url: string;
         };
+        /** FeatureInspectionCreate */
+        FeatureInspectionCreate: {
+            /**
+             * Condition
+             * @enum {string}
+             */
+            condition: "unknown" | "good" | "fair" | "poor" | "critical";
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Measurements */
+            measurements?: {
+                [key: string]: number;
+            };
+            /** Measurementunits */
+            measurementUnits?: {
+                [key: string]: string;
+            };
+            /** Notes */
+            notes: string;
+            /**
+             * Observedat
+             * Format: date-time
+             */
+            observedAt: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+        };
+        /** FeatureInspectionRead */
+        FeatureInspectionRead: {
+            /**
+             * Condition
+             * @enum {string}
+             */
+            condition: "unknown" | "good" | "fair" | "poor" | "critical";
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /**
+             * Featureid
+             * Format: uuid
+             */
+            featureId: string;
+            /** Featurerevision */
+            featureRevision: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Measurements */
+            measurements?: {
+                [key: string]: number;
+            };
+            /** Measurementunits */
+            measurementUnits?: {
+                [key: string]: string;
+            };
+            /** Notes */
+            notes: string;
+            /**
+             * Observedat
+             * Format: date-time
+             */
+            observedAt: string;
+            /** Recordedby */
+            recordedBy: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+        };
         /** FindingDisposition */
         FindingDisposition: {
             /**
@@ -2869,6 +3019,156 @@ export interface components {
             /** Name */
             name: string;
             source: components["schemas"]["BoundarySource"];
+        };
+        /** LandFeatureCreate */
+        LandFeatureCreate: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: string | number | boolean | null;
+            };
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "building" | "power" | "water" | "transport" | "equipment" | "vegetation" | "other";
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Geometry */
+            geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Name */
+            name: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+            source: components["schemas"]["BoundarySource"];
+            /**
+             * Status
+             * @default candidate
+             * @enum {string}
+             */
+            status?: "candidate" | "confirmed" | "retired";
+        };
+        /** LandFeatureRead */
+        LandFeatureRead: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: string | number | boolean | null;
+            };
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "building" | "power" | "water" | "transport" | "equipment" | "vegetation" | "other";
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Distancem */
+            distanceM: number;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Geometry */
+            geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Intersectsland */
+            intersectsLand: boolean;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Name */
+            name: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["BoundarySource"];
+            /**
+             * Status
+             * @default candidate
+             * @enum {string}
+             */
+            status?: "candidate" | "confirmed" | "retired";
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** LandFeatureRevise */
+        LandFeatureRevise: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: string | number | boolean | null;
+            };
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "building" | "power" | "water" | "transport" | "equipment" | "vegetation" | "other";
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Evidenceids */
+            evidenceIds?: string[];
+            /** Expectedrevision */
+            expectedRevision: number;
+            /** Geometry */
+            geometry: components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Name */
+            name: string;
+            /** Note */
+            note: string;
+            /**
+             * Requestkey
+             * Format: uuid
+             */
+            requestKey?: string;
+            source: components["schemas"]["BoundarySource"];
+            /**
+             * Status
+             * @default candidate
+             * @enum {string}
+             */
+            status?: "candidate" | "confirmed" | "retired";
+        };
+        /** LandFeatureRevisionRead */
+        LandFeatureRevisionRead: {
+            content: components["schemas"]["LandFeatureCreate"];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Note */
+            note: string;
+            /** Revision */
+            revision: number;
         };
         /** LandRead */
         LandRead: {
@@ -5181,6 +5481,8 @@ export type SchemaCzmlSource = components['schemas']['CzmlSource'];
 export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
 export type SchemaEventRead = components['schemas']['EventRead'];
 export type SchemaEvidenceRead = components['schemas']['EvidenceRead'];
+export type SchemaFeatureInspectionCreate = components['schemas']['FeatureInspectionCreate'];
+export type SchemaFeatureInspectionRead = components['schemas']['FeatureInspectionRead'];
 export type SchemaFindingDisposition = components['schemas']['FindingDisposition'];
 export type SchemaFindingRead = components['schemas']['FindingRead'];
 export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];
@@ -5203,6 +5505,10 @@ export type SchemaJobStepLog = components['schemas']['JobStepLog'];
 export type SchemaJobStepRead = components['schemas']['JobStepRead'];
 export type SchemaLandCandidate = components['schemas']['LandCandidate'];
 export type SchemaLandCreate = components['schemas']['LandCreate'];
+export type SchemaLandFeatureCreate = components['schemas']['LandFeatureCreate'];
+export type SchemaLandFeatureRead = components['schemas']['LandFeatureRead'];
+export type SchemaLandFeatureRevise = components['schemas']['LandFeatureRevise'];
+export type SchemaLandFeatureRevisionRead = components['schemas']['LandFeatureRevisionRead'];
 export type SchemaLandRead = components['schemas']['LandRead'];
 export type SchemaLandRevise = components['schemas']['LandRevise'];
 export type SchemaLayerCategory = components['schemas']['LayerCategory'];
@@ -7492,6 +7798,452 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listing_api_v1_land__land_id__features_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandFeatureRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_api_v1_land__land_id__features_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LandFeatureCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandFeatureRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_api_v1_land__land_id__features__feature_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                feature_id: string;
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandFeatureRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revise_api_v1_land__land_id__features__feature_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                feature_id: string;
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LandFeatureRevise"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandFeatureRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    inspections_api_v1_land__land_id__features__feature_id__inspections_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                feature_id: string;
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeatureInspectionRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    inspect_api_v1_land__land_id__features__feature_id__inspections_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                feature_id: string;
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeatureInspectionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeatureInspectionRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    history_api_v1_land__land_id__features__feature_id__revisions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                feature_id: string;
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandFeatureRevisionRead"][];
+                };
             };
             /** @description Missing or wrong write token */
             401: {

@@ -149,6 +149,8 @@
   flex-wrap: wrap;
 }
 .land-actions button,
+.land-inventory-record > button,
+.land-measurement-row > button,
 .land-history button {
   display: inline-flex;
   align-items: center;
@@ -522,4 +524,50 @@
 }
 .land-cover-chart i.land-cover-target {
   background: #a8d7b450;
+}
+.land-inventory,
+.land-inventory-form,
+.land-inventory-record {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.land-inventory {
+  border-top: 1px solid #a5c4a530;
+  padding-top: 18px;
+}
+.land-inventory-record dl {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.land-inventory-record dd {
+  margin: 4px 0;
+  color: var(--text-secondary);
+}
+.land-inventory-record small {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.land-inventory-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border);
+  padding: 12px;
+  min-width: 0;
+}
+.land-measurement-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 0.8fr;
+  gap: 8px;
+}
+.land-measurement-row input {
+  min-width: 0;
+  width: 100%;
+}
+.land-measurement-row > button {
+  grid-column: 1 / -1;
+  justify-self: end;
 }

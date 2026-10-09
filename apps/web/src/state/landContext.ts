@@ -14,6 +14,8 @@ export interface LandContextLayer {
   selectedIds?: string[];
 }
 interface LandContextState {
+  selectedInventoryId: string | null;
+  selectInventory: (id: string | null) => void;
   layers: Record<string, LandContextLayer>;
   candidates: LandCandidate[];
   selectedIds: string[];
@@ -25,6 +27,8 @@ interface LandContextState {
 }
 
 export const useLandContext = create<LandContextState>((set, get) => ({
+  selectedInventoryId: null,
+  selectInventory: (selectedInventoryId) => set({ selectedInventoryId }),
   layers: {},
   candidates: [],
   selectedIds: [],
@@ -65,5 +69,5 @@ export const useLandContext = create<LandContextState>((set, get) => ({
       layers: Object.fromEntries(Object.entries(state.layers).filter(([key]) => key !== id)),
       ...(id === "candidates" ? { candidates: [], selectedIds: [] } : {}),
     })),
-  clear: () => set({ layers: {}, candidates: [], selectedIds: [] }),
+  clear: () => set({ layers: {}, candidates: [], selectedIds: [], selectedInventoryId: null }),
 }));

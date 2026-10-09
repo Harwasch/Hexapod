@@ -68,7 +68,15 @@ export class LandMapController {
     handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (this.mode === "edit") return;
       if (this.mode === "candidates") {
-        const picked: unknown = this.host.scene.pick(event.position);
+        const picks: unknown[] = this.host.scene.drillPick(event.position, 32);
+        const picked = picks.find(
+          (candidate) =>
+            candidate &&
+            typeof candidate === "object" &&
+            "id" in candidate &&
+            candidate.id instanceof Entity &&
+            candidate.id.id.startsWith("land-context:candidates/"),
+        );
         if (
           picked &&
           typeof picked === "object" &&
@@ -147,8 +155,6 @@ export class LandMapController {
               polygon.slice(1).map((ring) => new PolygonHierarchy(positions(ring))),
             ),
             material: FILL,
-            height: 0,
-            heightReference: HeightReference.CLAMP_TO_GROUND,
           },
         });
         polygon.forEach((ring, ri) => {
@@ -185,8 +191,6 @@ export class LandMapController {
         polygon: {
           hierarchy: new PolygonHierarchy(positions(points)),
           material: new ColorMaterialProperty(FILL),
-          height: 0,
-          heightReference: HeightReference.CLAMP_TO_GROUND,
         },
       });
     points.forEach((point, index) =>

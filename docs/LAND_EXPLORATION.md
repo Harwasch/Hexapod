@@ -1,5 +1,21 @@
 # Land exploration: implementation record
 
+## Current status
+
+The complete feature is **in progress**, not ready for production handoff. The sections
+below record successive increments; their historical limits do not supersede later work.
+Apply **all migrations through the current Alembic head**, not just the first land migration.
+
+| Capability | Current implementation | Remaining work |
+| --- | --- | --- |
+| Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, geospatial imports, revisions, reviewed-draft recovery | Broader cadastral coverage, snapping/splitting, unfinished drawing recovery, large/dateline corridor handling |
+| Research | Durable worker, source evidence, five overview adapters, bounded public search, typed artifacts and scenarios | Broader sources, isolated raster/compute tools, agent evaluations and live model validation |
+| Workspace | Scoped records, OIDC/PKCE, roles, resizable/mobile panel | Membership UI, saved views, deeper accessibility/performance verification |
+| Scenarios | Versioned deterministic solar economics and restoration cover/cost comparisons | Roof/shading analysis and imagery/field-derived species cover |
+| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements | Batch imports, geometry editing UX, broader detection and asset catalog linkage |
+| Historical and rights workflows | Public search leads and cited research framework | Archive georeferencing, document ingestion, page citations and instrument/parcel lineage |
+| Action planning | Existing mission APIs remain available | Versioned evidence-to-action composer and private mission handoff |
+
 ## Product direction
 
 Land exploration is independent of mission planning. The selected land persists while a
@@ -34,7 +50,7 @@ legal, or financial findings are shown in place of missing integrations.
 
 ## Preview configuration
 
-Apply migration `0011` to an isolated development/preview database and run the API normally.
+Apply migrations through the current Alembic head to an isolated development/preview database and run the API normally.
 Set `VITE_ENABLE_LAND_EXPLORATION=true` on the web development server or build. It defaults
 to false, including in development, so current production flows remain unchanged until a
 deployer explicitly enables it. Set `VITE_API_BASE_URL` to the preview API when using a
@@ -57,7 +73,7 @@ The API namespace is `/api/v1/land`:
 | POST /land/corridor      | Buffer a supplied centerline in meters              |
 | POST /land/operations    | Union, difference, or intersection                  |
 
-## Limits of this increment
+## Historical limits of the first increment
 
 - This is a **single-operator pilot** under the deployment's existing shared token.
   All land endpoints, reads included, require it when configured. Workspace identities,
@@ -271,6 +287,31 @@ and configuration changes, validation results, remaining limits, and rollback in
 before that handoff. Disabling the web flag hides this increment without deleting saved
 land records. Downgrading migration `0011` deletes those records and should only be used
 against disposable development databases; production rollback should retain the tables.
+
+## Implemented increment: inventory and inspection records
+
+Migration `0015` introduces private land features, immutable revisions and dated inspections
+pinned to the observed feature revision. Features retain geometry, category, identity status,
+attributes and source provenance. A source URL/record identifier cannot be duplicated by
+create or edit. Stable request keys make create/inspection retries idempotent. Geometry is
+validated and normalized to 2D; numeric attributes and measurements must be finite.
+
+The inventory UI finds nearby mapped buildings/lines or records an inspected point, previews
+a candidate, saves and confirms identities, revises details, and displays history. Inventory
+features remain visible when the panel closes and selecting them reopens their record.
+Inspections record observation time, condition, notes and named measurements with units.
+Each selected feature has its own inspection form; changing features does not transfer an
+unfinished observation to a different asset. Source confirmation does not establish ownership.
+
+Validation: five database/API tests exercise source deduplication on create/edit, conflicts,
+workspace scoping, outside-boundary distances, geometry normalization, dated version pins,
+inspection idempotency and measurement validation. Two component tests cover complete unit
+submission, stable retry keys and duplicate measurement rejection. A browser journey against
+the isolated API creates a synthetic mapped asset, confirms it, records an inspection and
+reopens the persisted record after reload. A separate real-Cesium check verifies that clicking
+the filled polygon reopens its inventory record after the panel is fully closed. Removing
+explicit polygon height/reference restores ground-fill rendering and picking; existing
+desktop drawing, mobile import and described-corridor browser journeys all pass. Live-source coverage is separate from this fixture.
 
 ## Full implementation plan
 
