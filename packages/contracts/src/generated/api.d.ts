@@ -631,6 +631,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/actions/requests/{request_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Request Read */
+        get: operations["request_read_api_v1_land__land_id__actions_requests__request_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/documents": {
         parameters: {
             query?: never;
@@ -4450,6 +4467,11 @@ export interface components {
              */
             updatedAt: string;
         };
+        /** LandActionRequestRead */
+        LandActionRequestRead: {
+            current: components["schemas"]["LandActionRead"];
+            saved: components["schemas"]["LandActionRead"];
+        };
         /** LandActionReview */
         LandActionReview: {
             /** Expectedrevision */
@@ -8056,6 +8078,7 @@ export type SchemaJobStepLog = components['schemas']['JobStepLog'];
 export type SchemaJobStepRead = components['schemas']['JobStepRead'];
 export type SchemaLandActionCreate = components['schemas']['LandActionCreate'];
 export type SchemaLandActionRead = components['schemas']['LandActionRead'];
+export type SchemaLandActionRequestRead = components['schemas']['LandActionRequestRead'];
 export type SchemaLandActionReview = components['schemas']['LandActionReview'];
 export type SchemaLandActionRevise = components['schemas']['LandActionRevise'];
 export type SchemaLandActionStep = components['schemas']['LandActionStep'];
@@ -10898,6 +10921,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LandActionRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    request_read_api_v1_land__land_id__actions_requests__request_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+                request_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandActionRequestRead"];
                 };
             };
             /** @description Missing or wrong write token */

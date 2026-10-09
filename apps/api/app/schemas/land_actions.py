@@ -129,3 +129,8 @@ class LandActionRead(LandActionCreate):
 
 class ActionMissionCreate(LandActionReview):
     project_id: str = Field(min_length=1, max_length=120)
+
+
+class LandActionRequestRead(CamelModel):
+    saved: LandActionRead
+    current: LandActionRead

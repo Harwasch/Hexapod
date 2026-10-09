@@ -11,6 +11,18 @@ import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landId
 import { useInvestigation, useInvestigations } from "./researchApi";
 import { ActionEvidence } from "./ActionEvidence";
 import { EvidenceView } from "./LandResearch";
+import { ActionPlanSummary } from "./ActionPlanSummary";
+import {
+  actionDraftKey,
+  actionEdit,
+  actionPayload,
+  downloadActionDraft,
+  parseActionDraft,
+  sameAction,
+  serializeActionDraft,
+  type ActionDraftSnapshot,
+  type ActionEdit,
+} from "./actionDraft";
 
 type Action = components["schemas"]["LandActionRead"];
 type Draft = components["schemas"]["LandActionCreate"];
@@ -127,14 +139,17 @@ function fromScenario(land: LandArea, scenario: Scenario): Draft {
 }
 
 export function LandActions({ land }: { land: LandArea }) {
-  const scope = useLandScope(),
-    ready = useLandAccessReady(),
+  const scope = useLandScope();
+  return <Actions key={`${scope}:${land.id}`} land={land} scope={scope} />;
+}
+function Actions({ land, scope }: { land: LandArea; scope: string }) {
+  const ready = useLandAccessReady(),
     canEdit = useLandCanEdit();
   const cache = useQueryClient(),
     scene = useScene();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [editing, setEditing] = useState<Action | null>(null);
+  const [editing, setEditing] = useState<ActionEdit | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [reviewNote, setReviewNote] = useState("");
@@ -146,6 +161,50 @@ export function LandActions({ land }: { land: LandArea }) {
   const [sourceEvidence, setSourceEvidence] = useState<LandEvidence | null>(null);
   const ticket = useRef(0);
   const review = useRef<HTMLElement>(null);
+  const draftKey = actionDraftKey(scope, land.id);
+  const [recovery, setRecovery] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(draftKey);
+    } catch {
+      return null;
+    }
+  });
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<Action | null>(null);
+  const snapshot: ActionDraftSnapshot | null = draft
+    ? { version: 1, landId: land.id, draft, editing }
+    : null;
+  const serialized = snapshot ? serializeActionDraft(snapshot) : null;
+  useEffect(() => {
+    if (!serialized || recovery || !canEdit) return;
+    let message: string | null = null;
+    try {
+      if (serialized.length > 4_000_000) throw new Error("Draft exceeds the recovery limit");
+      localStorage.setItem(draftKey, serialized);
+    } catch {
+      message = "This browser could not preserve the action draft. Download a copy before leaving.";
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setStorageError(message);
+    });
+    return () => {
+      active = false;
+    };
+  }, [serialized, recovery, canEdit, draftKey]);
+  const clearStored = () => {
+    try {
+      localStorage.removeItem(draftKey);
+      setStorageError(null);
+    } catch {
+      setStorageError(
+        "The browser could not remove the saved draft. It may reappear after reload.",
+      );
+    }
+    setRecovery(null);
+  };
+
   useEffect(
     () => () => {
       ticket.current++;
@@ -186,7 +245,19 @@ export function LandActions({ land }: { land: LandArea }) {
   });
   const investigations = useInvestigations(land.id);
   const evidence = useInvestigation(investigationId, evidenceOffset);
-  const selected = catalog.data?.find((item) => item.id === selectedId) ?? null;
+  const selectedRecord = useQuery({
+    queryKey: ["land-action-record", scope, land.id, selectedId],
+    enabled: ready && Boolean(selectedId),
+    queryFn: () =>
+      unwrap(
+        api.GET("/api/v1/land/{land_id}/actions/{action_id}", {
+          params: { path: { land_id: land.id, action_id: selectedId ?? "" } },
+        }),
+      ),
+    retry: false,
+  });
+  const selected =
+    selectedRecord.data ?? catalog.data?.find((item) => item.id === selectedId) ?? null;
   useEffect(() => {
     if (!draft && selected?.id) review.current?.scrollIntoView({ block: "nearest" });
   }, [draft, selected?.id]);
@@ -212,7 +283,11 @@ export function LandActions({ land }: { land: LandArea }) {
       ),
     retry: false,
   });
-  const refresh = () => cache.invalidateQueries({ queryKey: ["land-actions", scope, land.id] });
+  const refresh = () =>
+    Promise.all([
+      cache.invalidateQueries({ queryKey: ["land-actions", scope, land.id] }),
+      cache.invalidateQueries({ queryKey: ["land-action-record", scope, land.id] }),
+    ]);
   const perform = async (operation: () => Promise<unknown>, after?: () => void) => {
     const current = ++ticket.current;
     setBusy(true);
@@ -222,29 +297,38 @@ export function LandActions({ land }: { land: LandArea }) {
       await refresh();
       if (ticket.current === current) after?.();
     } catch (cause) {
-      if (ticket.current === current)
+      if (ticket.current === current) {
         setError(
           cause instanceof ApiError && cause.fieldErrors.length
             ? cause.fieldErrors.join(". ")
             : describeError(cause),
         );
+        if (draft && editing && cause instanceof ApiError && cause.status === 409) {
+          try {
+            const latest = await unwrap(
+              api.GET("/api/v1/land/{land_id}/actions/{action_id}", {
+                params: { path: { land_id: land.id, action_id: editing.id } },
+              }),
+            );
+            if (ticket.current === current) {
+              setConflict(latest);
+              setError(null);
+            }
+          } catch {
+            /* Keep the original error and local draft available. */
+          }
+        }
+      }
     } finally {
       if (ticket.current === current) setBusy(false);
     }
   };
   const save = () => {
-    if (!draft) return;
+    if (!draft || conflict) return;
     return perform(
       async () => {
         const current = ticket.current;
-        const payload: Draft = {
-          ...draft,
-          assumptions: draft.assumptions?.map((line) => line.trim()).filter(Boolean),
-          steps: draft.steps.map((step) => ({
-            ...step,
-            resources: step.resources?.map((line) => line.trim()).filter(Boolean),
-          })),
-        };
+        const payload = actionPayload(draft);
         const result = editing
           ? await unwrap(
               api.PUT("/api/v1/land/{land_id}/actions/{action_id}", {
@@ -265,11 +349,85 @@ export function LandActions({ land }: { land: LandArea }) {
         if (ticket.current === current) setSelectedId(result.id);
       },
       () => {
+        clearStored();
+        setConflict(null);
         setDraft(null);
         setEditing(null);
         setReviewNote("");
       },
     );
+  };
+  const beginEdit = (action: Action) => {
+    clearStored();
+    setConflict(null);
+    setNotice(null);
+    setError(null);
+    setReviewNote("");
+    setEditing(actionEdit(action));
+    setDraft(editable(action));
+  };
+  const recover = async (asNew = false) => {
+    if (!recovery) return;
+    const current = ++ticket.current;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    setReviewNote("");
+    try {
+      const saved = parseActionDraft(recovery, land.id);
+      let baseline = asNew ? null : saved.editing;
+      let latest: Action | null = null;
+      let value = asNew ? { ...saved.draft, requestKey: crypto.randomUUID() } : saved.draft;
+      if (!asNew) {
+        const response = await api.GET("/api/v1/land/{land_id}/actions/requests/{request_key}", {
+          params: { path: { land_id: land.id, request_key: saved.draft.requestKey ?? "" } },
+        });
+        if (response.response.status !== 404) {
+          const found = await unwrap(Promise.resolve(response));
+          if (ticket.current !== current) return;
+          if (sameAction(saved.draft, found.saved)) {
+            cache.setQueryData(
+              ["land-action-record", scope, land.id, found.current.id],
+              found.current,
+            );
+            clearStored();
+            setSelectedId(found.current.id);
+            setNotice(
+              "This draft was already saved. Opened the current action without approving or scheduling it.",
+            );
+            await refresh();
+            return;
+          }
+          baseline = actionEdit(found.saved);
+          latest = found.current;
+          value = { ...saved.draft, requestKey: crypto.randomUUID() };
+        }
+        if (baseline && !latest)
+          latest = await unwrap(
+            api.GET("/api/v1/land/{land_id}/actions/{action_id}", {
+              params: { path: { land_id: land.id, action_id: baseline.id } },
+            }),
+          );
+      }
+      if (ticket.current !== current) return;
+      setEditing(baseline);
+      setDraft(value);
+      setRecovery(null);
+      setConflict(
+        latest &&
+          baseline &&
+          (latest.revision !== baseline.revision ||
+            latest.status !== baseline.status ||
+            latest.missionId !== baseline.missionId)
+          ? latest
+          : null,
+      );
+      setNotice("Recovered your draft. Review the work sequence and references before saving.");
+    } catch (cause) {
+      if (ticket.current === current) setError(describeError(cause));
+    } finally {
+      if (ticket.current === current) setBusy(false);
+    }
   };
   const showMap = (action: Action) => {
     useLandContext.getState().setLayer({
@@ -314,6 +472,80 @@ export function LandActions({ land }: { land: LandArea }) {
         Build a work sequence from this land, its evidence and a saved scenario. Review a specific
         version before scheduling.
       </p>
+      {recovery && canEdit && (
+        <div className="land-notice" role="region" aria-label="Recover action draft">
+          <p>
+            An unfinished action is saved in this browser for this land. Recovery does not approve
+            or schedule work.
+          </p>
+          <div className="land-actions">
+            <button type="button" disabled={busy} onClick={() => void recover()}>
+              Recover action draft
+            </button>
+            <button type="button" disabled={busy} onClick={() => void recover(true)}>
+              Recover as a new action
+            </button>
+            <button type="button" onClick={() => downloadActionDraft(recovery)}>
+              Download action draft
+            </button>
+            <button type="button" disabled={busy} onClick={clearStored}>
+              Discard action draft
+            </button>
+          </div>
+        </div>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      {storageError && <p role="alert">{storageError}</p>}
+      {draft && (
+        <div className="land-actions">
+          <button type="button" onClick={() => downloadActionDraft(snapshot)}>
+            Download action draft
+          </button>
+        </div>
+      )}
+      {conflict && (
+        <div className="land-notice" role="region" aria-label="Review changed action">
+          <p>
+            The saved action is now revision {conflict.revision}, {conflict.status}. Your draft
+            started from revision {editing?.revision}, {editing?.status}.
+          </p>
+          <details>
+            <summary>Current saved work sequence</summary>
+            <ActionPlanSummary action={conflict} />
+            <div className="land-actions">
+              <button type="button" onClick={() => showMap(conflict)}>
+                Show saved work areas on map
+              </button>
+            </div>
+          </details>
+          <div className="land-actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                if (draft) setDraft({ ...draft, requestKey: crypto.randomUUID() });
+                setEditing(null);
+                setConflict(null);
+                setError(null);
+              }}
+            >
+              Keep my work as a new action
+            </button>
+            <button type="button" disabled={busy} onClick={() => beginEdit(conflict)}>
+              Load latest plan into the draft
+            </button>
+          </div>
+          <p>Approval and scheduling require a separate review of the saved revision.</p>
+        </div>
+      )}
+      {selectedRecord.isError && (
+        <p role="alert">
+          The selected action could not be loaded.{" "}
+          <button type="button" onClick={() => void selectedRecord.refetch()}>
+            Retry selected action
+          </button>
+        </p>
+      )}
       {error && (
         <p className="land-error" role="alert">
           {error}
@@ -327,12 +559,14 @@ export function LandActions({ land }: { land: LandArea }) {
           </button>
         </p>
       )}
-      {canEdit && !draft && (
+      {canEdit && !draft && !recovery && (
         <div className="land-actions">
           <button
             type="button"
             onClick={() => {
               setEditing(null);
+              setNotice(null);
+              setError(null);
               setDraft(fresh(land));
             }}
           >
@@ -340,7 +574,7 @@ export function LandActions({ land }: { land: LandArea }) {
           </button>
         </div>
       )}
-      {canEdit && !draft && Boolean(scenarios.data?.length) && (
+      {canEdit && !draft && !recovery && Boolean(scenarios.data?.length) && (
         <details>
           <summary>Start from a saved scenario</summary>
           <div className="land-candidates">
@@ -350,6 +584,8 @@ export function LandActions({ land }: { land: LandArea }) {
                 type="button"
                 onClick={() => {
                   setEditing(null);
+                  setNotice(null);
+                  setError(null);
                   setDraft(fromScenario(land, scenario));
                 }}
               >
@@ -371,7 +607,7 @@ export function LandActions({ land }: { land: LandArea }) {
             void save();
           }}
         >
-          <fieldset disabled={busy}>
+          <fieldset disabled={busy || !canEdit}>
             <legend>Objective and timing</legend>
             <label className="land-name">
               Action title
@@ -473,7 +709,7 @@ export function LandActions({ land }: { land: LandArea }) {
               </p>
             )}
           </fieldset>
-          <fieldset disabled={busy}>
+          <fieldset disabled={busy || !canEdit}>
             <legend>Work sequence</legend>
             {draft.steps.map((step, index) => (
               <article key={step.id} className="land-action-step">
@@ -505,9 +741,9 @@ export function LandActions({ land }: { land: LandArea }) {
                       min={1}
                       max={36501}
                       required
-                      value={step.startDay + 1}
+                      value={Number.isFinite(step.startDay) ? step.startDay + 1 : ""}
                       onChange={(event) =>
-                        updateStep(index, { startDay: Number(event.target.value) - 1 })
+                        updateStep(index, { startDay: event.target.valueAsNumber - 1 })
                       }
                     />
                   </label>
@@ -518,8 +754,8 @@ export function LandActions({ land }: { land: LandArea }) {
                       min={1}
                       max={3650}
                       required
-                      value={step.days}
-                      onChange={(event) => updateStep(index, { days: Number(event.target.value) })}
+                      value={Number.isFinite(step.days) ? step.days : ""}
+                      onChange={(event) => updateStep(index, { days: event.target.valueAsNumber })}
                     />
                   </label>
                 </div>
@@ -670,7 +906,7 @@ export function LandActions({ land }: { land: LandArea }) {
               </button>
             </div>
           </fieldset>
-          <fieldset disabled={busy}>
+          <fieldset disabled={busy || !canEdit}>
             <legend>Evidence, features and exclusions</legend>
             <label className="land-name">
               Research investigation
@@ -818,7 +1054,7 @@ export function LandActions({ land }: { land: LandArea }) {
               )}
             </details>
           </fieldset>
-          <fieldset disabled={busy}>
+          <fieldset disabled={busy || !canEdit}>
             <legend>Constraints and assumptions</legend>
             {(draft.constraints ?? []).map((constraint, index) => (
               <div className="land-action-step" key={index}>
@@ -908,13 +1144,17 @@ export function LandActions({ land }: { land: LandArea }) {
             </label>
           </fieldset>
           <div className="land-actions">
-            <button type="submit" disabled={busy}>
+            <button type="submit" disabled={busy || !canEdit || !!conflict}>
               {editing ? "Save action revision" : "Save action draft"}
             </button>
             <button
               type="button"
               disabled={busy}
               onClick={() => {
+                clearStored();
+                setConflict(null);
+                setNotice(null);
+                setError(null);
                 setDraft(null);
                 setEditing(null);
               }}
@@ -1030,10 +1270,8 @@ export function LandActions({ land }: { land: LandArea }) {
             {canEdit && (
               <button
                 type="button"
-                onClick={() => {
-                  setEditing(selected);
-                  setDraft(editable(selected));
-                }}
+                disabled={busy || !!draft || !!recovery}
+                onClick={() => beginEdit(selected)}
               >
                 Revise action
               </button>

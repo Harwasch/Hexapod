@@ -8,10 +8,12 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -31,6 +33,7 @@ class LandAction(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class LandActionRevision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "land_action_revisions"
     __table_args__ = (
+        Index("ix_land_action_revisions_request", "land_id", text("(payload ->> 'request_key')")),
         UniqueConstraint("action_id", "revision"),
         ForeignKeyConstraint(
             ["land_id", "boundary_revision"],

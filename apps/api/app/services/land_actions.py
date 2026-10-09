@@ -19,6 +19,7 @@ from app.schemas.land_actions import (
     ActionMissionCreate,
     LandActionCreate,
     LandActionRead,
+    LandActionRequestRead,
     LandActionReview,
     LandActionRevise,
 )
@@ -389,3 +390,28 @@ def schedule(
     version.mission_id = plan.id
     db.commit()
     return plans.plan_to_read(plan)
+
+
+def request_read(
+    db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID, request_key: uuid.UUID
+) -> LandActionRequestRead:
+    get_land(db, workspace_id, land_id)
+    versions = list(
+        db.scalars(
+            select(LandActionRevision)
+            .where(
+                LandActionRevision.land_id == land_id,
+                LandActionRevision.payload["request_key"].astext == str(request_key),
+            )
+            .limit(2)
+        )
+    )
+    if not versions:
+        raise NotFoundError("action request", request_key)
+    if len(versions) != 1:
+        raise ConflictError(
+            "This request key identifies multiple action revisions; inspect their history."
+        )
+    version = versions[0]
+    row = scoped(db, workspace_id, land_id, version.action_id)
+    return LandActionRequestRead(saved=read(db, row, version), current=read(db, row))

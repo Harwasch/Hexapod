@@ -14,7 +14,7 @@ Apply **all migrations through the current Alembic head**, not just the first la
 | Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | 3D roof/obstruction reconstruction and fitted panel layouts, verified local reference communities and calibrated ecological forecasting |
 | Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
 | Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
-| Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool | Fleet execution integration, richer step geometry editing, draft recovery and full acceptance evaluation |
+| Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool; browser draft recovery, workflow-state conflict review and lost-save reconciliation | Fleet execution integration, richer step geometry editing and full acceptance evaluation |
 
 ## Product direction
 
@@ -1564,3 +1564,58 @@ exceptions, and screenshots were inspected. It advanced synthetic scenario
 `/tmp/land-scenario-recovery-desktop.png`, `/tmp/land-scenario-recovery-mobile.png`.
 No new migration is required beyond 0024. The isolated preview API was restarted; production
 and the original checkout remain untouched. The overall feature is still in progress.
+
+
+## Implemented increment: action draft recovery and workflow-state review
+
+Unfinished actions now recover within the current identity/workspace and land. Browser drafts
+retain objectives, steps, dependencies, resources, costs, assumptions, pinned scenario/asset/
+evidence references, exclusions and complete step footprints. Blank timing fields remain
+blank; incomplete local values are not accepted as saved schedules. Recovery validates the
+structure and geometry, enforces a bounded file size, and preserves invalid files for download.
+Storage failures keep the form editable and offer a download. Approval notes, scheduling notes
+and scheduling requests are not part of the recovered draft.
+
+The private read-only `GET /land/{land_id}/actions/requests/{request_key}` lookup returns the
+revision saved by a request and the current action. Lost-response recovery compares normalized
+editable content, including default fields and trimmed resource/assumption lines. An already
+saved draft opens the current action without another write, approval or scheduling operation.
+The selected action is also read by ID, so recovery is not limited to the current catalog page.
+
+Recovery checks both revision and workflow state. Approval or mission handoff can change
+without a new content revision; these changes now trigger review before saving the local draft.
+Concurrent revision conflicts retain local work. Users can preserve their work as a separate
+action or explicitly load the latest saved plan into a new draft revision. Current work is
+presented as a readable sequence with timing, success measures, costs, resources, prerequisites,
+constraints and a map action. Recovery never replays approval or scheduling. Creating a new
+revision continues to preserve prior approved/scheduled revisions and their mission records.
+
+Migration 0025 adds non-unique land/request-key indexes to action and scenario revision tables.
+Legacy reused keys remain intact; ambiguous recovery requests are reported instead of selecting
+an arbitrary revision. The test database passed an upgrade/downgrade/upgrade through 0024/0025,
+and both test and isolated preview databases are at 0025 with both indexes verified.
+
+Validation: twelve backend action/scenario tests pass, including private request lookup,
+original/current revision separation, retained mission identity, and unchanged approval state
+on reads. Five frontend action tests cover unfinished timing/text recovery, lost-save recognition,
+workflow-state conflict detection and absence of automatic approval/scheduling requests. API
+lint/format/type checks, web type checking/targeted lint, generated contracts and the production
+build pass. All seven land browser regressions pass; the action fixture now supports individual
+record reads.
+
+A real Chromium/API test created a clearly labeled synthetic draft on the public National Mall
+software fixture, recovered unfinished timing and resource lines, detected explicit fixture
+approval of the original revision, preserved local work as a separate draft, and deliberately
+dropped its successful save response. Recovery made exactly one creation POST and no browser
+approval or scheduling requests. The original action remained approved at revision 1 and the
+new action remained a draft with no mission. Desktop and 390px phone checks found no page
+exceptions or unintended overflow. A further read-only browser check verified the readable
+conflict summary and phone layout; its screenshot was inspected.
+
+Original synthetic action: `beaaaa26-ccf7-5a90-bbba-3c91ec7144a7`.
+Recovered synthetic draft: `30be2625-cd2c-5613-9129-652d31852ebb`.
+Local artifacts: `/tmp/land-action-recovery-browser-result.json`,
+`/tmp/land-action-recovery-review-result.json`,
+`/tmp/land-action-recovery-desktop.png`, `/tmp/land-action-recovery-mobile.png`.
+The isolated preview API was restarted. Production and the original checkout remain untouched;
+the full feature is still in progress.

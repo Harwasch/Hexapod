@@ -6535,6 +6535,23 @@
         "title": "LandActionRead",
         "type": "object"
       },
+      "LandActionRequestRead": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/LandActionRead"
+          },
+          "saved": {
+            "$ref": "#/components/schemas/LandActionRead"
+          }
+        },
+        "required": [
+          "saved",
+          "current"
+        ],
+        "title": "LandActionRequestRead",
+        "type": "object"
+      },
       "LandActionReview": {
         "additionalProperties": false,
         "properties": {
@@ -21383,6 +21400,111 @@
           }
         ],
         "summary": "Create",
+        "tags": [
+          "land actions"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/actions/requests/{request_key}": {
+      "get": {
+        "operationId": "request_read_api_v1_land__land_id__actions_requests__request_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandActionRequestRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Request Read",
         "tags": [
           "land actions"
         ]

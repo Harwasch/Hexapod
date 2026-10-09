@@ -363,7 +363,14 @@ test("review and schedule an action, then preserve that mission when revising", 
       };
       versions.unshift(action);
       result = action;
-    } else result = path.endsWith("/revisions") ? versions : action ? [action] : [];
+    } else
+      result = path.endsWith("/revisions")
+        ? versions
+        : path.endsWith("/actions")
+          ? action
+            ? [action]
+            : []
+          : action;
     await route.fulfill({ json: result });
   });
   await app.getByRole("button", { name: "Explore Earth", exact: true }).click();

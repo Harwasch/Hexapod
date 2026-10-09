@@ -3,7 +3,15 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, ForeignKeyConstraint, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +32,7 @@ class LandScenario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class LandScenarioRevision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "land_scenario_revisions"
     __table_args__ = (
+        Index("ix_land_scenario_revisions_request", "land_id", text("(payload ->> 'request_key')")),
         UniqueConstraint("scenario_id", "revision"),
         ForeignKeyConstraint(
             ["land_id", "boundary_revision"],

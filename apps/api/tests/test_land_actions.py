@@ -288,3 +288,51 @@ def test_agent_can_save_an_action_draft_but_cannot_approve_or_schedule(
     assert actions[0]["status"] == "draft"
     assert actions[0]["approvedAt"] is None and actions[0]["missionId"] is None
     assert not actions[0]["constraints"][0]["resolved"]
+
+
+def test_action_request_recovery_does_not_replay_approval_or_mission(
+    client: TestClient, db: Session
+) -> None:
+    land = client.post("/api/v1/land", json=BODY).json()
+    path = f"/api/v1/land/{land['id']}/actions"
+    original_key = uuid.uuid4()
+    payload = {**ACTION, "constraints": [], "requestKey": str(original_key)}
+    result = client.post(path, json=payload)
+    assert result.status_code == 201, result.text
+    identifier = result.json()["id"]
+    review = {"expectedRevision": 1, "note": "Fixture operator review"}
+    assert client.post(f"{path}/{identifier}/approve", json=review).status_code == 200
+    approved = client.get(f"{path}/requests/{original_key}").json()
+    assert approved["saved"]["status"] == approved["current"]["status"] == "approved"
+    mission = client.post(f"{path}/{identifier}/mission", json={**review, "projectId": "fixture"})
+    assert mission.status_code == 201, mission.text
+    second_key = uuid.uuid4()
+    revised = client.put(
+        f"{path}/{identifier}",
+        json={
+            **payload,
+            "requestKey": str(second_key),
+            "title": "New draft objective",
+            "expectedRevision": 1,
+            "note": "Changed assumptions",
+        },
+    )
+    assert revised.status_code == 200, revised.text
+    recovered = client.get(f"{path}/requests/{original_key}").json()
+    assert recovered["saved"]["revision"] == 1 and recovered["saved"]["status"] == "scheduled"
+    assert recovered["saved"]["missionId"] == mission.json()["id"]
+    assert recovered["current"]["revision"] == 2 and recovered["current"]["status"] == "draft"
+    assert recovered["current"]["missionId"] is None
+    assert client.get(f"{path}/requests/{second_key}").json()["saved"]["revision"] == 2
+    assert len(client.get(f"{path}/{identifier}/revisions").json()) == 2
+    assert (
+        client.get(f"{path}/{identifier}/mission", params={"revision": 1}).json()["id"]
+        == mission.json()["id"]
+    )
+    other = client.post("/api/v1/land", json=BODY).json()
+    assert (
+        client.get(f"/api/v1/land/{other['id']}/actions/requests/{original_key}").status_code == 404
+    )
+    with pytest.raises(NotFoundError):
+        land_actions.request_read(db, uuid.uuid4(), uuid.UUID(land["id"]), original_key)
+    assert client.get(f"{path}/requests/{uuid.uuid4()}").status_code == 404

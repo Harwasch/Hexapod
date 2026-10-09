@@ -12,6 +12,7 @@ from app.schemas.land_actions import (
     ActionMissionCreate,
     LandActionCreate,
     LandActionRead,
+    LandActionRequestRead,
     LandActionReview,
     LandActionRevise,
 )
@@ -48,6 +49,13 @@ def create(
 ) -> LandActionRead:
     scope.require("owner", "editor")
     return land_actions.create(db, scope.id, land_id, scope.principal.id, payload)
+
+
+@router.get("/requests/{request_key}", response_model=LandActionRequestRead)
+def request_read(
+    land_id: uuid.UUID, request_key: uuid.UUID, db: DbSession, scope: WorkspaceDep
+) -> LandActionRequestRead:
+    return land_actions.request_read(db, scope.id, land_id, request_key)
 
 
 @router.get("/{action_id}", response_model=LandActionRead)

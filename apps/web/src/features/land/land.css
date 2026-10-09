@@ -740,7 +740,8 @@
   border-radius: 8px;
 }
 
-.land-scenarios .land-notice pre {
+.land-scenarios .land-notice pre,
+.land-action-workspace .land-notice pre {
   max-height: 20rem;
   overflow: auto;
   white-space: pre-wrap;
@@ -756,7 +757,8 @@
   min-width: 0;
   max-width: 100%;
 }
-.land-scenarios .land-notice .land-actions button {
+.land-scenarios .land-notice .land-actions button,
+.land-action-workspace .land-notice .land-actions button {
   border: 1px solid var(--control-border);
   background: #a5c4a508;
   color: inherit;
@@ -766,4 +768,18 @@
   font: inherit;
   white-space: normal;
   text-decoration: none;
+}
+
+.land-action-saved-summary {
+  max-height: 24rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 10px 0;
+}
+.land-action-saved-summary ol,
+.land-action-saved-summary ul {
+  padding-left: 20px;
+}
+.land-action-saved-summary li + li {
+  margin-top: 12px;
 }
