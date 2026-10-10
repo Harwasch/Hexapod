@@ -211,6 +211,48 @@ jobs:
           fi
           curl -fsS --retry 5 --retry-all-errors "${API_BASE_URL}/api/v1/health"
 
+      - name: Land and Worlds API smoke checks (no generation or writes)
+        if: inputs.enable_land && inputs.target != 'preflight'
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+        run: |
+          python3 - <<'PYSMOKE'
+          import json
+          import os
+          import time
+          import tomllib
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          app = tomllib.load(open("fly.toml", "rb"))["app"]
+          base = (os.environ.get("API_BASE_URL") or f"https://{app}.fly.dev").rstrip("/")
+          token = os.environ["API_WRITE_TOKEN"]
+          assert token, "API_WRITE_TOKEN is required for authenticated smoke checks"
+          for path in ("/api/v1/health", "/api/v1/land", "/api/v1/worlds/catalog", "/api/v1/worlds/workers", "/api/v1/worlds/readiness"):
+              for attempt in range(6):
+                  try:
+                      with urlopen(Request(base + path, headers={"Authorization": "Bearer " + token}), timeout=30) as response:
+                          data = json.load(response)
+                      if path.endswith("/health"):
+                          assert data["database"] is True
+                      if path.endswith("/readiness"):
+                          assert data["provisioningEnabled"] is False, "Paid provisioning must remain disabled"
+                      print(path, "OK")
+                      break
+                  except Exception:
+                      if attempt == 5:
+                          raise SystemExit(f"Smoke check failed for {path}; response body withheld")
+                      time.sleep(3)
+          try:
+              urlopen(base + "/api/v1/worlds/workers", timeout=30)
+          except HTTPError as error:
+              assert error.code == 401, "Expected authentication requirement"
+          else:
+              raise SystemExit("Worlds private reads unexpectedly allowed without authentication")
+          print("Worlds private reads require authentication")
+          PYSMOKE
+
   web:
     name: Web · Cloudflare Pages
     needs: api
