@@ -129,11 +129,6 @@ jobs:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET }}
         run: apps/api/.venv/bin/python scripts/prepare-worlds-land-release.py
-      - name: Consolidate the verified shared-database API before attaching the ledger
-        if: inputs.target != 'preflight'
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl scale count app=1 --yes
       - name: Ensure the single API ledger volume exists
         if: inputs.target != 'preflight'
         env:
@@ -149,6 +144,11 @@ jobs:
             echo "::error::Multiple Worlds volumes found; refusing independent API ledgers."
             exit 1
           fi
+      - name: Consolidate the verified shared-database API before attaching the ledger
+        if: inputs.target != 'preflight'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl scale count app=1 --yes
       # `--remote-only` builds on Fly's builder, so the 500 MB+ image is never pulled
       # through the runner. The build context is the repository root because that is
       # where fly.toml is: infra/api.Dockerfile copies tools/pipeline and tools/captures
@@ -172,6 +172,9 @@ jobs:
           count=$(printf '%s' "$machines" | jq '[.[] | select(.config.metadata.fly_process_group == "app")] | length')
           [ "$count" = 1 ] || { echo "::error::Expected exactly one API ledger owner"; exit 1; }
           machine=$(printf '%s' "$machines" | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .id')
+          volume=$(flyctl volumes list --json | jq -r '.[] | select(.name == "twin_worlds_data") | .id')
+          mounted=$(printf '%s' "$machines" | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .config.mounts[]? | select(.path == "/worlds-data") | .volume')
+          [ -n "$volume" ] && [ "$mounted" = "$volume" ] || { echo "::error::Worlds ledger is not on its expected persistent volume"; exit 1; }
           flyctl ssh console --machine "$machine" --user root --command "chown 1000:1000 /worlds-data"
           flyctl ssh console --machine "$machine" --user root --command "chmod 700 /worlds-data"
           flyctl ssh console --machine "$machine" --user api --command "/app/.venv/bin/python -c 'from pathlib import Path; p=Path(\"/worlds-data/.release-write-check\"); p.write_text(\"ok\"); p.unlink()'"
