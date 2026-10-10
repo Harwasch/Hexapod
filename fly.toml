@@ -1,9 +1,10 @@
 # Fly.io configuration for the catalog API and the job worker.
 #
-# One app, one image (infra/api.Dockerfile), two process groups:
+# One app, one image (infra/api.Dockerfile), three process groups:
 #
-#   app     uvicorn, behind Fly's proxy and TLS      -- bursty, suspends when idle
+#   app     uvicorn, behind Fly's proxy and TLS      -- always on for Worlds cleanup, holds a ledger volume
 #   worker  `python -m app.worker`, a poll loop      -- runs while there is work, holds a volume
+#   research `python -m app.research`                 -- Land research queue
 #
 # Why Fly and not Cloudflare Containers, which would have consolidated this with Pages
 # and R2 on one bill: docs/DECISIONS/0007-fly-for-the-api-cloudflare-for-the-edge.md.
@@ -65,6 +66,12 @@ kill_timeout = "30s"
   # bucket keys are secrets; these are not.
   ALLOW_PRIVATE_URLS = "false"
   API_PORT = "8000"
+  # Personal-testing Worlds ledger: one API machine, on its own persistent volume.
+  WORLD_DATA_DIR = "/worlds-data"
+  WORLD_DATA_PERSISTENT = "true"
+  WORLD_RUNPOD_ALLOW_PROVISION = "false"
+  WORLD_LAMBDA_ALLOW_PROVISION = "false"
+  WORLD_MODAL_ALLOW_PROVISION = "false"
   # R2 wants "auto"; a real region name signs for a host that is not there. True of any
   # R2 account, so it belongs here rather than in a secret. (What keeps presigning on
   # SigV4 is S3Storage passing signature_version explicitly, not this value -- see
@@ -133,27 +140,16 @@ kill_timeout = "30s"
 [processes]
   app = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
   worker = "python -m app.worker"
+  research = "python -m app.research"
 
 [http_service]
   internal_port = 8000
   force_https = true
   processes = ["app"]
-  # A single-user, bursty API: let the machine sleep when nobody is looking and wake on
-  # the next request. "suspend" rather than "stop": the machine's memory is snapshotted
-  # and restored, so a request after a quiet spell resumes a running uvicorn in well
-  # under a second instead of booting Python and importing the app (Fly suspends
-  # machines of up to 2 GB; this one is 1 GB). Two things it does not change: the first
-  # request after a deploy still boots cold, as a new image has no snapshot; and sockets
-  # held open across a suspend -- the database pool, an R2 or Anthropic keep-alive --
-  # may be found reset once on resume. The pool checks before use (pool_pre_ping in
-  # app/db.py); an HTTP client retries on a new connection.
-  #
-  # The worker group is deliberately not in `processes` here -- it has no service, so it
-  # is never stopped by the proxy and never waits for a request. It stops itself when it
-  # is idle, and the API starts it (WORKER_IDLE_EXIT_S above).
-  auto_stop_machines = "suspend"
+  # Worlds lease cleanup must continue when the browser disconnects.
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [[http_service.checks]]
     method = "GET"
@@ -220,3 +216,20 @@ kill_timeout = "30s"
   policy = "on-failure"
   retries = 10
   processes = ["worker"]
+
+# Land research is independent from GPU/capture jobs and shares database/private storage.
+[[vm]]
+  processes = ["research"]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[[mounts]]
+  source = "twin_worlds_data"
+  destination = "/worlds-data"
+  processes = ["app"]
+  initial_size = "1gb"
+
+[[restart]]
+  policy = "on-failure"
+  retries = 10
+  processes = ["research"]

@@ -39,20 +39,22 @@ authorization; the infrastructure owner performs the release separately.
    Configure private storage and the existing API token for the API and research
    worker. Keep originals private and verify authenticated retrieval.
 3. Build the web application with `VITE_ENABLE_LAND_EXPLORATION=true` for this
-   testing environment. It defaults to false. Preserve the existing API origin,
+   testing environment. For the GitHub deployment workflow, set the
+   dispatch input `enable_land` to `true` before dispatching the release.
+   With an API release, this also requires a private R2 database backup and a
+   successful restore/migration rehearsal before replacing any application machine. It defaults to false. Preserve the existing API origin,
    Earth/imagery configuration and same-domain routes, including `/worlds.html`.
    The integration does not change production feature-flag defaults.
 4. Add an independently supervised research process using the API image:
    `python -m app.research`. It needs the same database/private storage settings as
    the API. Configure `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` for model-driven research.
-   Basic open-data overview does not need a model key. The current Fly process
-   configuration does not automatically create this process group.
+   Basic open-data overview does not need a model key. The Fly configuration includes the separate `research` process group.
 5. For Worlds, follow [the separate handoff](WORLDS_DEPLOYMENT.md) and
    [environment template](worlds.env.example). Use **one API replica** for the
    current SQLite ledger design. Mount persistent storage on that API machine,
    set `WORLD_DATA_DIR` to an absolute directory on it, and set
-   `WORLD_DATA_PERSISTENT=true`. The existing `/data` mount belongs to the capture
-   worker, not the API; it does not satisfy this requirement. Multiple independent
+   `WORLD_DATA_PERSISTENT=true`. The capture worker keeps its existing `/data` mount; the API uses its own
+   `twin_worlds_data` volume at `/worlds-data`. Multiple independent
    ledgers behind a load balancer are unsupported. If the hosting setup requires
    multiple API replicas, resolve the ledger architecture before enabling Worlds
    managed compute rather than treating separate volumes as shared storage.
@@ -63,8 +65,9 @@ authorization; the infrastructure owner performs the release separately.
    provisioning only with the owner's separate budget authorization. Provider keys
    stay on the manager; `HF_TOKEN` is only for preparing gated artifacts.
 
-No infrastructure configuration, paid workers or production migrations are applied
-by this integration. [Land's detailed guide](LAND_EXPLORATION.md) and
+The integration PR alone applies no infrastructure changes. The separately dispatched
+release workflow applies the hosting configuration and migrations described above;
+paid GPU workers remain disabled. [Land's detailed guide](LAND_EXPLORATION.md) and
 [Worlds' model/runtime guide](WORLDS_MODELS.md) describe remaining acceptance limits.
 
 ## Personal acceptance walkthrough
