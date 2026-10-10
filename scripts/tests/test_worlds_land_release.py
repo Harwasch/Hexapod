@@ -126,6 +126,7 @@ def test_backup_download_restore_and_migration_are_separate_from_production(harn
     state, calls = harness
     release.main()
     assert state["backup"]
+    assert any("createdb" in args and "template0" in args for args, _ in calls)
     assert any("postgres:17-bookworm" in args for args, _ in calls)
     assert any("postgis/postgis:17-3.5" in args for args, _ in calls)
     dump = next(kwargs for args, kwargs in calls if "pg_dump" in args)

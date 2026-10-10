@@ -276,7 +276,7 @@ def main() -> None:
                     "--env",
                     "POSTGRES_PASSWORD=rehearsal-local",
                     "--env",
-                    "POSTGRES_DB=rehearsal",
+                    "POSTGRES_DB=bootstrap",
                     postgis_image,
                 ],
                 capture_output=True,
@@ -290,7 +290,9 @@ def main() -> None:
             for attempt in range(60):
                 if (
                     subprocess.run(
-                        ["pg_isready", "-d", local], capture_output=True, check=False
+                        ["pg_isready", "-d", local.replace("/rehearsal", "/bootstrap")],
+                        capture_output=True,
+                        check=False,
                     ).returncode
                     == 0
                 ):
@@ -298,6 +300,22 @@ def main() -> None:
                 time.sleep(1)
             else:
                 raise RuntimeError("Local migration rehearsal database did not start")
+            # PostGIS images seed extensions with dependencies into their initial DB.
+            # Restore into template0 so --clean does not fight those seeded objects.
+            run(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "createdb",
+                    "--username",
+                    "postgres",
+                    "--template",
+                    "template0",
+                    "rehearsal",
+                ],
+                capture_output=True,
+            )
             run(
                 ["docker", "cp", str(restored), container + ":/tmp/database.dump"],
                 capture_output=True,
