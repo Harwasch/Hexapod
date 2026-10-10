@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ResearchEvent } from "@twin/contracts";
 import { ApiError, api, unwrap } from "@/api/client";
 import {
@@ -51,7 +51,12 @@ export function useResearchProgress(runId: string | undefined, running: boolean)
     message?: string;
   } | null>(null);
   const [attempt, retry] = useState(0);
-  const query = useQuery<ResearchEvent[]>({ queryKey: eventKey, enabled: false, initialData: [] });
+  // The authenticated stream/polling loop below owns fetching; this only observes its cache.
+  const query = useQuery<ResearchEvent[]>({
+    queryKey: eventKey,
+    queryFn: skipToken,
+    initialData: [],
+  });
   useEffect(() => {
     if (!ready || !runId) return;
     const controller = new AbortController(),
