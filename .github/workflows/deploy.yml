@@ -28,6 +28,7 @@ on:
           - everything
           - api
           - web
+          - preflight
         default: everything
       enable_land:
         description: Enable Land in the web build and back up/rehearse the database before an API release
@@ -90,7 +91,7 @@ concurrency:
 jobs:
   api:
     name: API and worker · Fly.io
-    if: inputs.target == 'everything' || inputs.target == 'api'
+    if: inputs.target == 'everything' || inputs.target == 'api' || inputs.target == 'preflight'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,14 +113,14 @@ jobs:
           curl -L https://fly.io/install.sh | sh
           echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
       - uses: astral-sh/setup-uv@v6
-        if: inputs.enable_land
+        if: inputs.enable_land || inputs.target == 'preflight'
       - name: Install backup and migration rehearsal tools
-        if: inputs.enable_land
+        if: inputs.enable_land || inputs.target == 'preflight'
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
           uv sync --frozen --project apps/api
       - name: Private database backup and restore/migration rehearsal
-        if: inputs.enable_land
+        if: inputs.enable_land || inputs.target == 'preflight'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
@@ -131,6 +132,7 @@ jobs:
           R2_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET }}
         run: apps/api/.venv/bin/python scripts/prepare-worlds-land-release.py
       - name: Ensure the single API ledger volume exists
+        if: inputs.target != 'preflight'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -153,10 +155,12 @@ jobs:
       # any machine is replaced. A migration that fails aborts the deploy with the old
       # version still serving.
       - name: fly deploy
+        if: inputs.target != 'preflight'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl deploy --remote-only --ha=false --wait-timeout 10m
       - name: Verify API ledger ownership and single-replica placement
+        if: inputs.target != 'preflight'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -179,6 +183,7 @@ jobs:
       # whatever stopped it: a trial limit, a host migration, a crash that exhausted its
       # restarts. If the process then dies on start, verify's worker check is what says so.
       - name: The background workers are started, not just updated
+        if: inputs.target != 'preflight'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |

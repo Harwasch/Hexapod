@@ -1551,7 +1551,9 @@ twin-web`) is the equivalent.
 
 ### Worlds and Land personal-testing release
 
-Dispatch **Deploy** with `target=everything` and `enable_land=true`. This passes
+First dispatch **Deploy** with `target=preflight` to exercise the private backup
+and migration rehearsal without replacing applications, creating volumes, or
+publishing the frontend. Then dispatch with `target=everything` and `enable_land=true`. This passes
 `VITE_ENABLE_LAND_EXPLORATION=true` to the browser build. Before the API release,
 the workflow uses the existing Neon and private R2 credentials to back up the
 running API's database, verifies the uploaded backup by downloading it, restores

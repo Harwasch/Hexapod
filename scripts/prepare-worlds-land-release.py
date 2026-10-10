@@ -31,7 +31,12 @@ def required(name: str) -> str:
 
 
 def run(args: list[str], **kwargs):
-    return subprocess.run(args, check=True, text=True, **kwargs)
+    try:
+        return subprocess.run(args, check=True, text=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            f"Release command {args[0]} failed with exit {error.returncode}; credential-bearing output withheld"
+        ) from None
 
 
 def neon(path: str):
@@ -59,6 +64,7 @@ def main() -> None:
     config = tomllib.loads((ROOT / "fly.toml").read_text())
     app = config["app"]
     project_name = os.environ.get("NEON_PROJECT_NAME") or "hexapod-twin"
+    print("Checking existing Neon project and source database identity", flush=True)
     projects = [
         p for p in neon("/projects?limit=400")["projects"] if p["name"] == project_name
     ]
@@ -105,6 +111,7 @@ def main() -> None:
             ["flyctl", "machine", "start", api[0]["id"], "--app", app],
             capture_output=True,
         )
+    print("Verifying the running Fly API database identity", flush=True)
     code = (
         "import json, sys; sys.path.insert(0, '/app'); from urllib.parse import urlsplit; from app.config import get_settings; "
         "u=urlsplit(str(get_settings().database_url)); "
@@ -155,6 +162,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="worlds-land-release-") as directory:
         dump = Path(directory) / "database.dump"
         dump.touch(mode=0o600)
+        print("Creating the database backup", flush=True)
         run(
             [
                 "pg_dump",
@@ -168,6 +176,7 @@ def main() -> None:
             capture_output=True,
         )
         digest = hashlib.file_digest(dump.open("rb"), "sha256").hexdigest()
+        print("Uploading backup to the private bucket", flush=True)
         storage.upload_file(
             str(dump),
             bucket,
@@ -198,6 +207,7 @@ def main() -> None:
             raise RuntimeError("Downloaded backup checksum mismatch")
         container = "worlds-land-rehearsal-" + release
         try:
+            print("Restoring backup into disposable local PostGIS", flush=True)
             run(
                 [
                     "docker",
