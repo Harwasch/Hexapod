@@ -18,6 +18,7 @@ dependencies = [
   "boto3>=1.40",
   "python-multipart>=0.0.20",
   "anthropic>=1.6.0",
+  "pyjwt[crypto]>=2.10,<3",
   "segno>=1.6",
   # Not the API's: the worker's. `app/worker/` runs `tools/pipeline`'s stages in this
   # environment (see app/worker/pipeline_bridge.py), and since A8 those stages read
@@ -44,6 +45,14 @@ dependencies = [
   # it. A dependency rather than an extra so that setting the secret is the whole change
   # -- the image is built from this lockfile and an extra would need a Dockerfile edit.
   "sentry-sdk>=2.20",
+  "pyogrio>=0.10",
+  "pyproj>=3.7",
+  "defusedxml>=0.7",
+  "rasterio>=1.4",
+  "rio-tiler>=7",
+  "pypdf>=5",
+  "pvlib>=0.16.1,<0.17",
+  "pandas>=3,<4",
 ]
 
 [project.optional-dependencies]
@@ -79,6 +88,7 @@ dev = [
   # httpx2.Response. The tests name that type; declared so it does not depend on
   # `anthropic` happening to pull it in.
   "httpx2>=2.13",
+  "types-defusedxml>=0.7.0.20260504",
 ]
 
 [build-system]
@@ -165,3 +175,17 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "-ra"
 filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[[tool.mypy.overrides]]
+module = ["pyogrio", "pyogrio.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Rasterio's C extension has no PEP 561 marker. Analysis boundaries validate arrays/metadata explicitly.
+module = ["rasterio", "rasterio.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# pvlib/pandas ship no typing marker; solar analysis validates typed model inputs and outputs.
+module = ["pvlib", "pvlib.*", "pandas", "pandas.*"]
+ignore_missing_imports = true

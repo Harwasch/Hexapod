@@ -227,6 +227,14 @@ export class SelectionManager {
     let picked: unknown;
     try {
       picked = await this.scene.pickAsync(position);
+      // The active study boundary is context, not the inspected feature. Look
+      // through its fill/outline so it cannot cover a creek, pole, or other data.
+      if (isEntityPick(picked) && picked.id.id.startsWith("land-boundary:")) {
+        const beneath: unknown[] = this.scene.drillPick(position, 32);
+        picked = beneath.find(
+          (candidate) => !isEntityPick(candidate) || !candidate.id.id.startsWith("land-boundary:"),
+        );
+      }
     } catch {
       picked = undefined;
     }
@@ -251,9 +259,29 @@ export class SelectionManager {
       isEntityPick(picked) &&
       typeof picked.id.id === "string" &&
       (picked.id.id.startsWith(AREA_HANDLE_PREFIX) ||
+        picked.id.id.startsWith("land-boundary:") ||
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
       return;
+    if (isEntityPick(picked) && picked.id.id.startsWith("land-context:")) {
+      const properties = picked.id.properties?.getValue(this.viewer.clock.currentTime) as
+        Record<string, unknown> | undefined;
+      if (
+        typeof properties?.landResearchArtifactId === "string" &&
+        typeof properties.landResearchFeatureId === "string"
+      ) {
+        this.events.emit("land-research-feature-select", {
+          layerId: properties.landResearchArtifactId,
+          featureId: properties.landResearchFeatureId,
+        });
+        return;
+      }
+    }
+    if (isEntityPick(picked) && picked.id.id.startsWith("land-context:inventory/")) {
+      const id = picked.id.id.slice("land-context:inventory/".length).split("#")[0];
+      if (id) this.events.emit("land-feature-select", { id });
+      return;
+    }
     // A plain click is for things on the map. On the ground, or on a site's surface (its mesh,
     // or the ground under a scan's splats), it does nothing at all: no marker, no card, and
     // what is open stays open. "What's here" in the map menu is how to ask about a place.
@@ -523,7 +551,9 @@ export class SelectionManager {
       // camera is currently moving or merely paused between two mouse events of a drag.
       if (!this.enabled || !this.hoverEnabled || this.camera.isMoving || this.pointerHeld) return;
       const picked: unknown = this.scene.pick(this.hoverPosition);
-      const interactive = picked instanceof Cesium3DTileFeature || isEntityPick(picked);
+      const interactive =
+        picked instanceof Cesium3DTileFeature ||
+        (isEntityPick(picked) && !picked.id.id.startsWith("land-boundary:"));
       this.viewer.canvas.style.cursor = interactive ? "pointer" : "";
     }, HOVER_REST_MS);
   }

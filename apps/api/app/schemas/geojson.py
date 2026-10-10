@@ -85,3 +85,20 @@ class MultiPolygon(CamelModel):
 
 
 Footprint = Annotated[Polygon | MultiPolygon, Field(discriminator="type")]
+
+
+class LineString(CamelModel):
+    type: Literal["LineString"] = "LineString"
+    coordinates: Annotated[list[Position], Field(min_length=2, max_length=20_000)]
+
+    @field_validator("coordinates")
+    @classmethod
+    def _validate(cls, value: list[list[float]]) -> list[list[float]]:
+        for position in value:
+            _check_position(position)
+        if len({tuple(point[:2]) for point in value}) < 2:
+            raise ValueError("a line needs at least two distinct points")
+        return value
+
+
+MapGeometry = Annotated[Point | LineString | Polygon | MultiPolygon, Field(discriminator="type")]

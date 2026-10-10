@@ -1,0 +1,123 @@
+.land-ecology,
+.land-survey-form,
+.land-survey-form > fieldset,
+.land-survey-plot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+.land-survey-form fieldset {
+  min-width: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.land-survey-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+.land-survey-form label.land-check {
+  flex-direction: row;
+  align-items: flex-start;
+}
+.land-survey-form input:not([type="checkbox"]),
+.land-survey-form select,
+.land-survey-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: #ffffff0a;
+  color: inherit;
+  padding: 8px;
+  color-scheme: dark;
+}
+.land-species-form {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--control-border);
+  padding-top: 12px;
+}
+.land-species-list {
+  list-style: none;
+  padding: 0;
+}
+.land-species-list > li {
+  border-top: 1px solid var(--control-border);
+  padding: 12px 0;
+}
+.land-species-bar {
+  height: 8px;
+  border-radius: 5px;
+  background: #ffffff15;
+  margin: 8px 0;
+  overflow: hidden;
+}
+.land-species-bar > span {
+  display: block;
+  height: 100%;
+  background: #91d6a2;
+}
+.land-survey-choice {
+  text-align: left;
+  padding: 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  color: inherit;
+  background: #ffffff08;
+}
+.land-survey-choice[aria-pressed="true"] {
+  border-color: #91d6a2;
+  background: #91d6a220;
+}
+.land-ecology code {
+  overflow-wrap: anywhere;
+}
+
+.land-ecology-research {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  padding: 14px;
+  background: #91d6a208;
+  overflow-wrap: anywhere;
+}
+.land-ecology-research > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.land-ecology-research select {
+  max-width: 100%;
+  min-width: 0;
+}
+.land-ecology-research .land-survey-form {
+  display: block;
+}
+.land-ecology-research .land-survey-form > * + * {
+  margin-top: 12px;
+}
+
+.land-ecology-research > * {
+  min-width: 0;
+}
+.land-ecology-research button {
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #a5c4a508;
+  color: inherit;
+  white-space: normal;
+}
+.land-ecology-research > button:first-of-type {
+  background: var(--accent-fill);
+  color: var(--on-accent-fill);
+}

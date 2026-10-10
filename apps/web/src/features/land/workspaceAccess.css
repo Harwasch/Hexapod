@@ -1,0 +1,111 @@
+.workspace-access {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.workspace-access form,
+.workspace-invitation form {
+  display: grid;
+  gap: 10px;
+}
+.workspace-access label,
+.workspace-invitation label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.workspace-access input,
+.workspace-access select,
+.workspace-invitation input {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+}
+.workspace-access ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.workspace-access li {
+  border: 1px solid #465565;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.workspace-access p {
+  margin: 4px 0;
+}
+.workspace-access button,
+.workspace-invitation button {
+  min-height: 40px;
+  white-space: normal;
+}
+.workspace-member-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+.workspace-member-actions label {
+  flex: 1;
+}
+.workspace-invitation {
+  box-sizing: border-box;
+  max-width: min(480px, calc(100vw - 24px));
+  width: 480px;
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  border: 1px solid #64748b;
+  border-radius: 16px;
+  background: #17232d;
+  color: #f1f5f9;
+  padding: 24px;
+  box-shadow: 0 24px 80px #0008;
+}
+.workspace-invitation::backdrop {
+  background: #06121bc9;
+}
+.workspace-invitation > button {
+  margin-top: 12px;
+}
+.workspace-invitation button {
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+.workspace-invitation h2 {
+  margin-top: 0;
+}
+.workspace-access button,
+.workspace-invitation button {
+  color: #e4ebe7;
+  background: #273c34;
+  border: 1px solid #657d70;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.workspace-access button:hover:not(:disabled),
+.workspace-invitation button:hover:not(:disabled) {
+  background: #355243;
+}
+.workspace-access button:disabled,
+.workspace-invitation button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.workspace-access button:focus-visible,
+.workspace-invitation button:focus-visible {
+  outline: 2px solid #9fd7b5;
+  outline-offset: 2px;
+}
+.workspace-invitation input {
+  background: #101d17;
+  border: 1px solid #84958c;
+  border-radius: 6px;
+  color: #f1f5f9;
+}

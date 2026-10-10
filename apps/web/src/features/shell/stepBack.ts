@@ -2,6 +2,7 @@ import { useMission } from "@/state/mission";
 import { useSkinPoke } from "@/state/skinPoke";
 import { selectedId, useSceneSelect } from "@/state/sceneSelect";
 import { useUi } from "@/state/ui";
+import { useLand } from "@/state/land";
 
 /** What the scene does for a step back: the parts of `CesiumSceneManager` it touches. */
 export interface StepBackScene {
@@ -69,6 +70,10 @@ export function stepBack(scene: StepBackScene | null): StepBack | null {
   if (ui.writeTokenPrompt) {
     ui.setWriteTokenPrompt(false);
     return "write-token";
+  }
+  if (ui.activePanel === "land" && useLand.getState().mode !== "browse") {
+    useLand.getState().begin("browse");
+    return "panel";
   }
   if (objects.mode === "paint") {
     if (!scene?.sceneSelect.escape()) objects.setMode("pick");

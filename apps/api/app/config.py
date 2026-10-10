@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -77,6 +77,35 @@ class Settings(BaseSettings):
     # only tolerable outside production, so `create_app` refuses to start when
     # `is_production` and this is empty; see app/main.py.
     api_write_token: str | None = None
+
+    # OIDC workspaces and the legacy single-operator pilot are separate auth modes.
+    land_document_workspace_quota_bytes: int = Field(
+        default=1024 * 1024 * 1024, ge=20 * 1024 * 1024
+    )
+    land_solar_workspace_quota_bytes: int = Field(default=256 * 1024**2, ge=1)
+    land_raster_workspace_quota_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024, ge=16 * 1024 * 1024
+    )
+    land_archive_workspace_quota_bytes: int = Field(default=512 * 1024 * 1024, ge=21 * 1024 * 1024)
+    land_auth_mode: Literal["pilot", "oidc"] = "pilot"
+    land_oidc_issuer: str | None = None
+    land_oidc_audience: str | None = None
+    land_oidc_jwks_url: str | None = None
+
+    @model_validator(mode="after")
+    def validate_land_identity(self) -> Settings:
+        if self.land_auth_mode == "oidc":
+            if (
+                not self.land_oidc_audience
+                or not self.land_oidc_issuer
+                or not self.land_oidc_jwks_url
+            ):
+                raise ValueError("OIDC land access requires issuer, audience and JWKS URL")
+            if not self.land_oidc_issuer.startswith(
+                "https://"
+            ) or not self.land_oidc_jwks_url.startswith("https://"):
+                raise ValueError("OIDC issuer and JWKS URL must use HTTPS")
+        return self
 
     # Signing key for the phone-handoff tokens (app/services/handoff.py). Unset falls back
     # to deriving one from `api_write_token`, and failing that to a random per-process key

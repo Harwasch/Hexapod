@@ -1,0 +1,717 @@
+.land-research {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-top: 1px solid var(--divider);
+  padding-top: 24px;
+}
+.land-research-heading {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.land-research-heading > div {
+  flex: 1;
+}
+.land-research-heading > svg {
+  color: var(--accent-strong);
+}
+.land-research-heading h3 {
+  font-size: 24px;
+  margin-bottom: 0;
+}
+.land-research-tabs {
+  display: flex;
+  padding: 4px;
+  gap: 4px;
+  background: #0002;
+  border-radius: 10px;
+}
+.land-research-tabs button {
+  flex: 1;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 10px 6px;
+  font-size: 12px;
+}
+.land-research-tabs button[aria-pressed="true"] {
+  background: var(--accent-fill);
+  color: var(--on-accent-fill);
+}
+.land-finding,
+.land-artifact,
+.land-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--control-border);
+  padding: 16px;
+  border-radius: 12px;
+  background: #a5c4a507;
+}
+.land-finding.is-pinned {
+  border-color: var(--accent-strong);
+}
+.land-finding h4,
+.land-artifact h4,
+.land-evidence h4 {
+  font-size: 16px;
+  margin: 0;
+  line-height: 1.35;
+}
+.land-finding-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-secondary);
+}
+.land-research details {
+  font-size: 12px;
+}
+.land-research summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.land-question {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-top: 1px solid var(--divider);
+  background: transparent;
+  padding: 12px 0 0;
+  font-size: 12px !important;
+}
+.land-question svg {
+  flex-shrink: 0;
+}
+.land-run {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.land-run > span:nth-child(2) {
+  flex: 1;
+}
+.land-run button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px;
+  background: transparent;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+}
+.land-run-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  flex-shrink: 0;
+}
+.land-run-dot.is-running {
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 4px #b6d3ac14;
+}
+.land-progress ol {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.land-progress li > span {
+  color: var(--accent-strong);
+}
+.land-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.land-ask > label {
+  font-size: 14px;
+}
+.land-ask textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.land-ask > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.land-ask > .land-question-focus {
+  flex-wrap: wrap;
+}
+.land-question-focus > span {
+  flex: 1 1 150px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.land-question-focus > button {
+  min-height: 44px;
+}
+.land-ask > div > label,
+.land-dismissed {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+.land-ask button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--accent-fill);
+  color: var(--on-accent-fill);
+  font-size: 12px;
+}
+.land-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.land-conversation article {
+  padding: 14px;
+  border-radius: 10px;
+  background: #ffffff05;
+}
+.land-conversation article[data-role="user"] {
+  background: #a5c4a514;
+}
+.land-conversation article > span {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 10px;
+  color: var(--accent-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.land-conversation p,
+.land-document {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.land-evidence {
+  border-color: var(--accent-strong);
+}
+.land-evidence dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  font-size: 11px;
+  margin: 0;
+}
+.land-evidence dt {
+  color: var(--text-secondary);
+}
+.land-evidence dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.land-evidence blockquote {
+  margin: 0;
+  padding: 10px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  background: #0002;
+  border-radius: 6px;
+}
+.land-evidence a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-strong);
+  font-size: 12px;
+}
+.land-evidence-link {
+  border: 0;
+  background: transparent;
+  text-decoration: underline;
+  padding: 7px;
+  font-size: 11px !important;
+}
+.land-chart {
+  width: 100%;
+  height: auto;
+  color: var(--text-secondary);
+}
+.land-chart-series-0 {
+  color: var(--accent-strong);
+}
+.land-chart-series-1 {
+  color: #78bce1;
+}
+.land-chart-series-2 {
+  color: #dcb075;
+}
+.land-table-wrap {
+  overflow: auto;
+  max-height: 320px;
+  max-width: 100%;
+}
+.land-table-wrap table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+.land-table-wrap td,
+.land-table-wrap th {
+  text-align: left;
+  padding: 9px;
+  border-bottom: 1px solid var(--divider);
+  min-width: 70px;
+}
+.land-table-wrap th {
+  font-weight: 600;
+}
+.land-timeline {
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+.land-timeline time {
+  display: block;
+  font-size: 11px;
+  color: var(--accent-strong);
+}
+.land-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.land-identity:empty {
+  display: none;
+}
+
+.land-raster {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+.land-raster > * {
+  min-width: 0;
+}
+.land-raster select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.land-raster-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.land-raster-stats dt {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.land-raster-stats dd {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+.land-raster-ramp {
+  height: 12px;
+  border-radius: 6px;
+}
+.land-raster-ramp.viridis {
+  background: linear-gradient(90deg, #440154, #3b528b, #21918c, #5ec962, #fde725);
+}
+.land-raster-ramp.magma {
+  background: linear-gradient(90deg, #000004, #51127c, #b73779, #fc8961, #fcfdbf);
+}
+.land-raster-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-top: -5px;
+}
+.land-raster-opacity {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.land-raster details {
+  overflow-wrap: anywhere;
+}
+.land-terrain-start {
+  padding: 12px;
+  border: 1px solid var(--border-subtle, #ffffff20);
+  border-radius: 10px;
+}
+
+.land-cover-legend {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 14px;
+}
+.land-cover-legend li > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.land-cover-legend strong {
+  flex: 1;
+  font-size: 13px;
+}
+.land-cover-swatch {
+  width: 13px;
+  height: 13px;
+  border: 1px solid #ffffff60;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.land-cover-bar {
+  height: 5px;
+  margin: 5px 0;
+  background: #ffffff15;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.land-cover-bar span {
+  display: block;
+  height: 100%;
+}
+.land-cover-legend small {
+  opacity: 0.7;
+  font-size: 11px;
+}
+
+.land-archive-gallery {
+  min-width: 0;
+}
+.land-archive-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+}
+.land-archive-navigation button {
+  border: 1px solid #ffffff25;
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  padding: 8px;
+}
+.land-archive-card {
+  overflow-wrap: anywhere;
+}
+.land-archive-card h5 {
+  font-size: 15px;
+  line-height: 1.4;
+  margin: 16px 0 6px;
+}
+.land-archive-date {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.land-archive-card figure {
+  margin: 10px 0;
+}
+.land-archive-card img {
+  display: block;
+  width: 100%;
+  height: 220px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #00000030;
+}
+.land-archive-card img.is-expanded {
+  height: auto;
+  max-height: 65vh;
+}
+.land-archive-card figcaption {
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 6px;
+}
+
+.land-archive-storage {
+  margin: 0.65rem 0;
+}
+.land-archive-storage code {
+  overflow-wrap: anywhere;
+}
+
+.land-alignment {
+  border-top: 1px solid var(--control-border);
+  margin-top: 16px;
+  padding-top: 12px;
+}
+.land-alignment > label,
+.land-saved-alignment > label,
+.land-alignment-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  font-size: 12px;
+}
+.land-alignment input:not([type="range"]),
+.land-alignment textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--surface-2, #ffffff0a);
+  color: inherit;
+  font: inherit;
+}
+.land-alignment textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+.land-alignment-image-wrap {
+  padding: 12px;
+  background: #00000025;
+  border-radius: 8px;
+}
+.land-alignment .land-alignment-image {
+  display: block;
+  position: relative;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: crosshair;
+  touch-action: manipulation;
+}
+.land-alignment .land-alignment-image img {
+  width: 100%;
+  height: auto;
+  border-radius: 0;
+  pointer-events: none;
+}
+.land-alignment-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid white;
+  background: #195b54;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  box-shadow: 0 1px 4px #0009;
+}
+.land-alignment-marker.is-pending {
+  background: #a2450a;
+}
+.land-alignment-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  min-width: 0;
+  margin: 10px 0;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+}
+.land-alignment-fields legend {
+  font-size: 12px;
+}
+.land-alignment-points {
+  list-style: none;
+  padding: 0;
+}
+.land-alignment-points li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--control-border);
+  font-size: 12px;
+}
+.land-alignment-points span {
+  display: block;
+  margin: 5px 0;
+  font-variant-numeric: tabular-nums;
+}
+.land-alignment-fit {
+  padding: 12px;
+  background: #ffffff06;
+  border-radius: 8px;
+  margin: 12px 0;
+  font-size: 12px;
+}
+.land-alignment-fit > dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.land-alignment-fit dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.land-alignment-fit ul {
+  padding-left: 16px;
+  line-height: 1.5;
+}
+.land-saved-alignment {
+  border-top: 1px solid var(--control-border);
+  padding: 12px 0;
+}
+.land-saved-alignment h6 {
+  font-size: 14px;
+  margin: 0;
+}
+.land-saved-alignment code {
+  overflow-wrap: anywhere;
+}
+
+.land-vegetation-start summary {
+  cursor: pointer;
+  font-size: 12px;
+  margin: 8px 0;
+}
+.land-vegetation-month {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin: 10px 0;
+}
+.land-vegetation-month label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+}
+.land-vegetation-month input {
+  color-scheme: dark;
+  min-width: 0;
+  padding: 7px;
+  background: #ffffff0a;
+  color: inherit;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+}
+.land-vegetation-timeline {
+  margin: 12px 0 20px;
+}
+.land-vegetation-timeline h5 {
+  font-size: 14px;
+  margin: 10px 0;
+}
+.land-vegetation-timeline > svg {
+  width: 100%;
+  background: #ffffff05;
+  border-radius: 8px;
+}
+.land-vegetation-observations {
+  list-style: none;
+  padding: 0;
+  font-size: 12px;
+}
+.land-vegetation-observations > li {
+  border-top: 1px solid var(--control-border);
+  padding: 10px 0;
+}
+.land-vegetation-observations dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.land-vegetation-observations dd {
+  margin: 4px 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.land-vegetation-observations summary {
+  cursor: pointer;
+}
+.land-vegetation-change {
+  padding: 10px;
+  background: #ffffff08;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.land-raster-ramp.rdylgn {
+  background: linear-gradient(to right, #a50026, #f46d43, #ffffbf, #66bd63, #006837);
+}
+
+.land-map-feature-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.land-map-feature-list li {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  min-width: 0;
+}
+.land-map-feature-list li[data-selected="true"] {
+  border-color: #f1cb7a;
+  background: #f1cb7a18;
+}
+.land-map-feature-list button {
+  min-height: 42px;
+  padding: 8px;
+  border: 1px solid #617265;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.land-map-feature-list button:first-child {
+  display: grid;
+  flex: 1;
+  text-align: left;
+  min-width: 0;
+}
+.land-map-feature-list button span {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.land-selected-map-feature {
+  padding: 12px;
+  margin: 12px 0;
+  border: 1px solid #f1cb7a;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.land-selected-map-feature h4 {
+  margin: 6px 0;
+}
+
+.land-calculation section {
+  border-top: 1px solid var(--control-border);
+  padding-block: 0.6rem;
+}
+.land-calculation code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

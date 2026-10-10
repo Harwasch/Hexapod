@@ -94,6 +94,12 @@ export type PlanRevisionRecord = Schemas["PlanRevisionRead"];
 export type PlanClarification = Schemas["Clarification"];
 export type PlanAnswerValue = string | number | boolean;
 export type GroundOutline = Schemas["Outline"];
+export type LandArea = Schemas["LandRead"];
+export type LandCreate = Schemas["LandCreate"];
+export type LandRevise = Schemas["LandRevise"];
+export type BoundarySource = Schemas["BoundarySource"];
+export type BoundaryRevision = Schemas["BoundaryRevisionRead"];
+export type BoundaryResult = Schemas["BoundaryResult"];
 export type OutlineRequest = Schemas["OutlineRequest"];
 
 /** Captures: an upload session and the source files it is made of. */
@@ -151,3 +157,17 @@ export type PipelineProvider = Schemas["ProviderRead"];
 export type RunStatus = Schemas["RunStatus"];
 export type GeorefMethod = Schemas["GeorefMethod"];
 export type ScaleSource = Schemas["ScaleSource"];
+
+/** Private land exploration and persistent research. */
+export type Investigation = Schemas["InvestigationRead"];
+export type InvestigationDetail = Schemas["InvestigationDetail"];
+export type ResearchRun = Schemas["RunRead"];
+export type LandEvidence = Schemas["EvidenceRead"];
+export type LandFinding = Schemas["FindingRead"];
+export type ResearchArtifact = Schemas["ResearchArtifactRead"];
+export type ResearchEvent = Schemas["EventRead"];
+
+export type LandCandidate = Schemas["LandCandidate"];
+export type CandidateResult = Schemas["CandidateResult"];
+export type SelectionInterpretation = Schemas["SelectionInterpretation"];
+export type LandMapGeometry = LandCandidate["geometry"];

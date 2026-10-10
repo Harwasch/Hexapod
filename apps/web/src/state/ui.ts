@@ -6,7 +6,7 @@ import { create } from "zustand";
  * inside one of them: Compare is a mode of Layers, Captures (with the phone handoff) and
  * "Add data" are the two tabs of Add, and Sites and Saved views are in the site switcher.
  */
-export type ToolPanel = "layers" | "measure" | "add";
+export type ToolPanel = "layers" | "measure" | "add" | "land";
 export type MeasureMode = "point" | "distance" | "area" | "height" | "elevation";
 /** The Layers panel's two modes: the catalog, or a swipe between two layers. */
 export type LayersMode = "browse" | "compare";

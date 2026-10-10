@@ -4,6 +4,11 @@ import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { env } from "@/app/env";
 import { HOTKEYS } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
+import { LandRasterBridge } from "@/cesium/LandRasterBridge";
+import { LandContextBridge } from "@/cesium/LandContextBridge";
+import { LandBridge } from "@/cesium/LandBridge";
+import { LandIdentityBridge } from "../land/WorkspaceIdentity";
+import { LandPanel } from "../land/LandPanel";
 import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
@@ -56,6 +61,9 @@ function GlobalHotkeys() {
   const settings = useSettings();
   const mission = useMission();
   useHotkey(HOTKEYS.layers.combo, () => ui.openLayers("browse"));
+  useHotkey(HOTKEYS.land.combo, () => {
+    if (env.landExplorationEnabled) ui.togglePanel("land");
+  });
   useHotkey(HOTKEYS.compare.combo, () => ui.openLayers("compare"));
   useHotkey(HOTKEYS.measure.combo, () => ui.togglePanel("measure"));
   useHotkey(HOTKEYS.captures.combo, () =>
@@ -150,6 +158,14 @@ export function AppShell() {
   return (
     <>
       <GlobalHotkeys />
+      {env.landExplorationEnabled && (
+        <>
+          <LandIdentityBridge />
+          <LandBridge />
+          <LandContextBridge />
+          <LandRasterBridge />
+        </>
+      )}
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">
         <ErrorBoundary inline label="Fleet overlay">
           <MissionOverlays />
@@ -172,6 +188,7 @@ export function AppShell() {
         <section className="hud-region hud-dock hud-dock--left" aria-label="Panel">
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
+            {env.landExplorationEnabled && <LandPanel />}
             <MeasurePanel />
             <AddPanel />
           </ErrorBoundary>

@@ -507,6 +507,8 @@ jobs:
         run: |
           PGPASSWORD=twin psql -h localhost -U twin -d twin -c "CREATE DATABASE twin_test;"
           PGPASSWORD=twin psql -h localhost -U twin -d twin_test -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+      - name: Install scanned-document runtime
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
       - run: uv run alembic upgrade head
       - run: uv run pytest -q
       - name: OpenAPI contract is up to date

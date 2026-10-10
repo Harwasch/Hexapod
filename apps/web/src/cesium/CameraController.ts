@@ -40,6 +40,8 @@ export interface FlyOptions {
   heading?: number;
   /** Degrees (negative looks down). */
   pitch?: number;
+  /** Degrees. Saved views can preserve roll; ordinary flights stay level. */
+  roll?: number;
   onComplete?: () => void;
   /** Called instead when the flight is replaced or cancelled before it arrives. */
   onCancel?: () => void;
@@ -1129,7 +1131,7 @@ export class CameraController {
       orientation: {
         heading: CesiumMath.toRadians(heading),
         pitch: CesiumMath.toRadians(pitch),
-        roll: 0,
+        roll: CesiumMath.toRadians(options.roll ?? 0),
       },
       duration: options.durationS ?? this.durationFor(destination),
       easingFunction: EasingFunction.QUADRATIC_IN_OUT,

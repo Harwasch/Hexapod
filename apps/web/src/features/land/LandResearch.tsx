@@ -1,0 +1,1112 @@
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowUpRight, BookOpen, Pin, Search, Square, X } from "lucide-react";
+import type {
+  components,
+  LandArea,
+  LandEvidence,
+  LandFinding,
+  ResearchEvent,
+} from "@twin/contracts";
+import { api, unwrap } from "@/api/client";
+import { boundsOf } from "@twin/geo";
+import { useScene } from "@/cesium/SceneContext";
+import { describeError } from "@/lib/log";
+import { useLandAccessReady, useLandScope, useLandCanEdit, landScope } from "@/state/landIdentity";
+import { useLand } from "@/state/land";
+import { useLandContext } from "@/state/landContext";
+import {
+  beginInvestigation,
+  cancelResearch,
+  setFindingDisposition,
+  startResearch,
+  useInvestigation,
+  useInvestigations,
+  useResearchStatus,
+} from "./researchApi";
+import { ResearchArtifactView } from "./ResearchArtifacts";
+import { useResearchProgress } from "./useResearchProgress";
+import {
+  parseResearchDraft,
+  researchDraftKey,
+  type ResearchDraft,
+  type CapturedResearchRequest,
+  type QuestionBudget,
+} from "./researchDraft";
+import { LandDocumentViewer } from "./LandDocumentViewer";
+import { VegetationStart } from "./VegetationStart";
+import "./research.css";
+
+function eventText(event: ResearchEvent): string {
+  const value =
+    event.payload.message ?? event.payload.title ?? event.payload.provider ?? event.payload.query;
+  return typeof value === "string" ? value : "";
+}
+
+export function EvidenceView({
+  evidence,
+  onClose,
+}: {
+  evidence: LandEvidence;
+  onClose: () => void;
+}) {
+  return (
+    <section className="land-evidence" aria-label="Source evidence">
+      <div className="land-place-heading">
+        <span className="land-eyebrow">Source evidence</span>
+        <button type="button" aria-label="Close source evidence" onClick={onClose}>
+          <X size={16} />
+        </button>
+      </div>
+      <h4>{evidence.title}</h4>
+      <p>{evidence.relevanceNote}</p>
+      <dl>
+        <dt>Spatial match</dt>
+        <dd>{evidence.spatialRelevance}</dd>
+        <dt>Retrieved</dt>
+        <dd>{new Date(evidence.retrievedAt).toLocaleDateString()}</dd>
+        {evidence.observedAt && (
+          <>
+            <dt>Observed</dt>
+            <dd>{new Date(evidence.observedAt).toLocaleDateString()}</dd>
+          </>
+        )}
+        <dt>License</dt>
+        <dd>{evidence.license}</dd>
+      </dl>
+      <blockquote>{evidence.excerpt}</blockquote>
+      <p className="land-footnote">{evidence.attribution}</p>
+      {evidence.document && (
+        <LandDocumentViewer
+          key={`${evidence.document.documentId}:${evidence.document.page}`}
+          landId={evidence.document.landId}
+          documentId={evidence.document.documentId}
+          initialPage={evidence.document.page}
+          pinnedHash={evidence.document.sha256}
+          pinnedOcrId={evidence.document.ocrId ?? undefined}
+        />
+      )}
+      {evidence.survey && (
+        <button
+          type="button"
+          onClick={() => {
+            const context = useLandContext.getState();
+            context.selectSurvey(evidence.survey?.surveyId ?? null);
+            context.setSection("ecology");
+          }}
+        >
+          Open cited field survey
+        </button>
+      )}
+      {evidence.inventory && (
+        <div className="land-actions">
+          <p>
+            Saved asset revision {evidence.inventory.revision} · {evidence.inventory.section}
+          </p>
+          <button
+            type="button"
+            onClick={() =>
+              useLandContext.getState().selectInventory(evidence.inventory?.featureId ?? null)
+            }
+          >
+            Open current asset
+          </button>
+        </div>
+      )}
+      {evidence.url && (
+        <a href={evidence.url} target="_blank" rel="noopener noreferrer">
+          Open original source <ArrowUpRight size={14} />
+        </a>
+      )}
+    </section>
+  );
+}
+
+export function LandResearch({ land }: { land: LandArea }) {
+  const scope = useLandScope();
+  const ready = useLandAccessReady();
+  const canEdit = useLandCanEdit();
+  const cache = useQueryClient();
+  const scene = useScene();
+  const catalog = useInvestigations(land.id);
+  const status = useResearchStatus();
+  const chosen = useLandContext((s) => s.selectedInvestigationId);
+  const setChosen = useLandContext((s) => s.selectInvestigation);
+  const selected =
+    chosen ??
+    catalog.data?.find((item) => item.boundaryRevision === land.revision)?.id ??
+    catalog.data?.[0]?.id ??
+    null;
+  const [offset, setOffset] = useState(0);
+  const detail = useInvestigation(selected, offset, 100, 10_000);
+  const [tab, setTab] = useState<"overview" | "conversation" | "visuals">("overview");
+  const question = useLandContext((state) => state.researchQuestion);
+  const setQuestion = useLandContext((state) => state.setResearchQuestion);
+  const focus = useLandContext((state) => state.researchFocus);
+  const lifetime = useRef(0);
+  const questionInput = useRef<HTMLTextAreaElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    lifetime.current += 1;
+    return () => {
+      lifetime.current += 1;
+    };
+  }, [land.id, scope]);
+  const [evidence, setEvidence] = useState<LandEvidence | null>(null);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const storageKey = researchDraftKey(scope, land.id);
+  const [initial] = useState(() => {
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem(storageKey);
+      const draft = raw ? parseResearchDraft(raw, land.id) : null;
+      const context = useLandContext.getState();
+      const apply =
+        !context.researchQuestion ||
+        (draft?.question === context.researchQuestion &&
+          JSON.stringify(draft.focus) === JSON.stringify(context.researchFocus));
+      return { draft, raw, apply, error: null, storageFailed: false };
+    } catch (cause) {
+      return {
+        draft: null,
+        raw,
+        apply: false,
+        error: raw ? describeError(cause) : null,
+        storageFailed: !raw,
+      };
+    }
+  });
+  const [storageError, setStorageError] = useState(initial.storageFailed);
+  const [recoveryError, setRecoveryError] = useState(initial.error);
+  const [recoveryNotice, setRecoveryNotice] = useState(
+    initial.draft && !useLandContext.getState().researchQuestion
+      ? initial.draft.boundaryRevision
+      : null,
+  );
+  const [newTopic, setNewTopic] = useState(
+    initial.apply ? (initial.draft?.newTopic ?? false) : false,
+  );
+  const [budget, setBudget] = useState<QuestionBudget>(
+    (initial.apply ? initial.draft?.budget : null) ?? {
+      maxSteps: 16,
+      maxSeconds: 180,
+      maxOutputTokens: 12000,
+      maxWebSearches: 6,
+    },
+  );
+  const [pending, setPending] = useState<CapturedResearchRequest | null>(
+    initial.draft?.pending ?? null,
+  );
+  const pendingRef = useRef(pending);
+  const capture = (value: CapturedResearchRequest | null) => {
+    pendingRef.current = value;
+    setPending(value);
+  };
+  useEffect(() => {
+    const context = useLandContext.getState();
+    if (initial.draft && !context.researchQuestion && !context.researchFocus) {
+      context.setResearchQuestion(initial.draft.question);
+      context.setResearchFocus(initial.draft.focus);
+      context.selectInvestigation(initial.draft.investigationId);
+    }
+  }, [initial]);
+  useEffect(() => {
+    if (recoveryError || landScope() !== scope || useLand.getState().active?.id !== land.id) return;
+    const context = useLandContext.getState();
+    const snapshot: ResearchDraft = {
+      version: 1,
+      landId: land.id,
+      boundaryRevision: land.revision,
+      question: context.researchQuestion,
+      focus: context.researchFocus,
+      budget,
+      newTopic,
+      investigationId: context.selectedInvestigationId ?? selected,
+      pending: pendingRef.current,
+    };
+    const save = () => {
+      try {
+        if (!snapshot.question && !snapshot.focus && !snapshot.pending)
+          localStorage.removeItem(storageKey);
+        else localStorage.setItem(storageKey, JSON.stringify(snapshot));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const saved = save();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setStorageError(!saved);
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    question,
+    focus,
+    selected,
+    budget,
+    newTopic,
+    pending,
+    land.id,
+    land.revision,
+    storageKey,
+    scope,
+    recoveryError,
+  ]);
+  const pendingTerrain = useRef<{
+    investigationId: string;
+    key: string;
+    revision: number;
+    signature: string;
+  } | null>(null);
+  const pendingArchive = useRef<{ investigationId: string; key: string; revision: number } | null>(
+    null,
+  );
+  const lastRun = detail.data?.runs.at(-1);
+  const running = lastRun?.status === "queued" || lastRun?.status === "running";
+  const progress = useResearchProgress(lastRun?.id, running);
+  const [activityLimit, setActivityLimit] = useState(100);
+
+  useEffect(() => {
+    if (!lastRun?.id || (lastRun?.status !== "succeeded" && lastRun?.status !== "partial")) return;
+    void cache.invalidateQueries({ queryKey: ["land-scenarios", scope, land.id] });
+    void cache.invalidateQueries({ queryKey: ["land-actions", scope, land.id] });
+  }, [lastRun?.id, lastRun?.status, cache, scope, land.id]);
+  const refresh = () => cache.invalidateQueries({ queryKey: ["land-research", scope] });
+  useEffect(() => {
+    if (!ready || !canEdit || !catalog.isSuccess || catalog.data.length > 0) return;
+    let current = true;
+    void unwrap(
+      api.POST("/api/v1/land/{land_id}/overview", {
+        params: { path: { land_id: land.id } },
+        body: { boundaryRevision: land.revision },
+      }),
+    )
+      .then((result) => {
+        if (current) {
+          setChosen(result.investigation.id);
+          void cache.invalidateQueries({ queryKey: ["land-research", scope, "list", land.id] });
+        }
+      })
+      .catch((cause: unknown) => {
+        if (current) setError(describeError(cause));
+      });
+    return () => {
+      current = false;
+    };
+  }, [
+    ready,
+    canEdit,
+    catalog.isSuccess,
+    catalog.data,
+    cache,
+    scope,
+    land.id,
+    land.revision,
+    setChosen,
+  ]);
+
+  const startCurrentOverview = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await unwrap(
+        api.POST("/api/v1/land/{land_id}/overview", {
+          params: { path: { land_id: land.id } },
+          body: { boundaryRevision: land.revision },
+        }),
+      );
+      setChosen(result.investigation.id);
+      setOffset(0);
+      await refresh();
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const analyzeRaster = async (
+    dataset: "cop-dem-glo-30" | "esa-worldcover-2021" | "sentinel-2-ndvi",
+    periods?: components["schemas"]["VegetationPeriod"][],
+  ) => {
+    if (!canEdit) return;
+    const analysis: components["schemas"]["RasterRequest"] = {
+      dataset,
+      resolutionM: dataset === "esa-worldcover-2021" ? 10 : dataset === "sentinel-2-ndvi" ? 20 : 30,
+      maxDimension: 512,
+      ...(periods ? { periods } : {}),
+    };
+    const signature = JSON.stringify(analysis);
+    const title =
+      dataset === "sentinel-2-ndvi"
+        ? "Vegetation through time"
+        : dataset === "esa-worldcover-2021"
+          ? "Land cover in 2021"
+          : "Surface elevation and slope";
+    setBusy(true);
+    setError(null);
+    try {
+      let operation = pendingTerrain.current;
+      if (operation?.revision !== land.revision || operation.signature !== signature) {
+        const investigation = await beginInvestigation(land, title);
+        operation = {
+          investigationId: investigation.id,
+          key: crypto.randomUUID(),
+          revision: land.revision,
+          signature,
+        };
+        pendingTerrain.current = operation;
+      }
+      await unwrap(
+        api.POST("/api/v1/research/investigations/{investigation_id}/runs", {
+          params: { path: { investigation_id: operation.investigationId } },
+          body: {
+            kind: "raster",
+            question:
+              dataset === "sentinel-2-ndvi"
+                ? "Compare dated vegetation signals on common clear cells inside this land."
+                : dataset === "esa-worldcover-2021"
+                  ? "Analyze the broad land-cover classes mapped in 2021 inside this land."
+                  : "Analyze surface elevation and slope inside this land.",
+            requestKey: operation.key,
+            analysis,
+          },
+        }),
+      );
+      setChosen(operation.investigationId);
+      setOffset(0);
+      setTab("visuals");
+      pendingTerrain.current = null;
+      await refresh();
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const discoverArchives = async () => {
+    if (!canEdit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      let operation = pendingArchive.current;
+      if (operation?.revision !== land.revision) {
+        const investigation = await beginInvestigation(land, "Photographs and historical maps");
+        operation = {
+          investigationId: investigation.id,
+          key: crypto.randomUUID(),
+          revision: land.revision,
+        };
+        pendingArchive.current = operation;
+      }
+      await unwrap(
+        api.POST("/api/v1/research/investigations/{investigation_id}/runs", {
+          params: { path: { investigation_id: operation.investigationId } },
+          body: {
+            kind: "archive",
+            question:
+              "Discover openly licensed photographs and historical map sheets relevant to this land.",
+            requestKey: operation.key,
+          },
+        }),
+      );
+      setChosen(operation.investigationId);
+      setOffset(0);
+      setTab("visuals");
+      pendingArchive.current = null;
+      await refresh();
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const ask = async (captured?: CapturedResearchRequest) => {
+    if (!canEdit || !ready || recoveryError || busy || (!captured && (!question.trim() || pending)))
+      return;
+    const session = useLand.getState().session;
+    const generation = lifetime.current;
+    const current = () =>
+      lifetime.current === generation &&
+      landScope() === scope &&
+      useLand.getState().session === session;
+    setBusy(true);
+    setError(null);
+    try {
+      let operation = captured;
+      const targetId = operation?.investigationId ?? (selected && !newTopic ? selected : null);
+      const target = targetId
+        ? (
+            await unwrap(
+              api.GET("/api/v1/research/investigations/{investigation_id}", {
+                params: { path: { investigation_id: targetId }, query: { limit: 1 } },
+              }),
+            )
+          ).investigation
+        : null;
+      if (!current()) return;
+      if (
+        target &&
+        (target.landId !== land.id ||
+          (operation && operation.boundaryRevision !== target.boundaryRevision))
+      )
+        throw new Error(
+          "This captured investigation does not match the selected land and boundary revision.",
+        );
+      if (!operation) {
+        const investigation = target ?? (await beginInvestigation(land, question));
+        if (!current()) return;
+        operation = {
+          investigationId: investigation.id,
+          boundaryRevision: investigation.boundaryRevision,
+          question,
+          key: crypto.randomUUID(),
+          budget,
+          focus,
+        };
+      }
+      capture(operation);
+      // Persist the exact request before the network call: retries never spend against a new key.
+      try {
+        const context = useLandContext.getState();
+        const snapshot: ResearchDraft = {
+          version: 1,
+          landId: land.id,
+          boundaryRevision: land.revision,
+          question: context.researchQuestion,
+          focus: context.researchFocus,
+          budget,
+          newTopic,
+          investigationId: selected,
+          pending: operation,
+        };
+        localStorage.setItem(storageKey, JSON.stringify(snapshot));
+        setStorageError(false);
+      } catch {
+        setStorageError(true);
+      }
+      const reference = operation.focus
+        ? { artifactId: operation.focus.artifactId, featureIndex: operation.focus.featureIndex }
+        : null;
+      await startResearch(
+        operation.investigationId,
+        operation.question,
+        "investigation",
+        operation.key,
+        operation.budget,
+        reference,
+      );
+      if (!current()) return;
+      setChosen(operation.investigationId);
+      const context = useLandContext.getState();
+      if (
+        context.researchQuestion === operation.question &&
+        JSON.stringify(context.researchFocus) === JSON.stringify(operation.focus)
+      ) {
+        setQuestion("");
+        context.setResearchFocus(null);
+      }
+      setNewTopic(false);
+      setOffset(0);
+      setTab("conversation");
+      capture(null);
+      setRecoveryNotice(null);
+      await refresh();
+    } catch (cause) {
+      if (current()) setError(describeError(cause));
+    } finally {
+      if (lifetime.current === generation) setBusy(false);
+    }
+  };
+  const viewEvidence = async (id: string | undefined) => {
+    if (!id) return;
+    setError(null);
+    const loaded = detail.data?.evidence.find((item) => item.id === id);
+    if (loaded) {
+      setEvidence(loaded);
+      return;
+    }
+    try {
+      setEvidence(
+        await unwrap(
+          api.GET("/api/v1/research/evidence/{evidence_id}", {
+            params: { path: { evidence_id: id } },
+          }),
+        ),
+      );
+    } catch (cause) {
+      setError(describeError(cause));
+    }
+  };
+  const updateFinding = (finding: LandFinding, value: "visible" | "pinned" | "dismissed") => {
+    if (!canEdit) return;
+    void setFindingDisposition(finding.id, value)
+      .then(refresh)
+      .catch((cause: unknown) => setError(describeError(cause)));
+  };
+  const findings =
+    detail.data?.findings
+      .filter((finding) => showDismissed || finding.disposition !== "dismissed")
+      .sort((a, b) => Number(b.disposition === "pinned") - Number(a.disposition === "pinned")) ??
+    [];
+  const maxTotal = Math.max(0, ...Object.values(detail.data?.page.totals ?? {}));
+  return (
+    <section className="land-research" aria-label="Explore your land">
+      <div className="land-research-heading">
+        <div>
+          <span className="land-eyebrow">Look closer</span>
+          <h3>Explore this land</h3>
+        </div>
+        <BookOpen size={24} />
+      </div>
+      <p>
+        Explore the evidence, uncover a story, or investigate an idea. Findings stay connected to
+        this land.
+      </p>
+      <div className="land-terrain-start">
+        <strong>Read the terrain</strong>
+        <p className="land-footnote">
+          Map surface elevation and slope from Copernicus GLO-30. Buildings and vegetation can
+          affect this model; small plots may be below its resolution.
+        </p>
+        <button
+          type="button"
+          disabled={busy || running || !ready || !canEdit}
+          onClick={() => void analyzeRaster("cop-dem-glo-30")}
+        >
+          {busy ? "Starting…" : "Analyze terrain"}
+        </button>
+      </div>
+      <div className="land-terrain-start">
+        <strong>What covers this land?</strong>
+        <p className="land-footnote">
+          Explore tree cover, grassland, water and other broad classes mapped in 2021. Use these as
+          a starting point for field observations and restoration questions.
+        </p>
+        <button
+          type="button"
+          disabled={busy || running || !ready || !canEdit}
+          onClick={() => void analyzeRaster("esa-worldcover-2021")}
+        >
+          {busy ? "Starting…" : "Analyze land cover"}
+        </button>
+      </div>
+      <VegetationStart
+        disabled={busy || running || !ready || !canEdit}
+        busy={busy}
+        onStart={(periods) => void analyzeRaster("sentinel-2-ndvi", periods)}
+      />
+      <div className="land-terrain-start">
+        <strong>A place with a past</strong>
+        <p className="land-footnote">
+          Find openly licensed photographs nearby and historical USGS map sheets. Every source keeps
+          its dates, creator, reuse terms and location limitations.
+        </p>
+        <button
+          type="button"
+          disabled={busy || running || !ready || !canEdit}
+          onClick={() => void discoverArchives()}
+        >
+          {busy ? "Starting…" : "Discover photos and maps"}
+        </button>
+      </div>
+      {catalog.data && catalog.data.length > 0 && (
+        <label className="land-name">
+          Investigation
+          <select
+            value={selected ?? ""}
+            onChange={(event) => {
+              setChosen(event.target.value);
+              setOffset(0);
+              setEvidence(null);
+            }}
+          >
+            {catalog.data.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.title} · boundary {item.boundaryRevision}
+                {item.stale ? " · older boundary" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <nav className="land-research-tabs" aria-label="Land research views">
+        {(["overview", "conversation", "visuals"] as const).map((value) => (
+          <button
+            type="button"
+            key={value}
+            aria-pressed={tab === value}
+            onClick={() => setTab(value)}
+          >
+            {value === "overview"
+              ? "Discoveries"
+              : value === "conversation"
+                ? "Investigation"
+                : "Visuals"}
+          </button>
+        ))}
+      </nav>
+      {detail.data?.investigation.stale && (
+        <div className="land-notice">
+          These results use boundary revision {detail.data.investigation.boundaryRevision}. Your
+          current boundary is revision {land.revision}.{" "}
+          <button
+            type="button"
+            disabled={busy || !canEdit}
+            onClick={() => void startCurrentOverview()}
+          >
+            Explore the current boundary
+          </button>
+        </div>
+      )}
+      {(error !== null || catalog.isError || detail.isError) && (
+        <div className="land-error" role="alert">
+          {error ?? "Research could not be loaded. Your saved land is retained."}
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              void refresh();
+            }}
+          >
+            Retry loading
+          </button>
+        </div>
+      )}
+      {lastRun && (
+        <div className="land-run" role="status">
+          <span className={`land-run-dot ${running ? "is-running" : ""}`} />
+          <span>
+            {lastRun.status === "queued"
+              ? "Research is queued"
+              : lastRun.status === "running"
+                ? "Investigating your land"
+                : lastRun.status === "partial"
+                  ? "Partial results available"
+                  : lastRun.status === "failed"
+                    ? lastRun.error
+                    : lastRun.status === "cancelled"
+                      ? "Research stopped; completed results retained"
+                      : "Research complete"}
+          </span>
+          {running && (
+            <button
+              type="button"
+              aria-label="Stop research"
+              onClick={() =>
+                void cancelResearch(lastRun.id)
+                  .then(refresh)
+                  .catch((cause: unknown) => setError(describeError(cause)))
+              }
+            >
+              <Square size={13} /> Stop
+            </button>
+          )}
+        </div>
+      )}
+      {running && progress.phase !== "unavailable" && (
+        <p role="status" className="land-footnote">
+          {progress.phase === "live"
+            ? "Live research updates"
+            : progress.phase === "polling"
+              ? "Research updates periodically"
+              : (progress.message ?? "Connecting to research updates…")}
+        </p>
+      )}
+      {progress.phase === "unavailable" && (
+        <p role="alert">
+          {progress.message}{" "}
+          <button type="button" onClick={progress.retry}>
+            Retry updates
+          </button>
+        </p>
+      )}
+      {progress.data && progress.data.length > 0 && (
+        <details className="land-progress">
+          <summary>Research activity</summary>
+          <p>
+            Showing the latest {Math.min(activityLimit, progress.data.length)} of{" "}
+            {progress.data.length} retained updates (up to 2,000).
+          </p>
+          <ol>
+            {progress.data
+              .slice(-activityLimit)
+              .filter((event) => event.kind !== "progress" || event.payload.message)
+              .map((event) => (
+                <li key={event.sequence}>
+                  <span>{event.kind}</span> {eventText(event)}
+                </li>
+              ))}
+          </ol>
+          {activityLimit < progress.data.length && (
+            <button type="button" onClick={() => setActivityLimit((value) => value + 100)}>
+              Show earlier updates
+            </button>
+          )}
+        </details>
+      )}
+      {tab === "overview" && (
+        <>
+          {findings.map((finding) => (
+            <article
+              key={finding.id}
+              className={`land-finding ${finding.disposition === "pinned" ? "is-pinned" : ""}`}
+            >
+              <div className="land-finding-meta">
+                <span>{finding.category}</span>
+                <span>{finding.confidence}</span>
+              </div>
+              <h4>{finding.title}</h4>
+              <p>{finding.summary}</p>
+              <details>
+                <summary>How certain is this?</summary>
+                <p>{finding.uncertainty}</p>
+              </details>
+              <div className="land-actions">
+                <button type="button" onClick={() => void viewEvidence(finding.evidenceIds[0])}>
+                  <BookOpen size={14} />
+                  Evidence ({finding.evidenceIds.length})
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={finding.disposition === "pinned"}
+                  onClick={() =>
+                    updateFinding(finding, finding.disposition === "pinned" ? "visible" : "pinned")
+                  }
+                >
+                  <Pin size={13} />
+                  {finding.disposition === "pinned" ? "Unpin" : "Pin"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateFinding(
+                      finding,
+                      finding.disposition === "dismissed" ? "visible" : "dismissed",
+                    )
+                  }
+                >
+                  {finding.disposition === "dismissed" ? "Restore" : "Dismiss"}
+                </button>
+                {finding.boundary && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (finding.boundary) {
+                        const b = boundsOf(finding.boundary);
+                        scene?.camera.flyToRectangle(b.west, b.south, b.east, b.north);
+                      }
+                    }}
+                  >
+                    Show on map
+                  </button>
+                )}
+              </div>
+              {finding.evidenceIds.length > 1 && (
+                <details>
+                  <summary>All supporting records</summary>
+                  {finding.evidenceIds.map((id, i) => (
+                    <button
+                      className="land-evidence-link"
+                      type="button"
+                      key={id}
+                      onClick={() => void viewEvidence(id)}
+                    >
+                      Source {i + 1}
+                    </button>
+                  ))}
+                </details>
+              )}
+              {finding.suggestedQuestions?.map((prompt) => (
+                <button
+                  type="button"
+                  key={prompt}
+                  className="land-question"
+                  onClick={() => {
+                    setQuestion(prompt);
+                    setTab("conversation");
+                  }}
+                >
+                  {prompt}
+                  <ArrowUpRight size={14} />
+                </button>
+              ))}
+            </article>
+          ))}
+          {!findings.length && (
+            <p className="land-footnote">
+              {running
+                ? "Findings will appear as sources are checked."
+                : "No findings on this page yet. Review source coverage or start an investigation."}
+            </p>
+          )}
+          <label className="land-dismissed">
+            <input
+              type="checkbox"
+              checked={showDismissed}
+              onChange={(event) => setShowDismissed(event.target.checked)}
+            />{" "}
+            Show dismissed findings
+          </label>
+        </>
+      )}
+      {tab === "conversation" && (
+        <div className="land-conversation">
+          {detail.data?.messages.map((message) => (
+            <article key={message.id} data-role={message.role}>
+              <span>{message.role === "user" ? "You" : "Land research"}</span>
+              <p>
+                {message.content
+                  .split(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi)
+                  .map((part, index) =>
+                    index % 2 === 1 ? (
+                      <button
+                        key={`${index}:${part}`}
+                        type="button"
+                        className="land-evidence-link"
+                        onClick={() => void viewEvidence(part)}
+                      >
+                        Source {Math.ceil(index / 2)}
+                      </button>
+                    ) : (
+                      part
+                    ),
+                  )}
+              </p>
+            </article>
+          ))}
+        </div>
+      )}
+      {tab === "visuals" && (
+        <>
+          {detail.data?.artifacts.map((artifact) => (
+            <div key={artifact.id}>
+              <ResearchArtifactView
+                artifact={artifact}
+                evidence={detail.data.evidence}
+                onEvidence={(id) => void viewEvidence(id)}
+                onAsk={() => {
+                  setTab("conversation");
+                  requestAnimationFrame(() => questionInput.current?.focus());
+                }}
+              />
+              {artifact.evidenceIds.length > 0 && (
+                <div className="land-actions">
+                  <button type="button" onClick={() => void viewEvidence(artifact.evidenceIds[0])}>
+                    Inspect source evidence
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+          {!detail.data?.artifacts.length && (
+            <p className="land-footnote">
+              Charts, tables, maps and comparisons will collect here as the investigation produces
+              them.
+            </p>
+          )}
+        </>
+      )}
+      {evidence && <EvidenceView evidence={evidence} onClose={() => setEvidence(null)} />}
+      {maxTotal > 100 && (
+        <div className="land-actions">
+          <button
+            type="button"
+            disabled={offset === 0}
+            onClick={() => setOffset(Math.max(0, offset - 100))}
+          >
+            Earlier results
+          </button>
+          <span>Page {offset / 100 + 1}</span>
+          <button
+            type="button"
+            disabled={offset + 100 >= maxTotal}
+            onClick={() => setOffset(offset + 100)}
+          >
+            More results
+          </button>
+        </div>
+      )}
+      {status.data && !status.data.modelConfigured && (
+        <p className="land-notice">
+          AI investigation is not configured on this server. The open-data overview can still
+          produce sourced findings and charts.
+        </p>
+      )}
+      {recoveryNotice !== null && (
+        <p className="land-notice">
+          Your question was restored from this browser. Restoring it did not submit a question.
+          {recoveryNotice !== land.revision &&
+            ` It was drafted at boundary revision ${recoveryNotice}; this land is now revision ${land.revision}.`}
+          <button type="button" onClick={() => setRecoveryNotice(null)}>
+            Dismiss recovery notice
+          </button>
+        </p>
+      )}
+      {recoveryError && (
+        <section className="land-evidence" aria-label="Unreadable saved question">
+          <p>{recoveryError} The saved record is retained until you discard it.</p>
+          <div className="land-actions">
+            <button
+              type="button"
+              onClick={() => {
+                const url = URL.createObjectURL(
+                  new Blob([initial.raw ?? ""], { type: "application/json" }),
+                );
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = "land-question-recovery.json";
+                link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              }}
+            >
+              Download saved question
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  localStorage.removeItem(storageKey);
+                  setRecoveryError(null);
+                } catch {
+                  setStorageError(true);
+                }
+              }}
+            >
+              Discard unreadable record
+            </button>
+          </div>
+        </section>
+      )}
+      {storageError && (
+        <p className="land-notice">
+          This browser could not save or restore the research draft. Keep this tab open to retain
+          your current question and retry record.
+        </p>
+      )}
+      {pending && !busy && (
+        <section className="land-evidence" aria-label="Captured research request">
+          <h4>Confirm the last research request</h4>
+          <blockquote>{pending.question}</blockquote>
+          {pending.focus && <p>About {pending.focus.label}</p>}
+          <p className="land-footnote">
+            Boundary {pending.boundaryRevision} · {pending.budget.maxSeconds} seconds · up to{" "}
+            {pending.budget.maxWebSearches} web searches
+          </p>
+          <p>
+            The request may already be queued. Retrying checks the same request and starts it only
+            if it was not received.
+          </p>
+          <div className="land-actions">
+            <button type="button" disabled={!canEdit || !ready} onClick={() => void ask(pending)}>
+              Retry captured request
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setChosen(pending.investigationId);
+                setOffset(0);
+                setTab("conversation");
+              }}
+            >
+              View its investigation
+            </button>
+            <button type="button" onClick={() => capture(null)}>
+              Discard retry record
+            </button>
+          </div>
+          <p className="land-footnote">
+            Discarding this record does not stop research that is already running.
+          </p>
+        </section>
+      )}
+      <form
+        className="land-ask"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void ask();
+        }}
+      >
+        <label htmlFor="land-question">Follow your curiosity</label>
+        {focus && (
+          <div className="land-notice land-question-focus">
+            <span>
+              Asking about <strong>{focus.label}</strong>
+            </span>
+            <button type="button" onClick={() => useLandContext.getState().setResearchFocus(null)}>
+              Clear question focus
+            </button>
+          </div>
+        )}
+        <textarea
+          id="land-question"
+          ref={questionInput}
+          placeholder="What has changed here? What could this land become?"
+          value={question}
+          maxLength={10000}
+          onChange={(event) => setQuestion(event.target.value)}
+          rows={3}
+        />
+        <details className="land-budget">
+          <summary>Research limits</summary>
+          <label className="land-name">
+            Time budget
+            <select
+              value={budget.maxSeconds}
+              onChange={(event) => setBudget({ ...budget, maxSeconds: Number(event.target.value) })}
+            >
+              <option value={60}>1 minute</option>
+              <option value={180}>3 minutes</option>
+              <option value={600}>10 minutes</option>
+            </select>
+          </label>
+          <label className="land-name">
+            Public web searches
+            <select
+              value={budget.maxWebSearches}
+              onChange={(event) =>
+                setBudget({ ...budget, maxWebSearches: Number(event.target.value) })
+              }
+            >
+              <option value={0}>Registered data sources only</option>
+              <option value={6}>Up to 6 searches</option>
+              <option value={12}>Up to 12 searches</option>
+            </select>
+          </label>
+          <p className="land-footnote">
+            Search may find useful leads outside the registered datasets. Each source still needs a
+            location match and appropriate reuse rights.
+          </p>
+        </details>
+        <div>
+          <label>
+            <input
+              type="checkbox"
+              checked={newTopic}
+              onChange={(event) => setNewTopic(event.target.checked)}
+            />{" "}
+            Start a separate investigation
+          </label>
+          <button
+            type="submit"
+            disabled={
+              !canEdit ||
+              busy ||
+              running ||
+              !!pending ||
+              !!recoveryError ||
+              !question.trim() ||
+              !status.data?.modelConfigured
+            }
+          >
+            <Search size={15} />
+            {busy ? "Starting…" : "Investigate"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
