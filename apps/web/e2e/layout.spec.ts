@@ -461,9 +461,10 @@ test.describe("the phone layout", () => {
     await page.getByRole("button", { name: "Close data attribution" }).click();
     await expect(dialog).toBeHidden();
 
-    // More holds the four tools.
+    // More holds every enabled tool, including the opt-in Land workspace.
     await page.getByTestId("phone-tab-more").click();
     await expect(page.getByTestId("phone-more").getByRole("button")).toHaveText([
+      ...(process.env.VITE_ENABLE_LAND_EXPLORATION === "true" ? ["Land"] : []),
       "Layers",
       "Measure",
       "Add",
