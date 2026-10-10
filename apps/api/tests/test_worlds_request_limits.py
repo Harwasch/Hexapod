@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -14,7 +16,7 @@ from app.worlds.request_limits import AuthenticatedBodyRoute
 
 
 @pytest.fixture
-def client():
+def client() -> TestClient:
     app = FastAPI()
     app.state.settings = SimpleNamespace(api_write_token="private-test-token")
     app.add_exception_handler(
@@ -36,8 +38,10 @@ def client():
         "/worlds/intelligence/highlights",
     ],
 )
-def test_image_routes_authenticate_before_consuming_media(client, monkeypatch, path):
-    async def unread(_self):
+def test_image_routes_authenticate_before_consuming_media(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    async def unread(_self: Any) -> AsyncIterator[bytes]:
         pytest.fail("Unauthorized inline image body must not be consumed")
         yield b""
 
@@ -46,8 +50,10 @@ def test_image_routes_authenticate_before_consuming_media(client, monkeypatch, p
     assert response.status_code == 401
 
 
-def test_image_routes_reject_declared_body_before_read(client, monkeypatch):
-    async def unread(_self):
+def test_image_routes_reject_declared_body_before_read(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unread(_self: Any) -> AsyncIterator[bytes]:
         pytest.fail("Oversized inline image body must not be consumed")
         yield b""
 
@@ -64,7 +70,9 @@ def test_image_routes_reject_declared_body_before_read(client, monkeypatch):
     assert response.status_code == 413
 
 
-def test_chunked_or_underdeclared_image_body_is_bounded(client, monkeypatch):
+def test_chunked_or_underdeclared_image_body_is_bounded(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(AuthenticatedBodyRoute, "body_limit", lambda _: 32)
     response = client.post(
         "/worlds/intelligence/highlights",

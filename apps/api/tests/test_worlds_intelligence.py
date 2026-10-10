@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -9,7 +12,7 @@ from app.worlds import intelligence
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.delenv("WORLDS_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("WORLDS_LLM_MODEL", raising=False)
     app = FastAPI()
@@ -19,7 +22,7 @@ def client(monkeypatch):
         yield client
 
 
-def test_offline_optimizer_preserves_original_and_discloses_source(client):
+def test_offline_optimizer_preserves_original_and_discloses_source(client: TestClient) -> None:
     response = client.post(
         "/worlds/prompts/optimize",
         json={
@@ -36,8 +39,10 @@ def test_offline_optimizer_preserves_original_and_discloses_source(client):
     assert "visual conditioning" in result["notes"][1]
 
 
-def test_generated_controls_filter_invented_and_unsupported_actions(client, monkeypatch):
-    async def completion(*_):
+def test_generated_controls_filter_invented_and_unsupported_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def completion(*_: Any) -> dict[str, Any]:
         return {
             "bindings": [
                 {
@@ -74,8 +79,10 @@ def test_generated_controls_filter_invented_and_unsupported_actions(client, monk
     assert result["bindings"][1]["experimental"] is True
 
 
-def test_games_cannot_invent_live_prompt_support(client, monkeypatch):
-    async def completion(*_):
+def test_games_cannot_invent_live_prompt_support(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def completion(*_: Any) -> dict[str, Any]:
         return {
             "name": "Forest",
             "premise": "Explore",
@@ -90,8 +97,10 @@ def test_games_cannot_invent_live_prompt_support(client, monkeypatch):
     assert result.json()["events"] == []
 
 
-def test_invalid_llm_response_is_actionable(client, monkeypatch):
-    async def completion(*_):
+def test_invalid_llm_response_is_actionable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def completion(*_: Any) -> dict[str, Any]:
         return {"enhanced": []}
 
     monkeypatch.setattr(intelligence, "_complete", completion)
@@ -102,7 +111,9 @@ def test_invalid_llm_response_is_actionable(client, monkeypatch):
     assert "invalid prompt" in response.json()["detail"]
 
 
-def test_remote_plaintext_language_model_is_rejected(client, monkeypatch):
+def test_remote_plaintext_language_model_is_rejected(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("WORLDS_LLM_BASE_URL", "http://remote.example/v1")
     monkeypatch.setenv("WORLDS_LLM_MODEL", "test")
     response = client.post(
@@ -112,7 +123,7 @@ def test_remote_plaintext_language_model_is_rejected(client, monkeypatch):
     assert "HTTPS" in response.json()["detail"]
 
 
-def test_long_valid_prompt_and_live_worker_capabilities_remain_valid(client):
+def test_long_valid_prompt_and_live_worker_capabilities_remain_valid(client: TestClient) -> None:
     body = {
         "prompt": "a" * 8000,
         "modelId": "astronex-world",

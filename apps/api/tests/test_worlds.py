@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -15,10 +18,12 @@ from app.services.errors import UnauthorizedError
 from app.worlds.config import WorldsSettings, validate_url
 from app.worlds.providers import RunPodProvider
 from app.worlds.router import router, settings
+from app.worlds.store import Store
+from tests.worlds_types import WorldsSetup, require_record
 
 
 @pytest.fixture
-def setup(tmp_path, monkeypatch):
+def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WorldsSetup:
     config = WorldsSettings(
         _env_file=None,
         data_dir=tmp_path,
@@ -28,7 +33,7 @@ def setup(tmp_path, monkeypatch):
     calls = []
     session_ids = []
 
-    def handle(req):
+    def handle(req: httpx.Request) -> httpx.Response:
         calls.append(req)
         assert req.headers["authorization"] == "Bearer test-worker-token"
         path = req.url.path
@@ -82,22 +87,22 @@ def setup(tmp_path, monkeypatch):
     return client, config, calls
 
 
-def connect(client):
+def connect(client: TestClient) -> dict[str, Any]:
     response = client.post("/api/v1/worlds/workers", json={"provider": "local"})
     assert response.status_code == 201, response.text
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
-def start(client, worker):
+def start(client: TestClient, worker: Any) -> dict[str, Any]:
     response = client.post(
         "/api/v1/worlds/sessions",
         json={"workerId": worker["id"], "modelId": "astronex-world", "prompt": "redwood forest"},
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
-def test_requires_token_for_private_reads_and_writes(setup):
+def test_requires_token_for_private_reads_and_writes(setup: WorldsSetup) -> None:
     client, _, calls = setup
     for path in ["providers", "catalog", "workers", "sessions"]:
         response = client.get(f"/api/v1/worlds/{path}", headers={"Authorization": "Bearer bad"})
@@ -105,7 +110,7 @@ def test_requires_token_for_private_reads_and_writes(setup):
     assert not calls
 
 
-def test_gateway_session_full_lifecycle(setup):
+def test_gateway_session_full_lifecycle(setup: WorldsSetup) -> None:
     client, config, calls = setup
     worker = connect(client)
     assert worker["status"] == "ready"
@@ -143,7 +148,7 @@ def test_gateway_session_full_lifecycle(setup):
     assert b"redwood forest" not in (config.data_dir / "metadata.sqlite3").read_bytes()
 
 
-def test_cloud_configuration_missing_does_not_provision(setup):
+def test_cloud_configuration_missing_does_not_provision(setup: WorldsSetup) -> None:
     client, config, calls = setup
     config.runpod_allow_provision = False
     response = client.post("/api/v1/worlds/workers", json={"provider": "runpod"})
@@ -154,7 +159,7 @@ def test_cloud_configuration_missing_does_not_provision(setup):
     assert providers[0]["configured"] is False
 
 
-def test_unsupported_webrtc_is_honest_and_redacted(setup):
+def test_unsupported_webrtc_is_honest_and_redacted(setup: WorldsSetup) -> None:
     client, _, _ = setup
     session = start(client, connect(client))
     response = client.post(
@@ -164,7 +169,7 @@ def test_unsupported_webrtc_is_honest_and_redacted(setup):
     assert "must never leak" not in response.text
 
 
-def test_input_prevents_urls_and_paths(setup):
+def test_input_prevents_urls_and_paths(setup: WorldsSetup) -> None:
     client, _, _ = setup
     worker = connect(client)
     for value in ["http://169.254.169.254/latest/meta-data", "/etc/passwd"]:
@@ -189,12 +194,14 @@ def test_input_prevents_urls_and_paths(setup):
         "file:///etc/passwd",
     ],
 )
-def test_gateway_url_security(url):
+def test_gateway_url_security(url: str) -> None:
     with pytest.raises(ValueError):
         validate_url(url)
 
 
-def test_runpod_uses_fixed_template_and_token_only_on_worker(tmp_path, monkeypatch):
+def test_runpod_uses_fixed_template_and_token_only_on_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = WorldsSettings(
         _env_file=None,
         data_dir=tmp_path,
@@ -205,7 +212,9 @@ def test_runpod_uses_fixed_template_and_token_only_on_worker(tmp_path, monkeypat
     )
     seen = []
 
-    def fake_request(method, url, *, token=None, payload=None, **kw):
+    def fake_request(
+        method: str, url: str, *, token: Any = None, payload: Any = None, **kw: Any
+    ) -> httpx.Response:
         seen.append((method, url, token, payload))
         return httpx.Response(
             200, json={"id": "pod123", "costPerHr": 1.25, "desiredStatus": "RUNNING"}
@@ -236,13 +245,15 @@ def test_runpod_uses_fixed_template_and_token_only_on_worker(tmp_path, monkeypat
     ]
 
 
-def test_failed_session_can_be_cleaned_up_without_orphaning_worker(setup, monkeypatch):
+def test_failed_session_can_be_cleaned_up_without_orphaning_worker(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from fastapi import HTTPException
 
     client, _, _ = setup
     worker = connect(client)
 
-    def missing(*args, **kwargs):
+    def missing(*args: Any, **kwargs: Any) -> Any:
         raise HTTPException(404, "not found")
 
     monkeypatch.setattr("app.worlds.router.gateway", missing)
@@ -257,8 +268,10 @@ def test_failed_session_can_be_cleaned_up_without_orphaning_worker(setup, monkey
     assert client.delete(f"/api/v1/worlds/workers/{worker['id']}").status_code == 200
 
 
-def test_unknown_provisioning_outcome_never_claims_teardown(setup, monkeypatch):
-    from fastapi import HTTPException
+def test_unknown_provisioning_outcome_never_claims_teardown(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import FastAPI, HTTPException
 
     client, config, _ = setup
     config.runpod_allow_provision = True
@@ -269,9 +282,9 @@ def test_unknown_provisioning_outcome_never_claims_teardown(setup, monkeypatch):
     config.runpod_api_key = SecretStr("test-provider-key")
     config.runpod_template_id = "approved"
     config.gateway_token = SecretStr("test-worker-token-at-least-32-characters")
-    client.app.state.worlds_lifecycle = SimpleNamespace(running=True)
+    cast(FastAPI, client.app).state.worlds_lifecycle = SimpleNamespace(running=True)
 
-    def timeout(*args, **kwargs):
+    def timeout(*args: Any, **kwargs: Any) -> Any:
         raise HTTPException(504, "timeout")
 
     monkeypatch.setattr("app.worlds.providers.RunPodProvider.create_worker", timeout)
@@ -283,7 +296,7 @@ def test_unknown_provisioning_outcome_never_claims_teardown(setup, monkeypatch):
     assert "console" in response.text
 
 
-def test_error_body_never_exposes_upstream_secrets(monkeypatch):
+def test_error_body_never_exposes_upstream_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import HTTPException
 
     from app.worlds.providers import request
@@ -305,7 +318,7 @@ def test_error_body_never_exposes_upstream_secrets(monkeypatch):
     assert "prompt-image" not in str(exc.value.detail)
 
 
-def test_response_size_limit(monkeypatch):
+def test_response_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import HTTPException
 
     from app.worlds.providers import request
@@ -324,8 +337,7 @@ def test_response_size_limit(monkeypatch):
     assert exc.value.status_code == 502
 
 
-def test_active_sessions_check_is_not_limited_to_latest_500(tmp_path):
-    from app.worlds.store import Store
+def test_active_sessions_check_is_not_limited_to_latest_500(tmp_path: Path) -> None:
 
     db = Store(tmp_path)
     db.put("session", {"id": "old", "workerId": "busy-worker", "status": "playing"})
@@ -335,8 +347,9 @@ def test_active_sessions_check_is_not_limited_to_latest_500(tmp_path):
     assert db.has_active_sessions("other") is False
 
 
-def test_destroy_managed_worker_recovers_crashed_sessions(setup, monkeypatch):
-    from app.worlds.store import Store
+def test_destroy_managed_worker_recovers_crashed_sessions(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
 
     client, config, _ = setup
     db = Store(config.data_dir)
@@ -360,11 +373,10 @@ def test_destroy_managed_worker_recovers_crashed_sessions(setup, monkeypatch):
     response = client.delete("/api/v1/worlds/workers/managed")
     assert response.status_code == 200
     assert destroyed == ["pod-id"]
-    assert db.get("session", "crashed-session")["status"] == "stopped"
+    assert require_record(db.get("session", "crashed-session"))["status"] == "stopped"
 
 
-def test_sessions_cannot_start_on_stopped_worker(setup):
-    from app.worlds.store import Store
+def test_sessions_cannot_start_on_stopped_worker(setup: WorldsSetup) -> None:
 
     client, config, _ = setup
     db = Store(config.data_dir)
@@ -385,12 +397,14 @@ def test_sessions_cannot_start_on_stopped_worker(setup):
     assert db.list("session") == []
 
 
-def test_unreachable_external_worker_does_not_claim_unknown_provisioning(setup, monkeypatch):
+def test_unreachable_external_worker_does_not_claim_unknown_provisioning(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from fastapi import HTTPException
 
     client, _, _ = setup
 
-    def unavailable(*args, **kwargs):
+    def unavailable(*args: Any, **kwargs: Any) -> Any:
         raise HTTPException(502, "unreachable")
 
     monkeypatch.setattr("app.worlds.providers.GatewayProvider.create_worker", unavailable)
@@ -400,7 +414,7 @@ def test_unreachable_external_worker_does_not_claim_unknown_provisioning(setup, 
     assert client.delete(f"/api/v1/worlds/workers/{worker['id']}").status_code == 200
 
 
-def test_busy_worker_rejects_second_session_before_gateway_call(setup):
+def test_busy_worker_rejects_second_session_before_gateway_call(setup: WorldsSetup) -> None:
     client, _, calls = setup
     worker = connect(client)
     first = start(client, worker)
@@ -417,17 +431,15 @@ def test_busy_worker_rejects_second_session_before_gateway_call(setup):
     assert start(client, worker)["id"] != first["id"]
 
 
-def test_worker_claim_is_atomic_across_concurrent_connections(tmp_path):
+def test_worker_claim_is_atomic_across_concurrent_connections(tmp_path: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
-
-    from app.worlds.store import Store
 
     db = Store(tmp_path)
     db.put("worker", {"id": "shared", "status": "ready"})
     barrier = Barrier(8)
 
-    def claim(index):
+    def claim(index: int) -> Any:
         # Separate Store instances model distinct request handlers/API processes;
         # the transaction lock belongs to SQLite, not a process-local mutex.
         connection = Store(tmp_path)
@@ -458,12 +470,14 @@ def test_worker_claim_is_atomic_across_concurrent_connections(tmp_path):
     "value",
     ["https://example.test:not-a-port", "https://example.test:65536", "https://example.test\n"],
 )
-def test_invalid_gateway_configuration_is_validated_before_http(value):
+def test_invalid_gateway_configuration_is_validated_before_http(value: Any) -> None:
     with pytest.raises(ValueError):
         validate_url(value)
 
 
-def test_malformed_gateway_health_is_sanitized(setup, monkeypatch):
+def test_malformed_gateway_health_is_sanitized(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from fastapi import HTTPException
 
     from app.worlds.providers import GatewayProvider
@@ -478,14 +492,14 @@ def test_malformed_gateway_health_is_sanitized(setup, monkeypatch):
     assert exc.value.status_code == 503
 
 
-def test_boolean_provider_price_is_unknown():
+def test_boolean_provider_price_is_unknown() -> None:
     from app.worlds.providers import hourly_cost
 
     assert hourly_cost({"costPerHr": True}) is None
     assert hourly_cost({"costPerHr": "0.74"}) == 0.74
 
 
-def test_creation_body_is_bounded_before_json_decoding(setup):
+def test_creation_body_is_bounded_before_json_decoding(setup: WorldsSetup) -> None:
     client, _, calls = setup
     response = client.post(
         "/api/v1/worlds/sessions",
@@ -496,10 +510,10 @@ def test_creation_body_is_bounded_before_json_decoding(setup):
     assert calls == []
 
 
-def test_chunked_body_cannot_bypass_worlds_request_limit(setup):
+def test_chunked_body_cannot_bypass_worlds_request_limit(setup: WorldsSetup) -> None:
     client, _, calls = setup
 
-    def chunks():
+    def chunks() -> Iterator[bytes]:
         yield b"x" * (128 * 1024)
         yield b"x"
 
@@ -511,12 +525,14 @@ def test_chunked_body_cannot_bypass_worlds_request_limit(setup):
 
 
 @pytest.mark.parametrize("authorization", ["", "Bearer incorrect"])
-def test_unauthorized_json_is_rejected_before_stream_read(setup, monkeypatch, authorization):
+def test_unauthorized_json_is_rejected_before_stream_read(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch, authorization: str
+) -> None:
     from starlette.requests import Request
 
     client, _, calls = setup
 
-    async def unread(_self):
+    async def unread(_self: Any) -> AsyncIterator[bytes]:
         pytest.fail("Unauthorized Worlds payload must not be consumed")
         yield b""
 
@@ -530,7 +546,7 @@ def test_unauthorized_json_is_rejected_before_stream_read(setup, monkeypatch, au
     assert calls == []
 
 
-def test_continuous_worker_status_keeps_revisions_without_echoing_private_input():
+def test_continuous_worker_status_keeps_revisions_without_echoing_private_input() -> None:
     from app.worlds.router import session_update
 
     metadata = {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -16,6 +17,7 @@ from app.config import Settings
 from app.main import create_app
 from app.observability import JsonFormatter, Redactor, configure_logging, init_sentry
 from app.services.errors import InvalidInputError
+from app.worlds.config import WorldsSettings
 
 PRESIGNED = (
     "https://acct.r2.cloudflarestorage.com/twin-assets/captures/abc/video.mp4?uploadId=x"
@@ -262,7 +264,9 @@ def test_a_breadcrumbs_data_is_redacted_too(monkeypatch: pytest.MonkeyPatch) -> 
     assert "7c1e2d3f" not in json.dumps(event)
 
 
-def test_worlds_server_credentials_are_redacted_outside_bearer_headers(monkeypatch) -> None:
+def test_worlds_server_credentials_are_redacted_outside_bearer_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     names = (
         "WORLD_GATEWAY_TOKEN",
         "WORLD_RUNPOD_API_KEY",
@@ -282,8 +286,9 @@ def test_worlds_server_credentials_are_redacted_outside_bearer_headers(monkeypat
 
 
 @pytest.mark.parametrize("dedicated_file", [False, True])
-def test_worlds_dotenv_credentials_are_redacted(monkeypatch, tmp_path, dedicated_file) -> None:
-    from app.worlds.config import WorldsSettings
+def test_worlds_dotenv_credentials_are_redacted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dedicated_file: bool
+) -> None:
     from app.worlds.reconstruction import ReconstructionSettings
 
     values = {
@@ -309,7 +314,7 @@ def test_worlds_dotenv_credentials_are_redacted(monkeypatch, tmp_path, dedicated
 
 
 def test_invalid_worlds_config_does_not_break_earth_redactor_or_expose_config_errors(
-    monkeypatch, tmp_path, caplog
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: Any
 ) -> None:
     path = tmp_path / ".env.worlds"
     reconstruction_secret = "separate-reconstruction-key-0123456789"

@@ -1,6 +1,8 @@
 """Provider contracts verified without credentials, allocation or outbound calls."""
 
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import httpx
@@ -13,11 +15,12 @@ from app.worlds.router import Quote, provider_quote, usage
 from app.worlds.store import Store
 from tests import test_worlds as fixtures
 from tests.test_worlds import connect
+from tests.worlds_types import WorldsSetup
 
 setup = fixtures.setup
 
 
-def configured(tmp_path, **extra):
+def configured(tmp_path: Path, **extra: Any) -> WorldsSettings:
     script = tmp_path / "boot.yaml"
     script.write_text("#cloud-config\n# {{WORLD_MODEL_ID}} {{WORLD_GATEWAY_TOKEN_BASE64}}")
     return WorldsSettings(
@@ -37,7 +40,7 @@ def configured(tmp_path, **extra):
     )
 
 
-def inventory(cents=199):
+def inventory(cents: int = 199) -> dict[str, Any]:
     return {
         "data": {
             "gpu_1x_a100_sxm4": {
@@ -48,7 +51,9 @@ def inventory(cents=199):
     }
 
 
-def test_lambda_live_quote_does_not_confuse_ram_or_actual_billing(tmp_path, monkeypatch):
+def test_lambda_live_quote_does_not_confuse_ram_or_actual_billing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = configured(tmp_path)
     monkeypatch.setattr(
         "app.worlds.providers.request", lambda *a, **kw: httpx.Response(200, json=inventory())
@@ -61,11 +66,13 @@ def test_lambda_live_quote_does_not_confuse_ram_or_actual_billing(tmp_path, monk
     assert result["pricingSource"] == "provider-quote"
 
 
-def test_lambda_launch_uses_only_approved_inputs(tmp_path, monkeypatch):
+def test_lambda_launch_uses_only_approved_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = configured(tmp_path)
     calls = []
 
-    def request(method, url, **kw):
+    def request(method: str, url: str, **kw: Any) -> Any:
         calls.append((method, url, kw))
         if url.endswith("instance-types"):
             return httpx.Response(200, json=inventory())
@@ -82,7 +89,9 @@ def test_lambda_launch_uses_only_approved_inputs(tmp_path, monkeypatch):
     assert body["user_data"].startswith("#cloud-config")
 
 
-def test_lambda_preflight_rejects_over_budget_without_allocation(tmp_path, monkeypatch):
+def test_lambda_preflight_rejects_over_budget_without_allocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     call = Mock(return_value=httpx.Response(200, json=inventory(999)))
     monkeypatch.setattr("app.worlds.providers.request", call)
     with pytest.raises(HTTPException) as error:
@@ -91,7 +100,9 @@ def test_lambda_preflight_rejects_over_budget_without_allocation(tmp_path, monke
     assert call.call_count == 1
 
 
-def test_lambda_pending_termination_never_claims_destroyed(tmp_path, monkeypatch):
+def test_lambda_pending_termination_never_claims_destroyed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     provider = LambdaProvider(configured(tmp_path))
     monkeypatch.setattr(provider, "status", lambda worker: {"status": "terminating"})
     call = Mock(return_value=httpx.Response(200, json={"data": {}}))
@@ -102,7 +113,7 @@ def test_lambda_pending_termination_never_claims_destroyed(tmp_path, monkeypatch
     assert call.call_args.args[2] == {"instance_ids": ["owned-id"]}
 
 
-def test_model_profile_cannot_inherit_other_model_runtime():
+def test_model_profile_cannot_inherit_other_model_runtime() -> None:
     config = WorldsSettings(
         _env_file=None,
         runpod_template_id="astronex-only",
@@ -117,7 +128,7 @@ def test_model_profile_cannot_inherit_other_model_runtime():
         config.for_model("unknown-model")
 
 
-def test_model_session_mismatch_rejected_before_gateway(setup):
+def test_model_session_mismatch_rejected_before_gateway(setup: WorldsSetup) -> None:
     client, _, calls = setup
     worker = connect(client)
     calls.clear()
@@ -129,14 +140,16 @@ def test_model_session_mismatch_rejected_before_gateway(setup):
     assert calls == []
 
 
-def test_profile_gateway_persists_for_status(setup, monkeypatch):
+def test_profile_gateway_persists_for_status(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
     client, config, calls = setup
     config.model_profiles_json = {
         "matrix-game-3": ModelProfile(local_gateway_url="http://127.0.0.1:9999")
     }
 
-    def request(method, url, **kw):
-        calls.append(SimpleNamespace(url=httpx.URL(url)))
+    def request(method: str, url: str, **kw: Any) -> Any:
+        calls.append(httpx.Request(method, url))
         return httpx.Response(200, json={"status": "ready", "models": [{"id": "matrix-game-3"}]})
 
     monkeypatch.setattr("app.worlds.providers.request", request)
@@ -150,10 +163,10 @@ def test_profile_gateway_persists_for_status(setup, monkeypatch):
     assert calls[-1].url.port == 9999
 
 
-def test_runpod_hardware_uses_bearer_and_secure_cloud(monkeypatch):
+def test_runpod_hardware_uses_bearer_and_secure_cloud(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def request(*args, **kw):
+    def request(*args: Any, **kw: Any) -> Any:
         calls.append((args, kw))
         return httpx.Response(
             200,
@@ -180,16 +193,18 @@ def test_runpod_hardware_uses_bearer_and_secure_cloud(monkeypatch):
 
 
 class AsyncMethod:
-    def __init__(self, value):
+    def __init__(self, value: Any) -> None:
         self.value = value
-        self.calls = []
+        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
-    async def aio(self, *args, **kwargs):
+    async def aio(self, *args: Any, **kwargs: Any) -> Any:
         self.calls.append((args, kwargs))
         return self.value
 
 
-def test_modal_sandbox_has_dedicated_credentials_and_hard_timeout(tmp_path, monkeypatch):
+def test_modal_sandbox_has_dedicated_credentials_and_hard_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = configured(
         tmp_path,
         modal_allow_provision=True,
@@ -220,7 +235,7 @@ def test_modal_sandbox_has_dedicated_credentials_and_hard_timeout(tmp_path, monk
     assert sdk.Client.from_credentials.calls[0][0] == ("dedicated-id", "dedicated-secret")
 
 
-def test_usage_marks_elapsed_estimates_and_no_billed_total(tmp_path):
+def test_usage_marks_elapsed_estimates_and_no_billed_total(tmp_path: Path) -> None:
     db = Store(tmp_path)
     db.put(
         "worker",
@@ -240,7 +255,7 @@ def test_usage_marks_elapsed_estimates_and_no_billed_total(tmp_path):
     assert value["workers"][0]["durationSeconds"] == 1800
 
 
-def test_image_only_session_can_use_empty_prompt(setup):
+def test_image_only_session_can_use_empty_prompt(setup: WorldsSetup) -> None:
     client, config, _ = setup
     worker = connect(client)
     db = Store(config.data_dir)
@@ -252,7 +267,7 @@ def test_image_only_session_can_use_empty_prompt(setup):
     assert result.status_code == 201
 
 
-def test_image_only_worker_rejects_text_before_session_creation(setup):
+def test_image_only_worker_rejects_text_before_session_creation(setup: WorldsSetup) -> None:
     client, config, calls = setup
     worker = connect(client)
     Store(config.data_dir).patch(
@@ -267,7 +282,9 @@ def test_image_only_worker_rejects_text_before_session_creation(setup):
     assert calls == []
 
 
-def test_lambda_recovery_only_adopts_exact_operation_name(tmp_path, monkeypatch):
+def test_lambda_recovery_only_adopts_exact_operation_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     provider = LambdaProvider(configured(tmp_path))
     monkeypatch.setattr(
         provider,
@@ -282,17 +299,19 @@ def test_lambda_recovery_only_adopts_exact_operation_name(tmp_path, monkeypatch)
             },
         ),
     )
-    assert provider.find_worker("worlds-specific-operation")["providerId"] == "owned"
+    owned = provider.find_worker("worlds-specific-operation")
+    assert owned is not None
+    assert owned["providerId"] == "owned"
     assert provider.find_worker("missing") is None
 
 
-def test_modal_sdk_operations_share_one_loop_and_close_cleanly(tmp_path):
+def test_modal_sdk_operations_share_one_loop_and_close_cleanly(tmp_path: Path) -> None:
     import asyncio
 
     from app.worlds.providers import close_modal_transport
 
     class LoopMethod:
-        async def aio(self):
+        async def aio(self) -> Any:
             return asyncio.get_running_loop()
 
     provider = ModalProvider(configured(tmp_path))
@@ -302,7 +321,7 @@ def test_modal_sdk_operations_share_one_loop_and_close_cleanly(tmp_path):
     assert first.is_closed()
 
 
-def test_readiness_distinguishes_model_gateway_and_provisioning_modes(setup):
+def test_readiness_distinguishes_model_gateway_and_provisioning_modes(setup: WorldsSetup) -> None:
     client, config, _ = setup
     config.model_profiles_json = {
         "forgewm": ModelProfile(local_gateway_url="http://127.0.0.1:9999")

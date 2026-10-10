@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
+from tempfile import SpooledTemporaryFile
 from typing import Any
 
 import httpx
@@ -41,9 +43,7 @@ def source(name: str = "/Users/alice/private.png", content: bytes | None = None)
 
 
 def test_unconfigured_never_calls_worker(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        recon.httpx, "Client", lambda **_kwargs: pytest.fail("No remote call expected")
-    )
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: pytest.fail("No remote call expected"))
     assert recon.capabilities()["configured"] is False
     with pytest.raises(HTTPException) as raised:
         recon.create_reconstruction([source()], '{"frames":[{}]}')
@@ -108,7 +108,7 @@ def test_only_minimum_media_metadata_reaches_worker(monkeypatch: pytest.MonkeyPa
         return httpx.Response(202, json={"id": "job_1", "status": "queued", "artifacts": []})
 
     monkeypatch.setattr(
-        recon.httpx,
+        httpx,
         "Client",
         lambda **kwargs: original_client(transport=httpx.MockTransport(handle), **kwargs),
     )
@@ -230,9 +230,7 @@ def test_size_limit_and_metadata_are_checked_before_upstream(
 ) -> None:
     monkeypatch.setenv("WORLD_RECONSTRUCTION_GATEWAY_URL", "http://localhost:8001")
     monkeypatch.setattr(recon, "MAX_UPLOAD_BYTES", 4)
-    monkeypatch.setattr(
-        recon.httpx, "Client", lambda **_kwargs: pytest.fail("No remote call expected")
-    )
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: pytest.fail("No remote call expected"))
     with pytest.raises(HTTPException) as raised:
         recon.create_reconstruction([source(content=b"12345")], '{"frames":[{}]}')
     assert raised.value.status_code == 413
@@ -246,23 +244,23 @@ def test_chunked_upload_limit_closes_spooled_files(monkeypatch: pytest.MonkeyPat
     app = FastAPI()
     app.include_router(recon.router)
     opened = []
-    original = formparsers.SpooledTemporaryFile
+    original = SpooledTemporaryFile
 
-    def spool(*args, **kwargs):
+    def spool(*args: Any, **kwargs: Any) -> Any:
         file = original(*args, **kwargs)
         opened.append(file)
         return file
 
     monkeypatch.setattr(formparsers, "SpooledTemporaryFile", spool)
 
-    async def chunks():
+    async def chunks() -> AsyncIterator[bytes]:
         yield (
             b'--test\r\nContent-Disposition: form-data; name="files"; filename="image.png"\r\n'
             b"Content-Type: image/png\r\n\r\nfirst"
         )
         yield b"x" * 513
 
-    async def send():
+    async def send() -> Any:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -350,7 +348,7 @@ def test_delete_requires_and_returns_worker_confirmation(
     monkeypatch.setenv("WORLD_RECONSTRUCTION_GATEWAY_URL", "http://localhost:9000")
     called = []
 
-    def upstream(method, url, **kwargs):
+    def upstream(method: str, url: str, **kwargs: Any) -> Any:
         called.append((method, url))
         return response
 

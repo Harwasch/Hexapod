@@ -3,17 +3,18 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+from typing import Any
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from PIL import Image
 
 from app.api.deps import require_write_token
 from app.worlds import intelligence, vision
 
 
-def picture():
+def picture() -> str:
     buffer = io.BytesIO()
     image = Image.new("RGB", (12, 12), "red")
     exif = Image.Exif()
@@ -23,11 +24,11 @@ def picture():
 
 
 class AsyncRouteClient:
-    def __init__(self, app):
+    def __init__(self, app: FastAPI) -> None:
         self.app = app
 
-    def request(self, method, path, **kwargs):
-        async def execute():
+    def request(self, method: str, path: str, **kwargs: Any) -> Any:
+        async def execute() -> Any:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=self.app), base_url="http://test"
             ) as client:
@@ -35,15 +36,15 @@ class AsyncRouteClient:
 
         return asyncio.run(execute())
 
-    def get(self, path, **kwargs):
+    def get(self, path: str, **kwargs: Any) -> Any:
         return self.request("GET", path, **kwargs)
 
-    def post(self, path, **kwargs):
+    def post(self, path: str, **kwargs: Any) -> Any:
         return self.request("POST", path, **kwargs)
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch: pytest.MonkeyPatch) -> AsyncRouteClient:
     for key in [
         "WORLDS_VISION_BASE_URL",
         "WORLDS_VISION_MODEL",
@@ -54,14 +55,14 @@ def client(monkeypatch):
     app = FastAPI()
     app.include_router(intelligence.router)
 
-    async def authorized():
+    async def authorized() -> None:
         pass
 
     app.dependency_overrides[require_write_token] = authorized
     return AsyncRouteClient(app)
 
 
-def test_vision_media_strips_metadata_and_rejects_urls():
+def test_vision_media_strips_metadata_and_rejects_urls() -> None:
     cleaned = vision.clean_image(picture())
     with Image.open(io.BytesIO(cleaned)) as image:
         assert not image.getexif()
@@ -70,18 +71,18 @@ def test_vision_media_strips_metadata_and_rejects_urls():
         "data:image/svg+xml;base64,PHN2Zz4=",
         "data:image/jpeg;base64,bm90LWltYWdl",
     ]:
-        with pytest.raises(Exception) as failure:
+        with pytest.raises(HTTPException) as failure:
             vision.clean_image(invalid)
         assert failure.value.status_code == 422
 
 
-def test_vision_media_is_bounded_before_decode():
-    with pytest.raises(Exception) as failure:
+def test_vision_media_is_bounded_before_decode() -> None:
+    with pytest.raises(HTTPException) as failure:
         vision.clean_image("a" * 2_800_000)
     assert failure.value.status_code == 413
 
 
-def test_unconfigured_vision_and_image_services_fail_honestly(client):
+def test_unconfigured_vision_and_image_services_fail_honestly(client: AsyncRouteClient) -> None:
     status = client.get("/worlds/intelligence/status").json()
     assert status["visionConfigured"] is False
     assert status["imageConfigured"] is False
@@ -96,8 +97,10 @@ def test_unconfigured_vision_and_image_services_fail_honestly(client):
     assert response.status_code == 503
 
 
-def test_grounded_commands_filter_invented_native_actions(client, monkeypatch):
-    async def complete(payload, instruction, images):
+def test_grounded_commands_filter_invented_native_actions(
+    client: AsyncRouteClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def complete(payload: Any, instruction: Any, images: Any) -> dict[str, Any]:
         assert payload["command"] == "fly"
         assert "frame" not in payload
         assert len(images) == 1
@@ -123,8 +126,10 @@ def test_grounded_commands_filter_invented_native_actions(client, monkeypatch):
     assert "not supported" in response.json()["explanation"]
 
 
-def test_director_never_sends_native_player_movement_or_claims_unset_objective(client, monkeypatch):
-    async def complete(*args):
+def test_director_never_sends_native_player_movement_or_claims_unset_objective(
+    client: AsyncRouteClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def complete(*args: Any) -> dict[str, Any]:
         return {
             "observation": "A trail",
             "objective": {"progress": "appears-complete", "confidence": 1, "evidence": "A trail"},
@@ -147,8 +152,10 @@ def test_director_never_sends_native_player_movement_or_claims_unset_objective(c
     assert response.json()["objective"]["progress"] == "unknown"
 
 
-def test_director_permits_only_declared_live_prompt_support(client, monkeypatch):
-    async def complete(*args):
+def test_director_permits_only_declared_live_prompt_support(
+    client: AsyncRouteClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def complete(*args: Any) -> dict[str, Any]:
         return {
             "observation": "A trail",
             "objective": {
@@ -161,7 +168,7 @@ def test_director_permits_only_declared_live_prompt_support(client, monkeypatch)
         }
 
     monkeypatch.setattr(vision, "complete", complete)
-    body = {
+    body: dict[str, Any] = {
         "prompt": "forest",
         "modelId": "test",
         "frame": picture(),
@@ -175,8 +182,10 @@ def test_director_permits_only_declared_live_prompt_support(client, monkeypatch)
     )
 
 
-def test_highlight_ranges_must_fit_replay(client, monkeypatch):
-    async def complete(*args):
+def test_highlight_ranges_must_fit_replay(
+    client: AsyncRouteClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def complete(*args: Any) -> dict[str, Any]:
         return {
             "highlights": [
                 {"startSeconds": 1, "endSeconds": 3, "title": "Light", "evidence": "Bright frame"},
@@ -190,7 +199,7 @@ def test_highlight_ranges_must_fit_replay(client, monkeypatch):
         }
 
     monkeypatch.setattr(vision, "complete", complete)
-    body = {
+    body: dict[str, Any] = {
         "durationSeconds": 10,
         "samples": [{"atSeconds": 1, "image": picture()}, {"atSeconds": 8, "image": picture()}],
     }
@@ -201,8 +210,10 @@ def test_highlight_ranges_must_fit_replay(client, monkeypatch):
     assert client.post("/worlds/intelligence/highlights", json=body).status_code == 422
 
 
-def test_character_assessment_names_the_qualitative_metric(client, monkeypatch):
-    async def complete(*args):
+def test_character_assessment_names_the_qualitative_metric(
+    client: AsyncRouteClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def complete(*args: Any) -> dict[str, Any]:
         return {
             "score": 0.7,
             "confidence": 0.6,
@@ -219,7 +230,7 @@ def test_character_assessment_names_the_qualitative_metric(client, monkeypatch):
     assert "not a biometric" in response.json()["note"]
 
 
-def test_untrusted_payload_cannot_set_ai_endpoint(client):
+def test_untrusted_payload_cannot_set_ai_endpoint(client: AsyncRouteClient) -> None:
     response = client.post(
         "/worlds/characters/analyze",
         json={"images": [picture()], "endpoint": "https://attacker.example"},
@@ -227,14 +238,16 @@ def test_untrusted_payload_cannot_set_ai_endpoint(client):
     assert response.status_code == 422
 
 
-def test_image_synthesis_strips_reference_metadata_and_returns_real_pixels(client, monkeypatch):
+def test_image_synthesis_strips_reference_metadata_and_returns_real_pixels(
+    client: AsyncRouteClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("WORLDS_IMAGE_BASE_URL", "https://images.example/v1")
     monkeypatch.setenv("WORLDS_IMAGE_MODEL", "configured-edit-model")
     monkeypatch.setenv("WORLDS_IMAGE_API_KEY", "server-only-secret")
     original_client = httpx.AsyncClient
     seen = []
 
-    def image_service(request):
+    def image_service(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         assert request.url.path == "/v1/images/edits"
         assert request.headers["authorization"] == "Bearer server-only-secret"
@@ -242,7 +255,7 @@ def test_image_synthesis_strips_reference_metadata_and_returns_real_pixels(clien
         assert b"reference-1.jpg" in request.content
         return httpx.Response(200, json={"data": [{"b64_json": picture().split(",", 1)[1]}]})
 
-    def network_client(*args, **kwargs):
+    def network_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
         kwargs.setdefault("transport", httpx.MockTransport(image_service))
         return original_client(*args, **kwargs)
 
@@ -258,19 +271,21 @@ def test_image_synthesis_strips_reference_metadata_and_returns_real_pixels(clien
     assert len(seen) == 1
 
 
-def test_image_service_urls_are_not_fetched(client, monkeypatch):
+def test_image_service_urls_are_not_fetched(
+    client: AsyncRouteClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("WORLDS_IMAGE_BASE_URL", "https://images.example/v1")
     monkeypatch.setenv("WORLDS_IMAGE_MODEL", "configured-edit-model")
     original_client = httpx.AsyncClient
     seen = []
 
-    def image_service(request):
+    def image_service(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return httpx.Response(
             200, json={"data": [{"url": "http://169.254.169.254/latest/meta-data"}]}
         )
 
-    def network_client(*args, **kwargs):
+    def network_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
         kwargs.setdefault("transport", httpx.MockTransport(image_service))
         return original_client(*args, **kwargs)
 
@@ -293,14 +308,14 @@ def test_image_service_urls_are_not_fetched(client, monkeypatch):
     ],
 )
 def test_starting_image_and_text_only_character_use_real_image_endpoint(
-    client, monkeypatch, route, body, expected
-):
+    client: AsyncRouteClient, monkeypatch: pytest.MonkeyPatch, route: str, body: Any, expected: str
+) -> None:
     monkeypatch.setenv("WORLDS_IMAGE_BASE_URL", "https://images.example/v1")
     monkeypatch.setenv("WORLDS_IMAGE_MODEL", "gpt-image-1")
     original_client = httpx.AsyncClient
     seen = []
 
-    def image_service(request):
+    def image_service(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         assert request.url.path == (
             "/v1/images/generations" if expected == "text-to-image" else "/v1/images/edits"
@@ -309,7 +324,7 @@ def test_starting_image_and_text_only_character_use_real_image_endpoint(
         assert b"private local path" not in request.content
         return httpx.Response(200, json={"data": [{"b64_json": picture().split(",", 1)[1]}]})
 
-    def network_client(*args, **kwargs):
+    def network_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
         kwargs.setdefault("transport", httpx.MockTransport(image_service))
         return original_client(*args, **kwargs)
 

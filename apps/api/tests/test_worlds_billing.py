@@ -1,16 +1,26 @@
 """Immutable local billing imports; no cloud account calls or inferred billed amounts."""
 
 from copy import deepcopy
+from typing import Any
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
+from app.worlds.config import WorldsSettings
 from app.worlds.store import Store
 from tests import test_worlds as fixtures
+from tests.worlds_types import WorldsSetup
 
 setup = fixtures.setup
 
 
-def owned(config, identity="owned", provider="runpod", provider_id="pod-owned"):
+def owned(
+    config: WorldsSettings,
+    identity: str = "owned",
+    provider: str = "runpod",
+    provider_id: str = "pod-owned",
+) -> dict[str, Any]:
     return Store(config.data_dir).put(
         "worker",
         {
@@ -26,7 +36,7 @@ def owned(config, identity="owned", provider="runpod", provider_id="pod-owned"):
     )
 
 
-def line(**overrides):
+def line(**overrides: Any) -> dict[str, Any]:
     return {
         "provider": "runpod",
         "workerId": "owned",
@@ -42,11 +52,11 @@ def line(**overrides):
     }
 
 
-def submit(client, *rows):
+def submit(client: TestClient, *rows: Any) -> Any:
     return client.post("/api/v1/worlds/billing/import", json={"rows": list(rows)})
 
 
-def test_actual_import_partial_period_delta_and_provenance(setup):
+def test_actual_import_partial_period_delta_and_provenance(setup: WorldsSetup) -> None:
     client, config, calls = setup
     original = deepcopy(owned(config))
     response = submit(client, line())
@@ -66,7 +76,7 @@ def test_actual_import_partial_period_delta_and_provenance(setup):
     assert usage["computeDeltaUSD"] == 0.25
 
 
-def test_duplicate_import_is_idempotent_and_conflicts_rollback_batch(setup):
+def test_duplicate_import_is_idempotent_and_conflicts_rollback_batch(setup: WorldsSetup) -> None:
     client, config, _ = setup
     owned(config)
     assert submit(client, line()).json()["inserted"] == 1
@@ -78,7 +88,7 @@ def test_duplicate_import_is_idempotent_and_conflicts_rollback_batch(setup):
     assert client.get("/api/v1/worlds/billing").json()["totalRecords"] == 1
 
 
-def test_explicit_credit_net_and_overlapping_periods_are_counted_once(setup):
+def test_explicit_credit_net_and_overlapping_periods_are_counted_once(setup: WorldsSetup) -> None:
     client, config, _ = setup
     owned(config)
     result = submit(
@@ -91,7 +101,9 @@ def test_explicit_credit_net_and_overlapping_periods_are_counted_once(setup):
     assert total["comparedComputeSeconds"] == 1800
 
 
-def test_provider_id_reconciliation_requires_unique_owned_provider_match(setup):
+def test_provider_id_reconciliation_requires_unique_owned_provider_match(
+    setup: WorldsSetup,
+) -> None:
     client, config, _ = setup
     row = line(providerId="pod-owned")
     del row["workerId"]
@@ -106,7 +118,7 @@ def test_provider_id_reconciliation_requires_unique_owned_provider_match(setup):
     assert client.get("/api/v1/worlds/billing").json()["unmatchedCount"] == 1
 
 
-def test_provider_mismatch_never_assigns_actual_to_worker(setup):
+def test_provider_mismatch_never_assigns_actual_to_worker(setup: WorldsSetup) -> None:
     client, config, _ = setup
     owned(config, provider="lambda")
     value = submit(client, line()).json()
@@ -115,7 +127,7 @@ def test_provider_mismatch_never_assigns_actual_to_worker(setup):
     assert value["totals"][0]["unmatchedActual"] == 1.25
 
 
-def test_currencies_and_noncompute_fees_stay_separate(setup):
+def test_currencies_and_noncompute_fees_stay_separate(setup: WorldsSetup) -> None:
     client, config, _ = setup
     owned(config)
     result = submit(
@@ -154,14 +166,14 @@ def test_currencies_and_noncompute_fees_stay_separate(setup):
         {"sourceType": "provider-reported"},
     ],
 )
-def test_invalid_billing_inputs_fail_before_persistence(setup, override):
+def test_invalid_billing_inputs_fail_before_persistence(setup: WorldsSetup, override: Any) -> None:
     client, config, calls = setup
     assert submit(client, line(**override)).status_code == 422
     assert Store(config.data_dir).records("billing") == []
     assert calls == []
 
 
-def test_billing_routes_require_authentication_and_support_pagination(setup):
+def test_billing_routes_require_authentication_and_support_pagination(setup: WorldsSetup) -> None:
     client, config, _ = setup
     owned(config)
     assert (
@@ -183,21 +195,22 @@ def test_billing_routes_require_authentication_and_support_pagination(setup):
     assert value["workerTotals"][0]["lineCount"] == 2
 
 
-def provider_check(client, identity="owned", **params):
+def provider_check(client: TestClient, identity: str = "owned", **params: Any) -> Any:
     return client.get(
         f"/api/v1/worlds/billing/runpod/{identity}",
         params={"startTime": "2026-01-01T00:00:00Z", "endTime": "2026-01-02T00:00:00Z", **params},
     )
 
 
-def test_live_runpod_billing_is_scoped_read_only_and_separate(setup, monkeypatch):
-    import httpx
+def test_live_runpod_billing_is_scoped_read_only_and_separate(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
 
     client, config, _ = setup
     owned(config)
     calls = []
 
-    def request(method, path, payload=None):
+    def request(method: str, path: str, payload: Any = None) -> Any:
         calls.append((method, path))
         return httpx.Response(
             200,
@@ -227,16 +240,19 @@ def test_live_runpod_billing_is_scoped_read_only_and_separate(setup, monkeypatch
     assert Store(config.data_dir).records("billing") == []
 
 
-def test_live_billing_empty_is_unknown_and_other_workers_never_queried(setup, monkeypatch):
-    import httpx
+def test_live_billing_empty_is_unknown_and_other_workers_never_queried(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
 
     client, config, _ = setup
     owned(config)
     calls = []
-    monkeypatch.setattr(
-        "app.worlds.providers.RunPodProvider.api",
-        lambda *a, **kw: calls.append(True) or httpx.Response(200, json=[]),
-    )
+
+    def empty_billing(*args: Any, **kwargs: Any) -> httpx.Response:
+        calls.append(True)
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr("app.worlds.providers.RunPodProvider.api", empty_billing)
     assert provider_check(client).json()["reportedAmountUSD"] is None
     owned(config, identity="lambda-owned", provider="lambda")
     assert provider_check(client, "lambda-owned").status_code == 409
@@ -255,8 +271,9 @@ def test_live_billing_empty_is_unknown_and_other_workers_never_queried(setup, mo
         {"podId": "pod-owned", "amount": 2, "time": "2025-01-01T00:00:00Z"},
     ],
 )
-def test_live_billing_rejects_mismatched_or_invalid_provider_records(setup, monkeypatch, record):
-    import httpx
+def test_live_billing_rejects_mismatched_or_invalid_provider_records(
+    setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch, record: Any
+) -> None:
 
     client, config, _ = setup
     owned(config)
