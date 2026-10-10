@@ -85,7 +85,8 @@ on:
 concurrency:
   # One deploy at a time. Not `cancel-in-progress`: a half-applied `fly deploy` is worse
   # than a queued one, and the release command runs migrations.
-  group: deploy-${{ github.ref }}
+  # Every branch targets the same production app and Pages project.
+  group: deploy-production
   cancel-in-progress: false
 
 jobs:
