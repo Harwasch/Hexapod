@@ -177,3 +177,28 @@ def test_multiple_legacy_api_replicas_are_verified_without_rescaling_in_prefligh
     release.main()
     assert sum(args[:3] == ["flyctl", "ssh", "console"] for args, _ in calls) == 2
     assert not any("scale" in args for args, _ in calls)
+
+
+def test_backup_diagnostics_redact_uri_password_and_provider_secrets(
+    monkeypatch, capsys
+):
+    uri = "postgresql://user:private%40password@db.example/db"
+
+    def failure(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1,
+            ["docker"],
+            stderr="pg_dump: error: " + uri + " private@password provider-secret\n",
+        )
+
+    monkeypatch.setattr(release.subprocess, "run", failure)
+    with pytest.raises(RuntimeError):
+        release.run(
+            ["docker"],
+            env={"PGDATABASE": uri, "R2_SECRET_ACCESS_KEY": "provider-secret"},
+        )
+    output = capsys.readouterr().out
+    assert "pg_dump: error:" in output
+    assert uri not in output
+    assert "private@password" not in output
+    assert "provider-secret" not in output
