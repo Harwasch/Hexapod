@@ -29,22 +29,13 @@
     {
       "repository": "Efficient-Large-Model/SANA-WM_streaming",
       "revision": "c7694938c854b1fcc29468e9514f1ea2d0c4ba8e",
-      "patterns": [
-        "sana_dit/*",
-        "ltx2_causal_vae/*",
-        "refiner_diffusers/*",
-        "gemma3_12b/*"
-      ],
+      "patterns": ["sana_dit/*", "ltx2_causal_vae/*", "refiner_diffusers/*", "gemma3_12b/*"],
       "destination": "."
     },
     {
       "repository": "Efficient-Large-Model/gemma-2-2b-it",
       "revision": "569d9809d0c8b6722d4d31b5a77a2ec7a400650a",
-      "patterns": [
-        "*.json",
-        "tokenizer.model",
-        "model-*.safetensors"
-      ],
+      "patterns": ["*.json", "tokenizer.model", "model-*.safetensors"],
       "destination": "gemma2_2b"
     }
   ]

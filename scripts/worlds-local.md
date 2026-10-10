@@ -13,15 +13,15 @@ python scripts/worlds-local.py plan --model astronex-world --name explore \
 
 Docker mode supports these prebuilt local tags:
 
-| Model | Local image | Build definition |
-|---|---|---|
-| astronex-world | worlds-astronex:local | workers/worlds/astronex/Dockerfile |
-| forge-wm | worlds-forge:local | workers/worlds/Dockerfile.models, MODEL=forge-wm |
-| matrix-game-3 | worlds-matrix:local | workers/worlds/Dockerfile.models, MODEL=matrix-game-3 |
-| sana-wm | worlds-sana:local | workers/worlds/Dockerfile.models, MODEL=sana-wm |
-| ltx-2.5 | worlds-ltx25:local | workers/worlds/ltx25/Dockerfile |
-| helix-world | worlds-helix:local | workers/worlds/helixworld/Dockerfile |
-| hunyuanworld-mirror | worlds-mirror:local | workers/worlds/reconstruction/Dockerfile |
+| Model               | Local image           | Build definition                                      |
+| ------------------- | --------------------- | ----------------------------------------------------- |
+| astronex-world      | worlds-astronex:local | workers/worlds/astronex/Dockerfile                    |
+| forge-wm            | worlds-forge:local    | workers/worlds/Dockerfile.models, MODEL=forge-wm      |
+| matrix-game-3       | worlds-matrix:local   | workers/worlds/Dockerfile.models, MODEL=matrix-game-3 |
+| sana-wm             | worlds-sana:local     | workers/worlds/Dockerfile.models, MODEL=sana-wm       |
+| ltx-2.5             | worlds-ltx25:local    | workers/worlds/ltx25/Dockerfile                       |
+| helix-world         | worlds-helix:local    | workers/worlds/helixworld/Dockerfile                  |
+| hunyuanworld-mirror | worlds-mirror:local   | workers/worlds/reconstruction/Dockerfile              |
 
 Prepare the pinned model source/checkpoint/dependencies first using each model's
 documentation. Put a random bearer token of at least 32 printable ASCII characters

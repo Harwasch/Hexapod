@@ -191,15 +191,11 @@ export function SolarAssessmentView({
           onClick={() => {
             if (shown) useLandContext.getState().removeLayer(`solar:${id}`);
             else {
-              useLandContext
-                .getState()
-                .setLayer({
-                  id: `solar:${id}`,
-                  title: "Solar array zone",
-                  features: [
-                    { id, label: `Solar ${a.request.year}`, geometry: a.request.arrayZone },
-                  ],
-                });
+              useLandContext.getState().setLayer({
+                id: `solar:${id}`,
+                title: "Solar array zone",
+                features: [{ id, label: `Solar ${a.request.year}`, geometry: a.request.arrayZone }],
+              });
               const b = boundsOf(a.request.arrayZone);
               scene?.camera.flyToRectangle(b.west, b.south, b.east, b.north);
             }

@@ -2,11 +2,11 @@
 
 The ForgeWM, Matrix-Game 3 and SANA-WM adapters call pinned public upstream inference APIs. Source cloning, dependency resolution, CPU protocol tests and source-level interface inspection were performed locally. **GPU inference, FlashAttention compilation, complete container builds, checkpoint compatibility/quality and memory/performance remain unvalidated.** No weights were downloaded, GPU rented, job launched or service deployed.
 
-| Worker ID | Required input | Native output recipe | Continuation |
-| --- | --- | --- | --- |
-| `forge-wm` | One image, empty prompt | Minecraft stage3 four-step student; 3 latents / 9 frames, 640×352 at upstream 12 fps | Last decoded image |
-| `matrix-game-3` | Image and text | Distilled 5B, 3 denoising steps, first 57-frame iteration, 1280×704 at upstream renderer's 17 fps | Last decoded image |
-| `sana-wm` | Image and text | Streaming stage1 + LTX2 refiner + causal VAE; 25 input / 24 emitted frames, 1280×704 at 16 fps | Last decoded image |
+| Worker ID       | Required input          | Native output recipe                                                                              | Continuation       |
+| --------------- | ----------------------- | ------------------------------------------------------------------------------------------------- | ------------------ |
+| `forge-wm`      | One image, empty prompt | Minecraft stage3 four-step student; 3 latents / 9 frames, 640×352 at upstream 12 fps              | Last decoded image |
+| `matrix-game-3` | Image and text          | Distilled 5B, 3 denoising steps, first 57-frame iteration, 1280×704 at upstream renderer's 17 fps | Last decoded image |
+| `sana-wm`       | Image and text          | Streaming stage1 + LTX2 refiner + causal VAE; 25 input / 24 emitted frames, 1280×704 at 16 fps    | Last decoded image |
 
 All use next-clip discrete movement/look commands, with `balanced` as the only supported quality. These FPS values are playback rates, **not measured inference speed**. Native KV state does not persist between requests; exact resume is unavailable. All require an initial image. Forge has no text encoder; its inherited text-encoder class is an empty stub. SANA uses a documented approximate 90° pinhole camera, not an estimated camera pose. One selected model runs per worker.
 
@@ -30,11 +30,11 @@ For weights, run the same bootstrap against a **new** clone destination with `--
 
 Create a Python3.12 venv per model and install its `requirements.lock` with `uv pip install --require-hashes`. For SANA pass `--build-constraints workers/worlds/sana_wm/build-constraints.txt`: upstream mmcv1.7.2 needs setuptools with `pkg_resources`. Forge **and Matrix** additionally require `flash-attn==2.8.3` built with CUDA12.8 tools and the already installed Torch (`pip install --no-build-isolation flash-attn==2.8.3`). Matrix's model calls `flash_attention` directly despite an unused SDPA fallback elsewhere. No claim is made that these CUDA kernels compiled successfully here.
 
-| Model | Runtime source | Checkpoint root | Interpreter override |
-| --- | --- | --- | --- |
-| Forge | `FORGEWM_SOURCE` | `FORGEWM_WEIGHTS` | `FORGEWM_PYTHON` |
+| Model   | Runtime source       | Checkpoint root       | Interpreter override |
+| ------- | -------------------- | --------------------- | -------------------- |
+| Forge   | `FORGEWM_SOURCE`     | `FORGEWM_WEIGHTS`     | `FORGEWM_PYTHON`     |
 | Matrix3 | `MATRIX_GAME_SOURCE` | `MATRIX_GAME_WEIGHTS` | `MATRIX_GAME_PYTHON` |
-| SANA | `SANA_WM_SOURCE` | `SANA_WM_WEIGHTS` | `SANA_WM_PYTHON` |
+| SANA    | `SANA_WM_SOURCE`     | `SANA_WM_WEIGHTS`     | `SANA_WM_PYTHON`     |
 
 Interpreter defaults to `INFERENCE_PYTHON`. Select `WORLD_MODEL_ID`, provide `WORLD_GATEWAY_TOKEN`, then run `gateway.py` in the separate transport venv. See [worker API](README.md) for gateway authentication and session requests. `/health` checks artifact presence and all indexed checkpoint shards; it explicitly reports GPU inference as unverified.
 

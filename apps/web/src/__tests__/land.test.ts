@@ -44,17 +44,15 @@ beforeEach(() => {
 describe("land scope", () => {
   it("persists while a different map feature is inspected", () => {
     useLand.getState().select(area);
-    useSelection
-      .getState()
-      .setSelection({
-        kind: "ground",
-        title: "Creek",
-        longitude: 0,
-        latitude: 0,
-        height: 0,
-        terrainHeight: 0,
-        at: 1,
-      });
+    useSelection.getState().setSelection({
+      kind: "ground",
+      title: "Creek",
+      longitude: 0,
+      latitude: 0,
+      height: 0,
+      terrainHeight: 0,
+      at: 1,
+    });
     expect(useLand.getState().active).toEqual(area);
   });
   it("does not undo an old drawing into a new drawing", () => {

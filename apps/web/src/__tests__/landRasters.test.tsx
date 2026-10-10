@@ -162,17 +162,15 @@ it("reopens the measurement and opacity of the map that is already visible", asy
 });
 
 it("shows categorical cover proportions without arithmetic summaries and decodes point classes", async () => {
-  useSelection
-    .getState()
-    .setSelection({
-      kind: "ground",
-      title: "Public park test point",
-      longitude: -77.05,
-      latitude: 38.888,
-      height: null,
-      terrainHeight: null,
-      at: 1,
-    });
+  useSelection.getState().setSelection({
+    kind: "ground",
+    title: "Public park test point",
+    longitude: -77.05,
+    latitude: 38.888,
+    height: null,
+    terrainHeight: null,
+    at: 1,
+  });
   mount({
     ...raster,
     request: { dataset: "esa-worldcover-2021", resolutionM: 10 },

@@ -630,7 +630,8 @@ def action(identity: str, body: Action, config: Settings, db: Database) -> dict[
     return {
         key: value
         for key, value in result.items()
-        if key in {"accepted", "status", "mechanism", "sequence", "appliesAt", "message", "revision"}
+        if key
+        in {"accepted", "status", "mechanism", "sequence", "appliesAt", "message", "revision"}
     }
 
 

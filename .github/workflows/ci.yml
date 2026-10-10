@@ -106,6 +106,26 @@ jobs:
       - name: The pages that must not load Cesium do not
         run: node apps/web/scripts/check-bundle.mjs
 
+  worlds:
+    name: Worlds · CPU workers, transport and reconstruction contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.17"
+          python-version: "3.12"
+      - name: Install CPU test runtime
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+          uv venv .venv-worlds-tests
+          uv pip sync --python .venv-worlds-tests/bin/python workers/worlds/requirements-test.lock
+      - name: Browser capabilities match worker adapters
+        run: .venv-worlds-tests/bin/python scripts/sync-worlds-capabilities.py --check
+      - name: Worker, reconstruction and local-launcher contracts (no GPU or provisioning)
+        run: .venv-worlds-tests/bin/python -m pytest -q workers/worlds/tests workers/worlds/reconstruction/tests scripts/tests
+
   workflows:
     name: Workflows · parse, and agree with the handover
     runs-on: ubuntu-latest
@@ -176,6 +196,10 @@ jobs:
   # not use the build, so it starts at once.
   e2e-shard:
     name: Web · Playwright (shard ${{ matrix.shard }})
+    # Land specs otherwise skip themselves, leaving the merged feature untested.
+    # This enables the test server only; production remains opt-in.
+    env:
+      VITE_ENABLE_LAND_EXPLORATION: "true"
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.web == 'true'

@@ -9,10 +9,7 @@
   "resolution": "1280x704",
   "fps": 17,
   "text": true,
-  "sourceFiles": [
-    "pipeline/inference_pipeline.py",
-    "wan/configs/config.py"
-  ],
+  "sourceFiles": ["pipeline/inference_pipeline.py", "wan/configs/config.py"],
   "weightFiles": [
     "base_distilled_model/config.json",
     "base_distilled_model/diffusion_pytorch_model.safetensors",

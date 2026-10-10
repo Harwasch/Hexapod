@@ -159,3 +159,6 @@ interaction preview needs no GPU and is explicitly labeled as a preview. See
 handoff. [Deployment configuration and acceptance checks](docs/WORLDS_DEPLOYMENT.md)
 include secret placement and the remaining GPU validation. This feature does not deploy
 or provision existing Hexapod infrastructure.
+
+For the combined Worlds and Land personal-testing release, see
+[the integration handoff](docs/WORLDS_LAND_TESTING.md).

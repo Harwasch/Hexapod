@@ -197,12 +197,10 @@ it("retains an unsaved capture for explicit retry after read-only recovery", asy
   };
   localStorage.setItem(viewDraftKey(landScope(), land.id), serializeViewCapture(land.id, capture));
   vi.spyOn(api, "GET").mockResolvedValue({ data: [], response: new Response() });
-  const post = vi
-    .spyOn(api, "POST")
-    .mockResolvedValue({
-      error: { title: "Not found", status: 404 },
-      response: new Response(null, { status: 404 }),
-    });
+  const post = vi.spyOn(api, "POST").mockResolvedValue({
+    error: { title: "Not found", status: 404 },
+    response: new Response(null, { status: 404 }),
+  });
   show();
   fireEvent.click(screen.getByRole("button", { name: "Recover view save" }));
   await screen.findByRole("button", { name: "Retry captured view save" });

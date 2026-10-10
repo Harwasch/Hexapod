@@ -119,11 +119,7 @@
       "gpuValidated": false,
       "servingMode": "reconstruction-jobs",
       "checkpointRevision": "5574b7b0d5ac9d80e8a92976222370a0d20a57a0",
-      "output": [
-        "gaussian-ply",
-        "point-cloud-ply",
-        "depth-mesh-glb"
-      ],
+      "output": ["gaussian-ply", "point-cloud-ply", "depth-mesh-glb"],
       "localReadme": "workers/worlds/reconstruction/README.md"
     }
   ],

@@ -29,12 +29,12 @@ Playback remains paced separately.
 
 ## Encoder modes
 
-| Setting | Behavior |
-| --- | --- |
-| `WORLD_VIDEO_ENCODER=software` (default) | aiortc negotiated software VP8/H264 encoder, with its normal bitrate/keyframe feedback. |
-| `WORLD_VIDEO_ENCODER=h264-software` | Explicit libx264 packet encoder for local testing or fixed-bitrate H264. |
-| `WORLD_VIDEO_ENCODER=nvenc` | Try PyAV `h264_nvenc` on the first real frame. On initialization or encoding failure, permanently switch that connection to libx264. |
-| `WORLD_VIDEO_BITRATE=3000000` | Fixed bitrate for packet modes, bounded to 250,000–12,000,000 bits/second. |
+| Setting                                  | Behavior                                                                                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `WORLD_VIDEO_ENCODER=software` (default) | aiortc negotiated software VP8/H264 encoder, with its normal bitrate/keyframe feedback.                                              |
+| `WORLD_VIDEO_ENCODER=h264-software`      | Explicit libx264 packet encoder for local testing or fixed-bitrate H264.                                                             |
+| `WORLD_VIDEO_ENCODER=nvenc`              | Try PyAV `h264_nvenc` on the first real frame. On initialization or encoding failure, permanently switch that connection to libx264. |
+| `WORLD_VIDEO_BITRATE=3000000`            | Fixed bitrate for packet modes, bounded to 250,000–12,000,000 bits/second.                                                           |
 
 Packet modes use aiortc's public `av.Packet` track interface and select H264 in
 SDP. They do not patch aiortc private encoder internals. NVENC requires a PyAV
@@ -55,17 +55,17 @@ TURN configuration and authenticated offer/control semantics are unchanged.
 These controls affect the **next generation block**. They do not make model
 inference real-time or alter a block already being sampled.
 
-* Existing directional actions accept `{pressed: true, value?: 0..1}` and
+- Existing directional actions accept `{pressed: true, value?: 0..1}` and
   `{pressed: false}`. Multiple held actions compose, opposing keys cancel, and
   releasing one action does not cancel another. Clients refresh held state;
   each action expires after two seconds without renewal.
-* `move` (alias `analog`) accepts a complete snapshot of normalized
+- `move` (alias `analog`) accepts a complete snapshot of normalized
   `{forward, right, up, yaw, pitch}` axes in `[-1,1]`. The snapshot replaces the
   prior analog state and expires after two seconds. `pressed: false` clears it.
-* `look` accepts mouse pixel deltas `{dx,dy}` (aliases `{x,y}`), each bounded to
+- `look` accepts mouse pixel deltas `{dx,dy}` (aliases `{x,y}`), each bounded to
   `[-500,500]`. Deltas accumulate with bounded magnitude and are consumed once at
   the next block. Positive X turns right; negative Y looks up.
-* `stop` and pause clear all held, analog and accumulated mouse state.
+- `stop` and pause clear all held, analog and accumulated mouse state.
 
 Camera transforms mirror pinned `utils/camera_trajectory.py`: 0.08 translation
 units and three degrees of rotation per latent frame, in OpenCV camera space.
@@ -105,7 +105,7 @@ paced into 20 ms audio frames and encoded as WebRTC Opus only when the selected
 model advertises audio output. Audio pauses with video, and session teardown
 stops the audio track and clears its samples. No microphone is captured, no
 audio is synthesized by the gateway, and HTTP frame fallback is video only.
-Its public preview accepts image/text conditioning; audio/video *text prompts*
+Its public preview accepts image/text conditioning; audio/video _text prompts_
 must not be confused with support for conditioning on uploaded audio/video files.
 
 ## CPU verification

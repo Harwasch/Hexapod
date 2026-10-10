@@ -6,15 +6,15 @@ The complete feature is **in progress**, not ready for production handoff. The s
 below record successive increments; their historical limits do not supersede later work.
 Apply **all migrations through the current Alembic head**, not just the first land migration.
 
-| Capability | Current implementation | Remaining work |
-| --- | --- | --- |
-| Land selection | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, reviewed line splitting, boundary and visible-feature snapping with retained drawing-guide provenance, geospatial imports, revisions, reviewed-draft and unfinished-operation recovery | Broader cadastral coverage and large/dateline corridor handling |
-| Research | Durable worker, resumable authenticated live progress with incremental polling fallback, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios and reproducible general arithmetic recipes, linked map/list feature inspection with source evidence and pinned agent follow-ups, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles | Broader imagery/mosaics and compute tools, agent evaluations and live model validation |
-| Workspace | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
-| Scenarios and ecology | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | Verified local reference communities and calibrated ecological forecasting |
-| Inventory | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals | Broader detection and asset catalog linkage; live provider/model acceptance |
-| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation |
-| Action planning | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool; browser draft recovery, workflow-state conflict review and lost-save reconciliation | Fleet execution integration, richer step geometry editing and full acceptance evaluation |
+| Capability                      | Current implementation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Remaining work                                                                                                        |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Land selection                  | Drawing, mapped parcels/features, grounded command previews, metric corridors, composition, reviewed line splitting, boundary and visible-feature snapping with retained drawing-guide provenance, geospatial imports, revisions, reviewed-draft and unfinished-operation recovery                                                                                                                                                                                                                                                                                                      | Broader cadastral coverage and large/dateline corridor handling                                                       |
+| Research                        | Durable worker, resumable authenticated live progress with incremental polling fallback, source evidence, five overview adapters, bounded public search, typed artifacts/scenarios and reproducible general arithmetic recipes, linked map/list feature inspection with source evidence and pinned agent follow-ups, isolated terrain/land-cover calculations, dated quality-masked Sentinel-2 vegetation comparisons and private map tiles                                                                                                                                             | Broader imagery/mosaics and compute tools, agent evaluations and live model validation                                |
+| Workspace                       | Scoped records, OIDC/PKCE, roles, owner membership controls, display profiles, expiring single-use invitation links with explicit joining, resizable/mobile panel, keyboard-accessible Discover/Records/Assets/Scenarios/Actions navigation; shared saved camera/research/imagery views with source validation, current inventory context and persistent captured-save recovery                                                                                                                                                                                                         | Broader temporary-overlay snapshots, live identity-provider acceptance, deeper accessibility/performance verification |
+| Scenarios and ecology           | Versioned solar economics linked to immutable hourly weather, orientation, temperature, horizon and inverter calculations; restoration cover/cost comparisons; immutable plot-based species surveys, mapped plots, sampling summaries and scenario references; versioned Catalogue of Life name matching, EPA regional context and USDA soil-linked reference candidates; cited species targets with pinned survey baselines, monitoring protocols and explicit conditional response envelopes; recoverable scenario forms with concurrent-revision review and lost-save reconciliation | Verified local reference communities and calibrated ecological forecasting                                            |
+| Inventory                       | Versioned features, source deduplication, confirmation, map selection, dated inspections and unit-bearing measurements; direct map placement and geometry editing with multipart/exclusion preservation, undo/redo and metric previews; reviewed, recoverable GeoJSON/CSV batch imports with duplicate identities and atomic receipts; individual draft recovery, reviewed concurrent merges and lost-response reconciliation; agent reads with private revision/page citations, bounded mapped infrastructure discovery and exact-source candidate proposals                           | Broader detection and asset catalog linkage; live provider/model acceptance                                           |
+| Historical and rights workflows | Private PDF/text originals, bounded native/OCR page extraction, original-page viewing, exact private citations, record search, dated document relationships, agent retrieval and licensed photo/historical-map discovery and immutable private image snapshots, bounded agent visual inspection and saved control-point map alignment                                                                                                                                                                                                                                                   | Higher-resolution archive masters and deeper instrument/parcel lineage evaluation                                     |
+| Action planning                 | Versioned drafts, references, exclusions, steps, costs, constraints, explicit approval and private scheduled-mission handoff; agent draft tool; browser draft recovery, workflow-state conflict review and lost-save reconciliation                                                                                                                                                                                                                                                                                                                                                     | Fleet execution integration, richer step geometry editing and full acceptance evaluation                              |
 
 ## Product direction
 
@@ -409,18 +409,18 @@ Add workspace identities and owner/editor/viewer membership through standards-ba
 Verify issuer, audience, expiry, and signatures server-side. The shared token remains an
 explicit local/single-operator mode, never a bypass for multi-user resource authorization.
 
-| Record | Responsibility |
-| --- | --- |
-| Workspace / Membership | Ownership, permissions, retention and usage limits |
-| LandArea / BoundaryRevision | Named study area and immutable geometry/provenance snapshots |
-| Investigation / Message | Persistent question, conversation, and linked outputs |
-| ResearchRun / RunEvent / ToolCall | Durable execution, progress, budgets, attempts and checkpoints |
-| SourceRecord / Evidence | Retrieved material, license, dates, location relevance and excerpts |
-| Finding | Supported claim, citations, uncertainty, geometry and user disposition |
-| ResearchArtifact | Versioned typed output plus private storage and rendering metadata |
-| Scenario / ScenarioRevision | Assumptions, model version, inputs, results and comparison lineage |
-| LandFeature / Observation | Stable physical asset identity, geometry, inspections and history |
-| ActionDraft | Versioned operational proposal linked to its supporting investigation |
+| Record                            | Responsibility                                                         |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| Workspace / Membership            | Ownership, permissions, retention and usage limits                     |
+| LandArea / BoundaryRevision       | Named study area and immutable geometry/provenance snapshots           |
+| Investigation / Message           | Persistent question, conversation, and linked outputs                  |
+| ResearchRun / RunEvent / ToolCall | Durable execution, progress, budgets, attempts and checkpoints         |
+| SourceRecord / Evidence           | Retrieved material, license, dates, location relevance and excerpts    |
+| Finding                           | Supported claim, citations, uncertainty, geometry and user disposition |
+| ResearchArtifact                  | Versioned typed output plus private storage and rendering metadata     |
+| Scenario / ScenarioRevision       | Assumptions, model version, inputs, results and comparison lineage     |
+| LandFeature / Observation         | Stable physical asset identity, geometry, inspections and history      |
+| ActionDraft                       | Versioned operational proposal linked to its supporting investigation  |
 
 Results pin boundary revision, source version or retrieval snapshot, method/model version,
 and assumptions. Boundary changes mark dependent results stale; they never silently rewrite
@@ -471,17 +471,17 @@ Verify each selected endpoint and its terms before enabling it. Open data may st
 a free API credential. Lack of coverage, provider failure, and a valid empty result are
 different user-visible states.
 
-| Domain | Candidate source families to validate and integrate |
-| --- | --- |
-| Parcels and rights records | Local government cadastral/recorder services; relevant public federal records |
-| Terrain and geology | USGS 3DEP and geological services; open global DEMs and national surveys |
-| Soils | USDA SSURGO; SoilGrids with source uncertainty and resolution |
-| Water and hazards | Government hydrography/wetlands; FEMA; NOAA and other regional services |
-| Imagery and change | Landsat, Sentinel, NAIP where available; open land-cover products |
-| Ecology | GBIF, appropriately licensed observation records, habitat and reference ecosystem data |
-| History | Library of Congress, public archives, historical maps and local collections |
-| Infrastructure | OSM, compatible Overture datasets, public utility/transportation records and user uploads |
-| Energy and climate | Open irradiance/weather datasets and reproducible solar modeling inputs |
+| Domain                     | Candidate source families to validate and integrate                                       |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| Parcels and rights records | Local government cadastral/recorder services; relevant public federal records             |
+| Terrain and geology        | USGS 3DEP and geological services; open global DEMs and national surveys                  |
+| Soils                      | USDA SSURGO; SoilGrids with source uncertainty and resolution                             |
+| Water and hazards          | Government hydrography/wetlands; FEMA; NOAA and other regional services                   |
+| Imagery and change         | Landsat, Sentinel, NAIP where available; open land-cover products                         |
+| Ecology                    | GBIF, appropriately licensed observation records, habitat and reference ecosystem data    |
+| History                    | Library of Congress, public archives, historical maps and local collections               |
+| Infrastructure             | OSM, compatible Overture datasets, public utility/transportation records and user uploads |
+| Energy and climate         | Open irradiance/weather datasets and reproducible solar modeling inputs                   |
 
 Implement clipping, overlays, projected measurements, raster sampling and zonal statistics,
 time-series comparisons, nodata/cloud masks and resolution-aware aggregation. Use a
@@ -546,15 +546,15 @@ large outputs remain interactive through pagination, tiling and progressive load
 
 ### 7. Complete the domain workflows
 
-| Workflow | Required behavior and evidence boundary |
-| --- | --- |
-| Historical discovery | Search former place/owner names and archive metadata; link photographs and events by defensible location/time matches; georeference maps using control points and show residual errors; label nearby/possible matches |
-| Rights and restrictions | Extract documents with page references; track parcel lineage, dates and conflicting instruments; show applicability as established, uncertain or unresolved; never turn a nearby record into a claim of current title |
-| Geotechnical understanding | Relate terrain, soil, geology, boreholes and hazards; separate regional estimates from measurements on the land; preserve scale and uncertainty in value/use assessments |
-| Ecology | Combine habitat, observations, remote sensing and surveys; distinguish observed species from potential habitat; protect obscured sensitive locations and honor record-level licenses |
-| Restoration | Estimate cover/change at supported resolution; define reference ecosystem, targets, treatments, costs and monitoring; request field/imagery evidence where species-level estimates are unsupported; compare versioned restoration scenarios |
-| Infrastructure | Import/detect candidate features, deduplicate, confirm identities and maintain asset geometry, attributes, inspections and change history; connect to existing renderable catalog assets without conflating the two models |
-| User-defined analysis | Compose reusable source, geometry, calculation and scenario tools in response to the user’s question; retain assumptions, provenance, units, uncertainty and reproducibility. Solar economics is one optional example, not a dedicated roof-analysis requirement |
+| Workflow                   | Required behavior and evidence boundary                                                                                                                                                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Historical discovery       | Search former place/owner names and archive metadata; link photographs and events by defensible location/time matches; georeference maps using control points and show residual errors; label nearby/possible matches                                            |
+| Rights and restrictions    | Extract documents with page references; track parcel lineage, dates and conflicting instruments; show applicability as established, uncertain or unresolved; never turn a nearby record into a claim of current title                                            |
+| Geotechnical understanding | Relate terrain, soil, geology, boreholes and hazards; separate regional estimates from measurements on the land; preserve scale and uncertainty in value/use assessments                                                                                         |
+| Ecology                    | Combine habitat, observations, remote sensing and surveys; distinguish observed species from potential habitat; protect obscured sensitive locations and honor record-level licenses                                                                             |
+| Restoration                | Estimate cover/change at supported resolution; define reference ecosystem, targets, treatments, costs and monitoring; request field/imagery evidence where species-level estimates are unsupported; compare versioned restoration scenarios                      |
+| Infrastructure             | Import/detect candidate features, deduplicate, confirm identities and maintain asset geometry, attributes, inspections and change history; connect to existing renderable catalog assets without conflating the two models                                       |
+| User-defined analysis      | Compose reusable source, geometry, calculation and scenario tools in response to the user’s question; retain assumptions, provenance, units, uncertainty and reproducibility. Solar economics is one optional example, not a dedicated roof-analysis requirement |
 
 Domain tools share the evidence/artifact/scenario framework. New analyses register input
 schemas, algorithms, provenance requirements and renderers rather than introducing another
@@ -708,7 +708,6 @@ tests cover seeking/cache/byte buffers, changing versions, servers ignoring Rang
 URLs, auxiliary paths and download budgets. This is an input foundation only: zonal terrain
 statistics, private output tiling, map display and other raster domains remain pending.
 
-
 ## Implemented increment: terrain raster analysis and map exploration
 
 Migration `0019` adds immutable, private raster metadata/bytes and typed durable analysis
@@ -766,7 +765,6 @@ also passed. No live model calls were exercised because credentials remain uncon
 This increment completes the initial terrain path, not the full feature. Archives,
 land-cover/time-series analysis, deeper ecology/solar, selection refinements and fleet
 execution remain in progress or planned. Production deployment remains with its owner.
-
 
 ## Implemented increment: categorical land-cover exploration
 
@@ -831,7 +829,6 @@ mobile layout with no overflow or page errors. The unavailable-image fallback wa
 as well. Chromium required the environment's existing proxy CA in its test trust store;
 TLS verification remained enabled. Production/deployment remains untouched.
 
-
 ## Implemented increment: unfinished drawing recovery
 
 Polygon points and corridor centerlines now persist before a reviewed boundary exists.
@@ -846,7 +843,6 @@ Validation: 36 focused land UI tests, full web typing and affected-file lint pas
 selection/action browser journeys passed, including two new reload-and-continue drawing
 journeys (the original four and two recovery tests were run separately after correcting the
 shared fixture's onboarding reset). No API/schema/deployment change is required.
-
 
 ## Implemented increment: immutable archive-image evidence
 
@@ -880,7 +876,6 @@ photo and a 200×245 USGS map preview, verified the downloaded original checksum
 both saved images with their public hosts deliberately unavailable. Desktop/mobile screenshots
 were inspected; no page errors or horizontal overflow were observed. No deployment was made.
 
-
 ## Implemented increment: agent visual inspection of archive evidence
 
 The research agent can request `inspect_archive_image` for source evidence in its current
@@ -908,7 +903,6 @@ processor hash mismatches and small-chunk download deadlines. API lint/format/ty
 (249 files), seven gallery UI tests, web typing/lint and build passed. Model responses were
 controlled test fixtures: live AI interpretation remains unvalidated because this environment
 has no configured model credentials. No production deployment was made.
-
 
 ## Implemented increment: historical-map alignment
 
@@ -1066,7 +1060,6 @@ measurement entry, reviewed saving, mapped plots, visual summaries, correction c
 JSON import/export, private research citations and scenario reference controls. Numeric
 measurements begin empty and changing methods clears them instead of inventing equivalents.
 
-
 Validation: 32 backend research/document/scenario/survey regressions and two migration
 round-trip/model-agreement checks passed. The ten survey tests were rerun after bounding
 agent evidence pages; they include long Unicode names/notes, private source citations,
@@ -1093,7 +1086,6 @@ estimate unsampled whole-land composition, provide ecological succession predict
 or establish an appropriate restoration reference ecosystem. Live model-provider validation
 still requires credentials absent from this environment. Nothing was deployed; the full
 land-exploration feature remains in progress.
-
 
 ## Implemented increment: hourly solar generation and linked economics
 
@@ -1157,6 +1149,7 @@ economics. A four-point horizon is available in the form; the typed analysis int
 supports up to 360 measured horizon points.
 
 Scientific references:
+
 - [NASA POWER hourly API](https://power.larc.nasa.gov/docs/services/api/temporal/hourly/)
 - [NASA POWER timestamp FAQ](https://power.larc.nasa.gov/docs/faqs/other/)
 - [pvlib Hay-Davies](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.irradiance.haydavies.html)
@@ -1186,7 +1179,6 @@ weather snapshot verifies as `63c9b3c952d666cf84842de555aba8a052ceece95bdc118f68
 Desktop and 390-pixel phone views were inspected; reopening and map display had no page
 exceptions or internal panel overflow. The preview still lacks high-resolution basemap
 imagery, so roof alignment/accuracy has not been demonstrated. Nothing was deployed.
-
 
 ## Implemented increment: ecological context and taxonomic name review
 
@@ -1234,6 +1226,7 @@ fresh retrieval. Controlled model tests validate both tools; live model-provider
 remains outstanding because this environment has no configured model credentials.
 
 Primary technical references:
+
 - [GBIF taxonomy interpretation](https://techdocs.gbif.org/en/data-processing/taxonomy-interpretation)
 - [GBIF Catalogue of Life transition](https://data-blog.gbif.org/post/catalogue-of-life-taxonomic-backbone/)
 - [GBIF species API](https://techdocs.gbif.org/en/openapi/v1/species)
@@ -1260,7 +1253,6 @@ follow-ups and rejection of foreign citations. Existing research and solar API r
 passed. API typing (279 files), lint and formatting passed. Ten frontend ecology/survey/solar
 tests, full web typing, affected lint, the production build and all seven existing land browser
 journeys passed. The original deployment checkout remains clean and untouched.
-
 
 ## Implemented increment: species restoration targets and conditional response
 
@@ -1329,7 +1321,6 @@ are software-test assumptions, not measured or predicted National Mall ecology. 
 results match the saved result. Desktop and 390-pixel phone views had no page exceptions or
 unintended panel overflow. The deployment checkout and production remain untouched.
 
-
 ## Implemented increment: asset geometry editing
 
 Assets can now be placed directly on the map and edited as points, lines, polygons or
@@ -1366,7 +1357,6 @@ Local validation artifacts: `/tmp/land-inventory-geometry-browser-result.json`,
 `/tmp/land-inventory-geometry-desktop.png`, `/tmp/land-inventory-geometry-mobile.png`.
 No schema migration is needed for this increment. Batch import and inventory draft
 recovery remain unfinished; the overall feature remains in progress and undeployed.
-
 
 ## Implemented increment: reviewed batch asset imports
 
@@ -1421,7 +1411,6 @@ frontend inventory/editor/import tests pass. API lint/format/type checks, web ty
 targeted lint and the production build pass. All seven land selection/action browser regression
 tests pass after updating the import-history fixture. No production deployment was performed.
 
-
 ## Implemented increment: asset draft recovery and concurrent edits
 
 Individual asset drafts now recover after reload, scoped to identity/workspace and land.
@@ -1465,7 +1454,6 @@ recovered creation `79f811f6-8f99-5287-8369-2f6068c9f8e4`. Local artifacts:
 `/tmp/land-inventory-recovery-desktop.png`, `/tmp/land-inventory-recovery-mobile.png`.
 This increment needs no new migration beyond 0024. Production remains untouched; the overall
 feature still has the remaining capabilities and acceptance work listed at the top.
-
 
 ## Implemented increment: agent inventory research and mapped point assets
 
@@ -1521,7 +1509,6 @@ The isolated preview API and worker were restarted with this code. No new migrat
 0024 is required. Production and the original checkout remain untouched; the full feature
 is still in progress.
 
-
 ## Implemented increment: scenario draft recovery
 
 Solar finance and restoration forms now preserve unfinished assumptions in browser storage,
@@ -1571,7 +1558,6 @@ exceptions, and screenshots were inspected. It advanced synthetic scenario
 `/tmp/land-scenario-recovery-desktop.png`, `/tmp/land-scenario-recovery-mobile.png`.
 No new migration is required beyond 0024. The isolated preview API was restarted; production
 and the original checkout remain untouched. The overall feature is still in progress.
-
 
 ## Implemented increment: action draft recovery and workflow-state review
 
@@ -1627,7 +1613,6 @@ Local artifacts: `/tmp/land-action-recovery-browser-result.json`,
 The isolated preview API was restarted. Production and the original checkout remain untouched;
 the full feature is still in progress.
 
-
 ## Implemented increment: workspace people and invitation links
 
 The workspace panel now exposes display profiles and owner-controlled membership management.
@@ -1671,7 +1656,6 @@ Local artifacts: `/tmp/land-workspace-ui-result.json`, `/tmp/land-workspace-desk
 Web type checking, targeted lint and the production build pass, along with all seven land
 browser regressions. The build retains the existing PlayCanvas worker externalization warnings.
 The complete land exploration feature remains in progress.
-
 
 ## Implemented increment: saved land exploration views
 
@@ -1725,7 +1709,6 @@ recovered after a browser restart. Survey sketches, unsaved asset/import preview
 footprints and other temporary overlays are explicitly excluded from the saved view; their
 underlying records and independent draft recovery remain available. The overall feature is
 still in progress and nothing has been deployed.
-
 
 ## Implemented increment: persistent saved-view capture recovery
 
@@ -1797,7 +1780,6 @@ Final checks for this increment: all seven land Chromium regression tests pass; 
 lint and the production build pass. The build retains the existing PlayCanvas worker-module
 externalization warnings. The isolated preview API was restarted with the new source endpoint.
 
-
 ## Implemented increment: reviewed boundary splitting and snapping
 
 `POST /land/split` previews the pieces produced by a drawn cut line. It preserves exclusions
@@ -1828,7 +1810,6 @@ reported no page errors or unintended overflow. The follow-up layout gives selec
 44px touch targets and uses the standard primary action styling. Screenshots were inspected.
 Artifacts: `/tmp/land-split-result.json`, `/tmp/land-split-desktop.png`,
 `/tmp/land-split-mobile.png`. No migration is needed; the isolated preview API was restarted.
-
 
 ## Implemented increment: live research progress and optional specialist tools
 
@@ -1865,7 +1846,6 @@ no page errors or unintended overflow occurred. Artifacts: `/tmp/land-live-resea
 
 Targeted web lint and production build also pass. The existing PlayCanvas worker-module
 externalization warnings remain. No schema migration or deployment is part of this increment.
-
 
 ## Implemented increment: grounded map-feature questions
 
@@ -1963,7 +1943,6 @@ was created by the browser check. Artifacts: `/tmp/land-question-recovery-result
 Existing PlayCanvas worker-module externalization build warnings remain. No migration or
 production deployment is part of this increment; the original checkout remains untouched.
 
-
 ## Implemented increment: mapped-feature snapping and attributable drawing guides
 
 Boundary drawing, corridor tracing, splitting and vertex edits can now snap to visible research
@@ -2005,7 +1984,6 @@ The test did not save a land record. Artifacts: `/tmp/land-mapped-snap-result.js
 `/tmp/land-mapped-snap-desktop.png`, `/tmp/land-mapped-snap-mobile.png`,
 `/tmp/land-mapped-snap-provenance.png`. The isolated API and research worker were restarted with
 the updated optional source schema. No database migration or production deployment is involved.
-
 
 ## Implemented increment: reproducible general calculations
 
