@@ -9,13 +9,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 import tomllib
@@ -34,20 +35,30 @@ def run(args: list[str], **kwargs):
     try:
         return subprocess.run(args, check=True, text=True, **kwargs)
     except subprocess.CalledProcessError as error:
-        diagnostic = ""
-        stderr = (error.stderr or "").lower()
-        for category in (
-            "server version",
-            "version mismatch",
-            "permission denied",
-            "password authentication failed",
-            "connection refused",
-            "could not translate host name",
-        ):
-            if category in stderr:
-                diagnostic += "; " + category
+        stderr = error.stderr or ""
+        for name, value in kwargs.get("env", os.environ).items():
+            if value and re.search(r"KEY|TOKEN|PASSWORD|SECRET|DATABASE|URI|URL", name):
+                stderr = stderr.replace(value, "[redacted]")
+                if "://" in value:
+                    password = urlsplit(value).password
+                    if password:
+                        stderr = stderr.replace(password, "[redacted]").replace(
+                            unquote(password), "[redacted]"
+                        )
+        stderr = re.sub(
+            r"postgres(?:ql)?(?:\+psycopg)?://[^\s]+", "[redacted database URL]", stderr
+        )
+        diagnostics = [
+            line
+            for line in stderr.splitlines()
+            if line.startswith(
+                ("pg_dump:", "pg_restore:", "docker:", "Error response from daemon:")
+            )
+        ]
+        for line in diagnostics[-6:]:
+            print(line[:500], flush=True)
         raise RuntimeError(
-            f"Release command {args[0]} failed with exit {error.returncode}{diagnostic}; credential-bearing output withheld"
+            f"Release command {args[0]} failed with exit {error.returncode}"
         ) from None
 
 
