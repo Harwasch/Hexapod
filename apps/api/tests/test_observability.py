@@ -260,3 +260,66 @@ def test_a_breadcrumbs_data_is_redacted_too(monkeypatch: pytest.MonkeyPatch) -> 
     # And the copies an event carries, whether or not they came through the hook.
     event = options["before_send"]({"breadcrumbs": {"values": [http(f"{check}/fail")]}}, {})
     assert "7c1e2d3f" not in json.dumps(event)
+
+
+def test_worlds_server_credentials_are_redacted_outside_bearer_headers(monkeypatch) -> None:
+    names = (
+        "WORLD_GATEWAY_TOKEN",
+        "WORLD_RUNPOD_API_KEY",
+        "WORLDS_LLM_API_KEY",
+        "WORLD_RECONSTRUCTION_GATEWAY_TOKEN",
+    )
+    values = {
+        name: f"sensitive-worlds-value-{index}-0123456789" for index, name in enumerate(names)
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    formatter = JsonFormatter(Redactor.for_settings(Settings()))
+    payload = formatter.format(_record("worker configuration %s", json.dumps(values)))
+    for value in values.values():
+        assert value not in payload
+    assert payload.count("[redacted]") == len(values)
+
+
+@pytest.mark.parametrize("dedicated_file", [False, True])
+def test_worlds_dotenv_credentials_are_redacted(monkeypatch, tmp_path, dedicated_file) -> None:
+    from app.worlds.config import WorldsSettings
+    from app.worlds.reconstruction import ReconstructionSettings
+
+    values = {
+        "WORLD_GATEWAY_TOKEN": "dotenv-worker-key-0123456789",
+        "WORLD_RUNPOD_API_KEY": "dotenv-runpod-key-0123456789",
+        "WORLD_RECONSTRUCTION_GATEWAY_TOKEN": "dotenv-reconstruction-key-0123456789",
+    }
+    path = tmp_path / ".env.worlds"
+    path.write_text("\n".join(f"{key}={value}" for key, value in values.items()))
+    for key in values:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("WORLD_ENV_FILE", raising=False)
+    if dedicated_file:
+        monkeypatch.setenv("WORLD_ENV_FILE", str(path))
+    else:
+        monkeypatch.setitem(WorldsSettings.model_config, "env_file", path)
+        monkeypatch.setitem(ReconstructionSettings.model_config, "env_file", path)
+    formatter = JsonFormatter(Redactor.for_settings(Settings()))
+    payload = formatter.format(_record("worker configuration %s", json.dumps(values)))
+    for value in values.values():
+        assert value not in payload
+    assert payload.count("[redacted]") == len(values)
+
+
+def test_invalid_worlds_config_does_not_break_earth_redactor_or_expose_config_errors(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    path = tmp_path / ".env.worlds"
+    reconstruction_secret = "separate-reconstruction-key-0123456789"
+    path.write_text(
+        "WORLD_RUNPOD_PORT=invalid-sensitive-config-value\n"
+        f"WORLD_RECONSTRUCTION_GATEWAY_TOKEN={reconstruction_secret}\n"
+    )
+    monkeypatch.setenv("WORLD_ENV_FILE", str(path))
+    monkeypatch.delenv("WORLD_RUNPOD_PORT", raising=False)
+    monkeypatch.delenv("WORLD_RECONSTRUCTION_GATEWAY_TOKEN", raising=False)
+    redactor = Redactor.for_settings(Settings(api_write_token=WRITE_TOKEN))
+    assert redactor(f"{WRITE_TOKEN} {reconstruction_secret}") == "[redacted] [redacted]"
+    assert "invalid-sensitive-config-value" not in caplog.text

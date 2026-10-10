@@ -856,10 +856,780 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/worlds/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Billing */
+        get: operations["billing_api_v1_worlds_billing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/billing/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Billing */
+        post: operations["import_billing_api_v1_worlds_billing_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/billing/runpod/{identity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Runpod Billing */
+        get: operations["runpod_billing_api_v1_worlds_billing_runpod__identity__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Catalog
+         * @description Live capability inspection shares the bounded readiness probes.
+         */
+        get: operations["catalog_api_v1_worlds_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/characters/analyze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Analyze */
+        post: operations["analyze_api_v1_worlds_characters_analyze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/characters/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Evaluate */
+        post: operations["evaluate_api_v1_worlds_characters_evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/characters/synthesize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Synthesize */
+        post: operations["synthesize_api_v1_worlds_characters_synthesize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/controls/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate Controls */
+        post: operations["generate_controls_api_v1_worlds_controls_generate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/customization/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Capabilities */
+        get: operations["capabilities_api_v1_worlds_customization_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/customization/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Jobs */
+        get: operations["jobs_api_v1_worlds_customization_jobs_get"];
+        put?: never;
+        /** Prepare */
+        post: operations["prepare_api_v1_worlds_customization_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/customization/jobs/{identity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_api_v1_worlds_customization_jobs__identity__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/customization/jobs/{identity}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel */
+        post: operations["cancel_api_v1_worlds_customization_jobs__identity__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/customization/jobs/{identity}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable */
+        post: operations["disable_api_v1_worlds_customization_jobs__identity__disable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/customization/jobs/{identity}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enable */
+        post: operations["enable_api_v1_worlds_customization_jobs__identity__enable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/customization/jobs/{identity}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Install */
+        post: operations["install_api_v1_worlds_customization_jobs__identity__install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/customization/jobs/{identity}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run */
+        post: operations["run_api_v1_worlds_customization_jobs__identity__run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/games/create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Game */
+        post: operations["create_game_api_v1_worlds_games_create_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/intelligence/command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Interpret Command */
+        post: operations["interpret_command_api_v1_worlds_intelligence_command_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/intelligence/director": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Direct Scene */
+        post: operations["direct_scene_api_v1_worlds_intelligence_director_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/intelligence/highlights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Highlights */
+        post: operations["highlights_api_v1_worlds_intelligence_highlights_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/intelligence/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Intelligence Status */
+        get: operations["intelligence_status_api_v1_worlds_intelligence_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/prompts/optimize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Optimize Prompt */
+        post: operations["optimize_prompt_api_v1_worlds_prompts_optimize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Providers */
+        get: operations["providers_api_v1_worlds_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/providers/{name}/hardware": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Provider Hardware */
+        get: operations["provider_hardware_api_v1_worlds_providers__name__hardware_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/providers/{name}/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Provider Quote */
+        post: operations["provider_quote_api_v1_worlds_providers__name__quote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness */
+        get: operations["readiness_api_v1_worlds_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/reconstructions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Reconstruction */
+        post: operations["create_reconstruction_api_v1_worlds_reconstructions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/reconstructions/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Reconstruction */
+        get: operations["get_reconstruction_api_v1_worlds_reconstructions__job_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Reconstruction
+         * @description Explicit worker cleanup; success requires the gateway to confirm deletion.
+         *
+         *     The external worker must delete the job's input, partial and output media. A
+         *     gateway without this contract returns an error; local state is not cleared.
+         */
+        delete: operations["delete_reconstruction_api_v1_worlds_reconstructions__job_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/reconstructions/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Capabilities */
+        get: operations["capabilities_api_v1_worlds_reconstructions_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/references/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate Reference */
+        post: operations["generate_reference_api_v1_worlds_references_generate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sessions */
+        get: operations["sessions_api_v1_worlds_sessions_get"];
+        put?: never;
+        /** Create Session */
+        post: operations["create_session_api_v1_worlds_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/sessions/{identity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Status */
+        get: operations["session_status_api_v1_worlds_sessions__identity__get"];
+        put?: never;
+        post?: never;
+        /** Stop Session */
+        delete: operations["stop_session_api_v1_worlds_sessions__identity__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/sessions/{identity}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Action */
+        post: operations["action_api_v1_worlds_sessions__identity__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/sessions/{identity}/frame": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Frame */
+        get: operations["frame_api_v1_worlds_sessions__identity__frame_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/sessions/{identity}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Heartbeat */
+        post: operations["heartbeat_api_v1_worlds_sessions__identity__heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/sessions/{identity}/offer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Offer */
+        post: operations["offer_api_v1_worlds_sessions__identity__offer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/sessions/{identity}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Snapshot */
+        post: operations["snapshot_api_v1_worlds_sessions__identity__snapshot_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/sessions/{identity}/transport-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Transport Config */
+        get: operations["transport_config_api_v1_worlds_sessions__identity__transport_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Usage */
+        get: operations["usage_api_v1_worlds_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Workers */
+        get: operations["list_workers_api_v1_worlds_workers_get"];
+        put?: never;
+        /** Create Worker */
+        post: operations["create_worker_api_v1_worlds_workers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/workers/{identity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Worker Status */
+        get: operations["worker_status_api_v1_worlds_workers__identity__get"];
+        put?: never;
+        post?: never;
+        /** Destroy Worker */
+        delete: operations["destroy_worker_api_v1_worlds_workers__identity__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/worlds/workers/{identity}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Worker */
+        post: operations["stop_worker_api_v1_worlds_workers__identity__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Action */
+        Action: {
+            /** Action */
+            action?: string | null;
+            /** Prompt */
+            prompt?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "native" | "prompt" | "semantic" | "pause" | "resume";
+            /** Values */
+            values?: {
+                [key: string]: unknown;
+            };
+        };
+        /** AppearancePackage */
+        AppearancePackage: {
+            /** Appearance */
+            appearance: string;
+            /** Clothing */
+            clothing: string;
+            /** Conditioningprompt */
+            conditioningPrompt: string;
+            /** Consistencynotes */
+            consistencyNotes?: string[];
+            /** Distinguishingfeatures */
+            distinguishingFeatures?: string[];
+            /**
+             * Identitymethod
+             * @default reference-images
+             * @constant
+             */
+            identityMethod?: "reference-images";
+            /**
+             * Source
+             * @default vision-llm
+             * @constant
+             */
+            source?: "vision-llm";
+        };
         /** ArcGisMapServerSource */
         ArcGisMapServerSource: {
             /** Layers */
@@ -874,6 +1644,15 @@ export interface components {
              * Format: uri
              */
             url: string;
+        };
+        /** Artifact */
+        Artifact: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Size */
+            size: number;
         };
         /**
          * ArtifactKind
@@ -1171,6 +1950,90 @@ export interface components {
             /** Url */
             url?: string | null;
         };
+        /** BillingImport */
+        BillingImport: {
+            /** Rows */
+            rows: components["schemas"]["BillingLine"][];
+        };
+        /** BillingLine */
+        BillingLine: {
+            /** Amount */
+            amount: number | string;
+            /**
+             * Category
+             * @default other
+             * @enum {string}
+             */
+            category?: "compute" | "storage" | "network" | "tax" | "other";
+            /** Currency */
+            currency: string;
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "charge" | "credit";
+            /**
+             * Periodend
+             * Format: date-time
+             */
+            periodEnd: string;
+            /**
+             * Periodstart
+             * Format: date-time
+             */
+            periodStart: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "runpod" | "lambda" | "modal" | "local";
+            /** Providerid */
+            providerId?: string | null;
+            /** Reference */
+            reference: string;
+            /** Source */
+            source: string;
+            /** Workerid */
+            workerId?: string | null;
+        };
+        /** Binding */
+        Binding: {
+            /** Action */
+            action?: string | null;
+            /**
+             * Experimental
+             * @default false
+             */
+            experimental?: boolean;
+            /** Id */
+            id: string;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Prompt */
+            prompt?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "native" | "prompt" | "semantic";
+        };
+        /** Body_create_reconstruction_api_v1_worlds_reconstructions_post */
+        Body_create_reconstruction_api_v1_worlds_reconstructions_post: {
+            /** Files */
+            files: string[];
+            /**
+             * Metadata
+             * @default {}
+             */
+            metadata?: string;
+        };
         /** Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post */
         Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post: {
             /** File */
@@ -1275,6 +2138,30 @@ export interface components {
              * Format: uuid
              */
             siteId: string;
+        };
+        /** Capabilities */
+        Capabilities: {
+            /** Configured */
+            configured: boolean;
+            /**
+             * Maxconcurrentjobs
+             * @default 0
+             */
+            maxConcurrentJobs?: number;
+            /**
+             * Maxtrainingseconds
+             * @default 0
+             */
+            maxTrainingSeconds?: number;
+            /** Message */
+            message: string;
+            /** Profiles */
+            profiles?: components["schemas"]["Profile"][];
+            /**
+             * Trainingenabled
+             * @default false
+             */
+            trainingEnabled?: boolean;
         };
         /** CaptureCreate */
         CaptureCreate: {
@@ -1689,6 +2576,106 @@ export interface components {
             /** Value */
             value: string;
         };
+        /** CommandRequest */
+        CommandRequest: {
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: unknown;
+            };
+            /** Command */
+            command: string;
+            /**
+             * Elapsedseconds
+             * @default 0
+             */
+            elapsedSeconds?: number;
+            /** Frame */
+            frame: string;
+            /** Modelid */
+            modelId: string;
+            /** Nativeactions */
+            nativeActions?: string[];
+            /**
+             * Objective
+             * @default
+             */
+            objective?: string;
+            /** Prompt */
+            prompt: string;
+            /** Recentevents */
+            recentEvents?: string[];
+        };
+        /** CommandResult */
+        CommandResult: {
+            action?: components["schemas"]["ProposedAction"] | null;
+            /**
+             * Experimental
+             * @default true
+             */
+            experimental?: boolean;
+            /** Explanation */
+            explanation: string;
+            /** Observation */
+            observation: string;
+            /**
+             * Source
+             * @default vision-llm
+             * @constant
+             */
+            source?: "vision-llm";
+        };
+        /** ConsistencyRequest */
+        ConsistencyRequest: {
+            /** Candidates */
+            candidates: string[];
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** References */
+            references: string[];
+        };
+        /** ConsistencyResult */
+        ConsistencyResult: {
+            /** Confidence */
+            confidence: number;
+            /** Differences */
+            differences?: string[];
+            /** Evidence */
+            evidence: string[];
+            /**
+             * Metric
+             * @default qualitative-appearance-consistency
+             * @constant
+             */
+            metric?: "qualitative-appearance-consistency";
+            /**
+             * Note
+             * @default An AI visual assessment, not a biometric identity metric or proof that two images show the same person.
+             */
+            note?: string;
+            /** Score */
+            score: number;
+            /**
+             * Source
+             * @default vision-llm
+             * @constant
+             */
+            source?: "vision-llm";
+        };
+        /** ControlsResult */
+        ControlsResult: {
+            /** Bindings */
+            bindings: components["schemas"]["Binding"][];
+            /** Notes */
+            notes?: string[];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "llm" | "local-guide";
+        };
         /** CrsMetadata */
         CrsMetadata: {
             /** Horizontal */
@@ -1710,6 +2697,81 @@ export interface components {
              * Format: uri
              */
             url: string;
+        };
+        /** DirectorRequest */
+        DirectorRequest: {
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Elapsedseconds
+             * @default 0
+             */
+            elapsedSeconds?: number;
+            /** Frame */
+            frame: string;
+            /**
+             * Mode
+             * @default cinematic
+             * @enum {string}
+             */
+            mode?: "relaxed" | "cinematic" | "challenging" | "chaotic";
+            /** Modelid */
+            modelId: string;
+            /** Nativeactions */
+            nativeActions?: string[];
+            /**
+             * Objective
+             * @default
+             */
+            objective?: string;
+            /** Prompt */
+            prompt: string;
+            /** Recentevents */
+            recentEvents?: string[];
+        };
+        /** DirectorResult */
+        DirectorResult: {
+            event?: components["schemas"]["ProposedAction"] | null;
+            objective: components["schemas"]["ObjectiveAssessment"];
+            /** Observation */
+            observation: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Source
+             * @default vision-llm
+             * @constant
+             */
+            source?: "vision-llm";
+        };
+        /** GameEvent */
+        GameEvent: {
+            /** Atseconds */
+            atSeconds: number;
+            /** Prompt */
+            prompt: string;
+        };
+        /** GameResult */
+        GameResult: {
+            /** Events */
+            events?: components["schemas"]["GameEvent"][];
+            /** Name */
+            name: string;
+            /** Notes */
+            notes?: string[];
+            /** Objective */
+            objective: string;
+            /** Premise */
+            premise: string;
+            /** Prompt */
+            prompt: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "llm" | "local-guide";
         };
         /** GeoJsonSource */
         GeoJsonSource: {
@@ -1787,6 +2849,102 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** Heartbeat */
+        Heartbeat: {
+            /**
+             * Active
+             * @default true
+             */
+            active?: boolean;
+        };
+        /** Highlight */
+        Highlight: {
+            /** Endseconds */
+            endSeconds: number;
+            /** Evidence */
+            evidence: string;
+            /** Startseconds */
+            startSeconds: number;
+            /** Title */
+            title: string;
+        };
+        /** HighlightSample */
+        HighlightSample: {
+            /** Atseconds */
+            atSeconds: number;
+            /** Image */
+            image: string;
+        };
+        /** HighlightsRequest */
+        HighlightsRequest: {
+            /** Durationseconds */
+            durationSeconds: number;
+            /**
+             * Prompt
+             * @default
+             */
+            prompt?: string;
+            /** Samples */
+            samples: components["schemas"]["HighlightSample"][];
+        };
+        /** HighlightsResult */
+        HighlightsResult: {
+            /** Highlights */
+            highlights: components["schemas"]["Highlight"][];
+            /**
+             * Note
+             * @default Suggestions based on sampled frames, not a full video analysis. Review before sharing.
+             */
+            note?: string;
+            /**
+             * Source
+             * @default vision-llm
+             * @constant
+             */
+            source?: "vision-llm";
+        };
+        /** IntelligenceRequest */
+        IntelligenceRequest: {
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: {
+                    [key: string]: boolean | number | string | string[];
+                } | string[] | string;
+            };
+            /**
+             * Experience
+             * @default exploration
+             */
+            experience?: string;
+            /** Modelid */
+            modelId: string;
+            /** Nativeactions */
+            nativeActions?: string[];
+            /** Prompt */
+            prompt: string;
+        };
+        /** IntelligenceStatus */
+        IntelligenceStatus: {
+            /** Configured */
+            configured: boolean;
+            /**
+             * Imageconfigured
+             * @default false
+             */
+            imageConfigured?: boolean;
+            /** Message */
+            message: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "llm" | "local-guide";
+            /**
+             * Visionconfigured
+             * @default false
+             */
+            visionConfigured?: boolean;
+        };
         /** IonAssetMetadata */
         IonAssetMetadata: {
             /** Attribution */
@@ -1836,6 +2994,48 @@ export interface components {
             configured: boolean;
             reconstruction: components["schemas"]["IonReconstructionCapabilities"];
         };
+        /** Job */
+        Job: {
+            /** Activationcompatible */
+            activationCompatible: boolean;
+            /** Artifacts */
+            artifacts?: components["schemas"]["Artifact"][];
+            /** Createdat */
+            createdAt: number;
+            /** Finishedat */
+            finishedAt?: number | null;
+            /**
+             * Gpuvalidated
+             * @default false
+             */
+            gpuValidated?: boolean;
+            /** Id */
+            id: string;
+            /** Installed */
+            installed?: string[];
+            /** Maxtrainingseconds */
+            maxTrainingSeconds: number;
+            /**
+             * Message
+             * @default
+             */
+            message?: string;
+            /** Modelid */
+            modelId: string;
+            /** Profileid */
+            profileId: string;
+            /** Selectedartifactid */
+            selectedArtifactId?: string | null;
+            /** Stage */
+            stage: string;
+            /** Startedat */
+            startedAt?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "prepared" | "running" | "cancelling" | "cancelled" | "completed" | "failed" | "unknown" | "interrupted";
+        };
         /**
          * JobCreate
          * @description Launch a run. `recipeVersion` is resolved from the recipe registry rather than
@@ -1852,6 +3052,11 @@ export interface components {
             recipe: string;
             /** Tier */
             tier?: string | null;
+        };
+        /** JobList */
+        JobList: {
+            /** Jobs */
+            jobs: components["schemas"]["Job"][];
         };
         /** JobRead */
         JobRead: {
@@ -2295,6 +3500,28 @@ export interface components {
             type: "mvt";
             /** Urltemplate */
             urlTemplate: string;
+        };
+        /** ObjectiveAssessment */
+        ObjectiveAssessment: {
+            /** Confidence */
+            confidence: number;
+            /** Evidence */
+            evidence: string;
+            /**
+             * Progress
+             * @enum {string}
+             */
+            progress: "unknown" | "not-started" | "in-progress" | "appears-complete";
+        };
+        /** Offer */
+        Offer: {
+            /** Sdp */
+            sdp: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "offer";
         };
         /**
          * OrphanObject
@@ -2894,6 +4121,11 @@ export interface components {
              */
             type: "Polygon";
         };
+        /** Prepare */
+        Prepare: {
+            /** Profileid */
+            profileId: string;
+        };
         /**
          * PresignedPart
          * @description One part of a multipart upload, and the URL to PUT it to.
@@ -2928,6 +4160,55 @@ export interface components {
             status: number;
             /** Title */
             title: string;
+        };
+        /** Profile */
+        Profile: {
+            /** Activationcompatible */
+            activationCompatible: boolean;
+            /** Datasetlabel */
+            datasetLabel: string;
+            /**
+             * Devices
+             * @constant
+             */
+            devices: 8;
+            /** Id */
+            id: string;
+            /**
+             * Modelid
+             * @enum {string}
+             */
+            modelId: "forge-wm" | "sana-wm";
+            /** Name */
+            name: string;
+            /** Stage */
+            stage: string;
+        };
+        /** PromptResult */
+        PromptResult: {
+            /** Enhanced */
+            enhanced: string;
+            /** Notes */
+            notes?: string[];
+            /** Original */
+            original: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "llm" | "local-guide";
+        };
+        /** ProposedAction */
+        ProposedAction: {
+            /** Action */
+            action?: string | null;
+            /** Prompt */
+            prompt?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "native" | "prompt" | "semantic";
         };
         /**
          * Provenance
@@ -3024,6 +4305,21 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** Quote */
+        Quote: {
+            /**
+             * Durationminutes
+             * @default 10
+             */
+            durationMinutes?: number;
+            /** Gputypeid */
+            gpuTypeId?: string | null;
+            /**
+             * Modelid
+             * @default astronex-world
+             */
+            modelId?: string;
+        };
         /**
          * RecipeGpu
          * @description A stage's GPU requirement. Its presence is the only routing signal there is.
@@ -3058,6 +4354,55 @@ export interface components {
             params: {
                 [key: string]: unknown;
             };
+        };
+        /** ReconstructionArtifact */
+        ReconstructionArtifact: {
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "ply" | "spz" | "glb" | "gltf" | "point-cloud";
+            /** Url */
+            url: string;
+        };
+        /** ReconstructionJob */
+        ReconstructionJob: {
+            /** Artifacts */
+            artifacts?: components["schemas"]["ReconstructionArtifact"][];
+            /** Camerasurl */
+            camerasUrl?: string | null;
+            /** Diagnosticsurl */
+            diagnosticsUrl?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            /** Progress */
+            progress?: number | null;
+            /** Stage */
+            stage?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed";
+        };
+        /** ReferenceGenerationRequest */
+        ReferenceGenerationRequest: {
+            /** Images */
+            images?: string[];
+            /** Prompt */
+            prompt: string;
+        };
+        /** ReferencesRequest */
+        ReferencesRequest: {
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Images */
+            images: string[];
         };
         /** RenderConfig */
         RenderConfig: {
@@ -3134,6 +4479,14 @@ export interface components {
             groundSampleDistanceM?: number | null;
             /** Pointspacingm */
             pointSpacingM?: number | null;
+        };
+        /** Run */
+        Run: {
+            /**
+             * Confirmtraining
+             * @constant
+             */
+            confirmTraining: true;
         };
         /**
          * RunStatus
@@ -3236,6 +4589,37 @@ export interface components {
          * @enum {string}
          */
         ScaleSource: "arkit" | "exif-gps" | "manual" | "camera-height-estimate" | "unresolved";
+        /** Select */
+        Select: {
+            /** Artifactid */
+            artifactId: string;
+        };
+        /** SessionCreate */
+        SessionCreate: {
+            /** Inputs */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /** Modelid */
+            modelId: string;
+            /**
+             * Prompt
+             * @default
+             */
+            prompt?: string;
+            /**
+             * Quality
+             * @default balanced
+             * @enum {string}
+             */
+            quality?: "quality" | "balanced" | "low-latency" | "max-fps";
+            /** Resolution */
+            resolution?: string | null;
+            /** Seed */
+            seed?: number | null;
+            /** Workerid */
+            workerId: string;
+        };
         /**
          * SidecarAttach
          * @description Attach the files staged under `stagingPrefix` to an asset's tileset.
@@ -3507,6 +4891,49 @@ export interface components {
             /** Truncated */
             truncated: boolean;
         };
+        /** SynthesisRequest */
+        SynthesisRequest: {
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Images */
+            images?: string[];
+            /**
+             * Kind
+             * @default portrait
+             * @enum {string}
+             */
+            kind?: "portrait" | "full-body" | "scene";
+            /**
+             * Sceneprompt
+             * @default
+             */
+            scenePrompt?: string;
+        };
+        /** SynthesisResult */
+        SynthesisResult: {
+            /**
+             * Conditioningmethod
+             * @default reference-image-edit
+             * @enum {string}
+             */
+            conditioningMethod?: "reference-image-edit" | "text-to-image";
+            /** Image */
+            image: string;
+            /**
+             * Note
+             * @default Generated from reference images. Appearance may drift; this is image conditioning, not native model identity support.
+             */
+            note?: string;
+            /**
+             * Source
+             * @default image-model
+             * @constant
+             */
+            source?: "image-model";
+        };
         /** TemporalExtent */
         TemporalExtent: {
             /** End */
@@ -3625,6 +5052,22 @@ export interface components {
              */
             url: string;
         };
+        /** WorkerCreate */
+        WorkerCreate: {
+            /** Gputypeid */
+            gpuTypeId?: string | null;
+            /**
+             * Modelid
+             * @default astronex-world
+             */
+            modelId?: string;
+            /**
+             * Provider
+             * @default runpod
+             * @enum {string}
+             */
+            provider?: "runpod" | "local" | "modal" | "lambda";
+        };
         /** XyzSource */
         XyzSource: {
             /** Maximumlevel */
@@ -3656,7 +5099,10 @@ export interface components {
     headers: never;
     pathItems: never;
 }
+export type SchemaAction = components['schemas']['Action'];
+export type SchemaAppearancePackage = components['schemas']['AppearancePackage'];
 export type SchemaArcGisMapServerSource = components['schemas']['ArcGisMapServerSource'];
+export type SchemaArtifact = components['schemas']['Artifact'];
 export type SchemaArtifactKind = components['schemas']['ArtifactKind'];
 export type SchemaArtifactRead = components['schemas']['ArtifactRead'];
 export type SchemaArtifactReference = components['schemas']['ArtifactReference'];
@@ -3668,11 +5114,16 @@ export type SchemaAssetRead = components['schemas']['AssetRead'];
 export type SchemaAssetScaleUpdate = components['schemas']['AssetScaleUpdate'];
 export type SchemaAssetUpdate = components['schemas']['AssetUpdate'];
 export type SchemaAttribution = components['schemas']['Attribution'];
+export type SchemaBillingImport = components['schemas']['BillingImport'];
+export type SchemaBillingLine = components['schemas']['BillingLine'];
+export type SchemaBinding = components['schemas']['Binding'];
+export type SchemaBodyCreateReconstructionApiV1WorldsReconstructionsPost = components['schemas']['Body_create_reconstruction_api_v1_worlds_reconstructions_post'];
 export type SchemaBodyUploadThumbnailApiV1SitesSiteIdThumbnailPost = components['schemas']['Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post'];
 export type SchemaBoundingBox = components['schemas']['BoundingBox'];
 export type SchemaBusyWindow = components['schemas']['BusyWindow'];
 export type SchemaCameraBookmarkCreate = components['schemas']['CameraBookmarkCreate'];
 export type SchemaCameraBookmarkRead = components['schemas']['CameraBookmarkRead'];
+export type SchemaCapabilities = components['schemas']['Capabilities'];
 export type SchemaCaptureCreate = components['schemas']['CaptureCreate'];
 export type SchemaCaptureDetail = components['schemas']['CaptureDetail'];
 export type SchemaCaptureFileComplete = components['schemas']['CaptureFileComplete'];
@@ -3692,18 +5143,36 @@ export type SchemaCesiumIonSource = components['schemas']['CesiumIonSource'];
 export type SchemaCesiumIonTerrainSource = components['schemas']['CesiumIonTerrainSource'];
 export type SchemaClarification = components['schemas']['Clarification'];
 export type SchemaClarificationOption = components['schemas']['ClarificationOption'];
+export type SchemaCommandRequest = components['schemas']['CommandRequest'];
+export type SchemaCommandResult = components['schemas']['CommandResult'];
+export type SchemaConsistencyRequest = components['schemas']['ConsistencyRequest'];
+export type SchemaConsistencyResult = components['schemas']['ConsistencyResult'];
+export type SchemaControlsResult = components['schemas']['ControlsResult'];
 export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
 export type SchemaCzmlSource = components['schemas']['CzmlSource'];
+export type SchemaDirectorRequest = components['schemas']['DirectorRequest'];
+export type SchemaDirectorResult = components['schemas']['DirectorResult'];
+export type SchemaGameEvent = components['schemas']['GameEvent'];
+export type SchemaGameResult = components['schemas']['GameResult'];
 export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];
 export type SchemaGeoPosition = components['schemas']['GeoPosition'];
 export type SchemaGeorefMethod = components['schemas']['GeorefMethod'];
 export type SchemaGooglePhotorealisticSource = components['schemas']['GooglePhotorealisticSource'];
 export type SchemaGroundSample = components['schemas']['GroundSample'];
 export type SchemaHealthStatus = components['schemas']['HealthStatus'];
+export type SchemaHeartbeat = components['schemas']['Heartbeat'];
+export type SchemaHighlight = components['schemas']['Highlight'];
+export type SchemaHighlightSample = components['schemas']['HighlightSample'];
+export type SchemaHighlightsRequest = components['schemas']['HighlightsRequest'];
+export type SchemaHighlightsResult = components['schemas']['HighlightsResult'];
+export type SchemaIntelligenceRequest = components['schemas']['IntelligenceRequest'];
+export type SchemaIntelligenceStatus = components['schemas']['IntelligenceStatus'];
 export type SchemaIonAssetMetadata = components['schemas']['IonAssetMetadata'];
 export type SchemaIonReconstructionCapabilities = components['schemas']['IonReconstructionCapabilities'];
 export type SchemaIonStatus = components['schemas']['IonStatus'];
+export type SchemaJob = components['schemas']['Job'];
 export type SchemaJobCreate = components['schemas']['JobCreate'];
+export type SchemaJobList = components['schemas']['JobList'];
 export type SchemaJobRead = components['schemas']['JobRead'];
 export type SchemaJobRetry = components['schemas']['JobRetry'];
 export type SchemaJobStepLog = components['schemas']['JobStepLog'];
@@ -3724,6 +5193,8 @@ export type SchemaLiveState = components['schemas']['LiveState'];
 export type SchemaMissingObject = components['schemas']['MissingObject'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
+export type SchemaObjectiveAssessment = components['schemas']['ObjectiveAssessment'];
+export type SchemaOffer = components['schemas']['Offer'];
 export type SchemaOrphanObject = components['schemas']['OrphanObject'];
 export type SchemaOutline = components['schemas']['Outline'];
 export type SchemaOutlinePoint = components['schemas']['OutlinePoint'];
@@ -3750,24 +5221,36 @@ export type SchemaPlanStatusUpdate = components['schemas']['PlanStatusUpdate'];
 export type SchemaPlanStep = components['schemas']['PlanStep'];
 export type SchemaPointCloudShading = components['schemas']['PointCloudShading'];
 export type SchemaPolygon = components['schemas']['Polygon'];
+export type SchemaPrepare = components['schemas']['Prepare'];
 export type SchemaPresignedPart = components['schemas']['PresignedPart'];
 export type SchemaProblem = components['schemas']['Problem'];
+export type SchemaProfile = components['schemas']['Profile'];
+export type SchemaPromptResult = components['schemas']['PromptResult'];
+export type SchemaProposedAction = components['schemas']['ProposedAction'];
 export type SchemaProvenance = components['schemas']['Provenance'];
 export type SchemaProviderRead = components['schemas']['ProviderRead'];
 export type SchemaQualityCounts = components['schemas']['QualityCounts'];
 export type SchemaQualityRoi = components['schemas']['QualityRoi'];
 export type SchemaQualityTip = components['schemas']['QualityTip'];
+export type SchemaQuote = components['schemas']['Quote'];
 export type SchemaRecipeGpu = components['schemas']['RecipeGpu'];
 export type SchemaRecipeRead = components['schemas']['RecipeRead'];
 export type SchemaRecipeStageRead = components['schemas']['RecipeStageRead'];
+export type SchemaReconstructionArtifact = components['schemas']['ReconstructionArtifact'];
+export type SchemaReconstructionJob = components['schemas']['ReconstructionJob'];
+export type SchemaReferenceGenerationRequest = components['schemas']['ReferenceGenerationRequest'];
+export type SchemaReferencesRequest = components['schemas']['ReferencesRequest'];
 export type SchemaRenderConfig = components['schemas']['RenderConfig'];
 export type SchemaRenderMetadata = components['schemas']['RenderMetadata'];
 export type SchemaRepresentation = components['schemas']['Representation'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
+export type SchemaRun = components['schemas']['Run'];
 export type SchemaRunStatus = components['schemas']['RunStatus'];
 export type SchemaScaleEvidence = components['schemas']['ScaleEvidence'];
 export type SchemaScaleEvidenceInput = components['schemas']['ScaleEvidenceInput'];
 export type SchemaScaleSource = components['schemas']['ScaleSource'];
+export type SchemaSelect = components['schemas']['Select'];
+export type SchemaSessionCreate = components['schemas']['SessionCreate'];
 export type SchemaSidecarAttach = components['schemas']['SidecarAttach'];
 export type SchemaSidecarAttachment = components['schemas']['SidecarAttachment'];
 export type SchemaSidecarFlag = components['schemas']['SidecarFlag'];
@@ -3778,6 +5261,8 @@ export type SchemaSiteSummary = components['schemas']['SiteSummary'];
 export type SchemaSiteUpdate = components['schemas']['SiteUpdate'];
 export type SchemaStacSource = components['schemas']['StacSource'];
 export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
+export type SchemaSynthesisRequest = components['schemas']['SynthesisRequest'];
+export type SchemaSynthesisResult = components['schemas']['SynthesisResult'];
 export type SchemaTemporalExtent = components['schemas']['TemporalExtent'];
 export type SchemaTilesUrlLayerSource = components['schemas']['TilesUrlLayerSource'];
 export type SchemaTilesUrlSource = components['schemas']['TilesUrlSource'];
@@ -3785,6 +5270,7 @@ export type SchemaUploadStatus = components['schemas']['UploadStatus'];
 export type SchemaUploadWindow = components['schemas']['UploadWindow'];
 export type SchemaWmsSource = components['schemas']['WmsSource'];
 export type SchemaWmtsSource = components['schemas']['WmtsSource'];
+export type SchemaWorkerCreate = components['schemas']['WorkerCreate'];
 export type SchemaXyzSource = components['schemas']['XyzSource'];
 export type $defs = Record<string, never>;
 export interface operations {
@@ -7458,6 +8944,2882 @@ export interface operations {
             };
             /** @description Object storage is not configured */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    billing_api_v1_worlds_billing_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    import_billing_api_v1_worlds_billing_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingImport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    runpod_billing_api_v1_worlds_billing_runpod__identity__get: {
+        parameters: {
+            query: {
+                endTime: string;
+                startTime: string;
+            };
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    catalog_api_v1_worlds_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    analyze_api_v1_worlds_characters_analyze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReferencesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppearancePackage"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    evaluate_api_v1_worlds_characters_evaluate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsistencyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsistencyResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    synthesize_api_v1_worlds_characters_synthesize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SynthesisRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SynthesisResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    generate_controls_api_v1_worlds_controls_generate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntelligenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlsResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    capabilities_api_v1_worlds_customization_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Capabilities"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    jobs_api_v1_worlds_customization_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobList"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    prepare_api_v1_worlds_customization_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Prepare"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    status_api_v1_worlds_customization_jobs__identity__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_api_v1_worlds_customization_jobs__identity__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    disable_api_v1_worlds_customization_jobs__identity__disable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    enable_api_v1_worlds_customization_jobs__identity__enable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Select"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    install_api_v1_worlds_customization_jobs__identity__install_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Select"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    run_api_v1_worlds_customization_jobs__identity__run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Run"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_game_api_v1_worlds_games_create_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntelligenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GameResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    interpret_command_api_v1_worlds_intelligence_command_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommandResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    direct_scene_api_v1_worlds_intelligence_director_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DirectorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectorResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    highlights_api_v1_worlds_intelligence_highlights_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HighlightsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HighlightsResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    intelligence_status_api_v1_worlds_intelligence_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntelligenceStatus"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    optimize_prompt_api_v1_worlds_prompts_optimize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntelligenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    providers_api_v1_worlds_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    provider_hardware_api_v1_worlds_providers__name__hardware_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: "runpod" | "local" | "modal" | "lambda";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    provider_quote_api_v1_worlds_providers__name__quote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: "runpod" | "local" | "modal" | "lambda";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Quote"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    readiness_api_v1_worlds_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_reconstruction_api_v1_worlds_reconstructions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_reconstruction_api_v1_worlds_reconstructions_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconstructionJob"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_reconstruction_api_v1_worlds_reconstructions__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconstructionJob"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_reconstruction_api_v1_worlds_reconstructions__job_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    capabilities_api_v1_worlds_reconstructions_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    generate_reference_api_v1_worlds_references_generate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReferenceGenerationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SynthesisResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sessions_api_v1_worlds_sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_session_api_v1_worlds_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    session_status_api_v1_worlds_sessions__identity__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stop_session_api_v1_worlds_sessions__identity__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    action_api_v1_worlds_sessions__identity__actions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Action"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    frame_api_v1_worlds_sessions__identity__frame_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    heartbeat_api_v1_worlds_sessions__identity__heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Heartbeat"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    offer_api_v1_worlds_sessions__identity__offer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Offer"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    snapshot_api_v1_worlds_sessions__identity__snapshot_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    transport_config_api_v1_worlds_sessions__identity__transport_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    usage_api_v1_worlds_usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_workers_api_v1_worlds_workers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_worker_api_v1_worlds_workers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    worker_status_api_v1_worlds_workers__identity__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    destroy_worker_api_v1_worlds_workers__identity__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stop_worker_api_v1_worlds_workers__identity__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

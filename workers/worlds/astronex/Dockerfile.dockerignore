@@ -1,0 +1,10 @@
+# Worker builds never send Earth data, provider credentials, or local libraries.
+**
+!workers/
+!workers/worlds/
+!workers/worlds/**
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/.env*
+**/benchmark-result*.json

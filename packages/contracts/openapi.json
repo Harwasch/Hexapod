@@ -1,6 +1,113 @@
 {
   "components": {
     "schemas": {
+      "Action": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "type": {
+            "enum": [
+              "native",
+              "prompt",
+              "semantic",
+              "pause",
+              "resume"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "Action",
+        "type": "object"
+      },
+      "AppearancePackage": {
+        "properties": {
+          "appearance": {
+            "maxLength": 3000,
+            "title": "Appearance",
+            "type": "string"
+          },
+          "clothing": {
+            "maxLength": 1500,
+            "title": "Clothing",
+            "type": "string"
+          },
+          "conditioningPrompt": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Conditioningprompt",
+            "type": "string"
+          },
+          "consistencyNotes": {
+            "items": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Consistencynotes",
+            "type": "array"
+          },
+          "distinguishingFeatures": {
+            "items": {
+              "maxLength": 300,
+              "type": "string"
+            },
+            "maxItems": 12,
+            "title": "Distinguishingfeatures",
+            "type": "array"
+          },
+          "identityMethod": {
+            "const": "reference-images",
+            "default": "reference-images",
+            "title": "Identitymethod",
+            "type": "string"
+          },
+          "source": {
+            "const": "vision-llm",
+            "default": "vision-llm",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "appearance",
+          "clothing",
+          "conditioningPrompt"
+        ],
+        "title": "AppearancePackage",
+        "type": "object"
+      },
       "ArcGisMapServerSource": {
         "additionalProperties": false,
         "properties": {
@@ -34,6 +141,30 @@
           "url"
         ],
         "title": "ArcGisMapServerSource",
+        "type": "object"
+      },
+      "Artifact": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size": {
+            "minimum": 0.0,
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "size"
+        ],
+        "title": "Artifact",
         "type": "object"
       },
       "ArtifactKind": {
@@ -1038,6 +1169,234 @@
         "title": "Attribution",
         "type": "object"
       },
+      "BillingImport": {
+        "additionalProperties": false,
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BillingLine"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "BillingImport",
+        "type": "object"
+      },
+      "BillingLine": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "maximum": 1000000000.0,
+                "minimum": -1000000000.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}|(?=[\\d.]{1,17}0*$)\\d{0,10}\\.\\d{0,6}0*$)",
+                "type": "string"
+              }
+            ],
+            "title": "Amount"
+          },
+          "category": {
+            "default": "other",
+            "enum": [
+              "compute",
+              "storage",
+              "network",
+              "tax",
+              "other"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Description",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "charge",
+              "credit"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "periodEnd": {
+            "format": "date-time",
+            "title": "Periodend",
+            "type": "string"
+          },
+          "periodStart": {
+            "format": "date-time",
+            "title": "Periodstart",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "runpod",
+              "lambda",
+              "modal",
+              "local"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "providerId": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Providerid"
+          },
+          "reference": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Reference",
+            "type": "string"
+          },
+          "source": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Source",
+            "type": "string"
+          },
+          "workerId": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workerid"
+          }
+        },
+        "required": [
+          "provider",
+          "reference",
+          "source",
+          "amount",
+          "currency",
+          "periodStart",
+          "periodEnd",
+          "kind"
+        ],
+        "title": "BillingLine",
+        "type": "object"
+      },
+      "Binding": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "experimental": {
+            "default": false,
+            "title": "Experimental",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 100,
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "maxLength": 30,
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 100,
+            "title": "Label",
+            "type": "string"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "type": {
+            "enum": [
+              "native",
+              "prompt",
+              "semantic"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "label",
+          "type"
+        ],
+        "title": "Binding",
+        "type": "object"
+      },
+      "Body_create_reconstruction_api_v1_worlds_reconstructions_post": {
+        "properties": {
+          "files": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "metadata": {
+            "default": "{}",
+            "title": "Metadata",
+            "type": "string"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "Body_create_reconstruction_api_v1_worlds_reconstructions_post",
+        "type": "object"
+      },
       "Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post": {
         "properties": {
           "file": {
@@ -1248,6 +1607,46 @@
           "createdAt"
         ],
         "title": "CameraBookmarkRead",
+        "type": "object"
+      },
+      "Capabilities": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "maxConcurrentJobs": {
+            "default": 0,
+            "title": "Maxconcurrentjobs",
+            "type": "integer"
+          },
+          "maxTrainingSeconds": {
+            "default": 0,
+            "title": "Maxtrainingseconds",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/Profile"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "trainingEnabled": {
+            "default": false,
+            "title": "Trainingenabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured",
+          "message"
+        ],
+        "title": "Capabilities",
         "type": "object"
       },
       "CaptureCreate": {
@@ -2481,6 +2880,249 @@
         "title": "ClarificationOption",
         "type": "object"
       },
+      "CommandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "additionalProperties": true,
+            "title": "Capabilities",
+            "type": "object"
+          },
+          "command": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Command",
+            "type": "string"
+          },
+          "elapsedSeconds": {
+            "default": 0,
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Elapsedseconds",
+            "type": "number"
+          },
+          "frame": {
+            "maxLength": 2800000,
+            "minLength": 1,
+            "title": "Frame",
+            "type": "string"
+          },
+          "modelId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Modelid",
+            "type": "string"
+          },
+          "nativeActions": {
+            "items": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Nativeactions",
+            "type": "array"
+          },
+          "objective": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Objective",
+            "type": "string"
+          },
+          "prompt": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "recentEvents": {
+            "items": {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Recentevents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "prompt",
+          "modelId",
+          "frame",
+          "command"
+        ],
+        "title": "CommandRequest",
+        "type": "object"
+      },
+      "CommandResult": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposedAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "experimental": {
+            "default": true,
+            "title": "Experimental",
+            "type": "boolean"
+          },
+          "explanation": {
+            "maxLength": 1500,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "observation": {
+            "maxLength": 2000,
+            "title": "Observation",
+            "type": "string"
+          },
+          "source": {
+            "const": "vision-llm",
+            "default": "vision-llm",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "observation",
+          "explanation"
+        ],
+        "title": "CommandResult",
+        "type": "object"
+      },
+      "ConsistencyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "maxLength": 2800000,
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Candidates",
+            "type": "array"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Description",
+            "type": "string"
+          },
+          "references": {
+            "items": {
+              "maxLength": 2800000,
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "References",
+            "type": "array"
+          }
+        },
+        "required": [
+          "references",
+          "candidates"
+        ],
+        "title": "ConsistencyRequest",
+        "type": "object"
+      },
+      "ConsistencyResult": {
+        "properties": {
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "differences": {
+            "items": {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Differences",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "metric": {
+            "const": "qualitative-appearance-consistency",
+            "default": "qualitative-appearance-consistency",
+            "title": "Metric",
+            "type": "string"
+          },
+          "note": {
+            "default": "An AI visual assessment, not a biometric identity metric or proof that two images show the same person.",
+            "title": "Note",
+            "type": "string"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "number"
+          },
+          "source": {
+            "const": "vision-llm",
+            "default": "vision-llm",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "score",
+          "confidence",
+          "evidence"
+        ],
+        "title": "ConsistencyResult",
+        "type": "object"
+      },
+      "ControlsResult": {
+        "properties": {
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/Binding"
+            },
+            "maxItems": 24,
+            "title": "Bindings",
+            "type": "array"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "llm",
+              "local-guide"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bindings",
+          "source"
+        ],
+        "title": "ControlsResult",
+        "type": "object"
+      },
       "CrsMetadata": {
         "additionalProperties": false,
         "properties": {
@@ -2545,6 +3187,205 @@
           "url"
         ],
         "title": "CzmlSource",
+        "type": "object"
+      },
+      "DirectorRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "additionalProperties": true,
+            "title": "Capabilities",
+            "type": "object"
+          },
+          "elapsedSeconds": {
+            "default": 0,
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Elapsedseconds",
+            "type": "number"
+          },
+          "frame": {
+            "maxLength": 2800000,
+            "minLength": 1,
+            "title": "Frame",
+            "type": "string"
+          },
+          "mode": {
+            "default": "cinematic",
+            "enum": [
+              "relaxed",
+              "cinematic",
+              "challenging",
+              "chaotic"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "modelId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Modelid",
+            "type": "string"
+          },
+          "nativeActions": {
+            "items": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Nativeactions",
+            "type": "array"
+          },
+          "objective": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Objective",
+            "type": "string"
+          },
+          "prompt": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "recentEvents": {
+            "items": {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Recentevents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "prompt",
+          "modelId",
+          "frame"
+        ],
+        "title": "DirectorRequest",
+        "type": "object"
+      },
+      "DirectorResult": {
+        "properties": {
+          "event": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposedAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "objective": {
+            "$ref": "#/components/schemas/ObjectiveAssessment"
+          },
+          "observation": {
+            "maxLength": 2000,
+            "title": "Observation",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1500,
+            "title": "Reason",
+            "type": "string"
+          },
+          "source": {
+            "const": "vision-llm",
+            "default": "vision-llm",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "observation",
+          "objective",
+          "reason"
+        ],
+        "title": "DirectorResult",
+        "type": "object"
+      },
+      "GameEvent": {
+        "properties": {
+          "atSeconds": {
+            "maximum": 3600.0,
+            "minimum": 10.0,
+            "title": "Atseconds",
+            "type": "integer"
+          },
+          "prompt": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "atSeconds",
+          "prompt"
+        ],
+        "title": "GameEvent",
+        "type": "object"
+      },
+      "GameResult": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/GameEvent"
+            },
+            "maxItems": 12,
+            "title": "Events",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "objective": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Objective",
+            "type": "string"
+          },
+          "premise": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Premise",
+            "type": "string"
+          },
+          "prompt": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "llm",
+              "local-guide"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "premise",
+          "objective",
+          "prompt",
+          "source"
+        ],
+        "title": "GameResult",
         "type": "object"
       },
       "GeoJsonSource": {
@@ -2726,6 +3567,247 @@
         "title": "HealthStatus",
         "type": "object"
       },
+      "Heartbeat": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "default": true,
+            "title": "Active",
+            "type": "boolean"
+          }
+        },
+        "title": "Heartbeat",
+        "type": "object"
+      },
+      "Highlight": {
+        "properties": {
+          "endSeconds": {
+            "exclusiveMinimum": 0.0,
+            "title": "Endseconds",
+            "type": "number"
+          },
+          "evidence": {
+            "maxLength": 1000,
+            "title": "Evidence",
+            "type": "string"
+          },
+          "startSeconds": {
+            "minimum": 0.0,
+            "title": "Startseconds",
+            "type": "number"
+          },
+          "title": {
+            "maxLength": 100,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "startSeconds",
+          "endSeconds",
+          "title",
+          "evidence"
+        ],
+        "title": "Highlight",
+        "type": "object"
+      },
+      "HighlightSample": {
+        "properties": {
+          "atSeconds": {
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Atseconds",
+            "type": "number"
+          },
+          "image": {
+            "maxLength": 2800000,
+            "title": "Image",
+            "type": "string"
+          }
+        },
+        "required": [
+          "atSeconds",
+          "image"
+        ],
+        "title": "HighlightSample",
+        "type": "object"
+      },
+      "HighlightsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "durationSeconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 86400.0,
+            "title": "Durationseconds",
+            "type": "number"
+          },
+          "prompt": {
+            "default": "",
+            "maxLength": 8000,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/HighlightSample"
+            },
+            "maxItems": 8,
+            "minItems": 2,
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "samples",
+          "durationSeconds"
+        ],
+        "title": "HighlightsRequest",
+        "type": "object"
+      },
+      "HighlightsResult": {
+        "properties": {
+          "highlights": {
+            "items": {
+              "$ref": "#/components/schemas/Highlight"
+            },
+            "maxItems": 8,
+            "title": "Highlights",
+            "type": "array"
+          },
+          "note": {
+            "default": "Suggestions based on sampled frames, not a full video analysis. Review before sharing.",
+            "title": "Note",
+            "type": "string"
+          },
+          "source": {
+            "const": "vision-llm",
+            "default": "vision-llm",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "highlights"
+        ],
+        "title": "HighlightsResult",
+        "type": "object"
+      },
+      "IntelligenceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Capabilities",
+            "type": "object"
+          },
+          "experience": {
+            "default": "exploration",
+            "maxLength": 300,
+            "title": "Experience",
+            "type": "string"
+          },
+          "modelId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Modelid",
+            "type": "string"
+          },
+          "nativeActions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Nativeactions",
+            "type": "array"
+          },
+          "prompt": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "modelId"
+        ],
+        "title": "IntelligenceRequest",
+        "type": "object"
+      },
+      "IntelligenceStatus": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "imageConfigured": {
+            "default": false,
+            "title": "Imageconfigured",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "llm",
+              "local-guide"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "visionConfigured": {
+            "default": false,
+            "title": "Visionconfigured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured",
+          "source",
+          "message"
+        ],
+        "title": "IntelligenceStatus",
+        "type": "object"
+      },
       "IonAssetMetadata": {
         "additionalProperties": false,
         "properties": {
@@ -2868,6 +3950,121 @@
         "title": "IonStatus",
         "type": "object"
       },
+      "Job": {
+        "properties": {
+          "activationCompatible": {
+            "title": "Activationcompatible",
+            "type": "boolean"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "number"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finishedat"
+          },
+          "gpuValidated": {
+            "default": false,
+            "title": "Gpuvalidated",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "installed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Installed",
+            "type": "array"
+          },
+          "maxTrainingSeconds": {
+            "title": "Maxtrainingseconds",
+            "type": "integer"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "modelId": {
+            "title": "Modelid",
+            "type": "string"
+          },
+          "profileId": {
+            "title": "Profileid",
+            "type": "string"
+          },
+          "selectedArtifactId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selectedartifactid"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "enum": [
+              "prepared",
+              "running",
+              "cancelling",
+              "cancelled",
+              "completed",
+              "failed",
+              "unknown",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "profileId",
+          "modelId",
+          "stage",
+          "status",
+          "createdAt",
+          "maxTrainingSeconds",
+          "activationCompatible"
+        ],
+        "title": "Job",
+        "type": "object"
+      },
       "JobCreate": {
         "additionalProperties": false,
         "description": "Launch a run. `recipeVersion` is resolved from the recipe registry rather than\nsupplied, so a caller cannot claim a run used a version that does not exist.",
@@ -2912,6 +4109,22 @@
           "recipe"
         ],
         "title": "JobCreate",
+        "type": "object"
+      },
+      "JobList": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "title": "JobList",
         "type": "object"
       },
       "JobRead": {
@@ -4506,6 +5719,60 @@
           "urlTemplate"
         ],
         "title": "MvtSource",
+        "type": "object"
+      },
+      "ObjectiveAssessment": {
+        "properties": {
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "evidence": {
+            "maxLength": 2000,
+            "title": "Evidence",
+            "type": "string"
+          },
+          "progress": {
+            "enum": [
+              "unknown",
+              "not-started",
+              "in-progress",
+              "appears-complete"
+            ],
+            "title": "Progress",
+            "type": "string"
+          }
+        },
+        "required": [
+          "progress",
+          "confidence",
+          "evidence"
+        ],
+        "title": "ObjectiveAssessment",
+        "type": "object"
+      },
+      "Offer": {
+        "additionalProperties": false,
+        "properties": {
+          "sdp": {
+            "maxLength": 100000,
+            "minLength": 1,
+            "title": "Sdp",
+            "type": "string"
+          },
+          "type": {
+            "const": "offer",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "sdp"
+        ],
+        "title": "Offer",
         "type": "object"
       },
       "OrphanObject": {
@@ -6116,6 +7383,21 @@
         "title": "Polygon",
         "type": "object"
       },
+      "Prepare": {
+        "additionalProperties": false,
+        "properties": {
+          "profileId": {
+            "pattern": "^[a-zA-Z0-9_-]{1,80}$",
+            "title": "Profileid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profileId"
+        ],
+        "title": "Prepare",
+        "type": "object"
+      },
       "PresignedPart": {
         "additionalProperties": false,
         "description": "One part of a multipart upload, and the URL to PUT it to.\n\nThe uploader must read the `ETag` response header off that PUT and send it back to\n`.../complete` \u2014 which needs `ExposeHeaders: [\"ETag\"]` in the bucket's CORS rule\n(infra/cors/upload.json), or the header is invisible to JavaScript.",
@@ -6192,6 +7474,132 @@
           "status"
         ],
         "title": "Problem",
+        "type": "object"
+      },
+      "Profile": {
+        "properties": {
+          "activationCompatible": {
+            "title": "Activationcompatible",
+            "type": "boolean"
+          },
+          "datasetLabel": {
+            "title": "Datasetlabel",
+            "type": "string"
+          },
+          "devices": {
+            "const": 8,
+            "title": "Devices",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "modelId": {
+            "enum": [
+              "forge-wm",
+              "sana-wm"
+            ],
+            "title": "Modelid",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "modelId",
+          "stage",
+          "devices",
+          "datasetLabel",
+          "activationCompatible"
+        ],
+        "title": "Profile",
+        "type": "object"
+      },
+      "PromptResult": {
+        "properties": {
+          "enhanced": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Enhanced",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "original": {
+            "title": "Original",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "llm",
+              "local-guide"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "original",
+          "enhanced",
+          "source"
+        ],
+        "title": "PromptResult",
+        "type": "object"
+      },
+      "ProposedAction": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 1500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "type": {
+            "enum": [
+              "native",
+              "prompt",
+              "semantic"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "ProposedAction",
         "type": "object"
       },
       "Provenance": {
@@ -6427,6 +7835,38 @@
         "title": "QualityTip",
         "type": "object"
       },
+      "Quote": {
+        "additionalProperties": false,
+        "properties": {
+          "durationMinutes": {
+            "default": 10,
+            "exclusiveMinimum": 0.0,
+            "maximum": 240.0,
+            "title": "Durationminutes",
+            "type": "number"
+          },
+          "gpuTypeId": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gputypeid"
+          },
+          "modelId": {
+            "default": "astronex-world",
+            "pattern": "^[a-zA-Z0-9_-]{1,100}$",
+            "title": "Modelid",
+            "type": "string"
+          }
+        },
+        "title": "Quote",
+        "type": "object"
+      },
       "RecipeGpu": {
         "additionalProperties": false,
         "description": "A stage's GPU requirement. Its presence is the only routing signal there is.",
@@ -6521,6 +7961,173 @@
           "gpu"
         ],
         "title": "RecipeStageRead",
+        "type": "object"
+      },
+      "ReconstructionArtifact": {
+        "properties": {
+          "format": {
+            "enum": [
+              "ply",
+              "spz",
+              "glb",
+              "gltf",
+              "point-cloud"
+            ],
+            "title": "Format",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "format",
+          "url"
+        ],
+        "title": "ReconstructionArtifact",
+        "type": "object"
+      },
+      "ReconstructionJob": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ReconstructionArtifact"
+            },
+            "maxItems": 10,
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "camerasUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camerasurl"
+          },
+          "diagnosticsUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diagnosticsurl"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,100}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "ReconstructionJob",
+        "type": "object"
+      },
+      "ReferenceGenerationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "images": {
+            "items": {
+              "maxLength": 2800000,
+              "type": "string"
+            },
+            "maxItems": 6,
+            "title": "Images",
+            "type": "array"
+          },
+          "prompt": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "ReferenceGenerationRequest",
+        "type": "object"
+      },
+      "ReferencesRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Description",
+            "type": "string"
+          },
+          "images": {
+            "items": {
+              "maxLength": 2800000,
+              "type": "string"
+            },
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Images",
+            "type": "array"
+          }
+        },
+        "required": [
+          "images"
+        ],
+        "title": "ReferencesRequest",
         "type": "object"
       },
       "RenderConfig": {
@@ -6738,6 +8345,21 @@
           }
         },
         "title": "ResolutionMetadata",
+        "type": "object"
+      },
+      "Run": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmTraining": {
+            "const": true,
+            "title": "Confirmtraining",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirmTraining"
+        ],
+        "title": "Run",
         "type": "object"
       },
       "RunStatus": {
@@ -7055,6 +8677,93 @@
         ],
         "title": "ScaleSource",
         "type": "string"
+      },
+      "Select": {
+        "additionalProperties": false,
+        "properties": {
+          "artifactId": {
+            "pattern": "^[a-zA-Z0-9_-]{1,80}$",
+            "title": "Artifactid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifactId"
+        ],
+        "title": "Select",
+        "type": "object"
+      },
+      "SessionCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "inputs": {
+            "additionalProperties": true,
+            "title": "Inputs",
+            "type": "object"
+          },
+          "modelId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Modelid",
+            "type": "string"
+          },
+          "prompt": {
+            "default": "",
+            "maxLength": 16000,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "quality": {
+            "default": "balanced",
+            "enum": [
+              "quality",
+              "balanced",
+              "low-latency",
+              "max-fps"
+            ],
+            "title": "Quality",
+            "type": "string"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "pattern": "^\\d{2,4}x\\d{2,4}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "maximum": 4294967295.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "workerId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Workerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workerId",
+          "modelId"
+        ],
+        "title": "SessionCreate",
+        "type": "object"
       },
       "SidecarAttach": {
         "additionalProperties": false,
@@ -7866,6 +9575,77 @@
         "title": "StorageReconciliation",
         "type": "object"
       },
+      "SynthesisRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Description",
+            "type": "string"
+          },
+          "images": {
+            "items": {
+              "maxLength": 2800000,
+              "type": "string"
+            },
+            "maxItems": 6,
+            "title": "Images",
+            "type": "array"
+          },
+          "kind": {
+            "default": "portrait",
+            "enum": [
+              "portrait",
+              "full-body",
+              "scene"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "scenePrompt": {
+            "default": "",
+            "maxLength": 6000,
+            "title": "Sceneprompt",
+            "type": "string"
+          }
+        },
+        "title": "SynthesisRequest",
+        "type": "object"
+      },
+      "SynthesisResult": {
+        "properties": {
+          "conditioningMethod": {
+            "default": "reference-image-edit",
+            "enum": [
+              "reference-image-edit",
+              "text-to-image"
+            ],
+            "title": "Conditioningmethod",
+            "type": "string"
+          },
+          "image": {
+            "title": "Image",
+            "type": "string"
+          },
+          "note": {
+            "default": "Generated from reference images. Appearance may drift; this is image conditioning, not native model identity support.",
+            "title": "Note",
+            "type": "string"
+          },
+          "source": {
+            "const": "image-model",
+            "default": "image-model",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "title": "SynthesisResult",
+        "type": "object"
+      },
       "TemporalExtent": {
         "additionalProperties": false,
         "properties": {
@@ -8114,6 +9894,43 @@
           "tileMatrixSetId"
         ],
         "title": "WmtsSource",
+        "type": "object"
+      },
+      "WorkerCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "gpuTypeId": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gputypeid"
+          },
+          "modelId": {
+            "default": "astronex-world",
+            "pattern": "^[a-zA-Z0-9_-]{1,100}$",
+            "title": "Modelid",
+            "type": "string"
+          },
+          "provider": {
+            "default": "runpod",
+            "enum": [
+              "runpod",
+              "local",
+              "modal",
+              "lambda"
+            ],
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "title": "WorkerCreate",
         "type": "object"
       },
       "XyzSource": {
@@ -13133,6 +14950,3734 @@
         "summary": "Reconcile object storage against the database, in both directions",
         "tags": [
           "storage"
+        ]
+      }
+    },
+    "/api/v1/worlds/billing": {
+      "get": {
+        "operationId": "billing_api_v1_worlds_billing_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 10000,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Billing Api V1 Worlds Billing Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Billing",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/billing/import": {
+      "post": {
+        "operationId": "import_billing_api_v1_worlds_billing_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Import Billing Api V1 Worlds Billing Import Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Import Billing",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/billing/runpod/{identity}": {
+      "get": {
+        "operationId": "runpod_billing_api_v1_worlds_billing_runpod__identity__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "startTime",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Starttime",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "endTime",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Endtime",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Runpod Billing Api V1 Worlds Billing Runpod  Identity  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Runpod Billing",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/catalog": {
+      "get": {
+        "description": "Live capability inspection shares the bounded readiness probes.",
+        "operationId": "catalog_api_v1_worlds_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Catalog Api V1 Worlds Catalog Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Catalog",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/characters/analyze": {
+      "post": {
+        "operationId": "analyze_api_v1_worlds_characters_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferencesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppearancePackage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Analyze",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/characters/evaluate": {
+      "post": {
+        "operationId": "evaluate_api_v1_worlds_characters_evaluate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsistencyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Evaluate",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/characters/synthesize": {
+      "post": {
+        "operationId": "synthesize_api_v1_worlds_characters_synthesize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SynthesisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynthesisResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Synthesize",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/controls/generate": {
+      "post": {
+        "operationId": "generate_controls_api_v1_worlds_controls_generate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntelligenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlsResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Generate Controls",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/customization/capabilities": {
+      "get": {
+        "operationId": "capabilities_api_v1_worlds_customization_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Capabilities",
+        "tags": [
+          "worlds customization"
+        ]
+      }
+    },
+    "/api/v1/worlds/customization/jobs": {
+      "get": {
+        "operationId": "jobs_api_v1_worlds_customization_jobs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Jobs",
+        "tags": [
+          "worlds customization"
+        ]
+      },
+      "post": {
+        "operationId": "prepare_api_v1_worlds_customization_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Prepare"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Prepare",
+        "tags": [
+          "worlds customization"
+        ]
+      }
+    },
+    "/api/v1/worlds/customization/jobs/{identity}": {
+      "get": {
+        "operationId": "status_api_v1_worlds_customization_jobs__identity__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Status",
+        "tags": [
+          "worlds customization"
+        ]
+      }
+    },
+    "/api/v1/worlds/customization/jobs/{identity}/cancel": {
+      "post": {
+        "operationId": "cancel_api_v1_worlds_customization_jobs__identity__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Cancel",
+        "tags": [
+          "worlds customization"
+        ]
+      }
+    },
+    "/api/v1/worlds/customization/jobs/{identity}/disable": {
+      "post": {
+        "operationId": "disable_api_v1_worlds_customization_jobs__identity__disable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Disable",
+        "tags": [
+          "worlds customization"
+        ]
+      }
+    },
+    "/api/v1/worlds/customization/jobs/{identity}/enable": {
+      "post": {
+        "operationId": "enable_api_v1_worlds_customization_jobs__identity__enable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Select"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Enable",
+        "tags": [
+          "worlds customization"
+        ]
+      }
+    },
+    "/api/v1/worlds/customization/jobs/{identity}/install": {
+      "post": {
+        "operationId": "install_api_v1_worlds_customization_jobs__identity__install_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Select"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Install",
+        "tags": [
+          "worlds customization"
+        ]
+      }
+    },
+    "/api/v1/worlds/customization/jobs/{identity}/run": {
+      "post": {
+        "operationId": "run_api_v1_worlds_customization_jobs__identity__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Run"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Run",
+        "tags": [
+          "worlds customization"
+        ]
+      }
+    },
+    "/api/v1/worlds/games/create": {
+      "post": {
+        "operationId": "create_game_api_v1_worlds_games_create_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntelligenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create Game",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/intelligence/command": {
+      "post": {
+        "operationId": "interpret_command_api_v1_worlds_intelligence_command_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Interpret Command",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/intelligence/director": {
+      "post": {
+        "operationId": "direct_scene_api_v1_worlds_intelligence_director_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectorResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Direct Scene",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/intelligence/highlights": {
+      "post": {
+        "operationId": "highlights_api_v1_worlds_intelligence_highlights_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HighlightsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HighlightsResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Highlights",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/intelligence/status": {
+      "get": {
+        "operationId": "intelligence_status_api_v1_worlds_intelligence_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntelligenceStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Intelligence Status",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/prompts/optimize": {
+      "post": {
+        "operationId": "optimize_prompt_api_v1_worlds_prompts_optimize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntelligenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Optimize Prompt",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/providers": {
+      "get": {
+        "operationId": "providers_api_v1_worlds_providers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Providers Api V1 Worlds Providers Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Providers",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/providers/{name}/hardware": {
+      "get": {
+        "operationId": "provider_hardware_api_v1_worlds_providers__name__hardware_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "enum": [
+                "runpod",
+                "local",
+                "modal",
+                "lambda"
+              ],
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Provider Hardware Api V1 Worlds Providers  Name  Hardware Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Provider Hardware",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/providers/{name}/quote": {
+      "post": {
+        "operationId": "provider_quote_api_v1_worlds_providers__name__quote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "enum": [
+                "runpod",
+                "local",
+                "modal",
+                "lambda"
+              ],
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Quote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Provider Quote Api V1 Worlds Providers  Name  Quote Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Provider Quote",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/readiness": {
+      "get": {
+        "operationId": "readiness_api_v1_worlds_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Readiness Api V1 Worlds Readiness Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Readiness",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/reconstructions": {
+      "post": {
+        "operationId": "create_reconstruction_api_v1_worlds_reconstructions_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_reconstruction_api_v1_worlds_reconstructions_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconstructionJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create Reconstruction",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/reconstructions/capabilities": {
+      "get": {
+        "operationId": "capabilities_api_v1_worlds_reconstructions_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Capabilities Api V1 Worlds Reconstructions Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Capabilities",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/reconstructions/{job_id}": {
+      "delete": {
+        "description": "Explicit worker cleanup; success requires the gateway to confirm deletion.\n\nThe external worker must delete the job's input, partial and output media. A\ngateway without this contract returns an error; local state is not cleared.",
+        "operationId": "delete_reconstruction_api_v1_worlds_reconstructions__job_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Delete Reconstruction Api V1 Worlds Reconstructions  Job Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Delete Reconstruction",
+        "tags": [
+          "worlds"
+        ]
+      },
+      "get": {
+        "operationId": "get_reconstruction_api_v1_worlds_reconstructions__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconstructionJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get Reconstruction",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/references/generate": {
+      "post": {
+        "operationId": "generate_reference_api_v1_worlds_references_generate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferenceGenerationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynthesisResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Generate Reference",
+        "tags": [
+          "worlds intelligence"
+        ]
+      }
+    },
+    "/api/v1/worlds/sessions": {
+      "get": {
+        "operationId": "sessions_api_v1_worlds_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sessions Api V1 Worlds Sessions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Sessions",
+        "tags": [
+          "worlds"
+        ]
+      },
+      "post": {
+        "operationId": "create_session_api_v1_worlds_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Session Api V1 Worlds Sessions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create Session",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/sessions/{identity}": {
+      "delete": {
+        "operationId": "stop_session_api_v1_worlds_sessions__identity__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stop Session Api V1 Worlds Sessions  Identity  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Stop Session",
+        "tags": [
+          "worlds"
+        ]
+      },
+      "get": {
+        "operationId": "session_status_api_v1_worlds_sessions__identity__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Session Status Api V1 Worlds Sessions  Identity  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Session Status",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/sessions/{identity}/actions": {
+      "post": {
+        "operationId": "action_api_v1_worlds_sessions__identity__actions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Action"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Action Api V1 Worlds Sessions  Identity  Actions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Action",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/sessions/{identity}/frame": {
+      "get": {
+        "operationId": "frame_api_v1_worlds_sessions__identity__frame_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Frame",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/sessions/{identity}/heartbeat": {
+      "post": {
+        "operationId": "heartbeat_api_v1_worlds_sessions__identity__heartbeat_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Heartbeat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Heartbeat Api V1 Worlds Sessions  Identity  Heartbeat Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Heartbeat",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/sessions/{identity}/offer": {
+      "post": {
+        "operationId": "offer_api_v1_worlds_sessions__identity__offer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Offer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Offer Api V1 Worlds Sessions  Identity  Offer Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Offer",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/sessions/{identity}/snapshot": {
+      "post": {
+        "operationId": "snapshot_api_v1_worlds_sessions__identity__snapshot_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Snapshot Api V1 Worlds Sessions  Identity  Snapshot Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Snapshot",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/sessions/{identity}/transport-config": {
+      "get": {
+        "operationId": "transport_config_api_v1_worlds_sessions__identity__transport_config_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Transport Config Api V1 Worlds Sessions  Identity  Transport Config Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Transport Config",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/usage": {
+      "get": {
+        "operationId": "usage_api_v1_worlds_usage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Usage Api V1 Worlds Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Usage",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/workers": {
+      "get": {
+        "operationId": "list_workers_api_v1_worlds_workers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Workers Api V1 Worlds Workers Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "List Workers",
+        "tags": [
+          "worlds"
+        ]
+      },
+      "post": {
+        "operationId": "create_worker_api_v1_worlds_workers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Worker Api V1 Worlds Workers Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create Worker",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/workers/{identity}": {
+      "delete": {
+        "operationId": "destroy_worker_api_v1_worlds_workers__identity__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Destroy Worker Api V1 Worlds Workers  Identity  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Destroy Worker",
+        "tags": [
+          "worlds"
+        ]
+      },
+      "get": {
+        "operationId": "worker_status_api_v1_worlds_workers__identity__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Worker Status Api V1 Worlds Workers  Identity  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Worker Status",
+        "tags": [
+          "worlds"
+        ]
+      }
+    },
+    "/api/v1/worlds/workers/{identity}/stop": {
+      "post": {
+        "operationId": "stop_worker_api_v1_worlds_workers__identity__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stop Worker Api V1 Worlds Workers  Identity  Stop Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Stop Worker",
+        "tags": [
+          "worlds"
         ]
       }
     }

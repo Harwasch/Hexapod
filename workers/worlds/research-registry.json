@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "verifiedDate": "2026-10-09",
+  "evidenceType": "official-source-and-model-metadata",
+  "models": [
+    {
+      "id": "astronex-world",
+      "repository": "https://github.com/Astronex-Robotics/Astronex-World",
+      "sourceRevision": "27584bf1a89da01ef35a03b48d83bc818d2adf2b",
+      "readme": "https://raw.githubusercontent.com/Astronex-Robotics/Astronex-World/27584bf1a89da01ef35a03b48d83bc818d2adf2b/README.md",
+      "integrationStatus": "adapter-implemented-gpu-unverified",
+      "gpuValidated": false
+    },
+    {
+      "id": "matrix-game-3",
+      "repository": "https://github.com/SkyworkAI/Matrix-Game",
+      "sourceRevision": "756776d516233027631008761d4d40ddaea3e23a",
+      "readme": "https://raw.githubusercontent.com/SkyworkAI/Matrix-Game/756776d516233027631008761d4d40ddaea3e23a/README.md",
+      "integrationStatus": "adapter-implemented-gpu-unverified",
+      "gpuValidated": false,
+      "servingMode": "resident-chunks",
+      "nativeKVContinuity": false,
+      "customization": "inference-only-release"
+    },
+    {
+      "id": "sana-wm",
+      "repository": "https://github.com/NVlabs/Sana",
+      "sourceRevision": "f9178744c096dcf2a2ea773da183e341bcbeb044",
+      "readme": "https://raw.githubusercontent.com/NVlabs/Sana/f9178744c096dcf2a2ea773da183e341bcbeb044/README.md",
+      "integrationStatus": "adapter-implemented-gpu-unverified",
+      "gpuValidated": false,
+      "servingMode": "resident-chunks",
+      "nativeKVContinuity": false,
+      "customization": "full-upstream-training-cli"
+    },
+    {
+      "id": "hy-worldplay",
+      "repository": "https://github.com/Tencent-Hunyuan/HY-WorldPlay",
+      "sourceRevision": "1588e1336e842b03b0a7860c654ebd7c46bb065e",
+      "readme": "https://raw.githubusercontent.com/Tencent-Hunyuan/HY-WorldPlay/1588e1336e842b03b0a7860c654ebd7c46bb065e/README.md",
+      "integrationStatus": "research-only",
+      "gpuValidated": false
+    },
+    {
+      "id": "alayaworld",
+      "repository": "https://github.com/AlayaLab/AlayaWorld",
+      "sourceRevision": "7e7dcfe5b82419d665ffdd458815553e459a8a39",
+      "readme": "https://raw.githubusercontent.com/AlayaLab/AlayaWorld/7e7dcfe5b82419d665ffdd458815553e459a8a39/README.md",
+      "integrationStatus": "research-only",
+      "gpuValidated": false
+    },
+    {
+      "id": "lingbot-world",
+      "repository": "https://github.com/Robbyant/lingbot-world",
+      "sourceRevision": "a43bec7f8091c83e9b30b16b912f6fc906236fa6",
+      "readme": "https://raw.githubusercontent.com/Robbyant/lingbot-world/a43bec7f8091c83e9b30b16b912f6fc906236fa6/README.md",
+      "integrationStatus": "research-only",
+      "gpuValidated": false
+    },
+    {
+      "id": "lingbot-world-v2",
+      "repository": "https://github.com/Robbyant/lingbot-world-v2",
+      "sourceRevision": "1895d300d8ac936401689b26389f51cbd36530eb",
+      "readme": "https://raw.githubusercontent.com/Robbyant/lingbot-world-v2/1895d300d8ac936401689b26389f51cbd36530eb/README.md",
+      "integrationStatus": "research-only",
+      "gpuValidated": false
+    },
+    {
+      "id": "forge-wm",
+      "repository": "https://github.com/asdfo123/ForgeWM",
+      "sourceRevision": "a922c6b42d2e1dcfdc367a27a07c0148cb8ed6d8",
+      "readme": "https://raw.githubusercontent.com/asdfo123/ForgeWM/a922c6b42d2e1dcfdc367a27a07c0148cb8ed6d8/README.md",
+      "integrationStatus": "adapter-implemented-gpu-unverified",
+      "gpuValidated": false,
+      "servingMode": "resident-chunks",
+      "nativeKVContinuity": false,
+      "customization": "full-upstream-training-cli"
+    },
+    {
+      "id": "helix-world",
+      "repository": "https://github.com/NoizAI/HelixWorld",
+      "sourceRevision": "5bc3e0e219aadac6c153748347ccfd6c4bf0e777",
+      "readme": "https://raw.githubusercontent.com/NoizAI/HelixWorld/5bc3e0e219aadac6c153748347ccfd6c4bf0e777/README.md",
+      "integrationStatus": "adapter-implemented-gpu-unverified",
+      "gpuValidated": false,
+      "servingMode": "offline-clips",
+      "nativeKVContinuity": false,
+      "inputAudio": false,
+      "inputVideo": false,
+      "outputAudio": true,
+      "audioTransport": "webrtc-opus",
+      "audioContinuity": false,
+      "checkpointRevision": "0f6aa9f329a118fcf0e16e0d315da026455ad8da",
+      "localReadme": "workers/worlds/helixworld/README.md",
+      "customization": "inference-only-preview"
+    },
+    {
+      "id": "oasis",
+      "repository": "https://github.com/etched-ai/open-oasis",
+      "sourceRevision": "f59deef2c019c212bd0c5a3a5b986a51f3701847",
+      "readme": "https://raw.githubusercontent.com/etched-ai/open-oasis/f59deef2c019c212bd0c5a3a5b986a51f3701847/README.md",
+      "integrationStatus": "research-only",
+      "gpuValidated": false
+    },
+    {
+      "id": "diamond",
+      "repository": "https://github.com/eloialonso/diamond",
+      "sourceRevision": "5bcd1599755b4f2fae8e5e079e02f0728e174965",
+      "readme": "https://raw.githubusercontent.com/eloialonso/diamond/5bcd1599755b4f2fae8e5e079e02f0728e174965/README.md",
+      "integrationStatus": "research-only",
+      "gpuValidated": false
+    },
+    {
+      "id": "hunyuanworld-mirror",
+      "role": "reconstruction",
+      "repository": "https://github.com/Tencent-Hunyuan/HunyuanWorld-Mirror",
+      "sourceRevision": "c61300e47ce06db2f02c8e2551aae68be7ae3a0b",
+      "integrationStatus": "adapter-implemented-gpu-unverified",
+      "gpuValidated": false,
+      "servingMode": "reconstruction-jobs",
+      "checkpointRevision": "5574b7b0d5ac9d80e8a92976222370a0d20a57a0",
+      "output": [
+        "gaussian-ply",
+        "point-cloud-ply",
+        "depth-mesh-glb"
+      ],
+      "localReadme": "workers/worlds/reconstruction/README.md"
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "AlayaLab/AlayaWorld",
+      "sha": "e5b374e8e38e5e1025b521d879c5a6d2b1a129ca",
+      "gated": false,
+      "license": "other"
+    },
+    {
+      "id": "Astronex-Lab/Astronex-World",
+      "sha": "f06ea330f2ce5cabef5fbf175287fe323ec1218c",
+      "gated": false,
+      "license": "apache-2.0"
+    },
+    {
+      "id": "Efficient-Large-Model/SANA-WM_bidirectional",
+      "sha": "e96271d77398def8ebb9fc595e7c0056dc625ab7",
+      "gated": false,
+      "license": "apache-2.0"
+    },
+    {
+      "id": "Efficient-Large-Model/SANA-WM_streaming",
+      "sha": "c7694938c854b1fcc29468e9514f1ea2d0c4ba8e",
+      "gated": false,
+      "license": "apache-2.0"
+    },
+    {
+      "id": "Etched/oasis-500m",
+      "sha": "4ca7d2d811f4f0c6fd1d5719bf83f14af3446c0c",
+      "gated": "auto",
+      "license": "mit"
+    },
+    {
+      "id": "ForgeWM/ForgeWM",
+      "sha": "604011fe62d2f2ec1098ef7749c8306c937afa85",
+      "gated": false,
+      "license": "apache-2.0"
+    },
+    {
+      "id": "NoizAI/HelixWorld-preview",
+      "sha": "0f6aa9f329a118fcf0e16e0d315da026455ad8da",
+      "gated": false,
+      "license": "apache-2.0",
+      "observedLatestRevision": "35fd0b7abce2a7f863730ed6310d6c7aea9452ec",
+      "revisionReason": "Pinned by the reviewed upstream model manifest; later Hub HEAD is not substituted."
+    },
+    {
+      "id": "Skywork/Matrix-Game-3.0",
+      "sha": "382aa382a03cec057360755aa72c7735025770bb",
+      "gated": false,
+      "license": "apache-2.0"
+    },
+    {
+      "id": "eloialonso/diamond",
+      "sha": "5d4abca9af6ab1b3ab1c6fc228cacb7281130f7f",
+      "gated": false,
+      "license": null
+    },
+    {
+      "id": "robbyant/lingbot-world-base-cam",
+      "sha": "6fc824ffc338d64c97c77e2eb8c0f4cfc24d82bd",
+      "gated": false,
+      "license": "apache-2.0"
+    },
+    {
+      "id": "robbyant/lingbot-world-v2-1.3b-causal-fast",
+      "sha": "7e36a5f919f86cb4255cc9bfc30adb44963fbde1",
+      "gated": false,
+      "license": "cc-by-nc-sa-4.0"
+    },
+    {
+      "id": "tencent/HY-WorldPlay",
+      "sha": "f4c29235647707b571479a69b569e4166f9f5bf8",
+      "gated": false,
+      "license": "other"
+    },
+    {
+      "id": "Skywork/Matrix-Game-2.0",
+      "sha": "08c42d1a99e57e79df60a964bb815618cdf460f8",
+      "gated": false,
+      "license": "mit"
+    },
+    {
+      "id": "Efficient-Large-Model/gemma-2-2b-it",
+      "sha": "569d9809d0c8b6722d4d31b5a77a2ec7a400650a",
+      "gated": false,
+      "license": "gemma"
+    },
+    {
+      "id": "google/gemma-3-12b-it-qat-q4_0-unquantized",
+      "sha": "68f7ee4fbd59087436ada77ed2d62f373fdd4482",
+      "gated": "manual",
+      "license": "gemma"
+    },
+    {
+      "id": "tencent/HunyuanWorld-Mirror",
+      "sha": "5574b7b0d5ac9d80e8a92976222370a0d20a57a0",
+      "gated": false,
+      "license": "other",
+      "licenseUrl": "https://huggingface.co/tencent/HunyuanWorld-Mirror/blob/5574b7b0d5ac9d80e8a92976222370a0d20a57a0/License.txt"
+    }
+  ]
+}

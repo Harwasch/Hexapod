@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.pytest_cache
+.venv*
+tests
+*.safetensors
+*.pt
+*.pth
+.env*
+data

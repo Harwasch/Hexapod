@@ -43,12 +43,14 @@ function cleanBuild(): Record<string, string> {
     "admin.html": page("admin-1.js", ["helpers-1.js", "client-1.js"]),
     "upload.html": page("upload-1.js"),
     "view.html": page("view-1.js"),
+    "worlds.html": page("worlds-1.js"),
     "assets/index-1.js": `import{a as e}from"./cesium-1.js";import"./helpers-1.js";e();`,
     "assets/cesium-1.js": `const s="uniform float czm_frameNumber;";export{s as a};`,
     "assets/helpers-1.js": `var o=Object.assign;export{o as a};`,
     "assets/admin-1.js": `import{a as t}from"./helpers-1.js";import{r}from"./client-1.js";t(r);`,
     "assets/client-1.js": `import{a}from"./helpers-1.js";export const r=a;`,
     "assets/upload-1.js": `export {};`,
+    "assets/worlds-1.js": `export {};`,
     "assets/view-1.js": `const later=()=>import("./cesium-1.js");export{later};`,
   };
 }

@@ -31,7 +31,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 
 /** Pages that must not reach CesiumJS, and the one that is measured but allowed to. */
-export const CESIUM_FREE_PAGES = ["admin.html", "upload.html", "view.html"];
+export const CESIUM_FREE_PAGES = ["admin.html", "upload.html", "view.html", "worlds.html"];
 export const GLOBE_PAGE = "index.html";
 
 /** Engine chunks by name, and by the GLSL built-in prefix only CesiumJS's shaders use. */

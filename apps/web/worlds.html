@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#101310" />
+    <meta
+      name="description"
+      content="Imagine a world. Enter it. Explore neural worlds with your own models and compute, and keep your creations in your browser."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>
+      @font-face {
+        font-family: "Instrument Sans";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/fonts/instrument-sans-v4-latin.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Azeret Mono";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/fonts/azeret-mono-v21-latin.woff2") format("woff2");
+      }
+      body {
+        margin: 0;
+        background: #101310;
+        color: #eee;
+        font-family: "Instrument Sans", sans-serif;
+      }
+    </style>
+    <title>Worlds — Imagine. Enter. Explore.</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/worlds/main.tsx"></script>
+  </body>
+</html>
