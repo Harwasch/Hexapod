@@ -43,7 +43,11 @@ def harness(monkeypatch):
 
     def neon(path):
         if path.startswith("/projects?"):
-            return {"projects": [{"name": "test-project", "id": "project"}]}
+            return {
+                "projects": [
+                    {"name": "test-project", "id": "project", "pg_version": 17}
+                ]
+            }
         if path.endswith("/branches"):
             return {"branches": [{"id": "branch", "default": True}]}
         if path.endswith("/databases"):
@@ -73,17 +77,19 @@ def harness(monkeypatch):
                     "ledger": state["ledger"],
                 }
             )
-        elif args[0] == "pg_dump":
-            Path(args[args.index("--file") + 1]).write_bytes(
-                b"private database snapshot"
-            )
+        elif "pg_dump" in args:
+            Path(
+                args[args.index("--volume") + 1].split(":")[0], "database.dump"
+            ).write_bytes(b"private database snapshot")
         elif args[:2] == ["docker", "port"]:
             output = "127.0.0.1:54329"
-        elif args[0] == "pg_restore":
+        elif "pg_restore" in args:
             assert args[args.index("--dbname") + 1].startswith(
                 "postgresql://postgres:rehearsal-local@127.0.0.1:"
             )
-            assert Path(args[-1]).read_bytes() == state["backup"]
+            assert state["copied"] == state["backup"]
+        elif args[:2] == ["docker", "cp"]:
+            state["copied"] = Path(args[2]).read_bytes()
         elif args[0] == "psql":
             output = "0028"
         return SimpleNamespace(stdout=output, returncode=0)
@@ -119,7 +125,9 @@ def test_backup_download_restore_and_migration_are_separate_from_production(harn
     state, calls = harness
     release.main()
     assert state["backup"]
-    dump = next(kwargs for args, kwargs in calls if args[0] == "pg_dump")
+    assert any("postgres:17-bookworm" in args for args, _ in calls)
+    assert any("postgis/postgis:17-3.5" in args for args, _ in calls)
+    dump = next(kwargs for args, kwargs in calls if "pg_dump" in args)
     assert "ep-test-pooler.example" in dump["env"]["PGDATABASE"]
     migration = next(kwargs for args, kwargs in calls if "alembic" in args)
     assert "127.0.0.1" in migration["env"]["ALEMBIC_DATABASE_URL"]
@@ -140,7 +148,7 @@ def test_ambiguous_or_unsafe_release_stops_before_dump(harness, monkeypatch, cha
         monkeypatch.setenv("R2_PUBLIC_BUCKET", "private")
     with pytest.raises(RuntimeError):
         release.main()
-    assert not any(args[0] == "pg_dump" for args, _ in calls)
+    assert not any("pg_dump" in args for args, _ in calls)
 
 
 def test_failed_restore_does_not_run_migrations_and_removes_local_database(
@@ -150,7 +158,7 @@ def test_failed_restore_does_not_run_migrations_and_removes_local_database(
     original = release.run
 
     def fail_restore(args, **kwargs):
-        if args[0] == "pg_restore":
+        if "pg_restore" in args:
             raise subprocess.CalledProcessError(1, args)
         return original(args, **kwargs)
 

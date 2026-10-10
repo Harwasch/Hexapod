@@ -34,8 +34,20 @@ def run(args: list[str], **kwargs):
     try:
         return subprocess.run(args, check=True, text=True, **kwargs)
     except subprocess.CalledProcessError as error:
+        diagnostic = ""
+        stderr = (error.stderr or "").lower()
+        for category in (
+            "server version",
+            "version mismatch",
+            "permission denied",
+            "password authentication failed",
+            "connection refused",
+            "could not translate host name",
+        ):
+            if category in stderr:
+                diagnostic += "; " + category
         raise RuntimeError(
-            f"Release command {args[0]} failed with exit {error.returncode}; credential-bearing output withheld"
+            f"Release command {args[0]} failed with exit {error.returncode}{diagnostic}; credential-bearing output withheld"
         ) from None
 
 
@@ -71,6 +83,16 @@ def main() -> None:
     if len(projects) != 1:
         raise RuntimeError("Expected exactly one existing Neon project; creating none")
     project = projects[0]["id"]
+    major = int(projects[0]["pg_version"])
+    if major not in (16, 17, 18):
+        raise RuntimeError(
+            f"PostgreSQL {major} requires an explicitly supported rehearsal image"
+        )
+    print(
+        f"Source database uses PostgreSQL {major}; using matching backup/restore tools",
+        flush=True,
+    )
+    postgis_image = f"postgis/postgis:{major}-" + ("3.6" if major == 18 else "3.5")
     branches = [
         b for b in neon(f"/projects/{project}/branches")["branches"] if b.get("default")
     ]
@@ -177,12 +199,20 @@ def main() -> None:
         print("Creating the database backup", flush=True)
         run(
             [
+                "docker",
+                "run",
+                "--rm",
+                "--env",
+                "PGDATABASE",
+                "--volume",
+                str(Path(directory)) + ":/backup",
+                f"postgres:{major}-bookworm",
                 "pg_dump",
                 "--format=custom",
                 "--no-owner",
                 "--no-privileges",
                 "--file",
-                str(dump),
+                "/backup/database.dump",
             ],
             env={**os.environ, "PGDATABASE": uri},
             capture_output=True,
@@ -233,7 +263,7 @@ def main() -> None:
                     "POSTGRES_PASSWORD=rehearsal-local",
                     "--env",
                     "POSTGRES_DB=rehearsal",
-                    "postgis/postgis:16-3.5",
+                    postgis_image,
                 ],
                 capture_output=True,
             )
@@ -255,16 +285,24 @@ def main() -> None:
             else:
                 raise RuntimeError("Local migration rehearsal database did not start")
             run(
+                ["docker", "cp", str(restored), container + ":/tmp/database.dump"],
+                capture_output=True,
+            )
+            inside = "postgresql://postgres:rehearsal-local@127.0.0.1:5432/rehearsal"
+            run(
                 [
+                    "docker",
+                    "exec",
+                    container,
                     "pg_restore",
                     "--dbname",
-                    local,
+                    inside,
                     "--clean",
                     "--if-exists",
                     "--no-owner",
                     "--no-privileges",
                     "--exit-on-error",
-                    str(restored),
+                    "/tmp/database.dump",
                 ],
                 env={**os.environ, "PGDATABASE": local},
                 capture_output=True,
