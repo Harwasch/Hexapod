@@ -78,6 +78,7 @@ def harness(monkeypatch):
                 }
             )
         elif "pg_dump" in args:
+            assert 'exec pg_dump --dbname "$PGDATABASE" "$@"' in args
             Path(
                 args[args.index("--volume") + 1].split(":")[0], "database.dump"
             ).write_bytes(b"private database snapshot")

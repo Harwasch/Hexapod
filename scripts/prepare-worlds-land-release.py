@@ -218,6 +218,9 @@ def main() -> None:
                 "--volume",
                 str(Path(directory)) + ":/backup",
                 f"postgres:{major}-bookworm",
+                "sh",
+                "-c",
+                'exec pg_dump --dbname "$PGDATABASE" "$@"',
                 "pg_dump",
                 "--format=custom",
                 "--no-owner",
@@ -329,7 +332,13 @@ def main() -> None:
                 },
             )
             revision = run(
-                ["psql", "-Atc", "select version_num from alembic_version"],
+                [
+                    "psql",
+                    "--dbname",
+                    local,
+                    "-Atc",
+                    "select version_num from alembic_version",
+                ],
                 env={**os.environ, "PGDATABASE": local},
                 capture_output=True,
             ).stdout.strip()
