@@ -546,8 +546,14 @@ test.describe("interaction", () => {
     await app.keyboard.press("Tab");
     await expect(app.getByTestId("tool-measure")).toBeFocused();
     const rail = app.getByRole("toolbar", { name: "Tools" });
-    // Four tools, each labelled in words on the button itself.
-    await expect(rail.getByRole("button")).toHaveText(["Layers", "Measure", "Add", "Settings"]);
+    // Each enabled tool is labelled in words on the button itself.
+    await expect(rail.getByRole("button")).toHaveText([
+      ...(process.env.VITE_ENABLE_LAND_EXPLORATION === "true" ? ["Land"] : []),
+      "Layers",
+      "Measure",
+      "Add",
+      "Settings",
+    ]);
     await expect(rail.getByRole("button", { name: "Layers" })).toHaveAttribute(
       "aria-pressed",
       "true",

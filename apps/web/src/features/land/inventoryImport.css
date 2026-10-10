@@ -1,0 +1,36 @@
+.inventory-import,
+.inventory-import > details,
+.inventory-import-controls,
+.inventory-import-rows,
+.inventory-import-rows article,
+.inventory-import article,
+.inventory-import details[open] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+.inventory-import-controls {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin: 0;
+}
+.inventory-import-rows article {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+.inventory-import code {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.inventory-import .land-actions {
+  flex-wrap: wrap;
+}
+.inventory-import p,
+.inventory-import button {
+  overflow-wrap: anywhere;
+}
+.inventory-import input[type="file"] {
+  max-width: 100%;
+}

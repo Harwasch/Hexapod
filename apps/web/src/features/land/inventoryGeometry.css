@@ -1,0 +1,64 @@
+.inventory-geometry {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.inventory-geometry > *,
+.inventory-coordinate-pair > * {
+  min-width: 0;
+}
+.inventory-geometry h4,
+.inventory-geometry p {
+  margin: 0;
+}
+.inventory-vertices {
+  display: grid;
+  gap: 14px;
+  padding-left: 24px;
+  margin: 0;
+}
+.inventory-coordinate-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.inventory-coordinate-pair label {
+  display: grid;
+  gap: 4px;
+}
+.inventory-coordinate-pair input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.inventory-geometry .land-actions {
+  flex-wrap: wrap;
+}
+.land-inventory-inputs {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.inventory-conflict {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+.inventory-conflict pre {
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.land-inventory-record p {
+  overflow-wrap: anywhere;
+}

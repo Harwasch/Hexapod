@@ -1,0 +1,130 @@
+.wi-panel {
+  border: 1px solid #b8d4a528;
+  border-radius: 9px;
+  background: #14201966;
+  padding: 15px;
+  margin: 16px 0;
+  color: #d6e3cd;
+  font:
+    12px/1.65 "Instrument Sans",
+    sans-serif;
+}
+.wi-panel h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+.wi-panel p {
+  margin: 8px 0;
+}
+.wi-panel button,
+.wi-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #bad8a434;
+  border-radius: 6px;
+  background: #b6d79d10;
+  color: #d4e7c7;
+  font: inherit;
+  cursor: pointer;
+}
+.wi-panel button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.wi-panel button:focus-visible,
+.wi-panel input:focus-visible,
+.wi-panel textarea:focus-visible,
+.wi-panel select:focus-visible {
+  outline: 2px solid #c1dfa9;
+  outline-offset: 3px;
+}
+.wi-row {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.wi-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #a8bc99;
+  font-size: 11px;
+  margin: 12px 0;
+  flex: 1;
+}
+.wi-field input,
+.wi-field textarea,
+.wi-field select {
+  background: #0d160e;
+  border: 1px solid #bbd3a528;
+  border-radius: 5px;
+  padding: 9px;
+  color: #d7e6c8;
+  width: 100%;
+  font: inherit;
+}
+.wi-field textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+.wi-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 13px 0;
+  color: #adc29d;
+  font-size: 11px;
+}
+.wi-check input {
+  margin-top: 4px;
+  accent-color: #b8dca0;
+}
+.wi-muted {
+  color: #8fa180;
+  font-size: 11px;
+}
+.wi-notice {
+  padding: 10px;
+  background: #d4b17009;
+  border: 1px solid #d4b17025;
+  border-radius: 5px;
+  color: #c9b68c;
+  font-size: 11px;
+}
+.wi-result {
+  border-top: 1px solid #b8d4a51f;
+  margin-top: 14px;
+  padding-top: 12px;
+}
+.wi-result code {
+  display: block;
+  white-space: pre-wrap;
+  font: 11px/1.7 monospace;
+  margin: 10px 0;
+  color: #c1d7af;
+}
+.wi-error {
+  color: #e4b49b;
+  font-size: 11px;
+}
+.wi-reference {
+  max-width: 100%;
+  max-height: 310px;
+  border-radius: 8px;
+  display: block;
+  margin: 12px 0;
+}
+.wi-panel ul {
+  padding-left: 20px;
+}
+.wi-panel a {
+  color: #c7dfb7;
+  text-decoration: none;
+}

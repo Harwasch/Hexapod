@@ -1,0 +1,32 @@
+{
+  "modelId": "astronex-world",
+  "repository": "https://github.com/Astronex-Robotics/Astronex-World",
+  "commit": "27584bf1a89da01ef35a03b48d83bc818d2adf2b",
+  "checkpoint": "Astronex-Lab/Astronex-World",
+  "checkpointRevision": "f06ea330f2ce5cabef5fbf175287fe323ec1218c",
+  "codeLicense": "Apache-2.0",
+  "weightsLicense": "Apache-2.0",
+  "requirementsSource": "Inference-only import closure pinned to reviewed upstream versions; transitive hashes resolved for CPython 3.12 Linux",
+  "hardware": {
+    "suggested": "NVIDIA L40S 48 GB (not benchmarked)",
+    "publisherConsumerPeakVRAMGB": 23.2
+  },
+  "validation": {
+    "gpuInference": "not-run",
+    "containerBuildRecord": "docs/WORLDS_DEPLOYMENT.md",
+    "reason": "GPU acceptance requires a CUDA worker and prepared checkpoints; no GPU was provisioned."
+  },
+  "adapter": {
+    "mode": "resident-block-latent-continuation",
+    "transport": "webrtc-video-datachannel-with-authenticated-http-fallback",
+    "realtime": false,
+    "exactResume": false,
+    "residentModel": true,
+    "cleanSessionWarmReuse": true,
+    "maxWarmIdleSeconds": 900,
+    "frameInterchange": "bounded-rgb24-spool",
+    "combinedCameraControls": "next-block",
+    "nativeKVContinuity": false,
+    "maxPromptCacheEntries": 2
+  }
+}

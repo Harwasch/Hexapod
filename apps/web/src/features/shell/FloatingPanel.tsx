@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { clsx } from "clsx";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { GlassButton, GlassPanel } from "@twin/ui";
 
@@ -19,6 +19,7 @@ export interface FloatingPanelProps {
   /** Slide-in origin. */
   from?: "left" | "right" | "bottom";
   className?: string;
+  style?: CSSProperties;
 }
 
 const offsets = { left: { x: -12, y: 0 }, right: { x: 12, y: 0 }, bottom: { x: 0, y: 12 } };
@@ -35,6 +36,7 @@ export function FloatingPanel({
   testId,
   from = "left",
   className,
+  style,
 }: FloatingPanelProps) {
   const reducedMotion = useSettings((s) => s.reducedMotion);
   const offset = offsets[from];
@@ -48,6 +50,7 @@ export function FloatingPanel({
           exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, ...offset }}
           transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.8 }}
           className={clsx("hud-item", className)}
+          style={style}
         >
           <GlassPanel
             strong

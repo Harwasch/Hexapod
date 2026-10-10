@@ -724,6 +724,15 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):
         return False
+    # Minimal container PID 1 may leave an exited orphan as a zombie. kill(pid, 0)
+    # still succeeds then, but the recipe has stopped and cannot touch its workdir.
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        if state == "Z":
+            return False
+    except (OSError, IndexError):
+        # Non-Linux hosts do not expose /proc; retain the portable signal check.
+        pass
     return True
 
 

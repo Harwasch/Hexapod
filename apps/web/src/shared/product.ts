@@ -8,7 +8,7 @@
  * entry may import anything that reaches a 3D globe.
  */
 
-export type ProductPage = "globe" | "scans" | "console";
+export type ProductPage = "globe" | "scans" | "console" | "worlds";
 
 export interface ProductLink {
   id: ProductPage;
@@ -20,6 +20,7 @@ export const PRODUCT_LINKS: readonly ProductLink[] = [
   { id: "globe", label: "Globe", href: "/" },
   { id: "scans", label: "Scans", href: "/view.html" },
   { id: "console", label: "Data console", href: "/admin.html" },
+  { id: "worlds", label: "Worlds ↗", href: "/worlds.html" },
 ];
 
 export const PRODUCT_NAME = "Land Ops";

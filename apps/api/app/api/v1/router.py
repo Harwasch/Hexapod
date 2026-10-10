@@ -11,16 +11,33 @@ from app.api.v1 import (
     captures,
     ion,
     jobs,
+    land,
+    land_actions,
+    land_archive_images,
+    land_documents,
+    land_features,
+    land_image_registrations,
+    land_rasters,
+    land_solar,
+    land_surveys,
+    land_views,
     layers,
     live,
     phone,
     plans,
     recipes,
+    research,
+    scenarios,
     sites,
     storage,
     system,
+    workspaces,
 )
 from app.schemas.common import Problem
+from app.worlds.customization import router as worlds_customization_router
+from app.worlds.intelligence import router as worlds_intelligence_router
+from app.worlds.reconstruction import router as worlds_reconstruction_router
+from app.worlds.router import router as worlds_router
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     # 401 is documented API-wide rather than per route: it is the shared write token's
@@ -46,3 +63,27 @@ api_v1.include_router(live.router)
 api_v1.include_router(artifacts.router)
 api_v1.include_router(recipes.router)
 api_v1.include_router(storage.router)
+api_v1.include_router(worlds_router)
+api_v1.include_router(worlds_intelligence_router)
+api_v1.include_router(worlds_reconstruction_router)
+api_v1.include_router(worlds_customization_router)
+api_v1.include_router(land.router)
+api_v1.include_router(land_rasters.router)
+api_v1.include_router(land_image_registrations.router)
+api_v1.include_router(land_archive_images.router)
+api_v1.include_router(workspaces.router)
+api_v1.include_router(research.router)
+
+api_v1.include_router(scenarios.router)
+
+api_v1.include_router(land_features.router)
+
+api_v1.include_router(land_actions.router)
+
+api_v1.include_router(land_documents.router)
+
+api_v1.include_router(land_surveys.router)
+
+api_v1.include_router(land_solar.router)
+
+api_v1.include_router(land_views.router)

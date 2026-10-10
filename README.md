@@ -148,3 +148,17 @@ Show developer readouts.
 
 The MakeHardware workflow used by the hardware parts of this repository is documented in
 [docs/HARDWARE.md](docs/HARDWARE.md).
+
+## Worlds explorer (separate product)
+
+Open `/worlds.html` for the local-first AI worlds explorer. It shares the web build and
+API host with Land Ops while keeping its projects and media separate. RunPod is the
+primary GPU provider; local and hosted gateways use the same model protocol. The
+interaction preview needs no GPU and is explicitly labeled as a preview. See
+[docs/WORLDS.md](docs/WORLDS.md) for local setup, model limitations, and the infrastructure
+handoff. [Deployment configuration and acceptance checks](docs/WORLDS_DEPLOYMENT.md)
+include secret placement and the remaining GPU validation. This feature does not deploy
+or provision existing Hexapod infrastructure.
+
+For the combined Worlds and Land personal-testing release, see
+[the integration handoff](docs/WORLDS_LAND_TESTING.md).

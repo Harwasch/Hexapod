@@ -1,0 +1,46 @@
+.land-solar-study,
+.land-solar-result {
+  min-width: 0;
+  margin: 1rem 0;
+}
+.land-solar-study > summary {
+  cursor: pointer;
+  font-weight: 650;
+  padding: 0.7rem 0;
+}
+.land-solar-study fieldset {
+  min-width: 0;
+  border: 1px solid var(--border-subtle, #33463c);
+  border-radius: 0.6rem;
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+}
+.land-solar-study input,
+.land-solar-study select,
+.land-solar-study textarea {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.land-solar-study .land-scenario-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.land-solar-result figure {
+  margin: 1rem 0;
+}
+.land-solar-result figcaption {
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+.land-solar-hash {
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+}
+.land-solar-result dd {
+  margin-left: 0;
+}
+@media (max-width: 480px) {
+  .land-solar-study .land-scenario-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

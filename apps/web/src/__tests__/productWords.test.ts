@@ -36,7 +36,12 @@ describe("one product, one set of words", () => {
     const header = productHeader("scans");
     const links = Array.from(header.querySelectorAll("a.product-bar__link"));
     expect(links.map((a) => a.textContent)).toEqual(PRODUCT_LINKS.map((l) => l.label));
-    expect(links.map((a) => a.getAttribute("href"))).toEqual(["/", "/view.html", "/admin.html"]);
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "/",
+      "/view.html",
+      "/admin.html",
+      "/worlds.html",
+    ]);
     expect(header.querySelector('[aria-current="page"]')?.textContent).toBe("Scans");
     expect(header.querySelector(".product-bar__brand")?.getAttribute("href")).toBe("/");
   });
