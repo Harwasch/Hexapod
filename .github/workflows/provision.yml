@@ -112,9 +112,9 @@ jobs:
 
           fly = tomllib.load(open("fly.toml", "rb"))
           pages = tomllib.load(open("wrangler.toml", "rb"))
-          mounts = fly["mounts"]
+          mounts = [mount for mount in fly["mounts"] if "worker" in mount.get("processes", [])]
           if len(mounts) != 1:
-              raise SystemExit(f"fly.toml declares {len(mounts)} mounts; this expects one")
+              raise SystemExit(f"fly.toml declares {len(mounts)} capture-worker mounts; this expects one")
           mount = mounts[0]
           size = str(mount["initial_size"]).strip().lower().removesuffix("gb")
           if not size.isdigit():

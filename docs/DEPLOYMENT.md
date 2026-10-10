@@ -1548,3 +1548,28 @@ twin-web`) is the equivalent.
   real Postgres, the recipe catalogue lists both recipes, the pipeline imports in the image's
   venv, the worker starts and exits cleanly, a production configuration starts, a
   misconfigured one refuses to, and every command `fly.toml` names exists in the image.
+
+### Worlds and Land personal-testing release
+
+First dispatch **Deploy** with `target=preflight` to exercise the private backup
+and migration rehearsal without replacing applications, creating volumes, or
+publishing the frontend. Then dispatch with `target=everything` and `enable_land=true`. This passes
+`VITE_ENABLE_LAND_EXPLORATION=true` to the browser build. Before every API release,
+the workflow uses the existing Neon and private R2 credentials to back up the
+running API's database, verifies the uploaded backup by downloading it, restores
+it into temporary local PostGIS, and rehearses all migrations through `0028`.
+The workflow summary records the private backup key and checksum. Backups remain
+under `operations/backups/worlds-land/` in the private bucket; do not make them public
+or delete them until the testing release has been accepted and normal retention applies.
+
+After verifying all existing API replicas share the source database and have no
+independent Worlds ledgers, the workflow consolidates the API to one replica.
+The Fly configuration now runs one API machine with a separate 1 GB Worlds volume
+and an independent 1 GB Land research process. `--ha=false` prevents an extra API
+machine with a separate ledger. The API stays running for Worlds lease cleanup;
+the research process polls the database continuously, so Neon will not scale to
+zero while that process is running. These are deliberate personal-testing costs.
+The capture worker and its existing volume remain separate. All Worlds paid
+provider provisioning flags remain false. Existing private-storage, API-token and
+Anthropic secrets are shared with the research process; no new secret values are
+baked into the web build. See [the testing checklist](WORLDS_LAND_TESTING.md).
