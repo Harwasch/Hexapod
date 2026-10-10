@@ -19,7 +19,13 @@ spec.loader.exec_module(release)
 @pytest.fixture
 def harness(monkeypatch):
     calls = []
-    state = {"host": "ep-test.example", "machines": 1, "backup": None, "metadata": None}
+    state = {
+        "host": "ep-test.example",
+        "machines": 1,
+        "backup": None,
+        "metadata": None,
+        "ledger": False,
+    }
     for name in (
         "NEON_API_KEY",
         "CLOUDFLARE_ACCOUNT_ID",
@@ -60,7 +66,12 @@ def harness(monkeypatch):
             )
         elif args[:3] == ["flyctl", "ssh", "console"]:
             output = "DATABASE_IDENTITY=" + json.dumps(
-                {"host": state["host"], "database": "db", "user": "user"}
+                {
+                    "host": state["host"],
+                    "database": "db",
+                    "user": "user",
+                    "ledger": state["ledger"],
+                }
             )
         elif args[0] == "pg_dump":
             Path(args[args.index("--file") + 1]).write_bytes(
@@ -115,13 +126,16 @@ def test_backup_download_restore_and_migration_are_separate_from_production(harn
     assert calls[-1][0][:3] == ["docker", "rm", "--force"]
 
 
-@pytest.mark.parametrize("change", ["wrong-database", "multiple-api", "public-bucket"])
+@pytest.mark.parametrize(
+    "change", ["wrong-database", "existing-ledgers", "public-bucket"]
+)
 def test_ambiguous_or_unsafe_release_stops_before_dump(harness, monkeypatch, change):
     state, calls = harness
     if change == "wrong-database":
         state["host"] = "another.example"
-    elif change == "multiple-api":
+    elif change == "existing-ledgers":
         state["machines"] = 2
+        state["ledger"] = True
     else:
         monkeypatch.setenv("R2_PUBLIC_BUCKET", "private")
     with pytest.raises(RuntimeError):
@@ -145,3 +159,13 @@ def test_failed_restore_does_not_run_migrations_and_removes_local_database(
         release.main()
     assert not any("alembic" in args for args, _ in calls)
     assert calls[-1][0][:3] == ["docker", "rm", "--force"]
+
+
+def test_multiple_legacy_api_replicas_are_verified_without_rescaling_in_preflight(
+    harness,
+):
+    state, calls = harness
+    state["machines"] = 2
+    release.main()
+    assert sum(args[:3] == ["flyctl", "ssh", "console"] for args, _ in calls) == 2
+    assert not any("scale" in args for args, _ in calls)

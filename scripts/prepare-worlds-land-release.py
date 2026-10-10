@@ -102,45 +102,57 @@ def main() -> None:
         for m in machines
         if m.get("config", {}).get("metadata", {}).get("fly_process_group") == "app"
     ]
-    if len(api) != 1:
+    if not api:
         raise RuntimeError(
-            "Worlds release requires exactly one existing API machine; refusing to rescale implicitly"
+            f"No API process group found among {len(machines)} Fly machines"
         )
-    if api[0]["state"] != "started":
-        run(
-            ["flyctl", "machine", "start", api[0]["id"], "--app", app],
+    print(f"Verifying database identity on {len(api)} API machine(s)", flush=True)
+    code = (
+        "import json, sys, os; sys.path.insert(0, '/app'); from pathlib import Path; "
+        "from urllib.parse import urlsplit; from app.config import get_settings; "
+        "u=urlsplit(str(get_settings().database_url)); "
+        "p=Path(os.environ.get('WORLD_DATA_DIR','/app/data/worlds')); "
+        "print('DATABASE_IDENTITY='+json.dumps({'host':(u.hostname or '').replace('-pooler.','.'),"
+        "'database':u.path.lstrip('/'),'user':u.username or '',"
+        "'ledger':(p/'metadata.sqlite3').exists()}))"
+    )
+    for machine in api:
+        if machine["state"] != "started":
+            run(
+                ["flyctl", "machine", "start", machine["id"], "--app", app],
+                capture_output=True,
+            )
+        result = run(
+            [
+                "flyctl",
+                "ssh",
+                "console",
+                "--app",
+                app,
+                "--machine",
+                machine["id"],
+                "--command",
+                "/app/.venv/bin/python -c " + shlex.quote(code),
+            ],
             capture_output=True,
         )
-    print("Verifying the running Fly API database identity", flush=True)
-    code = (
-        "import json, sys; sys.path.insert(0, '/app'); from urllib.parse import urlsplit; from app.config import get_settings; "
-        "u=urlsplit(str(get_settings().database_url)); "
-        "print('DATABASE_IDENTITY='+json.dumps({'host':(u.hostname or '').replace('-pooler.','.'),"
-        "'database':u.path.lstrip('/'),'user':u.username or ''}))"
-    )
-    result = run(
-        [
-            "flyctl",
-            "ssh",
-            "console",
-            "--app",
-            app,
-            "--machine",
-            api[0]["id"],
-            "--command",
-            "/app/.venv/bin/python -c " + shlex.quote(code),
-        ],
-        capture_output=True,
-    )
-    identities = [
-        json.loads(line.split("=", 1)[1])
-        for line in result.stdout.splitlines()
-        if line.startswith("DATABASE_IDENTITY=")
-    ]
-    if identities != [fingerprint(uri)]:
-        raise RuntimeError(
-            "Neon database does not match the running API; refusing backup/deployment"
-        )
+        identities = [
+            json.loads(line.split("=", 1)[1])
+            for line in result.stdout.splitlines()
+            if line.startswith("DATABASE_IDENTITY=")
+        ]
+        if len(identities) != 1:
+            raise RuntimeError("Could not identify the running API database")
+        identity = identities[0]
+        ledger = identity.pop("ledger", None)
+        if ledger is None or (len(api) > 1 and ledger):
+            raise RuntimeError(
+                "Refusing consolidation of independent or unverified Worlds ledgers"
+            )
+        if identity != fingerprint(uri):
+            raise RuntimeError(
+                "Neon database does not match every API replica; refusing backup/deployment"
+            )
     bucket = os.environ.get("R2_BUCKET") or "twin-assets"
     public_bucket = os.environ.get("R2_PUBLIC_BUCKET") or bucket + "-public"
     if bucket == public_bucket:

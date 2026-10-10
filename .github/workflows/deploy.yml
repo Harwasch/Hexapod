@@ -113,14 +113,11 @@ jobs:
           curl -L https://fly.io/install.sh | sh
           echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
       - uses: astral-sh/setup-uv@v6
-        if: inputs.enable_land || inputs.target == 'preflight'
       - name: Install backup and migration rehearsal tools
-        if: inputs.enable_land || inputs.target == 'preflight'
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
           uv sync --frozen --project apps/api
       - name: Private database backup and restore/migration rehearsal
-        if: inputs.enable_land || inputs.target == 'preflight'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
@@ -131,6 +128,11 @@ jobs:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET }}
         run: apps/api/.venv/bin/python scripts/prepare-worlds-land-release.py
+      - name: Consolidate the verified shared-database API before attaching the ledger
+        if: inputs.target != 'preflight'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl scale count app=1 --yes
       - name: Ensure the single API ledger volume exists
         if: inputs.target != 'preflight'
         env:
