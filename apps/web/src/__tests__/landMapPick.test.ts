@@ -111,6 +111,14 @@ describe("LandMapController picking", () => {
     expect(point?.[1]).toBeCloseTo(lat, 7);
   });
 
+  it("ignores depth left over from before the camera moved, which lands underground", () => {
+    const stale = Cartesian3.fromDegrees(-119.91, 36.62, -3_500);
+    const [point] = drawOnce(host(1_500, () => stale.clone()).manager);
+    const [lon, lat] = degrees(HIDDEN);
+    expect(point?.[0]).toBeCloseTo(lon, 7);
+    expect(point?.[1]).toBeCloseTo(lat, 7);
+  });
+
   it("draws the point's dot at the picked surface height, not clamped to the hidden globe", () => {
     const { manager, added } = host(1_500);
     drawOnce(manager);

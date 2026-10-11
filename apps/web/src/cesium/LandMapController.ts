@@ -32,6 +32,10 @@ const PREFIX = "land-boundary:";
 /** Handles beyond this many keep the globe-clamped placement rather than a scene sample. */
 const MAX_SAMPLED_HANDLES = 400;
 
+/** Below the Dead Sea shore or above Everest, a depth reading is not the ground. */
+const LOWEST_GROUND_M = -500;
+const HIGHEST_GROUND_M = 9_000;
+
 const key = (point: number[]) => `${point[0]},${point[1]}`;
 
 /** Land display persists while ordinary feature inspection continues beside it. */
@@ -73,21 +77,27 @@ export class LandMapController {
     const { scene, viewer } = this.host;
     const ray = viewer.camera.getPickRay(position);
     const far = this.host.camera.pose().altitude > 20_000;
-    let world: Cartesian3 | undefined;
-    if (far && ray) world = scene.globe.pick(ray, scene);
+    const globe = ray ? scene.globe.pick(ray, scene) : undefined;
+    let world: Cartesian3 | undefined = far ? globe : undefined;
     if (!world && scene.pickPositionSupported) {
       const hit = scene.pickPosition(position);
       const near = (viewer.camera.frustum as { near?: number }).near ?? 1;
+      const height = hit ? Cartographic.fromCartesian(hit).height : NaN;
       if (hit && Cartesian3.distance(hit, viewer.camera.positionWC) > 2 * near) {
-        world = hit;
-        this.surfaceHeight = Cartographic.fromCartesian(hit).height;
+        // Depth left over from a frame drawn before the camera moved puts the point deep
+        // underground; terrain where the globe is drawn, or Earth's range, rules that out.
+        const floor = globe ? Cartographic.fromCartesian(globe).height - 100 : LOWEST_GROUND_M;
+        if (height > floor && height < HIGHEST_GROUND_M) {
+          world = hit;
+          this.surfaceHeight = height;
+        }
       } else if (hit && this.surfaceHeight !== undefined) {
         // Dots drawn over everything write their depth on the near plane, so a click on one
         // (or a handle being dragged) reads back the camera; the surface just seen stands in.
         world = viewer.camera.pickEllipsoid(position, this.raised(this.surfaceHeight));
       }
     }
-    if (!world && ray) world = scene.globe.pick(ray, scene);
+    world ??= globe;
     // No terrain drawn there yet: the bare ellipsoid still says where the click is.
     world ??= viewer.camera.pickEllipsoid(position, scene.globe.ellipsoid);
     if (!world) return null;
