@@ -4,7 +4,7 @@ import type { components } from "@twin/contracts";
 import { api, unwrap } from "@/api/client";
 import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
 import { useLandContext } from "@/state/landContext";
-import { EvidenceView } from "./LandResearch";
+import { EvidenceView } from "./EvidenceView";
 
 type Result = components["schemas"]["RestorationEcologyResult"];
 const percent = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });

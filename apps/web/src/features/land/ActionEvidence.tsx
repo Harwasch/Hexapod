@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { components } from "@twin/contracts";
 import { api, unwrap } from "@/api/client";
 import { useLandScope, useLandAccessReady } from "@/state/landIdentity";
-import { EvidenceView } from "./LandResearch";
+import { EvidenceView } from "./EvidenceView";
 import { ScenarioResultView } from "./ScenarioResultView";
 
 export function ActionEvidence({ action }: { action: components["schemas"]["LandActionRead"] }) {

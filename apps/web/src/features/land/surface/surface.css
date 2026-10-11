@@ -1,0 +1,702 @@
+/* ---------------------------------------------------------------------------
+   Land, map first. The map carries the information; a few glass surfaces float over it,
+   each in its HUD region: the land chip and lens card in the left dock, the lens dock or the
+   draw bar in the strip, the agent in the right dock. Pins and leader lines live on the map.
+   --------------------------------------------------------------------------- */
+
+/* ---- On the map: pins and leaders -------------------------------------- */
+.hud > .land-overlays,
+.land-overlays {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  --tone: var(--accent);
+}
+
+.land-leaders {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.land-leader {
+  --tone: var(--accent);
+}
+.land-leader--agent {
+  --tone: var(--agent);
+}
+.land-leader--warn {
+  --tone: var(--warn);
+}
+.land-leader--neutral {
+  --tone: var(--text-secondary);
+}
+
+.land-leader__shadow {
+  fill: none;
+  stroke: rgba(6, 9, 5, 0.55);
+  stroke-width: 4.5;
+}
+.land-leader__line {
+  fill: none;
+  stroke: var(--tone);
+  stroke-width: 1.75;
+  stroke-dasharray: 5 4;
+  animation: land-leader-flow 1.2s linear infinite;
+}
+.land-leader__start,
+.land-leader__end {
+  fill: var(--tone);
+}
+.land-leader__ring {
+  fill: none;
+  stroke: var(--tone);
+  stroke-width: 2.2;
+}
+@keyframes land-leader-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+.land-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: -7px 0 0 -7px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  pointer-events: auto;
+  will-change: transform;
+  cursor: pointer;
+  --tone: var(--accent);
+}
+.land-pin--static {
+  cursor: default;
+}
+.land-pin--agent {
+  --tone: var(--agent);
+}
+.land-pin--warn {
+  --tone: var(--warn);
+}
+.land-pin--neutral {
+  --tone: var(--text-primary);
+}
+.land-pin__dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--tone);
+  border: 2px solid rgba(8, 11, 7, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+}
+.land-pin__label {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(10, 13, 9, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-shadow: none;
+}
+.land-pin:hover .land-pin__label,
+.land-pin:focus-visible .land-pin__label {
+  border-color: var(--tone);
+}
+.land-pin:focus-visible {
+  outline: none;
+}
+.land-pin:focus-visible .land-pin__dot {
+  box-shadow: var(--focus-ring);
+}
+
+/* ---- Cards ----------------------------------------------------------------- */
+.land-surface {
+  display: grid;
+  gap: var(--hud-gap);
+  width: min(var(--panel-width-wide), var(--dock-left-max, 100%));
+  max-height: 100%;
+  min-height: 0;
+  grid-auto-rows: max-content;
+  overflow: hidden;
+}
+
+.land-card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  min-width: 0;
+}
+.land-card--scroll {
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.land-eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 1.5rem;
+}
+.land-lens-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.land-eyebrow-row > :last-child {
+  margin-left: auto;
+}
+
+.land-headline {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+.land-lede {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.land-facts {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.land-fact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid transparent;
+}
+.land-fact__label {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.land-fact--warn .land-fact__label {
+  color: var(--warn);
+}
+.land-fact__go {
+  grid-row: 1;
+  grid-column: 2;
+  font-size: var(--text-xs);
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.land-fact__value {
+  grid-column: 1 / -1;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+.land-fact__note {
+  grid-column: 1 / -1;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.land-map-link {
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+.land-map-link:hover,
+.land-map-link.is-hot {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+.land-map-link:hover .land-fact__go,
+.land-map-link.is-hot .land-fact__go {
+  opacity: 1;
+}
+.land-map-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.land-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.land-row--end {
+  justify-content: flex-end;
+}
+.land-muted {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.land-alert {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  border: 1px solid rgba(224, 106, 90, 0.4);
+}
+.land-note {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-border);
+}
+
+/* Details: the full tools and raw data, one tap away from the summary. */
+.land-details {
+  border-top: 1px solid var(--divider);
+  padding-top: var(--space-2);
+}
+.land-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  padding: var(--space-1) 0;
+}
+.land-details > summary::-webkit-details-marker {
+  display: none;
+}
+.land-details > summary::after {
+  content: "";
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+.land-details[open] > summary::after {
+  transform: rotate(225deg);
+}
+.land-details__body {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+/* ---- The land chip ----------------------------------------------------- */
+.land-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  min-width: 0;
+}
+.land-chip__swatch {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  background: linear-gradient(140deg, #b9edc6, #6aa58a);
+  color: #0b1410;
+}
+.land-chip__text {
+  min-width: 0;
+  flex: 1;
+}
+.land-chip__name {
+  font-weight: 600;
+  font-size: var(--text-md);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.land-chip__meta {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Lens dock and draw bar (strip) ------------------------------------ */
+.land-dock {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.land-dock::-webkit-scrollbar {
+  display: none;
+}
+.land-dock button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--glass-radius-pill);
+  padding: 0.45rem 0.85rem;
+  font: inherit;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.land-dock button:hover {
+  color: var(--text-primary);
+  background: var(--control-bg);
+}
+.land-dock button[aria-pressed="true"] {
+  color: var(--text-primary);
+  background: var(--control-bg-hover);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.land-dock button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.land-dock__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.land-drawbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 6px 6px var(--space-4);
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.land-drawbar__status {
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+  margin-right: var(--space-2);
+}
+.land-drawbar__status b {
+  color: #b9edc6;
+  font-weight: 600;
+}
+.land-drawbar__snap {
+  font-size: var(--text-xs);
+  color: var(--warn);
+}
+.land-drawbar input[type="number"] {
+  width: 6rem;
+}
+
+/* ---- Agent -------------------------------------------------------------- */
+.land-agent {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+.land-agent__who {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--agent);
+}
+.land-agent__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--agent);
+}
+.land-agent.is-running .land-agent__pulse {
+  animation: land-pulse 1.4s infinite;
+}
+@keyframes land-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(157, 184, 240, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 0 9px rgba(157, 184, 240, 0);
+  }
+}
+.land-agent__question {
+  font-weight: 600;
+  line-height: 1.3;
+}
+.land-agent__progress {
+  height: 3px;
+  border-radius: 3px;
+  background: var(--control-bg);
+  overflow: hidden;
+}
+.land-agent__progress > i {
+  display: block;
+  height: 100%;
+  background: var(--agent);
+  transition: width var(--motion-slow) var(--ease-out);
+}
+.land-steps {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+.land-step {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+.land-step__mark {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--agent);
+  background: radial-gradient(circle, var(--agent) 0 2.5px, transparent 3px);
+}
+.land-step.is-active {
+  background: var(--agent-soft);
+  color: var(--text-primary);
+}
+.land-step.is-active .land-step__mark {
+  background: none;
+  border-top-color: transparent;
+  animation: land-spin 0.9s linear infinite;
+}
+.land-step.is-finding .land-step__mark {
+  border-color: var(--warn);
+  background: radial-gradient(circle, var(--warn) 0 2.5px, transparent 3px);
+}
+.land-step__source {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+@keyframes land-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .land-leader__line,
+  .land-agent.is-running .land-agent__pulse,
+  .land-step.is-active .land-step__mark {
+    animation: none;
+  }
+}
+
+/* Phone: the left dock is the bottom sheet; the card keeps to its height. */
+@media (max-width: 640px) {
+  .land-surface {
+    width: 100%;
+  }
+  .land-pin__label {
+    max-width: 9rem;
+  }
+}
+
+/* ---- Small parts used across the land cards ---------------------------- */
+.land-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.land-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent-strong);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.land-icon-button {
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: var(--radius-sm);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.land-icon-button:hover {
+  background: var(--control-bg);
+  color: var(--text-primary);
+}
+.land-field {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.land-number {
+  width: 6rem;
+}
+.land-review__area {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+}
+.land-review__area strong {
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+}
+.land-review__area span {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.land-lens-empty {
+  display: grid;
+  gap: var(--space-3);
+}
+.land-card--notices:empty {
+  display: none;
+}
+
+/* The start card's extra ways in, and lists of saved land. */
+.land-start__more {
+  gap: var(--space-1);
+}
+.land-start__more > button,
+.land-saved button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.land-start__more > button:hover,
+.land-saved button:hover {
+  background: var(--control-bg-hover);
+}
+.land-start__more > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.land-start__more span,
+.land-saved button > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.land-start__more small,
+.land-saved small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.land-saved {
+  display: grid;
+  gap: var(--space-2);
+}
+.land-saved h3 {
+  margin: 0;
+}
+.land-saved ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.land-saved button.is-selected {
+  border-color: var(--accent-border);
+}
+
+/* The land chip's menu. */
+.land-menu {
+  gap: 2px;
+  padding: var(--space-2);
+}
+.land-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.land-menu__item:hover,
+.land-menu__item:focus-visible {
+  background: var(--control-bg-hover);
+  outline: none;
+}
+.land-menu__item > span {
+  color: var(--text-secondary);
+  display: grid;
+}
+
+/* Parcel candidates. */
+.land-candidate__row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  grid-column: 1 / -1;
+  cursor: pointer;
+}
+.land-candidate__row > span {
+  display: grid;
+}
+.land-candidate.is-chosen {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+}

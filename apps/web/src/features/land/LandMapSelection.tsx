@@ -6,7 +6,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { useLandContext } from "@/state/landContext";
 import { useLandScope } from "@/state/landIdentity";
 import { describeError } from "@/lib/log";
-import { EvidenceView } from "./LandResearch";
+import { EvidenceView } from "./EvidenceView";
 import { mapValue, researchMapBounds } from "./researchMap";
 
 export function LandMapSelection({ land }: { land: LandArea }) {

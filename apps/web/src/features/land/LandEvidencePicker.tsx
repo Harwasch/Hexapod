@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
-import { EvidenceView } from "./LandResearch";
+import { EvidenceView } from "./EvidenceView";
 
 export function LandEvidencePicker({
   landId,

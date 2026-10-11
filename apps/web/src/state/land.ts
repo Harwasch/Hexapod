@@ -123,7 +123,12 @@ export const useLand = create<LandState>()((set, get) => ({
     })),
   addPoint: (point) => {
     const previous = get().points;
-    if ((get().mode === "pick" || get().mode === "candidates") && previous.length) return;
+    if (get().mode === "pick" && previous.length) return;
+    // Each click on open ground looks for records around that spot instead.
+    if (get().mode === "candidates") {
+      set({ points: [point] });
+      return;
+    }
     const last = previous.at(-1);
     if (last?.[0] === point[0] && last[1] === point[1]) return;
     if (previous.length >= 2000) {

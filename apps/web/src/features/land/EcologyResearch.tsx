@@ -12,7 +12,7 @@ import {
   useInvestigations,
 } from "./researchApi";
 import { ecologyNames } from "./ecologyRequest";
-import { EvidenceView } from "./LandResearch";
+import { EvidenceView } from "./EvidenceView";
 import { ResearchArtifactView } from "./ResearchArtifacts";
 
 type Request = components["schemas"]["EcologyRequest"];

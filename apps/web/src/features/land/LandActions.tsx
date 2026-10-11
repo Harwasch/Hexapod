@@ -10,7 +10,7 @@ import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 import { useInvestigation, useInvestigations } from "./researchApi";
 import { ActionEvidence } from "./ActionEvidence";
-import { EvidenceView } from "./LandResearch";
+import { EvidenceView } from "./EvidenceView";
 import { ActionPlanSummary } from "./ActionPlanSummary";
 import {
   actionDraftKey,
