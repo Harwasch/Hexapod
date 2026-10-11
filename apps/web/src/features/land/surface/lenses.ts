@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { create } from "zustand";
 
+import { useLandContext } from "@/state/landContext";
+
 /**
  * The ways to look at a piece of land. Each lens draws on the map and keeps one card in the
  * left dock: a plain sentence, a few facts that point at the map, and the full tools a tap away.
@@ -43,6 +45,36 @@ export function lensMeta(id: LensId): LensMeta {
   return LENSES.find((lens) => lens.id === id) ?? OVERVIEW;
 }
 
+type Section = "discover" | "records" | "inventory" | "ecology" | "scenarios" | "actions";
+
+/** The workspace section a lens stood in before lenses, for views read by older clients. */
+export function sectionOfLens(lens: LensId): Section {
+  const sections: Record<LensId, Section> = {
+    overview: "discover",
+    water: "discover",
+    soil: "discover",
+    ecology: "ecology",
+    solar: "scenarios",
+    records: "records",
+    assets: "inventory",
+    plans: "actions",
+  };
+  return sections[lens];
+}
+
+/** The lens for a view saved before lenses, which names only a workspace section. */
+export function lensOfSection(section: Section | undefined): LensId {
+  const lenses: Record<Section, LensId> = {
+    discover: "overview",
+    records: "records",
+    inventory: "assets",
+    ecology: "ecology",
+    scenarios: "plans",
+    actions: "plans",
+  };
+  return section ? lenses[section] : "overview";
+}
+
 interface LensState {
   lens: LensId;
   setLens: (lens: LensId) => void;
@@ -52,3 +84,12 @@ export const useLens = create<LensState>((set) => ({
   lens: "overview",
   setLens: (lens) => set({ lens }),
 }));
+
+// Picking something on the map opens the lens it belongs to: an asset clicked on the map
+// (`LandContextBridge` → `selectInventory`) shows Assets; a cited survey shows Ecology.
+useLandContext.subscribe((next, previous) => {
+  if (next.selectedInventoryId && next.selectedInventoryId !== previous.selectedInventoryId)
+    useLens.getState().setLens("assets");
+  else if (next.selectedSurveyId && next.selectedSurveyId !== previous.selectedSurveyId)
+    useLens.getState().setLens("ecology");
+});

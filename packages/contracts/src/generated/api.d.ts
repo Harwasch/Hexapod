@@ -6744,6 +6744,8 @@ export interface components {
             inventoryVisible?: boolean;
             /** Investigationid */
             investigationId?: string | null;
+            /** Lens */
+            lens?: ("overview" | "water" | "soil" | "ecology" | "solar" | "records" | "assets" | "plans") | null;
             /** Rasters */
             rasters?: components["schemas"]["LandViewRaster"][];
             /**

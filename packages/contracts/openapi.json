@@ -10236,6 +10236,27 @@
             ],
             "title": "Investigationid"
           },
+          "lens": {
+            "anyOf": [
+              {
+                "enum": [
+                  "overview",
+                  "water",
+                  "soil",
+                  "ecology",
+                  "solar",
+                  "records",
+                  "assets",
+                  "plans"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lens"
+          },
           "rasters": {
             "items": {
               "$ref": "#/components/schemas/LandViewRaster"
