@@ -7,11 +7,13 @@ from typing import Any
 
 import httpx
 from pydantic import HttpUrl, TypeAdapter, ValidationError
+from shapely.geometry import box
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.research.providers.base import SourceError, SourceSpec, fetch_json
+from app.research.providers.parcels import ParcelSource, counties_touching
 from app.schemas.geojson import MapGeometry, MultiPolygon, Polygon
 from app.schemas.land import BoundarySource, LandCreate
 from app.schemas.land_selection import (
@@ -24,18 +26,7 @@ from app.schemas.land_selection import (
 from app.services.errors import InvalidInputError
 
 GEOMETRY: TypeAdapter[MapGeometry] = TypeAdapter(MapGeometry)
-PARCEL_ENDPOINT = "https://gis.dnr.wa.gov/site2/rest/services/Public_Forest_Practices/WADNR_PUBLIC_OCIO_Parcels/MapServer/0"
-PARCEL = SourceSpec(
-    "wa-tax-parcels",
-    "Washington county tax parcels",
-    "parcels",
-    "Washington State; participating counties",
-    "Recorded tax-parcel mapping; not a boundary survey",
-    "Washington public GIS data; source use constraints apply",
-    "Washington Technology Solutions (WaTech), Washington State Counties",
-    PARCEL_ENDPOINT,
-    PARCEL_ENDPOINT + "/query",
-)
+PARCEL_LIMIT = 50
 OSM = SourceSpec(
     "osm",
     "OpenStreetMap",
@@ -63,23 +54,47 @@ def _distance(db: Session, geometry: MapGeometry, request: CandidateRequest) -> 
     return float(value or 0)
 
 
-def candidates(db: Session, request: CandidateRequest, client: httpx.Client) -> CandidateResult:
+def _record_id(value: object) -> str:
+    # Some layers store the parcel number as a number; 12345.0 is parcel 12345.
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip() if value is not None else ""
+
+
+def _county_names(sources: list[ParcelSource]) -> str:
+    return " and ".join(f"{source.county} County" for source in sources)
+
+
+def _parcels(db: Session, request: CandidateRequest, client: httpx.Client) -> CandidateResult:
     lon, lat = request.point.coordinates[:2]
-    if request.kind == "parcel" and not (-125 <= lon <= -116 and 45 <= lat <= 50):
+    dx = request.radius_m / (111_320 * max(0.1, math.cos(math.radians(lat))))
+    dy = request.radius_m / 110_574
+    counties = counties_touching(box(lon - dx, lat - dy, lon + dx, lat + dy))
+    if not counties:
         return CandidateResult(
             status="uncovered",
-            message="The current parcel adapter covers Washington State participating counties. "
-            "Draw or import a boundary here; mapped features are not parcel records.",
+            message="Parcel records are available for California. Here, draw the land or "
+            "import a boundary file.",
+            candidates=[],
+        )
+    # Near a county line the search reaches both counties; each answers for its own parcels.
+    available = [source for source in counties if source.status == "available"][:2]
+    if not available:
+        return CandidateResult(
+            status="uncovered",
+            message=f"{_county_names(counties[:2])} does not publish parcel records online. "
+            "Draw the land, or import a parcel file from the county.",
             candidates=[],
         )
     db.commit()  # Release the auth transaction before waiting for a public provider.
-    try:
-        if request.kind == "parcel":
-            dx = request.radius_m / (111_320 * max(0.1, math.cos(math.radians(lat))))
-            dy = request.radius_m / 110_574
+    result: list[LandCandidate] = []
+    answered: list[ParcelSource] = []
+    truncated = False
+    for source in available:
+        try:
             raw, _ = fetch_json(
                 client,
-                PARCEL,
+                source.spec,
                 {
                     "f": "geojson",
                     "geometry": f"{lon - dx},{lat - dy},{lon + dx},{lat + dy}",
@@ -87,150 +102,179 @@ def candidates(db: Session, request: CandidateRequest, client: httpx.Client) -> 
                     "inSR": 4326,
                     "outSR": 4326,
                     "spatialRel": "esriSpatialRelIntersects",
-                    "outFields": "OBJECTID,PARCEL_ID_NR",
+                    "outFields": source.id_field or "*",
                     "returnGeometry": "true",
-                    "resultRecordCount": 50,
+                    "resultRecordCount": PARCEL_LIMIT,
                 },
             )
             if "error" in raw:
                 raise SourceError("The parcel service rejected the query.")
-            result = []
-            for feature in raw.get("features", []):
-                try:
-                    geometry = GEOMETRY.validate_python(feature.get("geometry"))
-                    if geometry.type not in {"Polygon", "MultiPolygon"}:
-                        continue
-                    LandCreate.bounded_boundary(geometry)
-                    properties = feature.get("properties", {})
-                    record_id = str(
-                        properties.get("PARCEL_ID_NR")
-                        or feature.get("id")
-                        or properties.get("OBJECTID", "")
-                    )
-                    if not record_id:
-                        continue
-                    result.append(
-                        LandCandidate(
-                            id=f"wa-parcel/{record_id}",
-                            label=f"Parcel {record_id}",
-                            geometry=geometry,
-                            distance_m=_distance(db, geometry, request),
-                            source=BoundarySource(
-                                method="parcel",
-                                label="Washington county tax-parcel record",
-                                url=HttpUrl(PARCEL_ENDPOINT),
-                                record_id=record_id,
-                                attribution=PARCEL.attribution,
-                                meaning="recorded-parcel",
-                            ),
-                        )
-                    )
-                except (ValueError, ValidationError):
+            features = raw.get("features", [])
+            if not isinstance(features, list):
+                raise SourceError("The parcel service returned an unexpected response.")
+        except (httpx.HTTPError, SourceError, ValueError):
+            continue
+        answered.append(source)
+        truncated = (
+            truncated or bool(raw.get("exceededTransferLimit")) or len(features) >= PARCEL_LIMIT
+        )
+        try:
+            url: HttpUrl | None = HttpUrl(source.documentation_url)
+        except ValidationError:
+            url = None
+        for feature in features:
+            try:
+                geometry = GEOMETRY.validate_python(feature.get("geometry"))
+                if not isinstance(geometry, Polygon | MultiPolygon):
                     continue
-            truncated = bool(raw.get("exceededTransferLimit")) or len(raw.get("features", [])) >= 50
-            message = (
-                "Tax-parcel records near your point. Review the source and boundaries; "
-                "they do not establish ownership or exact surveyed limits."
-            )
-        else:
-            selectors = (
-                [
-                    '["power"="line"]',
-                    '["power"="minor_line"]',
-                    '["waterway"]',
-                    '["highway"]',
-                    '["railway"]',
-                ]
-                if request.kind == "line"
-                else [
-                    '["power"]',
-                    '["man_made"~"^(mast|tower|water_tower|water_well)$"]',
-                    '["amenity"="charging_station"]',
-                ]
-                if request.kind == "point"
-                else ['["building"]']
-            )
-            around = f"(around:{request.radius_m},{lat},{lon})"
-            element_type = "node" if request.kind == "point" else "way"
-            query = (
-                "[out:json][timeout:20];("
-                + "".join(f"{element_type}{selector}{around};" for selector in selectors)
-                + ");out geom 50;"
-            )
-            raw, _ = fetch_json(client, OSM, {"data": query}, method="POST")
-            if raw.get("remark"):
-                raise SourceError("The map provider did not complete the query.")
-            result = []
-            for element in raw.get("elements", []):
-                coordinates = [
-                    [point["lon"], point["lat"]] for point in element.get("geometry", [])
-                ]
-                try:
-                    if request.kind == "point":
-                        geometry = GEOMETRY.validate_python(
-                            {"type": "Point", "coordinates": [element["lon"], element["lat"]]}
-                        )
-                    elif request.kind == "building":
-                        geometry = GEOMETRY.validate_python(
-                            {"type": "Polygon", "coordinates": [coordinates]}
-                        )
-                        if isinstance(geometry, Polygon | MultiPolygon):
-                            LandCreate.bounded_boundary(geometry)
-                    else:
-                        geometry = GEOMETRY.validate_python(
-                            {"type": "LineString", "coordinates": coordinates}
-                        )
-                    tags = element.get("tags", {})
-                    identifier = str(element["id"])
-                    label = (
-                        tags.get("name")
-                        or tags.get("ref")
-                        or tags.get("power")
-                        or tags.get("man_made")
-                        or tags.get("amenity")
-                        or tags.get("waterway")
-                        or tags.get("highway")
-                        or "Mapped building"
-                    )
-                    result.append(
-                        LandCandidate(
-                            id=f"osm/{element_type}/{identifier}",
-                            label=str(label).replace("_", " ")[:300],
-                            geometry=geometry,
-                            distance_m=_distance(db, geometry, request),
-                            source=BoundarySource(
-                                method="mapped-feature",
-                                label="OpenStreetMap mapped feature",
-                                url=HttpUrl(
-                                    f"https://www.openstreetmap.org/{element_type}/{identifier}"
-                                ),
-                                record_id=identifier,
-                                attribution=OSM.attribution + " (ODbL)",
-                                meaning="physical-feature",
-                            ),
-                            properties={
-                                key: str(tags[key])
-                                for key in (
-                                    "power",
-                                    "man_made",
-                                    "amenity",
-                                    "voltage",
-                                    "building",
-                                    "waterway",
-                                    "highway",
-                                    "railway",
-                                )
-                                if key in tags
-                            },
-                        )
-                    )
-                except (ValueError, ValidationError, KeyError):
+                LandCreate.bounded_boundary(geometry)
+                properties = feature.get("properties") or {}
+                record_id = _record_id(properties.get(source.id_field)) or _record_id(
+                    feature.get("id")
+                )
+                if not record_id:
                     continue
-            truncated = len(raw.get("elements", [])) >= 50
-            message = (
-                "Mapped features near your point. Pick the relevant feature or refine the search; "
-                "mapping may be incomplete."
-            )
+                result.append(
+                    LandCandidate(
+                        id=f"ca-parcel/{source.fips}/{record_id}",
+                        label=f"Parcel {record_id}",
+                        geometry=geometry,
+                        distance_m=_distance(db, geometry, request),
+                        source=BoundarySource(
+                            method="parcel",
+                            label=f"{source.county} County assessor parcel",
+                            url=url,
+                            record_id=record_id,
+                            attribution=source.attribution,
+                            meaning="recorded-parcel",
+                        ),
+                    )
+                )
+            except (ValueError, ValidationError, AttributeError):
+                continue
+    if not answered:
+        return CandidateResult(
+            status="unavailable",
+            message=f"{_county_names(available)} parcel service is not responding right now. "
+            "Try again in a moment, or draw the land.",
+            candidates=[],
+        )
+    result.sort(key=lambda candidate: (candidate.distance_m, candidate.id))
+    return CandidateResult(
+        status="available" if result else "empty",
+        message=(
+            f"Parcels from {_county_names(answered)} records near your click. They show county "
+            "assessor mapping, not surveyed property lines."
+            if result
+            else "No parcels found right there. Click closer to your land, or draw it."
+        ),
+        candidates=result[:PARCEL_LIMIT],
+        truncated=truncated,
+    )
+
+
+def candidates(db: Session, request: CandidateRequest, client: httpx.Client) -> CandidateResult:
+    if request.kind == "parcel":
+        return _parcels(db, request, client)
+    lon, lat = request.point.coordinates[:2]
+    db.commit()  # Release the auth transaction before waiting for a public provider.
+    try:
+        selectors = (
+            [
+                '["power"="line"]',
+                '["power"="minor_line"]',
+                '["waterway"]',
+                '["highway"]',
+                '["railway"]',
+            ]
+            if request.kind == "line"
+            else [
+                '["power"]',
+                '["man_made"~"^(mast|tower|water_tower|water_well)$"]',
+                '["amenity"="charging_station"]',
+            ]
+            if request.kind == "point"
+            else ['["building"]']
+        )
+        around = f"(around:{request.radius_m},{lat},{lon})"
+        element_type = "node" if request.kind == "point" else "way"
+        query = (
+            "[out:json][timeout:20];("
+            + "".join(f"{element_type}{selector}{around};" for selector in selectors)
+            + ");out geom 50;"
+        )
+        raw, _ = fetch_json(client, OSM, {"data": query}, method="POST")
+        if raw.get("remark"):
+            raise SourceError("The map provider did not complete the query.")
+        result = []
+        for element in raw.get("elements", []):
+            coordinates = [[point["lon"], point["lat"]] for point in element.get("geometry", [])]
+            try:
+                if request.kind == "point":
+                    geometry = GEOMETRY.validate_python(
+                        {"type": "Point", "coordinates": [element["lon"], element["lat"]]}
+                    )
+                elif request.kind == "building":
+                    geometry = GEOMETRY.validate_python(
+                        {"type": "Polygon", "coordinates": [coordinates]}
+                    )
+                    if isinstance(geometry, Polygon | MultiPolygon):
+                        LandCreate.bounded_boundary(geometry)
+                else:
+                    geometry = GEOMETRY.validate_python(
+                        {"type": "LineString", "coordinates": coordinates}
+                    )
+                tags = element.get("tags", {})
+                identifier = str(element["id"])
+                label = (
+                    tags.get("name")
+                    or tags.get("ref")
+                    or tags.get("power")
+                    or tags.get("man_made")
+                    or tags.get("amenity")
+                    or tags.get("waterway")
+                    or tags.get("highway")
+                    or "Mapped building"
+                )
+                result.append(
+                    LandCandidate(
+                        id=f"osm/{element_type}/{identifier}",
+                        label=str(label).replace("_", " ")[:300],
+                        geometry=geometry,
+                        distance_m=_distance(db, geometry, request),
+                        source=BoundarySource(
+                            method="mapped-feature",
+                            label="OpenStreetMap mapped feature",
+                            url=HttpUrl(
+                                f"https://www.openstreetmap.org/{element_type}/{identifier}"
+                            ),
+                            record_id=identifier,
+                            attribution=OSM.attribution + " (ODbL)",
+                            meaning="physical-feature",
+                        ),
+                        properties={
+                            key: str(tags[key])
+                            for key in (
+                                "power",
+                                "man_made",
+                                "amenity",
+                                "voltage",
+                                "building",
+                                "waterway",
+                                "highway",
+                                "railway",
+                            )
+                            if key in tags
+                        },
+                    )
+                )
+            except (ValueError, ValidationError, KeyError):
+                continue
+        truncated = len(raw.get("elements", [])) >= 50
+        message = (
+            "Mapped features near your point. Pick the relevant feature or refine the search; "
+            "mapping may be incomplete."
+        )
         result.sort(key=lambda candidate: (candidate.distance_m, candidate.id))
         return CandidateResult(
             status="available" if result else "empty",
