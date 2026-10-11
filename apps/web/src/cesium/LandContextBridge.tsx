@@ -165,6 +165,11 @@ export function LandContextBridge() {
         host.viewer.entities.resumeEvents();
       }
       host.scene.requestRender();
+      // Clamped outlines are ground primitives rebuilt a frame later; draw once more so a
+      // removed layer leaves the map now rather than at the next camera move.
+      requestAnimationFrame(() => {
+        if (!host.isDestroyed) host.scene.requestRender();
+      });
     };
     const offInventoryPick = host.events.on("land-feature-select", ({ id }) => {
       useLandContext.getState().selectInventory(id);

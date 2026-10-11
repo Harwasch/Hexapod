@@ -42,7 +42,8 @@ export function landError(error: unknown): string {
 export function areaLabel(squareMetres: number): string {
   if (squareMetres < 4046.8564224) return `${Math.round(squareMetres).toLocaleString()} m²`;
   const acres = squareMetres / 4046.8564224;
-  return `${acres.toLocaleString(undefined, { maximumFractionDigits: acres < 10 ? 2 : 1 })} acres`;
+  const shown = acres.toLocaleString(undefined, { maximumFractionDigits: acres < 10 ? 2 : 1 });
+  return `${shown} ${shown === "1" ? "acre" : "acres"}`;
 }
 
 /** Frames a boundary with room on the left for the land cards. */

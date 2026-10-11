@@ -1,0 +1,176 @@
+/* ---------------------------------------------------------------------------
+   Water and Soil lenses: the parts they share (the overview bundle's progress line, notes,
+   tables and source list). Lens-specific styles live in water.css and soil.css.
+   --------------------------------------------------------------------------- */
+
+.bundle-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.bundle-progress__text {
+  font-variant-numeric: tabular-nums;
+}
+.bundle-progress__bar {
+  grid-column: 1;
+  grid-row: 2;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--control-bg);
+  overflow: hidden;
+}
+.bundle-progress__bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--motion-slow) var(--ease-out);
+}
+.bundle-progress > .glass-button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.bundle-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.bundle-section {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.bundle-heading {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.bundle-section p {
+  margin: 0;
+}
+
+.bundle-table-block {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+  min-width: 0;
+}
+.bundle-table {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+}
+.bundle-table:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.bundle-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.bundle-table th,
+.bundle-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--divider);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.bundle-table th {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+.bundle-table .is-number {
+  text-align: right;
+}
+
+.bundle-sources,
+.bundle-asks {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bundle-source {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: var(--text-sm);
+}
+:root[data-theme="light"] .bundle-source {
+  background: rgba(15, 23, 42, 0.04);
+}
+.bundle-source__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+}
+.bundle-source__message {
+  color: var(--text-secondary);
+}
+.bundle-source__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+}
+.bundle-status {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.bundle-status--available {
+  color: var(--accent);
+}
+.bundle-status--unavailable {
+  color: var(--warn);
+}
+.bundle-raw > summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.bundle-raw pre {
+  margin: var(--space-1) 0 0;
+  max-height: 12rem;
+  overflow: auto;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+:root[data-theme="light"] .bundle-raw pre {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.bundle-sample {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bundle-progress__bar > i {
+    transition: none;
+  }
+}
