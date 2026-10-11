@@ -1,10 +1,11 @@
-import { ChevronRight, LandPlot, MapPin, Pencil, Route, Upload } from "lucide-react";
+import { ChevronRight, LandPlot, MapPin, Pencil, Route, Upload, X } from "lucide-react";
 import type { RefObject } from "react";
 
 import { GlassButton, GlassPanel } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
 import { useLand } from "@/state/land";
+import { useUi } from "@/state/ui";
 
 import { useLandAreas } from "../api";
 import { areaLabel, beginLand, openLand } from "./landFlow";
@@ -21,6 +22,15 @@ export function LandStart({ fileInput }: { fileInput: RefObject<HTMLInputElement
     <GlassPanel strong className="land-card" data-testid="land-start">
       <div className="land-eyebrow-row">
         <span className="land-lens-label">Your land</span>
+        <GlassButton
+          iconOnly
+          size="sm"
+          variant="ghost"
+          aria-label="Close land"
+          onClick={() => useUi.getState().setPanel(null)}
+        >
+          <X size={16} aria-hidden="true" />
+        </GlassButton>
       </div>
       <h2 className="land-headline">Outline the place you want to understand.</h2>
       <div className="land-row">

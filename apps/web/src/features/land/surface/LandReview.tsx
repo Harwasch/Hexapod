@@ -118,6 +118,7 @@ export function LandReview() {
               }
             />
           </label>
+          <p>{draft.source.label}</p>
           <p className="land-muted">{sourceMeaning(draft.source.meaning)}</p>
           {draft.source.attribution && <p className="land-muted">{draft.source.attribution}</p>}
           <BoundaryReferences sources={draft.source.references ?? []} />

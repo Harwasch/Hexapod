@@ -110,7 +110,7 @@ test("draw, save, inspect elsewhere, edit, and reopen a land area without a miss
     twin.camera.cancelFlight();
     twin.camera.setView(-119.9, 36.6, 1500, 0, -90);
   });
-  await app.getByRole("button", { name: /Draw a boundary/ }).click();
+  await app.getByRole("button", { name: "Draw on the map", exact: true }).click();
   for (const [x, y] of [
     [650, 300],
     [1000, 300],
@@ -119,8 +119,9 @@ test("draw, save, inspect elsewhere, edit, and reopen a land area without a miss
   ]) {
     await app.mouse.click(x!, y!);
   }
-  await expect(app.getByText(/4 points placed/)).toBeVisible();
-  await app.getByRole("button", { name: "Review boundary", exact: true }).click();
+  const drawbar = app.getByTestId("land-drawbar");
+  await expect(drawbar).toContainText("4 corners");
+  await drawbar.getByRole("button", { name: "Done", exact: true }).click();
   await app.getByLabel("Name this land").fill("West field");
   await app.getByRole("button", { name: "Save this land", exact: true }).click();
   await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
@@ -133,7 +134,9 @@ test("draw, save, inspect elsewhere, edit, and reopen a land area without a miss
   await app.getByRole("menuitem", { name: "What's here" }).click();
   await expect(app.getByRole("heading", { name: "Location", exact: true })).toBeVisible();
   await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
-  await app.getByRole("button", { name: "Edit boundary", exact: true }).click();
+  await app.getByRole("button", { name: "Land options", exact: true }).click();
+  await app.getByRole("menuitem", { name: "Edit boundary", exact: true }).click();
+  await app.getByText("Notes and source", { exact: true }).click();
   await app.getByLabel("Notes", { exact: true }).fill("Survey before restoration");
   await app.getByRole("button", { name: "Save revision", exact: true }).click();
   await expect.poll(() => records.history.length).toBe(2);
@@ -141,8 +144,9 @@ test("draw, save, inspect elsewhere, edit, and reopen a land area without a miss
   await app.getByTestId("tool-land").click();
   await app.getByRole("button", { name: /West field/ }).click();
   await expect(app.getByText("Survey before restoration", { exact: true })).toBeVisible();
-  await app.getByRole("button", { name: "History", exact: true }).click();
-  await expect(app.getByText("Revision 2", { exact: true })).toBeVisible();
+  await app.getByRole("button", { name: "Land options", exact: true }).click();
+  await app.getByRole("menuitem", { name: "Boundary history", exact: true }).click();
+  await expect(app.getByText(/^Revision 2 ·/)).toBeVisible();
 });
 
 test("import with an exclusion and preserve the map on a phone", async ({ app }) => {
@@ -178,7 +182,7 @@ test("import with an exclusion and preserve the map on a phone", async ({ app })
   await expect(app.getByRole("heading", { name: "Creek reserve", exact: true })).toBeVisible();
   expect(records.saved[0]?.boundary.coordinates).toEqual([boundary.coordinates]);
   expect(await app.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await app.getByRole("button", { name: "Close panel", exact: true }).click();
+  await app.getByRole("button", { name: "Close land", exact: true }).click();
   const outlines = await app.evaluate(() => {
     const twin = (
       window as unknown as { __twin: { viewer: { entities: { values: { id: string }[] } } } }
@@ -265,17 +269,19 @@ test("select a mapped transmission line and preview a described corridor", async
   });
   await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
   await app.getByTestId("tool-land").click();
-  await app.getByRole("button", { name: /Find parcels, lines or buildings/ }).click();
-  await app.getByRole("combobox", { name: "Find", exact: true }).selectOption("line");
+  await app.getByRole("button", { name: "Pick parcels", exact: true }).click();
+  await app.getByRole("radio", { name: "Roads & rivers", exact: true }).click();
   await app.mouse.click(900, 400);
-  const candidate = app.getByRole("button", { name: /Transmission line 9/ });
-  await candidate.click();
-  await expect(candidate).toHaveAttribute("aria-pressed", "true");
+  const candidate = app.getByRole("checkbox", { name: "Transmission line 9" });
+  await candidate.check();
+  await expect(candidate).toBeChecked();
+  await app.getByText("Describe it instead", { exact: true }).click();
   await app
-    .getByLabel("Or describe your selection")
+    .getByLabel("Describe your selection")
     .fill("100 feet wide along this transmission line, flat ends");
-  await app.getByRole("button", { name: "Preview my instruction" }).click();
+  await app.getByRole("button", { name: "Use my description" }).click();
   await expect(app.getByLabel("Name this land")).toHaveValue("Transmission line 9");
+  await app.getByText("Notes and source", { exact: true }).click();
   await expect(app.getByText("Corridor along Transmission line 9", { exact: true })).toBeVisible();
 });
 
@@ -430,9 +436,13 @@ for (const kind of ["boundary", "corridor"] as const) {
       twin.camera.cancelFlight();
       twin.camera.setView(-77.05, 38.888, 1500, 0, -90);
     });
-    await app
-      .getByRole("button", { name: kind === "boundary" ? /Draw a boundary/ : /Trace a corridor/ })
-      .click();
+    if (kind === "boundary")
+      await app.getByRole("button", { name: "Draw on the map", exact: true }).click();
+    else {
+      await app.getByText("More ways", { exact: true }).click();
+      await app.getByRole("button", { name: /Trace a corridor/ }).click();
+    }
+    const drawbar = app.getByTestId("land-drawbar");
     if (kind === "corridor") {
       await app.getByLabel("Total corridor width", { exact: true }).fill("150");
       await app.getByRole("combobox", { name: "Width units", exact: true }).selectOption("m");
@@ -440,7 +450,7 @@ for (const kind of ["boundary", "corridor"] as const) {
     }
     await app.mouse.click(650, 300);
     await app.mouse.click(1000, 300);
-    await expect(app.getByText(/2 points placed/)).toBeVisible();
+    await expect(drawbar).toContainText(/2 (corners|points)/);
     const points = await app.evaluate(
       () =>
         (
@@ -455,7 +465,7 @@ for (const kind of ["boundary", "corridor"] as const) {
     await app.getByTestId("tool-land").click();
     await expect(app.getByText(/2 drawn points are stored/)).toBeVisible();
     await app.getByRole("button", { name: "Resume drawing", exact: true }).click();
-    await expect(app.getByText(/2 points placed/)).toBeVisible();
+    await expect(drawbar).toContainText(/2 (corners|points)/);
     expect(
       await app.evaluate(
         () =>
@@ -483,10 +493,10 @@ for (const kind of ["boundary", "corridor"] as const) {
       )
       .toBe(false);
     await app.mouse.click(1000, 550);
-    await expect(app.getByText(/3 points placed/)).toBeVisible();
-    await app.getByRole("button", { name: "Last point", exact: true }).click();
-    await expect(app.getByText(/2 points placed/)).toBeVisible();
-    await app.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(drawbar).toContainText(/3 (corners|points)/);
+    await drawbar.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect(drawbar).toContainText(/2 (corners|points)/);
+    await drawbar.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(
       await app.evaluate(() => localStorage.getItem("living-world-land-draft:pilot")),
     ).toBeNull();

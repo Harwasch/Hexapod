@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   Repeat,
+  X,
 } from "lucide-react";
 
 import type { LandArea } from "@twin/contracts";
@@ -17,6 +18,7 @@ import { GlassButton, GlassPanel } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
 import { useLand } from "@/state/land";
+import { useUi } from "@/state/ui";
 
 import { useBoundaryHistory, useLandAreas } from "../api";
 import { LandSavedViews } from "../LandSavedViews";
@@ -69,7 +71,21 @@ export function LandChip({ land }: { land: LandArea }) {
         >
           <MoreHorizontal size={16} aria-hidden="true" />
         </GlassButton>
+        <GlassButton
+          iconOnly
+          size="sm"
+          variant="ghost"
+          aria-label="Close land"
+          onClick={() => useUi.getState().setPanel(null)}
+        >
+          <X size={16} aria-hidden="true" />
+        </GlassButton>
       </GlassPanel>
+      {land.description && (
+        <p className="land-chip__notes" title={land.description}>
+          {land.description}
+        </p>
+      )}
       {menu && (
         <GlassPanel strong className="land-card land-menu" role="menu" aria-label="Land options">
           <MenuItem
