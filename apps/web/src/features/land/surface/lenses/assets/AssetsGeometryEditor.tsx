@@ -4,7 +4,7 @@ import { api, ApiError, unwrap } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
 import { useLandContext } from "@/state/landContext";
-import { useUi } from "@/state/ui";
+
 import {
   closeInventoryShape,
   keepGeometryHistory,
@@ -13,15 +13,21 @@ import {
   vertexCount,
   type InventoryShape,
   type Vertex,
-} from "./inventoryGeometry";
-import "./inventoryGeometry.css";
+} from "./assetsGeometry";
 
-type Preview = components["schemas"]["FeatureGeometryRead"];
-export function InventoryGeometryEditor({
+export type GeometryPreview = components["schemas"]["FeatureGeometryRead"];
+type Preview = GeometryPreview;
+
+/**
+ * Exact shape editing: every vertex as coordinates, parts and holes, undo and redo, picked on
+ * the map or typed. The server checks the shape before it can replace the draft's.
+ */
+export function AssetsGeometryEditor({
   landId,
   boundaryRevision,
   geometry,
   initialShape,
+  active,
   onDraft,
   onApply,
   onCancel,
@@ -30,16 +36,15 @@ export function InventoryGeometryEditor({
   boundaryRevision: number;
   geometry: LandMapGeometry;
   initialShape?: InventoryShape | null;
+  /** False while the lens is hidden: map picks are cancelled and nothing is drawn. */
+  active: boolean;
   onDraft?: (shape: InventoryShape) => void;
-  onApply: (geometry: LandMapGeometry) => void;
+  onApply: (geometry: LandMapGeometry, preview: Preview) => void;
   onCancel: () => void;
 }) {
   const scene = useScene();
-  const section = useLandContext((s) => s.section),
-    panel = useUi((s) => s.activePanel);
   const picker = useLandContext((s) => s.pointPicker);
-  const active = section === "inventory" && panel === "land";
-  const owner = `inventory-geometry:${landId}`;
+  const owner = `assets-geometry:${landId}`;
   const [history, setHistory] = useState<{
     past: InventoryShape[];
     present: InventoryShape;
@@ -120,7 +125,12 @@ export function InventoryGeometryEditor({
         ];
       }),
     );
-    useLandContext.getState().setLayer({ id: owner, title: "Editing asset geometry", features });
+    useLandContext.getState().setLayer({
+      id: owner,
+      title: "Editing asset shape",
+      style: { color: "#f1cb7a", fill: 0.15, width: 3 },
+      features,
+    });
     return () => useLandContext.getState().removeLayer(owner);
   }, [active, draft, owner, polygon, partIndex, ringIndex, start]);
   function cancelPick() {
@@ -194,13 +204,11 @@ export function InventoryGeometryEditor({
     }
   }
   return (
-    <section className="inventory-geometry" aria-label="Edit asset geometry">
-      <h4>Shape and location</h4>
-      <p>
-        Pick vertices on the map or enter coordinates. Preview the shape before applying it to this
-        draft.
+    <section className="assets-geometry assets-tool" aria-label="Edit asset geometry">
+      <p className="land-muted">
+        Pick corners on the map or type coordinates, then check the shape before using it.
       </p>
-      <div className="land-actions">
+      <div className="land-row">
         <button
           type="button"
           disabled={!history.past.length}
@@ -230,7 +238,7 @@ export function InventoryGeometryEditor({
           Redo geometry
         </button>
       </div>
-      <label className="land-name">
+      <label className="land-field">
         Geometry type
         <select
           aria-label="Geometry type"
@@ -260,11 +268,13 @@ export function InventoryGeometryEditor({
           <option value="MultiPolygon">Multiple areas</option>
         </select>
       </label>
-      <p className="land-footnote">Changing type can remove rings or parts. Undo restores them.</p>
+      <p className="land-muted">
+        Changing the type can drop rings or parts. Undo brings them back.
+      </p>
       {polygon && (
         <>
           {draft.type === "MultiPolygon" && (
-            <label className="land-name">
+            <label className="land-field">
               Area part
               <select
                 aria-label="Area part"
@@ -284,7 +294,7 @@ export function InventoryGeometryEditor({
               </select>
             </label>
           )}
-          <label className="land-name">
+          <label className="land-field">
             Boundary ring
             <select
               aria-label="Boundary ring"
@@ -302,7 +312,7 @@ export function InventoryGeometryEditor({
               ))}
             </select>
           </label>
-          <div className="land-actions">
+          <div className="land-row">
             <button
               type="button"
               onClick={() => {
@@ -362,12 +372,12 @@ export function InventoryGeometryEditor({
           </div>
         </>
       )}
-      <ol className="inventory-vertices" start={start + 1}>
+      <ol className="assets-vertices" start={start + 1}>
         {points.slice(start, start + 50).map((point, local) => {
           const index = start + local;
           return (
             <li key={index}>
-              <div className="inventory-coordinate-pair">
+              <div className="assets-coordinates">
                 {(["Longitude", "Latitude"] as const).map((label, axis) => (
                   <label key={label}>
                     {label}
@@ -393,7 +403,7 @@ export function InventoryGeometryEditor({
                   </label>
                 ))}
               </div>
-              <div className="land-actions">
+              <div className="land-row">
                 <button type="button" disabled={!scene || !active} onClick={() => void pick(index)}>
                   Pick vertex {index + 1} on map
                 </button>
@@ -425,7 +435,7 @@ export function InventoryGeometryEditor({
         })}
       </ol>
       {points.length > 50 && (
-        <div className="land-actions">
+        <div className="land-row">
           <button type="button" disabled={start === 0} onClick={() => setOffset(start - 50)}>
             Previous vertices
           </button>
@@ -442,7 +452,7 @@ export function InventoryGeometryEditor({
         </div>
       )}
       {draft.type !== "Point" && (
-        <div className="land-actions">
+        <div className="land-row">
           <button
             type="button"
             disabled={!scene || !active || vertexCount(draft) >= 20_000}
@@ -463,20 +473,20 @@ export function InventoryGeometryEditor({
         </div>
       )}
       {picker === owner && (
-        <p role="status">
+        <p role="status" className="land-muted">
           Click the map to place this vertex.{" "}
-          <button type="button" onClick={cancelPick}>
+          <button type="button" className="land-link" onClick={cancelPick}>
             Cancel map pick
           </button>
         </p>
       )}
       {error && (
-        <p role="alert" className="land-error">
+        <p role="alert" className="land-alert">
           {error}
         </p>
       )}
       {preview && (
-        <div role="status">
+        <div role="status" className="assets-geometry__ok">
           <strong>Geometry is valid.</strong>
           <p>
             {preview.intersectsLand
@@ -501,12 +511,10 @@ export function InventoryGeometryEditor({
                 </div>
               ))}
           </dl>
-          <p className="land-footnote">
-            Map coordinates describe a proposed feature; they do not establish surveyed accuracy.
-          </p>
+          <p className="land-muted">Map coordinates are not a survey.</p>
         </div>
       )}
-      <div className="land-actions">
+      <div className="land-row">
         <button type="button" disabled={busy} onClick={() => void validate()}>
           {busy ? "Checking geometry…" : "Preview geometry"}
         </button>
@@ -516,7 +524,7 @@ export function InventoryGeometryEditor({
           onClick={() => {
             if (preview) {
               cancelPick();
-              onApply(preview.geometry);
+              onApply(preview.geometry, preview);
             }
           }}
         >

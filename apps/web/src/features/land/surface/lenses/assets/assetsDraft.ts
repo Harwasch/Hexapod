@@ -1,7 +1,17 @@
 import type { components } from "@twin/contracts";
-import { defaultImportMapping, inventoryCategories, parseInventoryImport } from "./inventoryImport";
-import type { InventoryShape, Vertex } from "./inventoryGeometry";
+import { defaultImportMapping, inventoryCategories, parseInventoryImport } from "./assetsImport";
+import type { InventoryShape, Vertex } from "./assetsGeometry";
 export type AssetDraft = components["schemas"]["LandFeatureCreate"];
+
+/** The browser copy of an unsaved asset, per workspace and land (same key as before lenses). */
+export function assetDraftKey(scope: string, landId: string): string {
+  return `living-world-land-draft:${encodeURIComponent(scope)}:inventory:${landId}`;
+}
+
+/** The browser copy of an unfinished import (same key as before lenses). */
+export function assetImportKey(scope: string, landId: string): string {
+  return `living-world-land-draft:${encodeURIComponent(scope)}:inventory-import:${landId}`;
+}
 export type AssetRecord = components["schemas"]["LandFeatureRead"];
 export interface InventoryDraftSnapshot {
   version: 1;
