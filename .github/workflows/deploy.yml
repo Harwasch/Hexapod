@@ -129,6 +129,33 @@ jobs:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET }}
         run: apps/api/.venv/bin/python scripts/prepare-worlds-land-release.py
+      # TEMPORARY, remove after the next successful release. Run 73's backup went through
+      # Neon's transaction pooler, and pg_dump's empty search_path stayed on the shared
+      # server connection: the running API lost its schema and the release migration
+      # could not find alembic_version. The backup now connects directly; this clears
+      # the setting it left behind. Each SHOW and SET share one transaction, so one
+      # server connection; repeating reaches every connection the pool hands out.
+      - name: Reset the search_path a pooled backup left on shared connections
+        if: inputs.target != 'preflight'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          machine=$(flyctl machines list --json | jq -r '[.[] | select(.config.metadata.fly_process_group == "app")][0].id')
+          code=$(base64 -w0 <<'PY'
+          import psycopg
+          from app.config import get_settings
+          url = get_settings().database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+          reset = 0
+          for _ in range(40):
+              with psycopg.connect(url, prepare_threshold=None, connect_timeout=20) as connection:
+                  before = connection.execute("SHOW search_path").fetchone()[0]
+                  connection.execute("SET search_path TO DEFAULT")
+              reset += "public" not in before
+          print("pooled sessions reset:", reset)
+          PY
+          )
+          flyctl ssh console --machine "$machine" --user api --command "/app/.venv/bin/python -c \"import base64,sys; sys.path.insert(0,'/app'); exec(base64.b64decode('$code'))\""
       - name: Ensure the single API ledger volume exists
         if: inputs.target != 'preflight'
         env:
