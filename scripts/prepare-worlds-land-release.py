@@ -127,16 +127,24 @@ def main() -> None:
     if len(databases) != 1:
         raise RuntimeError("Database selection is ambiguous; refusing to guess")
     database = databases[0]
+    # A direct connection, never the pooler: pg_dump empties its session's search_path,
+    # and a transaction-mode pooler hands that session state to the next client of the
+    # same server connection -- the running API and the release migration included.
     query = urlencode(
         {
             "branch_id": branch,
             "database_name": database["name"],
             "role_name": database["owner_name"],
+            "pooled": "false",
         }
     )
     uri = neon(f"/projects/{project}/connection_uri?{query}")["uri"]
     if not uri or "\n" in uri:
         raise RuntimeError("Invalid database connection response")
+    if "-pooler." in (urlsplit(uri).hostname or ""):
+        raise RuntimeError(
+            "Backups must use a direct database connection, not the pooler"
+        )
     print("::add-mask::" + uri, flush=True)
     machines = json.loads(
         run(
