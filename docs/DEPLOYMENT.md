@@ -1557,7 +1557,7 @@ publishing the frontend. Then dispatch with `target=everything` and `enable_land
 `VITE_ENABLE_LAND_EXPLORATION=true` to the browser build. Before every API release,
 the workflow uses the existing Neon and private R2 credentials to back up the
 running API's database, verifies the uploaded backup by downloading it, restores
-it into temporary local PostGIS, and rehearses all migrations through `0028`.
+it into temporary local PostGIS, and rehearses all migrations through the release's single head (`0029` now).
 The workflow summary records the private backup key and checksum. Backups remain
 under `operations/backups/worlds-land/` in the private bucket; do not make them public
 or delete them until the testing release has been accepted and normal retention applies.

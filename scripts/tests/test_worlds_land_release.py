@@ -92,7 +92,7 @@ def harness(monkeypatch):
         elif args[:2] == ["docker", "cp"]:
             state["copied"] = Path(args[2]).read_bytes()
         elif args[0] == "psql":
-            output = "0028"
+            output = release.migration_head()
         return SimpleNamespace(stdout=output, returncode=0)
 
     class Storage:

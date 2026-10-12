@@ -29,7 +29,7 @@ authorization; the infrastructure owner performs the release separately.
 ## Deployment owner: prerequisites
 
 1. Back up the database and rehearse the migration against an isolated copy.
-   Land adds revisions `0011` through `0028`. Run `alembic heads` on the release
+   Land adds revisions `0011` through `0029`. Run `alembic heads` on the release
    revision and apply **all** migrations with `uv run alembic upgrade head` from
    `apps/api`; do not stop at an earlier revision mentioned in historical notes.
    Use the configured database connection, and verify the workspace ownership

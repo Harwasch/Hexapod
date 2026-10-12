@@ -24,6 +24,19 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def migration_head() -> str:
+    """The single Alembic head of the revision being released, read from its scripts."""
+    revisions, parents = set(), set()
+    for script in (ROOT / "apps/api/alembic/versions").glob("*.py"):
+        text = script.read_text()
+        revisions.update(re.findall(r'^revision = "([^"]+)"', text, re.MULTILINE))
+        parents.update(re.findall(r'^down_revision = "([^"]+)"', text, re.MULTILINE))
+    heads = revisions - parents
+    if len(heads) != 1:
+        raise RuntimeError("The release must have exactly one migration head")
+    return heads.pop()
+
+
 def required(name: str) -> str:
     value = os.environ.get(name, "")
     if not value:
@@ -360,10 +373,11 @@ def main() -> None:
                 env={**os.environ, "PGDATABASE": local},
                 capture_output=True,
             ).stdout.strip()
-            if revision != "0028":
+            head = migration_head()
+            if revision != head:
                 raise RuntimeError("Unexpected migration rehearsal head")
             print(
-                "Downloaded private backup restores and upgrades successfully to 0028",
+                f"Downloaded private backup restores and upgrades successfully to {head}",
                 flush=True,
             )
             summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -371,7 +385,7 @@ def main() -> None:
                 with open(summary, "a") as handle:
                     handle.write(
                         f"\nPrivate database backup: `s3://{bucket}/{key}`\n\n"
-                        f"SHA256: `{digest}`. Restore and migration to `0028` passed.\n"
+                        f"SHA256: `{digest}`. Restore and migration to `{head}` passed.\n"
                     )
         finally:
             subprocess.run(
