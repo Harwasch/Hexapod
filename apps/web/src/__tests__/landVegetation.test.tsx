@@ -1,7 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { components } from "@twin/contracts";
-import { VegetationStart } from "@/features/land/VegetationStart";
 import { vegetationPeriods } from "@/features/land/vegetationPeriods";
 import { OverviewPeriods } from "@/features/land/surface/lenses/overview/OverviewPeriods";
 import { RasterDetails } from "@/features/land/surface/lenses/overview/RasterDetails";
@@ -40,13 +39,6 @@ it("allows month editing and rejects duplicates before starting", () => {
   expect(screen.getByRole("button", { name: "Compare these months" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Add a month" }));
   expect(screen.getByLabelText("Observation month 2")).toHaveValue("");
-});
-
-it("keeps the old research tab's start working", () => {
-  const onStart = vi.fn();
-  render(<VegetationStart disabled={false} busy={false} onStart={onStart} />);
-  fireEvent.click(screen.getByRole("button", { name: "Compare vegetation" }));
-  expect(onStart).toHaveBeenCalledTimes(1);
 });
 
 const series: components["schemas"]["VegetationTimeline"] = {
