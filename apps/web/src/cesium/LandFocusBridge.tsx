@@ -5,6 +5,7 @@ import { polygonsOf } from "@twin/geo";
 
 import { useLandMap, type MapTone } from "@/state/landMap";
 
+import { repaintUntilDrawn } from "./repaintUntilDrawn";
 import { useScene } from "./SceneContext";
 
 const TONES: Record<MapTone, string> = {
@@ -20,6 +21,7 @@ export function LandFocusBridge() {
   useEffect(() => {
     if (!host) return;
     let entities: Entity[] = [];
+    let stopRepaint: () => void = () => undefined;
     const positions = (ring: number[][]) =>
       Cartesian3.fromDegreesArray(ring.flatMap((p) => [p[0] ?? 0, p[1] ?? 0]));
     const show = () => {
@@ -68,7 +70,8 @@ export function LandFocusBridge() {
             );
           });
       }
-      host.scene.requestRender();
+      stopRepaint();
+      stopRepaint = repaintUntilDrawn(host);
     };
     const off = useLandMap.subscribe((next, previous) => {
       if (next.focus !== previous.focus) show();
@@ -76,6 +79,7 @@ export function LandFocusBridge() {
     show();
     return () => {
       off();
+      stopRepaint();
       if (!host.isDestroyed) entities.forEach((entity) => host.viewer.entities.remove(entity));
     };
   }, [host]);

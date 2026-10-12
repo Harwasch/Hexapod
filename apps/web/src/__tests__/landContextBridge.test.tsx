@@ -11,7 +11,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@/cesium/SceneContext", () => ({
   useScene: () => ({
     isDestroyed: false,
-    viewer: { entities: fixture.entities },
+    viewer: { entities: fixture.entities, dataSourceDisplay: { ready: true } },
     scene: { requestRender: fixture.render },
     events: {
       on: (name: string, listener: (value: unknown) => void) => {

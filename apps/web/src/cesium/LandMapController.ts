@@ -25,6 +25,7 @@ import { nearestBoundaryPoint } from "@/features/land/boundarySnap";
 import type { LandMode, LandPoint } from "@/state/land";
 
 import type { CesiumSceneManager } from "./CesiumSceneManager";
+import { repaintUntilDrawn } from "./repaintUntilDrawn";
 
 const FILL = Color.fromCssColorString("#a8d7b4").withAlpha(0.13);
 const LINE = Color.fromCssColorString("#b9edc6");
@@ -57,6 +58,7 @@ export class LandMapController {
   /** Height of the last surface the depth buffer showed under the pointer. */
   private surfaceHeight: number | undefined;
   private readonly release = () => this.finishDrag();
+  private stopRepaint: () => void = () => undefined;
 
   constructor(
     private readonly host: CesiumSceneManager,
@@ -427,7 +429,9 @@ export class LandMapController {
         },
       });
     });
-    this.host.scene.requestRender();
+    // Clamped outlines are built over several frames that nothing else asks for.
+    this.stopRepaint();
+    this.stopRepaint = repaintUntilDrawn(this.host);
   }
 
   frame(footprint: Footprint): void {
@@ -436,6 +440,7 @@ export class LandMapController {
   }
 
   destroy(): void {
+    this.stopRepaint();
     this.finishDrag();
     this.handler?.destroy();
     this.showSnap(null);

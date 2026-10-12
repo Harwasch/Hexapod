@@ -17,6 +17,7 @@ import {
 import { useLand } from "@/state/land";
 import { useUi } from "@/state/ui";
 import { useLandIdentity } from "@/state/landIdentity";
+import { repaintUntilDrawn } from "./repaintUntilDrawn";
 import { useScene } from "./SceneContext";
 
 const DEFAULT_COLOR = "#88c8e5";
@@ -37,6 +38,7 @@ export function LandContextBridge() {
       string,
       { layer: LandContextLayer; entities: { entity: Entity; featureId: string }[] }
     >();
+    let stopRepaint: () => void = () => undefined;
     const positions = (points: number[][]) =>
       Cartesian3.fromDegreesArray(points.flatMap((point) => [point[0] ?? 0, point[1] ?? 0]));
     const sync = () => {
@@ -82,6 +84,10 @@ export function LandContextBridge() {
           current.entities.forEach(({ entity }) => host.viewer.entities.remove(entity));
           rendered.delete(id);
         }
+        // Re-adding an id that was removed in the same suspended batch only cancels the
+        // removal and keeps the old geometry; flush the removals before adding anything.
+        host.viewer.entities.resumeEvents();
+        host.viewer.entities.suspendEvents();
         for (const layer of Object.values(layers)) {
           if (rendered.has(layer.id)) continue;
           const entities: { entity: Entity; featureId: string }[] = [];
@@ -164,12 +170,8 @@ export function LandContextBridge() {
       } finally {
         host.viewer.entities.resumeEvents();
       }
-      host.scene.requestRender();
-      // Clamped outlines are ground primitives rebuilt a frame later; draw once more so a
-      // removed layer leaves the map now rather than at the next camera move.
-      requestAnimationFrame(() => {
-        if (!host.isDestroyed) host.scene.requestRender();
-      });
+      stopRepaint();
+      stopRepaint = repaintUntilDrawn(host);
     };
     const offInventoryPick = host.events.on("land-feature-select", ({ id }) => {
       useLandContext.getState().selectInventory(id);
@@ -203,6 +205,7 @@ export function LandContextBridge() {
     });
     sync();
     return () => {
+      stopRepaint();
       offInventoryPick();
       offResearchPick();
       offContext();

@@ -57,6 +57,7 @@ function host(altitude: number, depth: () => Cartesian3 = () => VISIBLE.clone())
       screenSpaceCameraController: { enableInputs: true },
     },
     viewer: {
+      dataSourceDisplay: { ready: true },
       camera: {
         frustum: { near: 0.1 },
         positionWC: CAMERA,
