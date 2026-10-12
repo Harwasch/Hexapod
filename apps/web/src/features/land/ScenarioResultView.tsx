@@ -92,7 +92,12 @@ export function ScenarioResultView({ result }: { result: ScenarioResult }) {
           </table>
         </div>
       )}
-      <button type="button" onClick={() => setRowsOpen(!rowsOpen)} aria-expanded={rowsOpen}>
+      <button
+        type="button"
+        className="land-link"
+        onClick={() => setRowsOpen(!rowsOpen)}
+        aria-expanded={rowsOpen}
+      >
         {rowsOpen ? "Hide" : "Inspect"} calculation rows
       </button>
       {rowsOpen && result.rows.length > 0 && (
