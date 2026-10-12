@@ -5308,6 +5308,194 @@
         "title": "EcologyRequest",
         "type": "object"
       },
+      "EventLocation": {
+        "additionalProperties": false,
+        "description": "Where on the map a research step is looking or what it found.\n\nSmall on purpose: a point, a box or a reference to saved geometry, never the geometry\nitself, so a streamed event stays far below the frame limit.",
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "maximum": 180.0,
+                    "minimum": -180.0,
+                    "type": "number"
+                  },
+                  {
+                    "maximum": 90.0,
+                    "minimum": -90.0,
+                    "type": "number"
+                  },
+                  {
+                    "maximum": 180.0,
+                    "minimum": -180.0,
+                    "type": "number"
+                  },
+                  {
+                    "maximum": 90.0,
+                    "minimum": -90.0,
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "kind": {
+            "enum": [
+              "point",
+              "bbox",
+              "geometry-ref"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "meaning": {
+            "enum": [
+              "sample-point",
+              "query-bbox",
+              "query-radius",
+              "catalog-coordinate",
+              "catalog-footprint",
+              "analysis-extent",
+              "array-zone",
+              "focus",
+              "result"
+            ],
+            "title": "Meaning",
+            "type": "string"
+          },
+          "point": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "maximum": 180.0,
+                    "minimum": -180.0,
+                    "type": "number"
+                  },
+                  {
+                    "maximum": 90.0,
+                    "minimum": -90.0,
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Point"
+          },
+          "radiusM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radiusm"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventLocationRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "meaning"
+        ],
+        "title": "EventLocation",
+        "type": "object"
+      },
+      "EventLocationRef": {
+        "additionalProperties": false,
+        "description": "A saved record whose geometry the event is about, when it has one.",
+        "properties": {
+          "artifactId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifactid"
+          },
+          "assessmentId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessmentid"
+          },
+          "evidenceId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidenceid"
+          },
+          "featureId": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Featureid"
+          },
+          "rasterId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rasterid"
+          }
+        },
+        "title": "EventLocationRef",
+        "type": "object"
+      },
       "EventRead": {
         "additionalProperties": false,
         "properties": {
@@ -5319,6 +5507,16 @@
           "kind": {
             "title": "Kind",
             "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "payload": {
             "additionalProperties": true,
@@ -7117,6 +7315,21 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "enum": [
+                "overview",
+                "investigation",
+                "raster",
+                "archive",
+                "solar",
+                "ecology"
+              ],
+              "type": "string"
+            },
+            "title": "Kinds",
+            "type": "array"
           },
           "landId": {
             "format": "uuid",
