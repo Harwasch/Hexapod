@@ -128,13 +128,21 @@
 
 /* ---- Cards ----------------------------------------------------------------- */
 .land-surface {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--hud-gap);
   width: min(var(--panel-width-wide), var(--dock-left-max, 100%));
   max-height: 100%;
   min-height: 0;
-  grid-auto-rows: max-content;
   overflow: hidden;
+}
+/* Small cards keep their height; the one scrolling card takes what is left and scrolls. */
+.land-surface > * {
+  flex: none;
+}
+.land-surface > .land-card--scroll {
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 .land-card {

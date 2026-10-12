@@ -382,29 +382,30 @@ test("review and schedule an action, then preserve that mission when revising", 
   await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
   await app.getByTestId("tool-land").click();
   await app.getByRole("button", { name: /Action field/ }).click();
-  await app.getByRole("tab", { name: "Actions", exact: true }).click();
-  const actions = app.getByRole("region", { name: "Land actions" });
-  await actions.getByRole("button", { name: "Plan an action", exact: true }).click();
-  await actions.getByLabel("Action title", { exact: true }).fill("Baseline survey");
-  await actions.getByLabel("Outcome to achieve", { exact: true }).fill("Measure native cover");
-  await actions.getByLabel("Step 1 name", { exact: true }).fill("Survey quadrats");
-  await actions
-    .getByLabel("Step 1 success measure", { exact: true })
-    .fill("Five recorded quadrats");
-  await actions.getByRole("button", { name: "Save action draft", exact: true }).click();
-  await expect(actions.getByRole("article", { name: "Action review" })).toBeVisible();
+  await app.getByTestId("land-lens-plans").click();
+  const plans = app.getByRole("region", { name: "Plans", exact: true });
+  await plans.getByRole("button", { name: "Make a plan", exact: true }).click();
+  await plans.getByLabel("Plan name", { exact: true }).fill("Baseline survey");
+  await plans.getByLabel("Goal", { exact: true }).fill("Measure native cover");
+  await plans.getByLabel("Step 1 name", { exact: true }).fill("Survey quadrats");
+  await plans.getByLabel("Step 1 success measure", { exact: true }).fill("Five recorded quadrats");
+  await plans.getByRole("button", { name: "Save plan", exact: true }).click();
+  await expect(plans.getByRole("region", { name: "Plan: Baseline survey" })).toBeVisible();
   expect(requests).toEqual(["draft"]);
-  await actions.getByLabel("Review note", { exact: true }).fill("Reviewed work area and access");
-  await actions.getByRole("button", { name: "Approve revision 1", exact: true }).click();
-  await actions.getByLabel("Scheduling note", { exact: true }).fill("Schedule the reviewed survey");
+  await plans.getByRole("button", { name: "Review and approve", exact: true }).click();
+  await plans.getByLabel("Review note", { exact: true }).fill("Reviewed work area and access");
+  await plans.getByRole("button", { name: "Approve revision 1", exact: true }).click();
+  await plans.getByRole("button", { name: "Schedule as a mission", exact: true }).click();
+  await plans.getByLabel("Scheduling note", { exact: true }).fill("Schedule the reviewed survey");
   expect(requests).toEqual(["draft", "approve"]);
-  await actions.getByRole("button", { name: "Schedule approved action", exact: true }).click();
-  await expect(actions.getByText(/Mission scheduled for/)).toBeVisible();
-  await actions.getByRole("button", { name: "Revise action", exact: true }).click();
-  await actions.getByLabel("Action title", { exact: true }).fill("Survey and follow-up");
-  await actions.getByRole("button", { name: "Save action revision", exact: true }).click();
+  await plans.getByRole("button", { name: "Schedule mission", exact: true }).click();
+  await expect(plans.getByText(/Mission scheduled for/)).toBeVisible();
+  await plans.getByRole("button", { name: "Revise plan", exact: true }).click();
+  await plans.getByLabel("Plan name", { exact: true }).fill("Survey and follow-up");
+  await plans.getByRole("button", { name: "Save changes", exact: true }).click();
+  await plans.getByRole("button", { name: "Review and approve", exact: true }).click();
   await expect(
-    actions.getByRole("button", { name: "Approve revision 2", exact: true }),
+    plans.getByRole("button", { name: "Approve revision 2", exact: true }),
   ).toBeDisabled();
   expect(versions[1]?.status).toBe("scheduled");
   expect(versions[0]?.missionId).toBeNull();

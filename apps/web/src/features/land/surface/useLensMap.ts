@@ -8,11 +8,16 @@ import { useLandMap, type MapPin } from "@/state/landMap";
  * Pass a memoised layer (or null to show nothing); its id should start with the lens id.
  */
 export function useLensLayer(layer: LandContextLayer | null): void {
+  // A changed layer replaces the shown one in place (a selection recolours one feature);
+  // only a closed lens, a cleared layer or a new id takes it off the map.
+  const id = layer?.id ?? null;
   useEffect(() => {
-    if (!layer) return;
-    useLandContext.getState().setLayer(layer);
-    return () => useLandContext.getState().removeLayer(layer.id);
+    if (layer) useLandContext.getState().setLayer(layer);
   }, [layer]);
+  useEffect(() => {
+    if (!id) return;
+    return () => useLandContext.getState().removeLayer(id);
+  }, [id]);
 }
 
 /** Shows a lens's pins while it is open. Pass a memoised list; `owner` is usually the lens id. */
