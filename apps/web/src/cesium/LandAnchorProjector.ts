@@ -14,6 +14,11 @@ export interface ProjectedPoint {
 const SAMPLES_PER_FRAME = 3;
 /** Where the scene has no surface to sample (nothing loaded there), stop asking after this. */
 const MAX_ATTEMPTS = 12;
+/** Below the Dead Sea shore or above Everest, a sample is not the ground. */
+const LOWEST_GROUND_M = -500;
+const HIGHEST_GROUND_M = 9_000;
+/** Drawn terrain and 3D tiles agree far closer than this; a sample further off is not the ground. */
+const MAX_TERRAIN_GAP_M = 1_000;
 
 const key = (point: LandPoint) => `${point[0].toFixed(7)},${point[1].toFixed(7)}`;
 
@@ -79,7 +84,17 @@ export class LandAnchorProjector {
       attempts += 1;
       try {
         const sampled = scene.sampleHeight(carto, viewer.entities.values);
-        if (sampled !== undefined && Number.isFinite(sampled)) {
+        const terrain = scene.globe.getHeight(carto);
+        // A sample read back before the surface there was drawn can land far underground,
+        // which puts the pin between the screen's centre and its spot; such a reading is
+        // retried rather than kept.
+        if (
+          sampled !== undefined &&
+          Number.isFinite(sampled) &&
+          sampled > LOWEST_GROUND_M &&
+          sampled < HIGHEST_GROUND_M &&
+          (terrain === undefined || Math.abs(sampled - terrain) < MAX_TERRAIN_GAP_M)
+        ) {
           this.heights.set(id, { height: sampled, sampled: true, attempts });
           return sampled;
         }
