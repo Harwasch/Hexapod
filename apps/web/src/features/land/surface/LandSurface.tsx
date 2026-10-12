@@ -14,6 +14,7 @@ import { useLandAreas } from "../api";
 import { LandBoundaryImport } from "../LandBoundaryImport";
 import { LandDraftRecovery } from "../LandDraftRecovery";
 import { WorkspaceIdentity } from "../WorkspaceIdentity";
+import { LandAgentInline } from "./LandAgent";
 import { LandChip } from "./LandChip";
 import { frameBoundary, saveDraft, useMappedFeaturePick } from "./landFlow";
 import { LandParcelPicker } from "./LandParcelPicker";
@@ -63,6 +64,7 @@ export function LandSurface() {
     ) : active ? (
       <>
         <LandChip land={active} />
+        <LandAgentInline />
         <LensHost land={active} />
       </>
     ) : (
