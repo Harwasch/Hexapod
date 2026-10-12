@@ -1,0 +1,331 @@
+/* ---------------------------------------------------------------------------
+   Solar lens. Warm marks for sunlight and arrays; text keeps the shared text tokens.
+   --------------------------------------------------------------------------- */
+.land-solar {
+  --solar: #ffcf5a;
+  --solar-soft: rgba(255, 207, 90, 0.16);
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+:root[data-theme="light"] .land-solar {
+  --solar: #b97c00;
+  --solar-soft: rgba(185, 124, 0, 0.14);
+}
+
+.land-solar p {
+  margin: 0;
+}
+
+.land-solar-push {
+  margin-left: auto;
+}
+
+/* ---- Running ------------------------------------------------------------- */
+.land-solar-running {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--solar-soft);
+  font-size: var(--text-sm);
+}
+.land-solar-running__pulse {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--solar);
+  animation: land-solar-pulse 1.4s infinite;
+}
+@keyframes land-solar-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 207, 90, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 0 9px rgba(255, 207, 90, 0);
+  }
+}
+
+/* ---- Sketching ----------------------------------------------------------- */
+.land-solar-sketch,
+.land-solar-sources {
+  display: grid;
+  gap: var(--space-2);
+}
+.land-solar-sketch__status {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Charts (monthly energy, cash over time) ----------------------------- */
+.land-solar-chart {
+  margin: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+.land-solar-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.land-solar-chart__base {
+  stroke: var(--divider);
+  stroke-width: 1;
+}
+.land-solar-chart__bar {
+  fill: var(--solar);
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.land-solar-chart__gap {
+  stroke: var(--text-tertiary);
+  stroke-width: 1.5;
+}
+.land-solar-chart__value {
+  fill: var(--text-secondary);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+.land-solar-chart__month {
+  fill: var(--text-tertiary);
+  font-size: 10px;
+}
+.land-solar-chart__hit {
+  fill: transparent;
+}
+.land-solar-chart__line {
+  fill: none;
+  stroke: var(--solar);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.land-solar-chart__dot {
+  fill: var(--solar);
+  stroke: var(--glass-bg-strong, rgba(10, 13, 9, 0.9));
+  stroke-width: 2;
+  pointer-events: none;
+}
+.land-solar-chart figcaption {
+  min-height: 1.2em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Settings and forms ---------------------------------------------------- */
+.land-solar-settings > summary {
+  align-items: flex-start;
+}
+.land-solar-settings__summary {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.land-solar-settings__body,
+.land-solar-econ__fields {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-2) 0 0;
+  border: 0;
+}
+.land-solar-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+}
+.land-solar-grid .land-field,
+.land-solar .land-field {
+  min-width: 0;
+}
+.land-solar .glass-input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.land-solar-hint {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.land-solar-horizon {
+  display: grid;
+  gap: var(--space-2);
+}
+.land-solar-econ {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.land-solar-group {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* ---- Results --------------------------------------------------------------- */
+.land-solar-result {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.land-solar-payback {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.land-solar-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+}
+.land-solar-list > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.land-solar-list dt {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.land-solar-list dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.land-solar-table {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+}
+.land-solar-table:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.land-solar-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.land-solar-table caption {
+  text-align: left;
+  padding-bottom: var(--space-1);
+  color: var(--text-secondary);
+}
+.land-solar-table th,
+.land-solar-table td {
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--divider);
+  text-align: left;
+  white-space: nowrap;
+}
+.land-solar-table thead th {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+/* ---- Details --------------------------------------------------------------- */
+.land-solar-section,
+.land-solar-about {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.land-solar-heading {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.land-solar-fold > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  padding: 2px 0;
+}
+.land-solar-fold[open] > summary {
+  margin-bottom: var(--space-2);
+}
+.land-solar-fold > :not(summary) + :not(summary) {
+  margin-top: var(--space-2);
+}
+.land-solar-note {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.land-solar-bullets {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.land-solar-hash {
+  overflow-wrap: anywhere;
+}
+
+.land-solar-saved,
+.land-solar-history {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.land-solar-saved > li {
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.land-solar-saved__row {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.land-solar-saved__row small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.land-solar-saved__row:hover {
+  background: var(--control-bg-hover);
+}
+.land-solar-saved__row[aria-pressed="true"] {
+  border-color: var(--solar);
+}
+.land-solar-saved__row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.land-solar-history > li {
+  font-size: var(--text-xs);
+}
+
+.land-solar-compact {
+  display: grid;
+  gap: var(--space-3);
+}
+
+@media (max-width: 480px) {
+  .land-solar-grid,
+  .land-solar-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .land-solar-running__pulse {
+    animation: none;
+  }
+}
+:root[data-motion="reduced"] .land-solar-running__pulse {
+  animation: none;
+}
