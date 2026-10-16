@@ -10824,6 +10824,170 @@
         "title": "PipelineCatalogue",
         "type": "object"
       },
+      "PlaceFact": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "enum": [
+              "modelled-surface",
+              "mapped-survey",
+              "classified-imagery",
+              "regulatory-map",
+              "regional-framework"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "cached": {
+            "default": false,
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "caveat": {
+            "title": "Caveat",
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Data",
+            "type": "object"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "kind": {
+            "enum": [
+              "elevation",
+              "soil",
+              "land-cover",
+              "flood-zone",
+              "ecoregion"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlaceFactSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "vintage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vintage"
+          }
+        },
+        "required": [
+          "kind",
+          "status",
+          "label",
+          "basis",
+          "caveat",
+          "longitude",
+          "latitude",
+          "retrievedAt",
+          "source"
+        ],
+        "title": "PlaceFact",
+        "type": "object"
+      },
+      "PlaceFactSource": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "documentationUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Documentationurl",
+            "type": "string"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "resolution": {
+            "title": "Resolution",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "name",
+          "url",
+          "documentationUrl",
+          "license",
+          "attribution",
+          "resolution"
+        ],
+        "title": "PlaceFactSource",
+        "type": "object"
+      },
       "PlanArea": {
         "additionalProperties": false,
         "description": "A zone drawn in the console for this plan (the fleet backend owns the other zones).",
@@ -13704,6 +13868,51 @@
         "title": "ResearchPage",
         "type": "object"
       },
+      "ResearchQueueStatus": {
+        "additionalProperties": false,
+        "description": "Runs waiting or running in the caller's workspace only.",
+        "properties": {
+          "oldestQueuedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldestqueuedat"
+          },
+          "oldestQueuedSeconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldestqueuedseconds"
+          },
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued",
+          "oldestQueuedAt",
+          "oldestQueuedSeconds",
+          "running"
+        ],
+        "title": "ResearchQueueStatus",
+        "type": "object"
+      },
       "ResearchStatus": {
         "additionalProperties": false,
         "properties": {
@@ -13722,6 +13931,12 @@
             "title": "Modelconfigured",
             "type": "boolean"
           },
+          "queue": {
+            "$ref": "#/components/schemas/ResearchQueueStatus"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/ResearchWorkerStatus"
+          },
           "workerRequired": {
             "default": true,
             "title": "Workerrequired",
@@ -13730,9 +13945,67 @@
         },
         "required": [
           "modelConfigured",
-          "model"
+          "model",
+          "worker",
+          "queue"
         ],
         "title": "ResearchStatus",
+        "type": "object"
+      },
+      "ResearchWorkerStatus": {
+        "additionalProperties": false,
+        "description": "Whether any research worker is alive. Ages come from the database clock.\n\nonline: seen within 45 s and not stopped. stale: seen before, not lately. stopped: the\nnewest worker said it was stopping. never: no worker has checked in on this server.",
+        "properties": {
+          "busy": {
+            "title": "Busy",
+            "type": "boolean"
+          },
+          "checkInEverySeconds": {
+            "default": 15,
+            "title": "Checkineveryseconds",
+            "type": "integer"
+          },
+          "lastSeenAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastseenat"
+          },
+          "secondsSinceSeen": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondssinceseen"
+          },
+          "state": {
+            "enum": [
+              "online",
+              "stale",
+              "stopped",
+              "never"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "lastSeenAt",
+          "secondsSinceSeen",
+          "busy"
+        ],
+        "title": "ResearchWorkerStatus",
         "type": "object"
       },
       "ResolutionMetadata": {
@@ -32419,6 +32692,130 @@
         ]
       }
     },
+    "/api/v1/research/place/{fact}": {
+      "get": {
+        "description": "One public fact about a point, looked up live and not saved (app/research/place.py).\n\nBehind land identity and its own rate limit, so it is not an open proxy to the agencies.",
+        "operationId": "place_fact_api_v1_research_place__fact__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fact",
+            "required": true,
+            "schema": {
+              "enum": [
+                "elevation",
+                "soil",
+                "land-cover",
+                "flood-zone",
+                "ecoregion"
+              ],
+              "title": "Fact",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Longitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceFact"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Place Fact",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
     "/api/v1/research/runs/{run_id}": {
       "get": {
         "operationId": "get_run_api_v1_research_runs__run_id__get",
@@ -32926,6 +33323,7 @@
     },
     "/api/v1/research/status": {
       "get": {
+        "description": "What research can do here: the model, the worker's presence and this workspace's queue.\n\nPolled every 10 s while a run waits (useResearchStatus), so it holds no transaction.",
         "operationId": "status_api_v1_research_status_get",
         "parameters": [
           {

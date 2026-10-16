@@ -171,3 +171,10 @@ export type LandCandidate = Schemas["LandCandidate"];
 export type CandidateResult = Schemas["CandidateResult"];
 export type SelectionInterpretation = Schemas["SelectionInterpretation"];
 export type LandMapGeometry = LandCandidate["geometry"];
+
+/** Research worker presence and point facts ("What's here"): stream research-status. */
+export type ResearchStatus = Schemas["ResearchStatus"];
+export type ResearchWorkerStatus = Schemas["ResearchWorkerStatus"];
+export type ResearchQueueStatus = Schemas["ResearchQueueStatus"];
+export type PlaceFact = Schemas["PlaceFact"];
+export type PlaceFactKind = PlaceFact["kind"];
