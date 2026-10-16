@@ -1,0 +1,613 @@
+{
+  "about": "The hosted catalog's phone scans with objects and image embeddings, as `python -m app.seed.scans` registers them. Rewritten by `python -m app.seed.scans --refresh-snapshot`; not hand-edited.",
+  "source": "https://twin-api.fly.dev/api/v1/sites/by-slug/<slug>",
+  "taken": "2026-10-16",
+  "sites": [
+    {
+      "slug": "phone-capture-2026-09-29-16-34-utc",
+      "name": "Camp",
+      "description": "A phone scan from the hosted catalog, registered in this catalog by `python -m app.seed.scans`. Its tiles, objects and object embeddings are read from the public bucket the hosted catalog uses. Its position is set by hand, not surveyed, good to about 10 m.",
+      "boundary": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [
+                -123.88156731739312,
+                46.13284895351298
+              ],
+              [
+                -123.8796107573423,
+                46.13284895351298
+              ],
+              [
+                -123.8796107573423,
+                46.134160847983594
+              ],
+              [
+                -123.88156731739312,
+                46.134160847983594
+              ],
+              [
+                -123.88156731739312,
+                46.13284895351298
+              ]
+            ]
+          ]
+        ]
+      },
+      "centroid": {
+        "longitude": -123.88058903736771,
+        "latitude": 46.133504900748285,
+        "height": null
+      },
+      "thumbnailUrl": "https://pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev/runs/50c25673-0940-4574-9b96-0b21362f83ca/thumbnail/thumbnail.jpg",
+      "metadata": {
+        "origin": "hosted-catalog",
+        "hostedApi": "https://twin-api.fly.dev",
+        "hostedSiteId": "793e0c17-aaf8-4f7c-9dab-3a60634ae056",
+        "snapshotTaken": "2026-10-16"
+      },
+      "attribution": [],
+      "license": null,
+      "assets": [
+        {
+          "name": "Phone capture 2026-09-29 16:34 UTC splat",
+          "representation": "gaussian-splat",
+          "source": {
+            "type": "3d-tiles-url",
+            "url": "https://pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev/runs/50c25673-0940-4574-9b96-0b21362f83ca/pa6da444d7ad8429e/package/splat/tileset.json"
+          },
+          "footprint": null,
+          "observedAt": null,
+          "validFrom": null,
+          "validTo": null,
+          "resolution": null,
+          "crs": null,
+          "license": null,
+          "attribution": [],
+          "provenance": {
+            "sourceOrganization": null,
+            "sourceUrl": null,
+            "publishedAt": null,
+            "notes": null,
+            "georefMethod": "manual",
+            "scaleSource": "unresolved",
+            "uncertaintyM": 10.0,
+            "scaleUncertaintyPct": null
+          },
+          "renderConfig": {
+            "maximumScreenSpaceError": null,
+            "screenSpaceErrorScale": 1.0,
+            "pointCloudShading": null,
+            "clipsWorld": true,
+            "clipFootprint": "catalog",
+            "heightOffsetM": 0.0,
+            "clampToGround": true,
+            "groundSamples": [
+              {
+                "lon": -123.88068706634476,
+                "lat": 46.13344566655184,
+                "height": 0.075
+              },
+              {
+                "lon": -123.88053323676884,
+                "lat": 46.133625328799695,
+                "height": 0.032
+              },
+              {
+                "lon": -123.88053047062786,
+                "lat": 46.13359071135581,
+                "height": 0.018
+              },
+              {
+                "lon": -123.88050542674995,
+                "lat": 46.13360801882269,
+                "height": 0.054
+              },
+              {
+                "lon": -123.88055286417388,
+                "lat": 46.13360566719992,
+                "height": 0.029
+              },
+              {
+                "lon": -123.88053173541559,
+                "lat": 46.13360821212764,
+                "height": 0.007
+              },
+              {
+                "lon": -123.88063688173426,
+                "lat": 46.13348041937731,
+                "height": 0.024
+              },
+              {
+                "lon": -123.88039952354676,
+                "lat": 46.133697193993534,
+                "height": 0.222
+              },
+              {
+                "lon": -123.88066286213602,
+                "lat": 46.13344498139613,
+                "height": 0.09
+              },
+              {
+                "lon": -123.88019538945036,
+                "lat": 46.13371622442231,
+                "height": 0.655
+              },
+              {
+                "lon": -123.88048111201243,
+                "lat": 46.13360796396842,
+                "height": 0.111
+              },
+              {
+                "lon": -123.8805801293597,
+                "lat": 46.13362762424888,
+                "height": 0.032
+              },
+              {
+                "lon": -123.88055605211372,
+                "lat": 46.13362563980615,
+                "height": -0.013
+              },
+              {
+                "lon": -123.88050857290806,
+                "lat": 46.13359244345008,
+                "height": 0.032
+              },
+              {
+                "lon": -123.88021963525888,
+                "lat": 46.13371441523394,
+                "height": 0.64
+              },
+              {
+                "lon": -123.88016927154064,
+                "lat": 46.13371552929893,
+                "height": 0.68
+              },
+              {
+                "lon": -123.88024663785306,
+                "lat": 46.13369822931101,
+                "height": 0.589
+              },
+              {
+                "lon": -123.88060965111396,
+                "lat": 46.1335004283947,
+                "height": 0.048
+              },
+              {
+                "lon": -123.88058301604421,
+                "lat": 46.13330274778538,
+                "height": 0.149
+              },
+              {
+                "lon": -123.88060910349277,
+                "lat": 46.13351779890321,
+                "height": 0.002
+              },
+              {
+                "lon": -123.88022061824985,
+                "lat": 46.133698842859765,
+                "height": 0.632
+              },
+              {
+                "lon": -123.88068732793504,
+                "lat": 46.1334625472983,
+                "height": 0.094
+              },
+              {
+                "lon": -123.88019481813028,
+                "lat": 46.13369832459277,
+                "height": 0.656
+              },
+              {
+                "lon": -123.88019438724808,
+                "lat": 46.133731389608734,
+                "height": 0.695
+              },
+              {
+                "lon": -123.88027189666869,
+                "lat": 46.13369701703435,
+                "height": 0.547
+              },
+              {
+                "lon": -123.88050679882517,
+                "lat": 46.13362414076754,
+                "height": 0.086
+              },
+              {
+                "lon": -123.88063379938244,
+                "lat": 46.13346682044588,
+                "height": 0.01
+              },
+              {
+                "lon": -123.88058203328814,
+                "lat": 46.133499817925596,
+                "height": -0.171
+              },
+              {
+                "lon": -123.88066083712319,
+                "lat": 46.13348139144489,
+                "height": 0.047
+              },
+              {
+                "lon": -123.88073823238857,
+                "lat": 46.133590007254256,
+                "height": -0.113
+              },
+              {
+                "lon": -123.88047946315615,
+                "lat": 46.1336239430763,
+                "height": 0.126
+              },
+              {
+                "lon": -123.88058371743624,
+                "lat": 46.13353524851422,
+                "height": 0.061
+              },
+              {
+                "lon": -123.88063542595225,
+                "lat": 46.13350018360584,
+                "height": 0.019
+              },
+              {
+                "lon": -123.88058472243243,
+                "lat": 46.133554989891685,
+                "height": 0.021
+              },
+              {
+                "lon": -123.88058540223955,
+                "lat": 46.13351812146115,
+                "height": 0.027
+              },
+              {
+                "lon": -123.88058318000792,
+                "lat": 46.133318887994996,
+                "height": 0.163
+              },
+              {
+                "lon": -123.88053264658977,
+                "lat": 46.13364240598661,
+                "height": 0.027
+              },
+              {
+                "lon": -123.8805553913263,
+                "lat": 46.1335896847081,
+                "height": -0.014
+              },
+              {
+                "lon": -123.88055721212318,
+                "lat": 46.13357206839363,
+                "height": 0.029
+              },
+              {
+                "lon": -123.88024588334562,
+                "lat": 46.133714028161414,
+                "height": 0.58
+              },
+              {
+                "lon": -123.88017005440763,
+                "lat": 46.13369850845693,
+                "height": 0.665
+              },
+              {
+                "lon": -123.88055648770603,
+                "lat": 46.133641827279696,
+                "height": -0.021
+              },
+              {
+                "lon": -123.88058238244192,
+                "lat": 46.1336415951921,
+                "height": -0.029
+              },
+              {
+                "lon": -123.88073924554402,
+                "lat": 46.13360689271254,
+                "height": -0.189
+              },
+              {
+                "lon": -123.88045517440499,
+                "lat": 46.133609280256586,
+                "height": 0.116
+              },
+              {
+                "lon": -123.88045583836956,
+                "lat": 46.133624090993486,
+                "height": 0.115
+              },
+              {
+                "lon": -123.88066126057554,
+                "lat": 46.13346341192332,
+                "height": 0.041
+              },
+              {
+                "lon": -123.88058561170338,
+                "lat": 46.13357065657527,
+                "height": -0.078
+              },
+              {
+                "lon": -123.88074007548738,
+                "lat": 46.133572641163646,
+                "height": -0.042
+              },
+              {
+                "lon": -123.88027191503934,
+                "lat": 46.13368034015591,
+                "height": 0.52
+              },
+              {
+                "lon": -123.88066299869207,
+                "lat": 46.133429813365474,
+                "height": 0.128
+              },
+              {
+                "lon": -123.88021927709283,
+                "lat": 46.13373294620877,
+                "height": 0.687
+              },
+              {
+                "lon": -123.88061056173493,
+                "lat": 46.13346398205471,
+                "height": -0.055
+              },
+              {
+                "lon": -123.88055868079309,
+                "lat": 46.13355435450575,
+                "height": 0.034
+              },
+              {
+                "lon": -123.88053317269714,
+                "lat": 46.13357300274945,
+                "height": -0.022
+              },
+              {
+                "lon": -123.8806883289258,
+                "lat": 46.13342931084456,
+                "height": 0.112
+              },
+              {
+                "lon": -123.88060901184964,
+                "lat": 46.133303030700766,
+                "height": 0.208
+              },
+              {
+                "lon": -123.88063210305111,
+                "lat": 46.133516320253975,
+                "height": -0.007
+              },
+              {
+                "lon": -123.88071257871505,
+                "lat": 46.13346337574932,
+                "height": 0.045
+              },
+              {
+                "lon": -123.88060433347573,
+                "lat": 46.133552922756344,
+                "height": -0.036
+              },
+              {
+                "lon": -123.88060961732728,
+                "lat": 46.133536159972685,
+                "height": -0.018
+              },
+              {
+                "lon": -123.88017202642247,
+                "lat": 46.13373155515673,
+                "height": 0.719
+              },
+              {
+                "lon": -123.88058427159099,
+                "lat": 46.13348301200052,
+                "height": -0.023
+              },
+              {
+                "lon": -123.88053109205929,
+                "lat": 46.13355308833861,
+                "height": -0.064
+              }
+            ],
+            "rigUrl": null,
+            "scale": 1.0,
+            "scaleEvidence": null
+          },
+          "defaultVisible": true
+        }
+      ],
+      "cameraBookmarks": []
+    },
+    {
+      "slug": "phone-capture-2026-09-28-00-30-utc",
+      "name": "Pumpkin",
+      "description": "A phone scan from the hosted catalog, registered in this catalog by `python -m app.seed.scans`. Its tiles, objects and object embeddings are read from the public bucket the hosted catalog uses. Its position is from the photos' GPS, good to about 10 m.",
+      "boundary": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [
+                -122.6998457220419,
+                38.06366781319626
+              ],
+              [
+                -122.69975885508326,
+                38.06366781319626
+              ],
+              [
+                -122.69975885508326,
+                38.063729576351605
+              ],
+              [
+                -122.6998457220419,
+                38.063729576351605
+              ],
+              [
+                -122.6998457220419,
+                38.06366781319626
+              ]
+            ]
+          ]
+        ]
+      },
+      "centroid": {
+        "longitude": -122.69980228856257,
+        "latitude": 38.06369869477393,
+        "height": null
+      },
+      "thumbnailUrl": "https://pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev/runs/430c1932-5b6a-47b1-bb71-bb7fa2fec86b/thumbnail/thumbnail.jpg",
+      "metadata": {
+        "origin": "hosted-catalog",
+        "hostedApi": "https://twin-api.fly.dev",
+        "hostedSiteId": "bd3e9645-007b-401b-83c1-d0fe06bc668e",
+        "snapshotTaken": "2026-10-16"
+      },
+      "attribution": [],
+      "license": null,
+      "assets": [
+        {
+          "name": "Phone capture 2026-09-28 00:30 UTC splat",
+          "representation": "gaussian-splat",
+          "source": {
+            "type": "3d-tiles-url",
+            "url": "https://pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev/runs/430c1932-5b6a-47b1-bb71-bb7fa2fec86b/pc936e13048d5e58f/package/splat/tileset.json"
+          },
+          "footprint": null,
+          "observedAt": null,
+          "validFrom": null,
+          "validTo": null,
+          "resolution": null,
+          "crs": null,
+          "license": null,
+          "attribution": [],
+          "provenance": {
+            "sourceOrganization": null,
+            "sourceUrl": null,
+            "publishedAt": null,
+            "notes": null,
+            "georefMethod": "exif-gps",
+            "scaleSource": "unresolved",
+            "uncertaintyM": 10.0,
+            "scaleUncertaintyPct": null
+          },
+          "renderConfig": {
+            "maximumScreenSpaceError": null,
+            "screenSpaceErrorScale": 1.0,
+            "pointCloudShading": null,
+            "clipsWorld": true,
+            "clipFootprint": "catalog",
+            "heightOffsetM": 0.0,
+            "clampToGround": true,
+            "groundSamples": [
+              {
+                "lon": -122.69979872625795,
+                "lat": 38.06370089381855,
+                "height": 0.03
+              }
+            ],
+            "rigUrl": null,
+            "scale": 1.0,
+            "scaleEvidence": null
+          },
+          "defaultVisible": true
+        }
+      ],
+      "cameraBookmarks": []
+    },
+    {
+      "slug": "phone-capture-2026-09-26-20-41-utc",
+      "name": "Spool",
+      "description": "A phone scan from the hosted catalog, registered in this catalog by `python -m app.seed.scans`. Its tiles, objects and object embeddings are read from the public bucket the hosted catalog uses. Its position is from the photos' GPS, good to about 10 m.",
+      "boundary": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [
+                -111.13487270112849,
+                44.79627379994901
+              ],
+              [
+                -111.13431138730239,
+                44.79627379994901
+              ],
+              [
+                -111.13431138730239,
+                44.796752257222714
+              ],
+              [
+                -111.13487270112849,
+                44.796752257222714
+              ],
+              [
+                -111.13487270112849,
+                44.79627379994901
+              ]
+            ]
+          ]
+        ]
+      },
+      "centroid": {
+        "longitude": -111.13459204421545,
+        "latitude": 44.796513028585856,
+        "height": null
+      },
+      "thumbnailUrl": "https://pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev/runs/8e1cc115-cb80-4af2-81fc-dccaf6b65891/thumbnail/thumbnail.jpg",
+      "metadata": {
+        "origin": "hosted-catalog",
+        "hostedApi": "https://twin-api.fly.dev",
+        "hostedSiteId": "123e90c7-0f93-4a66-9d6e-0f84ec3a797c",
+        "snapshotTaken": "2026-10-16"
+      },
+      "attribution": [],
+      "license": null,
+      "assets": [
+        {
+          "name": "Phone capture 2026-09-26 20:41 UTC splat",
+          "representation": "gaussian-splat",
+          "source": {
+            "type": "3d-tiles-url",
+            "url": "https://pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev/runs/8e1cc115-cb80-4af2-81fc-dccaf6b65891/pf151f49bd03a5380/package/splat/tileset.json"
+          },
+          "footprint": null,
+          "observedAt": null,
+          "validFrom": null,
+          "validTo": null,
+          "resolution": null,
+          "crs": null,
+          "license": null,
+          "attribution": [],
+          "provenance": {
+            "sourceOrganization": null,
+            "sourceUrl": null,
+            "publishedAt": null,
+            "notes": null,
+            "georefMethod": "exif-gps",
+            "scaleSource": "unresolved",
+            "uncertaintyM": 10.0,
+            "scaleUncertaintyPct": null
+          },
+          "renderConfig": {
+            "maximumScreenSpaceError": null,
+            "screenSpaceErrorScale": 1.0,
+            "pointCloudShading": null,
+            "clipsWorld": true,
+            "clipFootprint": "catalog",
+            "heightOffsetM": 0.0,
+            "clampToGround": true,
+            "groundSamples": [
+              {
+                "lon": -111.13460357801463,
+                "lat": 44.79649669888012,
+                "height": -0.216
+              }
+            ],
+            "rigUrl": null,
+            "scale": 1.0,
+            "scaleEvidence": null
+          },
+          "defaultVisible": true
+        }
+      ],
+      "cameraBookmarks": []
+    }
+  ]
+}
