@@ -21,12 +21,12 @@
     "maxSlopePct": 35
   },
   "drone": {
-    "label": "Consumer mapping drone (assumed)",
+    "label": "Mapping drone, Mavic 3 Enterprise class (assumed)",
     "altitudeAglM": 60,
     "speedMps": 8,
     "sidelapPct": 70,
     "frontlapPct": 75,
-    "cameraHfovDeg": 82,
+    "cameraHfovDeg": 73.7,
     "imageAspect": 1.3333,
     "maxWindMps": 10
   }

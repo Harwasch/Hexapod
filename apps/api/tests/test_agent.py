@@ -464,7 +464,7 @@ def test_a_line_zone_is_followed_by_the_assumed_drone_and_sized_by_its_length() 
     speed = MACHINE_CLASSES.drone.speed_mps
     assert sized.kind == "line" and sized.machine_class == "drone"
     assert sized.hours == pytest.approx(length.length_m / speed / 3600)
-    assert "Consumer mapping drone (assumed)" in sized.basis
+    assert "Mapping drone, Mavic 3 Enterprise class (assumed)" in sized.basis
     step = next(s for s in draft.steps if s.title == "Survey North fence")
     assert step.detail == "Follow 301 m of North fence (0.01 machine-hours)."
     path = next(a for a in draft.assumptions if a.startswith("Path from the outline"))
@@ -658,3 +658,40 @@ def test_plan_draft_endpoint_accepts_a_previous_draft_with_coverage(client: Test
         json={**body, "refinement": "every month", "previousDraft": previous},
     )
     assert again.status_code == 200, again.text
+
+
+def test_the_fog_goal_drafts_a_survey_flown_at_the_scout_capture() -> None:
+    """ "Lift the fog" proposes scout areas carrying their capture numbers: the goal reads as
+    a survey (never a treatment, so it must not say "clear"), and the planner flies each area
+    at its own altitude, overlap and speed rather than its detail table."""
+    from app.schemas.scout import ScoutCapture
+    from app.services.machine_classes import MACHINE_CLASSES
+    from app.services.planner import _task_kind
+
+    goal = "Survey the foggy ground from the air at 2 cm per pixel so the fog can lift"
+    assert _task_kind(goal) == "survey"
+    assert (
+        _task_kind("Survey the foggy ground from the air at 1.7 cm per pixel so the fog can lift")
+        == "survey"
+    )
+    assert _task_kind("scout the creek") == "survey"
+    capture = ScoutCapture(altitude_m=60, forward_overlap=0.75, side_overlap=0.7, speed_ms=8)
+    patch = PlannerZone(id="A-01", name="Fog patch 1", acres=999, geometry=PADDOCK, capture=capture)
+    draft = RulesPlanner().draft(
+        land_request(goal, [patch], preferred_zone_ids=["A-01"], answers={"resolution": "2"})
+    )
+    c = draft.coverage[0]
+    drone = MACHINE_CLASSES.drone
+    assert c.machine_class == "drone" and c.altitude_m == 60 and c.speed_mps == 8
+    assert c.spacing_m == pytest.approx(drone.footprint_width_m(60) * 0.3)
+    # The capture already says how it is flown: no detail multiplier on top.
+    assert "times the flying" not in c.basis and "scout capture" in c.basis
+    plain = PlannerZone(id="A-01", name="Fog patch 1", acres=999, geometry=PADDOCK)
+    doubled = (
+        RulesPlanner()
+        .draft(
+            land_request(goal, [plain], preferred_zone_ids=["A-01"], answers={"resolution": "2"})
+        )
+        .coverage[0]
+    )
+    assert doubled.hours == pytest.approx(2 * c.hours, rel=0.01)

@@ -2178,7 +2178,7 @@ a zone id, attributes each area to the approved action revision, and rejects ano
 Planning: the planner sizes a zone that comes with an outline from a shapely port of the
 console's coverage passes (`services/coverage.py`; holes and MultiPolygons included), using the
 assumed machine classes in `services/machine_classes.json`, the one table the web app reads too
-(robotic brush mower, seed drill, survey rover, consumer mapping drone; every label says
+(robotic brush mower, seed drill, survey rover, Mavic 3 Enterprise class mapping drone; every label says
 "assumed"). Hours are path length over the class speed plus turns, with each zone's basis
 sentence on the draft and one combined line under assumptions. A measured work-log rate still
 sets an area's hours. Zones without an outline (the simulated demo fleet's) are sized exactly as

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi.testclient import TestClient
 
 BODY = {
@@ -88,3 +90,30 @@ def test_plan_requires_known_site(client: TestClient) -> None:
         "/api/v1/plans", json={**BODY, "siteId": "11111111-1111-4111-8111-111111111111"}
     )
     assert response.status_code == 404
+
+
+def test_a_scout_area_keeps_its_capture_parameters(client: TestClient) -> None:
+    capture = {
+        "purpose": "lift-knowledge-fog",
+        "camera": "dji-m3e-wide",
+        "altitudeM": 60,
+        "forwardOverlap": 0.75,
+        "sideOverlap": 0.7,
+        "speedMs": 8,
+        "headingDeg": None,
+    }
+    area: dict[str, Any] = dict(BODY["areas"][0])  # type: ignore[index, arg-type]
+    areas = [{**area, "capture": capture}]
+    created = client.post("/api/v1/plans", json={**BODY, "areas": areas})
+    assert created.status_code == 201, created.text
+    stored = client.get(f"/api/v1/plans/{created.json()['id']}").json()
+    assert stored["areas"][0]["capture"] == capture
+    assert (
+        client.get(f"/api/v1/plans/{created.json()['id']}").json()["areas"][0]["attribution"]
+        is None
+    )
+    wrong = {**capture, "altitudeM": 400}
+    rejected = client.post(
+        "/api/v1/plans", json={**BODY, "areas": [{**areas[0], "capture": wrong}]}
+    )
+    assert rejected.status_code == 422

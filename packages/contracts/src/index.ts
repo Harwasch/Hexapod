@@ -185,3 +185,17 @@ export type LandGroundItem = Schemas["LandGroundItem"];
 export type ZoneCoverage = Schemas["ZoneCoverage"];
 export type MachineClassId = ZoneCoverage["machineClass"];
 export type WorkspaceMissionCreate = Schemas["WorkspaceMissionCreate"];
+/** The Fog of Knowing (stream fog): a lon/lat grid of how fine and fresh the stored knowledge of
+ * a Land is, the records behind a cell, and the foggiest patches to scout. */
+export type LonLatGrid = Schemas["LonLatGrid"];
+export type KnowledgeGrid = Schemas["KnowledgeGridRead"];
+export type KnowledgeRecord = Schemas["KnowledgeRecordRead"];
+export type KnowledgeCell = Schemas["KnowledgeCellRead"];
+export type KnowledgeCellRecord = Schemas["KnowledgeCellRecord"];
+export type KnowledgePolicy = Schemas["KnowledgePolicyRead"];
+export type KnowledgeClassId = KnowledgeRecord["classId"];
+export type KnowledgeNotCounted = Schemas["NotCountedRead"];
+export type KnowledgeScoutRequest = Schemas["KnowledgeScoutRequest"];
+export type KnowledgeScoutRead = Schemas["KnowledgeScoutRead"];
+export type KnowledgeScoutArea = Schemas["KnowledgeScoutArea"];
+export type ScoutCapture = Schemas["ScoutCapture"];

@@ -15,6 +15,7 @@ from shapely.ops import unary_union
 
 from app.schemas.base import CamelModel
 from app.schemas.geojson import MapGeometry
+from app.schemas.scout import ScoutCapture
 
 Cadence = Literal["once", "daily", "weekly", "monthly", "seasonal"]
 PlannerSource = Literal["claude", "rules"]
@@ -40,6 +41,8 @@ class PlannerZone(CamelModel):
     # The zone's outline (or, for a mapped line such as a fence, the line itself), so the
     # planner sizes work from the ground rather than from stated acres. Never sent to a model.
     geometry: MapGeometry | None = None
+    # A scout area's capture parameters: the planner flies it at these, not its detail table.
+    capture: ScoutCapture | None = None
 
     @field_validator("geometry", mode="wrap")
     @classmethod

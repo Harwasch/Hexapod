@@ -80,3 +80,41 @@ def test_the_artifact_references_do_not_query_per_asset(
         f"site-{index}" for index in range(7)
     }
     assert len(many) == len(few), many
+
+
+def test_the_knowledge_fog_does_not_query_per_record(
+    client: TestClient, db: Session, engine: Engine
+) -> None:
+    """The fog reads each kind of record in one statement, however many there are."""
+    from datetime import UTC, datetime, timedelta
+
+    from tests.test_land_features import FEATURE
+    from tests.test_land_knowledge import add_evidence, inspect, make_land, research_run
+
+    land = make_land(client)
+    run = research_run(db, land["id"])
+    observed = datetime.now(UTC) - timedelta(days=1)
+
+    read_counts: list[int] = []
+
+    def grow(count: int) -> None:
+        read_counts.append(count)
+        for index in range(count):
+            source = {**FEATURE["source"], "recordId": f"pole-{index}-{len(read_counts)}"}
+            inspect(client, land["id"], observed, name=f"Pole {index}", source=source)
+            add_evidence(
+                db, run, title=f"Soil record {index}", record_id=f"soil-{index}-{len(read_counts)}"
+            )
+
+    grow(1)
+    db.expunge_all()
+    with counting(engine) as few:
+        read = client.get(f"/api/v1/land/{land['id']}/knowledge").json()
+    assert len(read["records"]) == 2
+
+    grow(9)
+    db.expunge_all()
+    with counting(engine) as many:
+        read = client.get(f"/api/v1/land/{land['id']}/knowledge").json()
+    assert len(read["records"]) == 20
+    assert len(many) == len(few), many

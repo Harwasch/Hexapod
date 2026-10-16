@@ -6836,6 +6836,706 @@
         "title": "JobStepRead",
         "type": "object"
       },
+      "KnowledgeCellRead": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bounds"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "column": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column"
+          },
+          "density": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density"
+          },
+          "inside": {
+            "title": "Inside",
+            "type": "boolean"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "notCounted": {
+            "items": {
+              "$ref": "#/components/schemas/NotCountedRead"
+            },
+            "title": "Notcounted",
+            "type": "array"
+          },
+          "policyVersion": {
+            "title": "Policyversion",
+            "type": "string"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeCellRecord"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "row": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row"
+          }
+        },
+        "required": [
+          "longitude",
+          "latitude",
+          "column",
+          "row",
+          "inside",
+          "density",
+          "cellM",
+          "bounds",
+          "records",
+          "notCounted",
+          "policyVersion"
+        ],
+        "title": "KnowledgeCellRead",
+        "type": "object"
+      },
+      "KnowledgeCellRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "arithmetic": {
+            "title": "Arithmetic",
+            "type": "string"
+          },
+          "best": {
+            "title": "Best",
+            "type": "boolean"
+          },
+          "credit": {
+            "title": "Credit",
+            "type": "number"
+          },
+          "record": {
+            "$ref": "#/components/schemas/KnowledgeRecordRead"
+          }
+        },
+        "required": [
+          "record",
+          "credit",
+          "best",
+          "arithmetic"
+        ],
+        "title": "KnowledgeCellRecord",
+        "type": "object"
+      },
+      "KnowledgeClassRead": {
+        "additionalProperties": false,
+        "properties": {
+          "example": {
+            "title": "Example",
+            "type": "string"
+          },
+          "halfLifeDays": {
+            "title": "Halflifedays",
+            "type": "number"
+          },
+          "id": {
+            "enum": [
+              "centimetre",
+              "field",
+              "aerial",
+              "satellite",
+              "regional"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "maxResolutionM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxresolutionm"
+          },
+          "quality": {
+            "title": "Quality",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "quality",
+          "halfLifeDays",
+          "maxResolutionM",
+          "example"
+        ],
+        "title": "KnowledgeClassRead",
+        "type": "object"
+      },
+      "KnowledgeGridRead": {
+        "additionalProperties": false,
+        "properties": {
+          "asOf": {
+            "format": "date-time",
+            "title": "Asof",
+            "type": "string"
+          },
+          "best": {
+            "$ref": "#/components/schemas/LonLatGrid"
+          },
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "density": {
+            "$ref": "#/components/schemas/LonLatGrid"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "notCounted": {
+            "items": {
+              "$ref": "#/components/schemas/NotCountedRead"
+            },
+            "title": "Notcounted",
+            "type": "array"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/KnowledgePolicyRead"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeRecordRead"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/KnowledgeSummary"
+          }
+        },
+        "required": [
+          "landId",
+          "boundaryRevision",
+          "asOf",
+          "density",
+          "best",
+          "records",
+          "summary",
+          "policy",
+          "notCounted"
+        ],
+        "title": "KnowledgeGridRead",
+        "type": "object"
+      },
+      "KnowledgeLink": {
+        "additionalProperties": false,
+        "description": "Where the record lives in the app: a scan site, an inventory feature, a land raster, an\naligned archive image, a research evidence row or a field survey.",
+        "properties": {
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "site",
+              "inventory",
+              "raster",
+              "registration",
+              "evidence",
+              "survey"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "KnowledgeLink",
+        "type": "object"
+      },
+      "KnowledgePolicyRead": {
+        "additionalProperties": false,
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeClassRead"
+            },
+            "title": "Classes",
+            "type": "array"
+          },
+          "fieldReachM": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Fieldreachm",
+            "type": "object"
+          },
+          "foggyThreshold": {
+            "title": "Foggythreshold",
+            "type": "number"
+          },
+          "formula": {
+            "title": "Formula",
+            "type": "string"
+          },
+          "undatedFactor": {
+            "title": "Undatedfactor",
+            "type": "number"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "classes",
+          "undatedFactor",
+          "fieldReachM",
+          "foggyThreshold",
+          "formula"
+        ],
+        "title": "KnowledgePolicyRead",
+        "type": "object"
+      },
+      "KnowledgeProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "provider",
+          "license",
+          "attribution"
+        ],
+        "title": "KnowledgeProvenance",
+        "type": "object"
+      },
+      "KnowledgeRecordRead": {
+        "additionalProperties": false,
+        "properties": {
+          "ageDays": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agedays"
+          },
+          "arithmetic": {
+            "title": "Arithmetic",
+            "type": "string"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "classId": {
+            "enum": [
+              "centimetre",
+              "field",
+              "aerial",
+              "satellite",
+              "regional"
+            ],
+            "title": "Classid",
+            "type": "string"
+          },
+          "classNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classnote"
+          },
+          "countedClassId": {
+            "enum": [
+              "centimetre",
+              "field",
+              "aerial",
+              "satellite",
+              "regional"
+            ],
+            "title": "Countedclassid",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "capture",
+              "inspection",
+              "raster-observation",
+              "archive-alignment",
+              "research-evidence",
+              "survey"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "link": {
+            "$ref": "#/components/schemas/KnowledgeLink"
+          },
+          "located": {
+            "title": "Located",
+            "type": "boolean"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "observedLabel": {
+            "title": "Observedlabel",
+            "type": "string"
+          },
+          "peakCredit": {
+            "title": "Peakcredit",
+            "type": "number"
+          },
+          "positionalUncertaintyM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positionaluncertaintym"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/KnowledgeProvenance"
+          },
+          "recordedAt": {
+            "format": "date-time",
+            "title": "Recordedat",
+            "type": "string"
+          },
+          "resolutionM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolutionm"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "title",
+          "classId",
+          "countedClassId",
+          "classNote",
+          "resolutionM",
+          "observedAt",
+          "observedLabel",
+          "recordedAt",
+          "ageDays",
+          "peakCredit",
+          "arithmetic",
+          "located",
+          "positionalUncertaintyM",
+          "cells",
+          "provenance",
+          "link"
+        ],
+        "title": "KnowledgeRecordRead",
+        "type": "object"
+      },
+      "KnowledgeScoutArea": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "bestClassCounts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Bestclasscounts",
+            "type": "object"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "footprint": {
+            "$ref": "#/components/schemas/Polygon"
+          },
+          "meanDensity": {
+            "title": "Meandensity",
+            "type": "number"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "footprint",
+          "areaM2",
+          "cells",
+          "meanDensity",
+          "bestClassCounts",
+          "reason"
+        ],
+        "title": "KnowledgeScoutArea",
+        "type": "object"
+      },
+      "KnowledgeScoutRead": {
+        "additionalProperties": false,
+        "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeScoutArea"
+            },
+            "title": "Areas",
+            "type": "array"
+          },
+          "budgetM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budgetm2"
+          },
+          "forecast": {
+            "title": "Forecast",
+            "type": "string"
+          },
+          "policyVersion": {
+            "title": "Policyversion",
+            "type": "string"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "truncatedByBudget": {
+            "title": "Truncatedbybudget",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "areas",
+          "threshold",
+          "budgetM2",
+          "truncatedByBudget",
+          "forecast",
+          "policyVersion"
+        ],
+        "title": "KnowledgeScoutRead",
+        "type": "object"
+      },
+      "KnowledgeScoutRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "budgetM2": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 50000000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budgetm2"
+          },
+          "cellM": {
+            "default": 20,
+            "maximum": 100.0,
+            "minimum": 10.0,
+            "title": "Cellm",
+            "type": "number"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus"
+          },
+          "maxAreas": {
+            "default": 3,
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Maxareas",
+            "type": "integer"
+          },
+          "threshold": {
+            "default": 0.5,
+            "maximum": 1.0,
+            "minimum": 0.05,
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "title": "KnowledgeScoutRequest",
+        "type": "object"
+      },
+      "KnowledgeSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "byBestClass": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Bybestclass",
+            "type": "object"
+          },
+          "foggyFraction": {
+            "title": "Foggyfraction",
+            "type": "number"
+          },
+          "insideCells": {
+            "title": "Insidecells",
+            "type": "integer"
+          },
+          "medianDensity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediandensity"
+          }
+        },
+        "required": [
+          "insideCells",
+          "byBestClass",
+          "foggyFraction",
+          "medianDensity"
+        ],
+        "title": "KnowledgeSummary",
+        "type": "object"
+      },
       "LandActionCreate": {
         "additionalProperties": false,
         "properties": {
@@ -10386,6 +11086,100 @@
         "title": "LiveState",
         "type": "object"
       },
+      "LonLatGrid": {
+        "additionalProperties": false,
+        "description": "`value = raw * scale + offset`, except raw == `nodata`. `data` is base64 of the raw\nvalues, little-endian, row-major from the north-west cell.",
+        "properties": {
+          "cellM": {
+            "exclusiveMinimum": 0.0,
+            "title": "Cellm",
+            "type": "number"
+          },
+          "columns": {
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Columns",
+            "type": "integer"
+          },
+          "data": {
+            "title": "Data",
+            "type": "string"
+          },
+          "east": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "East",
+            "type": "number"
+          },
+          "encoding": {
+            "enum": [
+              "u8",
+              "u16",
+              "f32"
+            ],
+            "title": "Encoding",
+            "type": "string"
+          },
+          "nodata": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodata"
+          },
+          "north": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "North",
+            "type": "number"
+          },
+          "offset": {
+            "default": 0.0,
+            "title": "Offset",
+            "type": "number"
+          },
+          "rows": {
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "scale": {
+            "default": 1.0,
+            "title": "Scale",
+            "type": "number"
+          },
+          "south": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "South",
+            "type": "number"
+          },
+          "west": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "West",
+            "type": "number"
+          }
+        },
+        "required": [
+          "west",
+          "south",
+          "east",
+          "north",
+          "columns",
+          "rows",
+          "cellM",
+          "encoding",
+          "data"
+        ],
+        "title": "LonLatGrid",
+        "type": "object"
+      },
       "MapFeature": {
         "additionalProperties": false,
         "properties": {
@@ -10705,6 +11499,25 @@
           "urlTemplate"
         ],
         "title": "MvtSource",
+        "type": "object"
+      },
+      "NotCountedRead": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "reason"
+        ],
+        "title": "NotCountedRead",
         "type": "object"
       },
       "OrphanObject": {
@@ -11186,6 +11999,16 @@
               }
             ],
             "title": "Attribution"
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutCapture"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "footprint": {
             "discriminator": {
@@ -12494,6 +13317,16 @@
             "minimum": 0.0,
             "title": "Acres",
             "type": "number"
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutCapture"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "geometry": {
             "anyOf": [
@@ -15507,6 +16340,68 @@
           "expectedRevision"
         ],
         "title": "ScenarioRevise",
+        "type": "object"
+      },
+      "ScoutCapture": {
+        "additionalProperties": false,
+        "properties": {
+          "altitudeM": {
+            "maximum": 120.0,
+            "minimum": 20.0,
+            "title": "Altitudem",
+            "type": "number"
+          },
+          "camera": {
+            "const": "dji-m3e-wide",
+            "default": "dji-m3e-wide",
+            "title": "Camera",
+            "type": "string"
+          },
+          "forwardOverlap": {
+            "maximum": 0.9,
+            "minimum": 0.5,
+            "title": "Forwardoverlap",
+            "type": "number"
+          },
+          "headingDeg": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 360.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headingdeg"
+          },
+          "purpose": {
+            "const": "lift-knowledge-fog",
+            "default": "lift-knowledge-fog",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "sideOverlap": {
+            "maximum": 0.9,
+            "minimum": 0.5,
+            "title": "Sideoverlap",
+            "type": "number"
+          },
+          "speedMs": {
+            "maximum": 15.0,
+            "minimum": 1.0,
+            "title": "Speedms",
+            "type": "number"
+          }
+        },
+        "required": [
+          "altitudeM",
+          "forwardOverlap",
+          "sideOverlap",
+          "speedMs"
+        ],
+        "title": "ScoutCapture",
         "type": "object"
       },
       "SelectionInstruction": {
@@ -28041,6 +28936,381 @@
         "summary": "Create Investigation",
         "tags": [
           "land research"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/knowledge": {
+      "get": {
+        "operationId": "grid_api_v1_land__land_id__knowledge_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cellM",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 10,
+              "title": "Cellm",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asOf",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Asof"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeGridRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Grid",
+        "tags": [
+          "land knowledge"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/knowledge/cell": {
+      "get": {
+        "operationId": "cell_api_v1_land__land_id__knowledge_cell_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Longitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cellM",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 10,
+              "title": "Cellm",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asOf",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Asof"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeCellRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Cell",
+        "tags": [
+          "land knowledge"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/knowledge/scout-areas": {
+      "post": {
+        "operationId": "scout_areas_api_v1_land__land_id__knowledge_scout_areas_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeScoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeScoutRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Scout Areas",
+        "tags": [
+          "land knowledge"
         ]
       }
     },
