@@ -310,12 +310,19 @@ LOOKUPS: dict[str, Callable[[httpx.Client, float, float], _Answer]] = {
 
 
 def lookup(
-    fact: PlaceFactKind, lon: float, lat: float, client: httpx.Client | None = None
+    fact: PlaceFactKind,
+    lon: float,
+    lat: float,
+    client: httpx.Client | None = None,
+    *,
+    retry: bool = False,
 ) -> PlaceFact:
+    """One fact at a point. `retry` (the inspector's Retry button) skips a cached failure;
+    a cached answer is still returned, so retrying never spends a lookup on a known fact."""
     key = (fact, round(lon, 5), round(lat, 5))
     with _lock:
         hit = _cache.get(key)
-        if hit and hit[0] > time.monotonic():
+        if hit and hit[0] > time.monotonic() and not (retry and hit[1].status == "unavailable"):
             _cache.move_to_end(key)
             return hit[1].model_copy(update={"cached": True})
     owned = client is None

@@ -19,6 +19,7 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Process at most one queued run")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # Not one line per source request.
     settings = get_settings()
     sessions = get_session_factory(settings.database_url)
     worker = ResearchWorker(sessions, settings)

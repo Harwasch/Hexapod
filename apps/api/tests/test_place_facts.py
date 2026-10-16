@@ -238,6 +238,29 @@ def test_answers_are_cached_and_say_so() -> None:
     second = lookup("elevation", epqs, lon=LON + 0.000001)
     assert first.cached is False and second.cached is True
     assert second.label == first.label and len(epqs.requests) == 1
+    with epqs.client() as client:
+        # Retry only skips a cached failure; a cached answer is still the answer.
+        assert place.lookup("elevation", LON, LAT, client, retry=True).cached is True
+    assert len(epqs.requests) == 1
+
+
+def test_a_cached_failure_is_asked_again_only_on_retry() -> None:
+    state = {"up": False}
+
+    def flaky(_request: httpx.Request) -> httpx.Response:
+        if state["up"]:
+            return httpx.Response(200, json={"value": 12.5})
+        return httpx.Response(503)
+
+    source = Recorder(flaky)
+    assert lookup("elevation", source).status == "unavailable"
+    state["up"] = True
+    again = lookup("elevation", source)
+    assert again.status == "unavailable" and again.cached is True
+    with source.client() as client:
+        fresh = place.lookup("elevation", LON, LAT, client, retry=True)
+    assert fresh.status == "available" and fresh.cached is False
+    assert len(source.requests) == 2
 
 
 def test_place_route_validates_and_answers_under_pilot_auth(
@@ -246,10 +269,10 @@ def test_place_route_validates_and_answers_under_pilot_auth(
     calls: list[tuple[str, float, float]] = []
     real = place.lookup
 
-    def fake(kind: str, lon: float, lat: float) -> PlaceFact:
+    def fake(kind: str, lon: float, lat: float, *, retry: bool) -> PlaceFact:
         calls.append((kind, lon, lat))
         with answer({"Table": []}).client() as http:
-            return real(kind, lon, lat, http)  # type: ignore[arg-type]
+            return real(kind, lon, lat, http, retry=retry)  # type: ignore[arg-type]
 
     monkeypatch.setattr(place, "lookup", fake)
     response = client.get("/api/v1/research/place/soil?longitude=-120.72&latitude=35.53")
@@ -269,7 +292,7 @@ def test_place_lookups_are_rate_limited(
     monkeypatch.setattr(
         place,
         "lookup",
-        lambda kind, lon, lat: PlaceFact(
+        lambda kind, lon, lat, retry: PlaceFact(
             kind=kind,
             status="unavailable",
             label="fixture",

@@ -17848,6 +17848,8 @@ export interface operations {
             query: {
                 latitude: number;
                 longitude: number;
+                /** @description Ask the source again after a cached failure. */
+                retry?: boolean;
             };
             header?: {
                 "X-Workspace-ID"?: string | null;

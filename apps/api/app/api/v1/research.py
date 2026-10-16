@@ -68,11 +68,12 @@ def place_fact(
     scope: WorkspaceDep,
     longitude: float = Query(ge=-180, le=180),
     latitude: float = Query(ge=-90, le=90),
+    retry: bool = Query(False, description="Ask the source again after a cached failure."),
 ) -> PlaceFact:
     """One public fact about a point, looked up live and not saved (app/research/place.py).
 
     Behind land identity and its own rate limit, so it is not an open proxy to the agencies."""
-    return place.lookup(fact, longitude, latitude)
+    return place.lookup(fact, longitude, latitude, retry=retry)
 
 
 @router.get("/research/sources", response_model=list[SourceRead])

@@ -32736,6 +32736,18 @@
             }
           },
           {
+            "description": "Ask the source again after a cached failure.",
+            "in": "query",
+            "name": "retry",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Ask the source again after a cached failure.",
+              "title": "Retry",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Workspace-ID",
             "required": false,
