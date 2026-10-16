@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import socket
 import threading
+import time
 import uuid
 from contextlib import suppress
 from dataclasses import asdict
@@ -153,6 +156,48 @@ class ResearchWorker:
         self.model = model
         self.client = client
         self.searcher = searcher
+        # Presence (land_research_workers): who this process is, and when it last said so.
+        self.worker_id = uuid.uuid4()
+        self._hostname = socket.gethostname()
+        self._pid = os.getpid()
+        self._last_check_in = 0.0
+        self._check_in_lock = threading.Lock()
+
+    def _check_in(
+        self,
+        current_run_id: uuid.UUID | None = None,
+        *,
+        force: bool = False,
+        stopping: bool = False,
+    ) -> None:
+        """Tell /research/status this worker is alive, at most every CHECK_IN_EVERY_S.
+
+        Called from the poll loop and the lease keeper's thread, hence the lock. Presence is
+        advisory: a failure is logged and never breaks the loop or a run."""
+        with self._check_in_lock:
+            if (
+                not force
+                and self._last_check_in
+                and time.monotonic() - self._last_check_in < queue.CHECK_IN_EVERY_S
+            ):
+                return
+            try:
+                with self.sessions() as db:
+                    queue.check_in(
+                        db,
+                        self.worker_id,
+                        hostname=self._hostname,
+                        pid=self._pid,
+                        current_run_id=current_run_id,
+                        stopping=stopping,
+                    )
+                self._last_check_in = time.monotonic()
+            except Exception as error:
+                log.warning("Research worker check-in failed: %s", type(error).__name__)
+
+    def stop(self) -> None:
+        """Mark this worker stopped, so a queued run says so instead of "not seen lately"."""
+        self._check_in(None, force=True, stopping=True)
 
     def _keep_alive(self, run_id: uuid.UUID, token: uuid.UUID, stopped: threading.Event) -> None:
         while not stopped.wait(5):
@@ -175,6 +220,7 @@ class ResearchWorker:
                         stopped.set()
                         return
                     queue.heartbeat(db, run_id, token)
+                self._check_in(run_id)  # Long runs keep presence fresh between polls.
             except queue.LeaseLostError:
                 stopped.set()
                 return
@@ -183,11 +229,13 @@ class ResearchWorker:
                 # The lease expires naturally if the database remains unreachable.
 
     def run_once(self) -> bool:
+        self._check_in()
         with self.sessions() as db:
             claimed = queue.claim(db)
         if claimed is None:
             return False
         run_id, token = claimed
+        self._check_in(run_id, force=True)
         stopped = threading.Event()
         keeper = threading.Thread(
             target=self._keep_alive, args=(run_id, token, stopped), daemon=True
@@ -211,6 +259,7 @@ class ResearchWorker:
         finally:
             stopped.set()
             keeper.join(timeout=6)
+            self._check_in(None, force=True)
             if self.client is None:
                 client.close()
         return True

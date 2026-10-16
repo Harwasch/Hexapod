@@ -46,10 +46,17 @@ router = APIRouter(tags=["land research"])
 
 
 @router.get("/research/status", response_model=ResearchStatus)
-def status(settings: SettingsDep, scope: WorkspaceDep) -> ResearchStatus:
+def status(settings: SettingsDep, db: DbSession, scope: WorkspaceDep) -> ResearchStatus:
+    """What research can do here: the model, the worker's presence and this workspace's queue.
+
+    Polled every 10 s while a run waits (useResearchStatus), so it holds no transaction."""
+    worker, waiting = research.research_status(db, scope.id)
+    db.rollback()
     return ResearchStatus(
         model_configured=bool(settings.anthropic_api_key),
         model=settings.anthropic_model if settings.anthropic_api_key else None,
+        worker=worker,
+        queue=waiting,
     )
 
 
