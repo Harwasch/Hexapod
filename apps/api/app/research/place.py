@@ -14,6 +14,11 @@ Every answer says what kind of thing it is (`basis`), how old (`vintage`), where
 and never reads as "nothing here"; "empty" and "uncovered" say what they do not establish.
 Nothing is persisted: answers are cached in process, keyed by the point rounded to about a
 metre, for 6 h (2 min for failures). They are public data, so the cache is not per workspace.
+
+The route is synchronous, so each lookup holds one of the server's shared worker threads for
+as long as an agency takes to answer (up to TIMEOUT_S, or the WorldCover read budget). At most
+MAX_IN_FLIGHT lookups ask a source at once; past that a lookup answers "unavailable (busy)" at
+once, uncached, rather than queueing threads that every other route needs.
 """
 
 from __future__ import annotations
@@ -47,6 +52,11 @@ CACHE_SIZE = 1024
 CACHE_TTL_S = 6 * 3600
 #: A failure is retried soon: most are a slow or briefly unavailable agency service.
 FAILURE_TTL_S = 120
+#: Outbound lookups at once, across every client. One inspector asks five, so this lets a
+#: second person's rows through while a slow agency holds the first person's.
+MAX_IN_FLIGHT = 8
+#: How long a lookup waits for a free slot before answering busy: about one normal lookup.
+SLOT_WAIT_S = 2.0
 
 Status = Literal["available", "empty", "uncovered", "unavailable"]
 Basis = Literal[
@@ -59,6 +69,7 @@ Basis = Literal[
 
 _cache: OrderedDict[tuple[str, float, float], tuple[float, PlaceFact]] = OrderedDict()
 _lock = threading.Lock()
+_slots = threading.BoundedSemaphore(MAX_IN_FLIGHT)
 
 SPECS: dict[str, SourceSpec] = {
     "elevation": SOURCES["usgs-elevation"],
@@ -96,6 +107,26 @@ FLOOD_EMPTY = (
 ECOREGION_LIMIT = (
     REGION_LIMIT.split(". ")[0] + ". It names the region around this point, not the habitat at it."
 )
+#: NFHL zone values that are not flood zones in the usual sense, and read as low risk if shown
+#: as "outside the Special Flood Hazard Area" (both come back with SFHA_TF 'F').
+FLOOD_UNSTUDIED = "D"
+FLOOD_NOT_INCLUDED = "AREA NOT INCLUDED"
+FLOOD_D_LIMIT = (
+    "Zone D means FEMA has not studied the flood hazard here: it is possible but undetermined, "
+    "not low. Check the effective FIRM before decisions."
+)
+FLOOD_NOT_INCLUDED_LIMIT = (
+    "FEMA's flood map does not include this area, so it has no flood zone. This does not "
+    "establish low flood risk."
+)
+
+#: Citation links a browser can open for sources whose query it cannot: Soil Data Access
+#: answers only a POST, and a WorldCover tile is a 10-20 MB image. Each is the source's own
+#: public viewer of the same data; the exact query stays in `source.url` and `data`.
+VIEWERS: dict[str, str] = {
+    "soil": "https://websoilsurvey.nrcs.usda.gov/app/",
+    "land-cover": "https://viewer.esa-worldcover.org/worldcover/",
+}
 
 
 def _source(kind: str, url: str) -> PlaceFactSource:
@@ -105,6 +136,7 @@ def _source(kind: str, url: str) -> PlaceFactSource:
             "provider": spec.id,
             "name": spec.name,
             "url": url,
+            "link_url": VIEWERS.get(kind, url),
             "documentation_url": spec.documentation_url,
             "license": spec.license,
             "attribution": spec.attribution,
@@ -163,7 +195,7 @@ def _elevation(client: httpx.Client, lon: float, lat: float) -> _Answer:
 def _soil(client: httpx.Client, lon: float, lat: float) -> _Answer:
     if not covers_us(lon, lat):
         return _Answer("uncovered", "USDA soil survey covers the United States only.", SOIL_LIMIT)
-    records, url, _query = soil_components_at(client, lon, lat, timeout=TIMEOUT_S)
+    records, url, query = soil_components_at(client, lon, lat, timeout=TIMEOUT_S)
     if not records:
         return _Answer(
             "empty",
@@ -171,6 +203,7 @@ def _soil(client: httpx.Client, lon: float, lat: float) -> _Answer:
             "The soil survey returned no map unit here. This does not describe the ground; "
             "the survey may not cover this spot.",
             url=url,
+            data={"query": query},
         )
     first = records[0]
     parts = [
@@ -201,6 +234,8 @@ def _soil(client: httpx.Client, lon: float, lat: float) -> _Answer:
                 }
                 for row in records[:10]
             ],
+            # The SQL sent to Soil Data Access, which `source.url` only takes as a POST.
+            "query": query,
         },
     )
 
@@ -219,7 +254,7 @@ def _land_cover(client: httpx.Client, lon: float, lat: float) -> _Answer:
             "what is on the ground.",
             url=url,
             vintage="2021",
-            data={"classCode": code, "tile": worldcover.tile_for(lon, lat)},
+            data={"classCode": code, "tile": worldcover.tile_for(lon, lat), "tileUrl": url},
         )
     return _Answer(
         "available",
@@ -227,7 +262,12 @@ def _land_cover(client: httpx.Client, lon: float, lat: float) -> _Answer:
         COVER_LIMIT,
         url=url,
         vintage="2021",
-        data={"classCode": code, "classLabel": labels[code], "tile": worldcover.tile_for(lon, lat)},
+        data={
+            "classCode": code,
+            "classLabel": labels[code],
+            "tile": worldcover.tile_for(lon, lat),
+            "tileUrl": url,
+        },
     )
 
 
@@ -239,23 +279,38 @@ def _flood_zone(client: httpx.Client, lon: float, lat: float) -> _Answer:
     records, url = flood_zone_at(client, lon, lat, timeout=TIMEOUT_S)
     if not records:
         return _Answer("empty", "No mapped zone", FLOOD_EMPTY, url=url)
-    first = records[0]
-    zone = str(first.get("FLD_ZONE") or "unknown")
+
+    def zone_of(row: dict[str, Any]) -> str:
+        return str(row.get("FLD_ZONE") or "").strip().upper()
+
+    # "Not included" only when nothing else is mapped at the point (it can touch a real zone).
+    mapped = [row for row in records if zone_of(row) != FLOOD_NOT_INCLUDED]
+    if not mapped:
+        return _Answer(
+            "empty",
+            "Not included in FEMA flood mapping",
+            FLOOD_NOT_INCLUDED_LIMIT,
+            url=url,
+            data={"zone": FLOOD_NOT_INCLUDED, "sfha": False},
+        )
+    first = mapped[0]
+    zone = zone_of(first) or "unknown"
     sfha = str(first.get("SFHA_TF") or "").upper() == "T"
     subtype = str(first.get("ZONE_SUBTY") or "").strip()
-    description = (
-        "Special Flood Hazard Area"
-        if sfha
-        else subtype.capitalize() or "Outside the Special Flood Hazard Area"
-    )
+    if sfha:
+        description = "Special Flood Hazard Area"
+    elif zone == FLOOD_UNSTUDIED:
+        description = "Undetermined flood hazard: not studied"
+    elif zone == "OPEN WATER":
+        description = "Mapped as open water"
+    else:
+        description = subtype.capitalize() or "Outside the Special Flood Hazard Area"
     dfirm = str(first.get("DFIRM_ID") or "").strip()
-    others = sorted(
-        {str(row.get("FLD_ZONE")) for row in records[1:] if row.get("FLD_ZONE")} - {zone}
-    )
+    others = sorted({zone_of(row) for row in mapped[1:] if zone_of(row)} - {zone})
     return _Answer(
         "available",
-        f"Zone {zone}",
-        FLOOD_LIMIT,
+        "Open water" if zone == "OPEN WATER" else f"Zone {zone}",
+        FLOOD_D_LIMIT if zone == FLOOD_UNSTUDIED else FLOOD_LIMIT,
         url=url,
         detail=description
         + (f" · map {dfirm}" if dfirm else "")
@@ -325,10 +380,38 @@ def lookup(
         if hit and hit[0] > time.monotonic() and not (retry and hit[1].status == "unavailable"):
             _cache.move_to_end(key)
             return hit[1].model_copy(update={"cached": True})
+    if not _slots.acquire(timeout=SLOT_WAIT_S):
+        # Not cached: nothing was asked, so the next try should ask.
+        return _fact(
+            fact,
+            lon,
+            lat,
+            _Answer(
+                "unavailable",
+                f"{SPECS[fact].name} was not asked because the server is busy with other lookups",
+                "The lookup was not made, so this says nothing about the place. Try again shortly.",
+            ),
+        )
+    try:
+        answer = _ask(fact, lon, lat, client)
+    finally:
+        _slots.release()
+    result = _fact(fact, lon, lat, answer)
+    ttl = FAILURE_TTL_S if answer.status == "unavailable" else CACHE_TTL_S
+    with _lock:
+        _cache[key] = (time.monotonic() + ttl, result)
+        _cache.move_to_end(key)
+        while len(_cache) > CACHE_SIZE:
+            _cache.popitem(last=False)
+    return result
+
+
+def _ask(fact: PlaceFactKind, lon: float, lat: float, client: httpx.Client | None) -> _Answer:
+    """Ask the fact's source, turning any failure into an "unavailable (why)" answer."""
     owned = client is None
     http = client or httpx.Client(headers={"User-Agent": "LivingWorld-LandResearch/1.0"})
     try:
-        answer = LOOKUPS[fact](http, lon, lat)
+        return LOOKUPS[fact](http, lon, lat)
     except (httpx.HTTPError, SourceError, ValueError, KeyError, TypeError, OSError) as error:
         # OSError covers rasterio's RasterioIOError and the raster reader's own refusals.
         # Like retrieve(): no response bodies or server internals in what the user sees.
@@ -339,7 +422,7 @@ def lookup(
             reason = f"HTTP {status_code}"
         else:
             reason = type(error).__name__
-        answer = _Answer(
+        return _Answer(
             "unavailable",
             f"{SPECS[fact].name} could not be retrieved ({reason})",
             "The lookup failed, so this says nothing about the place. Try again shortly.",
@@ -347,7 +430,10 @@ def lookup(
     finally:
         if owned:
             http.close()
-    result = PlaceFact(
+
+
+def _fact(fact: PlaceFactKind, lon: float, lat: float, answer: _Answer) -> PlaceFact:
+    return PlaceFact(
         kind=fact,
         status=answer.status,
         label=answer.label,
@@ -362,13 +448,6 @@ def lookup(
         source=_source(fact, answer.url) if answer.url else None,
         data=answer.data,
     )
-    ttl = FAILURE_TTL_S if answer.status == "unavailable" else CACHE_TTL_S
-    with _lock:
-        _cache[key] = (time.monotonic() + ttl, result)
-        _cache.move_to_end(key)
-        while len(_cache) > CACHE_SIZE:
-            _cache.popitem(last=False)
-    return result
 
 
 def clear_cache() -> None:

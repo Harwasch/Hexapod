@@ -36,6 +36,7 @@ async function placeApi(page: Page) {
         provider: kind,
         name: `${kind} fixture`,
         url: "https://example.test/query",
+        linkUrl: "https://example.test/query",
         documentationUrl: "https://example.test/docs",
         license: "Public domain",
         attribution: "Fixture",

@@ -10956,6 +10956,13 @@
             "title": "License",
             "type": "string"
           },
+          "linkUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Linkurl",
+            "type": "string"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -10980,6 +10987,7 @@
           "provider",
           "name",
           "url",
+          "linkUrl",
           "documentationUrl",
           "license",
           "attribution",

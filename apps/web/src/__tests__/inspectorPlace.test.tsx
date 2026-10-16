@@ -26,11 +26,16 @@ vi.mock("@/cesium/SceneContext", () => ({ useScene: () => null }));
 const LON = -120.72;
 const LAT = 35.53;
 
-function source(kind: PlaceFactKind, name = `${kind} source`): PlaceFact["source"] {
+function source(
+  kind: PlaceFactKind,
+  name = `${kind} source`,
+  linkUrl = `https://example.test/${kind}?x=${LON}`,
+): PlaceFact["source"] {
   return {
     provider: kind,
     name,
     url: `https://example.test/${kind}?x=${LON}`,
+    linkUrl,
     documentationUrl: "https://example.test/docs",
     license: "U.S. public domain",
     attribution: "An agency",
@@ -75,6 +80,7 @@ const FACTS: Record<PlaceFactKind, PlaceFact> = {
     label: "Tree cover (class 10)",
     basis: "classified-imagery",
     vintage: "2021",
+    source: source("land-cover", "ESA WorldCover", "https://example.test/viewer"),
   }),
   "flood-zone": fact("flood-zone", {
     status: "empty",
@@ -209,6 +215,10 @@ describe("At this point", () => {
     expect(screen.getByTestId("place-land-cover")).toHaveTextContent(
       "Tree cover (class 10)Satellite classification · 2021",
     );
+    // The citation opens what a browser can show (the viewer), not the raw tile read.
+    expect(
+      within(screen.getByTestId("place-land-cover")).getByRole("link", { name: /ESA WorldCover/ }),
+    ).toHaveAttribute("href", "https://example.test/viewer");
     // An empty answer keeps its limit in view: no mapped zone is not low flood risk.
     expect(screen.getByTestId("place-flood-zone")).toHaveTextContent(
       "No mapped zoneRegulatory map · flood-zone source flood-zone caveat",

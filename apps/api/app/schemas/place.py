@@ -21,6 +21,10 @@ class PlaceFactSource(CamelModel):
     provider: str  # The SourceSpec id, e.g. "usgs-elevation".
     name: str
     url: HttpUrl  # The exact public query that answered.
+    # What a citation link opens: `url` itself when that query is a GET a browser can show,
+    # otherwise the source's public viewer. Soil Data Access answers only a POST (its SQL is in
+    # `data.query`), and land cover is read from a 10-20 MB image tile (`data.tileUrl`).
+    link_url: HttpUrl
     documentation_url: HttpUrl
     license: str
     attribution: str

@@ -6147,6 +6147,11 @@ export interface components {
             documentationUrl: string;
             /** License */
             license: string;
+            /**
+             * Linkurl
+             * Format: uri
+             */
+            linkUrl: string;
             /** Name */
             name: string;
             /** Provider */

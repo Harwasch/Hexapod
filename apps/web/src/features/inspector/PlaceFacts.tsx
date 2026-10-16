@@ -123,7 +123,9 @@ function FactRow({
           {data.source && (
             <>
               {" · "}
-              <a href={data.source.url} target="_blank" rel="noreferrer">
+              {/* linkUrl: the query itself where a browser can show it, else the source's
+                  viewer (a POST-only query or a 10-20 MB image tile is no citation to click). */}
+              <a href={data.source.linkUrl} target="_blank" rel="noreferrer">
                 {data.source.name} <ExternalLink size={10} aria-hidden="true" />
               </a>
             </>
