@@ -13,7 +13,44 @@ import { expect, test } from "./fixtures";
 
 test.skip(process.env.VITE_ENABLE_LAND_EXPLORATION !== "true", "Land preview is opt-in.");
 
+/** The inspector's point facts, answered here so "What's here" never reaches an agency. */
+async function placeApi(page: Page) {
+  const asked: string[] = [];
+  await page.route("**/api/v1/research/place/*", async (route) => {
+    const url = new URL(route.request().url());
+    const kind = url.pathname.split("/").at(-1) as components["schemas"]["PlaceFact"]["kind"];
+    asked.push(kind);
+    const fact: components["schemas"]["PlaceFact"] = {
+      kind,
+      status: kind === "flood-zone" ? "empty" : "available",
+      label: kind === "elevation" ? "236.8 m" : kind === "flood-zone" ? "No mapped zone" : kind,
+      detail: null,
+      basis: "modelled-surface",
+      vintage: kind === "elevation" ? "DEM acquired 2019" : null,
+      caveat: "Fixture caveat",
+      longitude: Number(url.searchParams.get("longitude")),
+      latitude: Number(url.searchParams.get("latitude")),
+      retrievedAt: "2026-10-16T00:00:00Z",
+      cached: false,
+      source: {
+        provider: kind,
+        name: `${kind} fixture`,
+        url: "https://example.test/query",
+        linkUrl: "https://example.test/query",
+        documentationUrl: "https://example.test/docs",
+        license: "Public domain",
+        attribution: "Fixture",
+        resolution: "Point",
+      },
+      data: {},
+    };
+    await route.fulfill({ json: fact });
+  });
+  return asked;
+}
+
 async function landApi(page: Page) {
+  await placeApi(page);
   const saved: LandArea[] = [];
   const history: BoundaryRevision[] = [];
   await page.route("**/api/v1/land{,/**,?*}", async (route) => {
@@ -133,6 +170,10 @@ test("draw, save, inspect elsewhere, edit, and reopen a land area without a miss
   await app.getByRole("menuitem", { name: "What's here" }).click();
   await expect(app.getByRole("heading", { name: "Location", exact: true })).toBeVisible();
   await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
+  // The point is inside the saved land, so the inspector offers to research it.
+  const place = app.getByTestId("inspector-place");
+  await expect(place.getByTestId("place-elevation")).toContainText("236.8 m");
+  await expect(place.getByRole("button", { name: "Research West field" })).toBeVisible();
   await app.getByRole("button", { name: "Edit boundary", exact: true }).click();
   await app.getByLabel("Notes", { exact: true }).fill("Survey before restoration");
   await app.getByRole("button", { name: "Save revision", exact: true }).click();
@@ -143,6 +184,75 @@ test("draw, save, inspect elsewhere, edit, and reopen a land area without a miss
   await expect(app.getByText("Survey before restoration", { exact: true })).toBeVisible();
   await app.getByRole("button", { name: "History", exact: true }).click();
   await expect(app.getByText("Revision 2", { exact: true })).toBeVisible();
+});
+
+test("ask what is here, then outline the land around that point", async ({ app }) => {
+  await landApi(app);
+  const asked = await placeApi(app);
+  let searched: number[] | null = null;
+  await app.route("**/api/v1/land/selection/candidates", async (route) => {
+    searched = (route.request().postDataJSON() as { point: { coordinates: number[] } }).point
+      .coordinates;
+    await route.fulfill({
+      json: {
+        status: "available",
+        message: "One mapped field found.",
+        truncated: false,
+        candidates: [
+          {
+            id: "osm:way:7",
+            label: "Creek field",
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [-119.905, 36.595],
+                  [-119.895, 36.595],
+                  [-119.895, 36.605],
+                  [-119.905, 36.605],
+                  [-119.905, 36.595],
+                ],
+              ],
+            },
+            source: {
+              method: "mapped-feature",
+              meaning: "physical-feature",
+              label: "OpenStreetMap field",
+            },
+            distanceM: 0,
+            properties: {},
+          },
+        ],
+      },
+    });
+  });
+  await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+  await app.evaluate(() => {
+    const twin = (
+      window as unknown as {
+        __twin: {
+          camera: {
+            cancelFlight(): void;
+            setView(lon: number, lat: number, height: number, heading: number, pitch: number): void;
+          };
+        };
+      }
+    ).__twin;
+    twin.camera.cancelFlight();
+    twin.camera.setView(-119.9, 36.6, 1500, 0, -90);
+  });
+  await app.mouse.click(800, 425, { button: "right" });
+  await app.getByRole("menuitem", { name: "What's here" }).click();
+  const place = app.getByTestId("inspector-place");
+  await expect(place).toContainText("At this point · looked up live, not saved");
+  await expect(place.getByTestId("place-elevation")).toContainText("236.8 m");
+  await expect(place.getByTestId("place-flood-zone")).toContainText("No mapped zone");
+  expect(new Set(asked)).toEqual(
+    new Set(["elevation", "soil", "land-cover", "flood-zone", "ecoregion"]),
+  );
+  await place.getByRole("button", { name: "Outline this land" }).click();
+  await expect(app.getByRole("button", { name: /Creek field/ })).toBeVisible();
+  expect(searched).not.toBeNull();
 });
 
 test("import with an exclusion and preserve the map on a phone", async ({ app }) => {

@@ -1,6 +1,6 @@
 """Per-client token buckets for the few routes whose cost is the attack.
 
-Most of this API is cheap to call and open to read, and is left alone. Three things are
+Most of this API is cheap to call and open to read, and is left alone. Four things are
 not cheap:
 
 * **The phone key.** Every route behind it hashes the supplied key with 200,000 rounds of
@@ -12,6 +12,9 @@ not cheap:
   guesser gets `PHONE_KEY` attempts a minute.
 * **Storage reconciliation** walks up to 50,000 objects in the bucket per call.
 * **Step logs** are read out of object storage on every request.
+* **Place facts** (`/research/place/{fact}`) each call a public agency service (USGS, USDA,
+  ESA, FEMA, EPA) on the caller's behalf. Behind land identity, and bucketed so the API is
+  never a fan-out proxy for one client.
 
 In-process and per-machine, on purpose: the API runs as one Fly machine (fly.toml), and a
 limit that needs Redis to work is a limit nobody deploys. A second machine would give each
@@ -53,6 +56,10 @@ PHONE_KEY = Limit(burst=10, per_minute=10)
 RECONCILE = Limit(burst=3, per_minute=4)
 #: Step logs. The console reads one when its drawer opens, and never polls them.
 STEP_LOG = Limit(burst=60, per_minute=120)
+#: Place facts. One "What's here" makes 5 lookups, so the burst allows 5 rapid inspections;
+#: each lookup calls a public agency service. Repeats are answered from a cache, but still
+#: spend a token: the bucket is in front of the route.
+PLACE = Limit(burst=25, per_minute=60)
 
 #: Clients remembered per bucket before the least recently seen is forgotten. Forgetting
 #: one only ever gives it a full bucket again, so the bound is on memory, not on safety.
@@ -118,6 +125,7 @@ class RateLimits:
         self.phone_key = TokenBucket(PHONE_KEY, clock=clock)
         self.reconcile = TokenBucket(RECONCILE, clock=clock)
         self.step_log = TokenBucket(STEP_LOG, clock=clock)
+        self.place = TokenBucket(PLACE, clock=clock)
 
 
 #: The header Fly's proxy sets on every request, which is `API_CLIENT_IP_HEADER`'s default.

@@ -14,6 +14,7 @@ import {
 import { ecologyNames } from "./ecologyRequest";
 import { EvidenceView } from "./LandResearch";
 import { ResearchArtifactView } from "./ResearchArtifacts";
+import { ResearchWorkerNotice } from "./ResearchWorkerNotice";
 
 type Request = components["schemas"]["EcologyRequest"];
 interface Operation {
@@ -319,6 +320,7 @@ export function EcologyResearch({ land, surveyNames }: { land: LandArea; surveyN
         <div className="land-notice" role="status">
           <strong>Ecological research · {run.status}</strong>
           <p>{run.error}</p>
+          <ResearchWorkerNotice run={run} className="land-footnote" />
           {running && canEdit && (
             <button
               type="button"

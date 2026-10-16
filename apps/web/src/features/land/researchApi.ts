@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components, LandArea } from "@twin/contracts";
 import { api, unwrap } from "@/api/client";
 import { useLandScope, useLandAccessReady } from "@/state/landIdentity";
@@ -37,7 +37,13 @@ export function useInvestigation(id: string | null, offset = 0, limit = 100, pol
   });
 }
 
-export function useResearchStatus() {
+/**
+ * What research can do on this server: the AI model, whether a research worker has checked
+ * in lately, and what waits in this workspace's queue. `pollWhileWaiting` refreshes it every
+ * 10 s while a run sits queued, so "none has checked in for 14 min" keeps counting and the
+ * notice clears when a worker starts; one query key, so every caller shares the polling.
+ */
+export function useResearchStatus(pollWhileWaiting = false) {
   const scope = useLandScope();
   const ready = useLandAccessReady();
   return useQuery({
@@ -45,6 +51,47 @@ export function useResearchStatus() {
     queryFn: () => unwrap(api.GET("/api/v1/research/status")),
     enabled: ready,
     staleTime: 60_000,
+    retry: false,
+    refetchInterval: pollWhileWaiting ? 10_000 : false,
+  });
+}
+
+export type PlaceFact = components["schemas"]["PlaceFact"];
+export type PlaceFactKind = PlaceFact["kind"];
+
+/**
+ * One public fact about a point (elevation, soil, land cover, flood zone, ecoregion), looked
+ * up live by the API and never saved. Keyed to about a metre, like the server's cache, and
+ * kept for the server's 6 h; a failure is shown, not retried, until the person asks.
+ */
+export function usePlaceFact(
+  kind: PlaceFactKind,
+  at: { longitude: number; latitude: number } | null,
+  enabled: boolean,
+) {
+  const scope = useLandScope();
+  const ready = useLandAccessReady();
+  const client = useQueryClient();
+  const queryKey = ["place-fact", scope, kind, at?.longitude.toFixed(5), at?.latitude.toFixed(5)];
+  return useQuery({
+    queryKey,
+    queryFn: () =>
+      unwrap(
+        api.GET("/api/v1/research/place/{fact}", {
+          params: {
+            path: { fact: kind },
+            query: {
+              longitude: at?.longitude ?? 0,
+              latitude: at?.latitude ?? 0,
+              // A refetch after "unavailable" is the Retry button: past the server's cached
+              // failure, or Retry would only repeat it.
+              retry: client.getQueryData<PlaceFact>(queryKey)?.status === "unavailable",
+            },
+          },
+        }),
+      ),
+    enabled: enabled && ready && at !== null,
+    staleTime: 6 * 3600_000,
     retry: false,
   });
 }

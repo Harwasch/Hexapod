@@ -2034,3 +2034,111 @@ occurred. Artifacts: `/tmp/land-calculation-result.json`, `/tmp/land-calculation
 `/tmp/land-calculation-mobile.png`. API/worker acceptance used a deterministic model fixture;
 live model credentials remain unavailable. The isolated API and worker were restarted, and the
 isolated Vite preview was restored on port 5175. The original checkout and deployment are unchanged.
+
+## Implemented increment: research worker presence and "What's here" point facts
+
+### Research worker presence
+
+Land research runs (overviews, terrain, land cover, vegetation, archives, ecology, solar and AI
+investigations) are queued by the API and executed by a separate process,
+`python -m app.research` (`pnpm dev:research` locally). The API never starts it. Before this
+increment the API could not tell an idle worker from a missing one: it only saw per-run leases,
+which exist while a run is held, so a run queued with no worker stayed "queued" indefinitely and
+said nothing.
+
+Each worker process now upserts one row in `land_research_workers` (migration 0029: id, hostname,
+pid, started, last seen, stopped, current run) every 15 s, idle or busy, using the database clock.
+The lease keeper refreshes it during long runs; a clean exit, Ctrl+C or SIGTERM marks it stopped.
+The worker prunes rows not seen for a week when it starts. Presence writes are advisory and never
+break the poll loop. `current_run_id` has no foreign key, so presence never waits on a run lock.
+
+`GET /api/v1/research/status` keeps `modelConfigured`, `model` and `workerRequired` and adds:
+
+- `worker`: `state` is `online` (a non-stopped worker seen within 45 s), `stale` (seen before, not
+  lately), `stopped` (the newest worker said it was stopping) or `never`; with `lastSeenAt`,
+  `secondsSinceSeen` (database clock, so browser clock skew never shows wrong minutes), `busy`
+  (any run in any workspace holds a live lease; it says nothing about whose) and
+  `checkInEverySeconds`. Hostnames, pids and worker lists never leave the server.
+- `queue`: `queued`, `oldestQueuedAt`, `oldestQueuedSeconds` and `running` (live lease), scoped
+  to the caller's workspace.
+
+In the land workspace a queued run explains itself ("Waiting for the research worker: none has
+checked in for 14 min. Your request is saved and starts when a worker runs."), and the status is
+polled every 10 s while it waits, so the notice clears when a worker starts. Ecology and solar
+status rows show the same line. Every disabled research button now says why next to it (connecting,
+role, the one queued or running request, AI not configured, a captured request or unreadable saved
+question to resolve, an empty question once the box has been used). A queued run's reason is short
+("One request runs at a time. Cancel the queued request to start something else."): the worker's
+state and age are said once, in the notice beside the run. The Stop button reads "Cancel
+queued request" for a queued run. When no worker is online and nothing of this land is queued, a
+footnote warns that new requests will wait. In development builds the notice adds
+`pnpm dev:research`; production users never see shell commands.
+
+Deployment: `fly.toml` `[processes]` defines only `app` and `worker` (the capture pipeline). It has
+no research process, so on the deployed API research runs are queued and never executed; the
+status now says so honestly ("none has checked in on this server yet"). Running
+`python -m app.research` as its own process group is a deployment decision left open here.
+
+### "What's here": point facts in the inspector
+
+`GET /api/v1/research/place/{fact}?longitude=&latitude=` answers one public fact about one point.
+`fact` is `elevation`, `soil`, `land-cover`, `flood-zone` or `ecoregion`. Each reuses a source the
+land research already registers, through the same bounded fetches (registry endpoints only, no
+redirects, 2 MB cap; a 10 s timeout for point lookups), so no host is added:
+
+| Fact       | Source                                         | Basis                    | Caveat shown                                                                                   |
+| ---------- | ---------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
+| Elevation  | USGS EPQS (3DEP), public domain                | Elevation model          | Interpolated from the 3DEP model at this point; not a surveyed height.                         |
+| Soil       | USDA NRCS Soil Data Access, public domain      | Mapped survey            | Map-unit estimate for the unit containing the point; not a soil test or parcel-wide soil map.  |
+| Land cover | ESA WorldCover 2021, CC BY 4.0 (one 10 m cell) | Satellite classification | Broad class for the 10 m cell, classified from 2021 imagery; not today's condition or species. |
+| Flood zone | FEMA NFHL layer 28 point query, public domain  | Regulatory map           | Check the effective FIRM and amendments; "No mapped zone" does not establish low flood risk.   |
+| Ecoregion  | EPA Level IV ecoregions (2011), CC0            | Regional framework       | Compiled at 1:250,000 for large extents; names the region around the point, not its habitat.   |
+
+Each answer carries `status` (`available`, `empty`, `uncovered` or `unavailable`), a label and
+detail, its basis and vintage, the caveat, the exact public query URL, license, attribution and
+source resolution. The citation link (`source.linkUrl`) is that query when a browser can open it
+(USGS, FEMA and EPA answer a GET with JSON). Soil Data Access takes its SQL only as a POST, and a
+WorldCover tile is a 10-20 MB image, so those two link Web Soil Survey and the WorldCover viewer,
+and keep the exact query in `data.query` (the SQL) and `data.tileUrl`. Flood zone D reads
+"Undetermined flood hazard: not studied" (never "outside the Special Flood Hazard Area"), and a
+point FEMA's map leaves out is `empty`, "Not included in FEMA flood mapping", with the same
+"does not establish low flood risk" caveat as "No mapped zone". A failure is "could not be retrieved (HTTP 503)" or the exception type, never
+a response body, and is never shown as "nothing here". The US-only sources answer `uncovered`
+outside the United States without making a request; a missing WorldCover tile (open ocean, HTTP 404) is `uncovered`, not an outage. The flood-zone lookup is a point query with
+`returnGeometry=false`: the boundary adapter's envelope query can return a county-wide Zone X
+polygon over the 2 MB cap (3.48 MB on a Central Coast parcel), which this avoids; fixing that
+adapter is separate work.
+
+Nothing is persisted. Answers are cached in the API process for 6 h, keyed by the point rounded
+to about a metre (failures for 2 min; the inspector's Retry asks again past a cached failure).
+The route sits behind land identity (`WorkspaceDep`) and its own token bucket (burst 25, 60 per
+minute per client; one inspection makes five lookups), so it is not an open proxy to the agencies.
+The route is synchronous, so a slow agency holds a server thread for up to the 10 s timeout (15 s
+for the WorldCover read). At most 8 lookups ask a source at once across all clients; a lookup
+that finds no free slot within 2 s answers `unavailable` ("... was not asked because the server
+is busy with other lookups"), uncached, so a hung agency cannot take the threads every other route
+needs. Identical lookups in flight are not merged.
+
+In the inspector, any non-site pick (open ground, and Google Photorealistic tiles, which pick as a
+layer feature) shows "At this point · looked up live, not saved" with the five rows filling in as
+each agency answers. Below them: "Research <land>" when the point is inside a saved land (it opens
+that land on Discover), otherwise "Outline this land", which opens the Land tool finding mapped
+parcels, fields and lines at the point. The map's right-click menu has the same "Outline land
+here", offered like the inspector's only when the workspace is ready and the role can add land.
+Both go through `features/land/landEntry.ts`, which clears the active land first (Save would
+otherwise revise it with the new outline) and never replaces an unsaved outline
+(`hasUnsavedOutline`: a draft, or a sketch with points placed in draw, corridor or split mode, the
+same test the browser recovery copy uses): with one open, the button and the menu item read
+"Return to your unsaved outline" and only reopen the tool on it. Other entry points (Descent) should use
+`landEntry` (`proposeOutline` for a found outline) rather than `useLand.propose`.
+
+The Terrain row above stays: it is the scene's own terrain sample, and the two elevation values
+can differ; each names its source and neither is a survey.
+
+Validation: API tests cover presence states and ages, workspace-scoped queue counts, the worker's
+idle check-in throttle and stop, pruning, every fact's mapping (including empty, uncovered,
+unavailable without bodies, caching and retry), the 422 bounds and the 429 limit. Web tests cover
+the copy and precedence of every reason, the queued notice and polling, the Investigate reason,
+the inspector rows, retry and CTAs, the menu item and the landEntry safety rules. All five lookups
+were checked live at -120.72, 35.53: 236.8 m (1 m DEM, 2019); Corducci and Typic Xerofluvents;
+Tree cover (class 10); Zone A, Special Flood Hazard Area, map 06079C; Paso Robles Hills and Valleys.

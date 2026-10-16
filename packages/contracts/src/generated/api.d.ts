@@ -1929,6 +1929,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research/place/{fact}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Place Fact
+         * @description One public fact about a point, looked up live and not saved (app/research/place.py).
+         *
+         *     Behind land identity and its own rate limit, so it is not an open proxy to the agencies.
+         */
+        get: operations["place_fact_api_v1_research_place__fact__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -2021,7 +2043,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Status */
+        /**
+         * Status
+         * @description What research can do here: the model, the worker's presence and this workspace's queue.
+         *
+         *     Polled every 10 s while a run waits (useResearchStatus), so it holds no transaction.
+         */
         get: operations["status_api_v1_research_status_get"];
         put?: never;
         post?: never;
@@ -6061,6 +6088,82 @@ export interface components {
             /** Recipes */
             recipes: components["schemas"]["RecipeRead"][];
         };
+        /** PlaceFact */
+        PlaceFact: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "modelled-surface" | "mapped-survey" | "classified-imagery" | "regulatory-map" | "regional-framework";
+            /**
+             * Cached
+             * @default false
+             */
+            cached?: boolean;
+            /** Caveat */
+            caveat: string;
+            /**
+             * Data
+             * @default {}
+             */
+            data?: {
+                [key: string]: unknown;
+            };
+            /** Detail */
+            detail?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "elevation" | "soil" | "land-cover" | "flood-zone" | "ecoregion";
+            /** Label */
+            label: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /**
+             * Retrievedat
+             * Format: date-time
+             */
+            retrievedAt: string;
+            source: components["schemas"]["PlaceFactSource"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "empty" | "uncovered" | "unavailable";
+            /** Vintage */
+            vintage?: string | null;
+        };
+        /** PlaceFactSource */
+        PlaceFactSource: {
+            /** Attribution */
+            attribution: string;
+            /**
+             * Documentationurl
+             * Format: uri
+             */
+            documentationUrl: string;
+            /** License */
+            license: string;
+            /**
+             * Linkurl
+             * Format: uri
+             */
+            linkUrl: string;
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+            /** Resolution */
+            resolution: string;
+            /**
+             * Url
+             * Format: uri
+             */
+            url: string;
+        };
         /**
          * PlanArea
          * @description A zone drawn in the console for this plan (the fleet backend owns the other zones).
@@ -7083,17 +7186,58 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /**
+         * ResearchQueueStatus
+         * @description Runs waiting or running in the caller's workspace only.
+         */
+        ResearchQueueStatus: {
+            /** Oldestqueuedat */
+            oldestQueuedAt: string | null;
+            /** Oldestqueuedseconds */
+            oldestQueuedSeconds: number | null;
+            /** Queued */
+            queued: number;
+            /** Running */
+            running: number;
+        };
         /** ResearchStatus */
         ResearchStatus: {
             /** Model */
             model: string | null;
             /** Modelconfigured */
             modelConfigured: boolean;
+            queue: components["schemas"]["ResearchQueueStatus"];
+            worker: components["schemas"]["ResearchWorkerStatus"];
             /**
              * Workerrequired
              * @default true
              */
             workerRequired?: boolean;
+        };
+        /**
+         * ResearchWorkerStatus
+         * @description Whether any research worker is alive. Ages come from the database clock.
+         *
+         *     online: seen within 45 s and not stopped. stale: seen before, not lately. stopped: the
+         *     newest worker said it was stopping. never: no worker has checked in on this server.
+         */
+        ResearchWorkerStatus: {
+            /** Busy */
+            busy: boolean;
+            /**
+             * Checkineveryseconds
+             * @default 15
+             */
+            checkInEverySeconds?: number;
+            /** Lastseenat */
+            lastSeenAt: string | null;
+            /** Secondssinceseen */
+            secondsSinceSeen: number | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "online" | "stale" | "stopped" | "never";
         };
         /** ResolutionMetadata */
         ResolutionMetadata: {
@@ -8800,6 +8944,8 @@ export type SchemaPhoneCapture = components['schemas']['PhoneCapture'];
 export type SchemaPhoneCaptureCreate = components['schemas']['PhoneCaptureCreate'];
 export type SchemaPhoneRefine = components['schemas']['PhoneRefine'];
 export type SchemaPipelineCatalogue = components['schemas']['PipelineCatalogue'];
+export type SchemaPlaceFact = components['schemas']['PlaceFact'];
+export type SchemaPlaceFactSource = components['schemas']['PlaceFactSource'];
 export type SchemaPlanArea = components['schemas']['PlanArea'];
 export type SchemaPlanCreate = components['schemas']['PlanCreate'];
 export type SchemaPlanDraft = components['schemas']['PlanDraft'];
@@ -8846,7 +8992,9 @@ export type SchemaResearchArtifactRead = components['schemas']['ResearchArtifact
 export type SchemaResearchBudget = components['schemas']['ResearchBudget'];
 export type SchemaResearchFocusReference = components['schemas']['ResearchFocusReference'];
 export type SchemaResearchPage = components['schemas']['ResearchPage'];
+export type SchemaResearchQueueStatus = components['schemas']['ResearchQueueStatus'];
 export type SchemaResearchStatus = components['schemas']['ResearchStatus'];
+export type SchemaResearchWorkerStatus = components['schemas']['ResearchWorkerStatus'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
 export type SchemaRestorationEcology = components['schemas']['RestorationEcology'];
 export type SchemaRestorationEcologyResult = components['schemas']['RestorationEcologyResult'];
@@ -17660,6 +17808,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    place_fact_api_v1_research_place__fact__get: {
+        parameters: {
+            query: {
+                latitude: number;
+                longitude: number;
+                /** @description Ask the source again after a cached failure. */
+                retry?: boolean;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                fact: "elevation" | "soil" | "land-cover" | "flood-zone" | "ecoregion";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaceFact"];
                 };
             };
             /** @description Missing or wrong write token */

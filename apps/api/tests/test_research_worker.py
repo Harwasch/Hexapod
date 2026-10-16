@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 import httpx
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.models.research import ResearchRun
+from app.models.research import ResearchRun, ResearchWorkerPresence
+from app.research import queue
 from app.research.model import CompleteAction, DecisionResult, ResearchDecision, RetrieveAction
 from app.research.providers.base import SourceContext
 from app.research.providers.open_data import retrieve
@@ -180,3 +182,58 @@ def test_redirects_are_not_followed() -> None:
             "usgs-elevation", SourceContext(Polygon.model_validate(BODY["boundary"])), http
         )
     assert result.status == "unavailable"
+
+
+def test_worker_checks_in_when_idle_and_clears_current_run(
+    client: TestClient, db: Session, sessions: sessionmaker[Session]
+) -> None:
+    """Presence is what lets a queued run tell an idle worker from a missing one."""
+    with httpx.Client(transport=httpx.MockTransport(transport)) as http:
+        worker = ResearchWorker(sessions, Settings(_env_file=None), client=http)
+        assert not worker.run_once()
+        row = db.get(ResearchWorkerPresence, worker.worker_id)
+        assert row is not None and row.current_run_id is None and row.stopped_at is None
+        idle_seen = row.last_seen_at
+        # Throttled: a second idle poll inside CHECK_IN_EVERY_S writes nothing.
+        assert not worker.run_once()
+        db.expire_all()
+        row = db.get(ResearchWorkerPresence, worker.worker_id)
+        assert row is not None and row.last_seen_at == idle_seen
+        start(client)
+        assert worker.run_once()
+        db.expire_all()
+        row = db.get(ResearchWorkerPresence, worker.worker_id)
+        assert row is not None and row.last_seen_at > idle_seen
+        assert row.current_run_id is None  # Cleared once the run is done.
+        worker.stop()
+        db.expire_all()
+        row = db.get(ResearchWorkerPresence, worker.worker_id)
+        assert row is not None and row.stopped_at is not None
+    status = client.get("/api/v1/research/status").json()
+    assert status["worker"]["state"] == "stopped"
+
+
+def test_presence_failures_never_break_the_poll() -> None:
+    class Broken:
+        def __call__(self) -> Session:
+            raise RuntimeError("database unavailable")
+
+    worker = ResearchWorker(Broken(), Settings(_env_file=None))  # type: ignore[arg-type]
+    worker.stop()  # Logged, not raised: presence is advisory.
+    assert worker._last_check_in == 0.0
+
+
+def test_old_presence_rows_are_pruned(db: Session) -> None:
+    old, fresh = uuid.uuid4(), uuid.uuid4()
+    queue.check_in(db, old, hostname="a", pid=1, current_run_id=None)
+    queue.check_in(db, fresh, hostname="b", pid=2, current_run_id=None)
+    db.execute(
+        text(
+            "UPDATE land_research_workers SET last_seen_at = clock_timestamp() - interval '8 days' "
+            "WHERE id = :id"
+        ),
+        {"id": old},
+    )
+    db.commit()
+    queue.prune_presence(db)
+    assert set(db.scalars(select(ResearchWorkerPresence.id))) == {fresh}

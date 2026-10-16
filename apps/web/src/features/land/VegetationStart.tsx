@@ -12,10 +12,13 @@ function defaultMonths() {
 }
 export function VegetationStart({
   disabled,
+  describedBy,
   busy,
   onStart,
 }: {
   disabled: boolean;
+  /** The id of the text saying why Start is disabled, when it is. */
+  describedBy?: string;
   busy: boolean;
   onStart: (periods: Period[]) => void;
 }) {
@@ -75,6 +78,7 @@ export function VegetationStart({
       <button
         type="button"
         disabled={disabled || !periods}
+        aria-describedby={describedBy}
         onClick={() => {
           if (periods) onStart(periods);
         }}

@@ -176,5 +176,11 @@ def limit_step_log(request: Request, settings: SettingsDep) -> None:
     limits_of(request).step_log.take(client_key(request, settings))
 
 
+def limit_place(request: Request, settings: SettingsDep) -> None:
+    """One public-agency lookup per token: see app/services/ratelimit.py."""
+    limits_of(request).place.take(client_key(request, settings))
+
+
 LimitReconcile = Depends(limit_reconcile)
 LimitStepLog = Depends(limit_step_log)
+LimitPlace = Depends(limit_place)

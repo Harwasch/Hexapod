@@ -67,6 +67,34 @@ def bound_records(data: dict[str, Any]) -> None:
         data["truncated"] = True
 
 
+def region_at(
+    client: httpx.Client, lon: float, lat: float, timeout: float = 10
+) -> tuple[dict[str, Any] | None, str]:
+    """The EPA Level IV ecoregion containing one point (its attributes, or None outside the
+    mapped extent) and the query URL."""
+    raw, url = fetch_json(
+        client,
+        ECOLOGY_SOURCES["epa-ecoregions"],
+        {
+            "f": "json",
+            "geometry": f"{lon},{lat}",
+            "geometryType": "esriGeometryPoint",
+            "inSR": 4326,
+            "spatialRel": "esriSpatialRelIntersects",
+            "outFields": "US_L4CODE,US_L4NAME,US_L3NAME,NA_L2NAME",
+            "returnGeometry": "false",
+        },
+        timeout=timeout,
+    )
+    if "error" in raw or not isinstance(raw.get("features"), list):
+        raise SourceError("EPA returned no usable regional feature response.")
+    for feature in raw["features"]:
+        values = feature.get("attributes") if isinstance(feature, dict) else None
+        if isinstance(values, dict):
+            return values, url
+    return None, url
+
+
 def regions(context: SourceContext, client: httpx.Client) -> SourceResult:
     spec = ECOLOGY_SOURCES["epa-ecoregions"]
     if not in_us(context):

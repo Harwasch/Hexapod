@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 import httpx
@@ -14,10 +15,11 @@ from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 from rasterio.shutil import copy as copy_raster
 from rasterio.vrt import WarpedVRT
+from rasterio.windows import Window
 from shapely.geometry import shape
 
 from app.analysis.raster_grid import AnalysisGrid, make_grid
-from app.analysis.raster_io import RasterOpener, ReadBudget
+from app.analysis.raster_io import RasterOpener, RasterStatusError, ReadBudget
 from app.analysis.terrain import TerrainResult
 from app.research.providers.base import SourceSpec, fetch_json
 from app.schemas.geojson import Footprint
@@ -57,6 +59,53 @@ CLASSES = (
     (95, "Mangroves", "#00cf75"),
     (100, "Moss and lichen", "#fae6a0"),
 )
+
+
+def map_url(tile: str) -> str:
+    identifier = f"ESA_WorldCover_10m_2021_v200_{tile}_Map"
+    return f"https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/{identifier}.tif"
+
+
+def tile_for(lon: float, lat: float) -> str:
+    """The 3° WorldCover tile holding a point, named by its south-west corner (N33W123)."""
+    la = math.floor(lat / 3) * 3
+    lo = math.floor(lon / 3) * 3
+    return f"{'N' if la >= 0 else 'S'}{abs(la):02d}{'E' if lo >= 0 else 'W'}{abs(lo):03d}"
+
+
+class NoTileError(LookupError):
+    """WorldCover publishes no tile here (open ocean, mostly): not covered, not an outage."""
+
+
+def class_at(client: httpx.Client, lon: float, lat: float) -> tuple[int | None, str]:
+    """The WorldCover 2021 class code of the 10 m cell containing a point (None for no
+    data) and the tile URL. One bounded COG read: about 4 range requests, under 200 KB."""
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        raise ValueError("Land-cover lookups need a finite point.")
+    url = map_url(tile_for(lon, lat))
+    opener = RasterOpener(
+        client, url, ReadBudget(max_bytes=4 * 1024 * 1024, max_requests=16, max_seconds=15)
+    )
+    try:
+        # rasterio hides the opener's error behind a bare RasterioIOError, so probe once
+        # first: a missing tile answers 404, which is "not covered", not "unavailable".
+        opener(url).close()
+    except RasterStatusError as error:
+        if error.status_code == 404:
+            raise NoTileError(url) from error
+        raise
+    with (
+        rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR", AWS_NO_SIGN_REQUEST="YES"),
+        rasterio.open(url, opener=opener, driver="GTiff") as source,
+    ):
+        if source.count != 1 or source.dtypes != ("uint8",):
+            raise ValueError("The WorldCover source is not its expected categorical band.")
+        row, col = source.index(lon, lat)
+        if not (0 <= row < source.height and 0 <= col < source.width):
+            raise ValueError("The point falls outside the WorldCover tile chosen for it.")
+        value = int(source.read(1, window=Window(col, row, 1, 1))[0, 0])
+        nodata = source.nodata
+    return (value if value and value != nodata else None), url
 
 
 def encode(values: NDArray[np.uint8], grid: AnalysisGrid) -> bytes:
@@ -129,7 +178,7 @@ def analyze(boundary: Footprint, request: RasterRequest, client: httpx.Client) -
     ):
         for tile in tiles:
             identifier = f"ESA_WorldCover_10m_2021_v200_{tile}_Map"
-            url = f"https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/{identifier}.tif"
+            url = map_url(tile)
             opener = RasterOpener(client, url, budget)
             with rasterio.open(url, opener=opener, driver="GTiff") as source:
                 if source.count != 1 or source.crs is None or source.dtypes != ("uint8",):
