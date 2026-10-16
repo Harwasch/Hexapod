@@ -33,6 +33,7 @@ import {
   type Framing,
   type Viewport,
 } from "./framing";
+import { MACHINE_CLASSES } from "./machineClasses";
 import { PREVIEW_MAX_PASSES, PREVIEW_SWATH_M } from "./preview";
 import type { LonLat, Machine, MissionProvider, Plan, Project, WorkLogRow, Zone } from "./types";
 
@@ -42,10 +43,12 @@ import type { LonLat, Machine, MissionProvider, Plan, Project, WorkLogRow, Zone 
  * `FIELD_EFFICIENCY` of the time and turning the rest. A 2 m mower at 1.4 m/s covers about
  * two acres an hour, so a shift is a dozen acres, never two hundred.
  */
+// The same assumed classes the planner sizes work with (machine_classes.json), so the demo's
+// rates and a drafted plan's hours never disagree.
 const ASSUMED = {
-  mow: { swathM: 2.0, speedMps: 1.4 },
-  survey: { swathM: 10, speedMps: 1.5 },
-  seed: { swathM: 3.0, speedMps: 1.2 },
+  mow: MACHINE_CLASSES.mower,
+  survey: MACHINE_CLASSES.survey,
+  seed: MACHINE_CLASSES.seeder,
 } as const;
 const FIELD_EFFICIENCY = 0.8;
 

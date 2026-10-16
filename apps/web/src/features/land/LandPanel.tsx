@@ -1,6 +1,7 @@
 import {
   Check,
   ChevronRight,
+  ClipboardList,
   Download,
   Focus,
   History,
@@ -26,6 +27,7 @@ import { useLand, type LandMode } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 
+import { planOnLand } from "../mission/landPlanning";
 import { FloatingPanel } from "../shell/FloatingPanel";
 import { WriteTokenField } from "../captures/WriteTokenField";
 import { createCorridor, createLand, reviseLand, useBoundaryHistory, useLandAreas } from "./api";
@@ -39,7 +41,7 @@ import { LandWorkspaceResizer } from "./LandWorkspaceResizer";
 import { LandCandidatePicker } from "./LandCandidatePicker";
 import { LandWorkspace } from "./LandWorkspace";
 import { WorkspaceIdentity } from "./WorkspaceIdentity";
-import { landUsesOidc, useLandScope } from "@/state/landIdentity";
+import { landUsesOidc, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 
 function areaLabel(squareMetres: number): string {
   if (squareMetres < 4046.8564224) return `${Math.round(squareMetres).toLocaleString()} m²`;
@@ -54,6 +56,7 @@ function landError(error: unknown): string {
 
 export function LandPanel() {
   const scope = useLandScope();
+  const canEdit = useLandCanEdit();
   const open = useUi((s) => s.activePanel === "land");
   const tokenPrompt = useUi((s) => s.writeTokenPrompt);
   const state = useLand();
@@ -627,6 +630,18 @@ export function LandPanel() {
                 <div className="land-actions">
                   <button
                     type="button"
+                    className="land-primary"
+                    disabled={!canEdit}
+                    onClick={() => {
+                      if (active) void planOnLand(active);
+                    }}
+                    data-testid="land-plan-work"
+                  >
+                    <ClipboardList size={16} />
+                    Plan work on this land
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       if (!active) return;
                       state.propose({
@@ -654,6 +669,11 @@ export function LandPanel() {
                     Export
                   </button>
                 </div>
+                {!canEdit && (
+                  <p className="land-footnote">
+                    Viewers can see this land&apos;s plans. A workspace editor can plan work here.
+                  </p>
+                )}
                 {historyOpen && (
                   <div className="land-history">
                     <h4>Boundary history</h4>
@@ -729,7 +749,7 @@ export function LandPanel() {
             ))}
             {catalog.data?.length === 0 && (
               <p className="land-footnote">
-                Your saved areas will stay here, independently of plans and captures.
+                Your saved areas stay here; plans you make on them appear in Plan.
               </p>
             )}
           </div>

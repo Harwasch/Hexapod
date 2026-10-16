@@ -996,6 +996,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/ground": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Area Ground
+         * @description The land as mission ground: its boundary and inventory features as plannable zones.
+         */
+        get: operations["area_ground_api_v1_land__land_id__ground_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/investigations": {
         parameters: {
             query?: never;
@@ -2338,6 +2358,59 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/missions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the workspace's missions */
+        get: operations["list_missions_api_v1_workspaces_missions_get"];
+        put?: never;
+        /** Approve a mission in the workspace */
+        post: operations["create_mission_api_v1_workspaces_missions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/missions/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a workspace mission */
+        get: operations["get_mission_api_v1_workspaces_missions__plan_id__get"];
+        /** Approve a new mission revision */
+        put: operations["revise_mission_api_v1_workspaces_missions__plan_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/missions/{plan_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change a mission's lifecycle state */
+        patch: operations["set_mission_status_api_v1_workspaces_missions__plan_id__status_patch"];
         trace?: never;
     };
     "/api/v1/workspaces/profile": {
@@ -5318,6 +5391,56 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /** LandGround */
+        LandGround: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Items */
+            items: components["schemas"]["LandGroundItem"][];
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Name */
+            name: string;
+            /** Skipped */
+            skipped: number;
+        };
+        /**
+         * LandGroundItem
+         * @description One plannable piece of a Land. Read model: every field explicit.
+         */
+        LandGroundItem: {
+            /** Aream2 */
+            areaM2: number;
+            /** Bufferm */
+            bufferM: number | null;
+            /** Category */
+            category: string | null;
+            /** Featureid */
+            featureId: string | null;
+            /** Footprint */
+            footprint: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "boundary" | "feature";
+            /** Lengthm */
+            lengthM: number | null;
+            line: components["schemas"]["LineString"] | null;
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /** Source */
+            source: string;
+            /** Status */
+            status: string | null;
+            /** Zoneid */
+            zoneId: string;
+        };
         /** LandRasterRead */
         LandRasterRead: {
             /** Boundaryrevision */
@@ -6166,9 +6289,12 @@ export interface components {
         };
         /**
          * PlanArea
-         * @description A zone drawn in the console for this plan (the fleet backend owns the other zones).
+         * @description Ground the console found for this plan: an area drawn or outlined there, a saved
+         *     Land's boundary or feature (the fleet backend owns the other zones).
          */
         PlanArea: {
+            /** Attribution */
+            attribution?: string | null;
             /** Footprint */
             footprint: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
             /** Id */
@@ -6239,6 +6365,8 @@ export interface components {
             cadence: "once" | "daily" | "weekly" | "monthly" | "seasonal";
             /** Clarifications */
             clarifications: components["schemas"]["Clarification"][];
+            /** Coverage */
+            coverage?: components["schemas"]["ZoneCoverage"][];
             /** Enddate */
             endDate: string | null;
             estimates: components["schemas"]["PlanEstimates"];
@@ -6286,6 +6414,8 @@ export interface components {
             cadence?: "once" | "daily" | "weekly" | "monthly" | "seasonal";
             /** Clarifications */
             clarifications?: components["schemas"]["Clarification"][];
+            /** Coverage */
+            coverage?: components["schemas"]["ZoneCoverage"][];
             /** Enddate */
             endDate?: string | null;
             estimates: components["schemas"]["PlanEstimates"];
@@ -6347,6 +6477,8 @@ export interface components {
             calendarDays: number;
             /** Machinehours */
             machineHours: number;
+            /** Pathm */
+            pathM?: number | null;
         };
         /** PlannerExistingPlan */
         PlannerExistingPlan: {
@@ -6424,6 +6556,8 @@ export interface components {
              * @default 0
              */
             acres?: number;
+            /** Geometry */
+            geometry?: (components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
             /** Id */
             id: string;
             /** Name */
@@ -6458,6 +6592,8 @@ export interface components {
             areas: components["schemas"]["PlanArea"][];
             /** Assumptions */
             assumptions: string[];
+            /** Boundaryrevision */
+            boundaryRevision: number | null;
             /**
              * Cadence
              * @enum {string}
@@ -6478,12 +6614,18 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Landactionid */
+            landActionId: string | null;
+            /** Landid */
+            landId: string | null;
             /** Machineids */
             machineIds: string[];
             /** Model */
             model: string | null;
             /** Objective */
             objective: string;
+            /** Private */
+            private: boolean;
             /** Projectid */
             projectId: string;
             /** Questions */
@@ -8720,6 +8862,62 @@ export interface components {
             /** Name */
             name: string;
         };
+        /**
+         * WorkspaceMissionCreate
+         * @description A plan approved inside a workspace: private, and optionally on one of its saved Lands.
+         */
+        WorkspaceMissionCreate: {
+            /** Areas */
+            areas?: components["schemas"]["PlanArea"][];
+            /** Assumptions */
+            assumptions?: string[];
+            /** Boundaryrevision */
+            boundaryRevision?: number | null;
+            /**
+             * Cadence
+             * @default once
+             * @enum {string}
+             */
+            cadence?: "once" | "daily" | "weekly" | "monthly" | "seasonal";
+            /** Enddate */
+            endDate?: string | null;
+            estimates: components["schemas"]["PlanEstimates"];
+            /** Goal */
+            goal: string;
+            /** Landid */
+            landId?: string | null;
+            /** Machineids */
+            machineIds?: string[];
+            /** Model */
+            model?: string | null;
+            /** Objective */
+            objective: string;
+            /** Projectid */
+            projectId: string;
+            /** Questions */
+            questions?: string[];
+            /** Risks */
+            risks?: string[];
+            /** Siteid */
+            siteId?: string | null;
+            /**
+             * Source
+             * @default rules
+             * @enum {string}
+             */
+            source?: "claude" | "rules";
+            /**
+             * Startdate
+             * Format: date
+             */
+            startDate: string;
+            /** Steps */
+            steps?: components["schemas"]["PlanStep"][];
+            /** Title */
+            title: string;
+            /** Zoneids */
+            zoneIds?: string[];
+        };
         /** WorkspaceRead */
         WorkspaceRead: {
             /**
@@ -8758,6 +8956,50 @@ export interface components {
             type: "xyz";
             /** Urltemplate */
             urlTemplate: string;
+        };
+        /**
+         * ZoneCoverage
+         * @description How one zone's work was sized from its outline: the path, the assumed machine class
+         *     (`app/services/machine_classes.json`) and the hours that follow. `basis` is the sentence
+         *     the console shows beside the number.
+         */
+        ZoneCoverage: {
+            /** Altitudem */
+            altitudeM?: number | null;
+            /** Aream2 */
+            areaM2: number | null;
+            /** Basis */
+            basis: string;
+            /** Capped */
+            capped: boolean;
+            /** Hours */
+            hours: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "area" | "line";
+            /** Lengthm */
+            lengthM: number;
+            /**
+             * Machineclass
+             * @enum {string}
+             */
+            machineClass: "mower" | "seeder" | "survey" | "drone";
+            /** Passes */
+            passes: number;
+            /** Spacingm */
+            spacingM: number | null;
+            /** Spans */
+            spans: number;
+            /** Speedmps */
+            speedMps: number;
+            /** Transitm */
+            transitM: number;
+            /** Turns */
+            turnS: number;
+            /** Zoneid */
+            zoneId: string;
         };
     };
     responses: never;
@@ -8900,6 +9142,8 @@ export type SchemaLandFeatureCreate = components['schemas']['LandFeatureCreate']
 export type SchemaLandFeatureRead = components['schemas']['LandFeatureRead'];
 export type SchemaLandFeatureRevise = components['schemas']['LandFeatureRevise'];
 export type SchemaLandFeatureRevisionRead = components['schemas']['LandFeatureRevisionRead'];
+export type SchemaLandGround = components['schemas']['LandGround'];
+export type SchemaLandGroundItem = components['schemas']['LandGroundItem'];
 export type SchemaLandRasterRead = components['schemas']['LandRasterRead'];
 export type SchemaLandRead = components['schemas']['LandRead'];
 export type SchemaLandRevise = components['schemas']['LandRevise'];
@@ -9058,8 +9302,10 @@ export type SchemaVersionReference = components['schemas']['VersionReference'];
 export type SchemaWmsSource = components['schemas']['WmsSource'];
 export type SchemaWmtsSource = components['schemas']['WmtsSource'];
 export type SchemaWorkspaceCreate = components['schemas']['WorkspaceCreate'];
+export type SchemaWorkspaceMissionCreate = components['schemas']['WorkspaceMissionCreate'];
 export type SchemaWorkspaceRead = components['schemas']['WorkspaceRead'];
 export type SchemaXyzSource = components['schemas']['XyzSource'];
+export type SchemaZoneCoverage = components['schemas']['ZoneCoverage'];
 export type $defs = Record<string, never>;
 export interface operations {
     outline_api_v1_agent_outline_post: {
@@ -13577,6 +13823,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeatureRequestRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    area_ground_api_v1_land__land_id__ground_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandGround"];
                 };
             };
             /** @description Missing or wrong write token */
@@ -19607,6 +19913,318 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_missions_api_v1_workspaces_missions_get: {
+        parameters: {
+            query?: {
+                landId?: string | null;
+                limit?: number;
+                projectId?: string | null;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_mission_api_v1_workspaces_missions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceMissionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_mission_api_v1_workspaces_missions__plan_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revise_mission_api_v1_workspaces_missions__plan_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanRevise"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_mission_status_api_v1_workspaces_missions__plan_id__status_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanStatusUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"];
+                };
             };
             /** @description Missing or wrong write token */
             401: {

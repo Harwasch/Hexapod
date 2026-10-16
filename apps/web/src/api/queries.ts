@@ -20,6 +20,7 @@ import type {
   JobCreate,
   JobRetry,
   JobStepLog,
+  LandGround,
   Layer,
   LayerCreate,
   OutlineRequest,
@@ -34,9 +35,15 @@ import type {
   SiteAsset,
   SiteCreate,
   SiteSummary,
+  WorkspaceMissionCreate,
 } from "@twin/contracts";
 
 import { env } from "@/app/env";
+import { landIdOfProject } from "@/missions/landGround";
+import { useLand } from "@/state/land";
+import { landUsesOidc, useLandAccessReady, useLandScope } from "@/state/landIdentity";
+import { useMission } from "@/state/mission";
+import { useSettings } from "@/state/settings";
 
 import { api, isOffline, unwrap } from "./client";
 import {
@@ -199,18 +206,29 @@ export function outlineGround(body: OutlineRequest): Promise<GroundOutline> {
   return unwrap<GroundOutline>(api.POST("/api/v1/agent/outline", { body }));
 }
 
-/** A project's persisted plans; `builtin` when the API is offline (the browser store then holds them). */
+const NO_PLANS: PlanRecord[] = [];
+const resolveNoPlans = (): Promise<PlanRecord[]> => Promise.resolve(NO_PLANS);
+
+/**
+ * A project's persisted plans; `builtin` when the API is offline (the browser store then holds
+ * them). A Land's own project (`land:<id>`) holds only private missions, which the public
+ * route can never carry, so it is not asked at all (and the land id stays out of its logs):
+ * the answer is a settled empty list, and `useWorkspacePlans` brings that project's plans.
+ */
 export function usePlans(projectId: string | null): CatalogResult<PlanRecord[]> {
+  const landScoped = landIdOfProject(projectId) !== null;
   const query = useQuery({
     queryKey: ["plans", projectId],
     queryFn: () =>
       unwrap<PlanRecord[]>(
         api.GET("/api/v1/plans", { params: { query: { projectId: projectId ?? "" } } }),
       ),
-    enabled: projectId !== null,
+    enabled: projectId !== null && !landScoped,
     staleTime: 15_000,
   });
-  return withFallback(query, () => []);
+  const result = withFallback(query, () => []);
+  if (!landScoped) return result;
+  return { data: NO_PLANS, builtin: false, isLoading: false, error: null, refetch: resolveNoPlans };
 }
 
 export const plansApi = {
@@ -231,6 +249,77 @@ export const plansApi = {
       api.DELETE("/api/v1/plans/{plan_id}", { params: { path: { plan_id: planId } } }),
     ),
 };
+
+/**
+ * The current workspace's missions for a project: plans on private ground (a saved Land),
+ * which the public `/plans` list never includes. Off when land exploration is off or the
+ * workspace is not ready; an error leaves the public list to stand alone. In pilot mode it
+ * asks only once land access is in use (a token entered, or a Land selected or engaged), so
+ * a visitor without the write token is never prompted for it by the plan list.
+ */
+export function useWorkspacePlans(projectId: string | null) {
+  const scope = useLandScope();
+  const ready = useLandAccessReady();
+  const hasToken = useSettings((s) => s.writeToken.trim() !== "");
+  const landSelected = useLand((s) => s.active !== null);
+  const landEngaged = useMission(
+    (s) => s.landGround !== null || landIdOfProject(s.project?.id) !== null,
+  );
+  return useQuery({
+    queryKey: ["workspace-plans", scope, projectId],
+    queryFn: () =>
+      unwrap<PlanRecord[]>(
+        api.GET("/api/v1/workspaces/missions", {
+          params: { query: { projectId: projectId ?? undefined } },
+        }),
+      ),
+    enabled:
+      env.landExplorationEnabled &&
+      ready &&
+      projectId !== null &&
+      (landUsesOidc || hasToken || landSelected || landEngaged),
+    retry: false,
+    staleTime: 15_000,
+  });
+}
+
+/** Writes to a workspace's missions: the private twin of `plansApi`. */
+export const workspaceMissionsApi = {
+  create: (body: WorkspaceMissionCreate) =>
+    unwrap<PlanRecord>(api.POST("/api/v1/workspaces/missions", { body })),
+  revise: (planId: string, body: PlanRecordRevise) =>
+    unwrap<PlanRecord>(
+      api.PUT("/api/v1/workspaces/missions/{plan_id}", {
+        params: { path: { plan_id: planId } },
+        body,
+      }),
+    ),
+  setStatus: (planId: string, status: PlanRecordStatus) =>
+    unwrap<PlanRecord>(
+      api.PATCH("/api/v1/workspaces/missions/{plan_id}/status", {
+        params: { path: { plan_id: planId } },
+        body: { status },
+      }),
+    ),
+};
+
+const groundInFlight = new Map<string, Promise<LandGround>>();
+
+/**
+ * A saved Land as mission ground (its boundary and inventory features as zones). Calls for
+ * the same land and boundary revision while one is in flight share it; a settled call is
+ * never reused, so a feature edited since is always fetched fresh.
+ */
+export function fetchLandGround(landId: string, revision: number): Promise<LandGround> {
+  const key = `${landId}@${revision}`;
+  const pending = groundInFlight.get(key);
+  if (pending) return pending;
+  const request = unwrap<LandGround>(
+    api.GET("/api/v1/land/{land_id}/ground", { params: { path: { land_id: landId } } }),
+  ).finally(() => groundInFlight.delete(key));
+  groundInFlight.set(key, request);
+  return request;
+}
 
 export function useIonStatus() {
   return useQuery({

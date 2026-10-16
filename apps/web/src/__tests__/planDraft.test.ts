@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import type { PlanDraft } from "@twin/contracts";
 
+import { anywhereProject } from "@/missions/anywhere";
+import { viewAreaZone } from "@/missions/areas";
 import { demoRanchProject } from "@/missions/demo";
+import { landProject } from "@/missions/landGround";
 import {
   buildDraftRequest,
   describeDraft,
   diffDrafts,
+  formatMachineHours,
   idLabel,
   overlayFor,
   planFromDraft,
@@ -15,8 +19,11 @@ import {
   recordBodyFromDraft,
   scheduleLanes,
   tickStep,
+  zonesFromRecord,
 } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
+
+import { ground, land, LAND_ID } from "./landGroundFixture";
 
 const project = demoRanchProject();
 
@@ -207,6 +214,10 @@ describe("plan drafting", () => {
       ],
       createdAt: "2026-09-17T00:00:00Z",
       updatedAt: "2026-09-18T00:00:00Z",
+      landId: null,
+      boundaryRevision: null,
+      private: false,
+      landActionId: null,
       areas: body.areas ?? [],
       zoneIds: body.zoneIds ?? [],
       machineIds: body.machineIds ?? [],
@@ -249,6 +260,104 @@ describe("plan drafting", () => {
     expect(ids).toContain("thistle");
     store.removePlan("plan-local");
     store.setRemotePlans(project.id, []);
+  });
+});
+
+describe("plans on a saved land", () => {
+  const onLand = landProject(land, ground);
+  const fenceDraft: PlanDraft = {
+    ...draft,
+    title: "Weekly fence check",
+    zoneIds: ["L-aaaa0001"],
+    machineIds: [],
+    cadence: "weekly",
+    endDate: null,
+    estimates: { acres: 0, machineHours: 0.03, calendarDays: 2, pathM: 1000 },
+  };
+
+  it("sends outlines for drawn and land zones (a fence as its line), never for simulated ones", () => {
+    const request = buildDraftRequest(onLand, { goal: "monitor the fence" });
+    const byId = new Map(request.zones?.map((z) => [z.id, z]));
+    expect(byId.get("L-aaaa0001")?.geometry?.type).toBe("LineString");
+    expect(byId.get("L-0f1e2d3c")?.geometry?.type).toBe("Polygon");
+    const anywhere = anywhereProject();
+    const area = viewAreaZone("A-01", "View area 01", {
+      center: { longitude: -120, latitude: 34.7 },
+      metersPerPixel: 1,
+      width: 800,
+      height: 600,
+      fraction: 0.5,
+      dx: 0,
+      dy: 0,
+    });
+    const drawn = buildDraftRequest({ ...anywhere, zones: [area] }, { goal: "mow it" });
+    expect(drawn.zones?.[0]?.geometry?.type).toBe("Polygon");
+    const demo = buildDraftRequest(project, { goal: "mow" });
+    expect(demo.zones?.every((z) => z.geometry === undefined)).toBe(true);
+  });
+
+  it("stores land zones with their provenance and reads them back private", () => {
+    const body = recordBodyFromDraft(fenceDraft, "monitor", onLand.id, null, onLand.zones);
+    expect(body.areas).toEqual([
+      {
+        id: "L-aaaa0001",
+        name: "North fence",
+        footprint: onLand.zones[1]!.footprint,
+        attribution: "Inventory · confirmed · revision 3 · Walked with a GPS",
+      },
+    ]);
+    const record = {
+      ...body,
+      id: "rec-1",
+      status: "scheduled" as const,
+      revision: 1,
+      revisions: [],
+      createdAt: "",
+      updatedAt: "",
+      areas: body.areas ?? [],
+      zoneIds: body.zoneIds ?? [],
+      machineIds: body.machineIds ?? [],
+      steps: body.steps ?? [],
+      assumptions: body.assumptions ?? [],
+      risks: body.risks ?? [],
+      questions: body.questions ?? [],
+      cadence: body.cadence ?? ("once" as const),
+      source: body.source ?? ("rules" as const),
+      model: body.model ?? null,
+      endDate: body.endDate ?? null,
+      siteId: null,
+      landId: LAND_ID,
+      boundaryRevision: 2,
+      private: true,
+      landActionId: null,
+    };
+    const [zone] = zonesFromRecord(record);
+    expect(zone?.attribution).toBe("Inventory · confirmed · revision 3 · Walked with a GPS");
+    expect(zone?.private).toBe(true);
+    const plan = planFromRecord(record, onLand);
+    expect(plan.scope).toBe("workspace");
+    expect(plan.landId).toBe(LAND_ID);
+    expect(plan.agentNote).toContain("Rule-based draft approved by you");
+    // A line has a path, not acres; a short run reads in minutes.
+    expect(plan.stats[0]).toEqual({ value: "1.0 km", label: "Path" });
+    expect(plan.stats[2]?.value).toBe("2 min");
+    expect(plan.meta).toBe("Weekly · North fence · 1.0 km");
+    const scheduled = planFromRecord({ ...record, landActionId: "action-1" }, onLand);
+    expect(scheduled.landActionId).toBe("action-1");
+    expect(scheduled.agentNote).toContain("land action");
+    expect(scheduled.agentNote).not.toContain("Rule-based draft approved by you");
+    expect(scheduled.stats[2]?.value).toBe("Not estimated");
+    expect(planFromRecord({ ...record, private: false }, onLand).scope).toBe("public");
+  });
+
+  it("names land zones without their opaque ids", () => {
+    expect(idLabel("L-aaaa0001", "North fence")).toBe("North fence");
+    expect(idLabel("LA-1234abcd", "Approved work area")).toBe("Approved work area");
+    expect(idLabel("Z-14", "West bench")).toBe("Z-14 West bench");
+    expect(formatMachineHours(0)).toBe("0 h");
+    expect(formatMachineHours(0.004)).toBe("1 min");
+    expect(formatMachineHours(12.4)).toBe("12 h");
+    expect(describeDraft(fenceDraft)).toContain("1.0 km path");
   });
 });
 

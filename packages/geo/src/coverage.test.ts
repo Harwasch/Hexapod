@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import fixtures from "../fixtures/coverage_cases.json";
 import { destination, haversineDistance } from "./coordinates";
 import { coveragePath, preferredHeadingDeg } from "./coverage";
 
@@ -75,5 +76,45 @@ describe("coveragePath", () => {
       ).positions,
     ).toEqual([]);
     expect(coveragePath(rect, { swathM: 0 }).passes).toBe(0);
+  });
+});
+
+interface CoverageCase {
+  name: string;
+  geometry: { type: string; coordinates: unknown };
+  spacingM: number;
+  headingDeg?: number;
+  maxPasses?: number;
+  expect: {
+    headingDeg?: number;
+    passes?: number;
+    spacingM?: number;
+    lengthMin?: number;
+    lengthMax?: number;
+    lengthM?: number;
+    lengthTolM?: number;
+    pythonOnly?: boolean;
+  };
+}
+
+// The same cases hold the API's planner (apps/api/tests/test_coverage.py, a shapely port that
+// also handles holes and MultiPolygons) to the preview's numbers.
+describe("shared coverage fixtures", () => {
+  const cases = (fixtures as { cases: CoverageCase[] }).cases.filter((c) => !c.expect.pythonOnly);
+  it.each(cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    const ring = (c.geometry.coordinates as number[][][])[0] ?? [];
+    const path = coveragePath(ring, {
+      swathM: c.spacingM,
+      ...(c.headingDeg !== undefined ? { headingDeg: c.headingDeg } : {}),
+      ...(c.maxPasses !== undefined ? { maxPasses: c.maxPasses } : {}),
+    });
+    const e = c.expect;
+    if (e.headingDeg !== undefined) expect(path.headingDeg).toBe(e.headingDeg);
+    if (e.passes !== undefined) expect(path.passes).toBe(e.passes);
+    if (e.spacingM !== undefined) expect(path.swathM).toBeCloseTo(e.spacingM, 1);
+    if (e.lengthMin !== undefined) expect(path.workingLengthM).toBeGreaterThan(e.lengthMin);
+    if (e.lengthMax !== undefined) expect(path.workingLengthM).toBeLessThan(e.lengthMax);
+    if (e.lengthM !== undefined)
+      expect(Math.abs(path.workingLengthM - e.lengthM)).toBeLessThan(e.lengthTolM ?? 1);
   });
 });

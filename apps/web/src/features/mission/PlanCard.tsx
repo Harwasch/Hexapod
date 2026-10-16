@@ -1,4 +1,4 @@
-import { ArrowLeft, Crosshair, PenLine, Scan } from "lucide-react";
+import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
@@ -10,7 +10,9 @@ import { areaFromMeasurement, isAreaZone, nextAreaId } from "@/missions/areas";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
 import { DEMO_EXAMPLES } from "@/missions/demo";
 import { DEMO_RANCH_PROJECT_ID } from "@/missions/demoRanchData";
-import { diffDrafts, idLabel, overlayFor } from "@/missions/planDraft";
+import { isLandZone } from "@/missions/landGround";
+import { machineClassSummary } from "@/missions/machineClasses";
+import { diffDrafts, formatMachineHours, idLabel, overlayFor } from "@/missions/planDraft";
 import type { Project, Zone } from "@/missions/types";
 import { useMeasurements } from "@/state/measurements";
 import { useMission } from "@/state/mission";
@@ -105,19 +107,24 @@ export function PlanCard({ project }: { project: Project }) {
   };
 
   // The ground's corners are on the map for as long as the card is open; a dropped corner
-  // redrafts the plan for the new outline.
-  const groundId = composer?.zoneIds.find((id) => isAreaZone({ id })) ?? null;
-  const groundZone = project.zones.find((z) => z.id === groundId) ?? null;
+  // redrafts the plan for the new outline. A saved Land's zones are records, not sketches:
+  // they are edited in Land, so they get no corners here.
+  const groundZone =
+    project.zones.find(
+      (z) => composer?.zoneIds.includes(z.id) && (isAreaZone(z) || isLandZone(z)),
+    ) ?? null;
+  const groundId = groundZone?.id ?? null;
+  const onLand = groundZone !== null && isLandZone(groundZone);
   const groundFootprint = groundZone?.footprint;
   useEffect(() => {
     if (!scene) return;
-    if (!groundId || !groundFootprint) {
+    if (!groundId || !groundFootprint || onLand) {
       scene.areas.edit(null);
       return;
     }
     if (scene.areas.editing === groundId) scene.areas.update(groundFootprint);
     else scene.areas.edit(groundId, groundFootprint);
-  }, [scene, groundId, groundFootprint]);
+  }, [scene, groundId, groundFootprint, onLand]);
   useEffect(() => {
     if (!scene) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -243,7 +250,16 @@ export function PlanCard({ project }: { project: Project }) {
             <p className="mc-muted">Map data first, then the imagery if nothing is mapped.</p>
           </div>
         )}
-        {groundZone && status !== "awaiting-ground" && (
+        {groundZone && onLand && status !== "awaiting-ground" && (
+          <LandGroundSection
+            zone={groundZone}
+            count={composer.zoneIds.length}
+            note={composer.ground?.note ?? null}
+            onPickAgain={pickAgain}
+            disabled={!scene || status === "drafting"}
+          />
+        )}
+        {groundZone && !onLand && status !== "awaiting-ground" && (
           <section className="mc-ground" data-testid="plan-ground">
             <span className="mc-eyebrow">GROUND</span>
             <div className="mc-ground__row">
@@ -304,6 +320,116 @@ export function PlanCard({ project }: { project: Project }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** How far a path runs, in the units the planner reports. */
+function distance(metres: number): string {
+  return metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.round(metres)} m`;
+}
+
+/**
+ * The ground when it is a saved Land's: what it is and where it came from. It is changed in
+ * Land (the outline, the inventory), so the card offers to go there rather than drag corners.
+ */
+function LandGroundSection({
+  zone,
+  count,
+  note,
+  onPickAgain,
+  disabled,
+}: {
+  zone: Zone;
+  count: number;
+  note: string | null;
+  onPickAgain: () => void;
+  disabled: boolean;
+}) {
+  const land = zone.land;
+  const size =
+    land?.line && land.lengthM
+      ? `${distance(land.lengthM)} line`
+      : `${zone.acres.toLocaleString()} ac`;
+  return (
+    <section className="mc-ground" data-testid="plan-ground" data-ground="land">
+      <span className="mc-eyebrow">GROUND · YOUR SAVED LAND</span>
+      <div className="mc-ground__row">
+        <span className="mc-ground__name">
+          <span className={`mc-dot mc-dot--${zone.tone}`} aria-hidden="true" />
+          {zone.name}
+          <span className="mc-muted">
+            {" "}
+            · {size}
+            {count > 1 ? ` · and ${count - 1} more` : ""}
+          </span>
+        </span>
+        <span className="mc-row" style={{ gap: "0.3rem" }}>
+          <button
+            type="button"
+            className="mc-btn mc-btn--sm"
+            onClick={onPickAgain}
+            disabled={disabled}
+            data-testid="ground-pick-again"
+          >
+            <Crosshair size={12} aria-hidden="true" /> Pick again
+          </button>
+          <button
+            type="button"
+            className="mc-btn mc-btn--sm"
+            onClick={() => useUi.getState().setPanel("land")}
+            data-testid="ground-open-land"
+          >
+            <LandPlot size={12} aria-hidden="true" /> Open in Land
+          </button>
+        </span>
+      </div>
+      <p className="mc-muted mc-ground__note">{note ?? zone.note}</p>
+      {note && zone.attribution && note !== zone.attribution && (
+        <p className="mc-muted mc-ground__note">{zone.attribution}</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * How the hours were sized from the outlines: per zone, the path, its passes and spacing, and
+ * the hours, with the assumed machine class it rests on (`missions/machineClasses.ts`, the
+ * same table the planner used).
+ */
+function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
+  const coverage = draft.coverage ?? [];
+  if (coverage.length === 0) return null;
+  const classes = [...new Set(coverage.map((c) => c.machineClass))];
+  // The heights the planner flew each drone zone at, so the note states the same assumption
+  // the rows' spacing came from.
+  const altitudes = coverage.flatMap((c) =>
+    c.machineClass === "drone" && c.altitudeM != null ? [c.altitudeM] : [],
+  );
+  return (
+    <section data-testid="plan-path">
+      <span className="mc-eyebrow">PATH</span>
+      <ul className="mc-list mc-list--plain mc-path">
+        {coverage.map((c) => {
+          const zone = project.zones.find((z) => z.id === c.zoneId);
+          const shape =
+            c.kind === "line"
+              ? `${distance(c.lengthM)} along the line`
+              : `${distance(c.lengthM)} · ${c.passes.toLocaleString()} passes${c.spacingM ? ` ${Math.round(c.spacingM)} m apart${c.capped ? " (widened)" : ""}` : ""}`;
+          return (
+            <li key={c.zoneId} title={c.basis}>
+              <span className="mc-path__zone">{zone ? idLabel(zone.id, zone.name) : c.zoneId}</span>
+              <span className="mc-mono">
+                {shape} · {formatMachineHours(c.hours)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mc-muted mc-path__note">
+        Computed from the outline; speeds assumed.{" "}
+        {classes.map((id) => machineClassSummary(id, id === "drone" ? altitudes : [])).join(". ")}.
+      </p>
+    </section>
   );
 }
 
@@ -490,12 +616,19 @@ function DraftReview({
         }}
       />
       <div className="mc-stats mc-stats--tight">
+        {draft.estimates.acres < 0.5 && (draft.estimates.pathM ?? 0) > 0 ? (
+          <div className="mc-stat">
+            <div className="mc-stat__value">{((draft.estimates.pathM ?? 0) / 1000).toFixed(1)}</div>
+            <div className="mc-stat__label">Path km</div>
+          </div>
+        ) : (
+          <div className="mc-stat">
+            <div className="mc-stat__value">{Math.round(draft.estimates.acres)}</div>
+            <div className="mc-stat__label">Acres</div>
+          </div>
+        )}
         <div className="mc-stat">
-          <div className="mc-stat__value">{Math.round(draft.estimates.acres)}</div>
-          <div className="mc-stat__label">Acres</div>
-        </div>
-        <div className="mc-stat">
-          <div className="mc-stat__value">{Math.round(draft.estimates.machineHours)} h</div>
+          <div className="mc-stat__value">{formatMachineHours(draft.estimates.machineHours)}</div>
           <div className="mc-stat__label">Machine-hours</div>
         </div>
         <div className="mc-stat">
@@ -512,6 +645,7 @@ function DraftReview({
           {draft.endDate ? ` → ${draft.endDate}` : " → ongoing"}
         </span>
       </div>
+      <PathList draft={draft} project={project} />
       <Assumptions
         items={assumed(draft.clarifications ?? [], composer?.asked ?? {}, composer?.answers ?? {})}
         answers={composer?.answers ?? {}}
@@ -538,7 +672,12 @@ function DraftReview({
       {(draft.steps ?? []).length > 0 && (
         <section>
           <span className="mc-eyebrow">SCHEDULE</span>
-          <PlanSchedule steps={draft.steps ?? []} startDate={draft.startDate} colorFor={colorFor} />
+          <PlanSchedule
+            steps={draft.steps ?? []}
+            startDate={draft.startDate}
+            colorFor={colorFor}
+            zoneLabel={(id) => zoneName(id) ?? id}
+          />
         </section>
       )}
       <section>

@@ -20,6 +20,7 @@ from app.schemas.land import (
     LandRead,
     LandRevise,
 )
+from app.schemas.land_ground import LandGround
 from app.schemas.land_import import BoundaryImportRead
 from app.schemas.land_selection import (
     CandidateRequest,
@@ -27,7 +28,7 @@ from app.schemas.land_selection import (
     SelectionInstruction,
     SelectionInterpretation,
 )
-from app.services import land, land_import, land_selection
+from app.services import land, land_ground, land_import, land_selection
 
 router = APIRouter(prefix="/land", tags=["land"])
 
@@ -88,6 +89,12 @@ def area_revisions(
     land_id: uuid.UUID, db: DbSession, workspace: WorkspaceDep
 ) -> list[BoundaryRevisionRead]:
     return land.revisions(db, workspace.id, land_id)
+
+
+@router.get("/{land_id}/ground", response_model=LandGround)
+def area_ground(land_id: uuid.UUID, db: DbSession, workspace: WorkspaceDep) -> LandGround:
+    """The land as mission ground: its boundary and inventory features as plannable zones."""
+    return land_ground.ground(db, workspace.id, land_id)
 
 
 @router.delete("/{land_id}", status_code=204)

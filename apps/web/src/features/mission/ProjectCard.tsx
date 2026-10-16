@@ -22,6 +22,8 @@ import { useRenameSite, useSites as useSiteCatalog } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
 import { describeError } from "@/lib/log";
+import { landIdOfProject } from "@/missions/landGround";
+import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -50,14 +52,18 @@ export function ProjectCard() {
   const units = useSettings((s) => s.units);
   // A project is named after its site (`siteNames.ts`), so this is the site's one name.
   const title = project?.name ?? "Land Ops";
-  // The area is the catalog's, formatted as the switcher's row formats it: one number for the
-  // place, in the user's units, wherever it is shown.
+  // One number for the place, in the user's units, wherever it is shown: the catalog site's
+  // area (formatted as the switcher's row formats it), or a saved Land's own area for its
+  // project, which carries no numbers of its own.
   const summary = project?.siteId
     ? catalog.data?.find((site) => site.id === project.siteId)
     : undefined;
+  const land = useLand((s) => s.active);
+  const landAreaM2 = landIdOfProject(project?.id) === land?.id ? land?.areaM2 : undefined;
+  const areaM2 = summary?.areaM2 ?? landAreaM2;
   const meta = project
     ? [
-        summary ? formatArea(summary.areaM2, units) : null,
+        areaM2 === undefined ? null : formatArea(areaM2, units),
         project.meta,
         project.simulated ? "simulated fleet" : null,
       ]

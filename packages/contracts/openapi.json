@@ -8455,6 +8455,181 @@
         "title": "LandFeatureRevisionRead",
         "type": "object"
       },
+      "LandGround": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LandGroundItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "landId",
+          "name",
+          "boundaryRevision",
+          "items",
+          "skipped"
+        ],
+        "title": "LandGround",
+        "type": "object"
+      },
+      "LandGroundItem": {
+        "additionalProperties": false,
+        "description": "One plannable piece of a Land. Read model: every field explicit.",
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "bufferM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bufferm"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "featureId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Featureid"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "kind": {
+            "enum": [
+              "boundary",
+              "feature"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "lengthM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lengthm"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineString"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "maxLength": 300,
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "zoneId": {
+            "maxLength": 40,
+            "title": "Zoneid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zoneId",
+          "kind",
+          "featureId",
+          "revision",
+          "name",
+          "category",
+          "status",
+          "footprint",
+          "line",
+          "areaM2",
+          "lengthM",
+          "bufferM",
+          "source"
+        ],
+        "title": "LandGroundItem",
+        "type": "object"
+      },
       "LandRasterRead": {
         "additionalProperties": false,
         "properties": {
@@ -10998,8 +11173,20 @@
       },
       "PlanArea": {
         "additionalProperties": false,
-        "description": "A zone drawn in the console for this plan (the fleet backend owns the other zones).",
+        "description": "Ground the console found for this plan: an area drawn or outlined there, a saved\nLand's boundary or feature (the fleet backend owns the other zones).",
         "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution"
+          },
           "footprint": {
             "discriminator": {
               "mapping": {
@@ -11221,6 +11408,13 @@
             "title": "Clarifications",
             "type": "array"
           },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/ZoneCoverage"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
           "endDate": {
             "anyOf": [
               {
@@ -11357,6 +11551,14 @@
               "$ref": "#/components/schemas/Clarification"
             },
             "title": "Clarifications",
+            "type": "array"
+          },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/ZoneCoverage"
+            },
+            "maxItems": 500,
+            "title": "Coverage",
             "type": "array"
           },
           "endDate": {
@@ -11585,6 +11787,18 @@
             "minimum": 0.0,
             "title": "Machinehours",
             "type": "number"
+          },
+          "pathM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pathm"
           }
         },
         "required": [
@@ -11612,6 +11826,17 @@
             },
             "title": "Assumptions",
             "type": "array"
+          },
+          "boundaryRevision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundaryrevision"
           },
           "cadence": {
             "enum": [
@@ -11653,6 +11878,30 @@
             "title": "Id",
             "type": "string"
           },
+          "landActionId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landactionid"
+          },
+          "landId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landid"
+          },
           "machineIds": {
             "items": {
               "type": "string"
@@ -11674,6 +11923,10 @@
           "objective": {
             "title": "Objective",
             "type": "string"
+          },
+          "private": {
+            "title": "Private",
+            "type": "boolean"
           },
           "projectId": {
             "title": "Projectid",
@@ -11787,6 +12040,10 @@
           "model",
           "revision",
           "revisions",
+          "landId",
+          "boundaryRevision",
+          "private",
+          "landActionId",
           "createdAt",
           "updatedAt"
         ],
@@ -12237,6 +12494,39 @@
             "minimum": 0.0,
             "title": "Acres",
             "type": "number"
+          },
+          "geometry": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "LineString": "#/components/schemas/LineString",
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Point": "#/components/schemas/Point",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Point"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LineString"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geometry"
           },
           "id": {
             "maxLength": 40,
@@ -18445,6 +18735,184 @@
         "title": "WorkspaceCreate",
         "type": "object"
       },
+      "WorkspaceMissionCreate": {
+        "additionalProperties": false,
+        "description": "A plan approved inside a workspace: private, and optionally on one of its saved Lands.",
+        "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/PlanArea"
+            },
+            "maxItems": 50,
+            "title": "Areas",
+            "type": "array"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "boundaryRevision": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundaryrevision"
+          },
+          "cadence": {
+            "default": "once",
+            "enum": [
+              "once",
+              "daily",
+              "weekly",
+              "monthly",
+              "seasonal"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "endDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enddate"
+          },
+          "estimates": {
+            "$ref": "#/components/schemas/PlanEstimates"
+          },
+          "goal": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "landId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landid"
+          },
+          "machineIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Machineids",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "objective": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Objective",
+            "type": "string"
+          },
+          "projectId": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Projectid",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "risks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risks",
+            "type": "array"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "source": {
+            "default": "rules",
+            "enum": [
+              "claude",
+              "rules"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "startDate": {
+            "format": "date",
+            "title": "Startdate",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "zoneIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Zoneids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "objective",
+          "goal",
+          "startDate",
+          "estimates",
+          "projectId"
+        ],
+        "title": "WorkspaceMissionCreate",
+        "type": "object"
+      },
       "WorkspaceRead": {
         "additionalProperties": false,
         "properties": {
@@ -18538,6 +19006,132 @@
           "urlTemplate"
         ],
         "title": "XyzSource",
+        "type": "object"
+      },
+      "ZoneCoverage": {
+        "additionalProperties": false,
+        "description": "How one zone's work was sized from its outline: the path, the assumed machine class\n(`app/services/machine_classes.json`) and the hours that follow. `basis` is the sentence\nthe console shows beside the number.",
+        "properties": {
+          "altitudeM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Altitudem"
+          },
+          "areaM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aream2"
+          },
+          "basis": {
+            "maxLength": 600,
+            "title": "Basis",
+            "type": "string"
+          },
+          "capped": {
+            "title": "Capped",
+            "type": "boolean"
+          },
+          "hours": {
+            "minimum": 0.0,
+            "title": "Hours",
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "area",
+              "line"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "lengthM": {
+            "minimum": 0.0,
+            "title": "Lengthm",
+            "type": "number"
+          },
+          "machineClass": {
+            "enum": [
+              "mower",
+              "seeder",
+              "survey",
+              "drone"
+            ],
+            "title": "Machineclass",
+            "type": "string"
+          },
+          "passes": {
+            "minimum": 0.0,
+            "title": "Passes",
+            "type": "integer"
+          },
+          "spacingM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spacingm"
+          },
+          "spans": {
+            "minimum": 0.0,
+            "title": "Spans",
+            "type": "integer"
+          },
+          "speedMps": {
+            "exclusiveMinimum": 0.0,
+            "title": "Speedmps",
+            "type": "number"
+          },
+          "transitM": {
+            "minimum": 0.0,
+            "title": "Transitm",
+            "type": "number"
+          },
+          "turnS": {
+            "minimum": 0.0,
+            "title": "Turns",
+            "type": "number"
+          },
+          "zoneId": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Zoneid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zoneId",
+          "kind",
+          "machineClass",
+          "areaM2",
+          "lengthM",
+          "transitM",
+          "passes",
+          "spans",
+          "spacingM",
+          "speedMps",
+          "turnS",
+          "hours",
+          "capped",
+          "basis"
+        ],
+        "title": "ZoneCoverage",
         "type": "object"
       }
     },
@@ -27129,6 +27723,102 @@
         ]
       }
     },
+    "/api/v1/land/{land_id}/ground": {
+      "get": {
+        "description": "The land as mission ground: its boundary and inventory features as plannable zones.",
+        "operationId": "area_ground_api_v1_land__land_id__ground_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandGround"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Area Ground",
+        "tags": [
+          "land"
+        ]
+      }
+    },
     "/api/v1/land/{land_id}/investigations": {
       "get": {
         "operationId": "list_investigations_api_v1_land__land_id__investigations_get",
@@ -35302,6 +35992,538 @@
         "summary": "Remove Member",
         "tags": [
           "workspaces"
+        ]
+      }
+    },
+    "/api/v1/workspaces/missions": {
+      "get": {
+        "operationId": "list_missions_api_v1_workspaces_missions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "projectId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Projectid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "landId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Landid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlanRead"
+                  },
+                  "title": "Response List Missions Api V1 Workspaces Missions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "List the workspace's missions",
+        "tags": [
+          "workspace missions"
+        ]
+      },
+      "post": {
+        "operationId": "create_mission_api_v1_workspaces_missions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMissionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Approve a mission in the workspace",
+        "tags": [
+          "workspace missions"
+        ]
+      }
+    },
+    "/api/v1/workspaces/missions/{plan_id}": {
+      "get": {
+        "operationId": "get_mission_api_v1_workspaces_missions__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get a workspace mission",
+        "tags": [
+          "workspace missions"
+        ]
+      },
+      "put": {
+        "operationId": "revise_mission_api_v1_workspaces_missions__plan_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRevise"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Approve a new mission revision",
+        "tags": [
+          "workspace missions"
+        ]
+      }
+    },
+    "/api/v1/workspaces/missions/{plan_id}/status": {
+      "patch": {
+        "operationId": "set_mission_status_api_v1_workspaces_missions__plan_id__status_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanStatusUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Change a mission's lifecycle state",
+        "tags": [
+          "workspace missions"
         ]
       }
     },

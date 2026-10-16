@@ -82,11 +82,19 @@ def test_action_review_immutable_history_and_private_mission_handoff(
     approved = client.post(identifier + "/approve", json=review)
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "approved" and approved.json()["approvedBy"]
+    elsewhere = {**review, "projectId": f"land:{uuid.uuid4()}"}
+    assert client.post(identifier + "/mission", json=elsewhere).status_code == 422
     response = client.post(identifier + "/mission", json={**review, "projectId": "demo"})
     assert response.status_code == 201, response.text
     mission = response.json()
     assert mission["status"] == "scheduled" and mission["endDate"] == "2026-10-14"
     assert mission["areas"][0]["footprint"] == approved.json()["effectiveBoundary"]
+    # The mission hangs off the land and the outline it was approved on, with area ids that
+    # cannot collide with another action's.
+    assert mission["landId"] == land["id"] and mission["boundaryRevision"] == 1
+    assert mission["private"] is True and mission["landActionId"] == action["id"]
+    assert all(zone.startswith("LA-") for zone in mission["zoneIds"])
+    assert mission["areas"][0]["attribution"].startswith("Approved land action revision 2")
     assert (
         client.post(identifier + "/mission", json={**review, "projectId": "demo"}).json()["id"]
         == mission["id"]

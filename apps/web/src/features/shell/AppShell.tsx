@@ -8,6 +8,7 @@ import { LandRasterBridge } from "@/cesium/LandRasterBridge";
 import { LandContextBridge } from "@/cesium/LandContextBridge";
 import { LandBridge } from "@/cesium/LandBridge";
 import { LandIdentityBridge } from "../land/WorkspaceIdentity";
+import { LandMissionBridge } from "../land/LandMissionBridge";
 import { LandPanel } from "../land/LandPanel";
 import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
@@ -164,6 +165,7 @@ export function AppShell() {
           <LandBridge />
           <LandContextBridge />
           <LandRasterBridge />
+          <LandMissionBridge />
         </>
       )}
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">

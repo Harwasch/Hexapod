@@ -178,3 +178,10 @@ export type ResearchWorkerStatus = Schemas["ResearchWorkerStatus"];
 export type ResearchQueueStatus = Schemas["ResearchQueueStatus"];
 export type PlaceFact = Schemas["PlaceFact"];
 export type PlaceFactKind = PlaceFact["kind"];
+/** Land as mission ground (stream loop): a saved Land's zones, outline-sized estimates, and
+ * plans held in a workspace. */
+export type LandGround = Schemas["LandGround"];
+export type LandGroundItem = Schemas["LandGroundItem"];
+export type ZoneCoverage = Schemas["ZoneCoverage"];
+export type MachineClassId = ZoneCoverage["machineClass"];
+export type WorkspaceMissionCreate = Schemas["WorkspaceMissionCreate"];

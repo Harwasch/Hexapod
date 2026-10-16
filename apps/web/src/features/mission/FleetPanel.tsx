@@ -2,6 +2,8 @@ import { AnimatePresence, motion } from "motion/react";
 
 import { GlassPanel } from "@twin/ui";
 
+import { isActivePlan } from "@/missions/conflicts";
+import { idLabel } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
@@ -29,6 +31,9 @@ export function FleetPanel() {
   const { selectMachine } = useMissionActions();
   const open = view === "fleet";
   const totalAcres = project?.workLog.reduce((sum, row) => sum + (row.acres ?? 0), 0) ?? 0;
+  // What the fleet has on its books, including missions Land actions scheduled.
+  const scheduled = project?.plans.filter(isActivePlan) ?? [];
+  const openPlan = useMission((s) => s.openPlan);
   return (
     <AnimatePresence>
       {open && (
@@ -115,6 +120,44 @@ export function FleetPanel() {
                     </div>
                   ))}
                 </div>
+                {scheduled.length > 0 && (
+                  <section className="mc-scheduled" data-testid="fleet-scheduled">
+                    <span className="mc-eyebrow">SCHEDULED</span>
+                    <ul className="mc-scheduled__list">
+                      {scheduled.map((plan) => (
+                        <li key={plan.id}>
+                          <button
+                            type="button"
+                            className="mc-scheduled__row"
+                            onClick={() => openPlan(plan.id)}
+                            data-testid={`fleet-scheduled-${plan.id}`}
+                          >
+                            <span
+                              className={`mc-dot mc-dot--glow mc-dot--${plan.status}`}
+                              aria-hidden="true"
+                            />
+                            <span className="mc-scheduled__title">{plan.title}</span>
+                            {plan.landId && <span className="mc-flag">Land</span>}
+                            <span className={`mc-scheduled__state mc-tone--${plan.status}`}>
+                              {plan.state}
+                            </span>
+                            <span className="mc-scheduled__meta mc-muted">
+                              {plan.span} ·{" "}
+                              {plan.machineIds?.length
+                                ? plan.machineIds
+                                    .map((id) => {
+                                      const machine = project.machines.find((m) => m.id === id);
+                                      return machine ? idLabel(machine.id, machine.name) : id;
+                                    })
+                                    .join(", ")
+                                : "unassigned"}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
                 <div className="mc-window__body mc-table-wrap">
                   <div className="mc-table mc-table--fleet" role="table" aria-label="Machines">
                     <div className="mc-table__head" role="row">

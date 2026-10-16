@@ -502,6 +502,7 @@ function retryJob(job: Record<string, unknown>, poll: number, fromStage: string 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<CaptureMockState> {
   // Plans approved during a test live here so list, revise and status round-trip.
   const mockPlans: Record<string, unknown>[] = [];
+  const mockMissions: (Record<string, unknown> & { projectId?: unknown })[] = [];
   const partSize = options.partSize ?? 4;
   const windowParts = options.windowParts ?? 2;
   const state: CaptureMockState = {
@@ -924,6 +925,10 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
         ...body,
         id: `plan-${mockPlans.length + 1}`,
         status: "scheduled",
+        landId: null,
+        boundaryRevision: null,
+        private: false,
+        landActionId: null,
         revision: 1,
         revisions: [
           {
@@ -940,6 +945,44 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
         updatedAt: now,
       };
       mockPlans.push(record);
+      return json(record, 201);
+    }
+    // A workspace's private missions (plans on a saved Land): none until one is approved.
+    if (path === "/api/v1/workspaces/missions" && request.method() === "GET") {
+      const projectId = new URL(request.url()).searchParams.get("projectId");
+      return json(mockMissions.filter((m) => !projectId || m.projectId === projectId));
+    }
+    if (path === "/api/v1/workspaces/missions" && request.method() === "POST") {
+      const body = request.postDataJSON() as Record<string, unknown> & {
+        landId?: string | null;
+        boundaryRevision?: number | null;
+      };
+      const now = new Date().toISOString();
+      const record = {
+        ...body,
+        id: `mission-${mockMissions.length + 1}`,
+        siteId: body.siteId ?? null,
+        status: "scheduled",
+        landId: body.landId ?? null,
+        boundaryRevision: body.boundaryRevision ?? null,
+        private: true,
+        landActionId: null,
+        revision: 1,
+        revisions: [
+          {
+            revision: 1,
+            note: "Approved",
+            createdAt: now,
+            title: body.title,
+            machineIds: body.machineIds,
+            zoneIds: body.zoneIds,
+            estimates: body.estimates,
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      };
+      mockMissions.push(record);
       return json(record, 201);
     }
     const planMatch = /^\/api\/v1\/plans\/([^/]+)(\/status)?$/.exec(path);
