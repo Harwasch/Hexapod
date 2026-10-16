@@ -317,4 +317,25 @@ describe("into the Land tool", () => {
     expect(useLand.getState().mode).toBe("browse");
     expect(useUi.getState().activePanel).toBe("land");
   });
+
+  it("returns to an outline still being drawn, keeping its points", async () => {
+    serve({ lands: [AROUND] });
+    const points: [number, number][] = [
+      [-120.73, 35.52],
+      [-120.71, 35.52],
+    ];
+    act(() => {
+      useLand.getState().begin("draw");
+      for (const point of points) useLand.getState().addPoint(point);
+    });
+    inspect();
+    mount();
+    // Inside a saved land, but "Research Oak Bench" would select it and drop the sketch.
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Return to your unsaved outline" }),
+    );
+    expect(screen.queryByRole("button", { name: "Research Oak Bench" })).toBeNull();
+    expect(useLand.getState()).toMatchObject({ mode: "draw", points, active: null });
+    expect(useUi.getState().activePanel).toBe("land");
+  });
 });

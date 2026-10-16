@@ -26,6 +26,15 @@ import { useMission } from "@/state/mission";
 import { useSceneSelect } from "@/state/sceneSelect";
 import { useUi, type MapMenuAt } from "@/state/ui";
 
+// The workspace role and readiness, as the identity hooks report them (the real ones always
+// say yes without OIDC configured, as in tests).
+const identity = vi.hoisted(() => ({ ready: true, canEdit: true }));
+vi.mock("@/state/landIdentity", async (original) => ({
+  ...(await original<object>()),
+  useLandAccessReady: () => identity.ready,
+  useLandCanEdit: () => identity.canEdit,
+}));
+
 const AT: MapMenuAt = { x: 200, y: 150, longitude: -122.1385, latitude: 47.645, height: 41.5 };
 const SAVED: LandArea = {
   id: "land-1",
@@ -73,6 +82,8 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => sceneRegistry.set(null));
+  identity.ready = true;
+  identity.canEdit = true;
 });
 
 function open(at: MapMenuAt = AT): void {
@@ -176,6 +187,60 @@ describe("MapContextMenu", () => {
         mode: "candidates",
         points: [[AT.longitude, AT.latitude]],
         active: null,
+      });
+    } finally {
+      env.landExplorationEnabled = enabled;
+      act(() => useLand.getState().clear());
+    }
+  });
+
+  it("offers no outline the user could not save: a viewer's role, or a workspace not ready", async () => {
+    const enabled = env.landExplorationEnabled;
+    try {
+      env.landExplorationEnabled = true;
+      act(() => useLand.getState().select(SAVED));
+      for (const state of [
+        { ready: true, canEdit: false },
+        { ready: false, canEdit: true },
+      ]) {
+        Object.assign(identity, state);
+        const { unmount } = render(<MapContextMenu />);
+        open();
+        const items = await screen.findAllByRole("menuitem");
+        expect(items.map((item) => item.textContent)).not.toContain("Outline land here");
+        act(() => useUi.getState().setMapMenu(null));
+        unmount();
+      }
+      // The selected land was never cleared for it.
+      expect(useLand.getState().active).toEqual(SAVED);
+    } finally {
+      env.landExplorationEnabled = enabled;
+      act(() => useLand.getState().clear());
+    }
+  });
+
+  it("returns to an outline still being drawn rather than replacing it", async () => {
+    const user = userEvent.setup();
+    const enabled = env.landExplorationEnabled;
+    try {
+      env.landExplorationEnabled = true;
+      act(() => {
+        useLand.getState().begin("draw");
+        useLand.getState().addPoint([-122.14, 47.64]);
+        useLand.getState().addPoint([-122.13, 47.64]);
+      });
+      render(<MapContextMenu />);
+      open();
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Return to your unsaved outline" }),
+      );
+      expect(useUi.getState().activePanel).toBe("land");
+      expect(useLand.getState()).toMatchObject({
+        mode: "draw",
+        points: [
+          [-122.14, 47.64],
+          [-122.13, 47.64],
+        ],
       });
     } finally {
       env.landExplorationEnabled = enabled;

@@ -11,7 +11,7 @@ import { useLandAccessReady, useLandCanEdit } from "@/state/landIdentity";
 import type { Selection } from "@/state/selection";
 
 import { useLandAreas } from "../land/api";
-import { openLand, outlineLandAt } from "../land/landEntry";
+import { hasUnsavedOutline, openLand, outlineLandAt } from "../land/landEntry";
 import { usePlaceFact, type PlaceFact, type PlaceFactKind } from "../land/researchApi";
 
 /** The rows, in order: what the row is called, and who answers it while it loads. */
@@ -167,7 +167,7 @@ function FactRow({
 function LandEntry({ point }: { point: Point }) {
   const scene = useScene();
   const canEdit = useLandCanEdit();
-  const hasDraft = useLand((s) => s.draft !== null);
+  const hasDraft = useLand(hasUnsavedOutline);
   const lands = useLandAreas(true).data;
   const inside = lands?.find((land) => footprintContains(land.boundary, point));
   if (hasDraft) {

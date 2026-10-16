@@ -1,7 +1,7 @@
 import type { LandArea, LandCreate } from "@twin/contracts";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
-import { useLand } from "@/state/land";
+import { useLand, type LandMode, type LandPoint } from "@/state/land";
 import { useLandContext, type LandWorkspaceSection } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 
@@ -13,13 +13,32 @@ import { useUi } from "@/state/ui";
  * - `LandPanel.save()` REVISES the active land when one is selected. A new outline started
  *   while a saved land is active would silently replace that land's boundary on save, so a
  *   new outline always clears the selection first (`useLand.clear()`).
- * - An unsaved outline (`useLand.draft`) is never replaced: the tool opens on it instead.
+ * - An unsaved outline is never replaced: the tool opens on it instead. That covers a proposed
+ *   or imported one (`useLand.draft`) and one still being drawn (points placed in draw,
+ *   corridor or split mode, with no draft yet). `clear()` and `select()` drop both, are not
+ *   undoable, and LandDraftRecovery then deletes the browser copy too.
  *
  * Selecting a land is picked up by the mission side too (LandMissionBridge), which may switch
  * the plan's project to that land. That is intended: a selected land is the ground plans use.
  */
 
 export type OutlineResult = "started" | "has-draft";
+
+/**
+ * Whether the Land tool holds an outline the user would lose: a draft, or a sketch with points
+ * placed. The sketch test is the one LandDraftRecovery uses to decide what to keep in the
+ * browser, so "unsaved" here means the same thing it does there.
+ */
+export function hasUnsavedOutline(s: {
+  draft: LandCreate | null;
+  mode: LandMode;
+  points: readonly LandPoint[];
+}): boolean {
+  return (
+    s.draft !== null ||
+    ((s.mode === "draw" || s.mode === "corridor" || s.mode === "split") && s.points.length > 0)
+  );
+}
 
 function openTool(): void {
   useUi.getState().setPanel("land");
@@ -37,13 +56,13 @@ function freePointer(scene: CesiumSceneManager | null): void {
 /**
  * Open the Land tool finding mapped parcels, fields and lines at a point, the way "Find
  * parcels, lines or buildings" does after its first click. Returns "has-draft", and only
- * opens the tool, when an unsaved outline exists.
+ * opens the tool, when an unsaved outline (a draft or a sketch in progress) exists.
  */
 export function outlineLandAt(
   point: { longitude: number; latitude: number },
   scene: CesiumSceneManager | null,
 ): OutlineResult {
-  if (useLand.getState().draft) {
+  if (hasUnsavedOutline(useLand.getState())) {
     openTool();
     return "has-draft";
   }
@@ -61,7 +80,7 @@ export function outlineLandAt(
  * into a revision of it. Refuses, like `outlineLandAt`, to replace an unsaved outline.
  */
 export function proposeOutline(draft: LandCreate, scene: CesiumSceneManager | null): OutlineResult {
-  if (useLand.getState().draft) {
+  if (hasUnsavedOutline(useLand.getState())) {
     openTool();
     return "has-draft";
   }
@@ -80,7 +99,7 @@ export function openLand(
   land: LandArea,
   section: LandWorkspaceSection = "discover",
 ): "opened" | "has-draft" {
-  if (useLand.getState().draft) {
+  if (hasUnsavedOutline(useLand.getState())) {
     openTool();
     return "has-draft";
   }

@@ -1,7 +1,7 @@
 /**
  * Ways into the Land tool from elsewhere on the map (features/land/landEntry.ts). The rules
  * that matter: a new outline never leaves a saved land active (Save would revise it), and an
- * unsaved outline is never replaced.
+ * unsaved outline, proposed or still being drawn, is never replaced.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LandArea, LandCreate } from "@twin/contracts";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
-import { openLand, outlineLandAt, proposeOutline } from "@/features/land/landEntry";
+import {
+  hasUnsavedOutline,
+  openLand,
+  outlineLandAt,
+  proposeOutline,
+} from "@/features/land/landEntry";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
@@ -43,14 +48,43 @@ const DRAFT: LandCreate = {
   source: { method: "mapped-feature", label: "OpenStreetMap feature" },
 };
 
+const SKETCH: [number, number][] = [
+  [-120.72, 35.53],
+  [-120.71, 35.53],
+  [-120.71, 35.54],
+];
+
 function fakeScene() {
   return { areas: { cancelPick: vi.fn(), edit: vi.fn() } };
+}
+
+/** An outline still being drawn: points placed, no draft yet. */
+function sketch(mode: "draw" | "corridor" = "draw"): void {
+  useLand.getState().begin(mode);
+  for (const point of SKETCH) useLand.getState().addPoint(point);
 }
 
 afterEach(() => {
   useLand.getState().clear();
   useLandContext.getState().clear();
   useUi.setState({ activePanel: null, measureMode: null });
+});
+
+describe("hasUnsavedOutline", () => {
+  it("is a draft, or a sketch with points placed", () => {
+    expect(hasUnsavedOutline(useLand.getState())).toBe(false);
+    useLand.getState().begin("draw");
+    expect(hasUnsavedOutline(useLand.getState())).toBe(false);
+    useLand.getState().addPoint([-120.72, 35.53]);
+    expect(hasUnsavedOutline(useLand.getState())).toBe(true);
+    useLand.getState().cancel();
+    // A lookup point in candidates or pick mode is not an outline.
+    useLand.getState().begin("candidates");
+    useLand.getState().addPoint([-120.72, 35.53]);
+    expect(hasUnsavedOutline(useLand.getState())).toBe(false);
+    useLand.getState().propose(DRAFT);
+    expect(hasUnsavedOutline(useLand.getState())).toBe(true);
+  });
 });
 
 describe("outlineLandAt", () => {
@@ -82,6 +116,16 @@ describe("outlineLandAt", () => {
     expect(useLand.getState().points).toEqual([]);
     expect(useUi.getState().activePanel).toBe("land");
   });
+
+  it("keeps an outline still being drawn, with its points", () => {
+    for (const mode of ["draw", "corridor"] as const) {
+      sketch(mode);
+      expect(outlineLandAt({ longitude: 0, latitude: 0 }, null)).toBe("has-draft");
+      expect(useLand.getState()).toMatchObject({ mode, points: SKETCH, draft: null });
+      expect(useUi.getState().activePanel).toBe("land");
+      useLand.getState().cancel();
+    }
+  });
 });
 
 describe("proposeOutline", () => {
@@ -99,6 +143,12 @@ describe("proposeOutline", () => {
     expect(proposeOutline(DRAFT, null)).toBe("has-draft");
     expect(useLand.getState().draft).toEqual(first);
   });
+
+  it("keeps an outline still being drawn", () => {
+    sketch();
+    expect(proposeOutline(DRAFT, null)).toBe("has-draft");
+    expect(useLand.getState()).toMatchObject({ mode: "draw", points: SKETCH, draft: null });
+  });
 });
 
 describe("openLand", () => {
@@ -115,5 +165,11 @@ describe("openLand", () => {
     expect(openLand(SAVED, "actions")).toBe("has-draft");
     expect(useLand.getState().draft).toEqual(DRAFT);
     expect(useLand.getState().active).toBeNull();
+  });
+
+  it("does not drop an outline still being drawn to select another land", () => {
+    sketch();
+    expect(openLand(SAVED)).toBe("has-draft");
+    expect(useLand.getState()).toMatchObject({ mode: "draw", points: SKETCH, active: null });
   });
 });
