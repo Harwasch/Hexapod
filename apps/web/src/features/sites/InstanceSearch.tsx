@@ -335,6 +335,8 @@ function highlightSummary(entry: AssetInstances): string | null {
         : `Matching ${categoryById(focus.category).name.toLowerCase()} highlighted`;
     case "ids":
       return "Highlighted";
+    case "similar":
+      return "Similar-looking objects highlighted";
   }
 }
 
