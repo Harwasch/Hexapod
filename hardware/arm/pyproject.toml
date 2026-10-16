@@ -1,0 +1,41 @@
+[project]
+name = "hexapod-arm"
+version = "0.1.0"
+description = "Parametric design, optimization and simulation of the fleet manipulator arm."
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=1.26",
+  "pyyaml>=6.0",
+  "mujoco>=3.2",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "ruff>=0.13",
+]
+# CAD export (python -m armdesign.cad). Heavy (OpenCASCADE), so not needed for the tests.
+cad = [
+  "build123d>=0.9",
+  "trimesh>=4.4",
+]
+
+[tool.uv]
+package = false
+default-groups = ["dev", "cad"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+# RUF005 would rewrite numpy `array + [list]` into list unpacking, which is a different sum.
+ignore = ["RUF012", "E501", "RUF001", "RUF002", "RUF003", "RUF005"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["armdesign"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

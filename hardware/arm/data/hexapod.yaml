@@ -1,0 +1,40 @@
+# Reference host: a medium hexapod. No hexapod has been designed yet, so these are the
+# assumptions the arm is sized against. Change them here and rerun `python -m armdesign.optimize`.
+name: H-M12 reference medium hexapod
+mass_kg: 12.0 # without the arm; the study is checked at 8 and 20 kg as well
+mass_range_kg: [8.0, 20.0]
+body:
+  length: 0.56 # x, forward
+  width: 0.30 # y
+  thickness: 0.10
+  center_height: 0.24 # nominal standing height of the body centre above ground
+  cg: [0.0, 0.0, 0.0] # body-frame offset of the hexapod's centre of mass
+# Hip (coxa) joints in the body frame; legs are coxa-femur-tibia.
+hips:
+  - [0.24, 0.12, -0.02]
+  - [0.0, 0.15, -0.02]
+  - [-0.24, 0.12, -0.02]
+  - [-0.24, -0.12, -0.02]
+  - [0.0, -0.15, -0.02]
+  - [0.24, -0.12, -0.02]
+# Feet on the ground in the nominal stance, same order as the hips (counter-clockwise from
+# above, starting front-left). The support polygon is their convex hull.
+feet:
+  - [0.40, 0.31, 0.0]
+  - [0.0, 0.45, 0.0]
+  - [-0.40, 0.31, 0.0]
+  - [-0.40, -0.31, 0.0]
+  - [0.0, -0.45, 0.0]
+  - [0.40, -0.31, 0.0]
+leg:
+  coxa: 0.06
+  femur: 0.18
+  tibia: 0.26
+  radius: 0.035 # collision capsule radius
+# How far the legs may move the body while the feet stay planted. The arm study lets the
+# planner use these, which is the whole-body-manipulation lever: the body is a 3-DOF
+# (height, pitch, yaw) stage under the arm for free.
+body_motion:
+  dz: [-0.07, 0.12]
+  pitch_deg: [-10, 15] # positive is nose down
+  yaw_deg: [-20, 20]

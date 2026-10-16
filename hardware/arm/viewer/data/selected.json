@@ -1,0 +1,478 @@
+{
+ "design": {
+  "arch": "parallelogram",
+  "dof": 5,
+  "l1": 0.37,
+  "l2": 0.28,
+  "mount_x": 0.26,
+  "pedestal": 0.05,
+  "spring": true,
+  "wrist_len": 0.09
+ },
+ "label": "5DOF para+spring L1=0.37 L2=0.28 x=0.26 ped=0.05",
+ "actuators": {
+  "yaw": {
+   "id": "rs_edulite_05",
+   "name": "RobStride EduLite 05",
+   "kind": "qdd",
+   "rated": 1.8,
+   "peak": 6.0,
+   "mass": 0.242,
+   "speed": 45.0294947014537,
+   "price": 80.0,
+   "backlash_deg": 0.25,
+   "force_sense": "yes",
+   "ip": "none",
+   "interface": "CAN"
+  },
+  "shoulder": {
+   "id": "sw_gim8108_8",
+   "name": "Steadywin GIM8108-8 + output encoder",
+   "kind": "qdd",
+   "rated": 7.5,
+   "peak": 22.0,
+   "mass": 0.396,
+   "speed": 33.510321638291124,
+   "price": 135.0,
+   "backlash_deg": 0.25,
+   "force_sense": "yes",
+   "ip": "IP54 (vendor claim)",
+   "interface": "CAN"
+  },
+  "elbow": {
+   "id": "sw_gim6010_8",
+   "name": "Steadywin GIM6010-8 + output encoder",
+   "kind": "qdd",
+   "rated": 5.0,
+   "peak": 11.0,
+   "mass": 0.388,
+   "speed": 43.982297150257104,
+   "price": 105.0,
+   "backlash_deg": 0.25,
+   "force_sense": "yes",
+   "ip": "IP54 (vendor claim)",
+   "interface": "CAN"
+  },
+  "wrist_pitch": {
+   "id": "hx_35hm",
+   "name": "Hiwonder HX-35HM",
+   "kind": "servo",
+   "rated": 1.2,
+   "peak": 3.43,
+   "mass": 0.071,
+   "speed": 5.550147021341968,
+   "price": 36.0,
+   "backlash_deg": 0.7,
+   "force_sense": "no",
+   "ip": "none",
+   "interface": "TTL"
+  },
+  "tool_roll": {
+   "id": "hx_65hm",
+   "name": "Hiwonder HX-65HM",
+   "kind": "servo",
+   "rated": 2.2,
+   "peak": 6.37,
+   "mass": 0.1435,
+   "speed": 5.550147021341968,
+   "price": 50.0,
+   "backlash_deg": 0.7,
+   "force_sense": "no",
+   "ip": "none",
+   "interface": "TTL"
+  }
+ },
+ "cost": 607.22,
+ "mass": 2.284,
+ "backlash_mm": 5.66,
+ "tip_speed": 21.11,
+ "payload": {
+  "continuous_kg": 0.33,
+  "peak_kg": 1.17,
+  "reach_m": 0.817
+ },
+ "legs": {
+  "actuator": "Steadywin GIM8108-8 + output encoder",
+  "femur_need_nm": 9.5,
+  "femur_peak_need_nm": 19.0,
+  "rated_nm": 7.5,
+  "peak_nm": 22.0,
+  "fits": false
+ },
+ "printed_grams": 449.8,
+ "printed_parts": [
+  {
+   "part": "deck seal ring (printed)",
+   "file": "stl/deck_seal_ring.stl",
+   "grams": 5.3,
+   "link": "body"
+  },
+  {
+   "part": "turret plate (printed)",
+   "file": "stl/turret_plate.stl",
+   "grams": 27.8,
+   "link": "turret"
+  },
+  {
+   "part": "turret cheek, shoulder side (printed)",
+   "file": "stl/turret_cheek_shoulder_side.stl",
+   "grams": 35.0,
+   "link": "turret"
+  },
+  {
+   "part": "turret cheek, elbow side (printed)",
+   "file": "stl/turret_cheek_elbow_side.stl",
+   "grams": 42.4,
+   "link": "turret"
+  },
+  {
+   "part": "spring pulley mast (printed)",
+   "file": "stl/spring_pulley_mast.stl",
+   "grams": 21.2,
+   "link": "turret"
+  },
+  {
+   "part": "upper arm hub (printed)",
+   "file": "stl/upper_arm_hub.stl",
+   "grams": 36.2,
+   "link": "upper"
+  },
+  {
+   "part": "elbow housing (printed)",
+   "file": "stl/elbow_housing.stl",
+   "grams": 19.9,
+   "link": "upper"
+  },
+  {
+   "part": "crank (printed)",
+   "file": "stl/crank.stl",
+   "grams": 22.8,
+   "link": "crank"
+  },
+  {
+   "part": "forearm hub and rear lever (printed)",
+   "file": "stl/forearm_hub_and_rear_lever.stl",
+   "grams": 29.1,
+   "link": "fore"
+  },
+  {
+   "part": "wrist clamp (printed)",
+   "file": "stl/wrist_clamp.stl",
+   "grams": 25.5,
+   "link": "fore"
+  },
+  {
+   "part": "wrist bracket (printed)",
+   "file": "stl/wrist_bracket.stl",
+   "grams": 30.4,
+   "link": "wrist"
+  },
+  {
+   "part": "camera housing (printed)",
+   "file": "stl/camera_housing.stl",
+   "grams": 4.1,
+   "link": "wrist"
+  },
+  {
+   "part": "tool changer, arm side (printed)",
+   "file": "stl/tool_changer_arm_side.stl",
+   "grams": 23.9,
+   "link": "flange"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side.stl",
+   "grams": 14.2,
+   "link": "tool_gripper"
+  },
+  {
+   "part": "gripper palm (printed)",
+   "file": "stl/gripper_palm.stl",
+   "grams": 61.0,
+   "link": "tool_gripper"
+  },
+  {
+   "part": "fin-ray finger (TPU)",
+   "file": "stl/fin-ray_finger.stl",
+   "grams": 11.3,
+   "link": "finger_l"
+  },
+  {
+   "part": "fin-ray finger (TPU)",
+   "file": "stl/fin-ray_finger_2.stl",
+   "grams": 11.3,
+   "link": "finger_r"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side_2.stl",
+   "grams": 14.2,
+   "link": "tool_probe"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side_3.stl",
+   "grams": 14.2,
+   "link": "tool_sprayer"
+  }
+ ],
+ "coverage": [
+  {
+   "id": "weed_pull",
+   "name": "Pull a young weed (seedling to small rosette)",
+   "category": "weed",
+   "weight": 3.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "weed_taproot",
+   "name": "Pull an established taprooted weed",
+   "category": "weed",
+   "weight": 1.0,
+   "reach": 0.833,
+   "served": 0.125,
+   "points": 48
+  },
+  {
+   "id": "weed_stab",
+   "name": "Stab or stamp a weed",
+   "category": "weed",
+   "weight": 2.0,
+   "reach": 0.25,
+   "served": 0.208,
+   "points": 48
+  },
+  {
+   "id": "spot_spray",
+   "name": "Spot-spray or micro-dose",
+   "category": "dose",
+   "weight": 3.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "seed_plant",
+   "name": "Drop a seed or press in a plug",
+   "category": "dose",
+   "weight": 1.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "soil_probe",
+   "name": "Push in a soil probe or corer",
+   "category": "sample",
+   "weight": 1.5,
+   "reach": 0.208,
+   "served": 0.208,
+   "points": 48
+  },
+  {
+   "id": "sense_ground",
+   "name": "Hold a sensor over the ground",
+   "category": "sense",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "sense_canopy",
+   "name": "Look under or into a canopy",
+   "category": "sense",
+   "weight": 1.0,
+   "reach": 0.889,
+   "served": 0.889,
+   "points": 54
+  },
+  {
+   "id": "leaf_sample",
+   "name": "Clip a leaf or tissue sample",
+   "category": "sample",
+   "weight": 1.0,
+   "reach": 0.944,
+   "served": 0.944,
+   "points": 108
+  },
+  {
+   "id": "fruit_ground",
+   "name": "Pick fruit near the ground (strawberry)",
+   "category": "harvest",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 102
+  },
+  {
+   "id": "fruit_bush",
+   "name": "Pick fruit from a bush or low branch (tomato, pepper, apple)",
+   "category": "harvest",
+   "weight": 2.0,
+   "reach": 0.926,
+   "served": 0.889,
+   "points": 108
+  },
+  {
+   "id": "debris_pick",
+   "name": "Pick up a rock, bottle or stick",
+   "category": "maintain",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "deck_stow",
+   "name": "Stow a sample, rock or tool on the robot's own deck",
+   "category": "maintain",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 12
+  },
+  {
+   "id": "water_sample",
+   "name": "Dip a vial into water below a bank",
+   "category": "sample",
+   "weight": 0.5,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "gate_latch",
+   "name": "Push a gate latch or button",
+   "category": "maintain",
+   "weight": 0.5,
+   "reach": 0.944,
+   "served": 0.944,
+   "points": 36
+  },
+  {
+   "id": "valve_turn",
+   "name": "Turn a small valve or knob",
+   "category": "maintain",
+   "weight": 0.5,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 56
+  },
+  {
+   "id": "prune",
+   "name": "Prune a small stem or clear a stick",
+   "category": "maintain",
+   "weight": 1.0,
+   "reach": 0.952,
+   "served": 0.952,
+   "points": 126
+  }
+ ],
+ "score": 0.8418,
+ "hexapod": {
+  "name": "H-M12 reference medium hexapod",
+  "mass_kg": 12.0,
+  "mass_range_kg": [
+   8.0,
+   20.0
+  ],
+  "body": {
+   "length": 0.56,
+   "width": 0.3,
+   "thickness": 0.1,
+   "center_height": 0.24,
+   "cg": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "hips": [
+   [
+    0.24,
+    0.12,
+    -0.02
+   ],
+   [
+    0.0,
+    0.15,
+    -0.02
+   ],
+   [
+    -0.24,
+    0.12,
+    -0.02
+   ],
+   [
+    -0.24,
+    -0.12,
+    -0.02
+   ],
+   [
+    0.0,
+    -0.15,
+    -0.02
+   ],
+   [
+    0.24,
+    -0.12,
+    -0.02
+   ]
+  ],
+  "feet": [
+   [
+    0.4,
+    0.31,
+    0.0
+   ],
+   [
+    0.0,
+    0.45,
+    0.0
+   ],
+   [
+    -0.4,
+    0.31,
+    0.0
+   ],
+   [
+    -0.4,
+    -0.31,
+    0.0
+   ],
+   [
+    0.0,
+    -0.45,
+    0.0
+   ],
+   [
+    0.4,
+    -0.31,
+    0.0
+   ]
+  ],
+  "leg": {
+   "coxa": 0.06,
+   "femur": 0.18,
+   "tibia": 0.26,
+   "radius": 0.035
+  },
+  "body_motion": {
+   "dz": [
+    -0.07,
+    0.12
+   ],
+   "pitch_deg": [
+    -10,
+    15
+   ],
+   "yaw_deg": [
+    -20,
+    20
+   ]
+  }
+ }
+}

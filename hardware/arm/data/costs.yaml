@@ -1,0 +1,15 @@
+# Everything that is not an actuator, in USD per arm at about 10 units. Sources and
+# assumptions are listed in docs/BOM.md; the CAD's BOM itemises the same lines.
+usd:
+  tube_per_m: 14.0 # 6061-T6 25 x 1.5 mm round tube, cut to length
+  printed_parts: 24.0 # ~0.75 kg of ASA / PETG-CF at ~$30/kg with supports and waste
+  bearings: 16.0 # thin-section yaw bearing, deep-groove pivots, thrust washers
+  fasteners: 10.0 # stainless M3/M4, heat-set inserts, dowel pins
+  tool_changer: 14.0 # 6 pogo pins + target pads, 4 N52 magnets, printed bayonet halves
+  gripper: 24.0 # STS3215 bus servo, TPU fin-ray fingers, printed body
+  wrist_sensing: 43.0 # 12 MP wide camera module + 8x8 multizone ToF
+  harness: 18.0 # silicone wire, JST-GH, XT30, cable glands, sleeving
+  seals: 10.0 # TPU gaiters at the joints, O-rings, conformal coat
+  parallelogram_rod: 8.0 # carbon rod + two M6 rod-end bearings
+  spring_each: 7.0 # extension spring, Dyneema line, pulley
+  servo_bus_adapter: 10.0 # TTL/RS-485 bus adapter for the servos on the arm

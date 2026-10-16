@@ -1,0 +1,2231 @@
+<meta charset="utf-8" />
+<title>FA-1 Field Arm</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap"
+/>
+<style>
+  /* Layout: a bench instrument. One live 3D stage with its readout column, then the
+   evidence (trade study, decisions, parts) as a working grid below. */
+  :root {
+    --bg: #f4f5f1;
+    --panel: #ffffff;
+    --ink: #1a1f1b;
+    --ink-2: #4d5650;
+    --muted: #7a837c;
+    --line: #dde1da;
+    --stage: #e9ebe5;
+    --accent: #d9581b;
+    --accent-ink: #ffffff;
+    --chip: #eceee8;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #6250d6;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --off: #a9b0aa;
+    --seq-1: #cde2fb;
+    --seq-2: #9ec5f4;
+    --seq-3: #6da7ec;
+    --seq-4: #3987e5;
+    --seq-5: #256abf;
+    --seq-6: #184f95;
+    --seq-7: #0d366b;
+    --f-display: "Archivo", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+    --f-body: "Public Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --r: 8px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111412;
+      --panel: #191d1a;
+      --ink: #edf0eb;
+      --ink-2: #c0c7c1;
+      --muted: #8e978f;
+      --line: #2b312d;
+      --stage: #1c211e;
+      --accent: #f07a3a;
+      --accent-ink: #141414;
+      --chip: #222824;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --series-6: #008300;
+      --series-7: #9085e9;
+      --off: #59615b;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111412;
+    --panel: #191d1a;
+    --ink: #edf0eb;
+    --ink-2: #c0c7c1;
+    --muted: #8e978f;
+    --line: #2b312d;
+    --stage: #1c211e;
+    --accent: #f07a3a;
+    --accent-ink: #141414;
+    --chip: #222824;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --off: #59615b;
+    color-scheme: dark;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 var(--f-body);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 20px 48px;
+  }
+  .wrap {
+    max-width: 1340px;
+    margin: 0 auto;
+    display: grid;
+    gap: 28px;
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--f-display);
+    font-stretch: 82%;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0;
+  }
+  h1 {
+    font-size: clamp(30px, 4.2vw, 46px);
+    font-weight: 780;
+    line-height: 1.02;
+  }
+  h2 {
+    font-size: 24px;
+    font-weight: 720;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 700;
+    font-stretch: 90%;
+  }
+  p {
+    margin: 0;
+  }
+  .eyebrow {
+    font: 600 11.5px/1 var(--f-mono);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .mono,
+  .num {
+    font-family: var(--f-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .muted {
+    color: var(--muted);
+  }
+  a {
+    color: var(--accent);
+  }
+  button,
+  select,
+  input {
+    font: inherit;
+    color: inherit;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* header */
+  .top {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: end;
+  }
+  .top .lede {
+    max-width: 62ch;
+    color: var(--ink-2);
+    margin-top: 10px;
+  }
+  .specs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--panel);
+  }
+  .spec {
+    padding: 12px 14px;
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    min-width: 0;
+  }
+  .spec:nth-child(3n) {
+    border-right: 0;
+  }
+  .spec:nth-last-child(-n + 3) {
+    border-bottom: 0;
+  }
+  .spec .v {
+    font: 650 22px/1.1 var(--f-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .spec .v small {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--muted);
+    margin-left: 2px;
+  }
+  .spec .k {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  /* stage */
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 380px;
+    gap: 16px;
+    align-items: start;
+  }
+  .viewcol {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+  }
+  #viewport {
+    position: relative;
+    height: clamp(380px, 64vh, 740px);
+    border-radius: var(--r);
+    overflow: hidden;
+    background: var(--stage);
+    border: 1px solid var(--line);
+    touch-action: none;
+  }
+  #viewport canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .modes {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    display: flex;
+    gap: 4px;
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px;
+    z-index: 2;
+  }
+  .modes button {
+    border: 0;
+    background: transparent;
+    padding: 6px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--ink-2);
+  }
+  .modes button[aria-pressed="true"] {
+    background: var(--ink);
+    color: var(--bg);
+  }
+  .vp-note {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    right: 12px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .tag {
+    pointer-events: auto;
+    font: 500 12px/1.2 var(--f-body);
+    background: color-mix(in srgb, var(--panel) 90%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 8px;
+    color: var(--ink-2);
+  }
+  .tag b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .vp-msg {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 24px;
+    color: var(--ink-2);
+    z-index: 3;
+  }
+  .timeline {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: 10px;
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 8px 10px;
+  }
+  .timeline[hidden] {
+    display: none !important;
+  }
+  .btn {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .btn.primary {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-color: var(--accent);
+    min-width: 72px;
+  }
+  .track {
+    position: relative;
+    height: 28px;
+  }
+  .track input {
+    width: 100%;
+    height: 28px;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+  .ticks {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 6px;
+    pointer-events: none;
+  }
+  .ticks i {
+    position: absolute;
+    top: 0;
+    width: 1px;
+    height: 6px;
+    background: var(--muted);
+  }
+  .tlabel {
+    font: 12px var(--f-mono);
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+
+  /* side panel */
+  .side {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 16px;
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+  .side h3 + p {
+    margin-top: 4px;
+    color: var(--ink-2);
+    font-size: 13.5px;
+  }
+  .scen {
+    display: grid;
+    gap: 6px;
+  }
+  .scen button {
+    text-align: left;
+    border: 1px solid var(--line);
+    background: transparent;
+    border-radius: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+    font-size: 13.5px;
+    line-height: 1.3;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+  }
+  .scen button[aria-pressed="true"] {
+    border-color: var(--ink);
+    background: var(--chip);
+  }
+  .scen .pk {
+    font: 11.5px var(--f-mono);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .meters {
+    display: grid;
+    gap: 7px;
+  }
+  .meter {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr) 58px;
+    gap: 8px;
+    align-items: center;
+    font-size: 12.5px;
+  }
+  .meter .bar {
+    position: relative;
+    height: 10px;
+    background: var(--chip);
+    border-radius: 3px;
+  }
+  .meter .fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    border-radius: 3px;
+  }
+  .meter .rated {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    width: 2px;
+    background: var(--ink-2);
+  }
+  .meter .val {
+    font: 12px var(--f-mono);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .meter .sw {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 6px;
+  }
+  .chart {
+    width: 100%;
+    display: block;
+    overflow: visible;
+  }
+  .chart text {
+    fill: var(--muted);
+    font: 10.5px var(--f-mono);
+  }
+  .chart .axis line,
+  .chart .grid line {
+    stroke: var(--line);
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    font-size: 12px;
+    color: var(--ink-2);
+  }
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .legend i {
+    width: 10px;
+    height: 3px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+  .legend i.dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+  }
+  .kv {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+    font-size: 13px;
+  }
+  .kv dt {
+    color: var(--ink-2);
+  }
+  .kv dd {
+    margin: 0;
+    font-family: var(--f-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .sliders {
+    display: grid;
+    gap: 10px;
+  }
+  .slider {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr) 54px;
+    gap: 8px;
+    align-items: center;
+    font-size: 13px;
+  }
+  .slider input {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+  .slider output {
+    font: 12px var(--f-mono);
+    text-align: right;
+  }
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .tasks {
+    display: grid;
+    gap: 4px;
+  }
+  .task {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 96px 40px;
+    gap: 8px;
+    align-items: center;
+    font-size: 12.5px;
+    padding: 4px 6px;
+    border-radius: 5px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: transparent;
+    text-align: left;
+  }
+  .task[aria-pressed="true"] {
+    border-color: var(--ink-2);
+    background: var(--chip);
+  }
+  .task .tb {
+    position: relative;
+    height: 8px;
+    background: var(--chip);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .task .tb i {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+  }
+  .task .pct {
+    font: 11.5px var(--f-mono);
+    text-align: right;
+  }
+  .status-key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    font-size: 12.5px;
+  }
+  .status-key span {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .status-key i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  /* sections below */
+  .section-head {
+    display: grid;
+    gap: 6px;
+    max-width: 78ch;
+  }
+  .section-head p {
+    color: var(--ink-2);
+  }
+  .grid2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 16px;
+    display: grid;
+    gap: 10px;
+    align-content: start;
+    min-width: 0;
+  }
+  .card .sub {
+    color: var(--ink-2);
+    font-size: 13.5px;
+  }
+  .decisions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .dec {
+    display: grid;
+    gap: 8px;
+    align-content: start;
+    padding: 16px;
+    border-top: 3px solid var(--ink);
+    background: var(--panel);
+    border-radius: 0 0 var(--r) var(--r);
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .dec .fig {
+    font: 650 20px/1.1 var(--f-mono);
+    color: var(--accent);
+  }
+  .dec p {
+    font-size: 14px;
+    color: var(--ink-2);
+  }
+  .tablewrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--panel);
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13.5px;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th {
+    font: 600 11.5px var(--f-mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  td.r,
+  th.r {
+    text-align: right;
+    font-family: var(--f-mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  tr.group td {
+    font-weight: 650;
+    background: var(--chip);
+  }
+  tr.total td {
+    font-weight: 700;
+    border-bottom: 0;
+  }
+  .tip {
+    position: fixed;
+    z-index: 20;
+    pointer-events: none;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12.5px;
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.14);
+    max-width: 320px;
+  }
+  .tip b {
+    font-weight: 650;
+  }
+  .tip .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+  }
+  .foot {
+    color: var(--muted);
+    font-size: 13px;
+    display: grid;
+    gap: 6px;
+  }
+  code {
+    font-family: var(--f-mono);
+    font-size: 0.92em;
+    background: var(--chip);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  @media (max-width: 1080px) {
+    .stage {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .decisions {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 760px) {
+    .top {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .grid2,
+    .decisions {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    #viewport {
+      height: 54vh;
+      min-height: 320px;
+    }
+    .specs {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .spec:nth-child(3n) {
+      border-right: 1px solid var(--line);
+    }
+    .spec:nth-child(2n) {
+      border-right: 0;
+    }
+    .spec:nth-last-child(-n + 3) {
+      border-bottom: 1px solid var(--line);
+    }
+    .spec:nth-last-child(-n + 2) {
+      border-bottom: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      scroll-behavior: auto !important;
+    }
+  }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">Hexapod fleet · read/write manipulator · design study</div>
+      <h1>FA-1 Field Arm</h1>
+      <p class="lede" id="lede">
+        A low-cost arm for the medium hexapod. It weeds, doses, samples, picks fruit and fetches
+        things. Its geometry and every actuator were chosen by optimizing against 17 field tasks,
+        and the result was checked in physics simulation with the hexapod's own legs doing part of
+        the work.
+      </p>
+    </div>
+    <div class="specs" id="specs" aria-label="Key specifications"></div>
+  </header>
+
+  <section class="stage" aria-label="3D model and simulation">
+    <div class="viewcol">
+      <div id="viewport">
+        <div class="modes" role="group" aria-label="View mode">
+          <button type="button" id="m-sim" aria-pressed="true">Simulate</button>
+          <button type="button" id="m-pose" aria-pressed="false">Pose</button>
+          <button type="button" id="m-ws" aria-pressed="false">Workspace</button>
+        </div>
+        <div class="vp-note" id="vpnote"></div>
+        <div class="vp-msg" id="vpmsg">Loading the arm…</div>
+      </div>
+      <div class="timeline" id="timeline">
+        <button type="button" class="btn primary" id="play">Pause</button>
+        <div class="track">
+          <div class="ticks" id="ticks"></div>
+          <input
+            type="range"
+            id="scrub"
+            min="0"
+            max="1000"
+            value="0"
+            step="1"
+            aria-label="Simulation time"
+          />
+        </div>
+        <span class="tlabel" id="tlabel">0.0 s</span>
+        <select id="speed" class="btn" aria-label="Playback speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+        </select>
+      </div>
+    </div>
+    <aside class="side" id="side"></aside>
+  </section>
+
+  <section class="section-head">
+    <div class="eyebrow">Trade study</div>
+    <h2>How the design was chosen</h2>
+    <p id="study-lede">
+      Stage A swept 1,764 geometries (degrees of freedom, elbow drive, link lengths, mount position,
+      pedestal height) for reach, approach angle, collisions and tip-over. Stage B took the frontier
+      geometries, added gravity springs as an option, and tried every assignment of 27 real
+      actuators against the torque each task point needs.
+    </p>
+  </section>
+  <div class="grid2">
+    <div class="card">
+      <h3>Cost against capability</h3>
+      <p class="sub">
+        Each dot is a design on its own geometry's frontier. Capability is the weighted share of
+        task points served. "Field grade" requires a backdrivable, force-sensing shoulder and elbow
+        and under 6 mm of open-loop backlash at the tool.
+      </p>
+      <div class="legend" id="lg-pareto"></div>
+      <svg
+        class="chart"
+        id="ch-pareto"
+        viewBox="0 0 560 330"
+        role="img"
+        aria-label="Cost against capability"
+      ></svg>
+    </div>
+    <div class="card">
+      <h3>Elbow drive and degrees of freedom</h3>
+      <p class="sub">
+        The best field-grade capability each architecture reaches for a given parts cost. The
+        parallelogram lets the shoulder and elbow motors share a pull's moment instead of stacking
+        it on the shoulder.
+      </p>
+      <div class="legend" id="lg-arch"></div>
+      <svg
+        class="chart"
+        id="ch-arch"
+        viewBox="0 0 560 330"
+        role="img"
+        aria-label="Capability by architecture"
+      ></svg>
+    </div>
+    <div class="card">
+      <h3>Link lengths</h3>
+      <p class="sub" id="heat-sub">
+        Kinematic coverage (reach, approach, collisions, tip-over) across upper-arm and forearm
+        lengths, at the chosen mount, pedestal and drive.
+      </p>
+      <svg
+        class="chart"
+        id="ch-heat"
+        viewBox="0 0 560 360"
+        role="img"
+        aria-label="Coverage by link lengths"
+      ></svg>
+    </div>
+    <div class="card">
+      <h3>Against arms you can buy</h3>
+      <p class="sub">
+        Parts or list price per kilogram-metre of rated payload × reach (log scale). Vendors rate
+        payload differently, so FA-1 is shown both ways: continuous at full stretch (conservative)
+        and peak.
+      </p>
+      <svg
+        class="chart"
+        id="ch-bench"
+        viewBox="0 0 560 420"
+        role="img"
+        aria-label="Price per kilogram metre"
+      ></svg>
+    </div>
+  </div>
+
+  <section class="section-head">
+    <div class="eyebrow">Design decisions</div>
+    <h2>What makes it cheap and still strong</h2>
+  </section>
+  <div class="decisions" id="decisions"></div>
+
+  <section class="section-head">
+    <div class="eyebrow">Bill of materials</div>
+    <h2>Parts, about 10 units</h2>
+    <p>
+      Single-unit US retail for actuators (October 2026). Printed parts in ASA or PETG-CF. STEP, STL
+      and GLB files are generated from the same parameters as the simulation.
+    </p>
+  </section>
+  <div class="grid2">
+    <div class="tablewrap"><table id="bom"></table></div>
+    <div class="tablewrap"><table id="printed"></table></div>
+  </div>
+
+  <footer class="foot">
+    <p>
+      Reproduce: <code>cd hardware/arm &amp;&amp; uv run python -m armdesign.optimize</code>, then
+      <code>python -m armdesign.report select</code>, <code>python -m armdesign.sim</code>,
+      <code>python -m armdesign.cad</code> and <code>python -m armdesign.report</code>.
+    </p>
+    <p id="assume">
+      The host is a reference medium hexapod (12 kg, 0.56 × 0.30 m body); no hexapod has been
+      designed yet. Prices are retail and can move.
+    </p>
+  </footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+<script type="module">
+  import * as THREE from "three";
+  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+  import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+  const $ = (s, el = document) => el.querySelector(s);
+  const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const fmt = (v, d = 1) => Number(v).toFixed(d);
+  const usd = (v) => "$" + Math.round(v).toLocaleString("en-US");
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs = {}, parent) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  const MOTOR_NAMES = {
+    yaw: "Yaw",
+    shoulder: "Shoulder",
+    elbow: "Elbow",
+    wrist_pitch: "Wrist pitch",
+    tool_roll: "Tool roll",
+    forearm_roll: "Forearm roll",
+  };
+  const SERIES = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5"];
+  const tip = $("#tip");
+  function showTip(html, x, y) {
+    tip.innerHTML = html;
+    tip.hidden = false;
+    const w = tip.offsetWidth,
+      h = tip.offsetHeight;
+    tip.style.left = Math.min(x + 14, innerWidth - w - 8) + "px";
+    tip.style.top = Math.max(8, Math.min(y + 14, innerHeight - h - 8)) + "px";
+  }
+  function hideTip() {
+    tip.hidden = true;
+  }
+
+  async function getJSON(u) {
+    const r = await fetch(u);
+    if (!r.ok) throw new Error(u + " " + r.status);
+    return r.json();
+  }
+  let selected, sims, study, ws, bom;
+  try {
+    [selected, sims, study, ws, bom] = await Promise.all(
+      [
+        "data/selected.json",
+        "data/sims.json",
+        "data/study.json",
+        "data/workspace.json",
+        "data/bom.json",
+      ].map(getJSON),
+    );
+  } catch (e) {
+    $("#vpmsg").textContent =
+      "The data files did not load. Serve this folder over HTTP (for example: python -m http.server) and open it again.";
+    throw e;
+  }
+  const D = selected.design;
+
+  /* ---------- header ---------- */
+  const motorRows = Object.entries(selected.actuators);
+  const spray = sims.find((s) => s.id === "spray");
+  const perWeed = spray?.per_weed_s;
+  const debris = selected.coverage.find((c) => c.id === "debris_pick");
+  const groundKg = debris && debris.served >= 0.99 ? 1.0 : selected.payload.continuous_kg;
+  const specs = [
+    [fmt(selected.payload.reach_m, 2), "m", "reach to the gripper tip"],
+    [
+      fmt(groundKg, 1),
+      "kg",
+      `anywhere on its ground patch; ${fmt(selected.payload.continuous_kg, 1)} / ${fmt(selected.payload.peak_kg, 1)} kg at full horizontal stretch`,
+    ],
+    [fmt(selected.mass, 2), "kg", "arm mass, gripper excluded"],
+    [usd(selected.cost), "", "parts per arm"],
+    [fmt(selected.backlash_mm, 1), "mm", "open-loop backlash at the tool (RSS)"],
+    [perWeed ? fmt(perWeed, 2) : "–", "s", "per weed, spot-dosing in simulation"],
+  ];
+  $("#specs").innerHTML = specs
+    .map(
+      ([v, u, k]) =>
+        `<div class="spec"><div class="v">${v}<small>${u}</small></div><div class="k">${k}</div></div>`,
+    )
+    .join("");
+
+  /* ---------- 3D stage ---------- */
+  const vp = $("#viewport");
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  vp.prepend(renderer.domElement);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 60);
+  camera.up.set(0, 0, 1);
+  camera.position.set(1.45, -1.3, 0.95);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0.3, 0, 0.34);
+  controls.enableDamping = true;
+  controls.maxPolarAngle = Math.PI * 0.495;
+  controls.minDistance = 0.4;
+  controls.maxDistance = 6;
+  controls.update();
+  scene.add(new THREE.HemisphereLight(0xf3f6ff, 0x5a4a38, 1.25));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.4);
+  sun.position.set(1.2, -1.4, 2.6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  Object.assign(sun.shadow.camera, {
+    left: -1.4,
+    right: 1.4,
+    top: 1.4,
+    bottom: -1.4,
+    near: 0.5,
+    far: 6,
+  });
+  sun.shadow.bias = -0.0004;
+  scene.add(sun);
+
+  function soilTexture() {
+    const c = document.createElement("canvas");
+    c.width = c.height = 512;
+    const g = c.getContext("2d");
+    g.fillStyle = "#6d5a44";
+    g.fillRect(0, 0, 512, 512);
+    let seed = 7;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 9000; i++) {
+      const v = 70 + rnd() * 70,
+        a = 0.25 + rnd() * 0.5;
+      g.fillStyle = `rgba(${v + 30},${v + 12},${v - 10},${a})`;
+      const s = 1 + rnd() * 3.5;
+      g.fillRect(rnd() * 512, rnd() * 512, s, s);
+    }
+    for (let i = 0; i < 140; i++) {
+      g.fillStyle = `rgba(80,110,50,${0.25 + rnd() * 0.3})`;
+      g.beginPath();
+      g.ellipse(rnd() * 512, rnd() * 512, 2 + rnd() * 5, 1 + rnd() * 2, rnd() * 3, 0, 7);
+      g.fill();
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(10, 10);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    return t;
+  }
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(8, 8),
+    new THREE.MeshStandardMaterial({ map: soilTexture(), roughness: 1 }),
+  );
+  ground.receiveShadow = true;
+  scene.add(ground);
+  const grid = new THREE.GridHelper(2, 20, 0xffffff, 0xffffff);
+  grid.rotation.x = Math.PI / 2;
+  grid.position.z = 0.0008;
+  grid.material.transparent = true;
+  grid.material.opacity = 0.09;
+  scene.add(grid);
+
+  function themeStage() {
+    scene.background = new THREE.Color(tok("--stage"));
+  }
+  themeStage();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () =>
+    setTimeout(() => {
+      themeStage();
+      drawCharts();
+    }, 30),
+  );
+  new MutationObserver(() =>
+    setTimeout(() => {
+      themeStage();
+      drawCharts();
+    }, 30),
+  ).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  function resize() {
+    const w = vp.clientWidth,
+      h = vp.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(vp);
+  resize();
+
+  /* CAD links, exported Y-up; wrap them back to Z-up. */
+  const loader = new GLTFLoader();
+  const CAD_LINKS = [
+    "turret",
+    "upper",
+    "fore",
+    "crank",
+    "rod",
+    "wrist",
+    "flange",
+    "finger_l",
+    "finger_r",
+  ];
+  const glb = {};
+  // The per-link GLBs arrive as base64 in one JSON file (cad/glb in the repo).
+  const meshes = await getJSON("data/meshes.json");
+  const toBuffer = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+  await Promise.all(
+    [...CAD_LINKS, "body", "tool_gripper", "tool_probe", "tool_sprayer"].map(async (n) => {
+      try {
+        if (!meshes[n]) return;
+        const g = await loader.parseAsync(toBuffer(meshes[n]), "");
+        g.scene.traverse((o) => {
+          if (o.isMesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+            if (o.material) {
+              o.material.roughness = 0.62;
+              o.material.metalness = 0.08;
+            }
+          }
+        });
+        const w = new THREE.Group();
+        w.rotation.x = Math.PI / 2;
+        w.add(g.scene);
+        glb[n] = w;
+      } catch (e) {
+        /* a parallelogram-free design has no crank or rod */
+      }
+    }),
+  );
+
+  const geomCache = new Map();
+  function makeGeom(g) {
+    const [a, b, c] = g.size;
+    let geo;
+    const key = g.type + g.size.join(",");
+    if (geomCache.has(key)) geo = geomCache.get(key);
+    else {
+      if (g.type === "box") geo = new THREE.BoxGeometry(2 * a, 2 * b, 2 * c);
+      else if (g.type === "sphere") geo = new THREE.SphereGeometry(a, 20, 14);
+      else if (g.type === "ellipsoid") {
+        geo = new THREE.SphereGeometry(1, 20, 14);
+        geo.scale(a, b, c);
+      } else if (g.type === "capsule") {
+        geo = new THREE.CapsuleGeometry(a, 2 * b, 6, 14);
+        geo.rotateX(Math.PI / 2);
+      } else if (g.type === "cylinder") {
+        geo = new THREE.CylinderGeometry(a, a, 2 * b, 28);
+        geo.rotateX(Math.PI / 2);
+      }
+      geomCache.set(key, geo);
+    }
+    const col = new THREE.Color().setRGB(g.rgba[0], g.rgba[1], g.rgba[2], THREE.SRGBColorSpace);
+    const m = new THREE.Mesh(
+      geo,
+      new THREE.MeshStandardMaterial({ color: col, roughness: 0.75, metalness: 0.05 }),
+    );
+    m.position.set(...g.pos);
+    m.quaternion.set(g.quat[1], g.quat[2], g.quat[3], g.quat[0]);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    return m;
+  }
+
+  const simCache = new Map();
+  async function loadSim(id) {
+    if (!simCache.has(id)) simCache.set(id, await getJSON(`data/sim_${id}.json`));
+    return simCache.get(id);
+  }
+
+  let world = null;
+  const springMat = new THREE.LineBasicMaterial({ color: new THREE.Color(tok("--accent")) });
+  function buildWorld(sim) {
+    if (world) scene.remove(world.root);
+    const root = new THREE.Group();
+    const objs = sim.bodies.map((n) => {
+      const o = new THREE.Group();
+      o.name = n;
+      o.matrixAutoUpdate = true;
+      root.add(o);
+      return o;
+    });
+    const idx = Object.fromEntries(sim.bodies.map((n, i) => [n, i]));
+    for (const g of sim.scene) {
+      if (
+        g.type === "plane" ||
+        g.body < 0 ||
+        !(g.type in { box: 1, sphere: 1, ellipsoid: 1, capsule: 1, cylinder: 1 })
+      )
+        continue;
+      if (CAD_LINKS.includes(sim.bodies[g.body])) continue;
+      objs[g.body].add(makeGeom(g));
+    }
+    for (const n of CAD_LINKS) if (n in idx && glb[n]) objs[idx[n]].add(glb[n].clone());
+    if (glb.body) objs[idx.body].add(glb.body.clone());
+    const tool = glb["tool_" + sim.tool];
+    if (tool) objs[idx.flange].add(tool.clone());
+    // Gravity-spring cables, redrawn every frame between their turret and link points.
+    const springs = [];
+    if (D.spring) {
+      const mk = () => {
+        const geo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(),
+          new THREE.Vector3(),
+        ]);
+        const l = new THREE.Line(geo, springMat);
+        root.add(l);
+        return l;
+      };
+      springs.push({
+        line: mk(),
+        a: ["turret", [-0.04, 0, D.pedestal + 0.05]],
+        b: ["upper", [0.11, 0.01, 0.018]],
+      });
+      if (D.arch === "parallelogram")
+        springs.push({
+          line: mk(),
+          a: ["turret", [-0.01, -0.012, D.pedestal - 0.045]],
+          b: ["crank", [-0.045, -0.012, 0]],
+        });
+    }
+    scene.add(root);
+    world = { root, objs, idx, springs, sim };
+  }
+  const _v = new THREE.Vector3(),
+    _w = new THREE.Vector3();
+  function updateSprings() {
+    if (!world) return;
+    for (const s of world.springs) {
+      const A = world.objs[world.idx[s.a[0]]],
+        B = world.objs[world.idx[s.b[0]]];
+      if (!A || !B) continue;
+      A.updateMatrixWorld();
+      B.updateMatrixWorld();
+      _v.set(...s.a[1]).applyMatrix4(A.matrixWorld);
+      _w.set(...s.b[1]).applyMatrix4(B.matrixWorld);
+      const p = s.line.geometry.attributes.position;
+      p.setXYZ(0, _v.x, _v.y, _v.z);
+      p.setXYZ(1, _w.x, _w.y, _w.z);
+      p.needsUpdate = true;
+    }
+  }
+  const qa = new THREE.Quaternion(),
+    qb = new THREE.Quaternion();
+  function frameIndex(T, t) {
+    let lo = 0,
+      hi = T.length - 1;
+    if (t <= T[0]) return [0, 0];
+    if (t >= T[hi]) return [hi, 0];
+    while (hi - lo > 1) {
+      const m = (lo + hi) >> 1;
+      if (T[m] <= t) lo = m;
+      else hi = m;
+    }
+    return [lo, (t - T[lo]) / (T[lo + 1] - T[lo])];
+  }
+  function applyFrame(t, skipArm = false) {
+    const L = world.sim.log;
+    const [k, f] = frameIndex(L.t, t);
+    const k1 = Math.min(k + 1, L.t.length - 1);
+    world.objs.forEach((o, i) => {
+      if (skipArm && ARM_BODIES.has(o.name)) return;
+      const p0 = L.pos[k][i],
+        p1 = L.pos[k1][i];
+      o.position.set(
+        p0[0] + (p1[0] - p0[0]) * f,
+        p0[1] + (p1[1] - p0[1]) * f,
+        p0[2] + (p1[2] - p0[2]) * f,
+      );
+      const a = L.quat[k][i],
+        b = L.quat[k1][i];
+      qa.set(a[1], a[2], a[3], a[0]);
+      qb.set(b[1], b[2], b[3], b[0]);
+      o.quaternion.slerpQuaternions(qa, qb, f);
+    });
+    updateSprings();
+    return k;
+  }
+  const ARM_BODIES = new Set([
+    "turret",
+    "upper",
+    "fore",
+    "crank",
+    "rod",
+    "wrist",
+    "flange",
+    "finger_l",
+    "finger_r",
+  ]);
+
+  /* Forward kinematics for Pose mode, in the same frames as the simulation. */
+  const Mx = () => new THREE.Matrix4();
+  const tr = (x, y, z) => Mx().makeTranslation(x, y, z);
+  const ry = (a) => Mx().makeRotationY(-a); // pitch joints turn about -y
+  const rz = (a) => Mx().makeRotationZ(a);
+  const rx = (a) => Mx().makeRotationX(a);
+  const HX = selected.hexapod;
+  const deckZ = HX.body.thickness / 2,
+    CRANK = 0.045;
+  function setFromMatrix(name, m) {
+    const o = world.objs[world.idx[name]];
+    if (o) m.decompose(o.position, o.quaternion, o.scale);
+  }
+  function poseFK(p) {
+    const body = world.objs[world.idx.body];
+    body.updateMatrix();
+    const Tb = body.matrix.clone();
+    const tur = Tb.clone()
+      .multiply(tr(D.mount_x, 0, deckZ))
+      .multiply(rz(p.yaw));
+    const up = tur
+      .clone()
+      .multiply(tr(0, 0, D.pedestal))
+      .multiply(ry(p.th2));
+    const fo = up
+      .clone()
+      .multiply(tr(D.l1, 0, 0))
+      .multiply(ry(p.th3 - p.th2));
+    const wr = fo
+      .clone()
+      .multiply(tr(D.l2, 0, 0))
+      .multiply(ry(p.q4));
+    const fl = wr.clone().multiply(rx(p.roll));
+    setFromMatrix("turret", tur);
+    setFromMatrix("upper", up);
+    setFromMatrix("fore", fo);
+    setFromMatrix("wrist", wr);
+    setFromMatrix("flange", fl);
+    const fx = D.wrist_len + 0.04;
+    setFromMatrix("finger_l", fl.clone().multiply(tr(fx, p.grip, 0)));
+    setFromMatrix("finger_r", fl.clone().multiply(tr(fx, -p.grip, 0)));
+    if (D.arch === "parallelogram") {
+      const cr = tur
+        .clone()
+        .multiply(tr(0, 0, D.pedestal))
+        .multiply(ry(p.th3));
+      setFromMatrix("crank", cr);
+      setFromMatrix(
+        "rod",
+        cr
+          .clone()
+          .multiply(tr(-CRANK, 0, 0))
+          .multiply(ry(p.th2 - p.th3)),
+      );
+    }
+    updateSprings();
+    const tcpLen = D.wrist_len + 0.11;
+    const tcp = new THREE.Vector3(tcpLen, 0, 0).applyMatrix4(fl);
+    return tcp;
+  }
+
+  /* ---------- modes ---------- */
+  const state = {
+    mode: "sim",
+    simId: sims[0]?.id,
+    t: 0,
+    playing: true,
+    speed: 1,
+    pose: null,
+    wsTask: -1,
+  };
+  const side = $("#side");
+  const modeBtns = { sim: $("#m-sim"), pose: $("#m-pose"), ws: $("#m-ws") };
+  for (const [m, b] of Object.entries(modeBtns)) b.addEventListener("click", () => setMode(m));
+  let wsCloud = null,
+    polygon = null;
+
+  async function setMode(m) {
+    state.mode = m;
+    for (const [k, b] of Object.entries(modeBtns)) b.setAttribute("aria-pressed", String(k === m));
+    $("#timeline").hidden = m !== "sim";
+    if (wsCloud) wsCloud.visible = m === "ws";
+    if (polygon) polygon.visible = m === "ws";
+    if (m === "sim") {
+      await selectSim(state.simId);
+    } else {
+      const base = await loadSim(m === "ws" ? "rock" : state.simId || "rock");
+      buildWorld(base);
+      applyFrame(0);
+      if (!state.pose) state.pose = { ...PRESETS.Ready };
+      poseFK(state.pose);
+      if (m === "pose") renderPose();
+      else renderWorkspace();
+    }
+  }
+
+  /* ----- Simulate ----- */
+  let torqueChart = null,
+    forceChart = null,
+    marginChart = null;
+  async function selectSim(id) {
+    state.simId = id;
+    const sim = await loadSim(id);
+    buildWorld(sim);
+    state.t = 0;
+    applyFrame(0);
+    renderSimPanel(sim);
+    const T = sim.log.t,
+      dur = T[T.length - 1];
+    $("#ticks").innerHTML = sim.events
+      .map((e) => `<i style="left:${(e.t / dur) * 100}%"></i>`)
+      .join("");
+    $("#scrub").max = String(Math.round(dur * 100));
+  }
+  function motorMeta(sim) {
+    return sim.motors.map((m, i) => ({
+      key: m,
+      name: MOTOR_NAMES[m] || m,
+      color: tok(SERIES[i % SERIES.length]),
+      rated: sim.rated[i],
+      peak: sim.peak[i],
+    }));
+  }
+  function renderSimPanel(sim) {
+    const meta = motorMeta(sim);
+    const s = sim.summary;
+    const tr2 = sim.tracking.map((x) => x.error_mm);
+    const med = tr2.length ? [...tr2].sort((a, b) => a - b)[Math.floor(tr2.length / 2)] : 0;
+    side.innerHTML = `
+    <div><h3>Scenarios</h3><p>Seven tasks run in MuJoCo with the actuators clipped at their catalog peak torque.</p></div>
+    <div class="scen" id="scen">${sims.map((x) => `<button type="button" data-id="${x.id}" aria-pressed="${x.id === sim.name}"><span>${x.title}</span><span class="pk">${Math.round(Math.max(...x.summary.peak_util) * 100)}% pk</span></button>`).join("")}</div>
+    <div><h3 id="sc-title">${sim.title}</h3><p>${sim.note || ""}</p></div>
+    <div><div class="eyebrow" style="margin-bottom:8px">Motor torque now · bar = % of peak · tick = continuous rating</div><div class="meters" id="meters">${meta.map((m, i) => `<div class="meter"><span><i class="sw" style="background:${m.color}"></i>${m.name}</span><div class="bar"><div class="fill" id="mf${i}" style="background:${m.color}"></div><div class="rated" style="left:${(m.rated / m.peak) * 100}%"></div></div><span class="val" id="mv${i}">0.0</span></div>`).join("")}</div></div>
+    <div><div class="eyebrow">Torque over the run, % of peak</div><div class="legend" style="margin:6px 0">${meta.map((m) => `<span><i style="background:${m.color}"></i>${m.name}</span>`).join("")}</div><svg class="chart" id="ch-torque" viewBox="0 0 360 150" role="img" aria-label="Torque over time"></svg></div>
+    <div class="grid2" style="gap:12px">
+      <div><div class="eyebrow">Force on the tool, N</div><svg class="chart" id="ch-force" viewBox="0 0 170 90" role="img" aria-label="Tool force"></svg></div>
+      <div><div class="eyebrow">Tip-over margin, cm</div><svg class="chart" id="ch-margin" viewBox="0 0 170 90" role="img" aria-label="Stability margin"></svg></div>
+    </div>
+    <dl class="kv">
+      <dt>Highest motor load</dt><dd>${Math.round(Math.max(...s.peak_util) * 100)}% of peak</dd>
+      <dt>Peak force at the tool</dt><dd>${fmt(s.max_tool_force, 0)} N</dd>
+      <dt>Smallest tip-over margin</dt><dd>${fmt(s.min_margin_m * 100, 1)} cm</dd>
+      <dt>Position error at targets</dt><dd>${fmt(med, 1)} mm median</dd>
+    </dl>`;
+    side.querySelectorAll("#scen button").forEach((b) =>
+      b.addEventListener("click", () => {
+        selectSim(b.dataset.id);
+        state.playing = true;
+        $("#play").textContent = "Pause";
+      }),
+    );
+    const T = sim.log.t,
+      tau = sim.log.tau;
+    const series = meta.map((m, i) => ({
+      name: m.name,
+      color: m.color,
+      pts: T.map((t, k) => [t, (Math.abs(tau[k][i]) / m.peak) * 100]),
+    }));
+    torqueChart = timeChart($("#ch-torque"), {
+      series,
+      yMax: 100,
+      w: 360,
+      h: 150,
+      events: sim.events,
+      unit: "%",
+    });
+    const fmag = sim.log.tool_force.map((f) => Math.hypot(...f));
+    forceChart = timeChart($("#ch-force"), {
+      series: [{ name: "Tool force", color: tok("--ink-2"), pts: T.map((t, k) => [t, fmag[k]]) }],
+      yMax: Math.max(10, Math.ceil(Math.max(...fmag) / 10) * 10),
+      w: 170,
+      h: 90,
+      small: true,
+      unit: " N",
+    });
+    const mg = sim.log.margin.map((m) => (m < -0.5 ? null : m * 100));
+    marginChart = timeChart($("#ch-margin"), {
+      series: [{ name: "Margin", color: tok("--ink-2"), pts: T.map((t, k) => [t, mg[k]]) }],
+      yMax: 40,
+      w: 170,
+      h: 90,
+      small: true,
+      unit: " cm",
+    });
+  }
+  function timeChart(svg, o) {
+    svg.innerHTML = "";
+    const m = o.small ? { l: 26, r: 6, t: 6, b: 16 } : { l: 32, r: 8, t: 8, b: 20 };
+    const W = o.w - m.l - m.r,
+      H = o.h - m.t - m.b;
+    const tmax = Math.max(...o.series[0].pts.map((p) => p[0]));
+    const X = (t) => m.l + (t / tmax) * W,
+      Y = (v) => m.t + H - (Math.min(v, o.yMax) / o.yMax) * H;
+    const g = el("g", { class: "grid" }, svg);
+    const yt = o.small ? [0, o.yMax / 2, o.yMax] : [0, 25, 50, 75, 100].filter((v) => v <= o.yMax);
+    for (const v of yt) {
+      el("line", { x1: m.l, x2: m.l + W, y1: Y(v), y2: Y(v) }, g);
+      el("text", { x: m.l - 4, y: Y(v) + 3.5, "text-anchor": "end" }, svg).textContent =
+        Math.round(v);
+    }
+    const step = tmax > 12 ? 4 : 2;
+    for (let t = 0; t <= tmax + 1e-6; t += step)
+      el("text", { x: X(t), y: o.h - 4, "text-anchor": "middle" }, svg).textContent =
+        t + (t === 0 ? " s" : "");
+    for (const e of o.events || [])
+      el(
+        "line",
+        {
+          x1: X(e.t),
+          x2: X(e.t),
+          y1: m.t,
+          y2: m.t + H,
+          stroke: tok("--line"),
+          "stroke-dasharray": "2 3",
+        },
+        svg,
+      );
+    for (const s of o.series) {
+      let d = "",
+        pen = false;
+      for (const [t, v] of s.pts) {
+        if (v == null) {
+          pen = false;
+          continue;
+        }
+        d += (pen ? "L" : "M") + X(t).toFixed(1) + " " + Y(v).toFixed(1);
+        pen = true;
+      }
+      el(
+        "path",
+        {
+          d,
+          fill: "none",
+          stroke: s.color,
+          "stroke-width": o.small ? 1.5 : 1.6,
+          "stroke-linejoin": "round",
+        },
+        svg,
+      );
+    }
+    const head = el(
+      "line",
+      { x1: m.l, x2: m.l, y1: m.t, y2: m.t + H, stroke: tok("--ink"), "stroke-width": 1 },
+      svg,
+    );
+    const hit = el(
+      "rect",
+      { x: m.l, y: m.t, width: W, height: H, fill: "transparent", style: "cursor:crosshair" },
+      svg,
+    );
+    const tAt = (ev) => {
+      const r = svg.getBoundingClientRect();
+      const sx = ((ev.clientX - r.left) / r.width) * o.w;
+      return Math.max(0, Math.min(tmax, ((sx - m.l) / W) * tmax));
+    };
+    hit.addEventListener("pointermove", (ev) => {
+      const t = tAt(ev);
+      const k = Math.round((t / tmax) * (o.series[0].pts.length - 1));
+      const rows = o.series
+        .map(
+          (s) =>
+            `<div class="row"><span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${s.color};margin-right:6px"></i>${s.name}</span><span>${s.pts[k][1] == null ? "–" : fmt(s.pts[k][1], 0) + o.unit}</span></div>`,
+        )
+        .join("");
+      showTip(`<b>${fmt(t, 2)} s</b>${rows}`, ev.clientX, ev.clientY);
+    });
+    hit.addEventListener("pointerleave", hideTip);
+    hit.addEventListener("click", (ev) => {
+      state.t = tAt(ev);
+    });
+    return {
+      set(t) {
+        const x = X(Math.min(t, tmax));
+        head.setAttribute("x1", x);
+        head.setAttribute("x2", x);
+      },
+    };
+  }
+  function updateReadouts(k) {
+    const sim = world.sim;
+    const meta = motorMeta(sim);
+    const tau = sim.log.tau[k];
+    meta.forEach((m, i) => {
+      const f = $("#mf" + i),
+        v = $("#mv" + i);
+      if (!f) return;
+      const u = Math.min(1, Math.abs(tau[i]) / m.peak);
+      f.style.width = (u * 100).toFixed(1) + "%";
+      v.textContent = fmt(Math.abs(tau[i]), 1) + " Nm";
+    });
+    torqueChart?.set(state.t);
+    forceChart?.set(state.t);
+    marginChart?.set(state.t);
+    const ev = sim.events.filter((e) => e.t <= state.t).pop();
+    $("#vpnote").innerHTML =
+      `<span class="tag"><b>${sim.title}</b></span>${ev ? `<span class="tag">${ev.label}</span>` : ""}<span class="tag">tool force <b>${fmt(Math.hypot(...sim.log.tool_force[k]), 0)} N</b></span>`;
+  }
+  $("#play").addEventListener("click", () => {
+    state.playing = !state.playing;
+    $("#play").textContent = state.playing ? "Pause" : "Play";
+  });
+  $("#scrub").addEventListener("input", (e) => {
+    state.t = Number(e.target.value) / 100;
+    state.playing = false;
+    $("#play").textContent = "Play";
+  });
+  $("#speed").addEventListener("change", (e) => {
+    state.speed = Number(e.target.value);
+  });
+
+  /* ----- Pose ----- */
+  const deg = (r) => (r * 180) / Math.PI,
+    rad = (d) => (d * Math.PI) / 180;
+  const FOLD = D.arch === "parallelogram" ? [18, 160] : [5, 165];
+  const PRESETS = {
+    Ready: { yaw: 0, th2: rad(62), th3: rad(-38), q4: rad(-62), roll: 0, grip: 0.03 },
+    "Ground, far": { yaw: 0, th2: rad(14), th3: rad(-58), q4: rad(-32), roll: 0, grip: 0.04 },
+    "Reach high": { yaw: 0, th2: rad(80), th3: rad(30), q4: rad(-30), roll: 0, grip: 0.04 },
+    Deck: { yaw: Math.PI, th2: rad(98), th3: rad(-38), q4: rad(-52), roll: 0, grip: 0.035 },
+    Stow: { yaw: 0, th2: rad(112), th3: rad(-25), q4: rad(-65), roll: 0, grip: 0.02 },
+  };
+  function renderPose() {
+    const p = state.pose;
+    const sl = (id, label, v, lo, hi, unit = "°", step = 1) =>
+      `<div class="slider"><label for="${id}">${label}</label><input type="range" id="${id}" min="${lo}" max="${hi}" step="${step}" value="${v}"><output id="${id}-o">${v}${unit}</output></div>`;
+    side.innerHTML = `
+    <div><h3>Pose the arm</h3><p>Pitch angles are absolute, as the parallelogram drives them: the elbow motor sets the forearm's angle to the horizon, whatever the shoulder does. The fold between the links is limited to ${FOLD[0]}–${FOLD[1]}°.</p></div>
+    <div class="presets">${Object.keys(PRESETS)
+      .map((k) => `<button type="button" class="btn" data-p="${k}">${k}</button>`)
+      .join("")}</div>
+    <div class="sliders">
+      ${sl("s-yaw", "Yaw", Math.round(deg(p.yaw)), -200, 200)}
+      ${sl("s-th2", "Upper arm", Math.round(deg(p.th2)), -35, 150)}
+      ${sl("s-th3", "Forearm", Math.round(deg(p.th3)), -150, 120)}
+      ${sl("s-q4", "Wrist", Math.round(deg(p.q4)), -125, 125)}
+      ${sl("s-roll", "Tool roll", Math.round(deg(p.roll)), -180, 180)}
+      ${sl("s-grip", "Gripper", Math.round(p.grip * 2000), 0, 120, " mm")}
+    </div>
+    <dl class="kv" id="pose-kv"></dl>
+    <div><h3>Actuators</h3><dl class="kv" style="margin-top:6px">${motorRows.map(([j, a]) => `<dt>${MOTOR_NAMES[j] || j}</dt><dd title="${a.name}">${a.name.split(" ")[0]} ${a.id.replace(/^(sw_|rs_|dm_|ft_|hx_)/, "").toUpperCase()} · ${fmt(a.rated, 1)}/${fmt(a.peak, 0)} Nm</dd>`).join("")}</dl></div>`;
+    const bind = (id, key, conv) => {
+      const i = $("#" + id),
+        o = $("#" + id + "-o");
+      i.addEventListener("input", () => {
+        let v = Number(i.value);
+        state.pose[key] = conv(v);
+        constrain(key);
+        o.textContent = i.value + (id === "s-grip" ? " mm" : "°");
+        updatePose();
+      });
+    };
+    bind("s-yaw", "yaw", rad);
+    bind("s-th2", "th2", rad);
+    bind("s-th3", "th3", rad);
+    bind("s-q4", "q4", rad);
+    bind("s-roll", "roll", rad);
+    bind("s-grip", "grip", (v) => v / 2000);
+    side.querySelectorAll("[data-p]").forEach((b) =>
+      b.addEventListener("click", () => {
+        state.pose = { ...PRESETS[b.dataset.p] };
+        renderPose();
+        updatePose();
+      }),
+    );
+    updatePose();
+  }
+  function constrain(key) {
+    const p = state.pose;
+    const fold = deg(p.th2 - p.th3);
+    if (fold < FOLD[0] || fold > FOLD[1]) {
+      const f = rad(Math.min(FOLD[1], Math.max(FOLD[0], fold)));
+      if (key === "th3") p.th2 = p.th3 + f;
+      else p.th3 = p.th2 - f;
+      const a = $("#s-th2"),
+        b = $("#s-th3");
+      if (a) {
+        a.value = Math.round(deg(p.th2));
+        $("#s-th2-o").textContent = a.value + "°";
+      }
+      if (b) {
+        b.value = Math.round(deg(p.th3));
+        $("#s-th3-o").textContent = b.value + "°";
+      }
+    }
+  }
+  function updatePose() {
+    const tcp = poseFK(state.pose);
+    const kv = $("#pose-kv");
+    if (!kv) return;
+    const fold = deg(state.pose.th2 - state.pose.th3);
+    kv.innerHTML = `<dt>Tool tip (x, y, z)</dt><dd>${fmt(tcp.x, 2)}, ${fmt(tcp.y, 2)}, ${fmt(tcp.z, 2)} m</dd><dt>Height above ground</dt><dd>${fmt(tcp.z * 100, 0)} cm</dd><dt>Elbow fold</dt><dd>${fmt(fold, 0)}°</dd>`;
+    $("#vpnote").innerHTML = `<span class="tag"><b>Pose</b> drag to orbit · scroll to zoom</span>`;
+  }
+
+  /* ----- Workspace ----- */
+  function buildWorkspaceCloud() {
+    if (wsCloud) return;
+    const geo = new THREE.SphereGeometry(0.0085, 10, 8);
+    const mat = new THREE.MeshStandardMaterial({ roughness: 0.5 });
+    wsCloud = new THREE.InstancedMesh(geo, mat, ws.points.length);
+    const M = new THREE.Matrix4();
+    ws.points.forEach((p, i) => {
+      M.makeTranslation(p[0], p[1], p[2] + 0.009);
+      wsCloud.setMatrixAt(i, M);
+    });
+    scene.add(wsCloud);
+    const feet = HX.feet.map((f) => new THREE.Vector2(f[0], f[1]));
+    const shape = new THREE.Shape(feet);
+    polygon = new THREE.Mesh(
+      new THREE.ShapeGeometry(shape),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(tok("--accent")),
+        transparent: true,
+        opacity: 0.16,
+        depthWrite: false,
+      }),
+    );
+    polygon.position.z = 0.002;
+    scene.add(polygon);
+  }
+  function colorWorkspace() {
+    const c = {
+      2: new THREE.Color(tok("--good")),
+      1: new THREE.Color(tok("--warning")),
+      0: new THREE.Color(tok("--off")),
+    };
+    const hidden = new THREE.Matrix4().makeScale(0, 0, 0),
+      M = new THREE.Matrix4();
+    ws.points.forEach((p, i) => {
+      const show = state.wsTask < 0 || p[3] === state.wsTask;
+      if (show) M.makeTranslation(p[0], p[1], p[2] + 0.009);
+      else M.copy(hidden);
+      wsCloud.setMatrixAt(i, M);
+      wsCloud.setColorAt(i, c[p[4]]);
+    });
+    wsCloud.instanceMatrix.needsUpdate = true;
+    if (wsCloud.instanceColor) wsCloud.instanceColor.needsUpdate = true;
+  }
+  function renderWorkspace() {
+    buildWorkspaceCloud();
+    wsCloud.visible = true;
+    polygon.visible = true;
+    const counts = [0, 0, 0];
+    ws.points.forEach((p) => {
+      if (state.wsTask < 0 || p[3] === state.wsTask) counts[p[4]]++;
+    });
+    side.innerHTML = `
+    <div><h3>Where it can work</h3><p>Every point the 17 tasks are scored on, around a standing hexapod. Pick a task to see only its points. The shaded shape on the ground is the support polygon between the feet.</p></div>
+    <div class="status-key"><span><i style="background:var(--good)"></i>Served (${counts[2]})</span><span><i style="background:var(--warning)"></i>Reached, but over a torque or tipping limit (${counts[1]})</span><span><i style="background:var(--off)"></i>Out of reach or blocked (${counts[0]})</span></div>
+    <div class="tasks" id="tasks">
+      <button type="button" class="task" data-i="-1" aria-pressed="${state.wsTask < 0}"><span><b>All tasks</b> · weighted score</span><span class="tb"><i style="width:${ws.score * 100}%;background:var(--good)"></i></span><span class="pct">${Math.round(ws.score * 100)}%</span></button>
+      ${ws.tasks.map((t, i) => `<button type="button" class="task" data-i="${i}" aria-pressed="${state.wsTask === i}"><span>${t.name}</span><span class="tb"><i style="width:${t.reach * 100}%;background:var(--warning)"></i><i style="width:${t.served * 100}%;background:var(--good)"></i></span><span class="pct">${Math.round(t.served * 100)}%</span></button>`).join("")}
+    </div>`;
+    side.querySelectorAll("#tasks .task").forEach((b) =>
+      b.addEventListener("click", () => {
+        state.wsTask = Number(b.dataset.i);
+        renderWorkspace();
+      }),
+    );
+    colorWorkspace();
+    $("#vpnote").innerHTML =
+      `<span class="tag"><b>Workspace</b> ${state.wsTask < 0 ? "all tasks" : ws.tasks[state.wsTask].name}</span>`;
+  }
+
+  /* ---------- render loop ---------- */
+  let last = performance.now(),
+    lastUi = 0;
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (world && state.mode === "sim") {
+      const T = world.sim.log.t,
+        dur = T[T.length - 1];
+      if (state.playing) {
+        state.t += dt * state.speed;
+        if (state.t > dur) state.t = 0;
+      }
+      const k = applyFrame(state.t);
+      if (now - lastUi > 80) {
+        lastUi = now;
+        updateReadouts(k);
+        $("#scrub").value = String(Math.round(state.t * 100));
+        $("#tlabel").textContent = fmt(state.t, 1) + " / " + fmt(dur, 1) + " s";
+      }
+    }
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  }
+  $("#vpmsg").remove();
+  await selectSim(state.simId);
+  requestAnimationFrame(loop);
+
+  /* ---------- trade-study charts ---------- */
+  function axes(svg, o) {
+    const { m, W, H, X, Y, xt, yt, xl, yl, xf, yf } = o;
+    const g = el("g", { class: "grid" }, svg);
+    for (const v of yt) {
+      el("line", { x1: m.l, x2: m.l + W, y1: Y(v), y2: Y(v) }, g);
+      el("text", { x: m.l - 6, y: Y(v) + 3.5, "text-anchor": "end" }, svg).textContent = yf(v);
+    }
+    for (const v of xt) {
+      el("line", { x1: X(v), x2: X(v), y1: m.t + H, y2: m.t + H + 4 }, g);
+      el("text", { x: X(v), y: m.t + H + 16, "text-anchor": "middle" }, svg).textContent = xf(v);
+    }
+    el("text", { x: m.l + W, y: m.t + H + 30, "text-anchor": "end" }, svg).textContent = xl;
+    el("text", { x: m.l - 6, y: m.t - 8, "text-anchor": "start" }, svg).textContent = yl;
+  }
+  function frontierOf(rows) {
+    const s = [...rows].sort((a, b) => a.cost - b.cost || b.score - a.score);
+    const out = [];
+    let best = -1;
+    for (const r of s)
+      if (r.score > best + 1e-9) {
+        out.push(r);
+        best = r.score;
+      }
+    return out;
+  }
+  function stepPath(rows, X, Y) {
+    let d = "";
+    rows.forEach((r, i) => {
+      d += i
+        ? `H${X(r.cost).toFixed(1)}V${Y(r.score).toFixed(1)}`
+        : `M${X(r.cost).toFixed(1)} ${Y(r.score).toFixed(1)}`;
+    });
+    return d;
+  }
+  function rowTip(r) {
+    const a = Object.entries(r.actuators)
+      .map(
+        ([j, id]) => `<div class="row"><span>${MOTOR_NAMES[j] || j}</span><span>${id}</span></div>`,
+      )
+      .join("");
+    return `<b>${usd(r.cost)} · ${Math.round(r.score * 100)}% served</b><div class="row"><span>${r.label}</span></div><div class="row"><span>mass</span><span>${fmt(r.mass, 2)} kg</span></div><div class="row"><span>backlash</span><span>${fmt(r.backlash_mm, 1)} mm</span></div>${a}`;
+  }
+  function drawPareto() {
+    const svg = $("#ch-pareto");
+    svg.innerHTML = "";
+    const rows = study.stage_b;
+    const m = { l: 44, r: 12, t: 22, b: 40 },
+      W = 560 - m.l - m.r,
+      H = 330 - m.t - m.b;
+    const x0 = 250,
+      x1 = Math.max(1100, Math.ceil(Math.max(...rows.map((r) => r.cost)) / 100) * 100);
+    const X = (v) => m.l + ((Math.min(v, x1) - x0) / (x1 - x0)) * W,
+      Y = (v) => m.t + H - v * H;
+    axes(svg, {
+      m,
+      W,
+      H,
+      X,
+      Y,
+      xt: [300, 500, 700, 900, x1].filter((v, i, a) => a.indexOf(v) === i && v <= x1),
+      yt: [0, 0.25, 0.5, 0.75, 1],
+      xl: "parts cost per arm",
+      yl: "share of task points served",
+      xf: usd,
+      yf: (v) => Math.round(v * 100) + "%",
+    });
+    const colors = { any: tok("--series-2"), field: tok("--series-1") };
+    const pts = el("g", {}, svg);
+    for (const r of rows)
+      el(
+        "circle",
+        { cx: X(r.cost), cy: Y(r.score), r: 3, fill: colors[r.tier], opacity: 0.22 },
+        pts,
+      );
+    for (const tier of ["any", "field"]) {
+      const f = frontierOf(rows.filter((r) => r.tier === tier));
+      el(
+        "path",
+        { d: stepPath(f, X, Y), fill: "none", stroke: colors[tier], "stroke-width": 2 },
+        svg,
+      );
+    }
+    const s = { cost: selected.cost, score: rows.length ? null : 0 };
+    const near = rows
+      .filter((r) => r.tier === "field")
+      .reduce(
+        (b, r) =>
+          Math.abs(r.cost - selected.cost) < Math.abs((b?.cost ?? 1e9) - selected.cost) ? r : b,
+        null,
+      );
+    const sy = near ? near.score : selected.score;
+    el(
+      "circle",
+      {
+        cx: X(selected.cost),
+        cy: Y(sy),
+        r: 7,
+        fill: "none",
+        stroke: tok("--ink"),
+        "stroke-width": 2,
+      },
+      svg,
+    );
+    el("circle", { cx: X(selected.cost), cy: Y(sy), r: 3.5, fill: tok("--ink") }, svg);
+    const lx = X(selected.cost) + 10,
+      ly = Y(sy) + 22;
+    el("text", { x: lx, y: ly, fill: tok("--ink"), style: "font-weight:600" }, svg).textContent =
+      `FA-1 · ${usd(selected.cost)}`;
+    $("#lg-pareto").innerHTML =
+      `<span><i class="dot" style="background:${colors.field}"></i>Field grade</span><span><i class="dot" style="background:${colors.any}"></i>Any actuator (hobby servos, steppers allowed)</span><span><i class="dot" style="border:2px solid ${tok("--ink")};background:transparent"></i>Chosen</span>`;
+    const hit = el("rect", { x: m.l, y: m.t, width: W, height: H, fill: "transparent" }, svg);
+    hit.addEventListener("pointermove", (ev) => {
+      const r = svg.getBoundingClientRect();
+      const sx = ((ev.clientX - r.left) / r.width) * 560,
+        sy2 = ((ev.clientY - r.top) / r.height) * 330;
+      let best = null,
+        bd = 1e9;
+      for (const row of rows) {
+        const d = (X(row.cost) - sx) ** 2 + (Y(row.score) - sy2) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = row;
+        }
+      }
+      if (best && bd < 400) showTip(rowTip(best), ev.clientX, ev.clientY);
+      else hideTip();
+    });
+    hit.addEventListener("pointerleave", hideTip);
+  }
+  function drawArch() {
+    const svg = $("#ch-arch");
+    svg.innerHTML = "";
+    const rows = study.stage_b.filter((r) => r.tier === "field");
+    const groups = [
+      ["5-DOF parallelogram", (r) => r.design.dof === 5 && r.design.arch === "parallelogram"],
+      ["5-DOF direct elbow", (r) => r.design.dof === 5 && r.design.arch === "direct"],
+      ["6-DOF parallelogram", (r) => r.design.dof === 6 && r.design.arch === "parallelogram"],
+      ["6-DOF direct elbow", (r) => r.design.dof === 6 && r.design.arch === "direct"],
+    ];
+    const m = { l: 44, r: 12, t: 22, b: 40 },
+      W = 560 - m.l - m.r,
+      H = 330 - m.t - m.b;
+    const all = rows.map((r) => r.cost);
+    const x0 = Math.floor(Math.min(...all, 400) / 100) * 100,
+      x1 = Math.ceil(Math.max(...all, 900) / 100) * 100;
+    const X = (v) => m.l + ((v - x0) / (x1 - x0)) * W,
+      Y = (v) => m.t + H - v * H;
+    const xt = [];
+    for (let v = x0; v <= x1; v += x1 - x0 > 700 ? 200 : 100) xt.push(v);
+    axes(svg, {
+      m,
+      W,
+      H,
+      X,
+      Y,
+      xt,
+      yt: [0, 0.25, 0.5, 0.75, 1],
+      xl: "parts cost per arm",
+      yl: "share of task points served",
+      xf: usd,
+      yf: (v) => Math.round(v * 100) + "%",
+    });
+    const leg = [];
+    groups.forEach(([name, f], i) => {
+      const fr = frontierOf(rows.filter(f));
+      const color = tok(SERIES[i]);
+      leg.push(`<span><i style="background:${color}"></i>${name}</span>`);
+      if (!fr.length) return;
+      el("path", { d: stepPath(fr, X, Y), fill: "none", stroke: color, "stroke-width": 2 }, svg);
+      for (const r of fr)
+        el(
+          "circle",
+          {
+            cx: X(r.cost),
+            cy: Y(r.score),
+            r: 3.2,
+            fill: color,
+            stroke: tok("--panel"),
+            "stroke-width": 1.5,
+          },
+          svg,
+        );
+    });
+    $("#lg-arch").innerHTML = leg.join("");
+  }
+  function drawHeat() {
+    const svg = $("#ch-heat");
+    svg.innerHTML = "";
+    const rows = study.stage_a.filter(
+      (r) =>
+        r.d.dof === D.dof &&
+        r.d.arch === D.arch &&
+        Math.abs(r.d.mount_x - D.mount_x) < 1e-6 &&
+        Math.abs(r.d.pedestal - D.pedestal) < 1e-6,
+    );
+    const L1 = [...new Set(rows.map((r) => r.d.l1))].sort((a, b) => a - b),
+      L2 = [...new Set(rows.map((r) => r.d.l2))].sort((a, b) => a - b);
+    $("#heat-sub").textContent =
+      `Kinematic coverage (reach, approach, collisions, tip-over) by upper-arm and forearm length, for a ${D.dof}-DOF ${D.arch === "parallelogram" ? "parallelogram" : "direct-elbow"} arm mounted ${Math.round(D.mount_x * 100)} cm forward with a ${Math.round(D.pedestal * 100)} cm pedestal. Longer links reach more but need bigger motors; the outlined cell is FA-1.`;
+    const m = { l: 56, r: 70, t: 14, b: 44 },
+      W = 560 - m.l - m.r,
+      H = 360 - m.t - m.b;
+    const cw = W / L2.length,
+      ch = H / L1.length;
+    const ramp = ["--seq-1", "--seq-2", "--seq-3", "--seq-4", "--seq-5", "--seq-6", "--seq-7"].map(
+      tok,
+    );
+    const smin = Math.min(...rows.map((r) => r.s)),
+      smax = Math.max(...rows.map((r) => r.s));
+    const col = (s) => ramp[Math.min(6, Math.floor(((s - smin) / (smax - smin + 1e-9)) * 7))];
+    for (const r of rows) {
+      const i = L1.indexOf(r.d.l1),
+        j = L2.indexOf(r.d.l2);
+      const x = m.l + j * cw,
+        y = m.t + H - (i + 1) * ch;
+      const rect = el(
+        "rect",
+        { x: x + 1, y: y + 1, width: cw - 2, height: ch - 2, rx: 2, fill: col(r.s) },
+        svg,
+      );
+      rect.addEventListener("pointermove", (ev) =>
+        showTip(
+          `<b>${Math.round(r.s * 100)}% reachable</b><div class="row"><span>upper arm</span><span>${Math.round(r.d.l1 * 1000)} mm</span></div><div class="row"><span>forearm</span><span>${Math.round(r.d.l2 * 1000)} mm</span></div>`,
+          ev.clientX,
+          ev.clientY,
+        ),
+      );
+      rect.addEventListener("pointerleave", hideTip);
+      if (Math.abs(r.d.l1 - D.l1) < 1e-6 && Math.abs(r.d.l2 - D.l2) < 1e-6)
+        el(
+          "rect",
+          {
+            x: x + 1,
+            y: y + 1,
+            width: cw - 2,
+            height: ch - 2,
+            rx: 2,
+            fill: "none",
+            stroke: tok("--accent"),
+            "stroke-width": 3,
+          },
+          svg,
+        );
+    }
+    L2.forEach(
+      (v, j) =>
+        (el(
+          "text",
+          { x: m.l + (j + 0.5) * cw, y: m.t + H + 16, "text-anchor": "middle" },
+          svg,
+        ).textContent = Math.round(v * 1000)),
+    );
+    L1.forEach(
+      (v, i) =>
+        (el(
+          "text",
+          { x: m.l - 6, y: m.t + H - (i + 0.5) * ch + 3.5, "text-anchor": "end" },
+          svg,
+        ).textContent = Math.round(v * 1000)),
+    );
+    el("text", { x: m.l + W, y: m.t + H + 34, "text-anchor": "end" }, svg).textContent =
+      "forearm, mm";
+    el("text", { x: 4, y: m.t + 8 }, svg).textContent = "upper";
+    el("text", { x: 4, y: m.t + 20 }, svg).textContent = "arm, mm";
+    // ramp legend
+    const lx = 560 - m.r + 18;
+    ramp.forEach((c, k) =>
+      el(
+        "rect",
+        { x: lx, y: m.t + H - (k + 1) * (H / 7), width: 12, height: H / 7 - 2, fill: c },
+        svg,
+      ),
+    );
+    el("text", { x: lx + 16, y: m.t + 8 }, svg).textContent = Math.round(smax * 100) + "%";
+    el("text", { x: lx + 16, y: m.t + H }, svg).textContent = Math.round(smin * 100) + "%";
+  }
+  function drawBench() {
+    const svg = $("#ch-bench");
+    svg.innerHTML = "";
+    const rows = study.benchmarks
+      .map((b) => ({
+        name: b.name.replace(/\s*\(.*?\)\s*/g, " ").trim(),
+        v: Number(b.price_usd) / ((Number(b.payload_kg) * Number(b.reach_mm)) / 1000),
+        kind: b.price_kind,
+        mass: b.mass_kg,
+        act: b.actuators,
+      }))
+      .filter((r) => isFinite(r.v) && r.v > 0);
+    const ours = [
+      {
+        name: "FA-1, continuous, full stretch",
+        v: selected.cost / (selected.payload.continuous_kg * selected.payload.reach_m),
+        ours: true,
+      },
+      {
+        name: "FA-1, peak",
+        v: selected.cost / (selected.payload.peak_kg * selected.payload.reach_m),
+        ours: true,
+      },
+    ];
+    const all = [...rows, ...ours].sort((a, b) => a.v - b.v).slice(0, 22);
+    const m = { l: 196, r: 46, t: 8, b: 30 },
+      W = 560 - m.l - m.r,
+      rowH = (420 - m.t - m.b) / all.length;
+    const lo = 100,
+      hi = Math.pow(10, Math.ceil(Math.log10(Math.max(...all.map((r) => r.v)))));
+    const X = (v) =>
+      m.l + ((Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo))) * W;
+    for (let d = lo; d <= hi; d *= 10) {
+      el(
+        "line",
+        { x1: X(d), x2: X(d), y1: m.t, y2: m.t + all.length * rowH, stroke: tok("--line") },
+        svg,
+      );
+      el("text", { x: X(d), y: 420 - 12, "text-anchor": "middle" }, svg).textContent = usd(d);
+    }
+    all.forEach((r, i) => {
+      const y = m.t + i * rowH;
+      const label = r.name.length > 30 ? r.name.slice(0, 29) + "…" : r.name;
+      el(
+        "text",
+        {
+          x: m.l - 6,
+          y: y + rowH * 0.68,
+          "text-anchor": "end",
+          fill: r.ours ? tok("--ink") : tok("--ink-2"),
+          style: r.ours ? "font-weight:700" : "",
+        },
+        svg,
+      ).textContent = label;
+      const bar = el(
+        "rect",
+        {
+          x: m.l,
+          y: y + rowH * 0.2,
+          width: Math.max(2, X(r.v) - m.l),
+          height: rowH * 0.6,
+          rx: 2,
+          fill: r.ours ? tok("--accent") : tok("--off"),
+        },
+        svg,
+      );
+      el("text", { x: X(r.v) + 4, y: y + rowH * 0.68, fill: tok("--ink-2") }, svg).textContent =
+        usd(r.v);
+      bar.addEventListener("pointermove", (ev) =>
+        showTip(
+          `<b>${r.name}</b><div class="row"><span>per kg·m</span><span>${usd(r.v)}</span></div>${r.kind ? `<div class="row"><span>${r.kind}</span></div>` : ""}${r.act ? `<div class="row"><span>${r.act.slice(0, 80)}</span></div>` : ""}`,
+          ev.clientX,
+          ev.clientY,
+        ),
+      );
+      bar.addEventListener("pointerleave", hideTip);
+    });
+  }
+  function drawCharts() {
+    drawPareto();
+    drawArch();
+    drawHeat();
+    drawBench();
+  }
+  drawCharts();
+
+  /* ---------- decisions ---------- */
+  const field = study.stage_b.filter((r) => r.tier === "field");
+  function bestAt(f, cost) {
+    const c = field.filter(f).filter((r) => r.cost <= cost);
+    return c.length ? Math.max(...c.map((r) => r.score)) : 0;
+  }
+  const para5 = bestAt(
+    (r) => r.design.arch === "parallelogram" && r.design.dof === D.dof,
+    selected.cost * 1.0001,
+  );
+  const dir5 = bestAt(
+    (r) => r.design.arch === "direct" && r.design.dof === D.dof,
+    selected.cost * 1.0001,
+  );
+  const weedArm = sims.find((s) => s.id === "weed_arm"),
+    weedBody = sims.find((s) => s.id === "weed_body");
+  const shIdx = 1;
+  const decs = [
+    [
+      "Parallelogram elbow",
+      `${Math.round(para5 * 100)}% vs ${Math.round(dir5 * 100)}%`,
+      `The elbow motor sits on the turret beside the shoulder and drives the forearm through a crank and a rod. A pull's moment is split between two motors instead of stacking on the shoulder, and no motor rides on the arm. At FA-1's price, the best direct-elbow ${D.dof}-DOF design serves ${Math.round(dir5 * 100)}% of task points; the parallelogram serves ${Math.round(para5 * 100)}%.`,
+    ],
+    [
+      D.spring ? "Zero-length gravity springs" : "No springs",
+      D.spring ? "arm weight → 0" : "—",
+      D.spring
+        ? "With the parallelogram, each motor sees one absolute angle, so a zero-length spring (spring and cable over a pulley) cancels the arm's own weight at every pose. The motors only carry the payload and the task, which is what lets mid-size actuators hold a 1 kg rock at full reach."
+        : "Springs did not pay for themselves on this geometry.",
+    ],
+    [
+      "QDD where it counts",
+      `${selected.actuators.shoulder.name.split(" + ")[0]}`,
+      `The yaw, shoulder and elbow are backdrivable quasi-direct-drive actuators: motor current is a force sensor (it feels the soil, a stem or a person), a fall or a branch back-drives them instead of stripping gears, and they cost less per newton-metre than smart servos. The wrist joints carry far less torque, so they use the cheapest part that holds it.`,
+    ],
+    [
+      "The legs are three more axes",
+      weedArm && weedBody
+        ? `${Math.round(weedArm.summary.peak_util[shIdx] * 100)}% → ${Math.round(weedBody.summary.peak_util[shIdx] * 100)}%`
+        : "",
+      `The hexapod can raise, tip and slide its body with the feet planted. For a 60 N taproot, leaning the body 12 cm over the weed before the legs lift cut the shoulder's peak load from ${weedArm ? Math.round(weedArm.summary.peak_util[shIdx] * 100) : "–"}% to ${weedBody ? Math.round(weedBody.summary.peak_util[shIdx] * 100) : "–"}% of its peak torque. The arm doesn't need extra joints or longer links for what the body can do.`,
+    ],
+    [
+      "Soil takes the body's weight",
+      "≤ ~0.75 × weight",
+      "A 10–20 mm soil core needs 130–900 N, more than an 8–20 kg robot weighs. The arm only holds the probe straight; the body lowers itself to press it in. Deeper cores need a rotary auger tool, not a stronger arm.",
+    ],
+    [
+      "One flange, many tools",
+      "6 pogo pins",
+      "A passive bayonet tool changer locks with the tool-roll joint, so changing tools needs no extra motor. Pogo pins carry power, CAN and two spare lines to powered tools (shears, pump valve, sensor head). The fin-ray TPU gripper picks fruit without bruising and doubles as the weed puller.",
+    ],
+  ];
+  $("#decisions").innerHTML = decs
+    .map(
+      ([h, f, p]) =>
+        `<article class="dec"><h3>${h}</h3><div class="fig">${f}</div><p>${p}</p></article>`,
+    )
+    .join("");
+
+  /* ---------- BOM ---------- */
+  const groups = {};
+  for (const r of bom) (groups[r.group] ||= []).push(r);
+  let total = 0,
+    html = `<thead><tr><th>Item</th><th>Where</th><th class="r">USD</th></tr></thead><tbody>`;
+  for (const [g, rows] of Object.entries(groups)) {
+    const sub = rows.reduce((a, r) => a + r.usd, 0);
+    total += sub;
+    html += `<tr class="group"><td colspan="2">${g}</td><td class="r">${usd(sub)}</td></tr>`;
+    for (const r of rows)
+      html += `<tr><td>${r.item}</td><td>${r.where || ""}</td><td class="r">${usd(r.usd)}</td></tr>`;
+  }
+  html += `<tr class="total"><td colspan="2">Total per arm</td><td class="r">${usd(total)}</td></tr></tbody>`;
+  $("#bom").innerHTML = html;
+  const pp = selected.printed_parts;
+  $("#printed").innerHTML =
+    `<thead><tr><th>Printed part</th><th>On</th><th class="r">g</th></tr></thead><tbody>${pp.map((p) => `<tr><td>${p.part.replace(" (printed)", "").replace(" (TPU)", " · TPU")}</td><td>${p.link.replace("tool_", "tool: ")}</td><td class="r">${fmt(p.grams, 0)}</td></tr>`).join("")}<tr class="total"><td colspan="2">Filament, all parts</td><td class="r">${fmt(selected.printed_grams, 0)}</td></tr></tbody>`;
+</script>
