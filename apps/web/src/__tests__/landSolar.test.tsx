@@ -84,18 +84,16 @@ it("links physical assumptions without fabricating an equivalent irradiation or 
 });
 it("invalidates review on edits and restores unfinished assumptions after reload", async () => {
   vi.spyOn(api, "GET").mockResolvedValue({ data: [], response: new Response() });
-  const post = vi
-    .spyOn(api, "POST")
-    .mockResolvedValue({
-      data: {
-        mappedZoneAreaM2: 10000,
-        capacityKwDc: 20,
-        inverterKwAc: 16.67,
-        longitude: -77.05,
-        latitude: 38.889,
-      },
-      response: new Response(),
-    });
+  const post = vi.spyOn(api, "POST").mockResolvedValue({
+    data: {
+      mappedZoneAreaM2: 10000,
+      capacityKwDc: 20,
+      inverterKwAc: 16.67,
+      longitude: -77.05,
+      latitude: 38.889,
+    },
+    response: new Response(),
+  });
   const view = mount();
   fireEvent.click(screen.getByRole("button", { name: "New hourly solar assessment" }));
   fireEvent.click(screen.getByRole("button", { name: "Use land boundary" }));
