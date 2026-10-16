@@ -39,7 +39,17 @@ vi.mock("@/api/queries", async (importOriginal) => ({
 }));
 
 const { approveDraft, setPlanStatus } = await import("@/features/mission/planDrafting");
-const { planOnLand } = await import("@/features/mission/landPlanning");
+const { engageLand, missionProjectName, planOnLand } =
+  await import("@/features/mission/landPlanning");
+
+const OTHER_ID = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+const otherLand = { ...land, id: OTHER_ID, name: "Creek Field" };
+const otherGround = {
+  ...ground,
+  landId: OTHER_ID,
+  name: "Creek Field",
+  items: ground.items.map((item) => ({ ...item, zoneId: item.zoneId.replace("L-", "L-b") })),
+};
 
 const draft = (zoneIds: string[]): PlanDraft => ({
   title: "Weekly fence check",
@@ -233,5 +243,42 @@ describe("plans on a saved land stay private", () => {
     });
     expect(state.log.at(-1)?.text).toContain("monitor the fence every week");
     expect(api.fetchLandGround).toHaveBeenCalledWith(LAND_ID, 2);
+  });
+
+  it("never layers one land's ground onto another land's project: the switch waits for the card", async () => {
+    useMission
+      .getState()
+      .engageLand({ landId: LAND_ID, zones: landZones(ground) }, landProject(land, ground));
+    useMission.getState().openComposer({ goal: "monitor the fence", zoneIds: ["L-0f1e2d3c"] });
+    api.fetchLandGround.mockResolvedValue(otherGround);
+    useLand.getState().select(otherLand);
+    expect(await engageLand(otherLand)).toBeNull();
+    let state = useMission.getState();
+    expect(state.project?.id).toBe(`land:${LAND_ID}`);
+    expect(state.landGround?.landId).toBe(LAND_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === OTHER_ID)).toBe(false);
+    expect(state.composer?.goal).toBe("monitor the fence");
+    expect(state.log.at(-1)?.text).toBe(
+      "Creek Field opens in Plan once you approve or close the plan card on Oak Bench.",
+    );
+    // Without the Land's own project too: the store never layers onto another Land's project.
+    useMission.getState().engageLand({ landId: OTHER_ID, zones: landZones(otherGround) });
+    expect(useMission.getState().landGround?.landId).toBe(LAND_ID);
+    useMission.getState().closeComposer();
+    await vi.waitFor(() => expect(useMission.getState().project?.id).toBe(`land:${OTHER_ID}`));
+    state = useMission.getState();
+    expect(state.landGround?.landId).toBe(OTHER_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
+  });
+
+  it("names a mission's project in the copy, never its id", () => {
+    const demo = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+    useMission.getState().setProject(landProject(land, ground));
+    expect(missionProjectName(demo.id, undefined)).toBe(demo.name);
+    expect(missionProjectName(`land:${LAND_ID}`, undefined)).toBe("Oak Bench");
+    expect(missionProjectName(`land:${OTHER_ID}`, undefined)).toBeNull();
+    const site = { id: "5d0c", slug: "west-yard", name: "West yard" };
+    expect(missionProjectName("site-5d0c", [site as never])).toBe("West yard");
+    expect(missionProjectName("site-nope", [site as never])).toBeNull();
   });
 });

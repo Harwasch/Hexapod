@@ -383,16 +383,26 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
           <span className="mc-dot mc-dot--glow mc-dot--run" aria-hidden="true" />
           <span>{plan.agentNote}</span>
         </div>
+        {plan.landActionId && !plan.landId && (
+          <p className="mc-muted" data-testid="plan-land-gone">
+            This mission came from a land action whose land was deleted, so it can no longer be
+            revised.
+          </p>
+        )}
         <div className="mc-actions">
-          {plan.landActionId && plan.landId ? (
-            <button
-              type="button"
-              className="mc-btn"
-              onClick={() => void openLandActions(plan.landId ?? "")}
-              data-testid="plan-revise-in-land"
-            >
-              Revise the action in Land
-            </button>
+          {plan.landActionId ? (
+            plan.landId && (
+              // A land action's mission is revised as the action, in Land; the workspace
+              // route refuses a revision here whether or not the land still exists.
+              <button
+                type="button"
+                className="mc-btn"
+                onClick={() => void openLandActions(plan.landId ?? "")}
+                data-testid="plan-revise-in-land"
+              >
+                Revise the action in Land
+              </button>
+            )
           ) : (
             <button
               type="button"

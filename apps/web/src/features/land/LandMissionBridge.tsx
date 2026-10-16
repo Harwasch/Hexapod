@@ -1,6 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
+import { boundsOf } from "@twin/geo";
+
+import { useScene } from "@/cesium/SceneContext";
 import { engageLand } from "@/features/mission/landPlanning";
 import { useLand } from "@/state/land";
 import { useLandScope } from "@/state/landIdentity";
@@ -23,6 +26,11 @@ export function LandMissionBridge() {
   const projectId = useMission((s) => s.project?.id ?? null);
   const scope = useLandScope();
   const client = useQueryClient();
+  const scene = useScene();
+  const sceneRef = useRef(scene);
+  useEffect(() => {
+    sceneRef.current = scene;
+  }, [scene]);
   const landId = active?.id ?? null;
   const revision = active?.revision ?? null;
   const browsing = mode === "browse" && !drafting;
@@ -34,7 +42,21 @@ export function LandMissionBridge() {
     }
     const land = useLand.getState().active;
     if (!land || !browsing) return;
-    engageLand(land).catch((error: unknown) => {
+    // A switch that waited for a plan card on another Land happens later, wherever the camera
+    // went meanwhile: frame the Land then, so its plans and its ground are in view together.
+    const frame = () => {
+      const b = boundsOf(land.boundary);
+      const dx = Math.max(0.0001, b.east - b.west);
+      const dy = Math.max(0.0001, b.north - b.south);
+      // Room on the east for the plan panel, as the Land panel leaves room on the west.
+      sceneRef.current?.camera.flyToRectangle(
+        Math.max(-180, b.west - dx * 0.35),
+        Math.max(-90, b.south - dy * 0.35),
+        Math.min(180, b.east + dx * 1.1),
+        Math.min(90, b.north + dy * 0.35),
+      );
+    };
+    engageLand(land, { onWaitedSwitch: frame }).catch((error: unknown) => {
       console.warn("Land ground could not be loaded", error);
     });
   }, [landId, revision, browsing]);

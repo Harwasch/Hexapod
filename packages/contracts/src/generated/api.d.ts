@@ -8820,6 +8820,8 @@ export interface components {
          *     the console shows beside the number.
          */
         ZoneCoverage: {
+            /** Altitudem */
+            altitudeM?: number | null;
             /** Aream2 */
             areaM2: number | null;
             /** Basis */

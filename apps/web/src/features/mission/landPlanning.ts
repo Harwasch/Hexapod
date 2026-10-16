@@ -12,11 +12,13 @@
 
 import type { QueryClient } from "@tanstack/react-query";
 
-import type { LandArea, PlanRecord } from "@twin/contracts";
+import type { LandArea, PlanRecord, SiteSummary } from "@twin/contracts";
 
 import { api, unwrap } from "@/api/client";
-import { fetchLandGround } from "@/api/queries";
+import { fetchLandGround, queryKeys } from "@/api/queries";
+import { siteDisplayName } from "@/features/sites/siteNames";
 import { describeError } from "@/lib/log";
+import { DEMO_PROJECT } from "@/missions/demo";
 import {
   boundaryZoneOf,
   groundModeFor,
@@ -25,6 +27,7 @@ import {
   landProjectId,
   landZones,
 } from "@/missions/landGround";
+import { siteProjectId } from "@/missions/siteProject";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useMission } from "@/state/mission";
@@ -38,7 +41,11 @@ import { useUi } from "@/state/ui";
  */
 export async function engageLand(
   land: LandArea,
-  options: { layerOnly?: boolean } = {},
+  options: {
+    layerOnly?: boolean;
+    /** Called when a switch that waited for an open plan card happens (to frame the land). */
+    onWaitedSwitch?: () => void;
+  } = {},
 ): Promise<"layer" | "project" | null> {
   const ground = await fetchLandGround(land.id, land.revision);
   if (useLand.getState().active?.id !== land.id) return null;
@@ -51,7 +58,63 @@ export async function engageLand(
   }
   if (options.layerOnly && !own) return null;
   store.engageLand({ landId: land.id, zones }, landProject(land, ground));
-  return "project";
+  if (useMission.getState().landGround?.landId === land.id) return "project";
+  // A plan card is open on another Land's project: its ground cannot take this Land's, so
+  // the switch waits until the card is approved or closed.
+  waitForCard(land, options.onWaitedSwitch);
+  return null;
+}
+
+/** The Land whose switch waits for the open plan card (its latest record), and how to stop. */
+let waiting: { land: LandArea; onSwitch?: () => void; stop: () => void } | null = null;
+
+function waitForCard(land: LandArea, onSwitch?: () => void): void {
+  if (waiting?.land.id === land.id) {
+    // Selected again, or its boundary revised meanwhile: the switch takes the latest record.
+    waiting = { ...waiting, land, onSwitch };
+    return;
+  }
+  waiting?.stop();
+  const card = useMission.getState().project?.name ?? "the current project";
+  useMission
+    .getState()
+    .appendLog(
+      "agent",
+      `${land.name} opens in Plan once you approve or close the plan card on ${card}.`,
+    );
+  const stop = useMission.subscribe((state) => {
+    if (state.composer || !waiting) return;
+    const { land: latest, onSwitch: then } = waiting;
+    stop();
+    waiting = null;
+    // Only for the Land still selected; a reload elsewhere never moves the operator.
+    if (useLand.getState().active?.id !== latest.id) return;
+    engageLand(latest, { onWaitedSwitch: then })
+      .then((mode) => {
+        if (mode === "project") then?.();
+      })
+      .catch((error: unknown) => {
+        console.warn("Land ground could not be loaded", error);
+      });
+  });
+  waiting = { land, onSwitch, stop };
+}
+
+/**
+ * A mission project's name for the copy, never its id: the project in view, the simulated
+ * demo or a catalog site the browser has listed. Null when it is none of those (another
+ * Land's plans, or a site not listed here), so the copy says "another mission project".
+ */
+export function missionProjectName(
+  projectId: string,
+  sites: readonly SiteSummary[] | undefined,
+): string | null {
+  const current = useMission.getState().project;
+  if (current?.id === projectId) return current.name;
+  if (landIdOfProject(projectId) !== null) return null;
+  if (projectId === DEMO_PROJECT.id) return DEMO_PROJECT.name;
+  const site = sites?.find((candidate) => siteProjectId(candidate.id) === projectId);
+  return site ? siteDisplayName(site) : null;
 }
 
 /**
@@ -112,9 +175,15 @@ export async function openLandMission(
       }
     }
   } else if (record.projectId !== store.project?.id) {
+    const name = missionProjectName(
+      record.projectId,
+      client.getQueryData<SiteSummary[]>(queryKeys.sites),
+    );
     store.appendLog(
       "agent",
-      `“${record.title}” is filed under the mission project ${record.projectId}. Switch to that project to see it in Plan.`,
+      name
+        ? `“${record.title}” is filed under the mission project ${name}. Switch to ${name} to see it in Plan.`
+        : `“${record.title}” is filed under another mission project. Switch to that project to see it in Plan.`,
     );
     store.setStreamOpen(true);
     return;

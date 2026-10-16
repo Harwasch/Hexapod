@@ -7,7 +7,11 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationError, ValidatorFunctionWrapHandler, field_validator
+from shapely import make_valid
+from shapely.errors import ShapelyError
+from shapely.geometry import MultiPolygon, Polygon, mapping, shape
+from shapely.ops import unary_union
 
 from app.schemas.base import CamelModel
 from app.schemas.geojson import MapGeometry
@@ -36,6 +40,45 @@ class PlannerZone(CamelModel):
     # The zone's outline (or, for a mapped line such as a fence, the line itself), so the
     # planner sizes work from the ground rather than from stated acres. Never sent to a model.
     geometry: MapGeometry | None = None
+
+    @field_validator("geometry", mode="wrap")
+    @classmethod
+    def _tolerate_invalid_outline(
+        cls, value: object, handler: ValidatorFunctionWrapHandler
+    ) -> object:
+        """An outline is sizing context, not a stored shape: one the console let through
+        invalid (a corner dragged across an edge, OSM outers that touch) is repaired, or
+        dropped so the zone falls back to its acres, rather than failing the whole draft."""
+        try:
+            return handler(value)
+        except ValidationError:
+            repaired = _repaired_outline(value)
+            if repaired is None:
+                return None
+            try:
+                return handler(repaired)
+            except ValidationError:
+                return None
+
+
+def _repaired_outline(value: object) -> dict[str, object] | None:
+    """The polygonal part of `shapely.make_valid` for an invalid (Multi)Polygon, as GeoJSON;
+    None when nothing with area is left or the value is not a polygon at all."""
+    if not isinstance(value, dict) or value.get("type") not in {"Polygon", "MultiPolygon"}:
+        return None
+    try:
+        fixed = make_valid(shape(value))
+    except (ShapelyError, ValueError, TypeError, AttributeError, IndexError, KeyError):
+        return None
+    if not isinstance(fixed, Polygon | MultiPolygon):
+        # A collection (a bow-tie with a stray edge): keep the parts with area.
+        parts = [g for g in getattr(fixed, "geoms", []) if isinstance(g, Polygon | MultiPolygon)]
+        if not parts:
+            return None
+        fixed = unary_union(parts)
+    if not isinstance(fixed, Polygon | MultiPolygon) or fixed.is_empty or fixed.area == 0:
+        return None
+    return dict(mapping(fixed))
 
 
 class BusyWindow(CamelModel):
@@ -127,6 +170,9 @@ class ZoneCoverage(CamelModel):
     passes: int = Field(ge=0)
     spans: int = Field(ge=0)
     spacing_m: float | None
+    # Flight height above ground the drone class flew at (set by the detail asked); None for
+    # ground classes, whose spacing is their swath.
+    altitude_m: float | None = Field(default=None, ge=0)
     speed_mps: float = Field(gt=0)
     turn_s: float = Field(ge=0)
     hours: float = Field(ge=0)

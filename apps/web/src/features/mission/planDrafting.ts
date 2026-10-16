@@ -14,6 +14,7 @@ import {
 } from "@/missions/planDraft";
 import { isPrivateZone, landIdOfProject } from "@/missions/landGround";
 import type { Plan, Project } from "@/missions/types";
+import { landUsesOidc, useLandIdentity } from "@/state/landIdentity";
 import { useMission } from "@/state/mission";
 
 /** Invalidated after every write so the plan list refetches (public and workspace plans). */
@@ -152,6 +153,17 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
       .appendLog(
         "agent",
         `“${existing.title}” is a shared plan, and plans on your land stay private. Start a new plan for this ground instead.`,
+      );
+    useMission.getState().setStreamOpen(true);
+    return null;
+  }
+  if (isPrivate && landUsesOidc && useLandIdentity.getState().role === "viewer") {
+    // The workspace route refuses a viewer's write; say so before asking it.
+    useMission
+      .getState()
+      .appendLog(
+        "agent",
+        "Viewers can see this workspace's plans but cannot save one. Ask a workspace owner or editor to approve it.",
       );
     useMission.getState().setStreamOpen(true);
     return null;

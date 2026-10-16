@@ -6,7 +6,8 @@ import { api } from "@/api/client";
 import { LandActions } from "@/features/land/LandActions";
 
 const openLandMission = vi.hoisted(() => vi.fn());
-vi.mock("@/features/mission/landPlanning", () => ({ openLandMission }));
+const missionProjectName = vi.hoisted(() => vi.fn((): string | null => null));
+vi.mock("@/features/mission/landPlanning", () => ({ openLandMission, missionProjectName }));
 
 type Action = components["schemas"]["LandActionRead"];
 const boundary: LandArea["boundary"] = {
@@ -294,4 +295,44 @@ it("schedules under the land's own plans, refreshes Plan and Fleet, and opens th
   await screen.findByText(/Mission scheduled for 2026-10-10 through 2026-10-11 under Ranch/);
   fireEvent.click(screen.getByRole("button", { name: "Open in Plan" }));
   expect(openLandMission).toHaveBeenCalledWith(land, mission, cache);
+});
+
+it("never offers another land's project, and names no project by its id", async () => {
+  const { useMission } = await import("@/state/mission");
+  const { anywhereProject } = await import("@/missions/anywhere");
+  useMission.getState().setProject({ ...anywhereProject(), id: "land:other", name: "Creek Field" });
+  const approved: Action = { ...action, status: "approved", revision: 2, missionId: "mission-2" };
+  const mission = {
+    id: "mission-2",
+    projectId: "builtin-demo",
+    title: approved.title,
+    startDate: "2026-10-10",
+    endDate: "2026-10-11",
+    status: "scheduled",
+  };
+  vi.spyOn(api, "GET").mockImplementation(((path: string) =>
+    Promise.resolve({
+      data: path.endsWith("/mission")
+        ? mission
+        : path.endsWith("/actions")
+          ? [approved]
+          : path.endsWith("/{action_id}")
+            ? approved
+            : [],
+      response: new Response(),
+    })) as typeof api.GET);
+  const cache = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  render(
+    <QueryClientProvider client={cache}>
+      <LandActions land={land} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: /Field survey.*approved/ }));
+  expect(screen.getByLabelText("Schedule under")).toHaveValue("land:land");
+  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+    "Ranch · this land's plans",
+  ]);
+  await screen.findByText(/under another mission project\./);
+  expect(screen.queryByText(/builtin-demo/)).toBeNull();
+  useMission.getState().setProject(null);
 });

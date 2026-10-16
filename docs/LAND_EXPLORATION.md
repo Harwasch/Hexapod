@@ -2074,19 +2074,27 @@ assumed machine classes in `services/machine_classes.json`, the one table the we
 "assumed"). Hours are path length over the class speed plus turns, with each zone's basis
 sentence on the draft and one combined line under assumptions. A measured work-log rate still
 sets an area's hours. Zones without an outline (the simulated demo fleet's) are sized exactly as
-before. Outlines are never sent to the model; the measured paths are. "Monitor", "patrol",
-"check", "watch", "count" and "scout" read as surveys.
+before. Outlines are never sent to the model; the measured paths are. An outline that is not
+valid (a corner dragged across an edge, OpenStreetMap outers that touch) is repaired with
+`make_valid`, or dropped so its zone is sized by acres, rather than failing the draft. Survey
+detail scales a drone's flying only, and each drone zone records the height it was flown at.
+"Monitor", "patrol", "check", "watch", "count" and "scout" read as surveys as whole words, so a
+"county road" or a "checkpoint" does not turn a repair into one.
 
 Console: selecting a saved land engages it as ground. It joins the current project when that
 project's zones or machines are on the land (the fleet stays), or becomes the land's own
 `land:<id>` project. The plan card and the bar take the land, or the feature a goal names ("the
 fence", "the troughs"), before OpenStreetMap, a click or the rough square; a click on the land
-takes the land. Approvals that touch land ground go to the workspace routes with the land and
-boundary revision; offline, such a plan is not saved at all. Plan lists public and workspace
-plans together, Fleet lists what is scheduled, the plan card shows each zone's path, passes,
-spacing and hours with the assumed class, and the Land panel offers "Plan work on this land" and
-"Open in Plan" after scheduling. Browser storage (`twin.mission.v1`, now version 2) never holds a
-workspace plan or private zone, and a sign-out or workspace switch forgets them.
+takes the land. A land's zones never join another land's own project: with a plan card open
+there, selecting a second land waits until the card is approved or closed. Approvals that touch
+land ground go to the workspace routes with the land and boundary revision; offline, such a plan
+is not saved at all. Plan lists public and workspace plans together (a land's own project asks
+only the workspace route, never public `/plans`), Fleet lists what is scheduled, the plan card
+shows each zone's path, passes, spacing and hours with the assumed class, and the Land panel
+offers "Plan work on this land" (to owners and editors) and "Open in Plan" after scheduling. A
+land action's mission is revised as the action, in Land, never with the agent. Browser storage
+(`twin.mission.v1`, now version 2) never holds a workspace plan or private zone, and a sign-out
+or workspace switch forgets them.
 
 Known limits: a land's own project has no machines, so its plans draft unassigned. The planner
 receives land outlines briefly through the write-gated, stateless plan-draft endpoint. The

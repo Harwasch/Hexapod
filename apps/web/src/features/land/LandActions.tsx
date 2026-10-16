@@ -3,10 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components, LandArea, LandEvidence } from "@twin/contracts";
 import { boundsOf } from "@twin/geo";
 import { api, unwrap, ApiError } from "@/api/client";
+import { useSites } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
-import { openLandMission } from "@/features/mission/landPlanning";
-import { groundModeFor, landProjectId } from "@/missions/landGround";
+import { missionProjectName, openLandMission } from "@/features/mission/landPlanning";
+import { groundModeFor, landIdOfProject, landProjectId } from "@/missions/landGround";
 import { useMission } from "@/state/mission";
 import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
@@ -161,12 +162,20 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
   const [projectId, setProjectId] = useState(() =>
     project && groundModeFor(project, land) === "layer" ? project.id : landProjectId(land.id),
   );
+  const sites = useSites().data;
   const projectLabel = (id: string) =>
     id === landProjectId(land.id)
       ? `${land.name} · this land's plans`
       : id === project?.id
         ? `${project.name} · current mission project`
-        : id;
+        : (missionProjectName(id, sites) ?? "another mission project");
+  // The project in view can file this land's mission unless it is another Land's own project
+  // (a mission is filed under one land; the server refuses that).
+  const otherLandProject = project !== null && (landIdOfProject(project.id) ?? land.id) !== land.id;
+  // What the select offers now: a choice of a project since left (or never offered) falls
+  // back to this land's own plans rather than filing under it.
+  const scheduleUnder =
+    projectId === project?.id && !otherLandProject ? projectId : landProjectId(land.id);
   const [offset, setOffset] = useState(0);
   const [investigationId, setInvestigationId] = useState<string | null>(null);
   const [evidenceOffset, setEvidenceOffset] = useState(0);
@@ -1316,7 +1325,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                             body: {
                               expectedRevision: selected.revision,
                               note: reviewNote,
-                              projectId,
+                              projectId: scheduleUnder,
                             },
                           }),
                         ).then((record) =>
@@ -1344,13 +1353,13 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                   Schedule under
                   <select
                     aria-label="Schedule under"
-                    value={projectId}
+                    value={scheduleUnder}
                     onChange={(event) => setProjectId(event.target.value)}
                   >
                     <option value={landProjectId(land.id)}>
                       {projectLabel(landProjectId(land.id))}
                     </option>
-                    {project && project.id !== landProjectId(land.id) && (
+                    {project && project.id !== landProjectId(land.id) && !otherLandProject && (
                       <option value={project.id}>{projectLabel(project.id)}</option>
                     )}
                   </select>

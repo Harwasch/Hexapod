@@ -398,6 +398,11 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
   const coverage = draft.coverage ?? [];
   if (coverage.length === 0) return null;
   const classes = [...new Set(coverage.map((c) => c.machineClass))];
+  // The heights the planner flew each drone zone at, so the note states the same assumption
+  // the rows' spacing came from.
+  const altitudes = coverage.flatMap((c) =>
+    c.machineClass === "drone" && c.altitudeM != null ? [c.altitudeM] : [],
+  );
   return (
     <section data-testid="plan-path">
       <span className="mc-eyebrow">PATH</span>
@@ -407,7 +412,7 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
           const shape =
             c.kind === "line"
               ? `${distance(c.lengthM)} along the line`
-              : `${distance(c.lengthM)} · ${c.passes.toLocaleString()} passes${c.spacingM ? ` ${Math.round(c.spacingM)} m apart` : ""}`;
+              : `${distance(c.lengthM)} · ${c.passes.toLocaleString()} passes${c.spacingM ? ` ${Math.round(c.spacingM)} m apart${c.capped ? " (widened)" : ""}` : ""}`;
           return (
             <li key={c.zoneId} title={c.basis}>
               <span className="mc-path__zone">{zone ? idLabel(zone.id, zone.name) : c.zoneId}</span>
@@ -420,7 +425,7 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
       </ul>
       <p className="mc-muted mc-path__note">
         Computed from the outline; speeds assumed.{" "}
-        {classes.map((id) => machineClassSummary(id)).join(" ")}.
+        {classes.map((id) => machineClassSummary(id, id === "drone" ? altitudes : [])).join(". ")}.
       </p>
     </section>
   );

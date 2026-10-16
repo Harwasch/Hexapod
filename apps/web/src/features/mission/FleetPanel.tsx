@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { GlassPanel } from "@twin/ui";
 
 import { isActivePlan } from "@/missions/conflicts";
+import { idLabel } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
@@ -142,7 +143,14 @@ export function FleetPanel() {
                             </span>
                             <span className="mc-scheduled__meta mc-muted">
                               {plan.span} ·{" "}
-                              {plan.machineIds?.length ? plan.machineIds.join(", ") : "unassigned"}
+                              {plan.machineIds?.length
+                                ? plan.machineIds
+                                    .map((id) => {
+                                      const machine = project.machines.find((m) => m.id === id);
+                                      return machine ? idLabel(machine.id, machine.name) : id;
+                                    })
+                                    .join(", ")
+                                : "unassigned"}
                             </span>
                           </button>
                         </li>

@@ -120,7 +120,8 @@ interface MissionState {
    * Engages a Land's zones as ground. With `project` (the Land's own project) it switches to
    * it as `setProject` does; while a composer is open the switch waits, and the zones join
    * the current project instead so the card in progress keeps its goal. Without `project`
-   * the zones join the current project (its fleet and zones stay).
+   * the zones join the current project (its fleet and zones stay). They never join another
+   * Land's own project: then nothing changes until the card closes.
    */
   engageLand: (ground: { landId: string; zones: Zone[] }, project?: Project) => void;
   /** The Land's zones leave the current project; a Land's own project keeps its zones. */
@@ -387,6 +388,11 @@ export const useMission = create<MissionState>()(
             };
           }
           if (!current) return {};
+          // Never onto another Land's own project: a mission is filed under one Land, so a
+          // plan there that took in this Land's ground is one the server refuses. Nothing
+          // changes, and the switch waits for the card (`landPlanning.ts`).
+          const other = landIdOfProject(current.id);
+          if (other !== null && other !== ground.landId) return {};
           const landGround = { landId: ground.landId, projectId: current.id, zones: ground.zones };
           return { landGround, project: compose(current, s.approvedPlans, s.areas, landGround) };
         }),

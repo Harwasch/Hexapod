@@ -41,7 +41,7 @@ import { LandWorkspaceResizer } from "./LandWorkspaceResizer";
 import { LandCandidatePicker } from "./LandCandidatePicker";
 import { LandWorkspace } from "./LandWorkspace";
 import { WorkspaceIdentity } from "./WorkspaceIdentity";
-import { landUsesOidc, useLandScope } from "@/state/landIdentity";
+import { landUsesOidc, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 
 function areaLabel(squareMetres: number): string {
   if (squareMetres < 4046.8564224) return `${Math.round(squareMetres).toLocaleString()} m²`;
@@ -56,6 +56,7 @@ function landError(error: unknown): string {
 
 export function LandPanel() {
   const scope = useLandScope();
+  const canEdit = useLandCanEdit();
   const open = useUi((s) => s.activePanel === "land");
   const tokenPrompt = useUi((s) => s.writeTokenPrompt);
   const state = useLand();
@@ -630,6 +631,7 @@ export function LandPanel() {
                   <button
                     type="button"
                     className="land-primary"
+                    disabled={!canEdit}
                     onClick={() => {
                       if (active) void planOnLand(active);
                     }}
@@ -667,6 +669,11 @@ export function LandPanel() {
                     Export
                   </button>
                 </div>
+                {!canEdit && (
+                  <p className="land-footnote">
+                    Viewers can see this land&apos;s plans. A workspace editor can plan work here.
+                  </p>
+                )}
                 {historyOpen && (
                   <div className="land-history">
                     <h4>Boundary history</h4>

@@ -59,11 +59,25 @@ export function machineClassLabel(id: MachineClassId): string {
   return MACHINE_CLASSES[id].label;
 }
 
-/** One line on what a class is assumed to do, e.g. "Robotic brush mower (assumed): 2 m swath at 1.4 m/s, 8 s per turn". */
-export function machineClassSummary(id: MachineClassId): string {
+/**
+ * One line on what a class is assumed to do, e.g. "Robotic brush mower (assumed): 2 m swath at
+ * 1.4 m/s, 8 s per turn". A drone's flight height depends on the detail asked for (a scan at
+ * 2 cm flies at 70 m), so pass the heights the planner used (`ZoneCoverage.altitudeM`); the
+ * line then names those, and the spacing they give, rather than the class default.
+ */
+export function machineClassSummary(
+  id: MachineClassId,
+  altitudesM: readonly number[] = [],
+): string {
   if (id === "drone") {
     const drone = MACHINE_CLASSES.drone;
-    return `${drone.label}: ${drone.altitudeAglM} m above ground at ${drone.speedMps} m/s, lines ${Math.round(droneLineSpacingM())} m apart`;
+    const heights = [...new Set(altitudesM.length ? altitudesM : [drone.altitudeAglM])].sort(
+      (a, b) => a - b,
+    );
+    const flown = heights
+      .map((h) => `${h} m above ground (lines ${Math.round(droneLineSpacingM(h))} m apart)`)
+      .join(" or ");
+    return `${drone.label}: ${flown} at ${drone.speedMps} m/s, ${drone.sidelapPct} % side overlap`;
   }
   const machine = MACHINE_CLASSES[id];
   return `${machine.label}: ${machine.swathM} m swath at ${machine.speedMps} m/s, ${machine.turnS} s per turn`;

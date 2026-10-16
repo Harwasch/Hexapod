@@ -436,6 +436,12 @@ def test_monitoring_and_checking_are_surveys_while_mowing_along_stays_treatment(
     assert _task_kind("check the troughs") == "survey"
     assert _task_kind("scout the north pasture") == "survey"
     assert _task_kind("mow along the fence") == "treat"
+    assert _task_kind("patrolling the boundary") == "survey"
+    # The looking verbs are whole words: a county road, a checkpoint and a country lane do not
+    # turn a repair into a survey.
+    assert _task_kind("repair the fence along the county road") == "treat"
+    assert _task_kind("fix the gate at the checkpoint") == "treat"
+    assert _task_kind("grade the country lane") == "treat"
 
 
 def test_a_line_zone_is_followed_by_the_assumed_drone_and_sized_by_its_length() -> None:
@@ -510,6 +516,85 @@ def test_a_learned_rate_still_sets_the_hours_of_an_outlined_area() -> None:
     assert draft.coverage[0].hours == pytest.approx(area / 4046.8564224 / 2.0)
     assert "measured rate" in draft.coverage[0].basis
     assert any("learned from 4 logged runs" in a for a in draft.assumptions)
+
+
+def test_survey_detail_scales_the_drone_but_not_a_ground_rover() -> None:
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=999, geometry=PADDOCK)
+
+    def sized(goal: str, detail: str) -> tuple[float, str, float | None]:
+        draft = RulesPlanner().draft(
+            land_request(
+                goal, [paddock], preferred_zone_ids=["A-01"], answers={"resolution": detail}
+            )
+        )
+        c = draft.coverage[0]
+        return c.hours, c.basis, c.altitude_m
+
+    flown, flown_basis, altitude = sized("survey the paddock", "2")
+    assert flown == pytest.approx(2 * sized("survey the paddock", "5")[0])
+    assert "2 times the flying for 2 cm detail" in flown_basis and altitude == 60
+    rover, rover_basis, rover_altitude = sized("survey the paddock with the rover", "2")
+    assert rover == pytest.approx(sized("survey the paddock with the rover", "5")[0])
+    assert "flying" not in rover_basis and rover_altitude is None
+
+
+def test_a_scan_reports_the_altitude_its_line_spacing_came_from() -> None:
+    from app.services.machine_classes import MACHINE_CLASSES
+
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=999, geometry=PADDOCK)
+    draft = RulesPlanner().draft(
+        land_request(
+            "3d scan the paddock",
+            [paddock],
+            preferred_zone_ids=["A-01"],
+            answers={"resolution": "2"},
+        )
+    )
+    c = draft.coverage[0]
+    assert c.altitude_m == 70
+    assert c.spacing_m == pytest.approx(MACHINE_CLASSES.drone.line_spacing_m(70))
+
+
+def test_one_invalid_outline_out_of_scope_does_not_block_the_draft(client: TestClient) -> None:
+    """A bow-tie left in the project (a corner dragged across an edge) is repaired or
+    dropped, never a 422 for every later draft on the project."""
+    bow_tie = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [-122.139, 47.644],
+                [-122.137, 47.645],
+                [-122.137, 47.644],
+                [-122.139, 47.645],
+                [-122.139, 47.644],
+            ]
+        ],
+    }
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=5, task="Mow", geometry=PADDOCK)
+    body: dict[str, Any] = {
+        "goal": "mow the paddock",
+        "projectName": "Oak Bench",
+        "zones": [
+            paddock.model_dump(by_alias=True, mode="json", exclude_none=True),
+            {"id": "A-02", "name": "Old sketch", "acres": 3, "geometry": bow_tie},
+            {
+                "id": "A-03",
+                "name": "Broken",
+                "acres": 2,
+                "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 0], [0, 0], [0, 0]]]},
+            },
+        ],
+        "preferredZoneIds": ["A-01"],
+        "today": "2026-09-17",
+    }
+    response = client.post("/api/v1/agent/plan-draft", json=body)
+    assert response.status_code == 200, response.text
+    if response.json()["source"] == "rules":
+        assert [c["zoneId"] for c in response.json()["coverage"]] == ["A-01"]
+    zones = PlanDraftRequest.model_validate(body).zones
+    # The bow-tie keeps its two triangles; an outline with nothing left falls back to acres.
+    assert zones[1].geometry is not None and zones[1].geometry.type == "MultiPolygon"
+    assert zones[2].geometry is None
 
 
 def test_zones_without_outlines_are_sized_exactly_as_before() -> None:

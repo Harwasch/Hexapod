@@ -18731,6 +18731,18 @@
         "additionalProperties": false,
         "description": "How one zone's work was sized from its outline: the path, the assumed machine class\n(`app/services/machine_classes.json`) and the hours that follow. `basis` is the sentence\nthe console shows beside the number.",
         "properties": {
+          "altitudeM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Altitudem"
+          },
           "areaM2": {
             "anyOf": [
               {

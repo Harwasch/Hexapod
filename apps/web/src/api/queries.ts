@@ -193,18 +193,29 @@ export function outlineGround(body: OutlineRequest): Promise<GroundOutline> {
   return unwrap<GroundOutline>(api.POST("/api/v1/agent/outline", { body }));
 }
 
-/** A project's persisted plans; `builtin` when the API is offline (the browser store then holds them). */
+const NO_PLANS: PlanRecord[] = [];
+const resolveNoPlans = (): Promise<PlanRecord[]> => Promise.resolve(NO_PLANS);
+
+/**
+ * A project's persisted plans; `builtin` when the API is offline (the browser store then holds
+ * them). A Land's own project (`land:<id>`) holds only private missions, which the public
+ * route can never carry, so it is not asked at all (and the land id stays out of its logs):
+ * the answer is a settled empty list, and `useWorkspacePlans` brings that project's plans.
+ */
 export function usePlans(projectId: string | null): CatalogResult<PlanRecord[]> {
+  const landScoped = landIdOfProject(projectId) !== null;
   const query = useQuery({
     queryKey: ["plans", projectId],
     queryFn: () =>
       unwrap<PlanRecord[]>(
         api.GET("/api/v1/plans", { params: { query: { projectId: projectId ?? "" } } }),
       ),
-    enabled: projectId !== null,
+    enabled: projectId !== null && !landScoped,
     staleTime: 15_000,
   });
-  return withFallback(query, () => []);
+  const result = withFallback(query, () => []);
+  if (!landScoped) return result;
+  return { data: NO_PLANS, builtin: false, isLoading: false, error: null, refetch: resolveNoPlans };
 }
 
 export const plansApi = {

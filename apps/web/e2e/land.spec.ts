@@ -187,8 +187,13 @@ test("plan work on a saved land: the land is the ground, and the plan stays priv
   const records = await landApi(app);
   const missions: Record<string, unknown>[] = [];
   const publicPlans: Record<string, unknown>[] = [];
+  const publicLandReads: string[] = [];
   app.on("request", (request) => {
-    const path = new URL(request.url()).pathname;
+    const url = new URL(request.url());
+    const path = url.pathname;
+    // The public list is never asked about a Land's project.
+    if (path === "/api/v1/plans" && url.searchParams.get("projectId")?.startsWith("land:"))
+      publicLandReads.push(request.url());
     if (request.method() !== "POST") return;
     if (path === "/api/v1/workspaces/missions")
       missions.push(request.postDataJSON() as Record<string, unknown>);
@@ -246,6 +251,7 @@ test("plan work on a saved land: the land is the ground, and the plan stays priv
     boundaryRevision: 1,
   });
   expect(publicPlans).toEqual([]);
+  expect(publicLandReads).toEqual([]);
   // The browser keeps none of it.
   const stored = await app.evaluate(() => localStorage.getItem("twin.mission.v1") ?? "");
   expect(stored).not.toContain(records.saved[0]?.id ?? "missing");

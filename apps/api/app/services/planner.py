@@ -212,19 +212,12 @@ def _answer_text(answers: dict[str, AnswerValue], key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-SURVEY_WORDS = (
-    "survey",
-    "inspect",
-    "map",
-    "scan",
-    "photograph",
-    "image",
-    "monitor",
-    "patrol",
-    "check",
-    "watch",
-    "count",
-    "scout",
+SURVEY_WORDS = ("survey", "inspect", "map", "scan", "photograph", "image")
+# Looking words people use for routine checks ("monitor the fence every week"). Matched as
+# whole words, with their endings, so "county road" and "checkpoint" stay treatment goals.
+SURVEY_VERBS = re.compile(
+    r"\b(?:monitor(?:s|ed|ing)?|patrol(?:s|led|ling)?|check(?:s|ed|ing)?"
+    r"|watch(?:es|ed|ing)?|count(?:s|ed|ing)?|scout(?:s|ed|ing)?)\b"
 )
 SCAN_WORDS = (
     "3d scan",
@@ -266,7 +259,7 @@ def _task_kind(text: str) -> TaskKind:
         return "treat"
     if any(w in lower for w in SCAN_WORDS):
         return "scan"
-    if any(w in lower for w in SURVEY_WORDS):
+    if any(w in lower for w in SURVEY_WORDS) or SURVEY_VERBS.search(lower):
         return "survey"
     return "treat"
 
@@ -317,14 +310,17 @@ def _hours_text(hours: float) -> str:
     return f"{hours:.1f}" if hours < 10 else f"{hours:,.0f}"
 
 
-def _coverage_effort(kind: TaskKind, answers: dict[str, AnswerValue]) -> tuple[float, str]:
-    """Multipliers the answers put on a measured path, and how the basis says so."""
+def _coverage_effort(
+    kind: TaskKind, machine: MachineClassId, answers: dict[str, AnswerValue]
+) -> tuple[float, str]:
+    """Multipliers the answers put on a measured path, and how the basis says so. Survey
+    detail scales flying only: a ground rover's path does not change with camera detail."""
     if kind == "treat" and _answer_text(answers, "passes") == "two":
         return 2.0, ", doubled for a second pass"
     if kind == "scan" and (_answer_text(answers, "views") or "oblique") == "oblique":
         return 2.0, ", doubled for oblique passes"
     detail = _answer_text(answers, "resolution")
-    if kind == "survey" and detail in SURVEY_DETAIL_EFFORT and detail != "5":
+    if kind == "survey" and machine == "drone" and detail in SURVEY_DETAIL_EFFORT and detail != "5":
         effort = SURVEY_DETAIL_EFFORT[detail]
         return effort, f", {effort:g} times the flying for {detail} cm detail"
     return 1.0, ""
@@ -339,13 +335,14 @@ def _size_zone(
     """One zone's path and machine-hours from its outline under the assumed machine class."""
     if zone.geometry is None:
         return None
+    flown_at: float | None = None
     if machine == "drone":
         drone = MACHINE_CLASSES.drone
         detail = _answer_text(answers, "resolution")
         gsd = detail if kind == "scan" and detail in SCAN_HEIGHT_M else "2"
         altitude = float(SCAN_HEIGHT_M[gsd]) if kind == "scan" else drone.altitude_agl_m
         spacing = drone.line_spacing_m(altitude)
-        speed, turn, label = drone.speed_mps, 0.0, drone.label
+        speed, turn, label, flown_at = drone.speed_mps, 0.0, drone.label, altitude
         how = (
             f"{altitude:g} m above ground, lines {spacing:.0f} m apart for "
             f"{drone.sidelap_pct:g} % side overlap"
@@ -362,7 +359,7 @@ def _size_zone(
     if both_sides:
         # A treatment along a line works one pass each side of it.
         length, passes, spans = length * 2, 2, 2
-    effort, effort_note = _coverage_effort(kind, answers)
+    effort, effort_note = _coverage_effort(kind, machine, answers)
     hours = ((length + measured.transit_m) / speed + spans * turn) / 3600 * effort
     timing = f"{turn:g} s per turn" if turn else "turns not timed"
     if measured.kind == "line":
@@ -387,6 +384,7 @@ def _size_zone(
         passes=passes,
         spans=spans,
         spacing_m=measured.spacing_m,
+        altitude_m=flown_at,
         speed_mps=speed,
         turn_s=turn,
         hours=hours,
