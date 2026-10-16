@@ -90,7 +90,7 @@ def fit(request: ImageRegistrationCreate, width: int, height: int) -> ImageRegis
     for first, second in pairwise(corners):
         for t in np.linspace(0, 1, 17)[:-1]:
             pixel = (first[0] + t * (second[0] - first[0]), first[1] + t * (second[1] - first[1]))
-            east, north = affine * pixel
+            east, north = affine @ pixel
             if np.hypot(east, north) > 250_000:
                 raise ValueError(
                     "The image extent extrapolates beyond 250 km. Check the point matches and coverage."

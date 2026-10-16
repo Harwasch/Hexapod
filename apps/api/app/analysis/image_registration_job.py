@@ -31,7 +31,7 @@ def build(source: Path, result: ImageRegistrationResult, output: Path) -> tuple[
         original.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
         pixels = np.array(original.convert("RGBA"))
     height, width = pixels.shape[:2]
-    transform = Affine(*result.transform) * Affine.scale(
+    transform = Affine(*result.transform) @ Affine.scale(
         result.image_width / width, result.image_height / height
     )
     with rasterio.Env(GDAL_CACHEMAX=16 * 1024 * 1024), MemoryFile() as memory:

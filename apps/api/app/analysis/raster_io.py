@@ -178,7 +178,10 @@ class RasterHttpFile(io.RawIOBase):
         return len(data)
 
     def close(self) -> None:
-        self.cache.clear()
+        # __init__ can reject the URL before the cache exists; io.IOBase still calls close().
+        cache = getattr(self, "cache", None)
+        if cache is not None:
+            cache.clear()
         super().close()
 
 
