@@ -12,9 +12,10 @@ from app.seed.captures import capture_sites
 def test_seed_is_idempotent_and_lists_layers(client: TestClient, db: Session) -> None:
     first = seed(db)
     second = seed(db)
-    # the demo site + one per capture (the archive, and any site.json under data/tiles)
+    # the scan showcase, the demo ranch, and one per capture (the archive, and any
+    # site.json under data/tiles)
     captures = len(capture_sites(get_settings()))
-    assert first["layers"] == 9 and first["sites"] == 1 + captures
+    assert first["layers"] == 9 and first["sites"] == 2 + captures
     assert second == {"sites": 0, "layers": 0}
     layers = client.get("/api/v1/layers").json()
     assert len(layers) == 9
@@ -30,8 +31,11 @@ def test_seed_is_idempotent_and_lists_layers(client: TestClient, db: Session) ->
     assert terrain["spatialExtent"] == {"west": -180, "south": -90, "east": 180, "north": 90}
     sites = client.get("/api/v1/sites").json()
     demo = next(site for site in sites if site["slug"] == "cesium-splat-demo")
-    # The place the simulated fleet runs in, with no reality model of its own.
+    # The scan showcase, whose splat this deployment cannot read.
     assert demo["representations"] == []
+    # The place the simulated fleet works, with no reality model of its own.
+    ranch = next(site for site in sites if site["slug"] == "demo-ranch")
+    assert ranch["representations"] == []
 
 
 def test_create_xyz_layer_and_update(client: TestClient) -> None:
