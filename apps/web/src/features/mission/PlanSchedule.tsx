@@ -11,10 +11,13 @@ export function PlanSchedule({
   steps,
   startDate,
   colorFor,
+  zoneLabel = (zoneId) => zoneId,
 }: {
   steps: PlanStep[];
   startDate: string;
   colorFor: (machineId: string) => string;
+  /** How a bar names its zone; a Land's zones go by name, their ids are opaque. */
+  zoneLabel?: (zoneId: string) => string;
 }) {
   const { lanes, totalDays } = scheduleLanes(steps);
   if (lanes.length === 0) return null;
@@ -83,7 +86,7 @@ export function PlanSchedule({
                     y={y + 14}
                     className="mc-schedule__bar-label"
                   >
-                    {bar.zoneId ?? bar.title}
+                    {bar.zoneId ? zoneLabel(bar.zoneId) : bar.title}
                   </text>
                 )}
               </g>

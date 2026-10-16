@@ -345,6 +345,7 @@ describe("plans on a saved land", () => {
     expect(scheduled.landActionId).toBe("action-1");
     expect(scheduled.agentNote).toContain("land action");
     expect(scheduled.agentNote).not.toContain("Rule-based draft approved by you");
+    expect(scheduled.stats[2]?.value).toBe("Not estimated");
     expect(planFromRecord({ ...record, private: false }, onLand).scope).toBe("public");
   });
 

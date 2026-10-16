@@ -346,7 +346,7 @@ function LandGroundSection({
   const land = zone.land;
   const size =
     land?.line && land.lengthM
-      ? `${distance(land.lengthM)} line, planned as a ${land.bufferM ?? 10} m corridor`
+      ? `${distance(land.lengthM)} line`
       : `${zone.acres.toLocaleString()} ac`;
   return (
     <section className="mc-ground" data-testid="plan-ground" data-ground="land">
@@ -665,7 +665,12 @@ function DraftReview({
       {(draft.steps ?? []).length > 0 && (
         <section>
           <span className="mc-eyebrow">SCHEDULE</span>
-          <PlanSchedule steps={draft.steps ?? []} startDate={draft.startDate} colorFor={colorFor} />
+          <PlanSchedule
+            steps={draft.steps ?? []}
+            startDate={draft.startDate}
+            colorFor={colorFor}
+            zoneLabel={(id) => zoneName(id) ?? id}
+          />
         </section>
       )}
       <section>

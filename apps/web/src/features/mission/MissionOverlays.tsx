@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import { useScene } from "@/cesium/SceneContext";
-import { hiddenMissionZoneIds } from "@/missions/landGround";
+import { hiddenMissionZoneIds, isLandZone } from "@/missions/landGround";
 import { collapsesToPin, pinCounts, pinLabel } from "@/missions/sitePin";
 import type { Machine, Zone } from "@/missions/types";
 import { useLand } from "@/state/land";
@@ -110,10 +110,12 @@ export function MissionOverlays() {
               data-testid={`zone-chip-${zone.id}`}
             >
               <span className="mc-chip__dot" aria-hidden="true" />
-              {/* A Land's zones go by name: their ids are opaque. */}
-              <span className={zone.land ? "mc-chip__id" : "mc-mono mc-chip__id"}>
-                {zone.land ? zone.name : zone.id}
-              </span>
+              {/* A Land's zones and a land action's areas go by name: their ids are opaque. */}
+              {isLandZone(zone) || zone.id.startsWith("LA-") ? (
+                <span className="mc-chip__id mc-chip__name">{zone.name}</span>
+              ) : (
+                <span className="mc-mono mc-chip__id">{zone.id}</span>
+              )}
               <span className="mc-chip__short">{zone.short}</span>
             </button>
           );

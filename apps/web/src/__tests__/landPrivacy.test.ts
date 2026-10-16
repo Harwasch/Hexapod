@@ -175,6 +175,27 @@ describe("plans on a saved land stay private", () => {
     expect(useMission.getState().project?.id).toBe(anywhereProject().id);
   });
 
+  it("keeps one copy of a stored mission area however often the plans are refetched", () => {
+    useMission.getState().setProject(landProject(land, ground));
+    useMission
+      .getState()
+      .engageLand({ landId: LAND_ID, zones: landZones(ground) }, landProject(land, ground));
+    const area = { ...landZones(ground)[0]!, id: "LA-c518a69e", land: undefined, private: true };
+    const projectId = `land:${LAND_ID}`;
+    for (let i = 0; i < 3; i++) {
+      useMission
+        .getState()
+        .mergeAreas(projectId, [area, { ...landZones(ground)[1]!, land: undefined }]);
+      useMission.getState().setRemotePlans(projectId, []);
+    }
+    const ids = useMission.getState().project?.zones.map((z) => z.id) ?? [];
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toContain("LA-c518a69e");
+    // The Land's own copy of a feature keeps its metadata over a stored copy of it.
+    const fence = useMission.getState().project?.zones.find((z) => z.id === "L-aaaa0001");
+    expect(fence?.land?.line).not.toBeNull();
+  });
+
   it("drops land-shaped ground from storage written before version 2", () => {
     const zone = landZones(ground)[0]!;
     const migrated = migrateMissionStorage(

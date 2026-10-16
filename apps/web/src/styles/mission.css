@@ -581,6 +581,14 @@ a.mc-link {
   --tone: var(--accent);
 }
 
+/* A zone that goes by its name (a Land's): long names stop short of the map. */
+.mc-chip__name {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mc-chip--amber {
   --tone: var(--warn);
 }
@@ -2511,6 +2519,7 @@ a.mc-link {
 
 .mc-ground__row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;

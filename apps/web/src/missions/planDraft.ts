@@ -300,6 +300,10 @@ export function planFromRecord(record: PlanRecord, project: Project): Plan {
       ? {
           agentNote:
             "Scheduled from a land action and approved in Land; machine-hours were not estimated.",
+          // A land action costs its steps; it never sized machine time, so none is shown.
+          stats: plan.stats.map((stat) =>
+            stat.label === "Machine-hours" ? { ...stat, value: "Not estimated" } : stat,
+          ),
         }
       : {}),
     scope: record.private ? "workspace" : "public",

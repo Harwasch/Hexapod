@@ -9,6 +9,7 @@ import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
 import { useScene } from "@/cesium/SceneContext";
+import { idLabel } from "@/missions/planDraft";
 import { planProgress, replanRefinement } from "@/missions/progress";
 
 import { openLandActions } from "./landPlanning";
@@ -164,7 +165,15 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
   const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
   const owned = plan.goal !== undefined;
   const project = useMission((s) => s.project);
-  const progress = owned && project ? planProgress(plan, project.workLog, new Date()) : null;
+  // Progress is logged acres; work along a line (a fence) has none to log.
+  const progress =
+    owned && project && plan.stats[0]?.label !== "Path"
+      ? planProgress(plan, project.workLog, new Date())
+      : null;
+  const zoneLabel = (id: string) => {
+    const zone = project?.zones.find((z) => z.id === id);
+    return zone ? idLabel(zone.id, zone.name) : id;
+  };
   // An open plan is drawn on the map for as long as its detail is open.
   useEffect(() => {
     scene?.mission.showPlan(
@@ -319,7 +328,12 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
         {plan.steps && plan.steps.length > 0 && (
           <section>
             <span className="mc-eyebrow">SCHEDULE</span>
-            <PlanSchedule steps={plan.steps} startDate={plan.startDate ?? ""} colorFor={colorFor} />
+            <PlanSchedule
+              steps={plan.steps}
+              startDate={plan.startDate ?? ""}
+              colorFor={colorFor}
+              zoneLabel={zoneLabel}
+            />
           </section>
         )}
         {plan.steps && plan.steps.length > 0 && (
@@ -330,7 +344,7 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
                 <li key={`${i}-${step.title}`} className="mc-step">
                   <div className="mc-step__title">{step.title}</div>
                   <div className="mc-step__meta mc-mono">
-                    {[step.when, step.zoneId, step.machineIds.join(" ")]
+                    {[step.when, step.zoneId && zoneLabel(step.zoneId), step.machineIds.join(" ")]
                       .filter(Boolean)
                       .join(" · ")}
                   </div>

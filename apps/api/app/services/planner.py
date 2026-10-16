@@ -766,7 +766,8 @@ class RulesPlanner:
             end_date=None if ongoing else today + timedelta(days=days),
             estimates=PlanEstimates(
                 acres=round(acres, 1),
-                machine_hours=round(hours, 1),
+                # Outline-sized runs can be minutes long (a fence check): keep two places.
+                machine_hours=round(hours, 2 if coverage else 1),
                 calendar_days=days,
                 path_m=round(sum(c.length_m for c in coverage), 1) if coverage else None,
             ),

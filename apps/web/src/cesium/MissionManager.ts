@@ -148,10 +148,17 @@ export class MissionManager {
     this.heightCache.clear();
     if (!project) return;
     // Zones may have been added or removed; the plan overlay is redrawn at the end.
-    if (overlay) queueMicrotask(() => this.project === project && this.showPlan(overlay));
+    // Unless the overlay was cleared or replaced meanwhile: a stale one must not come back.
+    if (overlay)
+      queueMicrotask(
+        () => this.project === project && this.overlay === overlay && this.showPlan(overlay),
+      );
+    const drawn = new Set<string>();
     for (const zone of project.zones) {
       const ring = outerRings(zone.footprint)[0];
-      if (!ring || this.hiddenZoneIds.has(zone.id)) continue;
+      // One entity per id: a second zone with an id already drawn would throw in Cesium.
+      if (!ring || this.hiddenZoneIds.has(zone.id) || drawn.has(zone.id)) continue;
+      drawn.add(zone.id);
       const positions = Cartesian3.fromDegreesArray(flattenRing(ring));
       const first = positions[0];
       if (!first) continue;

@@ -151,14 +151,18 @@ function compose(
   // An engaged Land's zones come last and win over a zone with the same id.
   const land = landGround?.projectId === project.id ? landGround.zones : [];
   const landIds = new Set(land.map((z) => z.id));
+  const drawnIds = new Set(drawn.map((z) => z.id));
+  // A project passed back in is already composed, so stored ground with ids other than
+  // "A-…" (a mission's "LA-…" areas) is in it once already: the console's copy replaces it.
+  // A zone the project carries with its Land metadata keeps it over a stored copy.
+  const own = project.zones.filter(
+    (z) => !isAreaZone(z) && !landIds.has(z.id) && (z.land !== undefined || !drawnIds.has(z.id)),
+  );
+  const ownIds = new Set(own.map((z) => z.id));
   return {
     ...project,
     plans: [...project.plans.filter((p) => !replaced.has(p.id)), ...extra],
-    zones: [
-      ...project.zones.filter((z) => !isAreaZone(z) && !landIds.has(z.id)),
-      ...drawn.filter((z) => !landIds.has(z.id)),
-      ...land,
-    ],
+    zones: [...own, ...drawn.filter((z) => !landIds.has(z.id) && !ownIds.has(z.id)), ...land],
   };
 }
 
