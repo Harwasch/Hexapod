@@ -10,7 +10,7 @@ from fastapi import APIRouter, Header, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
-from app.api.deps import DbSession, SettingsDep
+from app.api.deps import DbSession, LimitPlace, SettingsDep
 from app.api.workspace_deps import WorkspaceDep, workspace_access
 from app.models.land import LandArea
 from app.models.research import (
@@ -21,6 +21,8 @@ from app.models.research import (
     ResearchEvent,
     ResearchRun,
 )
+from app.research import place
+from app.schemas.place import PlaceFact, PlaceFactKind
 from app.schemas.research import (
     EventRead,
     EvidenceRead,
@@ -58,6 +60,19 @@ def status(settings: SettingsDep, db: DbSession, scope: WorkspaceDep) -> Researc
         worker=worker,
         queue=waiting,
     )
+
+
+@router.get("/research/place/{fact}", response_model=PlaceFact, dependencies=[LimitPlace])
+def place_fact(
+    fact: PlaceFactKind,
+    scope: WorkspaceDep,
+    longitude: float = Query(ge=-180, le=180),
+    latitude: float = Query(ge=-90, le=90),
+) -> PlaceFact:
+    """One public fact about a point, looked up live and not saved (app/research/place.py).
+
+    Behind land identity and its own rate limit, so it is not an open proxy to the agencies."""
+    return place.lookup(fact, longitude, latitude)
 
 
 @router.get("/research/sources", response_model=list[SourceRead])

@@ -64,14 +64,26 @@ SOURCES.update(ARCHIVE_SOURCES)
 SOURCES.update(ECOLOGY_SOURCES)
 
 
+def epqs_at(
+    client: httpx.Client, lon: float, lat: float, timeout: float = 25
+) -> tuple[dict[str, Any], str, float | None]:
+    """USGS EPQS at one point: the raw response, its URL, and a finite elevation in metres,
+    or None where the service has no value (it answers -1000000 off its coverage)."""
+    raw, url = fetch_json(
+        client,
+        SOURCES["usgs-elevation"],
+        {"x": lon, "y": lat, "wkid": 4326, "units": "Meters", "includeDate": True},
+        timeout=timeout,
+    )
+    value = float(raw.get("value", -1_000_000))
+    return raw, url, value if math.isfinite(value) and value > -999_999 else None
+
+
 def elevation(context: SourceContext, client: httpx.Client) -> SourceResult:
     spec = SOURCES["usgs-elevation"]
     lon, lat = context.point
-    raw, url = fetch_json(
-        client, spec, {"x": lon, "y": lat, "wkid": 4326, "units": "Meters", "includeDate": True}
-    )
-    value = float(raw.get("value", -1_000_000))
-    if not math.isfinite(value) or value <= -999_999:
+    raw, url, value = epqs_at(client, lon, lat)
+    if value is None:
         return SourceResult(
             spec.id, "uncovered", "USGS returned no elevation at the selected sample point."
         )

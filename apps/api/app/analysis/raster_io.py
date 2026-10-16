@@ -29,6 +29,20 @@ HOSTS = frozenset(
 BLOCK_SIZE = 64 * 1024
 
 
+class RasterStatusError(OSError):
+    """The source answered a range read with an HTTP status other than 206.
+
+    Still an OSError, so every existing handler treats it as before. It carries the status
+    because rasterio replaces an opener's exception with a bare RasterioIOError: a caller that
+    must tell a missing tile (404) from an outage probes through the opener first."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(
+            f"The raster source must support byte ranges and remain unchanged (HTTP {status_code})."
+        )
+        self.status_code = status_code
+
+
 @dataclass
 class ReadBudget:
     max_bytes: int = 64 * 1024 * 1024
@@ -108,9 +122,7 @@ class RasterHttpFile(io.RawIOBase):
             "GET", self.url, headers=headers, timeout=timeout, follow_redirects=False
         ) as response:
             if response.status_code != 206:
-                raise OSError(
-                    f"The raster source must support byte ranges and remain unchanged (HTTP {response.status_code})."
-                )
+                raise RasterStatusError(response.status_code)
             match = re.fullmatch(
                 r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", "")
             )

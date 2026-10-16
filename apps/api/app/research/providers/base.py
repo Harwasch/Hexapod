@@ -62,9 +62,11 @@ def fetch_json(
     *,
     method: Literal["GET", "POST"] = "GET",
     encoding: Literal["form", "json"] = "form",
+    timeout: float = 25,
 ) -> tuple[dict[str, Any], str]:
     # Only registry endpoints are fetched. Redirects cannot turn a trusted endpoint
     # into an arbitrary URL, and response size is bounded even without Content-Length.
+    # Point lookups (app/research/place.py) pass a shorter timeout: someone is waiting.
     with client.stream(
         method,
         spec.endpoint,
@@ -72,7 +74,7 @@ def fetch_json(
         data=params if method == "POST" and encoding == "form" else None,
         json=params if method == "POST" and encoding == "json" else None,
         follow_redirects=False,
-        timeout=25,
+        timeout=timeout,
     ) as response:
         response.raise_for_status()
         chunks = bytearray()
