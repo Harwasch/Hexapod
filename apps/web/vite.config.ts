@@ -1,9 +1,11 @@
 import { cpSync, createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, normalize, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { Readable } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import react from "@vitejs/plugin-react";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 
 const cesiumSource = fileURLToPath(new URL("./node_modules/cesium/Build/Cesium", import.meta.url));
 const cesiumVersion = (
@@ -103,9 +105,78 @@ function cesiumBuildAssets(): Plugin {
   };
 }
 
+/** `functions/r2/[[path]].js`: a Request in, a Response out, as Pages runs it. */
+interface TileProxyFunction {
+  onRequest: (context: {
+    request: Request;
+    env?: { TILE_PROXY_HOST?: string };
+  }) => Promise<Response>;
+}
+
+/** Headers of one hop, which Node's server sets itself. */
+const HOP_HEADERS = new Set(["connection", "keep-alive", "transfer-encoding"]);
+
+/**
+ * The public tile bucket on the dev server's own origin, as Pages serves it in production
+ * (`functions/r2/`, `src/lib/tileProxy.ts`): the same function, run here, when
+ * `TILE_PROXY_HOST` names a bucket (in the environment or `.env`). A tileset on that bucket
+ * -- the hosted scans `python -m app.seed.scans` registers -- then loads from this origin, its
+ * tiles, objects and object embeddings with it, so the bucket's CORS rule, which names the
+ * deployment's origin, does not decide whether a dev server on any port can read them. Unset,
+ * nothing changes: the probe 404s and every tileset loads from its own URL.
+ *
+ * The function's fetch is Node's: behind an HTTPS proxy, start the dev server with
+ * `NODE_USE_ENV_PROXY=1`.
+ */
+function tileProxyDev(): Plugin {
+  return {
+    name: "tile-proxy-dev",
+    apply: "serve",
+    async configureServer(server) {
+      const fromFiles = loadEnv(server.config.mode, server.config.envDir || server.config.root, "");
+      const host = (process.env.TILE_PROXY_HOST ?? fromFiles.TILE_PROXY_HOST ?? "").trim();
+      if (host === "") return;
+      // Through a computed URL: the function is plain JS, and this project does not allowJs.
+      const where = pathToFileURL(resolve(import.meta.dirname, "../../functions/r2/[[path]].js"));
+      const { onRequest } = (await import(/* @vite-ignore */ where.href)) as TileProxyFunction;
+      server.middlewares.use((req, res, next) => {
+        const url = req.url ?? "";
+        if (url !== "/r2" && !url.startsWith("/r2/")) return next();
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(req.headers)) {
+          if (typeof value === "string") headers.set(name, value);
+        }
+        const request = new Request(`http://${req.headers.host ?? "localhost"}${url}`, {
+          method: req.method,
+          headers,
+        });
+        onRequest({ request, env: { TILE_PROXY_HOST: host } })
+          .then((response) => {
+            res.statusCode = response.status;
+            // Node's fetch hands back the body decoded: its encoding and length are not this
+            // body's any more.
+            const decoded = response.headers.has("content-encoding");
+            response.headers.forEach((value, name) => {
+              if (HOP_HEADERS.has(name)) return;
+              if (decoded && (name === "content-encoding" || name === "content-length")) return;
+              res.setHeader(name, value);
+            });
+            if (!response.body || req.method === "HEAD") {
+              res.end();
+              return;
+            }
+            Readable.fromWeb(response.body as unknown as NodeReadableStream).pipe(res);
+          })
+          .catch((error: unknown) => next(error));
+      });
+      server.config.logger.info(`  ➜  Tiles of ${host} served under /r2/ (TILE_PROXY_HOST)`);
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), cesiumDevAssets(), cesiumBuildAssets()],
+  plugins: [react(), cesiumDevAssets(), cesiumBuildAssets(), tileProxyDev()],
   define: {
     CESIUM_BASE_URL: JSON.stringify(CESIUM_BASE_URL),
   },

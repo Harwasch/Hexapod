@@ -1,6 +1,13 @@
 import { create } from "zustand";
 
-import { indexCategories, matchCategory, type CategoryIndex } from "@/lib/categories";
+import {
+  categoryById,
+  indexCategories,
+  matchCategory,
+  OTHER_CATEGORY,
+  type CategoryIndex,
+  type SceneCategory,
+} from "@/lib/categories";
 import { parseQuery, searchInstances, withDescendants, type Instance } from "@/lib/instances";
 import { selectionLabel } from "@/lib/sceneSelect";
 
@@ -12,7 +19,27 @@ export type Focus =
   | { kind: "object"; id: number }
   /** The query's matches, or only those in one category. */
   | { kind: "matches"; category?: string }
-  | { kind: "ids" };
+  | { kind: "ids" }
+  /** The objects that look like `seedId` ("More like this", `AssetInstances.similar`). */
+  | { kind: "similar"; seedId: number };
+
+/** Where "More like this" lights its matches unless the viewer moves the slider. */
+export const DEFAULT_SIMILAR_THRESHOLD = 0.6;
+
+/**
+ * "More like this" on a scan: how alike every described object looks to the chosen one
+ * (lib/instances.ts `rankSimilar`), and how alike an object must be to be lit.
+ */
+export interface SimilarState {
+  /** The instance the viewer chose. */
+  seedId: number;
+  /** What was compared: `seedId`, or the described instance it is part of. */
+  seedUsed: number;
+  /** Per instance id, its cosine with `seedUsed`, centred (-1..1). */
+  scores: ReadonlyMap<number, number>;
+  /** Lit: a score at least this. */
+  threshold: number;
+}
 
 /** One scan's objects (lib/instances.ts, lib/categories.ts) and what the viewer does with them. */
 export interface AssetInstances {
@@ -31,6 +58,8 @@ export interface AssetInstances {
   query: string;
   /** Object ids the query matches, best first: what "Hide all" and "Show only" act on. */
   matches: readonly number[];
+  /** "More like this", while its matches are what is lit (`focus` is `similar`). */
+  similar: SimilarState | null;
 }
 
 /** A splat renderer that cannot hide or highlight this scan's objects, and why. */
@@ -77,6 +106,20 @@ interface InstancesState {
   highlight: (assetId: string, ids: readonly number[]) => void;
   /** Highlights a category, an object or the query's matches; the same again (or null) clears. */
   toggleFocus: (assetId: string, focus: Focus | null) => void;
+  /**
+   * Lights the objects that look like `seedId` at least `threshold` alike, with `seedUsed`
+   * (what was compared) and everything below them; any other highlight gives way, and any
+   * other highlight (`highlight`, `toggleFocus`, `reset`) ends it.
+   */
+  showSimilar: (
+    assetId: string,
+    seedId: number,
+    seedUsed: number,
+    scores: ReadonlyMap<number, number>,
+    threshold?: number,
+  ) => void;
+  /** Lights the "More like this" matches at least `threshold` alike instead. */
+  setSimilarThreshold: (assetId: string, threshold: number) => void;
   /** Nothing hidden, nothing highlighted (undo brings back what was hidden). */
   reset: (assetId: string) => void;
   setDimOthers: (dim: boolean) => void;
@@ -331,7 +374,81 @@ export function sameFocus(a: Focus | null, b: Focus | null): boolean {
   if (a === null || b === null) return a === b;
   if (a.kind !== b.kind) return false;
   if (a.kind === "matches" && b.kind === "matches") return a.category === b.category;
+  if (a.kind === "similar" && b.kind === "similar") return a.seedId === b.seedId;
   return !("id" in a) || a.id === (b as typeof a).id;
+}
+
+/** The instances "More like this" matches at its threshold, best first. */
+export function similarMatches(similar: SimilarState): number[] {
+  return [...similar.scores]
+    .filter(([, score]) => score >= similar.threshold)
+    .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+    .map(([id]) => id);
+}
+
+/** What "More like this" lights: the matches and what was compared, with all below them. */
+function similarLit(
+  entry: Pick<AssetInstances, "instances">,
+  similar: SimilarState,
+): ReadonlySet<number> {
+  return withDescendants(entry, [similar.seedUsed, ...similarMatches(similar)]);
+}
+
+/** The matches of "More like this" as a person counts them: objects, and what they mostly are. */
+export interface SimilarSummary {
+  /** Objects with a match in them, not counting the one compared (`index.objectOf`). */
+  objects: number;
+  /** Those objects by category, the most first (ties to the category listed first). */
+  categories: { category: SceneCategory; count: number }[];
+}
+
+/**
+ * The objects "More like this" lights at its threshold, by category. Several matches in one
+ * object (a conifer's branches) are one object; a match within the object compared is not
+ * counted, as the object itself is not.
+ */
+export function similarSummary(
+  entry: Pick<AssetInstances, "index" | "similar"> | undefined,
+): SimilarSummary | null {
+  const similar = entry?.similar;
+  if (!entry || !similar) return null;
+  const { objectOf, objects: byId, categoryOf } = entry.index;
+  const own = objectOf.get(similar.seedUsed) ?? similar.seedUsed;
+  const objects = new Set<number>();
+  for (const id of similarMatches(similar)) {
+    const object = objectOf.get(id) ?? id;
+    if (object !== own) objects.add(object);
+  }
+  const counts = new Map<string, number>();
+  for (const object of objects) {
+    const category = byId.get(object)?.category ?? categoryOf.get(object) ?? OTHER_CATEGORY;
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  const order = entry.index.groups.map((g) => g.category.id);
+  const categories = [...counts]
+    .map(([id, count]) => ({ category: categoryById(id), count }))
+    .sort(
+      (a, b) => b.count - a.count || order.indexOf(a.category.id) - order.indexOf(b.category.id),
+    );
+  return { objects: objects.size, categories };
+}
+
+/**
+ * A summary in words, "37 objects · mostly Shrubs & bushes (24)": "mostly" when one category
+ * is at least half of them, else the two largest.
+ */
+export function similarText(summary: SimilarSummary): string {
+  const { objects, categories } = summary;
+  if (objects === 0) return "No other object is this alike. Lower How alike to see more.";
+  const [top, next] = categories;
+  const counted = `${objects.toLocaleString()} ${objects === 1 ? "object" : "objects"}`;
+  if (!top) return counted;
+  if (objects === 1) return `${counted} · ${top.category.name}`;
+  if (top.count * 2 >= objects)
+    return `${counted} · mostly ${top.category.name} (${String(top.count)})`;
+  // Neither is half, so there are more categories than these two.
+  const named = [top, next].filter((c) => c !== undefined);
+  return `${counted} · ${named.map((c) => `${c.category.name} (${String(c.count)})`).join(", ")}, …`;
 }
 
 /** The instance ids of some objects. */
@@ -357,6 +474,9 @@ function focusMembers(entry: AssetInstances, focus: Focus): readonly number[] {
       );
     case "ids":
       return [...entry.highlighted];
+    case "similar":
+      // Only while its scores are held: they are what it lights.
+      return entry.similar?.seedId === focus.seedId ? [...similarLit(entry, entry.similar)] : [];
   }
 }
 
@@ -417,6 +537,7 @@ export const useInstances = create<InstancesState>()((set) => ({
           focus: null,
           query: "",
           matches: [],
+          similar: null,
         };
       }
       return { assets: next };
@@ -494,22 +615,44 @@ export const useInstances = create<InstancesState>()((set) => ({
     set((s) =>
       patch(s, assetId, (current) =>
         ids.length
-          ? { highlighted: withDescendants(current, ids), focus: { kind: "ids" } }
-          : { highlighted: EMPTY, focus: null },
+          ? { highlighted: withDescendants(current, ids), focus: { kind: "ids" }, similar: null }
+          : { highlighted: EMPTY, focus: null, similar: null },
       ),
     ),
   toggleFocus: (assetId, focus) =>
     set((s) =>
       patch(s, assetId, (current) => {
         if (focus === null || sameFocus(current.focus, focus)) {
-          return { highlighted: EMPTY, focus: null };
+          return { highlighted: EMPTY, focus: null, similar: null };
         }
         const lit = focusMembers(current, focus);
+        // Lighting its own matches again keeps "More like this"; anything else ends it.
+        const similar = focus.kind === "similar" ? current.similar : null;
         return lit.length
-          ? { highlighted: new Set(lit), focus }
-          : { highlighted: EMPTY, focus: null };
+          ? { highlighted: new Set(lit), focus, similar }
+          : { highlighted: EMPTY, focus: null, similar: null };
       }),
     ),
+  showSimilar: (assetId, seedId, seedUsed, scores, threshold = DEFAULT_SIMILAR_THRESHOLD) =>
+    set((s) =>
+      patch(s, assetId, (current) => {
+        const similar: SimilarState = { seedId, seedUsed, scores, threshold };
+        return {
+          similar,
+          highlighted: similarLit(current, similar),
+          focus: { kind: "similar", seedId },
+        };
+      }),
+    ),
+  setSimilarThreshold: (assetId, threshold) =>
+    set((s) => {
+      const current = s.assets[assetId]?.similar;
+      if (!current || current.threshold === threshold) return s;
+      return patch(s, assetId, (entry) => {
+        const similar: SimilarState = { ...current, threshold };
+        return { similar, highlighted: similarLit(entry, similar) };
+      });
+    }),
   reset: (assetId) => {
     changeHidden(
       assetId,
@@ -517,7 +660,7 @@ export const useInstances = create<InstancesState>()((set) => ({
       () => "Reset objects",
       () => EMPTY,
     );
-    set((s) => patch(s, assetId, () => ({ highlighted: EMPTY, focus: null })));
+    set((s) => patch(s, assetId, () => ({ highlighted: EMPTY, focus: null, similar: null })));
   },
   setDimOthers: (dimOthers) => set({ dimOthers }),
 }));

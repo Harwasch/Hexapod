@@ -120,6 +120,16 @@ a 14 cm rock and a 2 m weed, and places them on the demo site so millimetre-scal
 tested without capturing anything. Press `S` and pick them, or type `fly to rock` in the
 command box. See [docs/COMPARISON.md](docs/COMPARISON.md).
 
+## The hosted phone scans, locally
+
+The phone scans whose objects carry image embeddings (the camp, the pumpkin and the spool)
+exist only in the hosted catalog. `cd apps/api && uv run python -m app.seed.scans` registers
+them in your local catalog from a committed snapshot (idempotent, no network), pointing at the
+same public-bucket tiles. Start the dev server with
+`TILE_PROXY_HOST=pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev pnpm dev` so it serves that bucket
+on its own origin, as Pages does in production. Tap an object of the camp and press
+**More like this**. See [docs/SCENE_OBJECTS.md](docs/SCENE_OBJECTS.md#more-like-this).
+
 ## Mouse and keyboard
 
 Google Maps conventions: left-drag pans, wheel zooms towards the cursor, **Ctrl+drag,

@@ -39,6 +39,8 @@ import {
   type StrokeMode,
 } from "@/state/sceneSelect";
 
+import { MoreLikeThis } from "./MoreLikeThis";
+
 const STROKE_MODES: readonly { value: StrokeMode; label: string }[] = [
   { value: "replace", label: "New" },
   { value: "add", label: "Add" },
@@ -80,7 +82,8 @@ function overlap(iou: number): string {
  * a click, the brush or the objects panel chose. Its name and category, the candidates the
  * click offered (◀ 1 of 3 ▶, the hit's levels counted from the whole object, then the objects
  * met nearby; cycled with the arrows, `[` `]`, Alt and the wheel, the wheel over the arrows, or
- * Tab while the map or this card has focus), Hide, Show only, Fly to, the brush,
+ * Tab while the map or this card has focus), Hide, Show only, Fly to, More like this (where
+ * the scan's objects carry image embeddings: features/sites/MoreLikeThis), the brush,
  * and for a painted object Delete. While painting it says how the brush works and what the
  * stroke selects, and offers to keep the painted area as an object when what it selects
  * overlaps it little. A combination the brush selected is named by its members and what holds
@@ -272,6 +275,11 @@ export function ObjectCard({ controller }: { controller: SceneSelectController }
             <Crosshair size={13} aria-hidden="true" /> Fly to
           </button>
         </div>
+      )}
+      {/* One object to compare: not a combination, nor while the brush is out. Keyed by it, so
+          a read under way for the last one is dropped. */}
+      {assetId && id !== undefined && !combination && !painting && (
+        <MoreLikeThis key={`${assetId}:${String(id)}`} assetId={assetId} seedId={id} />
       )}
       <div className="mc-actions mc-actions--tools">
         <button

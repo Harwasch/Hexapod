@@ -15,3 +15,8 @@ AI investigations) are queued by the API and run by `python -m app.research`, wh
 never starts for you. The worker checks in every 15 s; `GET /api/v1/research/status` reports
 it as online, stale, stopped or never seen, and a queued run waits until one runs. See
 `docs/LAND_EXPLORATION.md` ("Research worker presence").
+
+Optional: `uv run python -m app.seed.scans` also registers the hosted catalog's phone scans
+(the camp, the pumpkin and the spool) from the committed snapshot `app/seed/hosted_scans.json`,
+so a local catalog has scans with objects and image embeddings. It is idempotent and reads no
+network; `--refresh-snapshot` re-reads the snapshot from the hosted API.
