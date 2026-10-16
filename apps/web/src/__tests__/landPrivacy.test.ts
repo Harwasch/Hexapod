@@ -116,6 +116,10 @@ describe("plans on a saved land stay private", () => {
     useMission.getState().setProject(demo);
     useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
     expect(missionLandId()).toBe(LAND_ID);
+    // Ground engaged on another project says nothing about this one.
+    expect(
+      missionLandId({ landGround: useMission.getState().landGround, project: anywhereProject() }),
+    ).toBeNull();
     api.workspaceCreate.mockImplementation((body: Record<string, unknown>) =>
       Promise.resolve(record(body)),
     );

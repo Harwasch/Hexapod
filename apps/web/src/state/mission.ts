@@ -207,7 +207,11 @@ export function migrateMissionStorage(persisted: unknown, version: number): unkn
 export function missionLandId(
   state: Pick<MissionState, "landGround" | "project"> = useMission.getState(),
 ): string | null {
-  return state.landGround?.landId ?? landIdOfProject(state.project?.id);
+  const layered =
+    state.landGround && state.landGround.projectId === state.project?.id
+      ? state.landGround.landId
+      : null;
+  return layered ?? landIdOfProject(state.project?.id);
 }
 
 export const useMission = create<MissionState>()(
