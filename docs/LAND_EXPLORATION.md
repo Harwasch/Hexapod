@@ -2067,7 +2067,9 @@ checked in for 14 min. Your request is saved and starts when a worker runs."), a
 polled every 10 s while it waits, so the notice clears when a worker starts. Ecology and solar
 status rows show the same line. Every disabled research button now says why next to it (connecting,
 role, the one queued or running request, AI not configured, a captured request or unreadable saved
-question to resolve, an empty question once the box has been used). The Stop button reads "Cancel
+question to resolve, an empty question once the box has been used). A queued run's reason is short
+("One request runs at a time. Cancel the queued request to start something else."): the worker's
+state and age are said once, in the notice beside the run. The Stop button reads "Cancel
 queued request" for a queued run. When no worker is online and nothing of this land is queued, a
 footnote warns that new requests will wait. In development builds the notice adds
 `pnpm dev:research`; production users never see shell commands.
@@ -2094,7 +2096,13 @@ redirects, 2 MB cap; a 10 s timeout for point lookups), so no host is added:
 
 Each answer carries `status` (`available`, `empty`, `uncovered` or `unavailable`), a label and
 detail, its basis and vintage, the caveat, the exact public query URL, license, attribution and
-source resolution. A failure is "could not be retrieved (HTTP 503)" or the exception type, never
+source resolution. The citation link (`source.linkUrl`) is that query when a browser can open it
+(USGS, FEMA and EPA answer a GET with JSON). Soil Data Access takes its SQL only as a POST, and a
+WorldCover tile is a 10-20 MB image, so those two link Web Soil Survey and the WorldCover viewer,
+and keep the exact query in `data.query` (the SQL) and `data.tileUrl`. Flood zone D reads
+"Undetermined flood hazard: not studied" (never "outside the Special Flood Hazard Area"), and a
+point FEMA's map leaves out is `empty`, "Not included in FEMA flood mapping", with the same
+"does not establish low flood risk" caveat as "No mapped zone". A failure is "could not be retrieved (HTTP 503)" or the exception type, never
 a response body, and is never shown as "nothing here". The US-only sources answer `uncovered`
 outside the United States without making a request; a missing WorldCover tile (open ocean, HTTP 404) is `uncovered`, not an outage. The flood-zone lookup is a point query with
 `returnGeometry=false`: the boundary adapter's envelope query can return a county-wide Zone X
@@ -2105,15 +2113,23 @@ Nothing is persisted. Answers are cached in the API process for 6 h, keyed by th
 to about a metre (failures for 2 min; the inspector's Retry asks again past a cached failure).
 The route sits behind land identity (`WorkspaceDep`) and its own token bucket (burst 25, 60 per
 minute per client; one inspection makes five lookups), so it is not an open proxy to the agencies.
+The route is synchronous, so a slow agency holds a server thread for up to the 10 s timeout (15 s
+for the WorldCover read). At most 8 lookups ask a source at once across all clients; a lookup
+that finds no free slot within 2 s answers `unavailable` ("... was not asked because the server
+is busy with other lookups"), uncached, so a hung agency cannot take the threads every other route
+needs. Identical lookups in flight are not merged.
 
 In the inspector, any non-site pick (open ground, and Google Photorealistic tiles, which pick as a
 layer feature) shows "At this point · looked up live, not saved" with the five rows filling in as
 each agency answers. Below them: "Research <land>" when the point is inside a saved land (it opens
 that land on Discover), otherwise "Outline this land", which opens the Land tool finding mapped
 parcels, fields and lines at the point. The map's right-click menu has the same "Outline land
-here". Both go through `features/land/landEntry.ts`, which clears the active land first (Save
-would otherwise revise it with the new outline) and never replaces an unsaved outline: with one
-open, the button reads "Return to your unsaved outline". Other entry points (Descent) should use
+here", offered like the inspector's only when the workspace is ready and the role can add land.
+Both go through `features/land/landEntry.ts`, which clears the active land first (Save would
+otherwise revise it with the new outline) and never replaces an unsaved outline
+(`hasUnsavedOutline`: a draft, or a sketch with points placed in draw, corridor or split mode, the
+same test the browser recovery copy uses): with one open, the button and the menu item read
+"Return to your unsaved outline" and only reopen the tool on it. Other entry points (Descent) should use
 `landEntry` (`proposeOutline` for a found outline) rather than `useLand.propose`.
 
 The Terrain row above stays: it is the scene's own terrain sample, and the two elevation values
