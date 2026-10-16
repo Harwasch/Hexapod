@@ -21,6 +21,7 @@ import type { CameraBookmark } from "@twin/contracts";
 import { metersPerPixel, scaleBandForAltitude } from "@twin/geo";
 
 import type { CameraPose } from "@/state/viewer";
+import type { Viewport } from "@/missions/framing";
 
 import type { Emitter } from "@/lib/emitter";
 import { isTyping } from "@/lib/hotkeys";
@@ -529,6 +530,21 @@ export class CameraController {
       }
     }
     return best;
+  }
+
+  /**
+   * The canvas in CSS pixels and the frustum's field of view (Cesium's `fov`, which spans the
+   * larger dimension): what a framing needs to fit ground into this window (`missions/framing.ts`).
+   */
+  viewport(): Viewport {
+    const canvas = this.viewer.canvas;
+    const frustum = this.viewer.camera.frustum;
+    const fov = "fov" in frustum ? (frustum as { fov: number }).fov : CesiumMath.PI_OVER_THREE;
+    return {
+      width: canvas.clientWidth || 1,
+      height: canvas.clientHeight || 1,
+      fovDeg: CesiumMath.toDegrees(fov),
+    };
   }
 
   get isMoving(): boolean {

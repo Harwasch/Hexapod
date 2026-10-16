@@ -12,8 +12,10 @@ import type { Site, SiteSummary } from "@twin/contracts";
 import { GlassTooltipProvider } from "@twin/ui";
 
 import { api } from "@/api/client";
-import { builtinDemoSite, DEMO_SITE_SLUG, toSummary } from "@/api/fallback";
+import { builtinRanchSite, builtinScanSite, toSummary } from "@/api/fallback";
 import { ProjectCard } from "@/features/mission/ProjectCard";
+import { DEMO_PROJECT } from "@/missions/demo";
+import { DEMO_RANCH_SLUG } from "@/missions/demoRanchData";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
@@ -21,17 +23,16 @@ import { useUi } from "@/state/ui";
 const ORCHARD_ID = "55555555-5555-4555-8555-555555555555";
 
 const demo: SiteSummary = {
-  ...toSummary(builtinDemoSite()),
-  id: "11111111-1111-4111-8111-111111111111",
-  slug: DEMO_SITE_SLUG,
-  name: "Cesium Gaussian splat demo",
+  ...toSummary(builtinRanchSite()),
+  id: "77777777-7777-4777-8777-777777777777",
+  slug: DEMO_RANCH_SLUG,
 };
 
 /** The API's catalog, as the mocked GET answers it; a successful PATCH renames in it. */
 let catalog: SiteSummary[] = [];
 
 function record(name: string): Site {
-  return { ...builtinDemoSite(), id: ORCHARD_ID, slug: "orchard-block-a", name };
+  return { ...builtinScanSite(), id: ORCHARD_ID, slug: "orchard-block-a", name };
 }
 
 const ok = (data: unknown) => ({ data, response: new Response(null, { status: 200 }) });
@@ -167,12 +168,16 @@ describe("renaming a site in the switcher", () => {
     expect(within(switcher).queryByTestId("write-token-form")).not.toBeInTheDocument();
   });
 
-  it("offers no rename for the demo, which is known by its project's name", async () => {
+  it("offers no rename for the demo ranch, which is known by its project's name", async () => {
     const switcher = await openSwitcher();
-    const demoRow = within(switcher).getByTestId(`site-row-${DEMO_SITE_SLUG}`);
-    expect(demoRow).toHaveTextContent("Blackrock Mesa");
-    expect(within(switcher).queryByTestId(`site-rename-${DEMO_SITE_SLUG}`)).not.toBeInTheDocument();
-    expect(within(switcher).queryByRole("button", { name: /Rename Blackrock/ })).toBeNull();
+    const demoRow = within(switcher).getByTestId(`site-row-${DEMO_RANCH_SLUG}`);
+    expect(demoRow).toHaveTextContent(DEMO_PROJECT.name);
+    expect(
+      within(switcher).queryByTestId(`site-rename-${DEMO_RANCH_SLUG}`),
+    ).not.toBeInTheDocument();
+    expect(
+      within(switcher).queryByRole("button", { name: new RegExp(`Rename ${DEMO_PROJECT.name}`) }),
+    ).toBeNull();
     expect(within(switcher).getByTestId("site-rename-orchard-block-a")).toBeInTheDocument();
   });
 

@@ -4,9 +4,11 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { formatArea } from "@twin/geo";
 import { GlassTooltipProvider } from "@twin/ui";
 
 import { api } from "@/api/client";
+import { builtinRanchSite } from "@/api/fallback";
 import { useAppActions } from "@/features/command-palette/useAppActions";
 import { LayersPanel } from "@/features/layers/LayersPanel";
 import { ProjectCard } from "@/features/mission/ProjectCard";
@@ -15,6 +17,8 @@ import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { PhoneTabBar } from "@/features/shell/PhoneTabBar";
 import { ToolRail } from "@/features/shell/ToolRail";
 import { LOCAL_VIEWS_KEY, localViewsFor, unsitedViews } from "@/features/bookmarks/savedViews";
+import { DEMO_PROJECT, demoRanchProject } from "@/missions/demo";
+import { DEMO_RANCH_SLUG } from "@/missions/demoRanchData";
 import type { Machine, Project, Zone } from "@/missions/types";
 import { bindDockRules, rightDockBusy, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
@@ -199,12 +203,19 @@ describe("Layers", () => {
 describe("the site switcher", () => {
   it("lists sites by their one name, keeps saved views, and leads to the other pages", async () => {
     const user = userEvent.setup();
-    useMission.setState({ project: { ...project, name: "Blackrock Mesa" }, projectsOpen: true });
+    useMission.setState({ project: demoRanchProject(), projectsOpen: true });
     render(wrap(<ProjectCard />));
     const switcher = screen.getByRole("dialog", { name: "Switch site" });
-    // The built-in catalog's demo site, under its project's name rather than the record's.
-    expect(await within(switcher).findByText("Blackrock Mesa")).toBeInTheDocument();
-    expect(within(switcher).queryByText("Cesium Gaussian splat demo")).not.toBeInTheDocument();
+    // The built-in catalog: the demo ranch under its project's name, and the scan showcase
+    // under its record's, since no project is attached to it.
+    expect(await within(switcher).findByText(DEMO_PROJECT.name)).toBeInTheDocument();
+    expect(within(switcher).getByText("Cesium Gaussian splat demo")).toBeInTheDocument();
+    // The badge's area is the ranch row's, to the character: one number for one place.
+    const area = formatArea(builtinRanchSite().areaM2, useSettings.getState().units);
+    expect(within(switcher).getByTestId(`site-row-${DEMO_RANCH_SLUG}`)).toHaveTextContent(area);
+    expect(screen.getByRole("button", { name: /switch site/ })).toHaveTextContent(
+      `${area} · ${DEMO_PROJECT.meta} · simulated fleet`,
+    );
 
     // No site is engaged, so the view is kept in this browser; it can be deleted again.
     await user.type(within(switcher).getByRole("textbox", { name: "View name" }), "North gate");

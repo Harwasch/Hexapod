@@ -18,34 +18,41 @@
  *    fetches it. It is data published by the same step that publishes the tiles, not a
  *    table someone keeps in step by hand.
  *
- * What stays hard-coded is the two things that are true with no deployment at all: the
- * demo site the simulated fleet runs on and the open-data layer stack (mirroring
- * apps/api/app/seed/data.py), so a fresh checkout with no bucket still shows a globe with
- * something on it. The demo site's own Cesium ion splat is withdrawn there (the account's
- * ion token cannot read it); `VITE_DEFAULT_SPLAT_ASSET_ID` gives it one again. The UI labels this whole state explicitly, and `builtin: true` keeps
- * every write form disabled — an offline capture is readable, never editable.
+ * What stays hard-coded is what is true with no deployment at all: the demo ranch the
+ * simulated fleet works (read from the same file the API seeds it from,
+ * `missions/demoRanchData.ts`), the Redmond scan showcase, and the open-data layer stack
+ * (mirroring apps/api/app/seed/data.py), so a fresh checkout with no bucket still shows a
+ * globe with something on it. The scan showcase's own Cesium ion splat is withdrawn there
+ * (the account's ion token cannot read it); `VITE_DEFAULT_SPLAT_ASSET_ID` gives it one again.
+ * The UI labels this whole state explicitly, and `builtin: true` keeps every write form
+ * disabled — an offline capture is readable, never editable.
  */
 
 import type { Layer, Site, SiteSummary } from "@twin/contracts";
 import { destination, footprintAreaM2 } from "@twin/geo";
 
 import { env } from "@/app/env";
+import { eyeOf } from "@/missions/framing";
+import { BUILTIN_RANCH_ID, DEMO_RANCH } from "@/missions/demoRanchData";
 
-export const DEMO_SITE_SLUG = "cesium-splat-demo";
+/** The Redmond scan showcase: Cesium's Gaussian splat Sandcastle site. */
+export const SCAN_SHOWCASE_SLUG = "cesium-splat-demo";
+export const BUILTIN_SCAN_SITE_ID = "builtin-demo-site";
 const DEMO_CENTER = { longitude: -122.13810992689156, latitude: 47.644519699638366 };
 const DEMO_HEIGHT = 120;
 const NOW = "2026-09-15T00:00:00Z";
 
+/** The seed's Overview (apps/api/app/seed/data.py, default_bookmark_for_demo). */
 function overviewBookmark() {
-  const range = 500;
-  const pitch = -25;
+  const range = 420;
+  const pitch = -45;
   const heading = 100;
   const horizontal = range * Math.cos((-pitch * Math.PI) / 180);
   const vertical = range * Math.sin((-pitch * Math.PI) / 180);
   const eye = destination(DEMO_CENTER, heading + 180, horizontal);
   return {
     id: "builtin-bookmark-overview",
-    siteId: "builtin-demo-site",
+    siteId: BUILTIN_SCAN_SITE_ID,
     name: "Overview",
     longitude: eye.longitude,
     latitude: eye.latitude,
@@ -67,7 +74,7 @@ function envAsset(
   if (!assetId) return null;
   return {
     id,
-    siteId: "builtin-demo-site",
+    siteId: BUILTIN_SCAN_SITE_ID,
     provider: "cesium-ion",
     name,
     representation,
@@ -112,7 +119,7 @@ const DEMO_BOUNDARY = {
   ],
 };
 
-export function builtinDemoSite(): Site {
+export function builtinScanSite(): Site {
   const footprint = DEMO_BOUNDARY;
   const assets: Site["assets"] = [];
   const splat = envAsset(
@@ -132,11 +139,11 @@ export function builtinDemoSite(): Site {
   if (mesh) assets.push(mesh);
   if (points) assets.push(points);
   return {
-    id: "builtin-demo-site",
-    slug: DEMO_SITE_SLUG,
+    id: BUILTIN_SCAN_SITE_ID,
+    slug: SCAN_SHOWCASE_SLUG,
     name: "Cesium Gaussian splat demo",
     description:
-      "Where the simulated fleet demo runs, in the photorealistic world around Cesium's '3D Tiles Gaussian splats with LOD' Sandcastle site. It has no reality model of its own.",
+      "Cesium's '3D Tiles Gaussian splats with LOD' Sandcastle site in Redmond, WA: the 3D-scan showcase. Its splat (Cesium ion 4547222) is withdrawn in this deployment; VITE_DEFAULT_SPLAT_ASSET_ID or adding the asset from the ion Asset Depot brings it back.",
     boundary: footprint,
     centroid: { ...DEMO_CENTER, height: DEMO_HEIGHT },
     areaM2: footprintAreaM2(footprint),
@@ -149,6 +156,82 @@ export function builtinDemoSite(): Site {
     createdAt: NOW,
     updatedAt: NOW,
   };
+}
+
+/**
+ * The demo ranch as the API seeds it (apps/api/app/seed/demo_ranch.py), from the same file:
+ * the same outline, area, credits and Overview, so offline and online agree to the acre.
+ */
+export function builtinRanchSite(): Site {
+  const ranch = DEMO_RANCH;
+  const camera = ranch.camera;
+  const eye = eyeOf(
+    {
+      target: camera.target,
+      headingDeg: camera.headingDeg,
+      pitchDeg: camera.pitchDeg,
+      rangeM: camera.rangeM,
+    },
+    camera.targetHeightM,
+  );
+  const used = new Set([
+    ranch.boundary.source,
+    ...Object.values(ranch.features).map((feature) => feature.source),
+  ]);
+  const sources = Object.entries(ranch.sources).filter(([id]) => used.has(id));
+  return {
+    id: BUILTIN_RANCH_ID,
+    slug: ranch.slug,
+    name: ranch.name,
+    description: ranch.description,
+    boundary: ranch.boundary.geometry,
+    centroid: { ...ranch.derived.centroid, height: null },
+    // The number the API serves (PostGIS ST_Area on the spheroid), not a spherical estimate.
+    areaM2: ranch.derived.siteAreaM2,
+    thumbnailUrl: null,
+    metadata: {
+      origin: "demo-ranch",
+      simulated: ["fleet", "zones", "plans", "work log"],
+      sources: Object.fromEntries(sources),
+    },
+    attribution: sources.map(([, source]) => ({
+      text: source.text,
+      organization: source.organization,
+      url: source.url,
+    })),
+    license: {
+      name: "CC BY 4.0",
+      spdxId: "CC-BY-4.0",
+      url: "https://creativecommons.org/licenses/by/4.0/",
+      requiresAttribution: true,
+      notes:
+        "Zone outlines derive from ESA WorldCover 2021 (CC BY 4.0) and the USGS National Hydrography Dataset (public domain). The outline is a demo area, and the fleet, zones, plans and work log are simulated.",
+    },
+    assets: [],
+    cameraBookmarks: [
+      {
+        id: "builtin-ranch-bookmark-overview",
+        siteId: BUILTIN_RANCH_ID,
+        name: "Overview",
+        ...eye,
+        roll: 0,
+        isDefault: true,
+        createdAt: NOW,
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+}
+
+/** Every built-in site: the demo ranch first (the app's default demo), then the scan showcase. */
+export function builtinSites(): Site[] {
+  return [builtinRanchSite(), builtinScanSite()];
+}
+
+/** The built-in site with this id, or null. */
+export function builtinSite(id: string): Site | null {
+  return builtinSites().find((site) => site.id === id) ?? null;
 }
 
 export function toSummary(site: Site): SiteSummary {
@@ -296,7 +379,7 @@ export function builtinLayers(): Layer[] {
  * Parsed defensively rather than cast. It is JSON from a bucket, written by a different
  * process at a different time, and the one thing worse than showing no captures offline
  * would be crashing the globe over a stale document — so anything unrecognisable yields
- * an empty list and the built-in demo stands alone.
+ * an empty list and the built-in sites stand alone.
  */
 export async function fetchOfflineCatalog(url: string, signal?: AbortSignal): Promise<Site[]> {
   const response = await fetch(url, { signal });

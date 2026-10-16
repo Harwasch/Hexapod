@@ -75,7 +75,7 @@ export function useAgentCommand(): { ask: (text: string) => Promise<void>; busy:
             return `Flying to ${hit.label}.`;
           },
           flyToSite: (query) => {
-            // A site answers to its display name ("Blackrock Mesa") and to its catalog record.
+            // A site answers to its display name ("Oak Bench Ranch") and to its catalog record.
             const site = (sites.data ?? []).find(
               (s) =>
                 siteDisplayName(s).toLowerCase().includes(query) ||

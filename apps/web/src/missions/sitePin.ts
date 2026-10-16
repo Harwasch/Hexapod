@@ -44,7 +44,7 @@ export function pinCounts(
   return { machines, zones, total: machines + zones };
 }
 
-/** The pin's spoken name: "Blackrock Mesa: 6 machines, 3 zones". */
+/** The pin's spoken name: "Oak Bench Ranch: 6 machines, 3 zones". */
 export function pinLabel(name: string, counts: { machines: number; zones: number }): string {
   const parts = [
     counts.machines > 0

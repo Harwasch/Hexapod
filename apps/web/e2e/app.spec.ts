@@ -4,6 +4,9 @@ import {
   addOnScreenCredit,
   expect,
   mockApi,
+  RANCH_CENTER,
+  RANCH_NAME,
+  RANCH_SLUG,
   selectionState,
   selectObject,
   stageObjects,
@@ -135,9 +138,10 @@ test.describe("boot", () => {
   test("app boots, viewer initializes and onboarding shows", async ({ app }) => {
     await expect(app.getByTestId("onboarding")).toBeVisible();
     await expect(app.getByRole("heading", { name: "Explore the living world" })).toBeVisible();
-    // At globe scale with no site, the status line sums up the catalog; the camera readouts
-    // are developer telemetry and stay off unless Settings › Advanced turns them on.
-    await expect(app.getByTestId("status-fleet")).toContainText("1 site");
+    // At globe scale with no site, the status line sums up the catalog (the demo ranch and
+    // the scan showcase); the camera readouts are developer telemetry and stay off unless
+    // Settings › Advanced turns them on.
+    await expect(app.getByTestId("status-fleet")).toContainText("2 sites · 6 machines");
     await expect(app.getByTestId("status-bar")).toHaveCount(0);
     const errors: string[] = [];
     app.on("pageerror", (e) => errors.push(e.message));
@@ -184,6 +188,7 @@ test.describe("boot", () => {
     await expect(page.getByTestId("notice-api-offline")).toBeVisible();
     // Sites are in the site switcher, behind the site's name at the top left.
     await page.getByTestId("project-card").getByRole("button").first().click();
+    await expect(page.getByTestId(`site-row-${RANCH_SLUG}`)).toBeVisible();
     await expect(page.getByTestId("site-row-cesium-splat-demo")).toBeVisible();
     await expect(page.getByText("Built-in demo (API offline)")).toBeVisible();
   });
@@ -195,21 +200,26 @@ test.describe("catalog", () => {
     // `s` opens the site switcher on its list of sites.
     await app.keyboard.press("s");
     await expect(app.getByTestId("site-switcher")).toBeVisible();
-    const card = app.getByTestId("site-row-cesium-splat-demo");
-    // One name per site: its project's, not the catalog record's.
-    await expect(card).toContainText("Blackrock Mesa");
-    await expect(card).not.toContainText("Cesium Gaussian splat demo");
-    await expect(card).toContainText("Splat");
-    await expect(card).toBeFocused();
-    await card.click();
+    // One name per site: the ranch by its project's, the scan showcase by its record's.
+    const ranch = app.getByTestId(`site-row-${RANCH_SLUG}`);
+    await expect(ranch).toContainText(RANCH_NAME);
+    await expect(ranch).not.toContainText("Splat");
+    await expect(ranch).toBeFocused();
+    const scan = app.getByTestId("site-row-cesium-splat-demo");
+    await expect(scan).toContainText("Cesium Gaussian splat demo");
+    await expect(scan).toContainText("Splat");
+    await ranch.click();
     await expect(app.getByTestId("site-switcher")).toHaveCount(0);
-    const strip = app.getByTestId("representation-switcher");
-    await expect(strip).toBeVisible({ timeout: 30_000 });
-    await expect(strip).toContainText("Blackrock Mesa");
-    await expect(strip).not.toContainText("Cesium Gaussian splat demo");
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, { timeout: 30_000 });
     // At the site the status line reports the site's own fleet, not the catalog's.
     await expect(app.getByTestId("status-fleet")).toContainText("Fleet:");
     await expect(app.getByTestId("status-fleet")).not.toContainText("site");
+    // The scan showcase is where a reality model is: its strip names it by its record.
+    await app.keyboard.press("s");
+    await app.getByTestId("site-row-cesium-splat-demo").click();
+    const strip = app.getByTestId("representation-switcher");
+    await expect(strip).toBeVisible({ timeout: 30_000 });
+    await expect(strip).toContainText("Cesium Gaussian splat demo");
   });
 
   test("a fly-to whose site record fails says so beside the switcher, and Retry flies on", async ({
@@ -237,7 +247,7 @@ test.describe("catalog", () => {
   });
 
   test("representation switch keeps the camera", async ({ app }) => {
-    await app.getByTestId("onboarding-demo").click();
+    await app.getByTestId("onboarding-scan").click();
     const switcher = app.getByTestId("representation-switcher");
     await expect(switcher).toBeVisible({ timeout: 30_000 });
     await expect(switcher.getByRole("radio", { name: /Splat/ })).toHaveAttribute(
@@ -595,13 +605,13 @@ test.describe("the HUD over the map", () => {
     app,
   }) => {
     await app.getByTestId("onboarding-demo").click();
-    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, {
       timeout: 30_000,
     });
     // `v` opens the switcher at its saved views, ready to name the current one.
     await app.keyboard.press("v");
     const switcher = app.getByTestId("site-switcher");
-    await expect(switcher).toContainText("Saved views · Blackrock Mesa");
+    await expect(switcher).toContainText(`Saved views · ${RANCH_NAME}`);
     await expect(switcher.getByTestId("saved-view-Overview")).toBeVisible();
     await expect(switcher.getByRole("textbox", { name: "View name" })).toBeFocused();
     // Escape from that field closes it and hands the keyboard back to the site's badge.
@@ -635,11 +645,10 @@ test.describe("the HUD over the map", () => {
     const badge = page.getByTestId("project-card").getByRole("button").first();
     await badge.click();
     const switcher = page.getByTestId("site-switcher");
-    // The demo is known by its project's name, which renaming its record would not change.
-    await expect(switcher.getByTestId("site-row-cesium-splat-demo")).toContainText(
-      "Blackrock Mesa",
-    );
-    await expect(switcher.getByTestId("site-rename-cesium-splat-demo")).toHaveCount(0);
+    // The demo ranch is known by its project's name, which renaming its record would not
+    // change.
+    await expect(switcher.getByTestId(`site-row-${RANCH_SLUG}`)).toContainText(RANCH_NAME);
+    await expect(switcher.getByTestId(`site-rename-${RANCH_SLUG}`)).toHaveCount(0);
     // At the grove, the badge is its name.
     await switcher.getByTestId("site-row-walnut-grove").click();
     await expect(page.getByTestId("project-title")).toHaveText("Walnut grove", {
@@ -875,7 +884,7 @@ test.describe("mission control", () => {
     app,
   }) => {
     await app.getByTestId("onboarding-demo").click();
-    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, {
       timeout: 30_000,
     });
     await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6);
@@ -884,7 +893,9 @@ test.describe("mission control", () => {
     // A drawer, not a window over the map: the tool panel it replaced is gone, the map stays.
     await expect(app.getByTestId("layers-panel")).toHaveCount(0);
     await app.getByTestId("plan-thistle").click({ force: true });
-    await expect(app.getByTestId("plan-detail")).toContainText("Remove all invasive star thistle");
+    await expect(app.getByTestId("plan-detail")).toContainText(
+      "Mow yellow star thistle on the west grassland",
+    );
     await expect(app.getByTestId("plan-show-on-map")).toBeVisible();
     await app.waitForTimeout(700);
     // The window animates in; a positional click can land on the map mid-transition.
@@ -913,7 +924,7 @@ test.describe("mission control", () => {
     app,
   }) => {
     await app.getByTestId("onboarding-demo").click();
-    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, {
       timeout: 30_000,
     });
     // The demo agent has simulated threads running, so its card shows; an idle one never says so.
@@ -1069,7 +1080,7 @@ test.describe("mission control", () => {
     app,
   }) => {
     await app.getByTestId("onboarding-demo").click();
-    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, {
       timeout: 30_000,
     });
     // The site's fleet, counted the way the Fleet window counts it, and labelled simulated.
@@ -1098,30 +1109,67 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("selection-card")).toHaveCount(0);
   });
 
+  test("the demo ranch opens with every zone and machine in frame", async ({ app }) => {
+    await app.setViewportSize({ width: 1440, height: 900 });
+    await expect(app.getByTestId("onboarding")).toContainText("simulated");
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, {
+      timeout: 30_000,
+    });
+    await cameraAtRest(app);
+    const overlays = app.locator('[data-testid^="zone-chip-"], [data-testid^="machine-marker-"]');
+    await expect(overlays).toHaveCount(9);
+    // Every chip and marker is drawn, and whole on the screen: the arrival frames them all.
+    await expect
+      .poll(
+        () =>
+          overlays.evaluateAll((nodes) =>
+            nodes
+              .filter((node) => {
+                const box = node.getBoundingClientRect();
+                const shown = getComputedStyle(node).visibility !== "hidden";
+                return !(
+                  shown &&
+                  box.left >= 0 &&
+                  box.top >= 0 &&
+                  box.right <= window.innerWidth &&
+                  box.bottom <= window.innerHeight
+                );
+              })
+              .map((node) => node.getAttribute("data-testid")),
+          ),
+        { timeout: 30_000 },
+      )
+      .toEqual([]);
+  });
+
   test("from far away a site is one pin with its name and a count", async ({ app }) => {
     await app.getByTestId("onboarding-demo").click();
     await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6, {
       timeout: 30_000,
     });
     const setHeight = (height: number) =>
-      app.evaluate((h) => {
-        const twin = (
-          window as unknown as {
-            __twin?: {
-              camera: {
-                cancelFlight: () => void;
-                setView: (lon: number, lat: number, h: number, hd: number, p: number) => void;
+      app.evaluate(
+        (h) => {
+          const twin = (
+            window as unknown as {
+              __twin?: {
+                camera: {
+                  cancelFlight: () => void;
+                  setView: (lon: number, lat: number, h: number, hd: number, p: number) => void;
+                };
               };
-            };
-          }
-        ).__twin;
-        twin?.camera.cancelFlight();
-        twin?.camera.setView(-122.138, 47.6445, h, 0, -90);
-      }, height);
+            }
+          ).__twin;
+          twin?.camera.cancelFlight();
+          twin?.camera.setView(h.longitude, h.latitude, h.height, 0, -90);
+        },
+        { ...RANCH_CENTER, height },
+      );
     await setHeight(400_000);
     const pin = app.getByTestId("site-pin");
     await expect(pin).toBeVisible({ timeout: 15_000 });
-    await expect(pin).toContainText("Blackrock Mesa");
+    await expect(pin).toContainText(RANCH_NAME);
     await expect(pin).toContainText("9");
     await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(0);
     await expect(app.locator('[data-testid^="zone-chip-"]')).toHaveCount(0);
@@ -1140,7 +1188,7 @@ test.describe("a scan object in the selection card", () => {
 
   async function loadDemo(app: Page): Promise<void> {
     await app.getByTestId("onboarding-demo").click();
-    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, {
       timeout: 30_000,
     });
   }
@@ -1160,7 +1208,7 @@ test.describe("a scan object in the selection card", () => {
     expect((await selectionState(app)).mode).toBe("pick");
 
     await fromMap(app, "v");
-    await expect(switcher).toContainText("Saved views · Blackrock Mesa");
+    await expect(switcher).toContainText(`Saved views · ${RANCH_NAME}`);
     await expect(card).toHaveCount(0);
     expect((await selectionState(app)).mode).toBe("pick");
     await app.keyboard.press("Escape");

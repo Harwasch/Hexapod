@@ -142,6 +142,11 @@ export function SelectionCard() {
                   valueText={`${zone.progressPct}%`}
                 />
                 <div className="mc-card__note">{zone.note}</div>
+                {zone.attribution && (
+                  <div className="mc-card__note mc-muted" data-testid="zone-attribution">
+                    {zone.attribution}
+                  </div>
+                )}
                 <div className="mc-actions">
                   <button
                     type="button"

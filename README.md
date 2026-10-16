@@ -29,9 +29,13 @@ clipped away under each local model, so nothing z-fights. Open datasets (terrain
 land cover, hydrography, buildings) are composable layers with provenance, license and
 attribution. Sites, assets and layers persist in PostGIS.
 
-A demo site in Redmond, WA (where Cesium's Gaussian-splat sample sits) carries a simulated
-fleet. The sample splat itself is withdrawn, because this deployment's ion account can't read
-it; `VITE_DEFAULT_SPLAT_ASSET_ID` gives the offline demo site a splat. On top of the world sits **mission control**
+The demo is a ranch on real land: oak savanna along Figueroa Creek on California's Central
+Coast, with a simulated fleet working it (the outline is a demo area, not a property line; the
+name, machines, zones and plans are simulated). Its geometry, sources and derived acreages live
+in one file, `apps/api/app/seed/demo_ranch.json` ([docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md)
+says how to change it). The 3D-scan showcase is the Redmond, WA site where Cesium's
+Gaussian-splat sample sits; that splat is withdrawn because this deployment's ion account can't
+read it, and `VITE_DEFAULT_SPLAT_ASSET_ID` gives the offline copy one. On top of the world sits **mission control**
 for autonomous land-management robots: project badge, Map / Plan / Fleet views, zone and
 machine overlays, plans, fleet and treatment log, one command box (search, actions and the
 agent) and a status line for the fleet, the agent and the connection.
@@ -68,7 +72,8 @@ Neither of the last two loads CesiumJS.
 
 Without Docker: any PostgreSQL 16 with the PostGIS extension works; point `DATABASE_URL`
 and `TEST_DATABASE_URL` at it. Without the API at all, the web app still boots with the
-built-in demo site and labels itself "Catalog API offline".
+built-in demo ranch and scan showcase and labels itself "Catalog API offline". The seed is
+manual (`uv run python -m app.seed`, also after a deploy).
 
 ### Environment variables
 

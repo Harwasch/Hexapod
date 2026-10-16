@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { SCAN_SHOWCASE_SLUG } from "@/api/fallback";
 import { siteDisplayName } from "@/features/sites/siteNames";
 import {
   artifactKindLabel,
@@ -8,12 +9,18 @@ import {
   runStatusLabel,
   uploadStatusLabel,
 } from "@/lib/labels";
+import { DEMO_PROJECT } from "@/missions/demo";
+import { DEMO_RANCH_SLUG } from "@/missions/demoRanchData";
 import { PRODUCT_LINKS, productHeader } from "@/shared/product";
 
 describe("one product, one set of words", () => {
   it("names a site by its project when one is attached, else by its record", () => {
-    expect(siteDisplayName({ id: "x", slug: "cesium-splat-demo", name: "Cesium demo" })).toBe(
-      "Blackrock Mesa",
+    expect(siteDisplayName({ id: "x", slug: DEMO_RANCH_SLUG, name: "Ranch record" })).toBe(
+      DEMO_PROJECT.name,
+    );
+    // The scan showcase has no project: its record names it.
+    expect(siteDisplayName({ id: "z", slug: SCAN_SHOWCASE_SLUG, name: "Cesium demo" })).toBe(
+      "Cesium demo",
     );
     expect(siteDisplayName({ id: "y", slug: "north-orchard", name: "North orchard" })).toBe(
       "North orchard",

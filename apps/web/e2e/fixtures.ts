@@ -1,7 +1,14 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { test as base, expect, type Page } from "@playwright/test";
 
-/** Mirrors the API seed closely enough for the UI; keeps e2e independent of PostGIS. */
-export const demoSite = {
+/**
+ * The Redmond scan showcase, mirroring the API seed closely enough for the UI (plus a mocked
+ * splat and mesh, which the deployment's own record has withdrawn); keeps e2e independent of
+ * PostGIS.
+ */
+export const scanSite = {
   id: "11111111-1111-4111-8111-111111111111",
   slug: "cesium-splat-demo",
   name: "Cesium Gaussian splat demo",
@@ -109,13 +116,16 @@ export const demoSite = {
   updatedAt: "2026-09-15T00:00:00Z",
 };
 
-export const demoSummary = {
-  id: demoSite.id,
-  slug: demoSite.slug,
-  name: demoSite.name,
-  description: demoSite.description,
-  centroid: demoSite.centroid,
-  areaM2: demoSite.areaM2,
+/** @deprecated The scan showcase. The demo the fleet works is `ranchSite`. */
+export const demoSite = scanSite;
+
+export const scanSummary = {
+  id: scanSite.id,
+  slug: scanSite.slug,
+  name: scanSite.name,
+  description: scanSite.description,
+  centroid: scanSite.centroid,
+  areaM2: scanSite.areaM2,
   thumbnailUrl: null,
   representations: ["gaussian-splat", "mesh"],
   latestObservedAt: "2025-05-01T00:00:00Z",
@@ -123,8 +133,94 @@ export const demoSummary = {
     resolutionDescription: "Sub-decimetre splat detail (visual)",
     groundSampleDistanceM: null,
   },
-  createdAt: demoSite.createdAt,
-  updatedAt: demoSite.updatedAt,
+  createdAt: scanSite.createdAt,
+  updatedAt: scanSite.updatedAt,
+};
+/** @deprecated See `scanSummary`. */
+export const demoSummary = scanSummary;
+
+interface RanchFile {
+  slug: string;
+  name: string;
+  description: string;
+  boundary: { geometry: { type: "Polygon"; coordinates: number[][][] } };
+  camera: { target: [number, number]; headingDeg: number; pitchDeg: number; rangeM: number };
+  derived: { siteAreaM2: number; centroid: [number, number] };
+}
+
+/** The demo ranch's one file (apps/api/app/seed/demo_ranch.json), as the seed reads it. */
+const RANCH = JSON.parse(
+  readFileSync(resolve(process.cwd(), "../api/app/seed/demo_ranch.json"), "utf-8"),
+) as RanchFile;
+
+export const RANCH_NAME = RANCH.name;
+export const RANCH_SLUG = RANCH.slug;
+export const RANCH_CENTER = {
+  longitude: RANCH.derived.centroid[0],
+  latitude: RANCH.derived.centroid[1],
+};
+
+/**
+ * The Overview the seed writes (`overview_bookmark`, apps/api/app/seed/data.py), with the
+ * target on the ellipsoid: e2e aborts Cesium's terrain, so the ground there is at height 0.
+ */
+function ranchOverview() {
+  const { target, headingDeg, pitchDeg, rangeM } = RANCH.camera;
+  const pitch = (-pitchDeg * Math.PI) / 180;
+  const back = ((headingDeg + 180) * Math.PI) / 180;
+  const horizontal = rangeM * Math.cos(pitch);
+  const metresPerDegree = 111_320;
+  return {
+    longitude:
+      target[0] +
+      (horizontal * Math.sin(back)) / (metresPerDegree * Math.cos((target[1] * Math.PI) / 180)),
+    latitude: target[1] + (horizontal * Math.cos(back)) / metresPerDegree,
+    height: rangeM * Math.sin(pitch),
+    heading: headingDeg,
+    pitch: pitchDeg,
+  };
+}
+
+/** The demo ranch the simulated fleet works: no reality model, one authored Overview. */
+export const ranchSite = {
+  id: "77777777-7777-4777-8777-777777777777",
+  slug: RANCH.slug,
+  name: RANCH.name,
+  description: RANCH.description,
+  boundary: RANCH.boundary.geometry,
+  centroid: { ...RANCH_CENTER, height: null },
+  areaM2: RANCH.derived.siteAreaM2,
+  thumbnailUrl: null,
+  metadata: { origin: "demo-ranch" },
+  attribution: [],
+  license: null,
+  assets: [],
+  cameraBookmarks: [
+    {
+      id: "88888888-8888-4888-8888-888888888888",
+      siteId: "77777777-7777-4777-8777-777777777777",
+      name: "Overview",
+      ...ranchOverview(),
+      roll: 0,
+      isDefault: true,
+      createdAt: "2026-09-15T00:00:00Z",
+    },
+  ],
+  createdAt: "2026-09-15T00:00:00Z",
+  updatedAt: "2026-09-15T00:00:00Z",
+};
+
+export const ranchSummary = {
+  ...scanSummary,
+  id: ranchSite.id,
+  slug: ranchSite.slug,
+  name: ranchSite.name,
+  description: ranchSite.description,
+  centroid: ranchSite.centroid,
+  areaM2: ranchSite.areaM2,
+  representations: [],
+  latestObservedAt: null,
+  quality: null,
 };
 
 /**
@@ -132,7 +228,7 @@ export const demoSummary = {
  * it, so the switcher can rename it. No assets, so a fly-to there has nothing to stream.
  */
 export const walnutSite = {
-  ...demoSite,
+  ...scanSite,
   id: "66666666-6666-4666-8666-666666666666",
   slug: "walnut-grove",
   name: "Walnut grove",
@@ -159,7 +255,7 @@ export const walnutSite = {
 };
 
 const walnutSummary = {
-  ...demoSummary,
+  ...scanSummary,
   id: walnutSite.id,
   slug: walnutSite.slug,
   name: walnutSite.name,
@@ -291,7 +387,7 @@ export interface MockOptions {
   workerRuns?: boolean;
   /** The stage the simulated worker fails on, so the retry-from-stage path has a target. */
   workerFailsAt?: string;
-  /** List `walnutSite` beside the demo; off, the catalog is the demo alone. */
+  /** List `walnutSite` beside the ranch and the scan showcase; off, the catalog is those two. */
   otherSite?: boolean;
 }
 
@@ -372,7 +468,7 @@ function advanceJobs(state: CaptureMockState, poll: number, failAt?: string): vo
       const capture = state.captures.find((c) => String(c.id) === String(job.captureId));
       if (capture) {
         capture.status = "complete";
-        capture.siteId = demoSite.id;
+        capture.siteId = scanSite.id;
       }
     }
   }
@@ -422,11 +518,18 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
   let jobPolls = 0;
   // The catalog's records, copied so a rename (PATCH) round-trips into the list and the
   // record within one test and no further.
-  const sites = [demoSite, ...(options.otherSite ? [walnutSite] : [])].map((site) => ({
-    ...site,
-  }));
+  const sites: (Record<string, unknown> & { id: string; name: string })[] = [
+    ranchSite,
+    scanSite,
+    ...(options.otherSite ? [walnutSite] : []),
+  ].map((site) => ({ ...site }));
+  const summaries: Record<string, object> = {
+    [ranchSite.id]: ranchSummary,
+    [scanSite.id]: scanSummary,
+    [walnutSite.id]: walnutSummary,
+  };
   const summaryOf = (site: (typeof sites)[number]) => ({
-    ...(site.id === walnutSite.id ? walnutSummary : demoSummary),
+    ...summaries[site.id],
     name: site.name,
   });
 
@@ -756,7 +859,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
       }
       return json(
         {
-          ...demoSite,
+          ...scanSite,
           id: "55555555-5555-4555-8555-555555555555",
           slug: "new-site",
           name: body.name,

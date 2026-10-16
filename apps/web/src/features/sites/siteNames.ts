@@ -8,10 +8,11 @@ import type { MissionProvider } from "@/missions/types";
  * One name per site, everywhere it is shown (docs/GLOSSARY.md, "Site").
  *
  * A site is known by its project's name when a mission project is attached to it — the demo
- * site is "Blackrock Mesa" in the site switcher, the status line and the agent's words — and
- * by its catalog name otherwise. Without this the same place was "Blackrock Mesa" in one
- * corner and "Cesium Gaussian splat demo" (the record of the tileset it was made from) in
- * another. The provider is the same seam `SceneBridge` resolves projects through.
+ * ranch is "Oak Bench Ranch" (missions/demoRanchData.ts) in the site switcher, the status line
+ * and the agent's words — and by its catalog name otherwise, as the Redmond scan showcase is
+ * ("Cesium Gaussian splat demo"). Without this the same place could be one name in one corner
+ * and its record's in another. The provider is the same seam `SceneBridge` resolves projects
+ * through.
  */
 const provider: MissionProvider = new DemoMissionProvider();
 

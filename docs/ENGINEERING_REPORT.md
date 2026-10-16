@@ -87,9 +87,11 @@ current delivery provider, not the data model; canonical data will live behind t
   Map / Plan / Fleet views, layer pills, machine markers and zone chips over the world,
   selection cards, Plans and Fleet windows with a treatment log, an agent activity stream
   and a bottom command bar with local intent parsing.
-- A simulated demo project (Blackrock Mesa, six machines, three zones, five plans) is
-  attached to the demo site and labeled as simulated; `MissionProvider` is the seam for a
-  live fleet feed. See [MISSION_CONTROL.md](MISSION_CONTROL.md).
+- A simulated demo project (six machines, three zones, five plans) is labeled as simulated;
+  `MissionProvider` is the seam for a live fleet feed. It was "Blackrock Mesa" on the Redmond
+  splat site until milestone 2 moved it to the demo ranch on real Central Coast land ("Oak
+  Bench Ranch", `apps/api/app/seed/demo_ranch.json`), with every acreage computed from the
+  geometry. See [MISSION_CONTROL.md](MISSION_CONTROL.md).
 
 **Performance pass (third iteration)**
 

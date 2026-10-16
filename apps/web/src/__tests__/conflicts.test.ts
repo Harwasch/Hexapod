@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { PlanDraft } from "@twin/contracts";
 
 import { busyWindows, describeConflict, planConflicts } from "@/missions/conflicts";
-import { DemoMissionProvider } from "@/missions/demo";
+import { demoRanchProject } from "@/missions/demo";
 import { buildDraftRequest, planFromDraft } from "@/missions/planDraft";
 import { learnedRates, parseHours, taskFamily } from "@/missions/rates";
 
-const project = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+const project = demoRanchProject();
 
 const base: PlanDraft = {
   title: "Mow Z-14",

@@ -14,6 +14,7 @@ from app.schemas.geojson import MultiPolygon, Polygon
 from app.schemas.site import SiteCreate
 from app.seed.captures import capture_sites
 from app.seed.data import DEMO_SITE, LAYERS
+from app.seed.demo_ranch import demo_ranch_site
 from app.services import geometry
 from app.services import layers as layer_service
 from app.services import sites as site_service
@@ -36,17 +37,25 @@ WITHDRAWN_SITES = (
     "mygla",  # no sites/mygla/
     "sheffield-park",  # no sites/sheffield-park/
 )
-#: Assets withdrawn from a site that stays. The demo site keeps its place, because the
-#: simulated fleet is drawn inside it, but not its splat (ion 4547222).
+#: Assets withdrawn from a site that stays. The Redmond scan showcase keeps its place (adding
+#: ion 4547222 from the ion Asset Depot brings its splat back), but not its splat.
 WITHDRAWN_ASSETS = {DEMO_SITE.slug: ("Gaussian splat (LOD)",)}
 WITHDRAWN_LAYERS = ("sentinel-2",)  # ion 3954
+#: Seeded sites whose words live in this code rather than in a capture manifest or a user's
+#: edit: their description, metadata, credits and licence follow the code on every seed.
+#: Their name never does, because the switcher lets a user rename a site.
+CODE_OWNED = frozenset({"cesium-sandcastle", "demo-ranch"})
 
 
 def seed(db: Session) -> dict[str, int]:
     """Creates the seeded sites and layers once, keeps the seeded sites' camera bookmarks
-    in step with the code (they are tuning, not user data), and removes what was withdrawn."""
+    in step with the code (they are tuning, not user data), and removes what was withdrawn.
+
+    Not part of a deploy: fly.toml's release command only migrates, so a deployment runs
+    `python -m app.seed` (and `python -m app.seed.publish --catalog-only` for the offline
+    catalog) by hand after a change here."""
     created = {"sites": 0, "layers": 0}
-    wanted = [DEMO_SITE, *capture_sites(get_settings())]
+    wanted = [DEMO_SITE, demo_ranch_site(), *capture_sites(get_settings())]
     _withdraw(db, wanted)
     for site in wanted:
         existing = db.scalar(select(Site).where(Site.slug == site.slug))
@@ -145,17 +154,31 @@ def _refresh(db: Session, existing: Site, wanted: SiteCreate) -> None:
     # A capture site is rebuilt whole by tools/captures: its manifest is the source of truth
     # for assets, quality and provenance, so new representations and updated numbers land.
     rebuilt = wanted.metadata.get("origin") == "capture-pipeline"
-    if rebuilt:
+    code_owned = wanted.metadata.get("origin") in CODE_OWNED
+    if rebuilt or code_owned:
         if existing.metadata_ != wanted.metadata:
             existing.metadata_ = dict(wanted.metadata)
             changed.append("metadata")
         if existing.description != wanted.description:
             existing.description = wanted.description
             changed.append("description")
-        if wanted.centroid is not None and existing.centroid_height != wanted.centroid.height:
-            existing.centroid = geometry.position_to_wkb(wanted.centroid)
-            existing.centroid_height = wanted.centroid.height
-            changed.append("centroid")
+    if code_owned:
+        attribution = [a.model_dump(mode="json", by_alias=True) for a in wanted.attribution]
+        if existing.attribution != attribution:
+            existing.attribution = attribution
+            changed.append("attribution")
+        license_ = wanted.license.model_dump(mode="json", by_alias=True) if wanted.license else None
+        if existing.license != license_:
+            existing.license = license_
+            changed.append("license")
+    if (
+        rebuilt
+        and wanted.centroid is not None
+        and existing.centroid_height != wanted.centroid.height
+    ):
+        existing.centroid = geometry.position_to_wkb(wanted.centroid)
+        existing.centroid_height = wanted.centroid.height
+        changed.append("centroid")
     by_name = {asset.name: asset for asset in existing.assets}
     for payload in wanted.assets:
         asset = by_name.get(payload.name)
