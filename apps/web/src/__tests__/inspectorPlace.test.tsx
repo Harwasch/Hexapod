@@ -209,7 +209,11 @@ describe("At this point", () => {
     expect(screen.getByTestId("place-land-cover")).toHaveTextContent(
       "Tree cover (class 10)Satellite classification · 2021",
     );
-    expect(screen.getByTestId("place-flood-zone")).toHaveTextContent("No mapped zone");
+    // An empty answer keeps its limit in view: no mapped zone is not low flood risk.
+    expect(screen.getByTestId("place-flood-zone")).toHaveTextContent(
+      "No mapped zoneRegulatory map · flood-zone source flood-zone caveat",
+    );
+    expect(within(screen.getByTestId("place-flood-zone")).queryByText("Limits")).toBeNull();
     expect(screen.getByTestId("place-ecoregion")).toHaveTextContent(
       "EPA ecoregions cover the United States only.",
     );

@@ -129,16 +129,25 @@ function FactRow({
             </>
           )}
         </span>
-        <details className="disclosure">
-          <summary className="disclosure__summary">Limits</summary>
-          <span className="glass-subtle">{data.caveat}</span>
-          {data.source && (
-            <span className="glass-subtle">
-              {" "}
-              {data.source.attribution}. {data.source.license}.
-            </span>
-          )}
-        </details>
+        {data.status === "empty" ? (
+          // "Nothing mapped here" is the answer most easily over-read, so its limit is not
+          // folded away: no mapped flood zone is not low flood risk.
+          <>
+            <br />
+            <span className="glass-subtle">{data.caveat}</span>
+          </>
+        ) : (
+          <details className="disclosure">
+            <summary className="disclosure__summary">Limits</summary>
+            <span className="glass-subtle">{data.caveat}</span>
+            {data.source && (
+              <span className="glass-subtle">
+                {" "}
+                {data.source.attribution} · License: {data.source.license}
+              </span>
+            )}
+          </details>
+        )}
       </>
     );
   }
