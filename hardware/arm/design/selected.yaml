@@ -1,0 +1,20 @@
+# Written by `python -m armdesign.report select` from out/study.json.
+why: cheapest field-tier design within 5% of the best field-tier score
+design:
+  arch: parallelogram
+  dof: 5
+  l1: 0.37
+  l2: 0.28
+  mount_x: 0.26
+  pedestal: 0.05
+  spring: true
+  wrist_len: 0.09
+actuators:
+  yaw: rs_edulite_05
+  shoulder: sw_gim8108_8
+  elbow: sw_gim6010_8
+  wrist_pitch: hx_35hm
+  tool_roll: hx_65hm
+score: 0.8419184981684952
+cost: 607.22
+mass: 2.284
