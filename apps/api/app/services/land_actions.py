@@ -322,14 +322,37 @@ def schedule(
     content = reviewable(db, row, version, payload.expected_revision)
     if not version.approved_at:
         raise InvalidInputError("Approve this action revision before scheduling it.")
+    if payload.project_id.startswith("land:") and payload.project_id != f"land:{land_id}":
+        raise InvalidInputError("Schedule under this land or the current mission project.")
     region = FOOTPRINT.validate_python(version.effective_boundary)
-    areas = [PlanArea(id="land", name="Approved work area", footprint=region)]
+    # Area ids are unique per action, so two scheduled actions on one project never share a
+    # zone id (they used to both be "land"). Rows stored before keep their ids as written.
+    work = f"LA-{identifier.hex[:8]}"
+    provenance = (
+        f"Approved land action revision {row.revision} on boundary revision "
+        f"{content.boundary_revision}"
+    )
+    areas = [
+        PlanArea(
+            id=work,
+            name=f"Approved work area · {content.title[:90]}",
+            footprint=region,
+            attribution=provenance,
+        )
+    ]
     steps = []
-    for step in content.steps:
-        zone = "land"
+    for index, step in enumerate(content.steps, start=1):
+        zone = work
         if step.footprint:
-            zone = f"step-{step.id}"
-            areas.append(PlanArea(id=zone, name=step.title[:120], footprint=step.footprint))
+            zone = f"{work}-{index}"
+            areas.append(
+                PlanArea(
+                    id=zone,
+                    name=step.title[:120],
+                    footprint=step.footprint,
+                    attribution=provenance,
+                )
+            )
         steps.append(
             PlanStep(
                 title=step.title,
@@ -377,7 +400,14 @@ def schedule(
         questions=[],
         source="rules",
     )
-    plan = plans.create_plan(db, mission, workspace_id=workspace_id, commit=False)
+    plan = plans.create_plan(
+        db,
+        mission,
+        workspace_id=workspace_id,
+        land_id=land_id,
+        boundary_revision=content.boundary_revision,
+        commit=False,
+    )
     plan.revisions[0].note = payload.note[:300]
     plan.revisions[0].snapshot = {
         **plan.revisions[0].snapshot,

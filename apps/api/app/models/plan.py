@@ -4,7 +4,7 @@ import uuid
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Date, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,9 +20,18 @@ class Plan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     Keyed by the mission project (the demo project or a fleet backend's id); optionally
     linked to a catalog site. The planner's output (steps, estimates, assumptions, risks,
     questions) is stored as JSON: it changes with the planner, not with migrations.
+
+    A plan may hang off a saved Land: `land_id` names it and `boundary_revision` pins the
+    outline it was planned on. Land is workspace-private, so only a private plan (one with a
+    workspace) may carry it; the check constraint holds that even against a buggy caller.
     """
 
     __tablename__ = "plans"
+    __table_args__ = (
+        CheckConstraint(
+            "land_id IS NULL OR workspace_id IS NOT NULL", name="ck_plans_land_private"
+        ),
+    )
 
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -30,6 +39,13 @@ class Plan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
         index=True,
     )
+    land_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("land_areas.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    boundary_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     project_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     site_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("sites.id", ondelete="SET NULL"), nullable=True

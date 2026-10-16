@@ -14,7 +14,7 @@ from app.schemas.plan import (
     PlanRevisionRead,
     PlanStatus,
 )
-from app.services.errors import NotFoundError
+from app.services.errors import ConflictError, NotFoundError
 
 ACTIVE_STATUSES: tuple[PlanStatus, ...] = ("scheduled", "dispatched", "paused")
 
@@ -30,13 +30,26 @@ def _body_columns(body: PlanBody) -> dict[str, object]:
     return data
 
 
-def list_plans(db: Session, project_id: str) -> list[Plan]:
-    stmt = (
-        select(Plan)
-        .where(Plan.project_id == project_id, Plan.workspace_id.is_(None))
-        .options(selectinload(Plan.revisions))
-        .order_by(Plan.created_at)
+def list_plans(
+    db: Session,
+    project_id: str | None,
+    *,
+    workspace_id: uuid.UUID | None = None,
+    land_id: uuid.UUID | None = None,
+    limit: int = 200,
+) -> list[Plan]:
+    """A project's plans in one scope: the public ones (no workspace) unless a workspace is
+    given, and then only that workspace's. Never both, so a public list cannot carry a
+    private plan."""
+    scope = (
+        Plan.workspace_id.is_(None) if workspace_id is None else Plan.workspace_id == workspace_id
     )
+    stmt = select(Plan).where(scope)
+    if project_id is not None:
+        stmt = stmt.where(Plan.project_id == project_id)
+    if land_id is not None:
+        stmt = stmt.where(Plan.land_id == land_id)
+    stmt = stmt.options(selectinload(Plan.revisions)).order_by(Plan.created_at).limit(limit)
     return list(db.scalars(stmt).all())
 
 
@@ -74,12 +87,20 @@ def _snapshot(plan: Plan) -> dict[str, object]:
 
 
 def create_plan(
-    db: Session, payload: PlanCreate, *, workspace_id: uuid.UUID | None = None, commit: bool = True
+    db: Session,
+    payload: PlanCreate,
+    *,
+    workspace_id: uuid.UUID | None = None,
+    land_id: uuid.UUID | None = None,
+    boundary_revision: int | None = None,
+    commit: bool = True,
 ) -> Plan:
     if payload.site_id is not None and db.get(Site, payload.site_id) is None:
         raise NotFoundError("site", payload.site_id)
     plan = Plan(
         workspace_id=workspace_id,
+        land_id=land_id,
+        boundary_revision=boundary_revision,
         project_id=payload.project_id,
         site_id=payload.site_id,
         status="scheduled",
@@ -96,8 +117,30 @@ def create_plan(
     return get_plan(db, plan.id, workspace_id=workspace_id)
 
 
-def revise_plan(db: Session, plan_id: uuid.UUID, payload: PlanRevise) -> Plan:
-    plan = get_plan(db, plan_id)
+def land_action_id(plan: Plan) -> uuid.UUID | None:
+    """The land action a mission was scheduled from (kept on its first revision), if any."""
+    first = plan.revisions[0] if plan.revisions else None
+    landed = first.snapshot.get("landAction") if first else None
+    raw = landed.get("id") if isinstance(landed, dict) else None
+    try:
+        return uuid.UUID(str(raw)) if raw else None
+    except ValueError:
+        return None
+
+
+def revise_plan(
+    db: Session,
+    plan_id: uuid.UUID,
+    payload: PlanRevise,
+    *,
+    workspace_id: uuid.UUID | None = None,
+) -> Plan:
+    plan = get_plan(db, plan_id, workspace_id=workspace_id)
+    if land_action_id(plan) is not None:
+        # The action holds the reviewed, approved version; a second editor here would fork it.
+        raise ConflictError(
+            "This mission was scheduled from a land action; revise the action in Land."
+        )
     for key, value in _body_columns(payload).items():
         setattr(plan, key, value)
     plan.revision += 1
@@ -109,18 +152,24 @@ def revise_plan(db: Session, plan_id: uuid.UUID, payload: PlanRevise) -> Plan:
         )
     )
     db.commit()
-    return get_plan(db, plan.id)
+    return get_plan(db, plan.id, workspace_id=workspace_id)
 
 
-def set_status(db: Session, plan_id: uuid.UUID, status: PlanStatus) -> Plan:
-    plan = get_plan(db, plan_id)
+def set_status(
+    db: Session,
+    plan_id: uuid.UUID,
+    status: PlanStatus,
+    *,
+    workspace_id: uuid.UUID | None = None,
+) -> Plan:
+    plan = get_plan(db, plan_id, workspace_id=workspace_id)
     plan.status = status
     db.commit()
-    return get_plan(db, plan.id)
+    return get_plan(db, plan.id, workspace_id=workspace_id)
 
 
-def delete_plan(db: Session, plan_id: uuid.UUID) -> None:
-    plan = get_plan(db, plan_id)
+def delete_plan(db: Session, plan_id: uuid.UUID, *, workspace_id: uuid.UUID | None = None) -> None:
+    plan = get_plan(db, plan_id, workspace_id=workspace_id)
     db.delete(plan)
     db.commit()
 
@@ -162,6 +211,10 @@ def plan_to_read(plan: Plan) -> PlanRead:
             )
             for r in plan.revisions
         ],
+        land_id=plan.land_id,
+        boundary_revision=plan.boundary_revision,
+        private=plan.workspace_id is not None,
+        land_action_id=land_action_id(plan),
         created_at=plan.created_at,
         updated_at=plan.updated_at,
     )

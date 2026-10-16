@@ -1,0 +1,136 @@
+{
+  "about": "Shared coverage fixtures: packages/geo/src/coverage.test.ts (coveragePath, outer rings) and apps/api/tests/test_coverage.py (app.services.coverage.measure) hold their numbers to these. Coordinates are metre offsets from (-122.139, 47.644) near Redmond, WA.",
+  "cases": [
+    {
+      "name": "rectangle 200 x 100 m",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-122.139, 47.644],
+            [-122.136338207, 47.643999969],
+            [-122.136338207, 47.644899384],
+            [-122.139, 47.644899415],
+            [-122.139, 47.644]
+          ]
+        ]
+      },
+      "spacingM": 10,
+      "expect": {
+        "headingDeg": 90,
+        "passes": 10,
+        "lengthMin": 1900,
+        "lengthMax": 2100
+      }
+    },
+    {
+      "name": "rectangle, capped preview",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-122.139, 47.644],
+            [-122.136338207, 47.643999969],
+            [-122.136338207, 47.644899384],
+            [-122.139, 47.644899415],
+            [-122.139, 47.644]
+          ]
+        ]
+      },
+      "spacingM": 2,
+      "maxPasses": 8,
+      "expect": {
+        "passes": 8,
+        "spacingM": 12.5,
+        "capped": true
+      }
+    },
+    {
+      "name": "U shape",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-122.139, 47.644],
+            [-122.13500731, 47.643999931],
+            [-122.13500731, 47.64579876],
+            [-122.136338207, 47.645798799],
+            [-122.136338207, 47.644404706],
+            [-122.137669103, 47.644404729],
+            [-122.137669103, 47.645798822],
+            [-122.139, 47.64579883],
+            [-122.139, 47.644]
+          ]
+        ]
+      },
+      "spacingM": 20,
+      "headingDeg": 90,
+      "expect": {
+        "passes": 10,
+        "lengthM": 2200,
+        "lengthTolM": 50
+      }
+    },
+    {
+      "name": "rectangle with a 50 x 50 m hole",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-122.139, 47.644],
+            [-122.136338207, 47.643999969],
+            [-122.136338207, 47.644899384],
+            [-122.139, 47.644899415],
+            [-122.139, 47.644]
+          ],
+          [
+            [-122.138001827, 47.64426982],
+            [-122.137336379, 47.644269812],
+            [-122.137336379, 47.64471952],
+            [-122.138001827, 47.644719528],
+            [-122.138001827, 47.64426982]
+          ]
+        ]
+      },
+      "spacingM": 10,
+      "expect": {
+        "passes": 10,
+        "lengthM": 1750,
+        "lengthTolM": 40,
+        "pythonOnly": true
+      }
+    },
+    {
+      "name": "two rectangles",
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [-122.139, 47.644],
+              [-122.136338207, 47.643999969],
+              [-122.136338207, 47.644899384],
+              [-122.139, 47.644899415],
+              [-122.139, 47.644]
+            ]
+          ],
+          [
+            [
+              [-122.12899999999999, 47.644],
+              [-122.12633820699999, 47.643999969],
+              [-122.12633820699999, 47.644899384],
+              [-122.12899999999999, 47.644899415],
+              [-122.12899999999999, 47.644]
+            ]
+          ]
+        ]
+      },
+      "spacingM": 10,
+      "expect": {
+        "lengthMin": 3800,
+        "lengthMax": 4200,
+        "pythonOnly": true
+      }
+    }
+  ]
+}

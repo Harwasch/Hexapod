@@ -407,3 +407,169 @@ def test_outline_endpoint_says_when_no_model_is_configured(monkeypatch: pytest.M
     )
     assert response.status_code == 503
     assert "ANTHROPIC_API_KEY" in response.json()["detail"]
+
+
+# A fence line near Redmond (~300 m east-west) and a ~200 x 100 m paddock, as GeoJSON.
+FENCE = {"type": "LineString", "coordinates": [[-122.139, 47.644], [-122.135, 47.644]]}
+PADDOCK = {
+    "type": "Polygon",
+    "coordinates": [
+        [
+            [-122.139, 47.644],
+            [-122.136338, 47.644],
+            [-122.136338, 47.6449],
+            [-122.139, 47.6449],
+            [-122.139, 47.644],
+        ]
+    ],
+}
+
+
+def land_request(goal: str, zones: list[PlannerZone], **overrides: Any) -> PlanDraftRequest:
+    return request(goal, zones=zones, machines=[], **overrides)
+
+
+def test_monitoring_and_checking_are_surveys_while_mowing_along_stays_treatment() -> None:
+    from app.services.planner import _task_kind
+
+    assert _task_kind("monitor the fence every week") == "survey"
+    assert _task_kind("check the troughs") == "survey"
+    assert _task_kind("scout the north pasture") == "survey"
+    assert _task_kind("mow along the fence") == "treat"
+
+
+def test_a_line_zone_is_followed_by_the_assumed_drone_and_sized_by_its_length() -> None:
+    from app.services.coverage import measure
+    from app.services.machine_classes import MACHINE_CLASSES
+
+    fence = PlannerZone(id="L-1a2b3c4d", name="North fence", acres=0.7, geometry=FENCE)
+    draft = RulesPlanner().draft(
+        land_request("monitor the fence every week", [fence], preferred_zone_ids=["L-1a2b3c4d"])
+    )
+    length = measure(FENCE, 1)
+    assert length is not None
+    assert draft.cadence == "weekly" and draft.zone_ids == ["L-1a2b3c4d"]
+    assert not any(step.title.startswith("Treat") for step in draft.steps)
+    assert all("L-1a2b3c4d" not in step.title for step in draft.steps)
+    assert any(step.title == "Survey North fence" for step in draft.steps)
+    assert draft.estimates.path_m == pytest.approx(length.length_m, rel=0.001)
+    assert draft.estimates.acres == 0
+    sized = draft.coverage[0]
+    speed = MACHINE_CLASSES.drone.speed_mps
+    assert sized.kind == "line" and sized.machine_class == "drone"
+    assert sized.hours == pytest.approx(length.length_m / speed / 3600)
+    assert "Consumer mapping drone (assumed)" in sized.basis
+    step = next(s for s in draft.steps if s.title == "Survey North fence")
+    assert step.detail == "Follow 301 m of North fence (0.01 machine-hours)."
+    path = next(a for a in draft.assumptions if a.startswith("Path from the outline"))
+    assert "assumed" in path and "one run" in path and "it repeats weekly" in path
+
+
+def test_an_outlined_area_takes_its_geodesic_acres_and_the_mower_path() -> None:
+    from app.services.coverage import measure
+
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=999, task="Mow", geometry=PADDOCK)
+    draft = RulesPlanner().draft(
+        land_request("mow the paddock", [paddock], preferred_zone_ids=["A-01"])
+    )
+    measured = measure(PADDOCK, 2.0)
+    assert measured is not None and measured.area_m2 is not None
+    # Acres from the outline (~4.9), never the 999 the client stated.
+    assert draft.estimates.acres == pytest.approx(measured.area_m2 / 4046.8564224, abs=0.05)
+    hours = ((measured.length_m + measured.transit_m) / 1.4 + measured.spans * 8) / 3600
+    assert draft.coverage[0].hours == pytest.approx(hours)
+    assert draft.coverage[0].machine_class == "mower" and draft.coverage[0].spacing_m == 2.0
+    assert draft.estimates.machine_hours == pytest.approx(hours, abs=0.05)
+    assert not any("acres per machine-hour assumed" in a for a in draft.assumptions)
+    two = RulesPlanner().draft(
+        land_request(
+            "mow the paddock", [paddock], preferred_zone_ids=["A-01"], answers={"passes": "two"}
+        )
+    )
+    assert two.coverage[0].hours == pytest.approx(2 * hours)
+    seeded = RulesPlanner().draft(
+        land_request("seed the paddock", [paddock], preferred_zone_ids=["A-01"])
+    )
+    assert seeded.coverage[0].machine_class == "seeder" and seeded.coverage[0].spacing_m == 3.0
+
+
+def test_a_learned_rate_still_sets_the_hours_of_an_outlined_area() -> None:
+    from app.schemas.agent import PlannerRate
+
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=999, task="Mow", geometry=PADDOCK)
+    draft = RulesPlanner().draft(
+        land_request(
+            "mow the paddock",
+            [paddock],
+            preferred_zone_ids=["A-01"],
+            rates=[PlannerRate(task="Mow", acres_per_machine_hour=2.0, samples=4)],
+        )
+    )
+    area = draft.coverage[0].area_m2
+    assert area is not None
+    assert draft.coverage[0].hours == pytest.approx(area / 4046.8564224 / 2.0)
+    assert "measured rate" in draft.coverage[0].basis
+    assert any("learned from 4 logged runs" in a for a in draft.assumptions)
+
+
+def test_zones_without_outlines_are_sized_exactly_as_before() -> None:
+    draft = RulesPlanner().draft(request("Mow Z-21 with one mower"))
+    assert draft.coverage == [] and draft.estimates.path_m is None
+    assert draft.estimates.machine_hours == pytest.approx(220 / 1.5, abs=0.05)
+    assert not any(a.startswith("Path from the outline") for a in draft.assumptions)
+
+
+def test_claude_planner_sends_paths_not_outlines_and_returns_server_coverage() -> None:
+    parsed = ModelPlanDraft(
+        title="Weekly fence check",
+        objective="Fly the fence weekly.",
+        zone_ids=["L-1a2b3c4d"],
+        machine_ids=[],
+        cadence="weekly",
+        start_date="2026-09-18",
+        end_date=None,
+        estimated_acres=12,
+        estimated_machine_hours=0.5,
+        estimated_calendar_days=1,
+        steps=[],
+        assumptions=["8 m/s"],
+        risks=[],
+        questions=[],
+        clarifications=[],
+    )
+    settings = Settings(ANTHROPIC_API_KEY="k", ANTHROPIC_MODEL="claude-opus-5", _env_file=None)
+    client = _FakeClient(parsed)
+    fence = PlannerZone(id="L-1a2b3c4d", name="North fence", acres=0.7, geometry=FENCE)
+    draft = ClaudePlanner(settings, client=client).draft(  # type: ignore[arg-type]
+        land_request("monitor the fence every week", [fence], preferred_zone_ids=["L-1a2b3c4d"])
+    )
+    prompt = client.messages.calls[0]["messages"][0]["content"]
+    assert '"geometry"' not in prompt and "-122.139" not in prompt
+    assert '"coverage"' in prompt and '"lengthM"' in prompt
+    assert draft.coverage[0].zone_id == "L-1a2b3c4d" and draft.coverage[0].kind == "line"
+    assert draft.estimates.path_m == pytest.approx(draft.coverage[0].length_m, abs=0.1)
+    # A line has no area, so the model's acres stand; its hours always stand.
+    assert draft.estimates.acres == 12 and draft.estimates.machine_hours == 0.5
+
+
+def test_plan_draft_endpoint_accepts_a_previous_draft_with_coverage(client: TestClient) -> None:
+    fence = PlannerZone(id="L-1a2b3c4d", name="North fence", acres=0.7, geometry=FENCE)
+    body: dict[str, Any] = {
+        "goal": "monitor the fence every week",
+        "projectName": "Oak Bench",
+        "zones": [fence.model_dump(by_alias=True, mode="json", exclude_none=True)],
+        "preferredZoneIds": ["L-1a2b3c4d"],
+        "today": "2026-09-17",
+    }
+    first = client.post("/api/v1/agent/plan-draft", json=body)
+    assert first.status_code == 200, first.text
+    draft = first.json()
+    if draft["source"] != "rules":
+        return
+    assert draft["coverage"][0]["kind"] == "line" and draft["estimates"]["pathM"] > 0
+    previous = {k: v for k, v in draft.items() if k not in {"source", "model", "note"}}
+    again = client.post(
+        "/api/v1/agent/plan-draft",
+        json={**body, "refinement": "every month", "previousDraft": previous},
+    )
+    assert again.status_code == 200, again.text
