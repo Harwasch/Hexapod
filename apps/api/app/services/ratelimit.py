@@ -1,6 +1,6 @@
 """Per-client token buckets for the few routes whose cost is the attack.
 
-Most of this API is cheap to call and open to read, and is left alone. Four things are
+Most of this API is cheap to call and open to read, and is left alone. Five things are
 not cheap:
 
 * **The phone key.** Every route behind it hashes the supplied key with 200,000 rounds of
@@ -15,6 +15,9 @@ not cheap:
 * **Place facts** (`/research/place/{fact}`) each call a public agency service (USGS, USDA,
   ESA, FEMA, EPA) on the caller's behalf. Behind land identity, and bucketed so the API is
   never a fan-out proxy for one client.
+* **Dated imagery** (`/imagery/dated`, `/imagery/usgs-topo/tiles`) asks Planetary Computer,
+  The National Map and USGS's sheet bucket on the caller's behalf, before sign-in: public
+  data, but not an open proxy either.
 
 In-process and per-machine, on purpose: the API runs as one Fly machine (fly.toml), and a
 limit that needs Redis to work is a limit nobody deploys. A second machine would give each
@@ -60,6 +63,13 @@ STEP_LOG = Limit(burst=60, per_minute=120)
 #: each lookup calls a public agency service. Repeats are answered from a cache, but still
 #: spend a token: the bucket is in front of the route.
 PLACE = Limit(burst=25, per_minute=60)
+#: Dated imagery catalogs (`/imagery/dated`). Each one asks Planetary Computer and The National
+#: Map up to twenty questions; one is asked per area as the Time Lantern opens. A catalog this
+#: server already holds is answered without spending a token.
+IMAGERY_CATALOG = Limit(burst=10, per_minute=30)
+#: Historical map tiles (`/imagery/usgs-topo/tiles`): each a few byte-range reads of a USGS
+#: sheet. A lens sweeping a sheet asks a few dozen a second at first, then browsers cache them.
+TOPO_TILE = Limit(burst=200, per_minute=600)
 
 #: Clients remembered per bucket before the least recently seen is forgotten. Forgetting
 #: one only ever gives it a full bucket again, so the bound is on memory, not on safety.
@@ -126,6 +136,8 @@ class RateLimits:
         self.reconcile = TokenBucket(RECONCILE, clock=clock)
         self.step_log = TokenBucket(STEP_LOG, clock=clock)
         self.place = TokenBucket(PLACE, clock=clock)
+        self.imagery_catalog = TokenBucket(IMAGERY_CATALOG, clock=clock)
+        self.topo_tile = TokenBucket(TOPO_TILE, clock=clock)
 
 
 #: The header Fly's proxy sets on every request, which is `API_CLIENT_IP_HEADER`'s default.

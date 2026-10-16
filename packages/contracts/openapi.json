@@ -4050,6 +4050,315 @@
         "title": "CzmlSource",
         "type": "object"
       },
+      "DatedImageryCatalog": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds",
+            "type": "array"
+          },
+          "cached": {
+            "default": false,
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/DatedImageryProviderStatus"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/DatedImagerySource"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bounds",
+          "retrievedAt",
+          "sources",
+          "providers"
+        ],
+        "title": "DatedImageryCatalog",
+        "type": "object"
+      },
+      "DatedImageryPart": {
+        "additionalProperties": false,
+        "description": "One record a source is made of (a NAIP quarter quad, a scene, a map sheet).",
+        "properties": {
+          "accuracy": {
+            "$ref": "#/components/schemas/StatedAccuracy"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "observedOn": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedon"
+          },
+          "observedYear": {
+            "maximum": 2200.0,
+            "minimum": 1800.0,
+            "title": "Observedyear",
+            "type": "integer"
+          },
+          "recordUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Recordurl",
+            "type": "string"
+          }
+        },
+        "required": [
+          "observedYear",
+          "footprint",
+          "recordUrl",
+          "accuracy"
+        ],
+        "title": "DatedImageryPart",
+        "type": "object"
+      },
+      "DatedImageryProviderStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "name",
+          "status",
+          "summary"
+        ],
+        "title": "DatedImageryProviderStatus",
+        "type": "object"
+      },
+      "DatedImagerySource": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "maxLength": 500,
+            "title": "Attribution",
+            "type": "string"
+          },
+          "bounds": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds",
+            "type": "array"
+          },
+          "dateLabel": {
+            "maxLength": 120,
+            "title": "Datelabel",
+            "type": "string"
+          },
+          "dateMeaning": {
+            "maxLength": 600,
+            "title": "Datemeaning",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 200,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "aerial-photo",
+              "satellite",
+              "historical-map"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "license": {
+            "maxLength": 300,
+            "title": "License",
+            "type": "string"
+          },
+          "licenseUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Licenseurl"
+          },
+          "mapScale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapscale"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/DatedImageryPart"
+            },
+            "maxItems": 40,
+            "minItems": 1,
+            "title": "Parts",
+            "type": "array"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "resolutionM": {
+            "exclusiveMinimum": 0.0,
+            "title": "Resolutionm",
+            "type": "number"
+          },
+          "sortDate": {
+            "format": "date",
+            "title": "Sortdate",
+            "type": "string"
+          },
+          "tiles": {
+            "$ref": "#/components/schemas/DatedImageryTiles"
+          },
+          "title": {
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "kind",
+          "title",
+          "dateLabel",
+          "dateMeaning",
+          "sortDate",
+          "resolutionM",
+          "bounds",
+          "tiles",
+          "license",
+          "attribution",
+          "parts"
+        ],
+        "title": "DatedImagerySource",
+        "type": "object"
+      },
+      "DatedImageryTiles": {
+        "additionalProperties": false,
+        "description": "How a browser draws the source: an XYZ template on a tiling scheme.",
+        "properties": {
+          "format": {
+            "const": "png",
+            "default": "png",
+            "title": "Format",
+            "type": "string"
+          },
+          "maximumLevel": {
+            "maximum": 22.0,
+            "minimum": 0.0,
+            "title": "Maximumlevel",
+            "type": "integer"
+          },
+          "scheme": {
+            "enum": [
+              "web-mercator",
+              "geographic"
+            ],
+            "title": "Scheme",
+            "type": "string"
+          },
+          "urlTemplate": {
+            "maxLength": 2000,
+            "title": "Urltemplate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scheme",
+          "urlTemplate",
+          "maximumLevel"
+        ],
+        "title": "DatedImageryTiles",
+        "type": "object"
+      },
       "DocumentLinkCreate": {
         "additionalProperties": false,
         "properties": {
@@ -17530,6 +17839,59 @@
         "title": "StacSource",
         "type": "object"
       },
+      "StatedAccuracy": {
+        "additionalProperties": false,
+        "description": "How far positions may be off, and on whose word.\n\nmeasured-fit: control points measured against the image (a land's own alignment).\nstated-by-source: the record's own sentence, quoted in `basis`. standard: the published\nstandard the source was made to, if the sheet states compliance. not-stated: the record says\nnothing, and nothing is borrowed from another year or product.",
+        "properties": {
+          "basis": {
+            "maxLength": 1200,
+            "title": "Basis",
+            "type": "string"
+          },
+          "citationUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citationurl"
+          },
+          "kind": {
+            "enum": [
+              "measured-fit",
+              "stated-by-source",
+              "standard",
+              "not-stated"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "valueM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valuem"
+          }
+        },
+        "required": [
+          "kind",
+          "basis"
+        ],
+        "title": "StatedAccuracy",
+        "type": "object"
+      },
       "StorageReconciliation": {
         "additionalProperties": false,
         "description": "One pass over the prefixes this system owns, against the rows that claim them.",
@@ -21125,6 +21487,265 @@
         "summary": "Health check",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/imagery/dated": {
+      "get": {
+        "description": "NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area\n(each side at most 0.25\u00b0), newest first, each with its date's meaning, its licence and its\nstated positional accuracy. A provider that fails is listed as unavailable; the others\nstill answer. Cached on this server for 6 h per area rounded to 0.01\u00b0.",
+        "operationId": "dated_api_v1_imagery_dated_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "west",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "West",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "south",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "South",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "east",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "East",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "north",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "North",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatedImageryCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Dated public imagery for an area",
+        "tags": [
+          "dated imagery"
+        ]
+      }
+    },
+    "/api/v1/imagery/usgs-topo/tiles/{z}/{x}/{y}.png": {
+      "get": {
+        "description": "A 256 px PNG on the WGS1984Quad grid (the grid of the land raster tiles), cut from the\nsheet's USGS GeoTIFF and transparent outside its neatline (`w`, `s`, `e`, `n`, NAD27).",
+        "operationId": "usgs_topo_tile_api_v1_imagery_usgs_topo_tiles__z___x___y__png_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "z",
+            "required": true,
+            "schema": {
+              "title": "Z",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "x",
+            "required": true,
+            "schema": {
+              "title": "X",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "y",
+            "required": true,
+            "schema": {
+              "title": "Y",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "STATE/STATE_name_scanid_year_scale_geo",
+            "in": "query",
+            "name": "sheet",
+            "required": true,
+            "schema": {
+              "description": "STATE/STATE_name_scanid_year_scale_geo",
+              "maxLength": 120,
+              "title": "Sheet",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "w",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "W",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "s",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "S",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "e",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "E",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "N",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "A tile of a USGS historical topographic map",
+        "tags": [
+          "dated imagery"
         ]
       }
     },

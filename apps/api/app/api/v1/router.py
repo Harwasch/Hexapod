@@ -9,6 +9,7 @@ from app.api.v1 import (
     artifacts,
     assets,
     captures,
+    imagery,
     ion,
     jobs,
     land,
@@ -81,3 +82,5 @@ api_v1.include_router(land_surveys.router)
 api_v1.include_router(land_solar.router)
 
 api_v1.include_router(land_views.router)
+
+api_v1.include_router(imagery.router)

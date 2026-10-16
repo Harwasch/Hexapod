@@ -358,6 +358,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imagery/dated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Dated public imagery for an area
+         * @description NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area
+         *     (each side at most 0.25°), newest first, each with its date's meaning, its licence and its
+         *     stated positional accuracy. A provider that fails is listed as unavailable; the others
+         *     still answer. Cached on this server for 6 h per area rounded to 0.01°.
+         */
+        get: operations["dated_api_v1_imagery_dated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imagery/usgs-topo/tiles/{z}/{x}/{y}.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A tile of a USGS historical topographic map
+         * @description A 256 px PNG on the WGS1984Quad grid (the grid of the land raster tiles), cut from the
+         *     sheet's USGS GeoTIFF and transparent outside its neatline (`w`, `s`, `e`, `n`, NAD27).
+         */
+        get: operations["usgs_topo_tile_api_v1_imagery_usgs_topo_tiles__z___x___y__png_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ion/assets/{asset_id}": {
         parameters: {
             query?: never;
@@ -3750,6 +3794,121 @@ export interface components {
              * Format: uri
              */
             url: string;
+        };
+        /** DatedImageryCatalog */
+        DatedImageryCatalog: {
+            /** Bounds */
+            bounds: number[];
+            /**
+             * Cached
+             * @default false
+             */
+            cached?: boolean;
+            /** Providers */
+            providers: components["schemas"]["DatedImageryProviderStatus"][];
+            /**
+             * Retrievedat
+             * Format: date-time
+             */
+            retrievedAt: string;
+            /** Sources */
+            sources: components["schemas"]["DatedImagerySource"][];
+        };
+        /**
+         * DatedImageryPart
+         * @description One record a source is made of (a NAIP quarter quad, a scene, a map sheet).
+         */
+        DatedImageryPart: {
+            accuracy: components["schemas"]["StatedAccuracy"];
+            /** Footprint */
+            footprint: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Observedon */
+            observedOn?: string | null;
+            /** Observedyear */
+            observedYear: number;
+            /**
+             * Recordurl
+             * Format: uri
+             */
+            recordUrl: string;
+        };
+        /** DatedImageryProviderStatus */
+        DatedImageryProviderStatus: {
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "empty" | "uncovered" | "unavailable";
+            /** Summary */
+            summary: string;
+        };
+        /** DatedImagerySource */
+        DatedImagerySource: {
+            /** Attribution */
+            attribution: string;
+            /** Bounds */
+            bounds: number[];
+            /** Datelabel */
+            dateLabel: string;
+            /** Datemeaning */
+            dateMeaning: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "aerial-photo" | "satellite" | "historical-map";
+            /** License */
+            license: string;
+            /** Licenseurl */
+            licenseUrl?: string | null;
+            /** Mapscale */
+            mapScale?: number | null;
+            /** Parts */
+            parts: components["schemas"]["DatedImageryPart"][];
+            /** Provider */
+            provider: string;
+            /** Resolutionm */
+            resolutionM: number;
+            /**
+             * Sortdate
+             * Format: date
+             */
+            sortDate: string;
+            tiles: components["schemas"]["DatedImageryTiles"];
+            /** Title */
+            title: string;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings?: string[];
+        };
+        /**
+         * DatedImageryTiles
+         * @description How a browser draws the source: an XYZ template on a tiling scheme.
+         */
+        DatedImageryTiles: {
+            /**
+             * Format
+             * @default png
+             * @constant
+             */
+            format?: "png";
+            /** Maximumlevel */
+            maximumLevel: number;
+            /**
+             * Scheme
+             * @enum {string}
+             */
+            scheme: "web-mercator" | "geographic";
+            /** Urltemplate */
+            urlTemplate: string;
         };
         /** DocumentLinkCreate */
         DocumentLinkCreate: {
@@ -8421,6 +8580,28 @@ export interface components {
             url: string;
         };
         /**
+         * StatedAccuracy
+         * @description How far positions may be off, and on whose word.
+         *
+         *     measured-fit: control points measured against the image (a land's own alignment).
+         *     stated-by-source: the record's own sentence, quoted in `basis`. standard: the published
+         *     standard the source was made to, if the sheet states compliance. not-stated: the record says
+         *     nothing, and nothing is borrowed from another year or product.
+         */
+        StatedAccuracy: {
+            /** Basis */
+            basis: string;
+            /** Citationurl */
+            citationUrl?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "measured-fit" | "stated-by-source" | "standard" | "not-stated";
+            /** Valuem */
+            valueM?: number | null;
+        };
+        /**
          * StorageReconciliation
          * @description One pass over the prefixes this system owns, against the rows that claim them.
          */
@@ -9073,6 +9254,11 @@ export type SchemaCoverProjection = components['schemas']['CoverProjection'];
 export type SchemaCoverResponse = components['schemas']['CoverResponse'];
 export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
 export type SchemaCzmlSource = components['schemas']['CzmlSource'];
+export type SchemaDatedImageryCatalog = components['schemas']['DatedImageryCatalog'];
+export type SchemaDatedImageryPart = components['schemas']['DatedImageryPart'];
+export type SchemaDatedImageryProviderStatus = components['schemas']['DatedImageryProviderStatus'];
+export type SchemaDatedImagerySource = components['schemas']['DatedImagerySource'];
+export type SchemaDatedImageryTiles = components['schemas']['DatedImageryTiles'];
 export type SchemaDocumentLinkCreate = components['schemas']['DocumentLinkCreate'];
 export type SchemaDocumentLinkRead = components['schemas']['DocumentLinkRead'];
 export type SchemaDocumentLocator = components['schemas']['DocumentLocator'];
@@ -9278,6 +9464,7 @@ export type SchemaSpeciesObservation = components['schemas']['SpeciesObservation
 export type SchemaSpeciesTarget = components['schemas']['SpeciesTarget'];
 export type SchemaSpeciesTargetResult = components['schemas']['SpeciesTargetResult'];
 export type SchemaStacSource = components['schemas']['StacSource'];
+export type SchemaStatedAccuracy = components['schemas']['StatedAccuracy'];
 export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
 export type SchemaSurveyCreate = components['schemas']['SurveyCreate'];
 export type SchemaSurveyLocator = components['schemas']['SurveyLocator'];
@@ -10691,6 +10878,135 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthStatus"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    dated_api_v1_imagery_dated_get: {
+        parameters: {
+            query: {
+                east: number;
+                north: number;
+                south: number;
+                west: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatedImageryCatalog"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    usgs_topo_tile_api_v1_imagery_usgs_topo_tiles__z___x___y__png_get: {
+        parameters: {
+            query: {
+                e: number;
+                n: number;
+                s: number;
+                /** @description STATE/STATE_name_scanid_year_scale_geo */
+                sheet: string;
+                w: number;
+            };
+            header?: never;
+            path: {
+                x: number;
+                y: number;
+                z: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "image/png": string;
                 };
             };
             /** @description Missing or wrong write token */

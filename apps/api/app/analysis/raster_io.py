@@ -24,6 +24,7 @@ HOSTS = frozenset(
         "esa-worldcover.s3.eu-central-1.amazonaws.com",
         "sentinel-cogs.s3.us-west-2.amazonaws.com",
         "e84-earth-search-sentinel-data.s3.us-west-2.amazonaws.com",
+        "prd-tnm.s3.amazonaws.com",
     }
 )
 BLOCK_SIZE = 64 * 1024
