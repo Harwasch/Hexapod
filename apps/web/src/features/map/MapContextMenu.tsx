@@ -1,13 +1,15 @@
-import { ClipboardList, Info, Navigation, Ruler, type LucideIcon } from "lucide-react";
+import { ClipboardList, Info, LandPlot, Navigation, Ruler, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 
 import { GlassPanel } from "@twin/ui";
 
+import { env } from "@/app/env";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { useScene } from "@/cesium/SceneContext";
 import { useUi, type MapMenuAt } from "@/state/ui";
 
+import { outlineLandAt } from "../land/landEntry";
 import { planHere } from "../mission/planFlow";
 import { placeMenu } from "./placeMenu";
 
@@ -44,11 +46,27 @@ const ACTIONS: readonly MapAction[] = [
   },
 ];
 
+/** Into the Land tool at the point, finding mapped parcels and lines there (landEntry.ts). */
+const OUTLINE: MapAction = {
+  id: "outline",
+  label: "Outline land here",
+  icon: LandPlot,
+  run: (scene, at) => void outlineLandAt(at, scene),
+};
+
+/** The menu's items: the Land item, after Plan here, only where land exploration is on. */
+function actions(): readonly MapAction[] {
+  if (!env.landExplorationEnabled) return ACTIONS;
+  const plan = ACTIONS.findIndex((action) => action.id === "plan") + 1;
+  return [...ACTIONS.slice(0, plan), OUTLINE, ...ACTIONS.slice(plan)];
+}
+
 /**
  * The map's menu at a point. A plain click on the map selects things on it and does nothing on
  * empty ground; asking about a place is a right-click (Ctrl+click on a one-button Mac, a long
  * press on touch; `SelectionManager` raises it), which opens this: What's here (the inspector,
- * the site's card on a scan's surface), Measure from here, Plan here and Fly here.
+ * the site's card on a scan's surface), Measure from here, Plan here, Outline land here (with
+ * land exploration on) and Fly here.
  *
  * A menu (`role="menu"`): the first item takes the keyboard, the arrows, Home and End move it,
  * and Escape or Tab closes it and gives the keyboard back. A press anywhere else or the camera
@@ -156,7 +174,7 @@ function MapMenu({ at }: { at: MapMenuAt }) {
         aria-label="Map"
         onKeyDown={onKeyDown}
       >
-        {ACTIONS.map(({ id, label, icon: Icon, run }) => (
+        {actions().map(({ id, label, icon: Icon, run }) => (
           <button
             key={id}
             type="button"

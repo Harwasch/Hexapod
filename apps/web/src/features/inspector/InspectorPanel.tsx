@@ -15,6 +15,7 @@ import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 
 import { FloatingPanel } from "../shell/FloatingPanel";
+import { PlaceFacts } from "./PlaceFacts";
 import { RealSize } from "./RealSize";
 
 const KIND_LABEL = {
@@ -176,6 +177,11 @@ export function InspectorPanel() {
               </>
             )}
           </dl>
+          {/* What public data says at the point, cited. Gated on "not a site" rather than
+              "ground": on Google's photorealistic tiles open ground picks as the tileset, a
+              layer-feature. The Terrain row above stays: it is the scene's own terrain, and
+              the rows below name their sources. */}
+          {selection.kind !== "site" && <PlaceFacts selection={selection} />}
           {livingSite && geometry && (
             <section
               aria-label={`Measured and simulated${site ? `: ${site.name}` : ""}`}

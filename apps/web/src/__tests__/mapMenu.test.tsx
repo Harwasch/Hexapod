@@ -10,6 +10,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { LandArea } from "@twin/contracts";
+
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { LONG_PRESS_MS, LongPress } from "@/cesium/longPress";
 import { sceneRegistry } from "@/cesium/SceneContext";
@@ -18,11 +20,25 @@ import { MapContextMenu } from "@/features/map/MapContextMenu";
 import { placeMenu } from "@/features/map/placeMenu";
 import { stepBack } from "@/features/shell/stepBack";
 import { Emitter } from "@/lib/emitter";
+import { env } from "@/app/env";
+import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useSceneSelect } from "@/state/sceneSelect";
 import { useUi, type MapMenuAt } from "@/state/ui";
 
 const AT: MapMenuAt = { x: 200, y: 150, longitude: -122.1385, latitude: 47.645, height: 41.5 };
+const SAVED: LandArea = {
+  id: "land-1",
+  name: "Saved elsewhere",
+  description: "",
+  revision: 3,
+  areaM2: 1,
+  perimeterM: 4,
+  createdAt: "2026-10-16",
+  updatedAt: "2026-10-16",
+  source: { method: "drawn", label: "Fixture" },
+  boundary: { type: "Polygon", coordinates: [] },
+};
 
 function fakeScene() {
   const events = new Emitter<SceneEvents>();
@@ -31,6 +47,7 @@ function fakeScene() {
     viewer: { canvas: document.createElement("canvas") },
     selection: { inspectAt: vi.fn(), flyTowards: vi.fn(), clear: vi.fn() },
     measurement: { seed: vi.fn() },
+    areas: { cancelPick: vi.fn(), edit: vi.fn() },
     sceneSelect: { escape: () => false },
     mission: { setSelectedZone: vi.fn() },
   };
@@ -127,6 +144,43 @@ describe("MapContextMenu", () => {
     open();
     await user.click(await screen.findByRole("menuitem", { name: "Fly here" }));
     expect(scene.selection.flyTowards).toHaveBeenCalledWith(AT);
+  });
+
+  it("outlines land at the point, only where land exploration is on", async () => {
+    const user = userEvent.setup();
+    const enabled = env.landExplorationEnabled;
+    try {
+      env.landExplorationEnabled = false;
+      const { unmount } = render(<MapContextMenu />);
+      open();
+      await screen.findByRole("menu");
+      expect(screen.queryByTestId("map-menu-outline")).not.toBeInTheDocument();
+      act(() => useUi.getState().setMapMenu(null));
+      unmount();
+      env.landExplorationEnabled = true;
+      act(() => useLand.getState().select(SAVED));
+      render(<MapContextMenu />);
+      open();
+      const items = await screen.findAllByRole("menuitem");
+      expect(items.map((item) => item.textContent)).toEqual([
+        "What's here",
+        "Measure from here",
+        "Plan here",
+        "Outline land here",
+        "Fly here",
+      ]);
+      await user.click(screen.getByTestId("map-menu-outline"));
+      expect(scene.areas.cancelPick).toHaveBeenCalled();
+      expect(useUi.getState().activePanel).toBe("land");
+      expect(useLand.getState()).toMatchObject({
+        mode: "candidates",
+        points: [[AT.longitude, AT.latitude]],
+        active: null,
+      });
+    } finally {
+      env.landExplorationEnabled = enabled;
+      act(() => useLand.getState().clear());
+    }
   });
 
   it("closes when the camera moves or on a press anywhere else", async () => {
