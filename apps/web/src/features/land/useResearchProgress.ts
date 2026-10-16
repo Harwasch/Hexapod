@@ -51,7 +51,15 @@ export function useResearchProgress(runId: string | undefined, running: boolean)
     message?: string;
   } | null>(null);
   const [attempt, retry] = useState(0);
-  const query = useQuery<ResearchEvent[]>({ queryKey: eventKey, enabled: false, initialData: [] });
+  // The stream below writes this cache entry; a broad invalidation must not try to fetch it,
+  // so its query function only hands back what the stream already merged.
+  const query = useQuery<ResearchEvent[]>({
+    queryKey: eventKey,
+    queryFn: () => cache.getQueryData<ResearchEvent[]>(eventKey) ?? [],
+    enabled: false,
+    staleTime: Infinity,
+    initialData: [],
+  });
   useEffect(() => {
     if (!ready || !runId) return;
     const controller = new AbortController(),

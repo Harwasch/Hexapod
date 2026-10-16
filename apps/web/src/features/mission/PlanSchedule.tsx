@@ -1,6 +1,6 @@
 import type { PlanStep } from "@twin/contracts";
 
-import { scheduleLanes } from "@/missions/planDraft";
+import { scheduleLanes, tickStep } from "@/missions/planDraft";
 
 const LANE_H = 22;
 const LABEL_W = 64;
@@ -22,7 +22,7 @@ export function PlanSchedule({
   const plotW = width - LABEL_W - 8;
   const dayW = plotW / totalDays;
   const height = TOP + lanes.length * LANE_H + 6;
-  const tickEvery = totalDays > 21 ? 7 : totalDays > 10 ? 2 : 1;
+  const tickEvery = tickStep(dayW);
   const start = new Date(`${startDate}T00:00:00`);
   const dayLabel = (day: number) => {
     if (Number.isNaN(start.getTime())) return `D${day + 1}`;

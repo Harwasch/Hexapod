@@ -13,6 +13,7 @@ import {
   presentStatus,
   recordBodyFromDraft,
   scheduleLanes,
+  tickStep,
 } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 
@@ -246,5 +247,20 @@ describe("plan drafting", () => {
     expect(ids).toContain("thistle");
     store.removePlan("plan-local");
     store.setRemotePlans(project.id, []);
+  });
+});
+
+describe("schedule ticks", () => {
+  it("spaces date labels so they never overlap", () => {
+    // 448 viewBox units of plot: 21 days used to tick every 2 days, 42 units apart,
+    // narrower than one "Oct 16" label.
+    expect(tickStep(448 / 21)).toBe(3);
+    expect(tickStep(448 / 4)).toBe(1);
+    expect(tickStep(448 / 60)).toBe(7);
+    expect(tickStep(448 / 120)).toBe(14);
+    expect(tickStep(448 / 400)).toBe(28);
+    for (const days of [1, 5, 10, 21, 30, 45, 90]) {
+      expect(tickStep(448 / days) * (448 / days)).toBeGreaterThanOrEqual(52);
+    }
   });
 });

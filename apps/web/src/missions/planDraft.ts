@@ -342,3 +342,12 @@ export function diffDrafts(before: PlanDraft, after: PlanDraft): string[] {
   if (stepsBefore !== stepsAfter) out.push(`Steps ${stepsBefore} → ${stepsAfter}.`);
   return out;
 }
+
+/** Room one schedule date tick needs: "Oct 16" in the 12 px mono tick face, plus a gap. */
+const TICK_LABEL_W = 52;
+const TICK_STEPS = [1, 2, 3, 7, 14];
+
+/** Days between labelled ticks: the smallest step whose labels cannot overlap. */
+export function tickStep(dayWidth: number): number {
+  return TICK_STEPS.find((step) => step * dayWidth >= TICK_LABEL_W) ?? 28;
+}
