@@ -11,6 +11,7 @@ import { beginInvestigation, cancelResearch, useInvestigation } from "./research
 import { importBoundary } from "./geometry";
 import { parseSurveyCorners } from "./surveyDraft";
 import { SolarAssessmentView } from "./SolarAssessmentView";
+import { ResearchWorkerNotice } from "./ResearchWorkerNotice";
 import {
   parseSolarDraft,
   solarRequest,
@@ -667,6 +668,7 @@ function Study({
       {run && (
         <div className="land-notice" role="status">
           Hourly analysis: {run.status}. {run.error}
+          <ResearchWorkerNotice run={run} className="land-footnote" />
           {running && canEdit && (
             <button
               type="button"

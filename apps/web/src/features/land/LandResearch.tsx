@@ -13,6 +13,7 @@ import { boundsOf } from "@twin/geo";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
 import { useLandAccessReady, useLandScope, useLandCanEdit, landScope } from "@/state/landIdentity";
+import { env } from "@/app/env";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import {
@@ -35,6 +36,13 @@ import {
 } from "./researchDraft";
 import { LandDocumentViewer } from "./LandDocumentViewer";
 import { VegetationStart } from "./VegetationStart";
+import { ResearchWorkerNotice } from "./ResearchWorkerNotice";
+import {
+  TYPE_A_QUESTION,
+  analysisBlocker,
+  askBlocker,
+  workerIdleNote,
+} from "./researchAvailability";
 import "./research.css";
 
 function eventText(event: ResearchEvent): string {
@@ -129,7 +137,6 @@ export function LandResearch({ land }: { land: LandArea }) {
   const cache = useQueryClient();
   const scene = useScene();
   const catalog = useInvestigations(land.id);
-  const status = useResearchStatus();
   const chosen = useLandContext((s) => s.selectedInvestigationId);
   const setChosen = useLandContext((s) => s.selectInvestigation);
   const selected =
@@ -267,6 +274,11 @@ export function LandResearch({ land }: { land: LandArea }) {
   );
   const lastRun = detail.data?.runs.at(-1);
   const running = lastRun?.status === "queued" || lastRun?.status === "running";
+  const status = useResearchStatus(running);
+  // Every disabled research button says why (researchAvailability.ts), in one place below
+  // the analyses and next to Investigate, instead of greying out in silence.
+  const blocked = analysisBlocker({ ready, canEdit, run: lastRun, status: status.data });
+  const [questionTouched, setQuestionTouched] = useState(false);
   const progress = useResearchProgress(lastRun?.id, running);
   const [activityLimit, setActivityLimit] = useState(100);
 
@@ -553,6 +565,20 @@ export function LandResearch({ land }: { land: LandArea }) {
       .sort((a, b) => Number(b.disposition === "pinned") - Number(a.disposition === "pinned")) ??
     [];
   const maxTotal = Math.max(0, ...Object.values(detail.data?.page.totals ?? {}));
+  const askReason = busy
+    ? null
+    : askBlocker({
+        ready,
+        canEdit,
+        run: lastRun,
+        status: status.data,
+        modelConfigured: status.data?.modelConfigured ?? (status.isError ? null : undefined),
+        pending: !!pending,
+        recoveryError: !!recoveryError,
+        question,
+      });
+  // An empty question box is not a problem until someone has been in it.
+  const askShown = askReason === TYPE_A_QUESTION && !questionTouched ? null : askReason;
   return (
     <section className="land-research" aria-label="Explore your land">
       <div className="land-research-heading">
@@ -575,6 +601,7 @@ export function LandResearch({ land }: { land: LandArea }) {
         <button
           type="button"
           disabled={busy || running || !ready || !canEdit}
+          aria-describedby={blocked ? "land-research-blocked" : undefined}
           onClick={() => void analyzeRaster("cop-dem-glo-30")}
         >
           {busy ? "Starting…" : "Analyze terrain"}
@@ -589,6 +616,7 @@ export function LandResearch({ land }: { land: LandArea }) {
         <button
           type="button"
           disabled={busy || running || !ready || !canEdit}
+          aria-describedby={blocked ? "land-research-blocked" : undefined}
           onClick={() => void analyzeRaster("esa-worldcover-2021")}
         >
           {busy ? "Starting…" : "Analyze land cover"}
@@ -596,6 +624,7 @@ export function LandResearch({ land }: { land: LandArea }) {
       </div>
       <VegetationStart
         disabled={busy || running || !ready || !canEdit}
+        describedBy={blocked ? "land-research-blocked" : undefined}
         busy={busy}
         onStart={(periods) => void analyzeRaster("sentinel-2-ndvi", periods)}
       />
@@ -608,11 +637,28 @@ export function LandResearch({ land }: { land: LandArea }) {
         <button
           type="button"
           disabled={busy || running || !ready || !canEdit}
+          aria-describedby={blocked ? "land-research-blocked" : undefined}
           onClick={() => void discoverArchives()}
         >
           {busy ? "Starting…" : "Discover photos and maps"}
         </button>
       </div>
+      {blocked && (
+        <p id="land-research-blocked" className="land-footnote" role="status">
+          {blocked}
+        </p>
+      )}
+      {lastRun?.status !== "queued" && workerIdleNote(status.data) && (
+        <p className="land-footnote" data-testid="research-worker-idle">
+          {workerIdleNote(status.data)}
+          {env.isDev && (
+            <>
+              {" "}
+              Developers: start one with <code>pnpm dev:research</code>.
+            </>
+          )}
+        </p>
+      )}
       {catalog.data && catalog.data.length > 0 && (
         <label className="land-name">
           Investigation
@@ -695,18 +741,19 @@ export function LandResearch({ land }: { land: LandArea }) {
           {running && (
             <button
               type="button"
-              aria-label="Stop research"
+              aria-label={lastRun.status === "queued" ? undefined : "Stop research"}
               onClick={() =>
                 void cancelResearch(lastRun.id)
                   .then(refresh)
                   .catch((cause: unknown) => setError(describeError(cause)))
               }
             >
-              <Square size={13} /> Stop
+              <Square size={13} /> {lastRun.status === "queued" ? "Cancel queued request" : "Stop"}
             </button>
           )}
         </div>
       )}
+      <ResearchWorkerNotice run={lastRun} />
       {running && progress.phase !== "unavailable" && (
         <p role="status" className="land-footnote">
           {progress.phase === "live"
@@ -930,12 +977,6 @@ export function LandResearch({ land }: { land: LandArea }) {
           </button>
         </div>
       )}
-      {status.data && !status.data.modelConfigured && (
-        <p className="land-notice">
-          AI investigation is not configured on this server. The open-data overview can still
-          produce sourced findings and charts.
-        </p>
-      )}
       {recoveryNotice !== null && (
         <p className="land-notice">
           Your question was restored from this browser. Restoring it did not submit a question.
@@ -1048,6 +1089,7 @@ export function LandResearch({ land }: { land: LandArea }) {
           value={question}
           maxLength={10000}
           onChange={(event) => setQuestion(event.target.value)}
+          onFocus={() => setQuestionTouched(true)}
           rows={3}
         />
         <details className="land-budget">
@@ -1094,6 +1136,7 @@ export function LandResearch({ land }: { land: LandArea }) {
             type="submit"
             disabled={
               !canEdit ||
+              !ready ||
               busy ||
               running ||
               !!pending ||
@@ -1101,11 +1144,17 @@ export function LandResearch({ land }: { land: LandArea }) {
               !question.trim() ||
               !status.data?.modelConfigured
             }
+            aria-describedby={askShown ? "land-ask-blocked" : undefined}
           >
             <Search size={15} />
             {busy ? "Starting…" : "Investigate"}
           </button>
         </div>
+        {askShown && (
+          <p id="land-ask-blocked" className="land-footnote" role="status">
+            {askShown}
+          </p>
+        )}
       </form>
     </section>
   );
