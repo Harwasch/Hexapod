@@ -1,6 +1,7 @@
 import {
   Check,
   ChevronRight,
+  ClipboardList,
   Download,
   Focus,
   History,
@@ -26,6 +27,7 @@ import { useLand, type LandMode } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 
+import { planOnLand } from "../mission/landPlanning";
 import { FloatingPanel } from "../shell/FloatingPanel";
 import { WriteTokenField } from "../captures/WriteTokenField";
 import { createCorridor, createLand, reviseLand, useBoundaryHistory, useLandAreas } from "./api";
@@ -627,6 +629,17 @@ export function LandPanel() {
                 <div className="land-actions">
                   <button
                     type="button"
+                    className="land-primary"
+                    onClick={() => {
+                      if (active) void planOnLand(active);
+                    }}
+                    data-testid="land-plan-work"
+                  >
+                    <ClipboardList size={16} />
+                    Plan work on this land
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       if (!active) return;
                       state.propose({
@@ -729,7 +742,7 @@ export function LandPanel() {
             ))}
             {catalog.data?.length === 0 && (
               <p className="land-footnote">
-                Your saved areas will stay here, independently of plans and captures.
+                Your saved areas stay here; plans you make on them appear in Plan.
               </p>
             )}
           </div>

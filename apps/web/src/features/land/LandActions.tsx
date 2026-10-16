@@ -5,6 +5,8 @@ import { boundsOf } from "@twin/geo";
 import { api, unwrap, ApiError } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
+import { openLandMission } from "@/features/mission/landPlanning";
+import { groundModeFor, landProjectId } from "@/missions/landGround";
 import { useMission } from "@/state/mission";
 import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
@@ -154,7 +156,17 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
   const [busy, setBusy] = useState(false);
   const [reviewNote, setReviewNote] = useState("");
   const project = useMission((state) => state.project);
-  const [projectId, setProjectId] = useState(`land:${land.id}`);
+  // A fleet's project that works this land keeps its missions together; otherwise the land's
+  // own plans, the project "Plan work on this land" uses.
+  const [projectId, setProjectId] = useState(() =>
+    project && groundModeFor(project, land) === "layer" ? project.id : landProjectId(land.id),
+  );
+  const projectLabel = (id: string) =>
+    id === landProjectId(land.id)
+      ? `${land.name} · this land's plans`
+      : id === project?.id
+        ? `${project.name} · current mission project`
+        : id;
   const [offset, setOffset] = useState(0);
   const [investigationId, setInvestigationId] = useState<string | null>(null);
   const [evidenceOffset, setEvidenceOffset] = useState(0);
@@ -1307,6 +1319,11 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                               projectId,
                             },
                           }),
+                        ).then((record) =>
+                          // Plan and Fleet list scheduled missions; they fetch it now.
+                          cache
+                            .invalidateQueries({ queryKey: ["workspace-plans"] })
+                            .then(() => record),
                         ),
                   () => setReviewNote(""),
                 );
@@ -1330,8 +1347,12 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                     value={projectId}
                     onChange={(event) => setProjectId(event.target.value)}
                   >
-                    <option value={`land:${land.id}`}>{land.name}</option>
-                    {project && <option value={project.id}>{project.name}</option>}
+                    <option value={landProjectId(land.id)}>
+                      {projectLabel(landProjectId(land.id))}
+                    </option>
+                    {project && project.id !== landProjectId(land.id) && (
+                      <option value={project.id}>{projectLabel(project.id)}</option>
+                    )}
                   </select>
                 </label>
               )}
@@ -1357,10 +1378,23 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
             </form>
           )}
           {mission.data && (
-            <p role="status">
-              Mission scheduled for {mission.data.startDate} through {mission.data.endDate}. Status:{" "}
-              {mission.data.status}.
-            </p>
+            <div className="land-mission-status">
+              <p role="status">
+                Mission scheduled for {mission.data.startDate} through {mission.data.endDate} under{" "}
+                {projectLabel(mission.data.projectId)}. Status: {mission.data.status}.
+              </p>
+              <div className="land-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (mission.data) void openLandMission(land, mission.data, cache);
+                  }}
+                  data-testid="land-mission-open-plan"
+                >
+                  Open in Plan
+                </button>
+              </div>
+            </div>
           )}
           {mission.isError && <p role="alert">The scheduled mission could not be loaded.</p>}
           <details>

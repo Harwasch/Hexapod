@@ -98,6 +98,8 @@ export class MissionManager {
   private readonly zoneEntities: Entity[] = [];
   private readonly trackEntities: Entity[] = [];
   private zonesVisible = true;
+  /** Zones another layer draws (the selected Land's boundary): no entity, no chip anchor. */
+  private hiddenZoneIds: ReadonlySet<string> = new Set();
   private tracksVisible = true;
   private readonly planEntities: Entity[] = [];
   private overlay: PlanOverlay | null = null;
@@ -134,6 +136,11 @@ export class MissionManager {
     return this.project;
   }
 
+  /** Zones to leave undrawn from the next `setProject` on (`missions/landGround.ts`). */
+  setHiddenZones(ids: ReadonlySet<string>): void {
+    this.hiddenZoneIds = ids;
+  }
+
   setProject(project: Project | null): void {
     const overlay = this.overlay;
     this.clearEntities();
@@ -144,7 +151,7 @@ export class MissionManager {
     if (overlay) queueMicrotask(() => this.project === project && this.showPlan(overlay));
     for (const zone of project.zones) {
       const ring = outerRings(zone.footprint)[0];
-      if (!ring) continue;
+      if (!ring || this.hiddenZoneIds.has(zone.id)) continue;
       const positions = Cartesian3.fromDegreesArray(flattenRing(ring));
       const first = positions[0];
       if (!first) continue;
@@ -253,7 +260,25 @@ export class MissionManager {
       const ring = zone ? outerRings(zone.footprint)[0] : undefined;
       if (!zone || !ring) return;
       const color = this.machineColor(item.machineIds[0] ?? "");
-      const path = coveragePath(ring, { swathM: PREVIEW_SWATH_M, maxPasses: PREVIEW_MAX_PASSES });
+      // A mapped line (a fence) is followed, not covered: draw the line, not passes over its
+      // corridor.
+      const line = zone.land?.line?.coordinates ?? null;
+      const path = line
+        ? { positions: [] }
+        : coveragePath(ring, { swathM: PREVIEW_SWATH_M, maxPasses: PREVIEW_MAX_PASSES });
+      if (line && line.length >= 2) {
+        this.planEntities.push(
+          this.viewer.entities.add({
+            id: `${PLAN_ENTITY_PREFIX}line:${zone.id}`,
+            polyline: {
+              positions: Cartesian3.fromDegreesArray(line.flatMap((p) => [p[0] ?? 0, p[1] ?? 0])),
+              width: 3.2,
+              material: color,
+              clampToGround: true,
+            },
+          }),
+        );
+      }
       if (path.positions.length >= 2) {
         this.planEntities.push(
           this.viewer.entities.add({
@@ -485,7 +510,8 @@ export class MissionManager {
       push(`machine:${machine.id}`, machine.position.longitude, machine.position.latitude, 1.2);
     if (this.zonesVisible)
       for (const zone of project.zones)
-        push(`zone:${zone.id}`, zone.anchor.longitude, zone.anchor.latitude, 0.5);
+        if (!this.hiddenZoneIds.has(zone.id))
+          push(`zone:${zone.id}`, zone.anchor.longitude, zone.anchor.latitude, 0.5);
     // The site pin that stands for all of the above at globe scale (`missions/sitePin.ts`).
     const site = siteAnchor(project);
     if (site) push(`site:${project.id}`, site.longitude, site.latitude, 0);

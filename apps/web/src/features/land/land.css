@@ -845,3 +845,16 @@
   height: 18px;
   flex-shrink: 0;
 }
+
+/* A scheduled action's mission: where it is filed, and the way into Plan. */
+.land-mission-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.land-mission-status p {
+  margin: 0;
+  flex: 1 1 14rem;
+}

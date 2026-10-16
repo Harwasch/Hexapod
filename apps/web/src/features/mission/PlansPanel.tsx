@@ -8,16 +8,16 @@ import type { Plan } from "@/missions/types";
 import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
-import { usePlans } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
-import { planFromRecord, zonesFromRecord } from "@/missions/planDraft";
 import { planProgress, replanRefinement } from "@/missions/progress";
 
+import { openLandActions } from "./landPlanning";
 import { PlanCard } from "./PlanCard";
 import { openSiteSwitcher } from "./siteSwitcher";
 import { PlanSchedule } from "./PlanSchedule";
-import { plansInvalidate, setPlanStatus } from "./planDrafting";
+import { setPlanStatus } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
+import { usePlansSync } from "./usePlansSync";
 
 /**
  * Plans list and plan detail (design: Plan view), in the right-hand drawer: the map beside it
@@ -41,30 +41,8 @@ export function PlansPanel() {
     (composer.status === "idle" ||
       composer.status === "awaiting-ground" ||
       composer.status === "locating");
-  // Persisted plans: the API is the source of truth whenever it answers.
-  const remote = usePlans(project?.id ?? null);
-  const setRemotePlans = useMission((s) => s.setRemotePlans);
-  const refetch = remote.refetch;
-  useEffect(() => {
-    plansInvalidate.current = () => void refetch();
-    return () => {
-      plansInvalidate.current = null;
-    };
-  }, [refetch]);
-  const remoteData = remote.builtin || remote.isLoading ? null : remote.data;
-  useEffect(() => {
-    // The store looks the project up itself; only a change of project or of records matters.
-    const current = useMission.getState().project;
-    if (!current || !remoteData) return;
-    // Areas stored with the plans join the project's zones first, so the plans' acres and
-    // overlays resolve against them.
-    useMission.getState().mergeAreas(current.id, remoteData.flatMap(zonesFromRecord));
-    const composed = useMission.getState().project ?? current;
-    setRemotePlans(
-      current.id,
-      remoteData.map((record) => planFromRecord(record, composed)),
-    );
-  }, [project?.id, remoteData, setRemotePlans]);
+  // Persisted plans, public and the workspace's: the API is the source of truth.
+  usePlansSync();
   return (
     <AnimatePresence>
       {open && (
@@ -144,6 +122,7 @@ export function PlansPanel() {
                           aria-hidden="true"
                         />
                         <span className="mc-plan__title">{p.title}</span>
+                        {p.landId && <span className="mc-flag">Land</span>}
                         <span className={`mc-plan__state mc-tone--${p.status}`}>{p.state}</span>
                       </div>
                       <div className="mc-row mc-plan__progress">
@@ -204,11 +183,14 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
   const lifecycle = () => {
     const next = plan.status === "run" ? "paused" : "dispatched";
     void setPlanStatus(plan, next);
+    const current = useMission.getState().project;
     appendLog(
       "agent",
       next === "paused"
         ? `“${plan.title}” paused. The fleet finishes its current pass and holds.`
-        : `“${plan.title}” dispatched to the fleet${useMission.getState().project?.simulated ? " (simulated: the robot bridge will pick this up here)" : ""}.`,
+        : current?.machines.length === 0
+          ? `“${plan.title}” marked dispatched. No machines are registered here, so nothing moves until a robot bridge picks it up.`
+          : `“${plan.title}” dispatched to the fleet${current?.simulated ? " (simulated: the robot bridge will pick this up here)" : ""}.`,
     );
     setStreamOpen(true);
   };
@@ -228,6 +210,13 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
             {plan.state}
           </span>
         </div>
+        {(Boolean(plan.landId) || plan.scope === "workspace") && (
+          <div className="mc-tags" data-testid="plan-land-chips">
+            {plan.landId && <span className="mc-flag">Land</span>}
+            {plan.landActionId && <span className="mc-flag">From land action</span>}
+            {plan.scope === "workspace" && <span className="mc-flag">Private to workspace</span>}
+          </div>
+        )}
       </div>
       <div className="mc-window__body mc-plan-detail__body">
         <p className="mc-objective">{plan.objective}</p>
@@ -381,30 +370,45 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
           <span>{plan.agentNote}</span>
         </div>
         <div className="mc-actions">
-          <button
-            type="button"
-            className="mc-btn"
-            onClick={() => {
-              if (plan.goal !== undefined) {
+          {plan.landActionId && plan.landId ? (
+            <button
+              type="button"
+              className="mc-btn"
+              onClick={() => void openLandActions(plan.landId ?? "")}
+              data-testid="plan-revise-in-land"
+            >
+              Revise the action in Land
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="mc-btn"
+              onClick={() => {
+                if (plan.goal !== undefined) {
+                  openComposer({
+                    goal: plan.goal,
+                    zoneIds: plan.zoneIds,
+                    machineIds: plan.machineIds ?? [],
+                    replacePlanId: plan.id,
+                  });
+                  return;
+                }
+                // Provider plans are owned by the fleet backend; a revision starts from their objective.
                 openComposer({
-                  goal: plan.goal,
+                  goal: plan.objective,
                   zoneIds: plan.zoneIds,
-                  machineIds: plan.machineIds ?? [],
                   replacePlanId: plan.id,
                 });
-                return;
-              }
-              // Provider plans are owned by the fleet backend; a revision starts from their objective.
-              openComposer({ goal: plan.objective, zoneIds: plan.zoneIds, replacePlanId: plan.id });
-              appendLog(
-                "agent",
-                `Revising “${plan.title}”: adjust the goal and I'll draft the new version for your approval.`,
-              );
-              setStreamOpen(true);
-            }}
-          >
-            Revise with agent
-          </button>
+                appendLog(
+                  "agent",
+                  `Revising “${plan.title}”: adjust the goal and I'll draft the new version for your approval.`,
+                );
+                setStreamOpen(true);
+              }}
+            >
+              Revise with agent
+            </button>
+          )}
           {owned ? (
             <button
               type="button"

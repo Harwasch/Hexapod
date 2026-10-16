@@ -1,7 +1,7 @@
 import type { PlanAnswerValue, PlanDraft, PlanRecordStatus } from "@twin/contracts";
 
 import { isOffline } from "@/api/client";
-import { draftPlan, plansApi } from "@/api/queries";
+import { draftPlan, plansApi, workspaceMissionsApi } from "@/api/queries";
 import { describeError } from "@/lib/log";
 import { planningApproved, planningDrafted, planningOpened } from "@/lib/planningMetrics";
 import {
@@ -12,10 +12,11 @@ import {
   presentStatus,
   recordBodyFromDraft,
 } from "@/missions/planDraft";
-import type { Plan } from "@/missions/types";
+import { isPrivateZone, landIdOfProject } from "@/missions/landGround";
+import type { Plan, Project } from "@/missions/types";
 import { useMission } from "@/state/mission";
 
-/** Invalidated after every write so an open Plans window refetches. */
+/** Invalidated after every write so the plan list refetches (public and workspace plans). */
 export const plansInvalidate: { current: (() => void) | null } = { current: null };
 
 /**
@@ -99,9 +100,43 @@ export async function startPlanDraft(
 }
 
 /**
+ * Where a plan belongs: a workspace's private missions when it is on a Land's project, covers
+ * private ground (a Land's zones, or areas derived from them), or revises a private plan;
+ * otherwise the public plan routes. Private ground never goes to the public routes.
+ */
+export function planIsPrivate(
+  project: Project,
+  zoneIds: readonly string[],
+  existing?: Pick<Plan, "scope">,
+): boolean {
+  const inScope = project.zones.filter((z) => zoneIds.includes(z.id));
+  return (
+    landIdOfProject(project.id) !== null ||
+    inScope.some((z) => isPrivateZone(z)) ||
+    existing?.scope === "workspace"
+  );
+}
+
+/** The Land a private plan hangs off, and the boundary revision it was planned on. */
+function landLink(
+  project: Project,
+  zoneIds: readonly string[],
+): { landId: string | null; boundaryRevision: number | null } {
+  const onLand = project.zones.find((z) => zoneIds.includes(z.id) && z.land);
+  const landId = onLand?.land?.landId ?? landIdOfProject(project.id);
+  const boundary = project.zones.find(
+    (z) => z.land?.landId === landId && z.land.kind === "boundary",
+  );
+  const boundaryRevision =
+    onLand?.land?.boundaryRevision ?? boundary?.land?.boundaryRevision ?? null;
+  return { landId, boundaryRevision: landId ? boundaryRevision : null };
+}
+
+/**
  * Approves a reviewed draft: the API stores it (a new plan, or a new revision of the plan
- * being revised) and the console shows the stored record. When the API is offline the plan
- * is kept in this browser and says so.
+ * being revised) and the console shows the stored record. Plans on private ground go to the
+ * workspace's missions. When the API is offline a public plan is kept in this browser and says
+ * so; a private one is not kept at all.
  */
 export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan | null> {
   const state = useMission.getState();
@@ -110,18 +145,44 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
   const replaceId = state.composer?.replacePlanId ?? null;
   const existing = replaceId ? project.plans.find((p) => p.id === replaceId) : undefined;
   const body = recordBodyFromDraft(draft, goal, project.id, project.siteId, project.zones);
+  const isPrivate = planIsPrivate(project, draft.zoneIds, existing);
+  if (isPrivate && existing?.persisted && existing.scope !== "workspace") {
+    useMission
+      .getState()
+      .appendLog(
+        "agent",
+        `“${existing.title}” is a shared plan, and plans on your land stay private. Start a new plan for this ground instead.`,
+      );
+    useMission.getState().setStreamOpen(true);
+    return null;
+  }
   let plan: Plan;
   try {
     // A revision carries the plan body only: identity (project, site) never changes.
     const { projectId: _projectId, siteId: _siteId, ...revision } = body;
+    const note = `Revised: ${goal.slice(0, 120)}`;
     const record = existing?.persisted
-      ? await plansApi.revise(existing.id, { ...revision, note: `Revised: ${goal.slice(0, 120)}` })
-      : await plansApi.create(body);
+      ? isPrivate
+        ? await workspaceMissionsApi.revise(existing.id, { ...revision, note })
+        : await plansApi.revise(existing.id, { ...revision, note })
+      : isPrivate
+        ? await workspaceMissionsApi.create({ ...body, ...landLink(project, draft.zoneIds) })
+        : await plansApi.create(body);
     plan = planFromRecord(record, project);
     plansInvalidate.current?.();
   } catch (error) {
     if (!isOffline(error)) {
       useMission.getState().appendLog("agent", `I couldn't save the plan: ${describeError(error)}`);
+      useMission.getState().setStreamOpen(true);
+      return null;
+    }
+    if (isPrivate) {
+      useMission
+        .getState()
+        .appendLog(
+          "agent",
+          "Not saved: the API is offline, and plans on private land are never kept in browser storage.",
+        );
       useMission.getState().setStreamOpen(true);
       return null;
     }
@@ -146,7 +207,10 @@ export async function setPlanStatus(plan: Plan, status: PlanRecordStatus): Promi
   useMission.getState().updatePlan(plan.id, presentation);
   if (plan.persisted) {
     try {
-      const record = await plansApi.setStatus(plan.id, status);
+      const record =
+        plan.scope === "workspace"
+          ? await workspaceMissionsApi.setStatus(plan.id, status)
+          : await plansApi.setStatus(plan.id, status);
       const project = useMission.getState().project;
       if (project) useMission.getState().updatePlan(plan.id, planFromRecord(record, project));
       plansInvalidate.current?.();

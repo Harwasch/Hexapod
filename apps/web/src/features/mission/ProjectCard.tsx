@@ -22,6 +22,8 @@ import { useRenameSite, useSites as useSiteCatalog } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
 import { describeError } from "@/lib/log";
+import { landIdOfProject } from "@/missions/landGround";
+import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -48,8 +50,14 @@ export function ProjectCard() {
   const focusOn = useUi((s) => s.switcherFocus);
   // A project is named after its site (`siteNames.ts`), so this is the site's one name.
   const title = project?.name ?? "Land Ops";
+  // A saved Land's project carries no numbers of its own: its area comes from the Land, in
+  // the viewer's units.
+  const land = useLand((s) => s.active);
+  const units = useSettings((s) => s.units);
+  const landAreaM2 = landIdOfProject(project?.id) === land?.id ? land?.areaM2 : undefined;
+  const landArea = landAreaM2 === undefined ? "" : `${formatArea(landAreaM2, units)} · `;
   const meta = project
-    ? `${project.meta}${project.simulated ? " · simulated fleet" : ""}`
+    ? `${landArea}${project.meta}${project.simulated ? " · simulated fleet" : ""}`
     : "Pick a site to start";
   const root = useRef<HTMLDivElement>(null);
   const badge = useRef<HTMLButtonElement>(null);

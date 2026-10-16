@@ -1977,6 +1977,104 @@ a.mc-link {
   color: var(--text-primary);
 }
 
+/* A small label on a plan saying where it lives: a saved Land, a workspace. Not a control. */
+.mc-flag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font: 600 10.5px var(--font-sans);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex: none;
+}
+
+/* Fleet: what is on the books, above the machines. */
+.mc-scheduled {
+  padding: 0 1rem 0.6rem;
+}
+
+.mc-scheduled__list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 9.5rem;
+  overflow-y: auto;
+}
+
+.mc-scheduled__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.1rem;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font: 500 12.5px var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-scheduled__row:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mc-scheduled__row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.mc-scheduled__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-scheduled__state {
+  font: 600 11px var(--font-sans);
+}
+
+.mc-scheduled__meta {
+  grid-column: 2 / -1;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The plan card's PATH list: one row per zone sized from its outline. */
+.mc-path li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.mc-path__zone {
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-path__note {
+  margin-top: 0.3rem;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
 .mc-tag--ghost {
   border-style: dashed;
   font-weight: 400;

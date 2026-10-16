@@ -98,7 +98,9 @@ export async function runIntent(input: string, ctx: IntentContext): Promise<stri
   return ctx.flyToPlace(place);
 }
 
-const WORK_VERBS = [
+/** Verbs that lead a sentence of work; `missions/landGround.ts` also skips them when it looks
+ * for the ground a goal names. */
+export const WORK_VERBS = [
   "mow|cut|clear|spray|treat|seed|reseed|drill|till|remove|survey|inspect|scan|photograph|capture",
   "monitor|patrol|weed|harvest|fertili[sz]e|irrigate|mulch|map",
   "restore|replant|plant|prune|trim|thin|graze|water|pick|collect|sample|count|check|protect",

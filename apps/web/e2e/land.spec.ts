@@ -33,6 +33,42 @@ async function landApi(page: Page) {
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
       return;
     }
+    if (path.endsWith("/ground")) {
+      // The land as mission ground: its boundary only (no inventory in this fixture).
+      const land = saved[0];
+      await route.fulfill({
+        status: land ? 200 : 404,
+        contentType: "application/json",
+        body: JSON.stringify(
+          land
+            ? {
+                landId: land.id,
+                name: land.name,
+                boundaryRevision: land.revision,
+                skipped: 0,
+                items: [
+                  {
+                    zoneId: `L-${land.id.replace(/-/g, "").slice(0, 8)}`,
+                    kind: "boundary",
+                    featureId: null,
+                    revision: land.revision,
+                    name: land.name,
+                    category: null,
+                    status: null,
+                    footprint: land.boundary,
+                    line: null,
+                    areaM2: land.areaM2,
+                    lengthM: null,
+                    bufferM: null,
+                    source: `Saved boundary, revision ${land.revision} · ${land.source.label} · study area, not a verified property boundary`,
+                  },
+                ],
+              }
+            : { title: "Not found", status: 404 },
+        ),
+      });
+      return;
+    }
     if (path.endsWith("/overview")) {
       await route.fulfill({
         status: 503,
@@ -143,6 +179,76 @@ test("draw, save, inspect elsewhere, edit, and reopen a land area without a miss
   await expect(app.getByText("Survey before restoration", { exact: true })).toBeVisible();
   await app.getByRole("button", { name: "History", exact: true }).click();
   await expect(app.getByText("Revision 2", { exact: true })).toBeVisible();
+});
+
+test("plan work on a saved land: the land is the ground, and the plan stays private", async ({
+  app,
+}) => {
+  const records = await landApi(app);
+  const missions: Record<string, unknown>[] = [];
+  const publicPlans: Record<string, unknown>[] = [];
+  app.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() !== "POST") return;
+    if (path === "/api/v1/workspaces/missions")
+      missions.push(request.postDataJSON() as Record<string, unknown>);
+    if (path === "/api/v1/plans")
+      publicPlans.push(request.postDataJSON() as Record<string, unknown>);
+  });
+  await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+  await app.getByTestId("tool-land").click();
+  await app.evaluate(() => {
+    const twin = (
+      window as unknown as {
+        __twin: {
+          camera: {
+            cancelFlight(): void;
+            setView(lon: number, lat: number, height: number, heading: number, pitch: number): void;
+          };
+        };
+      }
+    ).__twin;
+    twin.camera.cancelFlight();
+    twin.camera.setView(-119.9, 36.6, 1500, 0, -90);
+  });
+  await app.getByRole("button", { name: /Draw a boundary/ }).click();
+  for (const [x, y] of [
+    [650, 300],
+    [1000, 300],
+    [1000, 550],
+    [650, 550],
+  ]) {
+    await app.mouse.click(x!, y!);
+  }
+  await app.getByRole("button", { name: "Review boundary", exact: true }).click();
+  await app.getByLabel("Name this land").fill("West field");
+  await app.getByRole("button", { name: "Save this land", exact: true }).click();
+  await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
+  await app.getByTestId("land-plan-work").click();
+  const plans = app.getByTestId("plans-panel");
+  await expect(plans.getByTestId("plan-ground")).toContainText("West field");
+  await expect(plans.getByTestId("plan-ground")).toContainText("saved boundary revision 1");
+  await expect(plans.getByTestId("plan-awaiting-ground")).toHaveCount(0);
+  await expect(app.getByTestId("project-card")).toContainText("West field");
+  await app.getByTestId("command-input").fill("monitor the fence every week");
+  await app.getByTestId("command-input").press("Enter");
+  await expect(plans.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+  // No feature named "fence" on this land: the land's own boundary, never a rough square.
+  await expect(plans.getByTestId("plan-ground")).toContainText("West field");
+  await expect(plans.getByTestId("plan-ground")).not.toContainText("Rough area");
+  await expect(plans.getByTestId("plan-awaiting-ground")).toHaveCount(0);
+  await plans.getByTestId("plan-approve").dispatchEvent("click");
+  await expect(plans.getByTestId("plan-detail")).toContainText("Private to workspace");
+  expect(missions).toHaveLength(1);
+  expect(missions[0]).toMatchObject({
+    projectId: `land:${records.saved[0]?.id}`,
+    landId: records.saved[0]?.id,
+    boundaryRevision: 1,
+  });
+  expect(publicPlans).toEqual([]);
+  // The browser keeps none of it.
+  const stored = await app.evaluate(() => localStorage.getItem("twin.mission.v1") ?? "");
+  expect(stored).not.toContain(records.saved[0]?.id ?? "missing");
 });
 
 test("import with an exclusion and preserve the map on a phone", async ({ app }) => {

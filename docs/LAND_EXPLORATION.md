@@ -18,9 +18,14 @@ Apply **all migrations through the current Alembic head**, not just the first la
 
 ## Product direction
 
-Land exploration is independent of mission planning. The selected land persists while a
-person inspects features, follows evidence, compares scenarios, and eventually chooses an
-action. Existing selection and planning interactions are not the design constraint.
+A saved Land is the ground mission planning runs on. The selected land persists while a
+person inspects features, follows evidence, compares scenarios and chooses an action, and the
+same land is what plans, scheduled missions and their proof hang off: its boundary and inventory
+features become plannable zones, "Plan work on this land" opens the plan card on it, and a
+scheduled action opens in Plan. Plans that touch a land are workspace-private (a database check,
+the `/workspaces/missions` routes, never browser storage), and their estimates are sized from
+the outlines with every assumption stated. Existing selection and planning interactions are not
+the design constraint.
 
 The warehouse-roof/solar example illustrates extensibility; it is not a required first-class
 product workflow. Dedicated roof reconstruction, roof surveying and fitted panel layouts are
@@ -2034,3 +2039,55 @@ occurred. Artifacts: `/tmp/land-calculation-result.json`, `/tmp/land-calculation
 `/tmp/land-calculation-mobile.png`. API/worker acceptance used a deterministic model fixture;
 live model credentials remain unavailable. The isolated API and worker were restarted, and the
 isolated Vite preview was restored on port 5175. The original checkout and deployment are unchanged.
+
+## Implemented increment: land as mission ground
+
+Migration `0030_plan_land` (written against `0028`; re-point to `0029` when the research
+worker-presence migration lands) adds `plans.land_id` (foreign key to `land_areas`, set null on
+delete, indexed) and `plans.boundary_revision`, with the check `ck_plans_land_private`: only a
+plan that belongs to a workspace may carry land. Missions already scheduled from land actions
+are linked on upgrade through `land_action_revisions.mission_id`.
+
+Routes, all workspace-scoped through `WorkspaceDep`:
+
+- `GET /api/v1/land/{id}/ground` returns the land as plannable items: the boundary (`L-` plus
+  the first 8 hex of the land id) and every polygon or line inventory feature (`L-` plus the
+  feature id's). A line becomes an assumed 10 m work corridor and keeps the line itself; points
+  are counted as `skipped`; retired features are left out. Each item says where it came from.
+- `GET/POST /api/v1/workspaces/missions`, `GET/PUT /api/v1/workspaces/missions/{id}` and
+  `PATCH /api/v1/workspaces/missions/{id}/status` list and act on a workspace's plans. Any role
+  reads; owners and editors write. A `land:<id>` project must name that land, the land must be
+  in the workspace, and a pinned boundary revision must exist. A mission scheduled from a land
+  action refuses revision here (409): the action holds the approved version.
+- The public `/api/v1/plans` routes are unchanged and still never list, read or change a
+  workspace's plan.
+
+Scheduling a land action now records the land and boundary revision on the mission, uses
+`LA-<8 hex of the action id>` area ids (and `-<n>` per step footprint) so two actions never share
+a zone id, attributes each area to the approved action revision, and rejects another land's
+`land:<id>` project id. Stored missions keep the ids they were written with.
+
+Planning: the planner sizes a zone that comes with an outline from a shapely port of the
+console's coverage passes (`services/coverage.py`; holes and MultiPolygons included), using the
+assumed machine classes in `services/machine_classes.json`, the one table the web app reads too
+(robotic brush mower, seed drill, survey rover, consumer mapping drone; every label says
+"assumed"). Hours are path length over the class speed plus turns, with each zone's basis
+sentence on the draft and one combined line under assumptions. A measured work-log rate still
+sets an area's hours. Zones without an outline (the simulated demo fleet's) are sized exactly as
+before. Outlines are never sent to the model; the measured paths are. "Monitor", "patrol",
+"check", "watch", "count" and "scout" read as surveys.
+
+Console: selecting a saved land engages it as ground. It joins the current project when that
+project's zones or machines are on the land (the fleet stays), or becomes the land's own
+`land:<id>` project. The plan card and the bar take the land, or the feature a goal names ("the
+fence", "the troughs"), before OpenStreetMap, a click or the rough square; a click on the land
+takes the land. Approvals that touch land ground go to the workspace routes with the land and
+boundary revision; offline, such a plan is not saved at all. Plan lists public and workspace
+plans together, Fleet lists what is scheduled, the plan card shows each zone's path, passes,
+spacing and hours with the assumed class, and the Land panel offers "Plan work on this land" and
+"Open in Plan" after scheduling. Browser storage (`twin.mission.v1`, now version 2) never holds a
+workspace plan or private zone, and a sign-out or workspace switch forgets them.
+
+Known limits: a land's own project has no machines, so its plans draft unassigned. The planner
+receives land outlines briefly through the write-gated, stateless plan-draft endpoint. The
+console's map preview of passes still uses its own preview spacing, not the machine classes.

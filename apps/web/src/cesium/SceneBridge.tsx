@@ -11,8 +11,10 @@ import { api, ApiError, unwrap } from "@/api/client";
 import { builtinDemoSite } from "@/api/fallback";
 import { anywhereProject } from "@/missions/anywhere";
 import { DemoMissionProvider } from "@/missions/demo";
+import { hiddenMissionZoneIds } from "@/missions/landGround";
 import { siteProject } from "@/missions/siteProject";
 import { isReplaying } from "@/state/history";
+import { useLand } from "@/state/land";
 import { useLayers } from "@/state/layers";
 import { useLiving } from "@/state/living";
 import { reshapeArea, useMission } from "@/state/mission";
@@ -200,15 +202,18 @@ export function SceneBridge() {
     useMission.getState().setProject(project);
   }, [scene, activeSiteId, siteCatalog.data, activeSite.data]);
 
-  // The world draws whatever the store composes (provider zones plus drawn areas, plans).
+  // The world draws whatever the store composes (provider zones plus drawn areas, plans),
+  // except the selected Land's boundary, which the Land layer draws.
   const missionProject = useMission((s) => s.project);
+  const activeLandId = useLand((s) => s.active?.id ?? null);
   useEffect(() => {
     if (!scene) return;
+    scene.mission.setHiddenZones(hiddenMissionZoneIds(missionProject, activeLandId));
     scene.mission.setProject(missionProject);
     const layers = useMission.getState().layers;
     scene.mission.setLayer("zones", layers.zones);
     scene.mission.setLayer("tracks", layers.tracks);
-  }, [scene, missionProject]);
+  }, [scene, missionProject, activeLandId]);
 
   // Settings → scene
   const quality = useSettings((s) => s.quality);

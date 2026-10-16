@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import { useScene } from "@/cesium/SceneContext";
+import { hiddenMissionZoneIds } from "@/missions/landGround";
 import { collapsesToPin, pinCounts, pinLabel } from "@/missions/sitePin";
 import type { Machine, Zone } from "@/missions/types";
+import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useViewer } from "@/state/viewer";
 
@@ -26,6 +28,8 @@ const STATUS_CLASS: Record<Machine["status"], string> = {
 export function MissionOverlays() {
   const scene = useScene();
   const project = useMission((s) => s.project);
+  const activeLandId = useLand((s) => s.active?.id ?? null);
+  const hidden = hiddenMissionZoneIds(project, activeLandId);
   const selection = useMission((s) => s.selection);
   const hovered = useMission((s) => s.hoveredMachineId);
   const setHovered = useMission((s) => s.setHoveredMachine);
@@ -92,6 +96,7 @@ export function MissionOverlays() {
     <div className="mc-overlays" aria-label="Fleet on map">
       {zonesOn &&
         project.zones.map((zone: Zone) => {
+          if (hidden.has(zone.id)) return null;
           const selected = selection?.kind === "zone" && selection.id === zone.id;
           return (
             <button
@@ -105,7 +110,10 @@ export function MissionOverlays() {
               data-testid={`zone-chip-${zone.id}`}
             >
               <span className="mc-chip__dot" aria-hidden="true" />
-              <span className="mc-mono mc-chip__id">{zone.id}</span>
+              {/* A Land's zones go by name: their ids are opaque. */}
+              <span className={zone.land ? "mc-chip__id" : "mc-mono mc-chip__id"}>
+                {zone.land ? zone.name : zone.id}
+              </span>
               <span className="mc-chip__short">{zone.short}</span>
             </button>
           );

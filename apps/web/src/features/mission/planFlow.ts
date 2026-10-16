@@ -1,9 +1,10 @@
 /**
  * Planning from the bar. One sentence of work ("3D scan this field", "mow the orchard by
- * Friday") becomes a plan on the map: the ground is found first (named zones, the mapped
- * feature the goal talks about, or the spot the operator clicks), then the agent drafts with
- * sensible defaults and the card shows the result to approve, drag or talk to. The map menu's
- * "Plan here" starts from the other end: the spot first, the sentence after.
+ * Friday") becomes a plan on the map: the ground is found first (named zones, a saved Land or
+ * the feature of it the goal names, the mapped feature the goal talks about, or the spot the
+ * operator clicks), then the agent drafts with sensible defaults and the card shows the result
+ * to approve, drag or talk to. The map menu's "Plan here" starts from the other end: the spot
+ * first, the sentence after.
  */
 
 import { centerOf, destination, type LonLat } from "@twin/geo";
@@ -11,9 +12,16 @@ import { centerOf, destination, type LonLat } from "@twin/geo";
 import { outlineGround } from "@/api/queries";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { isAreaZone, nextAreaId, viewAreaZone } from "@/missions/areas";
-import { resolveGround } from "@/missions/ground";
+import { resolveGround, type GroundSource } from "@/missions/ground";
+import {
+  boundaryZoneOf,
+  isLandZone,
+  landGroundNote,
+  landZoneAt,
+  zonesNamedInGoal,
+} from "@/missions/landGround";
 import { fetchOsmAreas, kindForGoal, OSM_ATTRIBUTION, zoneFromCandidate } from "@/missions/osm";
-import type { Zone } from "@/missions/types";
+import type { Project, Zone } from "@/missions/types";
 import { useMission } from "@/state/mission";
 import { useViewer } from "@/state/viewer";
 
@@ -79,14 +87,57 @@ async function groundFromWords(
   }
 }
 
-/** Adds the area to the project and the card's scope. */
-function adopt(zone: Zone): void {
+/**
+ * Adds areas to the project and the card's scope, saying how the ground was found. Zones the
+ * project already carries (a Land's) only join the scope. Shared with flows that derive areas
+ * of their own (a fog patch, a "more like this" match), which set `private` on them.
+ */
+export function adoptAreas(
+  zones: readonly Zone[],
+  ground: { source: GroundSource; note: string } | null = null,
+): void {
   const state = useMission.getState();
-  if (!state.project) return;
-  state.addArea(state.project.id, zone);
+  const project = state.project;
+  if (!project) return;
+  for (const zone of zones) {
+    if (isLandZone(zone) && project.zones.some((z) => z.id === zone.id)) continue;
+    state.addArea(project.id, zone);
+  }
   const composer = useMission.getState().composer;
-  if (composer && !composer.zoneIds.includes(zone.id))
-    state.updateComposer({ zoneIds: [...composer.zoneIds, zone.id] });
+  if (!composer) return;
+  const zoneIds = [...composer.zoneIds];
+  for (const zone of zones) if (!zoneIds.includes(zone.id)) zoneIds.push(zone.id);
+  useMission.getState().updateComposer({ zoneIds, ...(ground ? { ground } : {}) });
+}
+
+function adopt(zone: Zone): void {
+  adoptAreas([zone]);
+}
+
+/**
+ * Ground on a saved Land, for a project that carries one: the features the goal names, or the
+ * Land's boundary. Over a fleet's project (the Land layered on it) a goal naming the fleet's
+ * own zones keeps them. Null when the project has no Land zones.
+ */
+function landGroundFor(
+  goal: string,
+  project: Project,
+): { zoneIds: string[]; note: string | null } | null {
+  const land = project.zones.filter((z) => z.land);
+  if (land.length === 0) return null;
+  const named = zonesNamedInGoal(goal, land);
+  const boundary = boundaryZoneOf(land);
+  const landName = boundary?.name ?? land[0]?.name ?? "your land";
+  const first = land.find((z) => z.id === named[0]);
+  if (first) {
+    const more = named.length > 1 ? ` (and ${named.length - 1} more)` : "";
+    return { zoneIds: named, note: `${landGroundNote(first, landName)}${more}` };
+  }
+  const fleetZones = project.zones.filter((z) => !z.land && !isAreaZone(z));
+  const fleet = fleetZones.length ? zonesNamedInGoal(goal, fleetZones) : [];
+  if (fleet.length) return { zoneIds: fleet, note: null };
+  const ground = boundary ?? land[0];
+  return ground ? { zoneIds: [ground.id], note: landGroundNote(ground, landName) } : null;
 }
 
 /**
@@ -107,13 +158,39 @@ export async function planFromText(
   }
   const composer = state.composer;
   // Ground already in scope: zones named in the goal, else what the open card already has.
+  // A card seeded with a Land's boundary ("Plan work on this land") takes the feature the goal
+  // names instead ("monitor the fence" → the fence).
   let zoneIds = mentionedZones(goal, project.zones);
-  if (zoneIds.length === 0 && composer?.zoneIds.length) zoneIds = composer.zoneIds;
+  let landNote: string | null = null;
+  if (zoneIds.length === 0 && composer?.zoneIds.length) {
+    zoneIds = composer.zoneIds;
+    const onLand = composer.zoneIds.every((id) => project.zones.some((z) => z.id === id && z.land));
+    const land = onLand ? landGroundFor(goal, project) : null;
+    if (land?.note && land.zoneIds.some((id) => !composer.zoneIds.includes(id))) {
+      zoneIds = land.zoneIds;
+      landNote = land.note;
+    }
+  }
+  // A saved Land is the ground before anything else is looked for: never a guess while
+  // its zones are here.
+  if (zoneIds.length === 0) {
+    const land = landGroundFor(goal, project);
+    if (land) {
+      zoneIds = land.zoneIds;
+      landNote = land.note;
+    }
+  }
   if (!composer) state.openComposer({ goal, zoneIds });
   else if (composer.replacePlanId === null)
     state.updateComposer({ goal, zoneIds, status: "idle", error: null });
+  if (landNote)
+    useMission.getState().updateComposer({ ground: { source: "land", note: landNote } });
   if (zoneIds.length > 0) {
     void startPlanDraft(goal, { zoneIds });
+    if (landNote) {
+      const landName = boundaryZoneOf(project.zones)?.name ?? "your land";
+      return `On ${landName}: ${landNote}`;
+    }
     return "Drafting.";
   }
   // The goal names a kind of ground ("the lake"): take the mapped one in view. "This field"
@@ -175,6 +252,17 @@ export async function outlineAt(
 ): Promise<void> {
   const state = useMission.getState();
   if (!state.composer || !state.project) return;
+  // A click on a saved Land takes the Land (or the feature under the click) as it is.
+  const onLand = landZoneAt(point, state.project.zones);
+  if (onLand) {
+    const boundary = boundaryZoneOf(state.project.zones, onLand.land?.landId);
+    const note = landGroundNote(onLand, boundary?.name ?? "your land");
+    adoptAreas([onLand], { source: "land", note });
+    state.appendLog("agent", note);
+    if (goal.trim().length >= 3) void startPlanDraft(goal, { zoneIds: [onLand.id] });
+    else useMission.getState().updateComposer({ status: "idle" });
+    return;
+  }
   state.updateComposer({ status: "locating" });
   state.appendLog("agent", "Looking at the ground there…");
   const id = nextAreaId(state.project.zones);
