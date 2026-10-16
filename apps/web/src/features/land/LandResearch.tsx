@@ -277,7 +277,7 @@ export function LandResearch({ land }: { land: LandArea }) {
   const status = useResearchStatus(running);
   // Every disabled research button says why (researchAvailability.ts), in one place below
   // the analyses and next to Investigate, instead of greying out in silence.
-  const blocked = analysisBlocker({ ready, canEdit, run: lastRun, status: status.data });
+  const blocked = analysisBlocker({ ready, canEdit, run: lastRun });
   const [questionTouched, setQuestionTouched] = useState(false);
   const progress = useResearchProgress(lastRun?.id, running);
   const [activityLimit, setActivityLimit] = useState(100);
@@ -571,7 +571,6 @@ export function LandResearch({ land }: { land: LandArea }) {
         ready,
         canEdit,
         run: lastRun,
-        status: status.data,
         modelConfigured: status.data?.modelConfigured ?? (status.isError ? null : undefined),
         pending: !!pending,
         recoveryError: !!recoveryError,

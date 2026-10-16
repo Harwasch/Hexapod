@@ -100,7 +100,7 @@ describe("workerIdleNote", () => {
 });
 
 describe("analysisBlocker", () => {
-  const base = { ready: true, canEdit: true, run: undefined, status: status() };
+  const base = { ready: true, canEdit: true, run: undefined };
 
   it("gives the first reason: workspace, then role, then the queued or running request", () => {
     expect(analysisBlocker({ ...base, ready: false, canEdit: false, run: queued })).toBe(
@@ -109,17 +109,9 @@ describe("analysisBlocker", () => {
     expect(analysisBlocker({ ...base, canEdit: false, run: queued })).toBe(
       "Your workspace role can view research but not start it.",
     );
-    expect(
-      analysisBlocker({
-        ...base,
-        run: queued,
-        status: status({ state: "stale", secondsSinceSeen: 840 }),
-      }),
-    ).toBe(
-      "One request runs at a time. The queued request is waiting: no research worker has checked in for 14 min. Cancel it to start something else.",
-    );
+    // The worker's state and age are ResearchWorkerNotice's to say, once.
     expect(analysisBlocker({ ...base, run: queued })).toBe(
-      "One request runs at a time. The queued request is waiting to start. Cancel it to start something else.",
+      "One request runs at a time. Cancel the queued request to start something else.",
     );
     expect(analysisBlocker({ ...base, run: running })).toBe(
       "One request runs at a time. Wait for “What is here?” to finish, or stop it.",
@@ -143,7 +135,6 @@ describe("askBlocker", () => {
     ready: true,
     canEdit: true,
     run: undefined,
-    status: status(),
     modelConfigured: true as boolean | null | undefined,
     pending: false,
     recoveryError: false,

@@ -145,6 +145,8 @@ it("explains a queued run that no worker has picked up, and says why analyses wa
       "land-research-blocked",
     );
   expect(screen.getByRole("button", { name: /Cancel queued request/ })).toBeInTheDocument();
+  // The worker's age is said once, by the notice, not again by every disabled button's reason.
+  expect(document.body.textContent?.match(/14 min/g)).toHaveLength(1);
   // The idle footnote is left out while the land's own run explains itself.
   expect(screen.queryByTestId("research-worker-idle")).not.toBeInTheDocument();
 });

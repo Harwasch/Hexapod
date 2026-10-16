@@ -72,25 +72,19 @@ export interface AnalysisInputs {
   ready: boolean;
   canEdit: boolean;
   run: Pick<ResearchRun, "status" | "question" | "focusLabel"> | undefined;
-  status: ResearchStatus | undefined;
 }
 
-/** Why the analysis buttons (terrain, land cover, vegetation, archives) are disabled. */
-export function analysisBlocker({ ready, canEdit, run, status }: AnalysisInputs): string | null {
+/**
+ * Why the analysis buttons (terrain, land cover, vegetation, archives) are disabled. A queued
+ * run's reason leaves the worker out: ResearchWorkerNotice, next to the run, says what it is
+ * waiting for and for how long, and this reason is shown twice more (under the analyses and
+ * by Investigate), so saying it here too would repeat the worker's age three times.
+ */
+export function analysisBlocker({ ready, canEdit, run }: AnalysisInputs): string | null {
   if (!ready) return "Connecting to your workspace…";
   if (!canEdit) return "Your workspace role can view research but not start it.";
-  if (run?.status === "queued") {
-    const worker = workerOf(status);
-    const waiting =
-      !worker || worker.state === "online"
-        ? "is waiting to start"
-        : worker.state === "never"
-          ? "is waiting: no research worker has checked in on this server yet"
-          : worker.state === "stopped"
-            ? `is waiting: the research worker stopped ${ago(worker)} ago`
-            : `is waiting: no research worker has checked in for ${ago(worker)}`;
-    return `One request runs at a time. The queued request ${waiting}. Cancel it to start something else.`;
-  }
+  if (run?.status === "queued")
+    return "One request runs at a time. Cancel the queued request to start something else.";
   if (run?.status === "running") {
     const label = run.focusLabel ?? run.question;
     const short = label.length > 60 ? `${label.slice(0, 60).trimEnd()}…` : label;
