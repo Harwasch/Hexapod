@@ -199,7 +199,10 @@ describe("Developer readouts + Onboarding", () => {
   it("onboarding opens the demo ranch, and offers a scan only where there is one", async () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
     const flyTo = vi.fn(() => Promise.resolve());
-    sceneRegistry.set({ sites: { flyTo } } as unknown as CesiumSceneManager);
+    sceneRegistry.set({
+      sites: { flyTo },
+      geocoder: { name: "Test", attribution: "Test geocoder", search: vi.fn() },
+    } as unknown as CesiumSceneManager);
     onTestFinished(() => sceneRegistry.set(null));
     useViewer.getState().setStatus("ready");
     const { unmount } = render(wrap(<OnboardingCard />));

@@ -5,9 +5,11 @@ import { useLand, type LandMode, type LandPoint } from "@/state/land";
 import { useLandContext, type LandWorkspaceSection } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 
+import { drawingReferences } from "./boundarySources";
+
 /**
  * Ways into the Land tool from elsewhere on the map: the inspector's "What's here", the map's
- * right-click menu, and later the Descent arrival. They live here, not in each caller, because
+ * right-click menu, and the Descent's arrival card. They live here, not in each caller, because
  * entering the tool the wrong way loses work:
  *
  * - `LandPanel.save()` REVISES the active land when one is selected. A new outline started
@@ -88,6 +90,25 @@ export function proposeOutline(draft: LandCreate, scene: CesiumSceneManager | nu
   useLand.getState().clear();
   useLand.getState().propose(draft);
   openTool();
+  return "started";
+}
+
+/**
+ * Open the Land tool drawing a new outline, as its own Draw button does: where a place was
+ * reached but no mapped area was found around it (the Descent's "Outline this land"). Refuses,
+ * like `outlineLandAt`, to replace an unsaved outline.
+ */
+export function drawOutline(scene: CesiumSceneManager | null): OutlineResult {
+  if (hasUnsavedOutline(useLand.getState())) {
+    openTool();
+    return "has-draft";
+  }
+  freePointer(scene);
+  useLand.getState().clear();
+  openTool();
+  useLand.getState().begin("draw");
+  const guides = useLandContext.getState().layers["drawing-guides"];
+  useLand.getState().setTraceSources(drawingReferences(guides?.drawingGuideSources ?? []));
   return "started";
 }
 

@@ -22,7 +22,7 @@ import { boundsOf, footprintAreaM2 } from "@twin/geo";
 import { useScene } from "@/cesium/SceneContext";
 import { ApiError, api, unwrap } from "@/api/client";
 import { describeError } from "@/lib/log";
-import { fetchOsmContaining, OSM_ATTRIBUTION } from "@/missions/osm";
+import { fetchOsmContaining } from "@/missions/osm";
 import { useLand, type LandMode } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
@@ -40,6 +40,7 @@ import "./land.css";
 import { LandWorkspaceResizer } from "./LandWorkspaceResizer";
 import { LandCandidatePicker } from "./LandCandidatePicker";
 import { LandWorkspace } from "./LandWorkspace";
+import { mappedFeatureDraft } from "./mappedFeature";
 import { WorkspaceIdentity } from "./WorkspaceIdentity";
 import { landUsesOidc, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 
@@ -118,18 +119,7 @@ export function LandPanel() {
             .setError("No mapped boundary found here. Draw the area or import a boundary.");
           return;
         }
-        useLand.getState().propose({
-          name: feature.name,
-          description: "",
-          boundary: feature.footprint,
-          source: {
-            method: "mapped-feature",
-            meaning: "physical-feature",
-            label: "OpenStreetMap feature",
-            attribution: OSM_ATTRIBUTION,
-            url: "https://www.openstreetmap.org/copyright",
-          },
-        });
+        useLand.getState().propose(mappedFeatureDraft(feature));
       })
       .catch((error: unknown) => {
         if (cancelled) return;

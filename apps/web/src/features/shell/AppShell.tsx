@@ -21,6 +21,7 @@ import { AddPanel } from "../add-data/AddPanel";
 import { CommandBox } from "../command-palette/CommandBox";
 import { ShortcutSheet } from "../command-palette/ShortcutSheet";
 import { CompareSplit } from "../compare/Compare";
+import { DescentArrival } from "../descent/DescentArrival";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
@@ -203,6 +204,7 @@ export function AppShell() {
         </section>
         <div className="hud-region hud-center">
           <OnboardingCard />
+          <DescentArrival />
         </div>
         <aside className="hud-region hud-dock hud-dock--right" aria-label="Details">
           <div className="hud-stack hud-messages">

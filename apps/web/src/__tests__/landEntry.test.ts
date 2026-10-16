@@ -10,6 +10,7 @@ import type { LandArea, LandCreate } from "@twin/contracts";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import {
+  drawOutline,
   hasUnsavedOutline,
   openLand,
   outlineLandAt,
@@ -148,6 +149,30 @@ describe("proposeOutline", () => {
     sketch();
     expect(proposeOutline(DRAFT, null)).toBe("has-draft");
     expect(useLand.getState()).toMatchObject({ mode: "draw", points: SKETCH, draft: null });
+  });
+});
+
+describe("drawOutline", () => {
+  it("starts a new drawing, never a revision of the active land, with the drawing guides", () => {
+    const scene = fakeScene();
+    useLand.getState().select(SAVED);
+    useLandContext.getState().setLayer({
+      id: "drawing-guides",
+      title: "Drawing guides",
+      features: [],
+      drawingGuideSources: [{ method: "mapped-feature", label: "Fixture fence" }],
+    });
+    expect(drawOutline(scene as unknown as CesiumSceneManager)).toBe("started");
+    expect(scene.areas.cancelPick).toHaveBeenCalled();
+    expect(useLand.getState()).toMatchObject({ active: null, mode: "draw", points: [] });
+    expect(useLand.getState().traceSources[0]?.label).toBe("Fixture fence");
+    expect(useUi.getState().activePanel).toBe("land");
+  });
+
+  it("keeps an unsaved outline", () => {
+    useLand.getState().propose(DRAFT);
+    expect(drawOutline(null)).toBe("has-draft");
+    expect(useLand.getState().draft).toEqual(DRAFT);
   });
 });
 

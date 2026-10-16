@@ -1,0 +1,98 @@
+/* ---- The Descent: the onboarding card's place field, and the arrival card ---- */
+.descent-form {
+  margin: 0 0 1rem;
+  text-align: left;
+}
+
+.descent-form__row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.descent-form__row .glass-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.descent-form__row .glass-button {
+  flex: 0 0 auto;
+}
+
+.descent-form__choices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.descent-form__choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  border-radius: 10px;
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.descent-form__choice:hover,
+.descent-form__choice:focus-visible {
+  background: var(--control-bg-hover);
+  outline: none;
+}
+
+.descent-form__choice span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.descent-arrival {
+  width: min(26rem, 100%);
+  padding: 1rem 1.1rem 1rem;
+}
+
+.descent-arrival__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.descent-arrival h2 {
+  margin: 0.15rem 0 0.4rem;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  line-height: 1.25;
+}
+
+.descent-arrival__mapped {
+  margin: 0 0 0.35rem;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.descent-arrival__credit {
+  margin: 0 0 0.85rem;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.descent-arrival__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.descent-arrival__actions .glass-button {
+  gap: 0.4rem;
+}
