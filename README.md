@@ -56,6 +56,7 @@ pnpm install
 cd apps/api && uv sync && uv run alembic upgrade head && uv run python -m app.seed && cd ../..
 pnpm dev:api                              # http://localhost:8000/api/v1/docs  (terminal 1)
 pnpm dev                                  # http://localhost:5173              (terminal 2)
+pnpm dev:research  # land research worker (terminal 3; only needed for Land analyses)
 ```
 
 Open <http://localhost:5173>, click **View high-resolution demo**.
@@ -94,6 +95,7 @@ the bundle. With no token configured, writes are open and nothing is ever asked 
 
 ```bash
 pnpm dev / pnpm dev:api        # dev servers
+pnpm dev:research              # land research worker; queued Land analyses wait for it
 pnpm lint && pnpm typecheck    # ESLint (strict, type-aware) + tsc for every package
 pnpm test                      # Vitest: packages/geo, packages/ui, packages/world, apps/web
 pnpm e2e                       # Playwright (needs Chromium: pnpm --filter @twin/web exec playwright install chromium)
