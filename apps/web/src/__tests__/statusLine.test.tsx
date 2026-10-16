@@ -272,9 +272,10 @@ describe("StatusLine", () => {
   it("summarises the catalog at globe scale, with no site engaged", async () => {
     useSites.setState({ activeSiteId: null });
     render(wrap(<StatusLine />));
-    // The built-in catalog (API offline) holds the one demo site and its simulated fleet.
+    // The built-in catalog (API offline) holds the demo ranch, with its simulated fleet, and
+    // the scan showcase, with none: the fleet is counted once.
     await waitFor(
-      () => expect(screen.getByTestId("status-fleet")).toHaveTextContent(/^1 site · 6 machines/),
+      () => expect(screen.getByTestId("status-fleet")).toHaveTextContent(/^2 sites · 6 machines/),
       { timeout: 4000 },
     );
     expect(screen.getByTestId("status-fleet")).toHaveTextContent("simulated");

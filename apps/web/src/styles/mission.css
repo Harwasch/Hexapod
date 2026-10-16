@@ -581,6 +581,13 @@ a.mc-link {
   --tone: var(--accent);
 }
 
+/* Turned to read leftwards from its ground point (MissionOverlays), the dot still marks it. */
+.mc-chip.is-flipped {
+  flex-direction: row-reverse;
+  padding: 0.45rem 0.55rem 0.45rem 0.7rem;
+  transform-origin: 100% 0;
+}
+
 .mc-chip--amber {
   --tone: var(--warn);
 }

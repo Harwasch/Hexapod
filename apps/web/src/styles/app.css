@@ -2203,6 +2203,19 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   color: var(--text-secondary);
 }
 
+.onboarding p:has(+ .onboarding__note) {
+  margin-bottom: 0.35rem;
+}
+
+.onboarding .onboarding__note {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+
+.onboarding__scan {
+  margin-top: 0.75rem;
+}
+
 .onboarding__actions {
   display: flex;
   justify-content: center;

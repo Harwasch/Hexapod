@@ -8,6 +8,7 @@ import {
   ConstantProperty,
   type Entity,
   HeightReference,
+  PolygonHierarchy,
   PolylineDashMaterialProperty,
   SceneTransforms,
   sampleTerrainMostDetailed,
@@ -22,9 +23,12 @@ import {
   destination,
   flattenRing,
   outerRings,
+  polygonsOf,
 } from "@twin/geo";
 
 import type { Emitter } from "@/lib/emitter";
+import { eyeOf, frameGround, projectGroundPoints, viewportOptions } from "@/missions/framing";
+import { PREVIEW_MAX_PASSES, PREVIEW_SWATH_M } from "@/missions/preview";
 import { siteAnchor } from "@/missions/sitePin";
 import type { Machine, PlanOverlay, Project, Zone } from "@/missions/types";
 
@@ -33,10 +37,6 @@ import type { SceneEvents } from "./types";
 
 export const ZONE_ENTITY_PREFIX = "mission:zone:";
 export const PLAN_ENTITY_PREFIX = "mission:plan:";
-/** Working width assumed for the coverage preview (a mid-size mower deck). */
-export const PREVIEW_SWATH_M = 6;
-/** The preview never draws more passes than this per zone; the spacing widens instead. */
-export const PREVIEW_MAX_PASSES = 28;
 /** One colour per machine so passes read as "who drives where". */
 const MACHINE_PALETTE = ["#7fd8c0", "#f0b254", "#9db8f0", "#e79ac8", "#c6e07a", "#c3a6f0"].map(
   (css) => Color.fromCssColorString(css),
@@ -108,6 +108,13 @@ export class MissionManager {
     string,
     { height: number; at: number; sampled?: boolean }
   >();
+  /**
+   * The terrain under each overlay anchor at full detail, sampled once per project. Under
+   * photorealistic tiles the globe may never load its own terrain there, and its placeholder
+   * heights are kilometres off; without this an anchor stood at the last height that answered
+   * anywhere, or at sea level: on a ranch 300 m up, chips drew a hundred pixels off their zones.
+   */
+  private readonly groundHeights = new Map<string, number>();
   private exploring = false;
   private readonly removeExplore: () => void;
   private readonly scratchWindow = new Cartesian2();
@@ -139,11 +146,13 @@ export class MissionManager {
     this.clearEntities();
     this.project = project;
     this.heightCache.clear();
+    this.groundHeights.clear();
     if (!project) return;
+    this.sampleGround(project);
     // Zones may have been added or removed; the plan overlay is redrawn at the end.
     if (overlay) queueMicrotask(() => this.project === project && this.showPlan(overlay));
     for (const zone of project.zones) {
-      const ring = outerRings(zone.footprint)[0];
+      const [ring, ...holes] = polygonsOf(zone.footprint)[0] ?? [];
       if (!ring) continue;
       const positions = Cartesian3.fromDegreesArray(flattenRing(ring));
       const first = positions[0];
@@ -154,9 +163,14 @@ export class MissionManager {
           id: `${ZONE_ENTITY_PREFIX}${zone.id}`,
           show: this.zonesVisible,
           polygon: {
-            hierarchy: positions,
+            // Holes stay open: the woods and the homestead inside a grassland zone are not in it.
+            hierarchy: new PolygonHierarchy(
+              positions,
+              holes.map(
+                (hole) => new PolygonHierarchy(Cartesian3.fromDegreesArray(flattenRing(hole))),
+              ),
+            ),
             material: tone.withAlpha(zone.treated ? 0.22 : 0.14),
-            heightReference: HeightReference.CLAMP_TO_GROUND,
             classificationType: undefined,
           },
           polyline: {
@@ -390,17 +404,26 @@ export class MissionManager {
     });
   }
 
+  /**
+   * Flies to the whole project, fitted to this window: every zone outline, chip and machine
+   * inside the part of the screen the HUD leaves open (`missions/framing.ts`), so the site pin
+   * and "the whole ranch" land framed on a phone held upright as on a desktop.
+   */
   flyToProject(): void {
     const project = this.project;
     if (!project || project.zones.length === 0) return;
-    const centers = project.zones.map((z) => centerOf(z.footprint));
-    const lon = centers.reduce((a, c) => a + c.longitude, 0) / centers.length;
-    const lat = centers.reduce((a, c) => a + c.latitude, 0) / centers.length;
-    void this.detailedHeight(lon, lat, "project-fly").then((height) => {
-      this.camera.flyToBoundingSphere(
-        new BoundingSphere(Cartesian3.fromDegrees(lon, lat, height), 1100),
-        { heading: 15, pitch: -45, rangeMultiplier: 2.2, durationS: 2 },
-      );
+    const framing = frameGround(
+      projectGroundPoints(project),
+      viewportOptions(this.camera.viewport(), 15, -40),
+    );
+    const { longitude, latitude } = framing.target;
+    void this.detailedHeight(longitude, latitude, "project-fly").then((height) => {
+      const eye = eyeOf(framing, height);
+      this.camera.flyTo(eye.longitude, eye.latitude, eye.height, {
+        heading: eye.heading,
+        pitch: eye.pitch,
+        durationS: 2,
+      });
     });
   }
 
@@ -437,6 +460,50 @@ export class MissionManager {
     return detailed;
   }
 
+  /** Where each overlay anchor of `project` stands, keyed as `projectAnchors` keys them. */
+  private anchorPoints(project: Project): { key: string; longitude: number; latitude: number }[] {
+    const points = [
+      ...project.machines.map((m) => ({ key: `machine:${m.id}`, ...m.position })),
+      ...project.zones.map((z) => ({ key: `zone:${z.id}`, ...z.anchor })),
+    ];
+    const site = siteAnchor(project);
+    if (site) points.push({ key: `site:${project.id}`, ...site });
+    return points;
+  }
+
+  /**
+   * Samples the most detailed terrain under every anchor once; see `groundHeights`. A terrain
+   * provider still loading (the app's first seconds) is asked again a little later.
+   */
+  private sampleGround(project: Project, attempt = 0): void {
+    const points = this.anchorPoints(project);
+    if (points.length === 0) return;
+    sampleTerrainMostDetailed(
+      this.viewer.terrainProvider,
+      points.map((p) => Cartographic.fromDegrees(p.longitude, p.latitude)),
+    )
+      .then((samples) => {
+        if (this.project !== project) return;
+        samples.forEach((sample, i) => {
+          const key = points[i]?.key;
+          if (key && isPlausibleHeight(sample.height)) this.groundHeights.set(key, sample.height);
+        });
+        // Guesses made before it answered give way at the next frame; a drawn-surface sample stays.
+        for (const key of this.groundHeights.keys()) {
+          if (!this.heightCache.get(key)?.sampled) this.heightCache.delete(key);
+        }
+        this.scene.requestRender();
+      })
+      .catch(() => {
+        if (attempt < 3 && this.project === project) {
+          setTimeout(
+            () => this.project === project && this.sampleGround(project, attempt + 1),
+            2000,
+          );
+        }
+      });
+  }
+
   /**
    * Cheap ground estimate for overlay anchors and flights. `globe.getHeight` is a CPU lookup
    * into loaded terrain; `scene.sampleHeight` is a render pass, so it runs only when the camera
@@ -459,7 +526,7 @@ export class MissionManager {
         fromTileset = undefined;
       }
     }
-    const fromTerrain = this.scene.globe.getHeight(carto);
+    const fromTerrain = this.groundHeights.get(key) ?? this.scene.globe.getHeight(carto);
     let height = reconcileHeights(fromTileset, fromTerrain);
     if (height === undefined) height = this.lastGoodHeight ?? 0;
     else this.lastGoodHeight = height;

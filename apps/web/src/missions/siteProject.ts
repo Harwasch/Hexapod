@@ -23,7 +23,8 @@ export function siteProject(site: Site): Project {
     id: siteProjectId(site.id),
     siteId: site.id,
     name: site.name,
-    meta: `${acres.toLocaleString()} acres · no fleet registered · plans only`,
+    // No numbers: the badge puts the site's area in front of it, in the user's units.
+    meta: "no fleet registered · plans only",
     simulated: false,
     machines: [],
     zones: [

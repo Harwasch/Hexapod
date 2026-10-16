@@ -12,7 +12,7 @@ import {
   viewFootprint,
   zoneFromFootprint,
 } from "@/missions/areas";
-import { DemoMissionProvider } from "@/missions/demo";
+import { demoRanchProject } from "@/missions/demo";
 import { recordBodyFromDraft, zonesFromRecord } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 
@@ -157,7 +157,7 @@ describe("drawn areas", () => {
     store.removeArea("anywhere", "A-01");
     expect(useMission.getState().project?.zones).toEqual([]);
     // Demo zones are kept in front of drawn areas.
-    const demo = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+    const demo = demoRanchProject();
     store.setProject(demo);
     store.addArea(demo.id, zone);
     const ids = useMission.getState().project?.zones.map((z) => z.id) ?? [];

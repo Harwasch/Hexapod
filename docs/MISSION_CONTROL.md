@@ -13,7 +13,7 @@ that layer and the seam where real fleet data plugs in.
 │ Measure   │ (one at a  │   markers and zone       Selection   │ full height; the map│ │
 │ Add       │  time)     │   chips; one site pin    Inspector   │ beside it stays live│ │
 │ Settings  └────────────┘   above 50 km                        │                     │ │
-│              [ Blackrock Mesa  Splat · Mesh · Points ] [ Load ]└─────────────────────┘ │
+│              [ Cesium Gaussian splat demo  Splat · Mesh ]      └─────────────────────┘ │
 └ Fleet: 4 working · 2 need attention │ Agent: <task> +4 tasks ⌃          ◎ ⌂ │ Data ┘
 ```
 
@@ -354,11 +354,41 @@ camera leaves it, the project does not.
 
 ## Demo data is simulated
 
-`missions/demo.ts` ships one project, **Blackrock Mesa**, attached to the public Cesium splat
-site. Every record carries `simulated: true`, the project badge says so, and nothing in the
-demo is presented as a live feed (camera feeds show "no stream"). Replace
-`DemoMissionProvider` with a provider backed by your fleet API (REST/WebSocket/MCAP) to get
-live positions; the overlays, cards, command box and status line do not change.
+`missions/demo.ts` ships one project, **Oak Bench Ranch**, attached to the demo ranch: a real
+place on California's Central Coast (oak savanna along Figueroa Creek, near Santa Ynez) whose
+outline is a demo area, not a property line. The name, machines, zones, plans and work log are
+simulated, with no affiliation with the landowner. Every record carries `simulated: true`, the
+project badge and the onboarding card say so, and nothing in the demo is presented as a live
+feed (camera feeds show "no stream"). `DemoMissionProvider` attaches it to the seeded
+`demo-ranch` site and its offline copy `builtin-demo-ranch` and to nothing else. Replace it with
+a provider backed by your fleet API (REST/WebSocket/MCAP) to get live positions; the overlays,
+cards, command box and status line do not change.
+
+**One file holds the place.** `apps/api/app/seed/demo_ranch.json` has the outline, Figueroa
+Creek (USGS NHD), the WorldCover grassland and oak patches, the simulated fence, the two machine
+bases, the camera framing and where each layer came from (credited on the site record:
+WorldCover's CC BY 4.0 requires it). Its `derived` block (zone footprints, geodesic areas, chip
+anchors, creek and fence lengths) is written by `python -m app.seed.demo_ranch --write` and never
+by hand; `tests/test_demo_ranch.py` fails when it is stale. The API seed and the web app
+(`missions/demoRanchData.ts` imports the JSON) read only this file, so every acreage is computed:
+a zone's acres are its footprint's, a plan's acres are its zones', each working machine stands on
+the coverage passes the plan preview draws, and the badge's area is the catalog site's, formatted
+as the switcher formats it. To move the ranch: edit the source half, run the build, run
+`src/__tests__/demoRanch.test.ts` (it prints a camera block to paste when the Overview no longer
+frames every zone and machine at 1440×900 and 1280×720), then `python -m app.seed` (and
+`python -m app.seed.publish --catalog-only` for the offline catalog). The seed is not part of a
+deploy: run both after one.
+
+**The arrival** is the site's authored Overview bookmark, looking north up the valley. A window
+it would crop (a phone held upright) gets a fit for its own shape instead (`demoRanchArrival`,
+`missions/framing.ts`), and the site pin's "whole site" flight (`MissionManager.flyToProject`)
+always fits the live window.
+
+The **Redmond** site (`cesium-splat-demo`, where Cesium's Gaussian-splat sample sits) is the
+3D-scan showcase, with no project of its own. Its splat (ion 4547222) is withdrawn in this
+deployment; `VITE_DEFAULT_SPLAT_ASSET_ID` or adding the asset from the ion Asset Depot brings it
+back. Until then the onboarding card's "or see a 3D scan" goes to the first site that has a
+splat.
 
 ## Design language
 

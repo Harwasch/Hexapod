@@ -24,6 +24,7 @@ import { MapCorner } from "@/features/shell/MapCorner";
 import { StatusLine } from "@/features/mission/StatusLine";
 import { ToolRail } from "@/features/shell/ToolRail";
 import { PHONE_MEDIA } from "@/lib/media";
+import { BUILTIN_RANCH_ID } from "@/missions/demoRanchData";
 import {
   DEFAULT_WIND_STRENGTH,
   LIVING_SURVEY_IDLE,
@@ -192,6 +193,37 @@ describe("Developer readouts + Onboarding", () => {
     await userEvent.click(screen.getByTestId("onboarding-explore"));
     await waitFor(() => expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument());
     expect(useSettings.getState().onboardingDismissed).toBe(true);
+    vi.restoreAllMocks();
+  });
+
+  it("onboarding opens the demo ranch, and offers a scan only where there is one", async () => {
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    const flyTo = vi.fn(() => Promise.resolve());
+    sceneRegistry.set({ sites: { flyTo } } as unknown as CesiumSceneManager);
+    onTestFinished(() => sceneRegistry.set(null));
+    useViewer.getState().setStatus("ready");
+    const { unmount } = render(wrap(<OnboardingCard />));
+    const card = await screen.findByTestId("onboarding");
+    expect(card).toHaveTextContent("The fleet, zones and plans are simulated.");
+    const open = screen.getByRole("button", { name: "Open the demo ranch" });
+    // Disabled until the catalog (here the built-in one) has the ranch.
+    await waitFor(() => expect(open).toBeEnabled());
+    // Offline with no splat configured, nothing in the built-in catalog is a scan.
+    expect(screen.queryByTestId("onboarding-scan")).not.toBeInTheDocument();
+    await userEvent.click(open);
+    expect(flyTo).toHaveBeenCalledWith(BUILTIN_RANCH_ID);
+    unmount();
+
+    const configured = env.defaultSplatAssetId;
+    env.defaultSplatAssetId = 4547222;
+    onTestFinished(() => {
+      env.defaultSplatAssetId = configured;
+    });
+    useSettings.getState().set({ onboardingDismissed: false });
+    flyTo.mockClear();
+    render(wrap(<OnboardingCard />));
+    await userEvent.click(await screen.findByTestId("onboarding-scan"));
+    expect(flyTo).toHaveBeenCalledWith("builtin-demo-site");
     vi.restoreAllMocks();
   });
 

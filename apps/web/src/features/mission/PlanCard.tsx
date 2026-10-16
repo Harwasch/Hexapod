@@ -8,6 +8,8 @@ import { useScene } from "@/cesium/SceneContext";
 import { planningEdited } from "@/lib/planningMetrics";
 import { areaFromMeasurement, isAreaZone, nextAreaId } from "@/missions/areas";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
+import { DEMO_EXAMPLES } from "@/missions/demo";
+import { DEMO_RANCH_PROJECT_ID } from "@/missions/demoRanchData";
 import { diffDrafts, idLabel, overlayFor } from "@/missions/planDraft";
 import type { Project, Zone } from "@/missions/types";
 import { useMeasurements } from "@/state/measurements";
@@ -22,7 +24,7 @@ import { useMissionActions } from "./useMissionActions";
 const EXAMPLES = [
   "3D scan this field into a gaussian splat",
   "Mow the orchard by Friday with two mowers",
-  "Survey the lake shore for erosion every month",
+  "Survey the creek for erosion every month",
 ];
 
 /** How long after a corner is dropped the plan redrafts for the new outline. */
@@ -181,7 +183,7 @@ export function PlanCard({ project }: { project: Project }) {
               defaults, and you change what you disagree with.
             </p>
             <div className="mc-tags" aria-label="Examples">
-              {EXAMPLES.map((example) => (
+              {(project.id === DEMO_RANCH_PROJECT_ID ? DEMO_EXAMPLES : EXAMPLES).map((example) => (
                 <button
                   key={example}
                   type="button"

@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { PlanDraft } from "@twin/contracts";
 
-import { DemoMissionProvider } from "@/missions/demo";
+import { demoRanchProject } from "@/missions/demo";
 import {
   buildDraftRequest,
   describeDraft,
   diffDrafts,
+  idLabel,
   overlayFor,
   planFromDraft,
   planFromRecord,
@@ -17,7 +18,7 @@ import {
 } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 
-const project = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+const project = demoRanchProject();
 
 const draft: PlanDraft = {
   title: "Clear thistle on the west bench",
@@ -85,7 +86,8 @@ describe("plan drafting", () => {
     expect(plan.ongoing).toBe(false);
     expect(plan.source).toEqual({ kind: "rules", model: null });
     expect(plan.facts.find((f) => f.k === "Risks")?.v).toContain("22%");
-    expect(plan.facts.find((f) => f.k === "Area")?.v).toBe("Z-14 West bench");
+    const z14 = project.zones.find((z) => z.id === "Z-14")!;
+    expect(plan.facts.find((f) => f.k === "Area")?.v).toBe(idLabel("Z-14", z14.name));
     const recurring = planFromDraft({ ...draft, cadence: "monthly", endDate: null }, project, {
       goal: "x",
     });

@@ -8,6 +8,9 @@ import { useViewer } from "@/state/viewer";
 
 import { useMissionActions } from "./useMissionActions";
 
+/** The gap a zone chip keeps from the screen's right edge before it turns to read leftwards. */
+const CHIP_EDGE_PX = 8;
+
 const STATUS_CLASS: Record<Machine["status"], string> = {
   working: "is-working",
   attention: "is-attention",
@@ -45,7 +48,17 @@ export function MissionOverlays() {
           continue;
         }
         node.style.visibility = "";
-        node.style.transform = `translate3d(${anchor.x.toFixed(1)}px, ${anchor.y.toFixed(1)}px, 0)`;
+        let x = anchor.x;
+        // A zone chip reads rightwards from its ground point; near the right edge (a phone held
+        // upright, mostly) it reads leftwards instead, so it is never cut off.
+        if (anchor.id.startsWith("zone:")) {
+          const width = node.offsetWidth;
+          const room = (node.offsetParent?.clientWidth ?? window.innerWidth) - CHIP_EDGE_PX;
+          const flip = anchor.x + width > room && anchor.x - width >= CHIP_EDGE_PX;
+          node.classList.toggle("is-flipped", flip);
+          if (flip) x -= width;
+        }
+        node.style.transform = `translate3d(${x.toFixed(1)}px, ${anchor.y.toFixed(1)}px, 0)`;
       }
     });
     // Re-subscribing when the pin swaps in asks for a frame, so it is placed straight away.

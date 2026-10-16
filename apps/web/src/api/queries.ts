@@ -39,7 +39,14 @@ import type {
 import { env } from "@/app/env";
 
 import { api, isOffline, unwrap } from "./client";
-import { builtinDemoSite, builtinLayers, fetchOfflineCatalog, toSummary } from "./fallback";
+import {
+  builtinLayers,
+  builtinScanSite,
+  builtinSite,
+  builtinSites,
+  fetchOfflineCatalog,
+  toSummary,
+} from "./fallback";
 
 export const queryKeys = {
   health: ["health"] as const,
@@ -126,10 +133,16 @@ export function useSites(): CatalogResult<SiteSummary[]> {
     ...RETRY,
   });
   const captures = useOfflineSites(query.isError && isOffline(query.error));
-  return withFallback(query, () => [
-    toSummary(builtinDemoSite()),
-    ...captures.map((site) => toSummary(site)),
-  ]);
+  return withFallback(query, () => {
+    const builtins = builtinSites();
+    // The published catalog lists the seeded ranch and scan showcase too; the built-in copy
+    // of each stands for it, so the fleet is not attached (and counted) twice.
+    const slugs = new Set(builtins.map((site) => site.slug));
+    return [
+      ...builtins.map(toSummary),
+      ...captures.filter((site) => !slugs.has(site.slug)).map((site) => toSummary(site)),
+    ];
+  });
 }
 
 export function useSite(id: string | null): CatalogResult<Site | null> {
@@ -143,7 +156,7 @@ export function useSite(id: string | null): CatalogResult<Site | null> {
   const captures = useOfflineSites(query.isError && isOffline(query.error));
   if (id?.startsWith("builtin-")) {
     return {
-      data: builtinDemoSite(),
+      data: builtinSite(id) ?? builtinScanSite(),
       builtin: true,
       isLoading: false,
       error: null,
@@ -154,7 +167,7 @@ export function useSite(id: string | null): CatalogResult<Site | null> {
   // resolves against the catalog in the bucket — the site the user was looking at does not
   // change identity when the API goes away.
   const result = withFallback(query, () =>
-    id ? (captures.find((site) => site.id === id) ?? builtinDemoSite()) : null,
+    id ? (captures.find((site) => site.id === id) ?? builtinScanSite()) : null,
   );
   return { ...result, data: id ? result.data : null };
 }

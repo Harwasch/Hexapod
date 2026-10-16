@@ -30,6 +30,7 @@ import {
   addGoogleCredit,
   expect,
   mockApi,
+  RANCH_NAME,
   selectObject,
   stageObjects,
   test,
@@ -195,7 +196,7 @@ async function ask(page: Page, text: string): Promise<void> {
 
 async function loadDemo(page: Page): Promise<void> {
   await page.getByTestId("onboarding-demo").click();
-  await expect(page.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+  await expect(page.getByTestId("project-card")).toContainText(RANCH_NAME, {
     timeout: 30_000,
   });
   await expect(page.getByTestId("onboarding")).toHaveCount(0);
