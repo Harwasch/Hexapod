@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 from datetime import date
 from itertools import pairwise
 from pathlib import Path
@@ -966,15 +967,69 @@ def test_sizing_measures_each_zone_once_and_a_bounded_amount_of_ground(
     )
     assert len(draft.coverage) == planner.SIZED_ZONES_MAX and draft.zone_ids == ids
     assert any("acres per machine-hour" in a for a in draft.assumptions)
+    # ...and names the zones that rate applies to, and why.
+    assert (
+        "A-20 Patch 20, A-21 Patch 21, A-22 Patch 22, A-23 Patch 23, A-24 Patch 24, "
+        "A-25 Patch 25 and 4 more are sized from their acres, not their outlines: past the 20 "
+        "outlines one draft measures."
+    ) in draft.assumptions
 
 
-def test_claude_planner_sizes_a_repeated_preferred_zone_once(
+def test_a_draft_names_each_outline_it_left_to_acres_and_why(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    parsed = ModelPlanDraft(
+    from app.services import planner
+
+    def notes(zones: list[PlannerZone]) -> list[str]:
+        draft = RulesPlanner().draft(request("Mow the patches", zones=zones, machines=MACHINES))
+        return [a for a in draft.assumptions if "sized from" in a]
+
+    assert notes(SQUARES[:3]) == []
+    monkeypatch.setattr(planner, "ZONE_VERTICES_MAX", 4)
+    assert notes(SQUARES[:2]) == [
+        "A-00 Patch 0 and A-01 Patch 1 are sized from their acres, not their outlines: more "
+        "than 4 outline points."
+    ]
+    monkeypatch.setattr(planner, "ZONE_VERTICES_MAX", 20_000)
+    monkeypatch.setattr(planner, "SIZED_VERTICES_MAX", 12)
+    assert notes(SQUARES[:3]) == [
+        "A-02 Patch 2 is sized from its acres, not its outline: past the 12 outline points one "
+        "draft measures."
+    ]
+    monkeypatch.setattr(planner, "SIZED_VERTICES_MAX", 50_000)
+    _CountingMeasure(monkeypatch, seconds_each=planner.SIZING_BUDGET_S * 0.6)
+    assert notes(SQUARES[:3]) == [
+        "A-02 Patch 2 is sized from its acres, not its outline: past the 10 seconds one draft "
+        "spends measuring."
+    ]
+
+
+def test_a_jagged_outline_drafts_within_the_sizing_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import coverage
+    from tests.test_coverage import spiky
+
+    def traced(*_: Any) -> Any:
+        raise AssertionError("an outline past MAX_SPANS was traced span by span")
+
+    monkeypatch.setattr(coverage, "_segments", traced)
+    # 1,500 points: 477,000 spans at the mower's swath. Traced, this draft took 22 s and 1.3 GB.
+    zone = PlannerZone(id="A-00", name="Spiky", acres=1, task="Mow", geometry=spiky(1500))
+    started = time.monotonic()
+    draft = RulesPlanner().draft(request("Mow A-00", zones=[zone], machines=MACHINES))
+    assert time.monotonic() - started < 5
+    [sized] = draft.coverage
+    assert sized.spans > 20 * coverage.MAX_SPANS and sized.passes == 5000
+    assert "too many to trace one by one" in sized.basis
+    assert draft.estimates.acres == pytest.approx((sized.area_m2 or 0) / 4046.8564224, abs=0.1)
+
+
+def _patch_draft(zone_ids: list[str]) -> ModelPlanDraft:
+    return ModelPlanDraft(
         title="Mow the patch",
         objective="Mow A-00.",
-        zone_ids=["A-00", "A-00", "A-01"],
+        zone_ids=zone_ids,
         machine_ids=[],
         cadence="once",
         start_date="2026-09-18",
@@ -988,12 +1043,41 @@ def test_claude_planner_sizes_a_repeated_preferred_zone_once(
         questions=[],
         clarifications=[],
     )
+
+
+CLAUDE = Settings(ANTHROPIC_API_KEY="k", ANTHROPIC_MODEL="claude-opus-5", _env_file=None)
+
+
+def test_claude_planner_sizes_a_repeated_preferred_zone_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     measure = _CountingMeasure(monkeypatch)
-    settings = Settings(ANTHROPIC_API_KEY="k", ANTHROPIC_MODEL="claude-opus-5", _env_file=None)
-    planner = ClaudePlanner(settings, client=_FakeClient(parsed))  # type: ignore[arg-type]
+    client = _FakeClient(_patch_draft(["A-00", "A-00", "A-01"]))
+    planner = ClaudePlanner(CLAUDE, client=client)  # type: ignore[arg-type]
     draft = planner.draft(
         land_request("Mow the patch", SQUARES[:2], preferred_zone_ids=["A-00"] * 500)
     )
-    assert measure.calls == 3, "once for the model's context, once per zone in the draft"
+    assert measure.calls == 2, "A-00 once for the model's context and the draft, A-01 once"
     assert draft.zone_ids == ["A-00", "A-01"]
     assert [c.zone_id for c in draft.coverage] == ["A-00", "A-01"]
+
+
+def test_claude_planner_spends_one_sizing_budget_per_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import planner as planner_module
+
+    measure = _CountingMeasure(monkeypatch, seconds_each=planner_module.SIZING_BUDGET_S * 0.6)
+    client = _FakeClient(_patch_draft(["A-00", "A-01", "A-02"]))
+    planner = ClaudePlanner(CLAUDE, client=client)  # type: ignore[arg-type]
+    draft = planner.draft(land_request("Mow the patches", SQUARES[:3]))
+    # The model's context measured two zones before the budget ran out; the draft reuses
+    # them and gets no second budget for the third.
+    assert measure.calls == 2
+    assert [c.zone_id for c in draft.coverage] == ["A-00", "A-01"]
+    note = (
+        "A-02 Patch 2 is sized from its acres, not its outline: past the 10 seconds one draft "
+        "spends measuring."
+    )
+    assert note in draft.assumptions
+    assert note in client.messages.calls[0]["messages"][0]["content"]

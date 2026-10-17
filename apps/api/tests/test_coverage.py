@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+import time
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +10,8 @@ import pytest
 from pyproj import Geod
 from shapely.geometry import shape
 
-from app.services.coverage import geodesic_area_m2, measure
+from app.services import coverage
+from app.services.coverage import MAX_SPANS, geodesic_area_m2, measure
 from app.services.machine_classes import MACHINE_CLASSES, load
 
 # The fixtures packages/geo/src/coverage.test.ts holds the console's preview to as well.
@@ -43,6 +46,59 @@ def test_measure_matches_the_shared_fixtures(fixture: dict[str, Any]) -> None:
         assert expect["lengthMin"] < result.length_m < expect["lengthMax"]
     if "lengthM" in expect:
         assert result.length_m == pytest.approx(expect["lengthM"], abs=expect["lengthTolM"])
+
+
+def spiky(points: int, degrees: float = 0.2) -> dict[str, Any]:
+    """A valid star `degrees` across whose points alternate between 60 % and 100 % of its
+    radius, so a pass row crosses many spikes: at 0.2 degrees (about 20 km) and 1,500 points,
+    the outline that took one draft 22 s and 1.3 GB when every span was traced."""
+    ring = [
+        [
+            -120 + degrees / 2 * (0.6 + 0.4 * (k % 2)) * math.cos(2 * math.pi * k / points),
+            35 + degrees / 2 * (0.6 + 0.4 * (k % 2)) * math.sin(2 * math.pi * k / points),
+        ]
+        for k in range(points)
+    ]
+    return {"type": "Polygon", "coordinates": [[*ring, ring[0]]]}
+
+
+@pytest.mark.parametrize("fixture", CASES, ids=[c["name"] for c in CASES])
+def test_counted_spans_and_passes_are_the_traced_ones(fixture: dict[str, Any]) -> None:
+    kwargs: dict[str, Any] = {}
+    if "maxPasses" in fixture:
+        kwargs["max_passes"] = fixture["maxPasses"]
+    if "headingDeg" in fixture:
+        kwargs["heading_deg"] = fixture["headingDeg"]
+    traced = measure(fixture["geometry"], fixture["spacingM"], **kwargs)
+    counted = measure(fixture["geometry"], fixture["spacingM"], max_spans=0, **kwargs)
+    assert traced is not None and counted is not None
+    assert counted.estimated and not traced.estimated
+    assert (counted.spans, counted.passes) == (traced.spans, traced.passes)
+    assert counted.transit_m == traced.transit_m and counted.capped is traced.capped
+    # The area over the spacing: what the traced passes sum to, closely even on small shapes.
+    assert counted.length_m == pytest.approx(traced.length_m, rel=0.02)
+
+
+def test_an_intricate_outline_is_counted_not_traced(monkeypatch: pytest.MonkeyPatch) -> None:
+    star = spiky(60, degrees=0.01)
+    traced = measure(star, 2)
+    counted = measure(star, 2, max_spans=1000)
+    assert traced is not None and counted is not None
+    assert traced.spans == 1782 and not traced.estimated and counted.estimated
+    assert (counted.spans, counted.passes) == (traced.spans, traced.passes)
+    assert counted.length_m == pytest.approx(traced.length_m, rel=0.001)
+
+    # 1,500 points 20 km across: 477,000 spans at 5,000 passes, and not one of them traced.
+    def traced_pieces(*_: Any) -> Any:
+        raise AssertionError("an outline past MAX_SPANS was traced")
+
+    monkeypatch.setattr(coverage, "_segments", traced_pieces)
+    started = time.monotonic()
+    big = measure(spiky(1500), 2)
+    assert time.monotonic() - started < 2
+    assert big is not None and big.estimated and big.capped and big.passes == 5000
+    assert big.spans > 20 * MAX_SPANS
+    assert big.length_m == pytest.approx(52_280_000, rel=0.01)
 
 
 def test_rectangle_reports_spans_transit_and_geodesic_area() -> None:

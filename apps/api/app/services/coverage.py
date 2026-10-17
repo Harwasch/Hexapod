@@ -9,6 +9,12 @@ equidistant one centred on the outline, so lengths are metres on the ground. The
 
 It measures a planning estimate, not a field-ready route: no headland turns, obstacles or
 slope, and the transit between passes is approximated by one spacing per span.
+
+Tracing costs about 40 µs and 3 KB a span, and an intricate outline can make millions of them
+(one spiky 1,000-point outline 20 km across makes 318,000 at 5,000 passes: 15 s and 875 MB).
+So the spans are counted first, from the edges alone, and past `max_spans` the passes are not
+traced: the counts give the spans and passes exactly, and the length is the area over the
+spacing, the sum tracing every pass comes to. The console's preview never meets such outlines.
 """
 
 from __future__ import annotations
@@ -17,6 +23,9 @@ import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import numpy as np
+import numpy.typing as npt
+import shapely
 from pyproj import Geod, Transformer
 from shapely.affinity import rotate
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon, shape
@@ -25,6 +34,8 @@ from shapely.geometry.polygon import orient
 from shapely.ops import transform
 
 GEOD = Geod(ellps="WGS84")
+#: Spans `measure` traces one by one; past it they are counted (see the module docstring).
+MAX_SPANS = 20_000
 
 
 @dataclass(frozen=True)
@@ -43,6 +54,9 @@ class Coverage:
     heading_deg: float | None
     #: True when `max_passes` widened the spacing past the one asked for.
     capped: bool
+    #: True when the spans were past `max_spans`: counted, not traced, and the length is the
+    #: area over the spacing.
+    estimated: bool = False
 
 
 def geodesic_area_m2(geometry: BaseGeometry) -> float:
@@ -66,12 +80,33 @@ def _segments(geometry: BaseGeometry) -> list[LineString]:
     return []
 
 
+def _row_crossings(
+    geometry: BaseGeometry, first_y: float, spacing: float, rows: int
+) -> npt.NDArray[np.int64]:
+    """How often each pass row (y = first_y + k * spacing) crosses the outline's rings, from
+    the edges alone: an edge crosses the rows whose y lies in [low, high) of its two ends."""
+    starts: list[npt.NDArray[np.int64]] = []
+    stops: list[npt.NDArray[np.int64]] = []
+    for ring in shapely.get_rings(shapely.get_parts(geometry)):
+        ys = shapely.get_coordinates(ring)[:, 1]
+        low, high = np.minimum(ys[:-1], ys[1:]), np.maximum(ys[:-1], ys[1:])
+        starts.append(np.clip(np.ceil((low - first_y) / spacing), 0, rows).astype(np.int64))
+        stops.append(np.clip(np.ceil((high - first_y) / spacing), 0, rows).astype(np.int64))
+    if not starts:
+        return np.zeros(rows, dtype=np.int64)
+    edges = np.bincount(np.concatenate(starts), minlength=rows + 1) - np.bincount(
+        np.concatenate(stops), minlength=rows + 1
+    )
+    return np.cumsum(edges)[:rows]
+
+
 def measure(
     geometry: dict[str, Any],
     spacing_m: float,
     *,
     heading_deg: float | None = None,
     max_passes: int = 5000,
+    max_spans: int = MAX_SPANS,
 ) -> Coverage | None:
     """Coverage of a GeoJSON geometry at `spacing_m` between passes; None for a point (or
     anything else that cannot be worked)."""
@@ -120,6 +155,22 @@ def measure(
     count = max(1, math.ceil(extent / spacing))
     rows = [miny + spacing * (k + 0.5) for k in range(count)]
     rows = [y for y in rows if y <= maxy]
+    # Each row's pieces are half its crossings: past max_spans, count them and do not trace.
+    crossings = _row_crossings(turned, rows[0], spacing, len(rows)) if rows else None
+    spans = int(crossings.sum()) // 2 if crossings is not None else 0
+    if crossings is not None and spans > max_spans:
+        return Coverage(
+            kind="area",
+            area_m2=geodesic_area_m2(shaped),
+            length_m=float(turned.area / spacing),
+            transit_m=float(max(0, spans - 1) * spacing),
+            passes=int(np.count_nonzero(crossings)),
+            spans=spans,
+            spacing_m=float(spacing),
+            heading_deg=heading,
+            capped=capped,
+            estimated=True,
+        )
     sweep = MultiLineString([[(minx - 1, y), (maxx + 1, y)] for y in rows])
     pieces = _segments(sweep.intersection(turned))
     length = sum(piece.length for piece in pieces)
