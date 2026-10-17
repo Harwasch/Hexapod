@@ -698,7 +698,7 @@ test.describe("on a touch phone", () => {
     });
   }
 
-  test("draws with taps, reviews the boundary above the sheet, and reopens at the overview", async ({
+  test("says tap, reviews the boundary above the sheet, and reopens at the overview", async ({
     app,
   }) => {
     await landApi(app);

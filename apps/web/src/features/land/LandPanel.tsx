@@ -87,9 +87,10 @@ export function LandPanel() {
   // Beside the panel on a desktop, above the sheet on a phone (landFraming.ts).
   const frame = (boundary: Footprint) => frameLand(scene, boundary);
 
-  // A boundary going to review stays in sight: on a phone the review sheet would otherwise
-  // cover the outline that was just drawn, so the camera frames it above the sheet. Only a
-  // newly proposed draft is framed, and only when something hides it.
+  // A boundary under review stays in sight: on a phone the review sheet would otherwise cover
+  // the outline that was just drawn, so the camera frames it above the sheet. Checked whenever
+  // the boundary under review changes (a new draft, a combined shape), and framed only when
+  // something hides it.
   const reviewing = open && draft !== null && mode === "browse";
   const reviewBoundary = reviewing ? draft.boundary : null;
   useEffect(() => {
