@@ -401,6 +401,30 @@ def wrist_clamp(lo: Layout) -> Part:
     return part
 
 
+FROLL = 70.0  # forearm-roll actuator centre behind the wrist pitch axis (MassModel)
+
+
+def roll_clamp(lo: Layout) -> Part:
+    """6-axis forearm: the tube's end clamp, a cradle for the forearm-roll servo whose horn
+    sits on the forearm axis."""
+    x = lo.l2 - FROLL
+    cradle = Pos(x, 0, -11) * Box(39, 30, 50) - Pos(x + 2, 0, -11) * Box(37, 26, 46)
+    sock = cyl_x(16.5, x - 62, x - 17, -5)
+    part = cradle + sock
+    part -= cyl_x(TUBE_OD / 2 + 0.15, x - 64, x - 21, -5)
+    return part
+
+
+def roll_yoke(lo: Layout) -> Part:
+    """6-axis wrist: from the forearm-roll horn to the wrist-pitch servo's cradle (froll frame)."""
+    plate = cyl_x(12, 21.5, 25.5)
+    beam = Pos(35, 0, 0) * Box(20, 30, 16)
+    ring = Pos(FROLL, 0, 0) * Box(52, 30, 42) - Pos(FROLL, 0, 0) * Box(46, 32, 36)
+    part = plate + beam + ring
+    part -= bolt_circle(7, 4, 1.2, lambda a, b, r: cyl_x(r, 20, 27, a, b))
+    return part
+
+
 def wrist_bracket(lo: Layout, roll_servo: bool) -> Part:
     """On the wrist motor's output face (outboard, +y), wraps round to hold the tool-roll
     actuator on the tool axis."""
@@ -548,16 +572,26 @@ def link_parts(design: ArmDesign, acts: ArmActuators, hx: Hexapod) -> dict[str, 
     if lo.para:
         links["crank"] = [_c(crank(lo), "accent", "crank (printed)")]
         links["rod"] = rod_parts(lo)
-    fore = [
-        _c(fore_hub(lo), "accent" if lo.para else "printed", "forearm hub and rear lever (printed)"),
-        tube_x(12, lo.l2 - 28, -5),
-        _c(wrist_clamp(lo), "printed", "wrist clamp (printed)"),
-    ]
+    hub = _c(fore_hub(lo), "accent" if lo.para else "printed", "forearm hub and rear lever (printed)")
     if lo.wp_servo:
-        fore += servo_box((lo.l2, 0, 0), "y")
+        wrist_motor = servo_box((0, 0, 0), "y")
     else:
-        fore += [Pos(lo.l2, 0, 0) * p for p in qdd_y(lo.wp_dia, lo.wp_len, lo.wp_len / 2, 1)]
-    links["fore"] = fore
+        wrist_motor = qdd_y(lo.wp_dia, lo.wp_len, lo.wp_len / 2, 1)
+    fr = acts.forearm_roll if design.dof == 6 else None
+    if fr is not None:
+        # The forearm-roll servo ends the forearm; the roll yoke carries the wrist motor.
+        x = lo.l2 - FROLL
+        fore = [hub, tube_x(12, x - 22, -5), _c(roll_clamp(lo), "printed", "forearm roll clamp (printed)")]
+        if fr.kind == "servo":
+            fore += servo_box((x, 0, -11), "x")
+        else:
+            fore += [Pos(x, 0, 0) * (Rot(0, 0, -90) * p) for p in qdd_y(fr.dia * 1000, fr.length * 1000, 20, 1)]
+        links["fore"] = fore
+        links["froll"] = [_c(roll_yoke(lo), "printed", "forearm roll yoke (printed)")]
+        links["froll"] += [Pos(FROLL, 0, 0) * p for p in wrist_motor]
+    else:
+        fore = [hub, tube_x(12, lo.l2 - 28, -5), _c(wrist_clamp(lo), "printed", "wrist clamp (printed)")]
+        links["fore"] = fore + [Pos(lo.l2, 0, 0) * p for p in wrist_motor]
     roll_servo = acts.tool_roll.kind == "servo"
     wr = [_c(wrist_bracket(lo, roll_servo), "printed", "wrist bracket (printed)"), *camera_housing(lo)]
     if roll_servo:

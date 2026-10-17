@@ -208,7 +208,7 @@ class MassModel:
     tube_kg_per_m: float = 0.36  # 25 x 1.5 mm 6061 tube, 0.30 kg/m, plus harness
     # Field kit (docs/research/rugged.md): aluminium heat plate, sun shield, drip skirt and
     # gaskets on the turret; sealed pods and a detent clutch at the wrist.
-    turret_kg: float = 0.55
+    turret_kg: float = 0.65
     elbow_housing_kg: float = 0.09
     rod_kg: float = 0.07  # parallelogram rod + crank
     wrist_housing_kg: float = 0.18

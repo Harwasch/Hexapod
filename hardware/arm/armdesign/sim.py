@@ -161,11 +161,16 @@ class Rig:
         self.m = mujoco.MjModel.from_xml_string(self.xml)
         self.d = mujoco.MjData(self.m)
         self.para = design.arch == "parallelogram"
+        self.six = design.dof == 6 and acts.forearm_roll is not None
         self.tcp_len = design.wrist_len + tool.length + standoff
         jid = lambda n: self.m.joint(n).id  # noqa: E731
         self.dof = {n: self.m.jnt_dofadr[jid(n)] for n in self._arm_joint_names()}
         self.qadr = {n: self.m.jnt_qposadr[jid(n)] for n in self._arm_joint_names()}
-        self.act = {n: self.m.actuator(f"m_{n}").id for n in MOTORS}
+        # A 6-axis arm's forearm roll is the sixth motor coordinate. The scenarios hold it
+        # level: every task here has a 5-axis solution, so it only carries the wrist.
+        self.motors = MOTORS + (("forearm_roll",) if self.six else ())
+        self.n = len(self.motors)
+        self.act = {n: self.m.actuator(f"m_{n}").id for n in self.motors}
         self.legs = [[self.m.actuator(f"leg{i}_{j}").id for j in ("coxa", "femur", "tibia")] for i in range(6)]
         self.body_id = self.m.body("body").id
         self.flange_id = self.m.body("flange").id
@@ -173,15 +178,16 @@ class Rig:
         self.foot_geoms = {self.m.geom(f"foot{i}").id for i in range(6)}
         self.ground = self.m.geom("ground").id
         self.grip = [self.m.actuator(n).id for n in ("grip_l", "grip_r")] if tool.id == "gripper" else []
-        self.peak = np.array([getattr(acts, n).peak for n in MOTORS])
-        self.rated = np.array([getattr(acts, n).rated for n in MOTORS])
-        self.kp = np.array([60.0, 160.0, 120.0, 25.0, 6.0])
-        self.kd = np.array([2.5, 5.0, 4.0, 0.5, 0.15])
-        self.ki = np.array([20.0, 400.0, 300.0, 40.0, 0.0])
+        self.peak = np.array([getattr(acts, n).peak for n in self.motors])
+        self.rated = np.array([getattr(acts, n).rated for n in self.motors])
+        extra = 6 - len(MOTORS) if self.six else 0
+        self.kp = np.array([60.0, 160.0, 120.0, 25.0, 6.0] + [25.0] * extra)
+        self.kd = np.array([2.5, 5.0, 4.0, 0.5, 0.15] + [0.5] * extra)
+        self.ki = np.array([20.0, 400.0, 300.0, 40.0, 0.0] + [40.0] * extra)
         self.i_limit = 0.25 * self.peak
         self.standoff = standoff
         self.soil: Soil | None = None
-        self.spring = np.zeros(5)
+        self.spring = np.zeros(self.n)
         self._place_initial()
         self._tune_springs()
 
@@ -189,9 +195,12 @@ class Rig:
         names = ["arm_yaw", "arm_shoulder", "arm_elbow", "arm_wrist_pitch", "arm_tool_roll"]
         if self.design.arch == "parallelogram":
             names += ["arm_crank", "arm_rod"]
+        if self.design.dof == 6 and self.acts.forearm_roll is not None:
+            names.append("arm_forearm_roll")
         return names
 
-    # motor coordinates: yaw, shoulder angle th2, forearm angle th3 (absolute), wrist, roll
+    # motor coordinates: yaw, shoulder angle th2, forearm angle th3 (absolute), wrist, roll,
+    # and on a 6-axis arm the forearm roll
     def set_motor_q(self, a: Array) -> None:
         d, q = self.d, self.qadr
         d.qpos[q["arm_yaw"]] = a[0]
@@ -202,6 +211,8 @@ class Rig:
         if self.para:
             d.qpos[q["arm_crank"]] = a[2]
             d.qpos[q["arm_rod"]] = a[1] - a[2]
+        if self.six:
+            d.qpos[q["arm_forearm_roll"]] = a[5]
 
     def motor_q(self) -> tuple[Array, Array]:
         d, q, v = self.d, self.qadr, self.dof
@@ -212,6 +223,7 @@ class Rig:
                 d.qpos[q["arm_shoulder"]] + d.qpos[q["arm_elbow"]],
                 d.qpos[q["arm_wrist_pitch"]],
                 d.qpos[q["arm_tool_roll"]],
+                *([d.qpos[q["arm_forearm_roll"]]] if self.six else []),
             ]
         )
         vel = np.array(
@@ -221,6 +233,7 @@ class Rig:
                 d.qvel[v["arm_shoulder"]] + d.qvel[v["arm_elbow"]],
                 d.qvel[v["arm_wrist_pitch"]],
                 d.qvel[v["arm_tool_roll"]],
+                *([d.qvel[v["arm_forearm_roll"]]] if self.six else []),
             ]
         )
         return pos, vel
@@ -228,7 +241,7 @@ class Rig:
     def _gamma(self) -> tuple[list[int], Array]:
         """Joint dofs and d(joint)/d(motor coordinate)."""
         names = self._arm_joint_names()
-        g = np.zeros((len(names), 5))
+        g = np.zeros((len(names), self.n))
         rows = {n: i for i, n in enumerate(names)}
         g[rows["arm_yaw"], 0] = 1
         g[rows["arm_shoulder"], 1] = 1
@@ -238,6 +251,8 @@ class Rig:
         if self.para:
             g[rows["arm_crank"], 2] = 1
             g[rows["arm_rod"], 1], g[rows["arm_rod"], 2] = 1, -1
+        if self.six:
+            g[rows["arm_forearm_roll"], 5] = 1
         return [self.dof[n] for n in names], g
 
     def gravity_motor(self) -> Array:
@@ -291,7 +306,9 @@ class Rig:
         if not self.design.spring:
             return
         saved = self.d.qpos.copy()
-        self.set_motor_q(np.array([0.0, 0.0, -math.pi / 2 if not self.para else 0.0, 0.0, 0.0]))
+        level = np.zeros(self.n)
+        level[2] = -math.pi / 2 if not self.para else 0.0
+        self.set_motor_q(level)
         mujoco.mj_forward(self.m, self.d)
         g = self.gravity_motor()
         self.spring[1] = g[1]
@@ -331,7 +348,7 @@ class Rig:
             raise ValueError(f"target out of reach: {p}")
         phi = math.atan2(ab[2], ab @ radial)
         q4 = float(wrap(np.array(phi - th3[0])))
-        return np.array([yaw, th2[0], th3[0], q4, roll])
+        return np.array([yaw, th2[0], th3[0], q4, roll] + [0.0] * (self.n - 5))
 
     def fk(self, a: Array, pose: BodyPose) -> Array:
         """TCP position for motor coordinates a with the body at pose."""
@@ -537,7 +554,8 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
     tracking: list[dict] = []
     last_tgt: Array | None = None
 
-    integ = np.zeros(5)
+    integ = np.zeros(rig.n)
+    zero = np.zeros(rig.n)
 
     def step(a_des: Array, ad_des: Array, t_now: float, add_des: Array | None = None) -> None:
         nonlocal grip_cmd, integ
@@ -551,12 +569,12 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
             + rig.kd * (ad_des - qd)
             + integ
             + rig.gravity_motor()
-            - rig.spring * np.array([0, math.cos(q[1]), math.cos(q[2]), 0, 0])
+            - rig.spring * np.r_[0, math.cos(q[1]), math.cos(q[2]), np.zeros(rig.n - 3)]
         )
         if add_des is not None:
             tau += rig.inertia_motor() @ add_des
         act = np.clip(rig.motor_to_actuator(tau), -rig.peak, rig.peak)
-        for i, n in enumerate(MOTORS):
+        for i, n in enumerate(rig.motors):
             d.ctrl[rig.act[n]] = act[i]
         # The springs are hardware: torque on the shoulder and the crank (or the shoulder only).
         d.qfrc_applied[:] = 0.0
@@ -571,7 +589,7 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
             log["t"].append(round(t_now, 3))
             log["pos"].append(np.round(d.xpos[1:], 4).tolist())
             log["quat"].append(np.round(d.xquat[1:], 4).tolist())
-            log["tau"].append(np.round(d.actuator_force[[rig.act[n] for n in MOTORS]], 3).tolist())
+            log["tau"].append(np.round(d.actuator_force[[rig.act[n] for n in rig.motors]], 3).tolist())
             log["tcp"].append(np.round(rig.tcp(), 4).tolist())
             log["tool_force"].append(np.round(on_tool, 2).tolist())
             log["margin"].append(round(margin, 4))
@@ -580,7 +598,7 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
 
     t = 0.0
     for _ in range(round(settle / dt)):
-        step(a_cmd, np.zeros(5), t)
+        step(a_cmd, zero, t)
         t += dt
     for seg in segs:
         if seg.at_start:
@@ -601,7 +619,7 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
         # Lines start where the arm was commanded to be, not where it sagged to.
         p0 = rig.fk(a_cmd, pose0)
         n = max(1, round(seg.duration / dt))
-        ad_prev = np.zeros(5)
+        ad_prev = zero
         for k in range(n):
             s, ds, dds = min_jerk((k + 1) / n)
             ds /= seg.duration
@@ -623,10 +641,10 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
                 p = p0 + s * (tgt - p0)
                 a_new = rig.ik(p, app, seg.roll, pose, near=a_cmd)
                 ad = (a_new - a_cmd) / dt
-                add = (ad - ad_prev) / dt if k else np.zeros(5)
+                add = (ad - ad_prev) / dt if k else zero
                 a_cmd = a_new
             else:
-                ad = add = np.zeros(5)
+                ad = add = zero
             ad_prev = ad
             step(a_cmd, ad, t, add)
             t += dt
@@ -641,7 +659,7 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
         if seg.at_end:
             seg.at_end(rig)
     for _ in range(round(0.4 / dt)):
-        step(a_cmd, np.zeros(5), t)
+        step(a_cmd, zero, t)
         t += dt
     tau = np.array(log["tau"])
     return {
@@ -649,7 +667,7 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
         "bodies": bodies,
         "events": events,
         "tracking": tracking,
-        "motors": list(MOTORS),
+        "motors": list(rig.motors),
         "rated": rig.rated.tolist(),
         "peak": rig.peak.tolist(),
         "spring": rig.spring.tolist(),
