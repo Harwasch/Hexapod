@@ -17,6 +17,7 @@ import { isAreaZone, zoneFromFootprint } from "./areas";
 import { bookedWindows } from "./conflicts";
 import { isLandZone } from "./landGround";
 import { learnedRates } from "./rates";
+import { SCOUT_SHORT } from "./scout";
 import type { Plan, PlanOverlay, Project, Zone } from "./types";
 
 export interface DraftSeed {
@@ -70,6 +71,7 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
       treated: z.treated,
       note: z.note,
       ...(sendsGeometry(project, z) ? { geometry: z.land?.line ?? z.footprint } : {}),
+      ...(z.scout ? { capture: z.scout } : {}),
     })),
     existingPlans: project.plans
       .filter((p) => p.id !== seed.replacePlanId)
@@ -217,6 +219,7 @@ export function recordBodyFromDraft(
         name: z.name,
         footprint: z.footprint,
         ...(z.attribution ? { attribution: z.attribution.slice(0, 300) } : {}),
+        ...(z.scout ? { capture: z.scout } : {}),
       })),
     title: draft.title.trim() || "New plan",
     objective: draft.objective,
@@ -257,8 +260,9 @@ export function presentStatus(status: PlanRecordStatus): {
 }
 
 /**
- * The ground a stored plan carries, as zones, with where each outline came from. A workspace's
- * plan's ground is private, so it never reaches browser storage.
+ * The ground a stored plan carries, as zones, with where each outline came from and, for a
+ * scout area, how it is flown. A workspace's plan's ground is private, so it never reaches
+ * browser storage.
  */
 export function zonesFromRecord(record: PlanRecord): Zone[] {
   return record.areas.map((a) => {
@@ -267,6 +271,7 @@ export function zonesFromRecord(record: PlanRecord): Zone[] {
       ...zone,
       ...(a.attribution ? { attribution: a.attribution, note: a.attribution } : {}),
       ...(record.private ? { private: true } : {}),
+      ...(a.capture ? { scout: a.capture, task: "Scout", short: SCOUT_SHORT } : {}),
     };
   });
 }

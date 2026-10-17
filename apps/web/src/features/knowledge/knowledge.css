@@ -1,0 +1,303 @@
+/* The Fog of Knowing: the strip pill and its details, and the cell card.
+
+   Class colours are an ordinal ramp (one hue, finest knowledge strongest), validated with the
+   dataviz palette checks for each theme; "no record" is the fog itself, hatched, so it is
+   never read from colour alone (every segment is also named with its share). */
+
+:root {
+  --knowledge-centimetre: #9ec5f4;
+  --knowledge-field: #6da7ec;
+  --knowledge-aerial: #3987e5;
+  --knowledge-satellite: #256abf;
+  --knowledge-regional: #184f95;
+  --knowledge-none: #e1e6e8;
+  --knowledge-none-hatch: rgba(10, 14, 9, 0.28);
+}
+
+:root[data-theme="light"] {
+  --knowledge-centimetre: #104281;
+  --knowledge-field: #1c5cab;
+  --knowledge-aerial: #2a78d6;
+  --knowledge-satellite: #5598e7;
+  --knowledge-regional: #86b6ef;
+  --knowledge-none: #c7cccf;
+  --knowledge-none-hatch: rgba(15, 23, 42, 0.3);
+}
+
+.knowledge-pill-wrap {
+  display: flex;
+}
+
+.knowledge-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.45rem 0.3rem 0.7rem;
+  font-size: var(--text-sm);
+}
+
+.knowledge-pill__label {
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.knowledge-pill__stat {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.knowledge-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.glass-popover.knowledge-popover {
+  max-width: min(25rem, calc(100vw - 2rem));
+  max-height: min(70vh, 36rem);
+  overflow-y: auto;
+}
+
+.knowledge-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-size: var(--text-sm);
+}
+
+.knowledge-legend p {
+  margin: 0;
+}
+
+.knowledge-lead,
+.knowledge-summary {
+  color: var(--text-secondary);
+}
+
+.knowledge-formula {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  border-left: 2px solid var(--glass-border);
+  padding-left: 0.5rem;
+}
+
+.knowledge-bar {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.knowledge-bar__track {
+  display: flex;
+  gap: 2px;
+  height: 0.75rem;
+}
+
+.knowledge-bar__segment {
+  min-width: 3px;
+  border-radius: 2px;
+}
+
+.knowledge-bar__segment:first-child {
+  border-radius: 4px 2px 2px 4px;
+}
+
+.knowledge-bar__segment:last-child {
+  border-radius: 2px 4px 4px 2px;
+}
+
+.knowledge-bar__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.knowledge-bar__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.knowledge-swatch {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 2px;
+  flex: none;
+  margin-right: 0.35rem;
+  vertical-align: -0.05rem;
+}
+
+.knowledge-bar__key .knowledge-swatch {
+  margin-right: 0;
+}
+
+.knowledge-class--centimetre {
+  background: var(--knowledge-centimetre);
+}
+.knowledge-class--field {
+  background: var(--knowledge-field);
+}
+.knowledge-class--aerial {
+  background: var(--knowledge-aerial);
+}
+.knowledge-class--satellite {
+  background: var(--knowledge-satellite);
+}
+.knowledge-class--regional {
+  background: var(--knowledge-regional);
+}
+.knowledge-class--none {
+  background:
+    repeating-linear-gradient(45deg, var(--knowledge-none-hatch) 0 1px, transparent 1px 4px),
+    var(--knowledge-none);
+}
+
+.knowledge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.knowledge-table caption {
+  text-align: left;
+  padding-bottom: 0.25rem;
+}
+
+.knowledge-table th,
+.knowledge-table td {
+  text-align: left;
+  padding: 0.25rem 0.3rem 0.25rem 0;
+  border-top: 1px solid var(--glass-border);
+  vertical-align: top;
+  font-weight: 400;
+}
+
+.knowledge-table thead th {
+  color: var(--text-tertiary);
+  border-top: none;
+}
+
+.knowledge-table td {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.knowledge-example {
+  display: block;
+  color: var(--text-tertiary);
+  margin-left: 1rem;
+}
+
+.knowledge-not-counted summary,
+.knowledge-group summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.knowledge-not-counted ul,
+.knowledge-not-counted__list {
+  margin: 0.35rem 0 0;
+  padding-left: 1rem;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.knowledge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.knowledge-cell__head {
+  margin: 0;
+}
+
+.knowledge-records {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.knowledge-group .knowledge-records {
+  margin-top: 0.5rem;
+}
+
+.knowledge-record {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.knowledge-record__icon {
+  margin-top: 0.2rem;
+  flex: none;
+}
+
+.knowledge-record__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  font-size: var(--text-xs);
+}
+
+.knowledge-record__title {
+  font-size: var(--text-sm);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-record__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.knowledge-chip {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  color: #0a0e09;
+  font-size: var(--text-xs);
+}
+
+.knowledge-chip.knowledge-class--regional,
+.knowledge-chip.knowledge-class--satellite {
+  color: #f4f6fb;
+}
+
+:root[data-theme="light"] .knowledge-chip.knowledge-class--regional,
+:root[data-theme="light"] .knowledge-chip.knowledge-class--satellite {
+  color: #0a0e09;
+}
+
+:root[data-theme="light"] .knowledge-chip.knowledge-class--centimetre,
+:root[data-theme="light"] .knowledge-chip.knowledge-class--field,
+:root[data-theme="light"] .knowledge-chip.knowledge-class--aerial {
+  color: #f4f6fb;
+}
+
+.knowledge-record__math {
+  color: var(--text-primary);
+}
+
+.knowledge-record__note,
+.knowledge-record__source {
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}

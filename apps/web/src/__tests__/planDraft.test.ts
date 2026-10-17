@@ -375,3 +375,76 @@ describe("schedule ticks", () => {
     }
   });
 });
+
+describe("scout areas", () => {
+  const capture = {
+    purpose: "lift-knowledge-fog" as const,
+    camera: "dji-m3e-wide" as const,
+    altitudeM: 60,
+    forwardOverlap: 0.75,
+    sideOverlap: 0.7,
+    speedMs: 8,
+    headingDeg: null,
+  };
+  const anywhere = anywhereProject();
+  const patch = {
+    ...viewAreaZone("A-01", "Fog patch 1", {
+      center: { longitude: -120.04, latitude: 34.698 },
+      metersPerPixel: 1,
+      width: 800,
+      height: 600,
+      fraction: 0.5,
+      dx: 0,
+      dy: 0,
+    }),
+    task: "Scout",
+    attribution: "Fog of knowing fog-v1",
+    scout: capture,
+    private: true,
+  };
+  const scoutDraft: PlanDraft = {
+    ...draft,
+    title: "Survey the foggy ground",
+    zoneIds: ["A-01"],
+    machineIds: [],
+    steps: [],
+  };
+
+  it("sends the capture to the planner and keeps it on the stored plan", () => {
+    const request = buildDraftRequest({ ...anywhere, zones: [patch] }, { goal: "survey" });
+    expect(request.zones?.[0]?.capture).toEqual(capture);
+    const body = recordBodyFromDraft(scoutDraft, "survey", anywhere.id, null, [patch]);
+    expect(body.areas?.[0]?.capture).toEqual(capture);
+    expect(body.areas?.[0]?.attribution).toBe("Fog of knowing fog-v1");
+    const record = {
+      ...body,
+      id: "rec-2",
+      status: "scheduled" as const,
+      revision: 1,
+      revisions: [],
+      createdAt: "",
+      updatedAt: "",
+      areas: body.areas ?? [],
+      zoneIds: body.zoneIds ?? [],
+      machineIds: body.machineIds ?? [],
+      steps: body.steps ?? [],
+      assumptions: body.assumptions ?? [],
+      risks: body.risks ?? [],
+      questions: body.questions ?? [],
+      cadence: body.cadence ?? ("once" as const),
+      source: body.source ?? ("rules" as const),
+      model: body.model ?? null,
+      endDate: body.endDate ?? null,
+      siteId: null,
+      landId: null,
+      boundaryRevision: null,
+      private: true,
+      landActionId: null,
+    };
+    const [zone] = zonesFromRecord(record);
+    expect(zone?.scout).toEqual(capture);
+    expect(zone?.task).toBe("Scout");
+    expect(zone?.private).toBe(true);
+    expect(planFromRecord(record, anywhere).zoneIds).toEqual(["A-01"]);
+  });
+});

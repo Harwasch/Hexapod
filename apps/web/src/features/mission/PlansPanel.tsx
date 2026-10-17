@@ -16,6 +16,7 @@ import { openLandActions } from "./landPlanning";
 import { PlanCard } from "./PlanCard";
 import { openSiteSwitcher } from "./siteSwitcher";
 import { PlanSchedule } from "./PlanSchedule";
+import { ScoutExport } from "./ScoutExport";
 import { setPlanStatus } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
 import { usePlansSync } from "./usePlansSync";
@@ -239,6 +240,11 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
             </div>
           ))}
         </div>
+        {project && (
+          <ScoutExport
+            zones={project.zones.filter((z) => z.scout && plan.zoneIds.includes(z.id))}
+          />
+        )}
         <section>
           <div className="mc-row mc-row--between">
             <span className="mc-eyebrow">PROGRESS</span>

@@ -16,6 +16,7 @@ import {
   readResearchStream,
   ResearchAccessError,
 } from "./researchStream";
+import { invalidateLandDerived } from "./landDerived";
 
 type Phase = "connecting" | "live" | "reconnecting" | "polling" | "complete" | "unavailable";
 const terminal = new Set(["succeeded", "partial", "failed", "cancelled"]);
@@ -85,6 +86,9 @@ export function useResearchProgress(runId: string | undefined, running: boolean)
       if (fresh.some((item) => terminal.has(item.kind))) {
         refresh();
         void cache.invalidateQueries({ queryKey: ["land-research", scope, "list"] });
+        // A finished run may have stored evidence or a raster: what is computed from the
+        // land's records (its fog, its rasters) is asked again.
+        void invalidateLandDerived(cache, null);
       } else if (
         !refreshTimer &&
         fresh.some((item) => ["finding", "artifact", "started"].includes(item.kind))

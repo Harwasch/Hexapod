@@ -5,6 +5,7 @@ import { env } from "@/app/env";
 import { HOTKEYS } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
 import { LandRasterBridge } from "@/cesium/LandRasterBridge";
+import { KnowledgeFogBridge } from "@/cesium/KnowledgeFogBridge";
 import { LandContextBridge } from "@/cesium/LandContextBridge";
 import { LandBridge } from "@/cesium/LandBridge";
 import { LandIdentityBridge } from "../land/WorkspaceIdentity";
@@ -24,6 +25,8 @@ import { CompareSplit } from "../compare/Compare";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
+import { KnowledgeCellCard } from "../knowledge/KnowledgeCellCard";
+import { KnowledgeLegend } from "../knowledge/KnowledgeLegend";
 import { LayerAboutSheet } from "../layers/LayerAboutSheet";
 import { LayersPanel } from "../layers/LayersPanel";
 import { PokeBadge } from "../living/PokeBadge";
@@ -165,6 +168,7 @@ export function AppShell() {
           <LandBridge />
           <LandContextBridge />
           <LandRasterBridge />
+          <KnowledgeFogBridge />
           <LandMissionBridge />
         </>
       )}
@@ -221,11 +225,21 @@ export function AppShell() {
               <InspectorPanel />
               <DevPanel />
             </ErrorBoundary>
+            {env.landExplorationEnabled && (
+              <ErrorBoundary inline label="Fog of knowing">
+                <KnowledgeCellCard />
+              </ErrorBoundary>
+            )}
           </div>
         </aside>
         <div className="hud-region hud-strip">
           <ExploreHud />
           <TimelineControl />
+          {env.landExplorationEnabled && (
+            <ErrorBoundary inline label="Fog of knowing">
+              <KnowledgeLegend />
+            </ErrorBoundary>
+          )}
           <RepresentationSwitcher />
           <SiteLoadStatus />
         </div>

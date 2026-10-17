@@ -7,7 +7,6 @@ import {
   ColorMaterialProperty,
   ConstantProperty,
   type Entity,
-  HeightReference,
   PolygonHierarchy,
   PolylineDashMaterialProperty,
   SceneTransforms,
@@ -19,16 +18,18 @@ import {
 import {
   boundingRadiusM,
   centerOf,
-  coveragePath,
   destination,
   flattenRing,
-  outerRings,
+  footprintLanes,
+  laneStrokes,
   polygonsOf,
+  type CoverageLane,
 } from "@twin/geo";
 
 import type { Emitter } from "@/lib/emitter";
 import { eyeOf, frameGround, projectGroundPoints, viewportOptions } from "@/missions/framing";
 import { PREVIEW_MAX_PASSES, PREVIEW_SWATH_M } from "@/missions/preview";
+import { scoutLanes, scoutOf } from "@/missions/scout";
 import { siteAnchor } from "@/missions/sitePin";
 import type { Machine, PlanOverlay, Project, Zone } from "@/missions/types";
 
@@ -42,6 +43,8 @@ const MACHINE_PALETTE = ["#7fd8c0", "#f0b254", "#9db8f0", "#e79ac8", "#c6e07a", 
   (css) => Color.fromCssColorString(css),
 );
 const ROUTE_COLOR = Color.fromCssColorString("#9db8f0");
+/** A scout area's passes: pale, dashed, a forecast of where the fog would lift. */
+const FOG_LIFT = Color.fromCssColorString("#e8eef0");
 
 const TONE: Record<Zone["tone"], Color> = {
   teal: Color.fromCssColorString("#7fd8c0"),
@@ -102,6 +105,8 @@ export class MissionManager {
   private hiddenZoneIds: ReadonlySet<string> = new Set();
   private tracksVisible = true;
   private readonly planEntities: Entity[] = [];
+  /** The lanes drawn for each zone of the plan overlay (`previewLanes`). */
+  private readonly drawnLanes = new Map<string, CoverageLane[]>();
   private overlay: PlanOverlay | null = null;
   private readonly listeners = new Set<FrameListener>();
   private readonly removeFrame: () => void;
@@ -263,12 +268,17 @@ export class MissionManager {
   /**
    * Draws a plan on the world: every zone in scope with its coverage passes in the colour of
    * the machine assigned, a numbered marker per step, and the route between zones in step
-   * order. `null` clears it. The passes are a preview (see PREVIEW_SWATH_M).
+   * order. `null` clears it. Passes come from `footprintLanes` over every part of a zone with
+   * its holes left out, so nothing is drawn over a homestead or a cleared fog hole. Three
+   * styles: a mapped line (a fence) is drawn as the line it follows; a scout area ("Lift the
+   * fog") is drawn as its real flight lines, dashed and labelled a forecast; anything else as
+   * preview passes (see PREVIEW_SWATH_M). `previewLanes` hands out exactly what is drawn.
    */
   showPlan(overlay: PlanOverlay | null): void {
     this.overlay = overlay;
     for (const entity of this.planEntities) this.viewer.entities.remove(entity);
     this.planEntities.length = 0;
+    this.drawnLanes.clear();
     this.setSelectedZone(null);
     const project = this.project;
     if (!overlay || !project) {
@@ -278,15 +288,21 @@ export class MissionManager {
     const centers: Cartesian3[] = [];
     overlay.zones.forEach((item, index) => {
       const zone = project.zones.find((z) => z.id === item.zoneId);
-      const ring = zone ? outerRings(zone.footprint)[0] : undefined;
-      if (!zone || !ring) return;
+      if (!zone || polygonsOf(zone.footprint).length === 0) return;
       const color = this.machineColor(item.machineIds[0] ?? "");
       // A mapped line (a fence) is followed, not covered: draw the line, not passes over its
       // corridor.
       const line = zone.land?.line?.coordinates ?? null;
-      const path = line
-        ? { positions: [] }
-        : coveragePath(ring, { swathM: PREVIEW_SWATH_M, maxPasses: PREVIEW_MAX_PASSES });
+      const scout = zone.scout ? scoutOf(zone.scout) : null;
+      const lanes: CoverageLane[] = line
+        ? []
+        : scout
+          ? scoutLanes(zone.footprint, scout)
+          : footprintLanes(zone.footprint, {
+              swathM: PREVIEW_SWATH_M,
+              maxPasses: PREVIEW_MAX_PASSES,
+            }).lanes;
+      this.drawnLanes.set(zone.id, lanes);
       if (line && line.length >= 2) {
         this.planEntities.push(
           this.viewer.entities.add({
@@ -300,29 +316,40 @@ export class MissionManager {
           }),
         );
       }
-      if (path.positions.length >= 2) {
+      // Consecutive passes join at the turn; lanes of one pass split by a hole stay apart.
+      laneStrokes(lanes).forEach((stroke, strokeIndex) => {
+        if (stroke.length < 2) return;
         this.planEntities.push(
           this.viewer.entities.add({
-            id: `${PLAN_ENTITY_PREFIX}passes:${zone.id}`,
+            id: `${PLAN_ENTITY_PREFIX}passes:${zone.id}:${strokeIndex}`,
             polyline: {
               positions: Cartesian3.fromDegreesArray(
-                path.positions.flatMap((p) => [p.longitude, p.latitude]),
+                stroke.flatMap((p) => [p.longitude, p.latitude]),
               ),
-              width: 1.6,
-              material: color.withAlpha(0.8),
+              width: scout ? 1.8 : 1.6,
+              material: scout
+                ? new PolylineDashMaterialProperty({ color: FOG_LIFT, dashLength: 10 })
+                : color.withAlpha(0.8),
               clampToGround: true,
             },
           }),
         );
-      }
+      });
       const outline = this.zoneEntities.find((e) => e.id === `${ZONE_ENTITY_PREFIX}${zone.id}`);
       if (outline?.polyline) {
         outline.polyline.width = new ConstantProperty(3.2);
-        outline.polyline.material = new ColorMaterialProperty(color);
+        outline.polyline.material = new ColorMaterialProperty(scout ? FOG_LIFT : color);
       }
       const center = centerOf(zone.footprint);
-      const position = Cartesian3.fromDegrees(center.longitude, center.latitude);
-      centers.push(position);
+      centers.push(Cartesian3.fromDegrees(center.longitude, center.latitude));
+      // Labels stand on the ground as the zone chips do (`surfaceHeight`): clamping a label
+      // needs the globe's terrain, which photorealistic tiles hide, and then it sank to the
+      // ellipsoid, hundreds of metres under a ranch and off its zone.
+      const position = Cartesian3.fromDegrees(
+        center.longitude,
+        center.latitude,
+        this.surfaceHeight(center.longitude, center.latitude, `plan:${zone.id}`) + 3,
+      );
       this.planEntities.push(
         this.viewer.entities.add({
           id: `${PLAN_ENTITY_PREFIX}step:${zone.id}`,
@@ -334,11 +361,29 @@ export class MissionManager {
             showBackground: true,
             backgroundColor: color,
             backgroundPadding: new Cartesian2(7, 4),
-            heightReference: HeightReference.CLAMP_TO_GROUND,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         }),
       );
+      if (scout) {
+        // Said where the lines are: these passes are what a flight would do, not evidence.
+        this.planEntities.push(
+          this.viewer.entities.add({
+            id: `${PLAN_ENTITY_PREFIX}forecast:${zone.id}`,
+            position,
+            label: {
+              text: "Would lift fog · forecast",
+              font: "500 12px Inter, system-ui, sans-serif",
+              fillColor: Color.fromCssColorString("#0a0e09"),
+              showBackground: true,
+              backgroundColor: FOG_LIFT.withAlpha(0.92),
+              backgroundPadding: new Cartesian2(7, 4),
+              pixelOffset: new Cartesian2(0, 26),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+          }),
+        );
+      }
     });
     if (centers.length >= 2) {
       this.planEntities.push(
@@ -354,6 +399,14 @@ export class MissionManager {
       );
     }
     this.scene.requestRender();
+  }
+
+  /**
+   * The lanes the plan overlay draws for a zone, in driving order (empty for a mapped line or
+   * a zone not on the map): what a scout export flies and a rehearsal runs.
+   */
+  previewLanes(zoneId: string): readonly CoverageLane[] {
+    return this.drawnLanes.get(zoneId) ?? [];
   }
 
   /**

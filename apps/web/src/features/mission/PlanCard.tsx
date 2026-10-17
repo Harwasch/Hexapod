@@ -20,6 +20,7 @@ import { useUi } from "@/state/ui";
 
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
+import { ScoutExport } from "./ScoutExport";
 import { groundFromView, waitForGround } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
 
@@ -646,6 +647,22 @@ function DraftReview({
         </span>
       </div>
       <PathList draft={draft} project={project} />
+      <ScoutExport
+        zones={project.zones.filter((z) => z.scout && draft.zoneIds.includes(z.id))}
+        onAltitude={(altitudeM) => {
+          // The patches fly at the new height: the map's lanes and the planner's hours follow.
+          for (const zone of project.zones) {
+            if (!zone.scout || !draft.zoneIds.includes(zone.id)) continue;
+            useMission
+              .getState()
+              .addArea(project.id, { ...zone, scout: { ...zone.scout, altitudeM } });
+          }
+          void startPlanDraft(goal, {
+            zoneIds: composer?.zoneIds ?? draft.zoneIds,
+            reshaped: true,
+          });
+        }}
+      />
       <Assumptions
         items={assumed(draft.clarifications ?? [], composer?.asked ?? {}, composer?.answers ?? {})}
         answers={composer?.answers ?? {}}

@@ -88,6 +88,8 @@ export class SelectionManager {
   private readonly longPress: LongPress;
   /** The selection last reported, until cleared: what a terrain sample may still refine. */
   private current: Selection | null = null;
+  /** Consumers that want plain clicks on empty ground as 'ground-tap' events. */
+  private groundTapWanted = 0;
 
   constructor(
     private readonly viewer: CesiumWidget,
@@ -179,6 +181,20 @@ export class SelectionManager {
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (!enabled) this.viewer.canvas.style.cursor = "";
+  }
+
+  /**
+   * Asks for a 'ground-tap' on every plain click that finds nothing to select. Returns the
+   * release; while nobody holds one, a click on the ground does nothing at all, as before.
+   */
+  wantGroundTaps(): () => void {
+    this.groundTapWanted++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.groundTapWanted = Math.max(0, this.groundTapWanted - 1);
+    };
   }
 
   clear(): void {
@@ -285,8 +301,31 @@ export class SelectionManager {
     // A plain click is for things on the map. On the ground, or on a site's surface (its mesh,
     // or the ground under a scan's splats), it does nothing at all: no marker, no card, and
     // what is open stays open. "What's here" in the map menu is how to ask about a place.
-    if (mode === "click" && !(picked instanceof Cesium3DTileFeature) && !isEntityPick(picked))
+    // While a ground layer asks for taps (the fog), a mission zone's fill is ground too: the
+    // tap goes to the layer, and the zone's chip on the map still selects the zone.
+    const zoneFill =
+      this.groundTapWanted > 0 &&
+      isEntityPick(picked) &&
+      typeof picked.id.id === "string" &&
+      picked.id.id.startsWith(ZONE_ENTITY_PREFIX);
+    if (
+      mode === "click" &&
+      (zoneFill || (!(picked instanceof Cesium3DTileFeature) && !isEntityPick(picked)))
+    ) {
+      // Unless something asked for it: then the point goes out as a 'ground-tap', and still
+      // nothing is selected here.
+      if (this.groundTapWanted > 0) {
+        const context = this.pickPosition(window, picked);
+        if (context)
+          this.events.emit("ground-tap", {
+            longitude: CesiumMath.toDegrees(context.carto.longitude),
+            latitude: CesiumMath.toDegrees(context.carto.latitude),
+            x: window.x,
+            y: window.y,
+          });
+      }
       return;
+    }
     const context = this.pickPosition(window, picked);
     if (!context) {
       this.clear();
