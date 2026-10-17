@@ -24,13 +24,17 @@ SOURCE = Path(__file__).with_name("machine_classes.json")
 
 
 class GroundClass(CamelModel):
-    """A machine that works the ground in passes one swath apart."""
+    """A machine that works the ground in passes one swath apart. The last two numbers are
+    the limits the console's dress rehearsal checks a plan's lanes against
+    (`missions/rehearsal.ts`): the steepest slope along or across a lane, and how close a lane
+    may come to a mapped creek."""
 
     label: str = Field(min_length=1)
     swath_m: float = Field(gt=0)
     speed_mps: float = Field(gt=0)
     turn_s: float = Field(ge=0)
     max_slope_pct: float = Field(gt=0)
+    creek_buffer_m: float = Field(ge=0)
 
 
 class DroneClass(CamelModel):

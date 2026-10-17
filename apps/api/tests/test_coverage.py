@@ -97,6 +97,9 @@ def test_machine_classes_load_and_derive_the_drone_spacing(tmp_path: Path) -> No
     assert MACHINE_CLASSES.mower.speed_mps == 1.4 and MACHINE_CLASSES.mower.swath_m == 2.0
     assert MACHINE_CLASSES.seeder.turn_s == 12 and MACHINE_CLASSES.survey.swath_m == 10
     assert all("(assumed)" in c.label for c in (drone, MACHINE_CLASSES.mower))
+    # The dress rehearsal's limits, assumed like the rest: a slope cap and a creek buffer.
+    assert MACHINE_CLASSES.mower.max_slope_pct == 25 and MACHINE_CLASSES.mower.creek_buffer_m == 15
+    assert MACHINE_CLASSES.survey.creek_buffer_m < MACHINE_CLASSES.seeder.creek_buffer_m
     # The wide camera of a Mavic 3 Enterprise class drone: 73.7 degrees across (24 mm
     # equivalent), so 89.9 m of ground across at 60 m and lines 27 m apart at 70 % side overlap.
     assert drone.footprint_width_m() == pytest.approx(89.9, abs=0.1)

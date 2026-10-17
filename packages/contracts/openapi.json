@@ -24319,6 +24319,114 @@
         ]
       }
     },
+    "/api/v1/land/rasters/{raster_id}/grid": {
+      "get": {
+        "description": "One band's values on a lon/lat grid (float32, NaN for no value), e.g. the elevation a\nplan's dress rehearsal reads slope from.",
+        "operationId": "band_grid_api_v1_land_rasters__raster_id__grid_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "band",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 30,
+              "minimum": 1,
+              "title": "Band",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LonLatGrid"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Band Grid",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
     "/api/v1/land/rasters/{raster_id}/sample": {
       "get": {
         "operationId": "sample_api_v1_land_rasters__raster_id__sample_get",
