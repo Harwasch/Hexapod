@@ -1988,7 +1988,12 @@
         chosen: k === study.chosen,
       });
     marks.sort((a, b) => (b.chosen ? 1 : 0) - (a.chosen ? 1 : 0) || a.cost - b.cost);
-    const placed = [];
+    // Labels avoid every mark as well as each other.
+    const placed = marks.map((mk) => {
+      const x = X(mk.cost),
+        y = Y(mk.score);
+      return { x0: x - 9, x1: x + 9, y0: y - 9, y1: y + 9 };
+    });
     marks.forEach((mk, i) => {
       const cx = X(mk.cost),
         cy = Y(mk.score);

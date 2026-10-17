@@ -9,9 +9,12 @@ verification are in [research/custom_electronics.md](research/custom_electronics
 **Status: specified, not chosen for FA-2.**
 
 - The study priced the board in as one of three cost levers. With it, bare Steadywin units
-  reach the highest capability per dollar above about $780 delivered. That is the "Max"
-  pick: $810, 91% of task points, three GWK6010-8 units, two of them through rope capstans.
-- FA-2 ($737) uses bought integrated actuators instead. The board's engineering is 16–24
+  carry the field-grade frontier above about $800 delivered. That is the "Max" pick:
+  - $828 and 91% of task points;
+  - two GWK6010-8 units on this board, at the yaw and (through a rope capstan) the
+    shoulder;
+  - a bought EduLite 05 capstan elbow.
+- FA-2 ($756) uses bought integrated actuators instead. The board's engineering is 16–24
   or more person-weeks, and 10 arms never repay it.
 - Build the board when the hexapod's legs will use it too.
 

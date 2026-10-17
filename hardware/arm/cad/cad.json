@@ -87,43 +87,43 @@
   {
    "part": "turret plate (printed)",
    "file": "stl/turret_plate.stl",
-   "grams": 16.2,
+   "grams": 22.3,
    "link": "turret"
   },
   {
    "part": "turret cheek, shoulder side (printed)",
    "file": "stl/turret_cheek_shoulder_side.stl",
-   "grams": 43.3,
+   "grams": 61.5,
    "link": "turret"
   },
   {
    "part": "turret cheek, elbow side (printed)",
    "file": "stl/turret_cheek_elbow_side.stl",
-   "grams": 43.4,
+   "grams": 66.6,
    "link": "turret"
   },
   {
    "part": "turret box (printed)",
    "file": "stl/turret_box.stl",
-   "grams": 25.9,
+   "grams": 32.7,
    "link": "turret"
   },
   {
    "part": "upper arm hub (printed)",
    "file": "stl/upper_arm_hub.stl",
-   "grams": 36.6,
+   "grams": 41.4,
    "link": "upper"
   },
   {
    "part": "elbow housing (printed)",
    "file": "stl/elbow_housing.stl",
-   "grams": 19.1,
+   "grams": 21.2,
    "link": "upper"
   },
   {
    "part": "crank (printed)",
    "file": "stl/crank.stl",
-   "grams": 22.8,
+   "grams": 39.3,
    "link": "crank"
   },
   {
@@ -200,5 +200,5 @@
   }
  ],
  "step": "arm_assembly.step",
- "printed_grams": 471.1
+ "printed_grams": 548.8
 }

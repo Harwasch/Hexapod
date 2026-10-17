@@ -17,14 +17,14 @@
  },
  {
   "group": "Reductions",
-  "item": "3:1 capstan (drum, pinion, cable, bearings)",
+  "item": "3:1 capstan (drum, pinion, rope, bearings)",
   "where": "shoulder",
   "qty": 1,
   "usd": 11.0
  },
  {
   "group": "Reductions",
-  "item": "joint encoder (MT6701 on the drum, read on the servo-bus board)",
+  "item": "joint encoder (MT6701 at the joint, read on the servo-bus board)",
   "where": "shoulder",
   "qty": 1,
   "usd": 6.0
@@ -39,14 +39,14 @@
  },
  {
   "group": "Reductions",
-  "item": "3:1 capstan (drum, pinion, cable, bearings)",
+  "item": "3:1 capstan (drum, pinion, rope, bearings)",
   "where": "elbow",
   "qty": 1,
   "usd": 11.0
  },
  {
   "group": "Reductions",
-  "item": "joint encoder (MT6701 on the drum, read on the servo-bus board)",
+  "item": "joint encoder (MT6701 at the joint, read on the servo-bus board)",
   "where": "elbow",
   "qty": 1,
   "usd": 6.0

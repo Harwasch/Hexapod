@@ -22,24 +22,24 @@ fa1:
     tool_roll: hx_65hm
   lever: retail
   score_v2: 0.8671
-  cost: 819.72
+  cost: 840.33
   cost_list: 607.22
   cost_sourced: 720.72
   cost_field_kit: 47.0
   parts:
     yaw:
       name: RobStride EduLite 05
-      price: 118.0
+      price: 124.29
       rated: 1.8
       peak: 6.0
     shoulder:
       name: Steadywin GIM8108-8 + output encoder
-      price: 198.0
+      price: 205.31
       rated: 7.5
       peak: 22.0
     elbow:
       name: Steadywin GIM6010-8 + output encoder
-      price: 156.0
+      price: 163.01
       rated: 5.0
       peak: 11.0
     wrist_pitch:
@@ -132,7 +132,7 @@ picks:
     actuators:
       yaw: bare_gwk6010_8
       shoulder: bare_gwk6010_8+capstan3-d20
-      elbow: bare_gwk6010_8+capstan3-d20
+      elbow: rs_edulite_05+capstan3-d20
       wrist_pitch: hx_35hm
       forearm_roll: sts3250
       tool_roll: sts3250
@@ -140,15 +140,15 @@ picks:
       shoulder: 3:1 capstan
       elbow: 3:1 capstan
     sources:
-      yaw: Steadywin direct $46.82 + 40.3% duty + $15 shipping + custom driver
-      shoulder: Steadywin direct $46.82 + 40.3% duty + $15 shipping + custom driver
-      elbow: Steadywin direct $46.82 + 40.3% duty + $15 shipping + custom driver
+      yaw: retail + custom driver
+      shoulder: retail + custom driver
+      elbow: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
       wrist_pitch: retail
       forearm_roll: OpenELAB DDP
       tool_roll: OpenELAB DDP
     lever: all
-    score: 0.9134616255760193
-    cost: 816.84
-    mass: 2.47
+    score: 0.9102563858032227
+    cost: 827.7
+    mass: 2.452
     backlash_mm: 4.43
     label: 6DOF para L1=0.31 L2=0.37 x=0.26 ped=0.16
