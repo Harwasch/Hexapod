@@ -499,3 +499,55 @@ def test_a_split_part_shares_its_cells() -> None:
     assert sum(shares(101, [0.4, 0.35, 0.25])) == 101
     assert shares(5, [0.0, 0.0]) == [5, 0]
     assert shares(0, []) == []
+
+
+def test_cold_stacks_are_built_one_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cold build peaks near 200 MB on a 512 x 512 signature; first taps on two lands at
+    once must not build two together on the 1 GB API VM. Taps on one raster still share one
+    build (its per-key lock), and a warm tap waits for nothing."""
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from app.services import land_rasters, land_similarity
+
+    with MemoryFile() as memory:
+        with memory.open(
+            driver="GTiff",
+            width=2,
+            height=2,
+            count=1,
+            dtype="float32",
+            crs="EPSG:4326",
+            transform=Affine(1e-4, 0, -120.0, 0, -1e-4, 34.7),
+        ) as dataset:
+            dataset.write(np.ones((1, 2, 2), dtype=np.float32))
+        tiff = memory.read()
+    building = 0
+    most = 0
+    count = threading.Lock()
+
+    def slow_build(*_: Any) -> Any:
+        nonlocal building, most
+        with count:
+            building += 1
+            most = max(most, building)
+        time.sleep(0.2)
+        with count:
+            building -= 1
+        return SimpleNamespace(nbytes=1)
+
+    monkeypatch.setattr(land_rasters, "blob", lambda db, row: tiff)
+    monkeypatch.setattr(land_similarity, "build_stack", slow_build)
+    monkeypatch.setattr(land_similarity, "_stacks", type(land_similarity._stacks)())
+    metadata = SimpleNamespace(signature=SimpleNamespace(features=[]))
+    rows = [SimpleNamespace(sha256=f"cold-{index}") for index in range(3)]
+    threads = [
+        threading.Thread(target=land_similarity._stack, args=(None, row, metadata)) for row in rows
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert most == 1, "cold builds of different rasters ran together"
+    assert set(land_similarity._stacks) == {row.sha256 for row in rows}

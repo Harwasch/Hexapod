@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from app.schemas.agent import Cadence, PlanEstimates, PlannerSource, PlanStep
+from app.schemas.agent import Cadence, PlanEstimates, PlannerSource, PlanStep, ZoneName
 from app.schemas.base import CamelModel
 from app.schemas.geojson import Footprint
 from app.schemas.scout import ScoutCapture
@@ -21,7 +21,7 @@ class PlanArea(CamelModel):
     Land's boundary or feature (the fleet backend owns the other zones)."""
 
     id: str = Field(min_length=1, max_length=40)
-    name: str = Field(min_length=1, max_length=120)
+    name: ZoneName
     footprint: Footprint
     # Where the outline came from ("© OpenStreetMap contributors", "Saved boundary, revision
     # 2"), shown wherever the area is drawn. The one provenance field areas carry.

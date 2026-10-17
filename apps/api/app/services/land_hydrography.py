@@ -3,8 +3,9 @@
 Read live from the NHD map service (Flowline - Large Scale, 1:24,000), clipped to the boundary
 grown by BUFFER_M so a creek just outside the line still counts, and never saved. The browser
 cannot ask NHD itself (no CORS), so the API asks on its behalf. An answer is kept in memory
-for an hour per land revision. A failed lookup is not kept, so the next request tries again;
-an answer too large to read is kept for ten minutes, because asking again cannot help.
+for an hour per land revision, within CACHE_BYTES. A failed lookup is not kept, so the next
+request tries again; an answer too large to read is kept for ten minutes, because asking again
+cannot help.
 """
 
 from __future__ import annotations
@@ -51,7 +52,10 @@ RECORD_LIMIT = 500
 TIMEOUT_S = 20
 CACHE_TTL_S = 3600
 TOO_LARGE_TTL_S = 600
-CACHE_SIZE = 256
+#: Answers kept in memory, by their estimated size (`_weight`). One at NHD's 2 MB answer limit
+#: (about 80,000 vertices) holds about 11 MB of Python objects, so a count of answers is no
+#: bound on the 1 GB API VM; a typical land's answer is tens of kilobytes.
+CACHE_BYTES = 32 * 1024 * 1024
 TOO_LARGE = (
     "This land has more mapped flowlines nearby than one USGS NHD answer can carry, so none "
     "are shown. Trying again will not help; a smaller outline would fit."
@@ -74,7 +78,8 @@ FTYPES = {
     566: "Coastline",
 }
 
-_cache: OrderedDict[tuple[uuid.UUID, int], tuple[float, LandHydrography]] = OrderedDict()
+#: (land, revision) -> (expires at, answer, estimated bytes).
+_cache: OrderedDict[tuple[uuid.UUID, int], tuple[float, LandHydrography, int]] = OrderedDict()
 _lock = threading.Lock()
 
 
@@ -282,9 +287,22 @@ def hydrography(db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID) -> Lan
         else 0
     )
     if keep:
+        weight = _weight(result)
         with _lock:
-            _cache[key] = (now + keep, result)
+            # Expired answers go first: a revised boundary is a new key, so the old revision's
+            # answer would otherwise stay until the budget pushed it out.
+            fresh = time.monotonic()
+            for stale in [k for k, (expires, _, _) in _cache.items() if expires <= fresh]:
+                del _cache[stale]
+            _cache[key] = (now + keep, result, weight)
             _cache.move_to_end(key)
-            while len(_cache) > CACHE_SIZE:
-                _cache.popitem(last=False)
+            total = sum(entry[2] for entry in _cache.values())
+            while total > CACHE_BYTES and len(_cache) > 1:
+                total -= _cache.popitem(last=False)[1][2]
     return result
+
+
+def _weight(result: LandHydrography) -> int:
+    """About the bytes an answer holds in memory: measured at ~140 per vertex (a list of two
+    floats) and ~2 KB per feature's other fields."""
+    return 4096 + sum(2048 + 140 * len(feature.geometry.coordinates) for feature in result.features)

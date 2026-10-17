@@ -15,8 +15,9 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -54,6 +55,18 @@ RULES_ACRES_PER_MACHINE_HOUR = 1.5
 RULES_HOURS_PER_DAY = 8
 RULES_MAX_ZONES = 3
 ACRE_M2 = 4046.8564224
+#: What one draft request may measure (a `SizingBudget`, shared by every `size_zones` call the
+#: request makes): each outline once per spacing, at most SIZED_ZONES_MAX zones a call, no
+#: outline over ZONE_VERTICES_MAX vertices (a Land boundary's limit), SIZED_VERTICES_MAX in all,
+#: and no zone started once measuring has taken SIZING_BUDGET_S seconds. coverage.measure bounds
+#: each outline's own work (it traces at most MAX_SPANS spans, under a second here), so a request
+#: measures for about the budget plus one zone at most. A zone past these is sized by its acres
+#: at the assumed rate, as a zone without an outline is, and the draft names it and says why.
+SIZED_ZONES_MAX = 20
+ZONE_VERTICES_MAX = 20_000
+SIZED_VERTICES_MAX = 50_000
+SIZING_BUDGET_S = 10.0
+_clock = time.monotonic
 # Zones sized from their outlines use the assumed machine classes in machine_classes.json
 # (speeds, swaths, the drone's camera); the acre rate above is for zones without one.
 
@@ -393,6 +406,65 @@ def _coverage_effort(
     return 1.0, ""
 
 
+class SizingBudget:
+    """What one draft request may still measure (see SIZED_ZONES_MAX): one per request, so a
+    request that sizes its zones twice (the model's context, then its draft) spends one budget,
+    and an outline it already measured at a spacing is not measured again."""
+
+    def __init__(self) -> None:
+        #: Seconds spent measuring (not the model's turn between a request's two calls).
+        self.seconds = 0.0
+        self.vertices = 0
+        self._measured: dict[tuple[str, float], coverage_service.Coverage | None] = {}
+        #: Outlined zones left to their acres, and why.
+        self.unmeasured: dict[str, str] = {}
+
+    def measure(self, zone: PlannerZone, spacing: float) -> coverage_service.Coverage | None:
+        key = (zone.id, spacing)
+        if key in self._measured:
+            return self._measured[key]
+        assert zone.geometry is not None
+        if self.seconds > SIZING_BUDGET_S:
+            self.unmeasured[zone.id] = (
+                f"past the {SIZING_BUDGET_S:g} seconds one draft spends measuring"
+            )
+            return None
+        count = _vertex_count(zone.geometry.coordinates)
+        if count > ZONE_VERTICES_MAX:
+            self.unmeasured[zone.id] = f"more than {ZONE_VERTICES_MAX:,} outline points"
+            return None
+        if self.vertices + count > SIZED_VERTICES_MAX:
+            self.unmeasured[zone.id] = (
+                f"past the {SIZED_VERTICES_MAX:,} outline points one draft measures"
+            )
+            return None
+        self.vertices += count
+        started = _clock()
+        measured = coverage_service.measure(zone.geometry.model_dump(mode="json"), spacing)
+        self.seconds += _clock() - started
+        self._measured[key] = measured
+        return measured
+
+    def notes(self, zone_ids: list[str], covered: set[str], names: dict[str, str]) -> list[str]:
+        """One line per reason naming the zones in `zone_ids` sized by acres for it."""
+        by_reason: dict[str, list[str]] = {}
+        for zone_id in dict.fromkeys(zone_ids):
+            reason = self.unmeasured.get(zone_id)
+            if reason and zone_id not in covered:
+                by_reason.setdefault(reason, []).append(_label(zone_id, names.get(zone_id, "")))
+        lines = []
+        for reason, labels in by_reason.items():
+            shown = labels[:6] + ([f"{len(labels) - 6} more"] if len(labels) > 6 else [])
+            listed = f"{', '.join(shown[:-1])} and {shown[-1]}" if len(shown) > 1 else shown[0]
+            sized = (
+                "is sized from its acres, not its outline"
+                if len(labels) == 1
+                else "are sized from their acres, not their outlines"
+            )
+            lines.append(f"{listed} {sized}: {reason}.")
+        return lines
+
+
 def _size_zone(
     zone: PlannerZone,
     kind: TaskKind,
@@ -400,9 +472,11 @@ def _size_zone(
     answers: dict[str, AnswerValue],
     *,
     absent: bool = False,
+    budget: SizingBudget | None = None,
 ) -> ZoneCoverage | None:
     """One zone's path and machine-hours from its outline under the assumed machine class;
-    `absent` says the fleet has no machine of that class, and the basis says so too."""
+    `absent` says the fleet has no machine of that class, and the basis says so too. None when
+    the zone has no outline, or (`budget.unmeasured` says why) no room left to measure it."""
     if zone.geometry is None:
         return None
     flown_at: float | None = None
@@ -433,7 +507,7 @@ def _size_zone(
         ground = MACHINE_CLASSES.ground(machine)
         spacing, speed, turn, label = ground.swath_m, ground.speed_mps, ground.turn_s, ground.label
         how = f"{spacing:g} m swath"
-    measured = coverage_service.measure(zone.geometry.model_dump(mode="json"), spacing)
+    measured = (budget or SizingBudget()).measure(zone, spacing)
     if measured is None:
         return None
     length, passes, spans = measured.length_m, measured.passes, measured.spans
@@ -452,6 +526,11 @@ def _size_zone(
         path = f"{_distance(length)} in {passes:,} passes ({how})"
         if measured.capped:
             path += ", spacing widened to stay under 5,000 passes"
+        if measured.estimated:
+            path += (
+                f", length from the area over the spacing ({spans:,} stretches, too many to "
+                "trace one by one)"
+            )
     basis = (
         f"{zone.name}: {path} at {speed:g} m/s, {timing}{effort_note} → "
         f"{_hours_text(hours)} machine-hours per run; {label}"
@@ -482,19 +561,36 @@ def size_zones(
     kind: TaskKind,
     answers: dict[str, AnswerValue],
     crew: list[str] | None = None,
+    budget: SizingBudget | None = None,
 ) -> list[ZoneCoverage]:
-    """Coverage for every zone in scope that came with an outline; the rest are sized by acres.
-    The class is the crew's (`_work_class`), so the hours are for the machines that do it."""
+    """Coverage for every zone in scope that came with an outline, within the request's
+    measuring budget (SIZED_ZONES_MAX; `budget.unmeasured` names the zones it left out); the
+    rest are sized by acres. The class is the crew's (`_work_class`), so the hours are for the
+    machines that do it."""
+    budget = budget or SizingBudget()
     text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
     machine = _work_class(kind, text, request.machines, crew)
     absent = machine == "drone" and _no_flyer(request.machines)
     zone_by_id = {z.id: z for z in request.zones}
+    outlined = [
+        zone_by_id[z]
+        for z in dict.fromkeys(zone_ids)
+        if z in zone_by_id and zone_by_id[z].geometry is not None
+    ]
+    for zone in outlined[SIZED_ZONES_MAX:]:
+        budget.unmeasured[zone.id] = f"past the {SIZED_ZONES_MAX} outlines one draft measures"
     sized = (
-        _size_zone(zone_by_id[z], kind, machine, answers, absent=absent)
-        for z in zone_ids
-        if z in zone_by_id
+        _size_zone(zone, kind, machine, answers, absent=absent, budget=budget)
+        for zone in outlined[:SIZED_ZONES_MAX]
     )
     return [c for c in sized if c is not None]
+
+
+def _vertex_count(coordinates: Any) -> int:
+    """Positions in a GeoJSON coordinates array (a Point's is one)."""
+    if not coordinates or not isinstance(coordinates[0], list):
+        return 1
+    return sum(_vertex_count(item) for item in coordinates)
 
 
 def _path_assumption(
@@ -575,7 +671,8 @@ class RulesPlanner:
         # Zones with an outline are sized from it (path length over the assumed machine class's
         # speed, plus turns), unless the work log measured a rate for the task: a measured rate
         # still sets an area's hours, and the coverage says so. The rest keep the acre rate.
-        coverage = size_zones(request, zone_ids, kind, answers, machine_ids)
+        budget = SizingBudget()
+        coverage = size_zones(request, zone_ids, kind, answers, machine_ids, budget)
         rated_notes: list[str] = []
         for index, measured in enumerate(coverage):
             learned = (
@@ -851,12 +948,10 @@ class RulesPlanner:
             *dict.fromkeys(rated_notes),
             f"{RULES_HOURS_PER_DAY} working hours per machine per day, no weather days.",
         ]
+        names = {z.id: z.name for z in request.zones}
         if coverage:
-            assumptions.append(
-                _path_assumption(
-                    coverage, {z.id: z.name for z in request.zones}, cadence, no_flyer=no_flyer
-                )
-            )
+            assumptions.append(_path_assumption(coverage, names, cadence, no_flyer=no_flyer))
+        assumptions.extend(budget.notes(zone_ids, set(covered), names))
         if kind == "scan":
             assumptions.append(
                 "Only capture counts as machine time; reconstruction runs on a workstation or "
@@ -1233,7 +1328,7 @@ Put questions whose answer changes the plan materially (deadline, detail level, 
 size, cadence) in clarifications as structured choices or ranges, at most three, and never ask \
 one the operator's answers already cover; apply every answer you are given. \
 When coverage is given for a zone, base machine-hours on its path length and stated speeds \
-and cite it under assumptions. \
+and cite it under assumptions; unmeasured names outlined zones to size from their acres. \
 Dates are ISO (YYYY-MM-DD); end_date is null when the plan repeats on a cadence."""
 
 
@@ -1263,11 +1358,16 @@ class ClaudePlanner:
         context["today"] = _today(request).isoformat()
         text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
         outlined = [z.id for z in request.zones if z.geometry is not None]
-        scoped = [z for z in request.preferred_zone_ids if z in outlined] or outlined[:20]
-        context["coverage"] = [
-            c.model_dump(mode="json", by_alias=True)
-            for c in size_zones(request, scoped, _task_kind(text), request.answers)
-        ]
+        scoped = [
+            z for z in dict.fromkeys(request.preferred_zone_ids) if z in outlined
+        ] or outlined[:SIZED_ZONES_MAX]
+        budget = SizingBudget()
+        coverage = size_zones(request, scoped, _task_kind(text), request.answers, budget=budget)
+        context["coverage"] = [c.model_dump(mode="json", by_alias=True) for c in coverage]
+        names = {z.id: z.name for z in request.zones}
+        unmeasured = budget.notes(scoped, {c.zone_id for c in coverage}, names)
+        if unmeasured:
+            context["unmeasured"] = unmeasured
         parts = [
             f"Project context (JSON):\n{json.dumps(context, indent=1)}",
             f"Operator goal: {request.goal.strip()}",
@@ -1305,19 +1405,27 @@ class ClaudePlanner:
         parsed = response.parsed_output
         if parsed is None:
             raise PlannerError(502, "The planning model returned no plan.")
-        return self._to_draft(parsed, request)
+        return self._to_draft(parsed, request, budget)
 
-    def _to_draft(self, parsed: ModelPlanDraft, request: PlanDraftRequest) -> PlanDraft:
+    def _to_draft(
+        self,
+        parsed: ModelPlanDraft,
+        request: PlanDraftRequest,
+        budget: SizingBudget | None = None,
+    ) -> PlanDraft:
         zone_ids = {z.id for z in request.zones}
         machine_ids = {m.id for m in request.machines}
         today = _today(request)
-        scoped = [z for z in parsed.zone_ids if z in zone_ids]
+        scoped = [z for z in dict.fromkeys(parsed.zone_ids) if z in zone_ids]
         # The server's own measurement rides along with the model's numbers: acres become the
         # outlines' geodesic area when every zone in scope has one, and the path is reported.
         # The model's machine-hours stand; the card shows both.
         text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
         crew = [m for m in parsed.machine_ids if m in machine_ids]
-        coverage = size_zones(request, scoped, _task_kind(text), request.answers, crew)
+        budget = budget or SizingBudget()
+        coverage = size_zones(request, scoped, _task_kind(text), request.answers, crew, budget)
+        names = {z.id: z.name for z in request.zones}
+        unmeasured = budget.notes(scoped, {c.zone_id for c in coverage}, names)
         areas = [c.area_m2 for c in coverage if c.kind == "area" and c.area_m2]
         acres = (
             round(sum(areas) / ACRE_M2, 1)
@@ -1350,7 +1458,7 @@ class ClaudePlanner:
                 )
                 for step in parsed.steps
             ],
-            assumptions=parsed.assumptions,
+            assumptions=[*parsed.assumptions, *unmeasured],
             risks=parsed.risks,
             questions=parsed.questions,
             clarifications=[

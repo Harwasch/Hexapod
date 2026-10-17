@@ -5,9 +5,15 @@ a model's work."""
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, ValidationError, ValidatorFunctionWrapHandler, field_validator
+from pydantic import (
+    BeforeValidator,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+)
 from shapely import make_valid
 from shapely.errors import ShapelyError
 from shapely.geometry import MultiPolygon, Polygon, mapping, shape
@@ -19,6 +25,22 @@ from app.schemas.scout import ScoutCapture
 
 Cadence = Literal["once", "daily", "weekly", "monthly", "seasonal"]
 PlannerSource = Literal["claude", "rules"]
+ZONE_NAME_MAX = 120
+
+
+def _clip_zone_name(value: object) -> object:
+    """A zone name longer than ZONE_NAME_MAX is clipped, not refused. Zone names come from a
+    Land's names (up to 200 characters) and from names the console derives from them
+    ("<feature>, workable"), and one long name must not refuse a whole draft or approval."""
+    if isinstance(value, str) and len(text := value.strip()) > ZONE_NAME_MAX:
+        return text[: ZONE_NAME_MAX - 1].rstrip() + "…"
+    return value
+
+
+#: A zone's or a plan area's name, as the planner reads it and an approved plan keeps it.
+ZoneName = Annotated[
+    str, BeforeValidator(_clip_zone_name), Field(min_length=1, max_length=ZONE_NAME_MAX)
+]
 
 
 class PlannerMachine(CamelModel):
@@ -32,7 +54,7 @@ class PlannerMachine(CamelModel):
 
 class PlannerZone(CamelModel):
     id: str = Field(min_length=1, max_length=40)
-    name: str = Field(min_length=1, max_length=120)
+    name: ZoneName
     acres: float = Field(default=0, ge=0)
     task: str = Field(default="", max_length=200)
     progress_pct: int = Field(default=0, ge=0, le=100)
@@ -213,8 +235,8 @@ class PlanDraftRequest(CamelModel):
     # Rates learned from the work log; the planner prefers them over its defaults.
     rates: list[PlannerRate] = Field(default_factory=list, max_length=100)
     # Operator pre-selections from the console (a selected zone, machines ticked in Fleet).
-    preferred_zone_ids: list[str] = Field(default_factory=list)
-    preferred_machine_ids: list[str] = Field(default_factory=list)
+    preferred_zone_ids: list[str] = Field(default_factory=list, max_length=500)
+    preferred_machine_ids: list[str] = Field(default_factory=list, max_length=200)
     # A follow-up instruction on a previous draft ("use three machines", "skip Z-21").
     refinement: str | None = Field(default=None, max_length=2000)
     # Answers to the planner's clarifications, by clarification id.

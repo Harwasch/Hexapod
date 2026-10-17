@@ -60,15 +60,21 @@ from app.schemas.land_similarity import (
 from app.services import land_rasters
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 
-#: Standardized vectors kept between taps. Oak Bench Ranch's 54,000 cells of 20 features
-#: take 4.6 MB; a 1024 x 1024 six-window raster would take 130 MB, so the budget keeps that.
-STACK_CACHE_BYTES = 192 * 1024 * 1024
+#: Standardized vectors kept between taps. Oak Bench Ranch's 54,000 cells of 20 features take
+#: 4.6 MB and a 512 x 512 twenty-feature raster about 24 MB, so this keeps several lands'; a
+#: larger stack is kept alone. Sized with the API's other in-process caches (decoded bands,
+#: topo sheets, hydrography) and one cold build's peak to fit the 1 GB API VM.
+STACK_CACHE_BYTES = 96 * 1024 * 1024
 #: The display grid's cells may be at most this many on a side (the analysis grid's limit).
 DISPLAY_MAX_CELLS = 1024
 
 _stacks: OrderedDict[str, Stack] = OrderedDict()
 _loading: dict[str, threading.Lock] = {}
 _lock = threading.Lock()
+#: One cold build at a time, across rasters: a 512 x 512 twenty-feature build peaks near
+#: 200 MB on top of its blob and bands, and first taps on two lands at once must not double
+#: that on the 1 GB VM. A tap on a built stack never waits for it.
+_building = threading.Lock()
 
 
 def _signature(
@@ -108,15 +114,16 @@ def _stack(db: Session, row: LandRaster, metadata: RasterMetadata) -> Stack:
         try:
             signature = metadata.signature
             assert signature is not None  # checked by _signature
-            data = land_rasters.blob(db, row)
-            with MemoryFile(data) as memory, memory.open(driver="GTiff") as dataset:
-                stack = build_stack(
-                    dataset.read(),
-                    signature.features,
-                    dataset.transform,
-                    dataset.crs,
-                    dataset.nodata,
-                )
+            with _building:
+                data = land_rasters.blob(db, row)
+                with MemoryFile(data) as memory, memory.open(driver="GTiff") as dataset:
+                    stack = build_stack(
+                        dataset.read(),
+                        signature.features,
+                        dataset.transform,
+                        dataset.crs,
+                        dataset.nodata,
+                    )
             with _lock:
                 _stacks[key] = stack
                 size = sum(item.nbytes for item in _stacks.values())

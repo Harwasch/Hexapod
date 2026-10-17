@@ -200,6 +200,63 @@ def test_action_exclusions_and_step_footprints_survive_mission_handoff(client: T
     assert client.post(path, json=bad).status_code == 422
 
 
+def test_each_scheduled_revision_gets_its_own_area_ids(client: TestClient) -> None:
+    """A revised action scheduled again on the same project carries other ground, so its
+    areas must not share ids with the first revision's mission (the console keys zones by id
+    and would draw and rehearse mission 2 on revision 1's outline)."""
+    land = client.post("/api/v1/land", json=BODY).json()
+    path = f"/api/v1/land/{land['id']}/actions"
+    plot = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [-122.136, 47.644],
+                [-122.134, 47.644],
+                [-122.134, 47.646],
+                [-122.136, 47.646],
+                [-122.136, 47.644],
+            ]
+        ],
+    }
+    steps = [{**ACTION["steps"][0], "footprint": plot}, ACTION["steps"][1]]
+    body = {**ACTION, "constraints": [], "steps": steps, "requestKey": str(uuid.uuid4())}
+    action = client.post(path, json=body).json()
+    identifier = f"{path}/{action['id']}"
+    first_review = {"expectedRevision": 1, "note": "Reviewed"}
+    assert client.post(identifier + "/approve", json=first_review).status_code == 200
+    first = client.post(identifier + "/mission", json={**first_review, "projectId": "demo"})
+    assert first.status_code == 201, first.text
+    # Shrink the ground: the east strip is left out of revision 2.
+    strip = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [-122.132, 47.64],
+                [-122.13, 47.64],
+                [-122.13, 47.65],
+                [-122.132, 47.65],
+                [-122.132, 47.64],
+            ]
+        ],
+    }
+    revised = client.put(
+        identifier,
+        json={**body, "exclusions": [strip], "expectedRevision": 1, "note": "Leave the strip"},
+    )
+    assert revised.status_code == 200, revised.text
+    second_review = {"expectedRevision": 2, "note": "Reviewed again"}
+    assert client.post(identifier + "/approve", json=second_review).status_code == 200
+    second = client.post(identifier + "/mission", json={**second_review, "projectId": "demo"})
+    assert second.status_code == 201, second.text
+    one, two = first.json(), second.json()
+    assert one["id"] != two["id"]
+    assert len(one["zoneIds"]) == len(two["zoneIds"]) == 2
+    assert all(zone.startswith("LA-") for zone in one["zoneIds"] + two["zoneIds"])
+    assert not set(one["zoneIds"]) & set(two["zoneIds"])
+    assert {step["zoneId"] for step in two["steps"]} == set(two["zoneIds"])
+    assert shape(two["areas"][0]["footprint"]).area < shape(one["areas"][0]["footprint"]).area
+
+
 def test_action_dependency_cycles_and_cost_basis_are_validated() -> None:
     body = {**ACTION, "steps": [dict(item) for item in ACTION["steps"]]}
     body["steps"][0]["dependsOn"] = ["plant"]

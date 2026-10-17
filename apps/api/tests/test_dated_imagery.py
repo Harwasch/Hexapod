@@ -319,6 +319,18 @@ def test_sentinel_takes_the_clearest_dry_season_scene_of_each_year(fake: Fake) -
     assert bodies[0]["collections"] == ["sentinel-2-l2a"]
 
 
+def test_nmas_holds_large_scale_sheets_to_a_thirtieth_of_an_inch() -> None:
+    """NMAS (1947): 1/30 inch at publication scales larger than 1:20,000, 1/50 inch at
+    1:20,000 or smaller."""
+    large = dated_imagery._topo_accuracy(1950, 12_000)
+    assert large.value_m == 10.16
+    assert "1/30 inch on the map at scales larger than 1:20,000" in large.basis
+    assert dated_imagery._topo_accuracy(1950, 10_000).value_m == 8.47
+    assert dated_imagery._topo_accuracy(1950, 20_000).value_m == 10.16
+    assert dated_imagery._topo_accuracy(1950, 24_000).value_m == 12.19
+    assert dated_imagery._topo_accuracy(1950, 62_500).value_m == 31.75
+
+
 def test_topo_sheets_keep_allow_listed_editions_with_their_standard(fake: Fake) -> None:
     sources = dated_imagery.usgs_topo_sheets(BBOX, client_for(fake))
     assert [s.title for s in sources] == ["USGS 1:24,000 Los Olivos", "USGS 1:62,500 Los Olivos"]

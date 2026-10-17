@@ -83,6 +83,17 @@ def test_ground_turns_the_boundary_and_features_into_plannable_zones(client: Tes
     assert "assumed 10 m work corridor" in fence["source"]
 
 
+def test_a_long_land_name_is_clipped_like_its_features(client: TestClient) -> None:
+    """Land names run to 200 characters; a zone name stops at 120 (the planner's and a plan
+    area's limit), as feature names already do."""
+    name = "Upper and lower benches of the old home ranch above the creek " * 3
+    land = client.post("/api/v1/land", json={**BODY, "name": name[:200]}).json()
+    items = client.get(f"/api/v1/land/{land['id']}/ground").json()["items"]
+    boundary = next(item for item in items if item["kind"] == "boundary")
+    assert len(boundary["name"]) <= 120 and boundary["name"].endswith("…")
+    assert name.startswith(boundary["name"][:-1])
+
+
 def test_ground_is_scoped_to_the_workspace(identity_client: IdentityClient) -> None:
     client, token = identity_client
     alice = headers(token())

@@ -325,9 +325,11 @@ def schedule(
     if payload.project_id.startswith("land:") and payload.project_id != f"land:{land_id}":
         raise InvalidInputError("Schedule under this land or the current mission project.")
     region = FOOTPRINT.validate_python(version.effective_boundary)
-    # Area ids are unique per action, so two scheduled actions on one project never share a
-    # zone id (they used to both be "land"). Rows stored before keep their ids as written.
-    work = f"LA-{identifier.hex[:8]}"
+    # Area ids are unique per action and per scheduled revision, so two scheduled actions on
+    # one project never share a zone id (they used to both be "land"), and neither do two
+    # revisions of one action, whose ground may differ (the console keys zones by id). Rows
+    # stored before keep their ids as written.
+    work = f"LA-{identifier.hex[:8]}-r{row.revision}"
     provenance = (
         f"Approved land action revision {row.revision} on boundary revision "
         f"{content.boundary_revision}"
