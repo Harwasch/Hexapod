@@ -55,23 +55,31 @@ def dated(
     """NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area
     (each side at most 0.25°), newest first, each with its date's meaning, its licence and its
     stated positional accuracy. A provider that fails is listed as unavailable; the others
-    still answer. Cached on this server for 6 h per area rounded to 0.01°."""
+    still answer. Cached on this server for 6 h per area rounded to 0.01°; a catalog missing
+    something that may answer if asked again is cached for seconds, and not by browsers."""
     bbox = dated_imagery.check_bbox((west, south, east, north))
-    response.headers["Cache-Control"] = "public, max-age=600"
-    hit = dated_imagery.cached(bbox)
-    if hit is not None:
-        return hit
-    limit_imagery_catalog(request, settings)
-    return dated_imagery.discover(bbox, _http())
+    catalog = dated_imagery.cached(bbox)
+    if catalog is None:
+        limit_imagery_catalog(request, settings)
+        catalog = dated_imagery.discover(bbox, _http())
+    response.headers["Cache-Control"] = (
+        "no-store" if dated_imagery.incomplete(catalog) else "public, max-age=600"
+    )
+    return catalog
 
 
 @router.get(
     "/imagery/usgs-topo/tiles/{z}/{x}/{y}.png",
-    responses={200: {"content": {"image/png": {"schema": {"type": "string", "format": "binary"}}}}},
+    responses={
+        200: {"content": {"image/png": {"schema": {"type": "string", "format": "binary"}}}},
+        204: {"description": "The client left before the tile was drawn; nothing was read."},
+        503: {"description": "Every sheet reader is busy: ask again after Retry-After seconds."},
+    },
     dependencies=[LimitTopoTile],
     summary="A tile of a USGS historical topographic map",
 )
-def usgs_topo_tile(
+async def usgs_topo_tile(
+    request: Request,
     z: int,
     x: int,
     y: int,
@@ -82,20 +90,30 @@ def usgs_topo_tile(
     n: float = Query(ge=-90, le=90),
 ) -> Response:
     """A 256 px PNG on the WGS1984Quad grid (the grid of the land raster tiles), cut from the
-    sheet's USGS GeoTIFF and transparent outside its neatline (`w`, `s`, `e`, `n`, NAD27)."""
+    sheet's USGS GeoTIFF and transparent outside its neatline (`w`, `s`, `e`, `n`, NAD27).
+
+    An `async def`, so a tile waiting for one of the tiler's few sheet readers waits on the event
+    loop and holds none of the threads every other route runs on; the read itself runs on the
+    tiler's own threads (usgs_topo_tiles.render_tile)."""
+    tile = usgs_topo_tiles.plan(sheet, (w, s, e, n), z, x, y)
     try:
-        png = usgs_topo_tiles.render(sheet, (w, s, e, n), z, x, y)
+        png = await usgs_topo_tiles.render_tile(tile, gone=request.is_disconnected)
     except usgs_topo_tiles.RenderBusy as error:
         raise HTTPException(
             503,
             "Historical map tiles are busy. Try again in a few seconds.",
-            headers={"Retry-After": "5"},
+            headers={
+                "Retry-After": str(usgs_topo_tiles.RETRY_AFTER_S),
+                "Cache-Control": "no-store",
+            },
         ) from error
-    except (OSError, RasterioError) as error:
+    except (OSError, RasterioError, ValueError) as error:
         logger.warning("usgs topo tile failed: %s %s/%s/%s: %s", sheet, z, x, y, error)
         raise HTTPException(
             502, "The USGS map sheet could not be read. Try again shortly."
         ) from error
+    if png is None:
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
     return Response(
         png,
         media_type="image/png",

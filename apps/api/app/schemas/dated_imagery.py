@@ -42,6 +42,18 @@ class StatedAccuracy(CamelModel):
     citation_url: HttpUrl | None = None
 
 
+class DatumShift(CamelModel):
+    """How a map drawn on an older datum was moved onto WGS 84 to lie under today's world: the
+    operation PROJ used, its stated accuracy, and whether a better one exists that this server
+    does not have (the NADCON grids). The lens says it beside the map's own accuracy."""
+
+    from_datum: Literal["NAD27"]
+    operation: str = Field(max_length=300)
+    #: The operation's stated accuracy (m), when it states one.
+    accuracy_m: Finite | None = Field(default=None, ge=0)
+    better_available: bool
+
+
 class DatedImageryPart(CamelModel):
     """One record a source is made of (a NAIP quarter quad, a scene, a map sheet)."""
 
@@ -73,7 +85,8 @@ class DatedImagerySource(CamelModel):
     #: Orders the rail, newest first.
     sort_date: date
     #: Ground size of a pixel (m); for a scanned map, of a scan pixel, not of what it shows.
-    resolution_m: Finite = Field(gt=0)
+    #: Null when the records do not say.
+    resolution_m: Finite | None = Field(default=None, gt=0)
     #: The printed scale of a map (24000 for 1:24,000), else null.
     map_scale: int | None = Field(default=None, gt=0)
     bounds: Bounds
@@ -82,6 +95,9 @@ class DatedImagerySource(CamelModel):
     license_url: HttpUrl | None = None
     attribution: str = Field(max_length=500)
     parts: list[DatedImageryPart] = Field(min_length=1, max_length=40)
+    #: For a map moved from an older datum: how, and how well.
+    datum_shift: DatumShift | None = None
+    #: Caveats in words, each for the reader: the datum shift, a trimmed sheet edge, clouds.
     warnings: list[str] = []
 
 

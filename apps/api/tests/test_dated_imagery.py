@@ -20,12 +20,13 @@ from app.research.providers import dated_imagery
 from app.research.providers.base import SourceContext
 from app.research.providers.open_data import ADAPTERS, OVERVIEW_SOURCES, SOURCES, retrieve
 from app.schemas.geojson import Polygon
+from app.services import usgs_topo_tiles
 
 BBOX = (-120.06, 34.68, -120.02, 34.72)
 SEARCH_ID = "0123456789abcdef0123456789abcdef"
 METADATA = (
-    "https://naipeuwest.blob.core.windows.net/naip/v002/ca/2016/ca_fgdc_2016/34120/"
-    "m_3412024_sw_10_h_20160615.txt"
+    "https://naipeuwest.blob.core.windows.net/naip/v002/ca/{year}/ca_fgdc_{year}/34120/"
+    "m_{identifier}.txt"
 )
 FGDC = """Data_Quality_Information:
     Positional_Accuracy:
@@ -54,19 +55,28 @@ def square(west: float, south: float, size: float = 0.07) -> dict[str, Any]:
     }
 
 
-def naip_item(identifier: str, year: int, day: str, *, metadata: bool) -> dict[str, Any]:
+def metadata_url(identifier: str, year: int) -> str:
+    """Each quarter quad's own FGDC record, as the real items carry."""
+    return METADATA.format(year=year, identifier=identifier)
+
+
+def naip_item(
+    identifier: str, year: int, day: str, *, metadata: bool, gsd: float | None = None
+) -> dict[str, Any]:
     assets: dict[str, Any] = {"image": {"href": "https://naipeuwest.blob.core.windows.net/x.tif"}}
     if metadata:
-        assets["metadata"] = {"href": METADATA, "type": "text/plain"}
+        assets["metadata"] = {"href": metadata_url(identifier, year), "type": "text/plain"}
+    properties: dict[str, Any] = {
+        "naip:year": str(year),
+        "naip:state": "ca",
+        "datetime": f"{day}T00:00:00Z",
+    }
+    if gsd != 0:
+        properties["gsd"] = gsd or (0.6 if year >= 2016 else 1.0)
     return {
         "id": identifier,
         "geometry": square(-120.1, 34.65),
-        "properties": {
-            "naip:year": str(year),
-            "naip:state": "ca",
-            "datetime": f"{day}T00:00:00Z",
-            "gsd": 0.6 if year >= 2016 else 1.0,
-        },
+        "properties": properties,
         "assets": assets,
         "links": [
             {
@@ -141,6 +151,8 @@ class Fake:
         self.topo: Callable[[httpx.Request], httpx.Response] = lambda _: httpx.Response(
             200, json={"items": TOPO_RECORDS, "total": len(TOPO_RECORDS)}
         )
+        #: NAIP records that answer 404.
+        self.unreadable: set[str] = set()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         with self.lock:
@@ -154,8 +166,8 @@ class Fake:
             body = json.loads(request.content)
             year = int(body["datetime"][:4])
             return httpx.Response(200, json={"features": self.sentinel.get(year, [])})
-        if url == METADATA:
-            return httpx.Response(200, text=FGDC)
+        if url.startswith(dated_imagery.NAIP_METADATA_PREFIX):
+            return httpx.Response(404 if url in self.unreadable else 200, text=FGDC)
         if url.startswith(dated_imagery.TNM_PRODUCTS):
             return self.topo(request)
         return httpx.Response(404)
@@ -218,13 +230,46 @@ def test_naip_accuracy_quotes_the_record_or_says_not_stated(fake: Fake) -> None:
         "From 2009 to present all NAIP imagery acquisitions used the +/- 6 meters to ground "
         "specification."
     )
-    assert str(stated.citation_url) == METADATA
-    # Fetched once for the year, not once per quarter quad.
-    assert len(fake.to(METADATA)) == 1
+    # Each quarter quad has its own record; one is read for the year (the first, in a fixed
+    # order) and its sentence stands for the year's quads in that state.
+    assert str(stated.citation_url) == metadata_url("ca_2016_a", 2016)
+    assert sources[0].parts[1].accuracy == stated
+    assert [str(r.url) for r in fake.to(dated_imagery.NAIP_METADATA_PREFIX)] == [
+        metadata_url("ca_2016_a", 2016)
+    ]
     unstated = sources[1].parts[0].accuracy
     assert unstated.kind == "not-stated"
     assert unstated.value_m is None
     assert unstated.basis == "This item's record states no positional accuracy."
+
+
+def test_a_naip_record_that_cannot_be_read_says_so_and_is_asked_again(fake: Fake) -> None:
+    fake.unreadable.add(metadata_url("ca_2016_a", 2016))
+    catalog = dated_imagery.discover(BBOX, client_for(fake))
+    naip = {p.provider: p for p in catalog.providers}["naip-aerial"]
+    # The photographs are still listed; only their stated accuracy is missing, and says why.
+    assert naip.status == "available"
+    newest = next(s for s in catalog.sources if s.id == "naip-2016")
+    accuracy = newest.parts[0].accuracy
+    assert accuracy.kind == "not-stated"
+    assert accuracy.basis == dated_imagery.UNREAD_NAIP
+    assert "states no positional accuracy" not in accuracy.basis
+    assert dated_imagery.incomplete(catalog)
+    # Not kept: once the short-lived catalog is gone, the record is read again.
+    fake.unreadable.clear()
+    dated_imagery._catalogs.clear()
+    again = dated_imagery.discover(BBOX, client_for(fake))
+    assert next(s for s in again.sources if s.id == "naip-2016").parts[0].accuracy.value_m == 6
+    assert not dated_imagery.incomplete(again)
+
+
+def test_naip_resolution_is_unknown_when_no_record_states_it(fake: Fake) -> None:
+    fake.naip = lambda _: httpx.Response(
+        200,
+        json={"features": [naip_item("x", 2010, "2010-06-01", metadata=False, gsd=0)]},
+    )
+    (source,) = dated_imagery.naip_years(BBOX, client_for(fake))
+    assert source.resolution_m is None
 
 
 def test_naip_follows_the_search_pages(fake: Fake) -> None:
@@ -287,8 +332,19 @@ def test_topo_sheets_keep_allow_listed_editions_with_their_standard(fake: Fake) 
         "/api/v1/imagery/usgs-topo/tiles/{z}/{x}/{y}.png?sheet=CA%2FCA_Los%20Olivos_292579_1948"
     )
     assert "&w=-120.125&s=34.625&e=-120.0&n=34.75" in modern.tiles.url_template
-    # The datum shift is named, with its stated accuracy.
+    # The datum shift is named, with its stated accuracy, in words and as data for the rim.
     assert modern.warnings[0].startswith("Shifted from NAD27 to WGS 84 with")
+    operation, accuracy, better_missing = usgs_topo_tiles.datum_shift(
+        (-120.125, 34.625, -120.0, 34.75)
+    )
+    assert modern.datum_shift is not None
+    assert modern.datum_shift.model_dump() == {
+        "from_datum": "NAD27",
+        "operation": operation,
+        "accuracy_m": accuracy,
+        "better_available": better_missing,
+    }
+    assert f"“{operation}”" in modern.warnings[0]
     # The neatline is shifted to WGS 84: tens of metres west of the NAD27 graticule.
     assert -120.0015 < modern.bounds[2] < -120.0
     assert modern.date_meaning.startswith("Catalog publication year")
@@ -311,6 +367,24 @@ def test_a_failing_provider_is_unavailable_and_the_others_answer(fake: Fake) -> 
     # Newest first, across providers.
     dates = [s.sort_date for s in catalog.sources]
     assert dates == sorted(dates, reverse=True)
+
+
+def test_after_a_failure_only_the_provider_that_failed_is_asked_again(fake: Fake) -> None:
+    fake.topo = lambda _: httpx.Response(503)
+    http = client_for(fake)
+    first = dated_imagery.discover(BBOX, http)
+    assert dated_imagery.incomplete(first)
+    # The catalog with a failure is kept only briefly; then the next one asks USGS alone.
+    dated_imagery._catalogs.clear()
+    fake.topo = lambda _: httpx.Response(200, json={"items": TOPO_RECORDS})
+    fake.requests.clear()
+    second = dated_imagery.discover(BBOX, http)
+    assert {str(r.url).split("?")[0] for r in fake.requests} == {dated_imagery.TNM_PRODUCTS}
+    assert {p.status for p in second.providers} == {"available"}
+    assert not dated_imagery.incomplete(second)
+    assert [s.id for s in second.sources if s.provider == "naip-aerial"] == [
+        s.id for s in first.sources if s.provider == "naip-aerial"
+    ]
 
 
 def test_a_catalog_is_answered_from_the_cache_the_second_time(fake: Fake) -> None:
@@ -376,6 +450,20 @@ def test_route_lists_dated_imagery_in_camel_case(client: TestClient, routed: Fak
     assert {"dateLabel", "dateMeaning", "sortDate", "licenseUrl", "parts", "tiles"} <= set(first)
     assert first["tiles"]["urlTemplate"]
     assert response.headers["cache-control"] == "public, max-age=600"
+
+
+def test_route_lets_no_browser_keep_a_catalog_with_a_failure(
+    client: TestClient, routed: Fake
+) -> None:
+    routed.topo = lambda _: httpx.Response(503)
+    params = {"west": BBOX[0], "south": BBOX[1], "east": BBOX[2], "north": BBOX[3]}
+    response = client.get("/api/v1/imagery/dated", params=params)
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    # Answered again from this server's short-lived copy: still not for browsers to keep.
+    again = client.get("/api/v1/imagery/dated", params=params)
+    assert again.json()["cached"] is True
+    assert again.headers["cache-control"] == "no-store"
 
 
 def test_route_refuses_an_area_larger_than_a_ranch(client: TestClient, routed: Fake) -> None:

@@ -4,9 +4,12 @@ Three public sources, each as one list entry per real acquisition, never an inte
 
 * **NAIP** (USDA Farm Service Agency aerial photographs, U.S. public domain), one source per
   year it was flown here, drawn from a Planetary Computer mosaic of that year's quarter quads.
-  The parts are the quarter quads with their own flight dates. Their accuracy is the sentence the
-  item's own FGDC record states ("+/- 6 meters to ground specification"); a year whose records
-  carry no metadata says "not stated" rather than borrowing another year's.
+  The parts are the quarter quads with their own flight dates. Their accuracy is the sentence
+  the year's FGDC records state ("+/- 6 meters to ground specification"), read from one record
+  per year and state: a year's records in a state say it in the same words (the four quarter
+  quads over the ranch do, in every year that has records). A year whose records carry no
+  metadata says "not stated" rather than borrowing another year's, and a record that cannot be
+  read says so.
 * **Sentinel-2** (Copernicus, attribution required), the clearest scene of each dry season
   (June to September) since 2016, so that years compare like with like on Mediterranean
   rangeland, where spring green and summer gold are different pictures of the same ground.
@@ -16,9 +19,10 @@ Three public sources, each as one list entry per real acquisition, never an inte
   Standards; earlier ones predate them, and say so.
 
 Every fetch goes to a registered endpoint (SourceSpec, fetch_json: no redirects, bounded) or,
-for the NAIP metadata text, to one allow-listed prefix. Catalogs are cached in process for 6 h
-per area rounded to 0.01°, mosaic registrations for 24 h. The three SourceSpecs join the
-research registry (open_data.SOURCES) so /research/sources lists them; the overview does not
+for the NAIP metadata text, to one allow-listed prefix. Each provider's answer is cached in
+process for 6 h per area rounded to 0.01°, mosaic registrations for 24 h; a provider that failed
+is asked again by the next catalog after FAILURE_TTL_S, and only it. The three SourceSpecs join
+the research registry (open_data.SOURCES) so /research/sources lists them; the overview does not
 run them.
 """
 
@@ -54,6 +58,7 @@ from app.schemas.dated_imagery import (
     DatedImageryProviderStatus,
     DatedImagerySource,
     DatedImageryTiles,
+    DatumShift,
     StatedAccuracy,
 )
 from app.schemas.geojson import Polygon
@@ -122,8 +127,9 @@ MOSAIC_REGISTER = SourceSpec(
 #: Each side of an area asked about, at most (degrees): a ranch, not a county.
 MAX_SIDE_DEG = 0.25
 CATALOG_TTL_S = 6 * 3600
-#: A catalog with a provider that failed is asked again soon.
-FAILURE_TTL_S = 120
+#: A catalog with a provider that failed (or a NAIP record unread) is answered from the cache
+#: only this long (s); then its failed provider, alone, is asked again.
+FAILURE_TTL_S = 30
 MOSAIC_TTL_S = 24 * 3600
 CACHE_SIZE = 256
 #: NAIP search pages (100 items each); a 0.25° area holds about 200 items over ten years.
@@ -152,6 +158,7 @@ TOPO_DATE_MEANING = (
     "Catalog publication year; surveying, revision and scanning may have different dates."
 )
 NOT_STATED_NAIP = "This item's record states no positional accuracy."
+UNREAD_NAIP = "The year's metadata record could not be read, so its stated accuracy is not shown."
 PREDATES_NMAS = "Predates the National Map Accuracy Standards (1947); no accuracy is stated."
 
 
@@ -255,13 +262,15 @@ class _TTLCache:
 
 
 _catalogs = _TTLCache(CACHE_SIZE)
+#: (provider, area) -> the provider's sources: what a catalog after a failure need not ask again.
+_answers = _TTLCache(CACHE_SIZE * 3)
 _mosaics = _TTLCache(CACHE_SIZE)
 _metadata = _TTLCache(CACHE_SIZE)
 
 
 def clear_caches() -> None:
-    """Forget every cached catalog, mosaic and metadata sentence (tests)."""
-    for cache in (_catalogs, _mosaics, _metadata):
+    """Forget every cached catalog, answer, mosaic and metadata sentence (tests)."""
+    for cache in (_catalogs, _answers, _mosaics, _metadata):
         cache.clear()
 
 
@@ -344,17 +353,28 @@ def _naip_mosaic(
     return search_id
 
 
-def _naip_accuracy(client: httpx.Client, year: int, href: str | None) -> StatedAccuracy:
-    """The item's own FGDC sentence on positional accuracy, fetched once per year, or "not
-    stated" when the item has no metadata record (NAIP from 2020 on, here)."""
-    if not href or not href.startswith(NAIP_METADATA_PREFIX) or not href.endswith(".txt"):
-        return StatedAccuracy(kind="not-stated", basis=NOT_STATED_NAIP)
-    cached = _metadata.get(("naip", year, href))
+def _metadata_href(item: dict[str, Any]) -> str | None:
+    """The item's FGDC record on the allow-listed prefix, or None (NAIP from 2020 on, here)."""
+    metadata = (item.get("assets") or {}).get("metadata") or {}
+    href = metadata.get("href") if isinstance(metadata, dict) else None
+    if not isinstance(href, str) or not href.startswith(NAIP_METADATA_PREFIX):
+        return None
+    return href if href.endswith(".txt") else None
+
+
+def _naip_accuracy(client: httpx.Client, year: int, state: str, href: str) -> StatedAccuracy:
+    """The FGDC sentence on positional accuracy of one of the year's records in a state, fetched
+    once per year and state and cached. A record that cannot be read says so, and is not cached:
+    the next catalog asks again."""
+    cached = _metadata.get(("naip", year, state))
     if isinstance(cached, StatedAccuracy):
         return cached
-    text = _fetch_text(client, href)
+    try:
+        text = _fetch_text(client, href)
+    except (httpx.HTTPError, SourceError):
+        return StatedAccuracy(kind="not-stated", basis=UNREAD_NAIP)
     accuracy = _stated_accuracy(text, href)
-    _metadata.put(("naip", year, href), accuracy, CATALOG_TTL_S)
+    _metadata.put(("naip", year, state), accuracy, CATALOG_TTL_S)
     return accuracy
 
 
@@ -420,34 +440,48 @@ def _naip_year(
     items: list[dict[str, Any]],
 ) -> DatedImagerySource | None:
     spec = DATED_IMAGERY_SOURCES["naip-aerial"]
-    parts: list[DatedImageryPart] = []
+    kept: list[tuple[dict[str, Any], Polygon, str, str | None]] = []
     states: set[str] = set()
     resolutions: list[float] = []
-    for item in items:
+    #: The record read for each state: the first, in a fixed order, that has one.
+    records: dict[str, str] = {}
+    for item in sorted(items, key=lambda item: str(item.get("id", ""))):
         properties = item.get("properties") or {}
         footprint = _polygon(item.get("geometry"))
         record = _self_link(item)
         if footprint is None or record is None:
             continue
-        state = properties.get("naip:state")
-        if isinstance(state, str) and re.fullmatch(r"[a-z]{2}", state):
+        raw_state = properties.get("naip:state")
+        state = (
+            raw_state
+            if isinstance(raw_state, str) and re.fullmatch(r"[a-z]{2}", raw_state)
+            else None
+        )
+        if state:
             states.add(state)
         gsd = properties.get("gsd")
         if isinstance(gsd, (int, float)) and gsd > 0:
             resolutions.append(float(gsd))
-        metadata = (item.get("assets") or {}).get("metadata") or {}
-        href = metadata.get("href") if isinstance(metadata, dict) else None
-        parts.append(
-            DatedImageryPart(
-                observed_on=_day(properties.get("datetime")),
-                observed_year=year,
-                footprint=footprint,
-                record_url=HttpUrl(record),
-                accuracy=_naip_accuracy(client, year, href if isinstance(href, str) else None),
-            )
-        )
-    if not parts or not states:
+        href = _metadata_href(item)
+        if state and href:
+            records.setdefault(state, href)
+        kept.append((properties, footprint, record, state if href else None))
+    if not kept or not states:
         return None
+    accuracies = {
+        state: _naip_accuracy(client, year, state, href) for state, href in records.items()
+    }
+    unstated = StatedAccuracy(kind="not-stated", basis=NOT_STATED_NAIP)
+    parts = [
+        DatedImageryPart(
+            observed_on=_day(properties.get("datetime")),
+            observed_year=year,
+            footprint=footprint,
+            record_url=HttpUrl(record),
+            accuracy=accuracies[state] if state else unstated,
+        )
+        for properties, footprint, record, state in kept
+    ]
     parts.sort(key=lambda part: part.observed_on or date(year, 1, 1), reverse=True)
     parts = parts[:40]
     search_id = _naip_mosaic(client, year, sorted(states), bbox)
@@ -471,7 +505,8 @@ def _naip_year(
         date_label=label,
         date_meaning=NAIP_DATE_MEANING,
         sort_date=days[-1] if days else date(year, 12, 31),
-        resolution_m=min(resolutions) if resolutions else 1.0,
+        # The records' own ground sample distance; unknown (and not shown) when none says.
+        resolution_m=min(resolutions) if resolutions else None,
         bounds=_union_bounds(parts),
         tiles=DatedImageryTiles(
             scheme="web-mercator",
@@ -618,15 +653,25 @@ def _topo_accuracy(year: int, scale: int) -> StatedAccuracy:
     return StatedAccuracy(kind="not-stated", basis=PREDATES_NMAS)
 
 
-def _datum_warning(neatline: tuple[float, float, float, float]) -> str:
+def _datum_shift(neatline: tuple[float, float, float, float]) -> DatumShift:
     name, accuracy, better_missing = usgs_topo_tiles.datum_shift(neatline)
-    stated = f", stated accuracy about {accuracy:g} m" if accuracy else ", accuracy not stated"
+    return DatumShift(
+        from_datum="NAD27", operation=name, accuracy_m=accuracy, better_available=better_missing
+    )
+
+
+def _datum_warning(shift: DatumShift) -> str:
+    stated = (
+        f", stated accuracy about {shift.accuracy_m:g} m"
+        if shift.accuracy_m
+        else ", accuracy not stated"
+    )
     missing = (
         " A more accurate grid-based shift exists but is not installed on this server."
-        if better_missing
+        if shift.better_available
         else ""
     )
-    return f"Shifted from NAD27 to WGS 84 with “{name}”{stated}.{missing}"
+    return f"Shifted from NAD27 to WGS 84 with “{shift.operation}”{stated}.{missing}"
 
 
 class _Sheet(NamedTuple):
@@ -699,7 +744,8 @@ def usgs_topo_sheets(
     for year, scale, name, sheet, box, meta in kept[:TOPO_MAX_SHEETS]:
         neatline, snapped = usgs_topo_tiles.snap_neatline(box)
         ring = usgs_topo_tiles.neatline_wgs84(neatline)
-        warnings = [_datum_warning(neatline)]
+        shift = _datum_shift(neatline)
+        warnings = [_datum_warning(shift)]
         if not snapped:
             warnings.append(
                 "The sheet's edge could not be matched to the map grid, so the catalog footprint "
@@ -744,6 +790,7 @@ def usgs_topo_sheets(
                 license_url=HttpUrl(USGS_COPYRIGHT_URL),
                 attribution=spec.attribution,
                 parts=[part],
+                datum_shift=shift,
                 warnings=warnings,
             )
         )
@@ -792,8 +839,19 @@ def _failure(provider: str, error: Exception) -> DatedImageryProviderStatus:
         provider=provider,
         name=spec.name,
         status="unavailable",
-        summary=f"{spec.name} could not be reached ({reason}). Try again in a few minutes.",
+        summary=f"{spec.name} could not be reached ({reason}).",
     )
+
+
+def _unread(sources: list[DatedImagerySource]) -> bool:
+    """Whether a record behind these sources could not be read (and is asked again soon)."""
+    return any(part.accuracy.basis == UNREAD_NAIP for source in sources for part in source.parts)
+
+
+def incomplete(catalog: DatedImageryCatalog) -> bool:
+    """Whether a catalog lacks something that may answer if asked again: a provider that could
+    not be reached, or a record that could not be read. Never cached long, here or in browsers."""
+    return any(p.status == "unavailable" for p in catalog.providers) or _unread(catalog.sources)
 
 
 def cached(bbox: tuple[float, float, float, float]) -> DatedImageryCatalog | None:
@@ -811,10 +869,18 @@ def discover(bbox: tuple[float, float, float, float], client: httpx.Client) -> D
         return hit
 
     def ask(provider: str) -> list[DatedImagerySource] | DatedImageryProviderStatus:
+        # A provider that answered for this area before is not asked again: after a failure,
+        # only the provider that failed is.
+        known = _answers.get((provider, area))
+        if isinstance(known, list):
+            return known
         try:
-            return PROVIDERS[provider](area, client)
+            found = PROVIDERS[provider](area, client)
         except (httpx.HTTPError, SourceError, ValueError, KeyError, TypeError) as error:
             return _failure(provider, error)
+        if not _unread(found):
+            _answers.put((provider, area), found, CATALOG_TTL_S)
+        return found
 
     # The three providers are different services: asked side by side, the slowest decides.
     with ThreadPoolExecutor(max_workers=len(PROVIDERS)) as pool:
@@ -836,7 +902,7 @@ def discover(bbox: tuple[float, float, float, float], client: httpx.Client) -> D
         sources=sources,
         providers=statuses,
     )
-    _catalogs.put(area, catalog, FAILURE_TTL_S if failed else CATALOG_TTL_S)
+    _catalogs.put(area, catalog, FAILURE_TTL_S if failed or incomplete(catalog) else CATALOG_TTL_S)
     return catalog
 
 

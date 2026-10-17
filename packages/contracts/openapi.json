@@ -4218,6 +4218,16 @@
             "title": "Datemeaning",
             "type": "string"
           },
+          "datumShift": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatumShift"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "maxLength": 200,
             "title": "Id",
@@ -4277,9 +4287,16 @@
             "type": "string"
           },
           "resolutionM": {
-            "exclusiveMinimum": 0.0,
-            "title": "Resolutionm",
-            "type": "number"
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolutionm"
           },
           "sortDate": {
             "format": "date",
@@ -4311,7 +4328,6 @@
           "dateLabel",
           "dateMeaning",
           "sortDate",
-          "resolutionM",
           "bounds",
           "tiles",
           "license",
@@ -4357,6 +4373,45 @@
           "maximumLevel"
         ],
         "title": "DatedImageryTiles",
+        "type": "object"
+      },
+      "DatumShift": {
+        "additionalProperties": false,
+        "description": "How a map drawn on an older datum was moved onto WGS 84 to lie under today's world: the\noperation PROJ used, its stated accuracy, and whether a better one exists that this server\ndoes not have (the NADCON grids). The lens says it beside the map's own accuracy.",
+        "properties": {
+          "accuracyM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accuracym"
+          },
+          "betterAvailable": {
+            "title": "Betteravailable",
+            "type": "boolean"
+          },
+          "fromDatum": {
+            "const": "NAD27",
+            "title": "Fromdatum",
+            "type": "string"
+          },
+          "operation": {
+            "maxLength": 300,
+            "title": "Operation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromDatum",
+          "operation",
+          "betterAvailable"
+        ],
+        "title": "DatumShift",
         "type": "object"
       },
       "DocumentLinkCreate": {
@@ -21492,7 +21547,7 @@
     },
     "/api/v1/imagery/dated": {
       "get": {
-        "description": "NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area\n(each side at most 0.25\u00b0), newest first, each with its date's meaning, its licence and its\nstated positional accuracy. A provider that fails is listed as unavailable; the others\nstill answer. Cached on this server for 6 h per area rounded to 0.01\u00b0.",
+        "description": "NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area\n(each side at most 0.25\u00b0), newest first, each with its date's meaning, its licence and its\nstated positional accuracy. A provider that fails is listed as unavailable; the others\nstill answer. Cached on this server for 6 h per area rounded to 0.01\u00b0; a catalog missing\nsomething that may answer if asked again is cached for seconds, and not by browsers.",
         "operationId": "dated_api_v1_imagery_dated_get",
         "parameters": [
           {
@@ -21600,7 +21655,7 @@
     },
     "/api/v1/imagery/usgs-topo/tiles/{z}/{x}/{y}.png": {
       "get": {
-        "description": "A 256 px PNG on the WGS1984Quad grid (the grid of the land raster tiles), cut from the\nsheet's USGS GeoTIFF and transparent outside its neatline (`w`, `s`, `e`, `n`, NAD27).",
+        "description": "A 256 px PNG on the WGS1984Quad grid (the grid of the land raster tiles), cut from the\nsheet's USGS GeoTIFF and transparent outside its neatline (`w`, `s`, `e`, `n`, NAD27).\n\nAn `async def`, so a tile waiting for one of the tiler's few sheet readers waits on the event\nloop and holds none of the threads every other route runs on; the read itself runs on the\ntiler's own threads (usgs_topo_tiles.render_tile).",
         "operationId": "usgs_topo_tile_api_v1_imagery_usgs_topo_tiles__z___x___y__png_get",
         "parameters": [
           {
@@ -21702,6 +21757,9 @@
             },
             "description": "Successful Response"
           },
+          "204": {
+            "description": "The client left before the tile was drawn; nothing was read."
+          },
           "401": {
             "content": {
               "application/json": {
@@ -21741,6 +21799,9 @@
               }
             },
             "description": "Validation error"
+          },
+          "503": {
+            "description": "Every sheet reader is busy: ask again after Retry-After seconds."
           }
         },
         "summary": "A tile of a USGS historical topographic map",

@@ -370,7 +370,8 @@ export interface paths {
          * @description NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area
          *     (each side at most 0.25°), newest first, each with its date's meaning, its licence and its
          *     stated positional accuracy. A provider that fails is listed as unavailable; the others
-         *     still answer. Cached on this server for 6 h per area rounded to 0.01°.
+         *     still answer. Cached on this server for 6 h per area rounded to 0.01°; a catalog missing
+         *     something that may answer if asked again is cached for seconds, and not by browsers.
          */
         get: operations["dated_api_v1_imagery_dated_get"];
         put?: never;
@@ -392,6 +393,10 @@ export interface paths {
          * A tile of a USGS historical topographic map
          * @description A 256 px PNG on the WGS1984Quad grid (the grid of the land raster tiles), cut from the
          *     sheet's USGS GeoTIFF and transparent outside its neatline (`w`, `s`, `e`, `n`, NAD27).
+         *
+         *     An `async def`, so a tile waiting for one of the tiler's few sheet readers waits on the event
+         *     loop and holds none of the threads every other route runs on; the read itself runs on the
+         *     tiler's own threads (usgs_topo_tiles.render_tile).
          */
         get: operations["usgs_topo_tile_api_v1_imagery_usgs_topo_tiles__z___x___y__png_get"];
         put?: never;
@@ -3856,6 +3861,7 @@ export interface components {
             dateLabel: string;
             /** Datemeaning */
             dateMeaning: string;
+            datumShift?: components["schemas"]["DatumShift"] | null;
             /** Id */
             id: string;
             /**
@@ -3874,7 +3880,7 @@ export interface components {
             /** Provider */
             provider: string;
             /** Resolutionm */
-            resolutionM: number;
+            resolutionM?: number | null;
             /**
              * Sortdate
              * Format: date
@@ -3909,6 +3915,25 @@ export interface components {
             scheme: "web-mercator" | "geographic";
             /** Urltemplate */
             urlTemplate: string;
+        };
+        /**
+         * DatumShift
+         * @description How a map drawn on an older datum was moved onto WGS 84 to lie under today's world: the
+         *     operation PROJ used, its stated accuracy, and whether a better one exists that this server
+         *     does not have (the NADCON grids). The lens says it beside the map's own accuracy.
+         */
+        DatumShift: {
+            /** Accuracym */
+            accuracyM?: number | null;
+            /** Betteravailable */
+            betterAvailable: boolean;
+            /**
+             * Fromdatum
+             * @constant
+             */
+            fromDatum: "NAD27";
+            /** Operation */
+            operation: string;
         };
         /** DocumentLinkCreate */
         DocumentLinkCreate: {
@@ -9259,6 +9284,7 @@ export type SchemaDatedImageryPart = components['schemas']['DatedImageryPart'];
 export type SchemaDatedImageryProviderStatus = components['schemas']['DatedImageryProviderStatus'];
 export type SchemaDatedImagerySource = components['schemas']['DatedImagerySource'];
 export type SchemaDatedImageryTiles = components['schemas']['DatedImageryTiles'];
+export type SchemaDatumShift = components['schemas']['DatumShift'];
 export type SchemaDocumentLinkCreate = components['schemas']['DocumentLinkCreate'];
 export type SchemaDocumentLinkRead = components['schemas']['DocumentLinkRead'];
 export type SchemaDocumentLocator = components['schemas']['DocumentLocator'];
@@ -11009,6 +11035,13 @@ export interface operations {
                     "image/png": string;
                 };
             };
+            /** @description The client left before the tile was drawn; nothing was read. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Missing or wrong write token */
             401: {
                 headers: {
@@ -11044,6 +11077,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+            /** @description Every sheet reader is busy: ask again after Retry-After seconds. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
