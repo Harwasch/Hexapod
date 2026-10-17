@@ -50,7 +50,6 @@ export function LanternRim() {
   const bottom = useRef<SVGTextPathElement>(null);
   const caption = useRef<SVGTextElement>(null);
   const centre = useRef<SVGTextElement>(null);
-  const corner = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
     if (!scene) return;
@@ -156,7 +155,7 @@ export function LanternRim() {
           data-testid="lantern-rim-centre"
         />
       </svg>
-      <p ref={corner} className="lantern-rim__corner">
+      <p className="lantern-rim__corner">
         Outside the lens: Google Photorealistic 3D Tiles (capture dates not published). Inside:
         dated imagery draped on the terrain, with today&apos;s 3D removed.
       </p>

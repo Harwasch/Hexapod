@@ -731,6 +731,7 @@ def usgs_topo_sheets(
                 date_label=f"Map dated {year}",
                 date_meaning=TOPO_DATE_MEANING,
                 sort_date=date(year, 1, 1),
+                # The collection scans at 300 dpi (the GeoTIFFs' own resolution tag says so).
                 resolution_m=round(scale * 0.0254 / 300, 2),
                 map_scale=scale,
                 bounds=list(usgs_topo_tiles.ring_bounds(ring)),
