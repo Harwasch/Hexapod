@@ -746,12 +746,12 @@
   <header class="top">
     <div>
       <div class="eyebrow">Hexapod fleet · read/write manipulator · design study</div>
-      <h1>FA-1 Field Arm</h1>
+      <h1>FA-2 Field Arm</h1>
       <p class="lede" id="lede">
-        A low-cost arm for the medium hexapod. It weeds, doses, samples, picks fruit and fetches
-        things. Its geometry and every actuator were chosen by optimizing against 17 field tasks,
-        and the result was checked in physics simulation with the hexapod's own legs doing part of
-        the work.
+        A low-cost arm for the medium hexapod. It weeds, doses, samples, picks fruit, turns valves
+        and fetches things. Its geometry and every part were chosen by optimizing against 17 field
+        tasks at delivered prices, and the result was checked in physics simulation with the
+        hexapod's own legs doing part of the work.
       </p>
     </div>
     <div class="specs" id="specs" aria-label="Key specifications"></div>
@@ -797,11 +797,13 @@
     <div class="eyebrow">Trade study</div>
     <h2>How the design was chosen</h2>
     <p id="study-lede">
-      The second study opened three cost levers: factory-direct sourcing, printed capstan reductions
-      on the turret-mounted motors, and bare motors run by our own driver board. It also let the
-      planner lean the body forward over planted feet, rejected body poses the legs cannot hold, and
-      required the base joints to turn fast enough for a 0.5 s dosing cycle. The same 1,764
-      geometries were swept; the frontier geometries were then tried with every assignment of parts
+      The second study priced every part as delivered to the US (40.3% duty on Chinese motors plus
+      freight) and opened three cost levers. The first is duty-paid resellers. The second is printed
+      Dyneema capstan reductions on the turret motors. The third is bare motors run by our own
+      driver board. Every price was checked against a live cart. It also let the body lean forward
+      over planted feet and dropped poses the legs cannot hold. It required the base joints to turn
+      fast enough for a 0.5 s dosing cycle and the tool roll to turn a 3 Nm valve. The same 1,764
+      geometries were swept, and the frontier geometries were tried with every assignment of parts
       under each lever setting.
     </p>
   </section>
@@ -901,8 +903,10 @@
     <div class="eyebrow">Bill of materials</div>
     <h2>Parts, about 10 units</h2>
     <p>
-      Single-unit US retail for actuators (October 2026). Printed parts in ASA or PETG-CF. STEP, STL
-      and GLB files are generated from the same parameters as the simulation.
+      Delivered to the US at about 10 units (October 2026). Duty-paid resellers are used where a
+      cart check confirmed the price; otherwise the price is the list price plus 40.3% duty and
+      freight. Printed parts are white ASA outside and PA12-CF near the motors. STEP, STL and GLB
+      files are generated from the same parameters as the simulation.
     </p>
   </section>
   <div class="grid2">
@@ -918,7 +922,8 @@
     </p>
     <p id="assume">
       The host is a reference medium hexapod (12 kg, 0.56 × 0.30 m body); no hexapod has been
-      designed yet. Prices are retail and can move.
+      designed yet. Prices are landed in the US and were checked on 2026-10-17. Tariffs can move;
+      the US–China truce expires on 2026-11-10.
     </p>
   </footer>
 </div>
@@ -956,7 +961,14 @@
     tool_roll: "Tool roll",
     forearm_roll: "Forearm roll",
   };
-  const SERIES = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5"];
+  const SERIES = [
+    "--series-1",
+    "--series-2",
+    "--series-3",
+    "--series-4",
+    "--series-5",
+    "--series-7",
+  ];
   const tip = $("#tip");
   function showTip(html, x, y) {
     tip.innerHTML = html;
@@ -1007,7 +1019,7 @@
       `anywhere on its ground patch; ${fmt(selected.payload.continuous_kg, 1)} / ${fmt(selected.payload.peak_kg, 1)} kg at full horizontal stretch`,
     ],
     [fmt(selected.mass, 2), "kg", "arm mass, gripper excluded"],
-    [usd(selected.cost), "", "parts per arm"],
+    [usd(selected.cost), "", "parts per arm, delivered (duty + freight)"],
     [fmt(selected.backlash_mm, 1), "mm", "open-loop backlash at the tool (RSS)"],
     [perWeed ? fmt(perWeed, 2) : "–", "s", "per weed, spot-dosing in simulation"],
   ];
@@ -1877,6 +1889,7 @@
     sourcing: "+ factory-direct sourcing",
     reductions: "+ printed capstan reductions",
     custom: "+ custom driver electronics",
+    bought: "Sourcing + reductions (no custom board)",
     all: "All three levers",
   };
   const PICK_NAMES = { lite: "Lite", balanced: "FA-2", max: "Max" };
@@ -1900,11 +1913,11 @@
     const fr = study.frontier;
     const v2 = fr.all?.field ?? [],
       retail = fr.retail?.field ?? [],
-      v1 = study.v1_frontier ?? [];
+      bought = fr.bought?.field ?? [];
     const pts = study.stage_b.filter((r) => r.lever === "all" && r.tier === "field");
     const picks = Object.entries(study.picks ?? {});
     const fa1 = study.fa1;
-    const all = [...v2, ...retail, ...v1, ...pts];
+    const all = [...v2, ...retail, ...bought, ...pts];
     const { x0, x1, y0 } = scaleFor(all, fa1 ? fa1.cost : 1e9);
     const m = { l: 44, r: 14, t: 22, b: 40 },
       W = 560 - m.l - m.r,
@@ -1928,19 +1941,19 @@
     });
     const c2 = tok("--series-1"),
       cR = tok("--series-2"),
-      cV1 = tok("--muted");
+      cB = tok("--series-3");
     const g = el("g", {}, svg);
     for (const r of pts)
       el("circle", { cx: X(r.cost), cy: Y(r.score), r: 2.6, fill: c2, opacity: 0.2 }, g);
-    if (v1.length)
+    if (bought.length)
       el(
         "path",
         {
-          d: stepPath(frontierOf(v1), X, Y),
+          d: stepPath(frontierOf(bought), X, Y),
           fill: "none",
-          stroke: cV1,
-          "stroke-width": 1.6,
-          "stroke-dasharray": "4 4",
+          stroke: cB,
+          "stroke-width": 2,
+          "stroke-dasharray": "5 3",
         },
         svg,
       );
@@ -2005,7 +2018,7 @@
       ).textContent = `${mk.name} ${usd(mk.cost)}`;
     });
     $("#lg-pareto").innerHTML =
-      `<span><i style="background:${c2}"></i>All levers</span><span><i style="background:${cR}"></i>US retail only</span><span><i style="background:${cV1}"></i>First study (FA-1)</span><span><i class="dot" style="border:2px solid ${tok("--ink")};background:transparent"></i>Picks</span><span><i style="width:9px;height:9px;border:2px solid ${tok("--ink")};background:transparent"></i>FA-1, same rules</span>`;
+      `<span><i style="background:${c2}"></i>All levers</span><span><i style="background:${cR}"></i>US retail only</span><span><i style="background:${cB}"></i>Bought parts only (no custom board)</span><span><i class="dot" style="border:2px solid ${tok("--ink")};background:transparent"></i>Picks</span><span><i style="width:9px;height:9px;border:2px solid ${tok("--ink")};background:transparent"></i>FA-1, same rules and prices</span>`;
     const hit = el("rect", { x: m.l, y: m.t, width: W, height: H, fill: "transparent" }, svg);
     const pool = [...pts, ...retail];
     hit.addEventListener("pointermove", (ev) => {
@@ -2030,7 +2043,7 @@
     const svg = $("#ch-levers");
     if (!svg) return;
     svg.innerHTML = "";
-    const order = ["retail", "sourcing", "custom", "reductions", "all"];
+    const order = ["retail", "sourcing", "reductions", "custom", "bought", "all"];
     const series = order
       .filter((k) => study.frontier[k]?.field?.length)
       .map((k, i) => ({ k, rows: frontierOf(study.frontier[k].field), color: tok(SERIES[i]) }));
@@ -2093,7 +2106,7 @@
     if (study.fa1)
       cols.push({
         name: "FA-1",
-        sub: "first study, re-scored",
+        sub: "first design, re-scored and landed",
         r: {
           cost: study.fa1.cost,
           score: study.fa1.score_v2,
@@ -2113,6 +2126,9 @@
               : k === "max"
                 ? "most capability at FA-1's price"
                 : "recommended",
+          board: Object.values(study.picks[k].sources ?? {}).some((x) =>
+            x.includes("custom driver"),
+          ),
           r: study.picks[k],
           chosen: k === study.chosen,
         });
@@ -2126,17 +2142,20 @@
       return base + (r.stages?.[j] ? ` · ${r.stages[j]}` : "");
     };
     const rows = [
-      ["Parts cost", (r) => usd(r.cost)],
+      ["Parts cost, landed", (r) => usd(r.cost)],
       ["Task points served", (r) => Math.round(r.score * 100) + "%"],
       ["Arm mass", (r) => (r.mass ? fmt(r.mass, 2) + " kg" : "–")],
       ["Backlash at the tool", (r) => (r.backlash_mm ? fmt(r.backlash_mm, 1) + " mm" : "–")],
+      ["Axes", (r) => (r.design ? String(r.design.dof) : "5")],
+      ["Our own driver board", (r, c) => (c.board ? "yes (16–24+ person-weeks)" : "no")],
       ["Yaw", (r) => part(r, "yaw")],
       ["Shoulder", (r) => part(r, "shoulder")],
       ["Elbow", (r) => part(r, "elbow")],
+      ["Forearm roll", (r) => part(r, "forearm_roll")],
       ["Wrist pitch", (r) => part(r, "wrist_pitch")],
       ["Tool roll", (r) => part(r, "tool_roll")],
     ];
-    box.innerHTML = `<table><thead><tr><th></th>${cols.map((c) => `<th class="r" style="${c.chosen ? "color:var(--accent)" : ""}">${c.name}<br><span style="text-transform:none;letter-spacing:0;font-weight:400">${c.sub}</span></th>`).join("")}</tr></thead><tbody>${rows.map(([h, f]) => `<tr><td>${h}</td>${cols.map((c) => `<td class="r">${f(c.r)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    box.innerHTML = `<table><thead><tr><th></th>${cols.map((c) => `<th class="r" style="${c.chosen ? "color:var(--accent)" : ""}">${c.name}<br><span style="text-transform:none;letter-spacing:0;font-weight:400">${c.sub}</span></th>`).join("")}</tr></thead><tbody>${rows.map(([h, f]) => `<tr><td>${h}</td>${cols.map((c) => `<td class="r">${f(c.r, c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   }
   function drawArch() {
     const svg = $("#ch-arch");
@@ -2374,56 +2393,71 @@
   drawCharts();
 
   /* ---------- decisions ---------- */
-  const field = study.stage_b.filter((r) => r.tier === "field");
+  // Architecture comparisons use the same parts the design was picked from: bought parts.
+  const field = study.stage_b.filter((r) => r.tier === "field" && r.lever === "bought");
   function bestAt(f, cost) {
     const c = field.filter(f).filter((r) => r.cost <= cost);
     return c.length ? Math.max(...c.map((r) => r.score)) : 0;
   }
-  const para5 = bestAt(
-    (r) => r.design.arch === "parallelogram" && r.design.dof === D.dof,
-    selected.cost * 1.0001,
-  );
-  const dir5 = bestAt(
-    (r) => r.design.arch === "direct" && r.design.dof === D.dof,
-    selected.cost * 1.0001,
-  );
+  const at = selected.cost * 1.0001;
+  const pct = (v) => Math.round(v * 100) + "%";
+  const para = bestAt((r) => r.design.arch === "parallelogram" && r.design.dof === D.dof, at);
+  const direct = bestAt((r) => r.design.arch === "direct" && r.design.dof === D.dof, at);
+  const six = bestAt((r) => r.design.dof === 6, at),
+    five = bestAt((r) => r.design.dof === 5, at);
   const weedArm = sims.find((s) => s.id === "weed_arm"),
     weedBody = sims.find((s) => s.id === "weed_body");
   const shIdx = 1;
+  const fa1 = study.fa1 ?? {};
+  const sh = selected.actuators.shoulder;
   const decs = [
     [
+      "Priced delivered, not listed",
+      fa1.cost_list ? `${usd(fa1.cost_list)} → ${usd(fa1.cost)}` : "",
+      `Nearly every motor ships from China with US duty unpaid: 40.3% since July 2026, plus express freight. FA-1's ${usd(fa1.cost_list ?? 0)} parts list was ${usd(fa1.cost ?? 0)} delivered. Buying the same parts from duty-paid resellers alone brings it to ${usd(fa1.cost_sourced ?? 0)}. Every price here is delivered, and each one was checked against a live cart.`,
+    ],
+    [
+      "Rope capstans on the turret",
+      sh.stage ? `${fmt(sh.rated, 1)} / ${fmt(sh.peak, 0)} Nm for ${usd(sh.price)}` : sh.name,
+      sh.stage
+        ? `A 2 mm Dyneema rope runs from a grooved steel pinion to a printed drum, giving a ${sh.stage} reduction with no backlash. It turns a ${usd(sh.price - 8 - parseFloat(sh.stage))} ${sh.name.split(" + ")[0]} into a shoulder of ${fmt(sh.rated, 1)} Nm continuous and ${fmt(sh.peak, 0)} Nm peak. FA-1 paid $198 delivered for a 7.5 / 22 Nm GIM8108-8. The parallelogram keeps both drives on the turret, so the reduction adds no moving mass.`
+        : "The shoulder drives the arm directly.",
+    ],
+    [
       "Parallelogram elbow",
-      `${Math.round(para5 * 100)}% vs ${Math.round(dir5 * 100)}%`,
-      `The elbow motor sits on the turret beside the shoulder and drives the forearm through a crank and a rod. A pull's moment is split between two motors instead of stacking on the shoulder, and no motor rides on the arm. At FA-1's price, the best direct-elbow ${D.dof}-DOF design serves ${Math.round(dir5 * 100)}% of task points; the parallelogram serves ${Math.round(para5 * 100)}%.`,
+      `${pct(para)} vs ${pct(direct)}`,
+      `The elbow motor sits on the turret beside the shoulder and drives the forearm through a crank and a rod. A pull's moment is split between two motors instead of stacking on the shoulder, and no motor rides on the arm. At this price, the best direct-elbow ${D.dof}-axis design serves ${pct(direct)} of task points; the parallelogram serves ${pct(para)}.`,
+    ],
+    [
+      D.dof === 6 ? "A sixth axis at the wrist" : "Five axes are enough",
+      `${pct(six)} vs ${pct(five)}`,
+      D.dof === 6
+        ? `A forearm roll lets the tool come in from the side: stems, latches, leaves under the canopy. With the body's yaw already working as an axis, it was worth ${Math.round((six - five) * 100)} points at this price. It is a small bus servo, held level whenever a task does not need it.`
+        : `At this price the best 6-axis design serves ${pct(six)} and the best 5-axis ${pct(five)}. The hexapod's body yaw already supplies the sixth axis, and a fifth servo at the wrist costs torque at every joint behind it.`,
     ],
     [
       D.spring ? "Zero-length gravity springs" : "No springs",
       D.spring ? "arm weight → 0" : "—",
       D.spring
-        ? "With the parallelogram, each motor sees one absolute angle, so a zero-length spring (spring and cable over a pulley) cancels the arm's own weight at every pose. The motors only carry the payload and the task, which is what lets mid-size actuators hold a 1 kg rock at full reach."
+        ? "With the parallelogram, each motor sees one absolute angle, so a zero-length spring (an extension spring and a cable over a pulley) cancels the arm's own weight at every pose. The motors carry only the payload and the task. That lets small motors hold a 1 kg rock at full reach, and it keeps continuous current, and heat in the sealed turret, low."
         : "Springs did not pay for themselves on this geometry.",
-    ],
-    [
-      "QDD where it counts",
-      `${selected.actuators.shoulder.name.split(" + ")[0]}`,
-      `The yaw, shoulder and elbow are backdrivable quasi-direct-drive actuators: motor current is a force sensor (it feels the soil, a stem or a person), a fall or a branch back-drives them instead of stripping gears, and they cost less per newton-metre than smart servos. The wrist joints carry far less torque, so they use the cheapest part that holds it.`,
     ],
     [
       "The legs are three more axes",
       weedArm && weedBody
-        ? `${Math.round(weedArm.summary.peak_util[shIdx] * 100)}% → ${Math.round(weedBody.summary.peak_util[shIdx] * 100)}%`
+        ? `${pct(weedArm.summary.peak_util[shIdx])} → ${pct(weedBody.summary.peak_util[shIdx])}`
         : "",
-      `The hexapod can raise, tip and slide its body with the feet planted. For a 60 N taproot, leaning the body 12 cm over the weed before the legs lift cut the shoulder's peak load from ${weedArm ? Math.round(weedArm.summary.peak_util[shIdx] * 100) : "–"}% to ${weedBody ? Math.round(weedBody.summary.peak_util[shIdx] * 100) : "–"}% of its peak torque. The arm doesn't need extra joints or longer links for what the body can do.`,
+      `The hexapod can raise, tip and slide its body with the feet planted. For a 60 N taproot, leaning the body 12 cm over the weed before the legs lift cut the shoulder's peak load from ${weedArm ? pct(weedArm.summary.peak_util[shIdx]) : "–"} to ${weedBody ? pct(weedBody.summary.peak_util[shIdx]) : "–"} of its peak torque. The arm doesn't need extra joints or longer links for what the body can do.`,
     ],
     [
-      "Soil takes the body's weight",
-      "≤ ~0.75 × weight",
-      "A 10–20 mm soil core needs 130–900 N, more than an 8–20 kg robot weighs. The arm only holds the probe straight; the body lowers itself to press it in. Deeper cores need a rotary auger tool, not a stronger arm.",
+      "No custom driver board yet",
+      "$133 + 16–24 wk",
+      "Bare Steadywin motors on our own 3-axis driver reach the most capability per dollar (the Max pick). But the board costs about $133 delivered, plus 16–24 or more person-weeks of engineering that 10 arms never repay. It pays only once the hexapod's 18 leg joints share it. docs/ELECTRONICS.md specifies it for that day.",
     ],
     [
       "One flange, many tools",
-      "6 pogo pins",
-      "A passive bayonet tool changer locks with the tool-roll joint, so changing tools needs no extra motor. Pogo pins carry power, CAN and two spare lines to powered tools (shears, pump valve, sensor head). The fin-ray TPU gripper picks fruit without bruising and doubles as the weed puller.",
+      "3 Nm twist",
+      "A passive bayonet tool changer locks with the tool-roll joint, so changing tools needs no extra motor. Pogo pins carry power, CAN and two spare lines to powered tools such as shears, a pump valve or a sensor head. Field grade requires the tool roll to give 3 Nm, enough for small valves and knobs; without that floor the cheapest designs gave up valves entirely to save wrist weight. The fin-ray TPU gripper picks fruit without bruising and doubles as the weed puller.",
     ],
   ];
   $("#decisions").innerHTML = decs

@@ -311,6 +311,16 @@ def cheek(lo: Layout, side: int) -> Part:
     return prof
 
 
+def turret_box(lo: Layout) -> Part:
+    """On a tall pedestal: a closed box between the cheeks, under the drums. It stiffens the
+    column and is the sealed, vented housing for the turret electronics."""
+    top = lo.ped - lo.head_r - 6
+    x = 2 * lo.head_r - 6
+    outer = Pos(0, 0, 9.5) * Box(x, 2 * lo.cheek_in, top - 9.5, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    inner = Pos(0, 0, 9.5) * Box(x - 6, 2 * lo.cheek_in + 2, top - 12.5, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    return outer - inner
+
+
 def spring_mast(lo: Layout) -> Part:
     """Pulley mast above the shoulder axis (shoulder spring) and a lug below it (elbow
     spring), both at y = 0 between the cheeks... carried by a bridge across the cheeks."""
@@ -542,6 +552,8 @@ def link_parts(design: ArmDesign, acts: ArmActuators, hx: Hexapod) -> dict[str, 
         _c(cheek(lo, 1), "printed", "turret cheek, shoulder side (printed)"),
         _c(cheek(lo, -1), "printed", "turret cheek, elbow side (printed)"),
     ]
+    if lo.ped - lo.head_r - 6 > 40:
+        tur.append(_c(turret_box(lo), "printed", "turret box (printed)"))
     tur += [Pos(lo.motor_x(1), 0, lo.ped) * p for p in qdd_y(lo.sh_dia, lo.sh_len, lo.cheek_out, -1)]
     if lo.sh_stage:
         st = lo.sh_stage

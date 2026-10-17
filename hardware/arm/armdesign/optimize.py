@@ -74,7 +74,7 @@ def fixed_cost(design: ArmDesign, costs: dict[str, float], driver_board: bool = 
         "gripper (servo + fin-ray fingers)": costs["gripper"],
         "wrist camera + ToF": costs["wrist_sensing"],
         "harness + connectors": costs["harness"],
-        "seals + boots": costs["seals"],
+        "field kit (seals, vents, servo pods, heat plate)": costs["seals"],
     }
     if design.arch == "parallelogram":
         c["parallelogram rod + rod ends"] = costs["parallelogram_rod"]
@@ -99,16 +99,23 @@ def fixed_mass(design: ArmDesign, mm: MassModel) -> float:
     return m
 
 
+# The twist the tool roll must be able to give: the valve task's 3 Nm (data/tasks.yaml).
+# The coverage score weighs it like any task, so without this floor the cheapest designs
+# trade valves and knobs away entirely for a lighter wrist.
+MIN_TOOL_TWIST_NM = 3.0
+
 # What a joint must be in each tier. "field" is the outdoor-robot bar: the shoulder and
 # elbow can feel contact through motor current and survive being back-driven by a fall or
-# a branch, the yaw is backdrivable, nothing at the base is a hobby part, and the base
-# joints know their output angle at power-up (no homing sweep from the stowed pose).
+# a branch, the yaw is backdrivable, nothing at the base is a hobby part, the base joints
+# know their output angle at power-up (no homing sweep from the stowed pose), and the
+# tool roll can turn a valve.
 TIERS = {
     "any": {},
     "field": {
         "yaw": lambda a: a.kind == "qdd" and a.output_encoder == "yes",
         "shoulder": lambda a: a.kind == "qdd" and a.force_sense == "yes" and a.output_encoder == "yes",
         "elbow": lambda a: a.kind == "qdd" and a.force_sense == "yes" and a.output_encoder == "yes",
+        "tool_roll": lambda a: PEAK_DERATE * a.peak >= MIN_TOOL_TWIST_NM,
     },
 }
 # Root-sum-square tip error from gear backlash, open loop. Micro-dosing and stamping want

@@ -94,14 +94,17 @@ def cost_of(design: ArmDesign, acts: dict[str, Actuator]) -> float:
 
 
 def choose(study: dict, fa1_score: float, fa1_cost: float) -> dict[str, dict]:
-    """Three picks on the all-levers field frontier: the cheapest that matches FA-1, the
-    best at FA-1's price, and the knee (the cheapest within 5% of the best anywhere)."""
-    field = study["frontier"]["all"]["field"]
-    best = max(r["score"] for r in field)
+    """Three picks on the field-grade frontiers. lite: the cheapest that matches FA-1's
+    capability; balanced (FA-2): the cheapest within 5% of the best field-grade score
+    anywhere. Both come from bought parts only (no custom board, whose engineering 10
+    arms never repay). max: the most capability at FA-1's price, any lever."""
+    bought = study["frontier"]["bought"]["field"]
+    every = study["frontier"]["all"]["field"]
+    best = max(r["score"] for r in every)
     return {
-        "lite": min((r for r in field if r["score"] >= fa1_score - 1e-6), key=lambda r: r["cost"]),
-        "balanced": min((r for r in field if r["score"] >= KNEE * best), key=lambda r: r["cost"]),
-        "max": max((r for r in field if r["cost"] <= fa1_cost + 1e-6), key=lambda r: (r["score"], -r["cost"])),
+        "lite": min((r for r in bought if r["score"] >= fa1_score - 1e-6), key=lambda r: r["cost"]),
+        "balanced": min((r for r in bought if r["score"] >= KNEE * best), key=lambda r: r["cost"]),
+        "max": max((r for r in every if r["cost"] <= fa1_cost + 1e-6), key=lambda r: (r["score"], -r["cost"])),
     }
 
 
@@ -120,9 +123,10 @@ def select() -> None:
     keep = ("design", "actuators", "stages", "sources", "lever", "score", "cost", "mass", "backlash_mm", "label")
     sel = {
         "why": (
-            "FA-2 is the balanced pick: the cheapest field-grade design, all levers on, within "
-            f"{round((1 - KNEE) * 100)}% of the best field-grade score. lite matches FA-1's capability "
-            "for the least money; max is the most capability at FA-1's price."
+            "FA-2 is the balanced pick: the cheapest field-grade design built from bought parts "
+            f"(sourcing and printed reductions, no custom board) within {round((1 - KNEE) * 100)}% of "
+            "the best field-grade score at any price. lite matches FA-1's capability for the least "
+            "money; max is the most capability at FA-1's price with any lever."
         ),
         "chosen": "balanced",
         "fa1": {
@@ -270,7 +274,7 @@ def bom(design: ArmDesign, acts: dict) -> list[dict]:
     fixed = fixed_cost(design, costs, any(a.needs_driver for a in acts.values()))
     for k, v in fixed.items():
         group = "Sensing" if "camera" in k else "End effector" if k.startswith(("gripper", "tool")) else "Structure"
-        if k in ("harness + connectors", "seals + boots", "servo bus adapter") or "driver board" in k:
+        if k in ("harness + connectors", "servo bus adapter") or k.startswith("field kit") or "driver board" in k:
             group = "Electrical + sealing"
         rows.append({"group": group, "item": k, "where": "", "qty": 1, "usd": round(v, 2)})
     return rows
@@ -371,16 +375,13 @@ def main(argv: list[str]) -> None:
         "stage_b": [
             trim(r)
             for r in study["stage_b"]
-            if r["lever"] == "all" or (r["lever"] == "retail" and r["tier"] == "field")
+            if r["lever"] in ("all", "bought") or (r["lever"] == "retail" and r["tier"] == "field")
         ],
         "stage_a": [{"d": r["design"], "s": round(r["kin_score"], 4)} for r in study["stage_a"]],
         "picks": sel.get("picks", {}),
         "chosen": sel.get("chosen"),
         "fa1": sel.get("fa1"),
     }
-    v1 = OUT / "study_v1.json"
-    if v1.exists():
-        slim["v1_frontier"] = [trim(r) for r in json.loads(v1.read_text())["frontier"]["field"]]
     with (ROOT / "data" / "benchmarks.csv").open() as f:
         bench = [row for row in csv.DictReader(f)]
     slim["benchmarks"] = [

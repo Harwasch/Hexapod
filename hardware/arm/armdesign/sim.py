@@ -693,13 +693,16 @@ def tray_drop(rig: Rig, h: float = 0.12) -> Array:
     return TRAY + np.array([0.0, 0.0, rig.hx.deck_z + h])
 
 
-def to_tray(rig: Rig, h: float = 0.12, body: BodyPose | None = None, roll: float = 0.0) -> list[Seg]:
+def to_tray(
+    rig: Rig, h: float = 0.12, body: BodyPose | None = None, roll: float = 0.0, swing: float = 1.0
+) -> list[Seg]:
     """Lift clear above the mount, then swing round to the tray: the yaw turns half a turn
-    with the arm folded high, so nothing sweeps past the chassis."""
+    with the arm folded high, so nothing sweeps past the chassis. A heavy payload gets a
+    slower swing (`swing`, seconds)."""
     via = np.array([rig.design.mount_x + 0.04, 0.0, rig.hx.deck_z + 0.30])
     return [
         Seg("lift clear", 0.8, target=via, in_body=True, body=body, roll=roll),
-        Seg("swing to the deck tray", 1.0, target=tray_drop(rig, h), in_body=True, roll=roll),
+        Seg("swing to the deck tray", swing, target=tray_drop(rig, h), in_body=True, roll=roll),
     ]
 
 
@@ -773,7 +776,7 @@ def sc_rock(rig: Rig) -> list[Seg]:
         Seg("grip", 0.3, "hold", grip=0.03, roll=math.pi / 2, at_end=lambda r: r.attach("rock")),
         Seg("lift 1 kg at full reach", 0.8, "line", target=p + [0, 0, 0.15], roll=math.pi / 2),
         Seg("hold out", 1.0, "hold"),
-        *to_tray(rig, 0.1, roll=math.pi / 2),
+        *to_tray(rig, 0.1, roll=math.pi / 2, swing=1.6),
         Seg("set down", 0.5, "hold", grip=0.058, at_start=lambda r: r.release("rock")),
         *from_tray(rig),
         Seg("ready", 0.8, motor=ready(rig)),
@@ -876,6 +879,7 @@ SCENARIOS = [
         "gripper",
         lambda: [rock("rock", (0.62, -0.12))],
         sc_rock,
+        note="With the rock in hand the swing to the tray takes 1.6 s. At 1.0 s the yaw saturates and the rock lands 42 mm off.",
     ),
     Scenario(
         "soil_probe",

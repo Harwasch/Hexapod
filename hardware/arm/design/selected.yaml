@@ -1,20 +1,128 @@
 # Written by `python -m armdesign.report select` from out/study.json.
-why: cheapest field-tier design within 5% of the best field-tier score
-design:
-  arch: parallelogram
-  dof: 5
-  l1: 0.37
-  l2: 0.28
-  mount_x: 0.26
-  pedestal: 0.05
-  spring: true
-  wrist_len: 0.09
-actuators:
-  yaw: rs_edulite_05
-  shoulder: sw_gim8108_8
-  elbow: sw_gim6010_8
-  wrist_pitch: hx_35hm
-  tool_roll: hx_65hm
-score: 0.8419184981684952
-cost: 607.22
-mass: 2.284
+why: "FA-2 is the balanced pick: the cheapest field-grade design, all levers on, within
+  5% of the best field-grade score. lite matches FA-1's capability for the least
+  money; max is the most capability at FA-1's price."
+chosen: balanced
+fa1:
+  design:
+    arch: parallelogram
+    dof: 5
+    l1: 0.37
+    l2: 0.28
+    mount_x: 0.26
+    pedestal: 0.05
+    spring: true
+    wrist_len: 0.09
+  actuators:
+    yaw: rs_edulite_05
+    shoulder: sw_gim8108_8
+    elbow: sw_gim6010_8
+    wrist_pitch: hx_35hm
+    tool_roll: hx_65hm
+  lever: retail
+  score_v2: 0.8671
+  cost: 812.72
+  cost_list: 607.22
+  cost_sourced: 713.72
+  mass: 2.734
+  backlash_mm: 5.66
+picks:
+  lite:
+    design:
+      arch: parallelogram
+      dof: 6
+      l1: 0.31
+      l2: 0.31
+      mount_x: 0.26
+      pedestal: 0.05
+      spring: true
+      wrist_len: 0.09
+    actuators:
+      yaw: rs_edulite_05
+      shoulder: rs_edulite_05+capstan3-d20
+      elbow: rs_edulite_05+capstan3-d20
+      wrist_pitch: sts3215
+      forearm_roll: sts3215
+      tool_roll: sts3215
+    stages:
+      shoulder: 3:1 capstan
+      elbow: 3:1 capstan
+    sources:
+      yaw: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
+      shoulder: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
+      elbow: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
+      wrist_pitch: OpenELAB DDP (AliExpress ~$20, unverified)
+      forearm_roll: OpenELAB DDP (AliExpress ~$20, unverified)
+      tool_roll: OpenELAB DDP (AliExpress ~$20, unverified)
+    lever: all
+    score: 0.8727742433547974
+    cost: 598.0
+    mass: 2.499
+    backlash_mm: 4.04
+    label: 6DOF para+spring L1=0.31 L2=0.31 x=0.26 ped=0.05
+  balanced:
+    design:
+      arch: parallelogram
+      dof: 6
+      l1: 0.31
+      l2: 0.37
+      mount_x: 0.26
+      pedestal: 0.16
+      spring: true
+      wrist_len: 0.09
+    actuators:
+      yaw: rs_05
+      shoulder: rs_edulite_05+capstan3-d20
+      elbow: rs_edulite_05+capstan3-d20
+      wrist_pitch: hx_35hm
+      forearm_roll: sts3215
+      tool_roll: sts3215
+    stages:
+      shoulder: 3:1 capstan
+      elbow: 3:1 capstan
+    sources:
+      yaw: Zennixtek DDP $105 + $7 shipping
+      shoulder: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
+      elbow: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
+      wrist_pitch: retail
+      forearm_roll: OpenELAB DDP (AliExpress ~$20, unverified)
+      tool_roll: OpenELAB DDP (AliExpress ~$20, unverified)
+    lever: all
+    score: 0.882567822933197
+    cost: 640.44
+    mass: 2.486
+    backlash_mm: 3.94
+    label: 6DOF para+spring L1=0.31 L2=0.37 x=0.26 ped=0.16
+  max:
+    design:
+      arch: parallelogram
+      dof: 6
+      l1: 0.31
+      l2: 0.37
+      mount_x: 0.26
+      pedestal: 0.16
+      spring: false
+      wrist_len: 0.09
+    actuators:
+      yaw: bare_gwk6010_8
+      shoulder: bare_gwk6010_8+capstan3-d20
+      elbow: bare_gwk6010_8+capstan3-d20
+      wrist_pitch: hx_35hm
+      forearm_roll: sts3250
+      tool_roll: sts3250
+    stages:
+      shoulder: 3:1 capstan
+      elbow: 3:1 capstan
+    sources:
+      yaw: Steadywin direct $46.82 + 40.3% duty + $15 shipping + custom driver
+      shoulder: Steadywin direct $46.82 + 40.3% duty + $15 shipping + custom driver
+      elbow: Steadywin direct $46.82 + 40.3% duty + $15 shipping + custom driver
+      wrist_pitch: retail
+      forearm_roll: OpenELAB DDP
+      tool_roll: OpenELAB DDP
+    lever: all
+    score: 0.9134616255760193
+    cost: 809.84
+    mass: 2.47
+    backlash_mm: 4.43
+    label: 6DOF para L1=0.31 L2=0.37 x=0.26 ped=0.16

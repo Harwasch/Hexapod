@@ -1,57 +1,72 @@
 {
  "design": {
   "arch": "parallelogram",
-  "dof": 5,
-  "l1": 0.37,
-  "l2": 0.28,
+  "dof": 6,
+  "l1": 0.31,
+  "l2": 0.37,
   "mount_x": 0.26,
-  "pedestal": 0.05,
+  "pedestal": 0.16,
   "spring": true,
   "wrist_len": 0.09
  },
- "label": "5DOF para+spring L1=0.37 L2=0.28 x=0.26 ped=0.05",
+ "label": "6DOF para+spring L1=0.31 L2=0.37 x=0.26 ped=0.16",
  "actuators": {
   "yaw": {
-   "id": "rs_edulite_05",
-   "name": "RobStride EduLite 05",
+   "id": "rs_05",
+   "name": "RobStride 05",
    "kind": "qdd",
    "rated": 1.8,
-   "peak": 6.0,
-   "mass": 0.242,
-   "speed": 45.0294947014537,
-   "price": 80.0,
-   "backlash_deg": 0.25,
+   "peak": 5.5,
+   "mass": 0.191,
+   "speed": 50.26548245743668,
+   "price": 112.0,
+   "backlash_deg": 0.2,
    "force_sense": "yes",
    "ip": "none",
-   "interface": "CAN"
+   "interface": "CAN",
+   "stage": "",
+   "ratio": 7.75,
+   "source": "Zennixtek DDP $105 + $7 shipping",
+   "retail": 110.0,
+   "needs_driver": false
   },
   "shoulder": {
-   "id": "sw_gim8108_8",
-   "name": "Steadywin GIM8108-8 + output encoder",
+   "id": "rs_edulite_05+capstan3-d20",
+   "name": "RobStride EduLite 05 + 3:1 capstan",
    "kind": "qdd",
-   "rated": 7.5,
-   "peak": 22.0,
-   "mass": 0.396,
-   "speed": 33.510321638291124,
-   "price": 135.0,
-   "backlash_deg": 0.25,
+   "rated": 4.968000000000001,
+   "peak": 16.560000000000002,
+   "mass": 0.304496,
+   "speed": 15.009831567151233,
+   "price": 93.0,
+   "backlash_deg": 0.08333333333333333,
    "force_sense": "yes",
-   "ip": "IP54 (vendor claim)",
-   "interface": "CAN"
+   "ip": "none",
+   "interface": "CAN",
+   "stage": "3:1 capstan",
+   "ratio": 27.0,
+   "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)",
+   "retail": 80.0,
+   "needs_driver": false
   },
   "elbow": {
-   "id": "sw_gim6010_8",
-   "name": "Steadywin GIM6010-8 + output encoder",
+   "id": "rs_edulite_05+capstan3-d20",
+   "name": "RobStride EduLite 05 + 3:1 capstan",
    "kind": "qdd",
-   "rated": 5.0,
-   "peak": 11.0,
-   "mass": 0.388,
-   "speed": 43.982297150257104,
-   "price": 105.0,
-   "backlash_deg": 0.25,
+   "rated": 4.968000000000001,
+   "peak": 16.560000000000002,
+   "mass": 0.304496,
+   "speed": 15.009831567151233,
+   "price": 93.0,
+   "backlash_deg": 0.08333333333333333,
    "force_sense": "yes",
-   "ip": "IP54 (vendor claim)",
-   "interface": "CAN"
+   "ip": "none",
+   "interface": "CAN",
+   "stage": "3:1 capstan",
+   "ratio": 27.0,
+   "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)",
+   "retail": 80.0,
+   "needs_driver": false
   },
   "wrist_pitch": {
    "id": "hx_35hm",
@@ -61,45 +76,74 @@
    "peak": 3.43,
    "mass": 0.071,
    "speed": 5.550147021341968,
-   "price": 36.0,
+   "price": 39.0,
    "backlash_deg": 0.7,
    "force_sense": "no",
    "ip": "none",
-   "interface": "TTL"
+   "interface": "TTL",
+   "stage": "",
+   "ratio": 300.0,
+   "source": "retail",
+   "retail": 36.0,
+   "needs_driver": false
+  },
+  "forearm_roll": {
+   "id": "sts3215",
+   "name": "Feetech STS3215 (12 V, C018)",
+   "kind": "servo",
+   "rated": 0.98,
+   "peak": 2.94,
+   "mass": 0.055,
+   "speed": 4.71238898038469,
+   "price": 27.4,
+   "backlash_deg": 0.6,
+   "force_sense": "no",
+   "ip": "none",
+   "interface": "TTL",
+   "stage": "",
+   "ratio": 345.0,
+   "source": "OpenELAB DDP (AliExpress ~$20, unverified)",
+   "retail": 26.0,
+   "needs_driver": false
   },
   "tool_roll": {
-   "id": "hx_65hm",
-   "name": "Hiwonder HX-65HM",
+   "id": "sts3215",
+   "name": "Feetech STS3215 (12 V, C018)",
    "kind": "servo",
-   "rated": 2.2,
-   "peak": 6.37,
-   "mass": 0.1435,
-   "speed": 5.550147021341968,
-   "price": 50.0,
-   "backlash_deg": 0.7,
+   "rated": 0.98,
+   "peak": 2.94,
+   "mass": 0.055,
+   "speed": 4.71238898038469,
+   "price": 27.4,
+   "backlash_deg": 0.6,
    "force_sense": "no",
    "ip": "none",
-   "interface": "TTL"
+   "interface": "TTL",
+   "stage": "",
+   "ratio": 345.0,
+   "source": "OpenELAB DDP (AliExpress ~$20, unverified)",
+   "retail": 26.0,
+   "needs_driver": false
   }
  },
- "cost": 607.22,
- "mass": 2.284,
- "backlash_mm": 5.66,
- "tip_speed": 21.11,
+ "cost": 640.44,
+ "mass": 2.486,
+ "backlash_mm": 3.94,
+ "tip_speed": 8.56,
  "payload": {
-  "continuous_kg": 0.33,
-  "peak_kg": 1.17,
-  "reach_m": 0.817
+  "continuous_kg": 0.35,
+  "peak_kg": 1.19,
+  "reach_m": 0.846
  },
  "legs": {
-  "actuator": "Steadywin GIM8108-8 + output encoder",
+  "actuator": "RobStride EduLite 05 + 3:1 capstan",
   "femur_need_nm": 9.5,
   "femur_peak_need_nm": 19.0,
-  "rated_nm": 7.5,
-  "peak_nm": 22.0,
+  "rated_nm": 4.968000000000001,
+  "peak_nm": 16.560000000000002,
   "fits": false
  },
- "printed_grams": 449.8,
+ "printed_grams": 490.8,
  "printed_parts": [
   {
    "part": "deck seal ring (printed)",
@@ -110,19 +154,25 @@
   {
    "part": "turret plate (printed)",
    "file": "stl/turret_plate.stl",
-   "grams": 27.8,
+   "grams": 16.2,
    "link": "turret"
   },
   {
    "part": "turret cheek, shoulder side (printed)",
    "file": "stl/turret_cheek_shoulder_side.stl",
-   "grams": 35.0,
+   "grams": 41.4,
    "link": "turret"
   },
   {
    "part": "turret cheek, elbow side (printed)",
    "file": "stl/turret_cheek_elbow_side.stl",
-   "grams": 42.4,
+   "grams": 43.4,
+   "link": "turret"
+  },
+  {
+   "part": "turret box (printed)",
+   "file": "stl/turret_box.stl",
+   "grams": 25.9,
    "link": "turret"
   },
   {
@@ -156,10 +206,16 @@
    "link": "fore"
   },
   {
-   "part": "wrist clamp (printed)",
-   "file": "stl/wrist_clamp.stl",
-   "grams": 25.5,
+   "part": "forearm roll clamp (printed)",
+   "file": "stl/forearm_roll_clamp.stl",
+   "grams": 24.1,
    "link": "fore"
+  },
+  {
+   "part": "forearm roll yoke (printed)",
+   "file": "stl/forearm_roll_yoke.stl",
+   "grams": 20.7,
+   "link": "froll"
   },
   {
    "part": "wrist bracket (printed)",
@@ -232,7 +288,7 @@
    "category": "weed",
    "weight": 1.0,
    "reach": 0.833,
-   "served": 0.125,
+   "served": 0.208,
    "points": 48
   },
   {
@@ -240,8 +296,8 @@
    "name": "Stab or stamp a weed",
    "category": "weed",
    "weight": 2.0,
-   "reach": 0.25,
-   "served": 0.208,
+   "reach": 0.667,
+   "served": 0.5,
    "points": 48
   },
   {
@@ -267,8 +323,8 @@
    "name": "Push in a soil probe or corer",
    "category": "sample",
    "weight": 1.5,
-   "reach": 0.208,
-   "served": 0.208,
+   "reach": 0.583,
+   "served": 0.542,
    "points": 48
   },
   {
@@ -285,8 +341,8 @@
    "name": "Look under or into a canopy",
    "category": "sense",
    "weight": 1.0,
-   "reach": 0.889,
-   "served": 0.889,
+   "reach": 1.0,
+   "served": 1.0,
    "points": 54
   },
   {
@@ -294,8 +350,8 @@
    "name": "Clip a leaf or tissue sample",
    "category": "sample",
    "weight": 1.0,
-   "reach": 0.944,
-   "served": 0.944,
+   "reach": 1.0,
+   "served": 1.0,
    "points": 108
   },
   {
@@ -312,8 +368,8 @@
    "name": "Pick fruit from a bush or low branch (tomato, pepper, apple)",
    "category": "harvest",
    "weight": 2.0,
-   "reach": 0.926,
-   "served": 0.889,
+   "reach": 1.0,
+   "served": 0.963,
    "points": 108
   },
   {
@@ -348,8 +404,8 @@
    "name": "Push a gate latch or button",
    "category": "maintain",
    "weight": 0.5,
-   "reach": 0.944,
-   "served": 0.944,
+   "reach": 1.0,
+   "served": 1.0,
    "points": 36
   },
   {
@@ -358,7 +414,7 @@
    "category": "maintain",
    "weight": 0.5,
    "reach": 1.0,
-   "served": 1.0,
+   "served": 0.0,
    "points": 56
   },
   {
@@ -366,12 +422,12 @@
    "name": "Prune a small stem or clear a stick",
    "category": "maintain",
    "weight": 1.0,
-   "reach": 0.952,
-   "served": 0.952,
+   "reach": 1.0,
+   "served": 1.0,
    "points": 126
   }
  ],
- "score": 0.8418,
+ "score": 0.8826,
  "hexapod": {
   "name": "H-M12 reference medium hexapod",
   "mass_kg": 12.0,
@@ -472,6 +528,9 @@
    "yaw_deg": [
     -20,
     20
+   ],
+   "lean_dx": [
+    0.1
    ]
   }
  }

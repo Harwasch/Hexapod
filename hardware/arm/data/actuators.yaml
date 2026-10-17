@@ -447,7 +447,7 @@ actuators:
     ip: none
     notes: Rated 40 rpm
   - id: sts3215
-    name: Feetech STS3215 (12 V
+    name: Feetech STS3215 (12 V, C018)
     kind: servo
     ratio: 345
     rated_nm: 0.98

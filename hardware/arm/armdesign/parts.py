@@ -27,6 +27,9 @@ LEVERS: dict[str, dict[str, bool]] = {
     "sourcing": {"sourcing": True, "reductions": False, "custom": False},
     "reductions": {"sourcing": False, "reductions": True, "custom": False},
     "custom": {"sourcing": False, "reductions": False, "custom": True},
+    # Everything that needs no engineering of our own: the custom board is 16-24+
+    # person-weeks that 10 arms never pay back (docs/ELECTRONICS.md).
+    "bought": {"sourcing": True, "reductions": True, "custom": False},
     "all": {"sourcing": True, "reductions": True, "custom": True},
 }
 LEVER_LABELS = {
@@ -34,6 +37,7 @@ LEVER_LABELS = {
     "sourcing": "+ cheaper sourcing",
     "reductions": "+ printed reductions",
     "custom": "+ custom driver electronics",
+    "bought": "sourcing + reductions, no custom board",
     "all": "all three levers",
 }
 TURRET_JOINTS = ("yaw", "shoulder", "elbow")  # the elbow only on a parallelogram
