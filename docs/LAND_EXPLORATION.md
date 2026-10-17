@@ -2207,3 +2207,56 @@ or workspace switch forgets them.
 Known limits: a land's own project has no machines, so its plans draft unassigned. The planner
 receives land outlines briefly through the write-gated, stateless plan-draft endpoint. The
 console's map preview of passes still uses its own preview spacing, not the machine classes.
+
+## Implemented increment: the demo ranch as a saved Land
+
+`uv run python -m app.seed.demo_land` (in `apps/api`, after `python -m app.seed`) saves the demo
+ranch, Oak Bench Ranch, as a Land in the pilot workspace, so the joined loop has real ground at
+the place the simulated fleet works. Everything comes from `apps/api/app/seed/demo_ranch.json`,
+the file the `demo-ranch` site and the web app read, and goes in through the same services as the
+Land panel's routes:
+
+- **The Land**: the demo outline as its boundary, with source method `imported`, record id
+  `demo-ranch` and meaning `study-area`. The description says that the outline is a demo area,
+  not a property line, that the name, fleet, zones and plans are simulated, and that nothing has
+  been inspected.
+- **Three inventory features**, each a `candidate` with an external reference
+  `demo_ranch.json` / its key in the file, clipped to the outline:
+  - _Perimeter fence_ (`other`, a line on the outline's east, north and west edges). Its source
+    reads "Demo outline fence, simulated", and it carries `simulated: true`. No fence was mapped
+    or surveyed.
+  - _Figueroa Creek_ (`water`): the USGS NHD flowlines, merged into one line, with the NHD
+    credit (public domain).
+  - _Oak woodland_ (`vegetation`): the ESA WorldCover 2021 tree cover and shrubland patch, with
+    the CC BY 4.0 credit. WorldCover does not map species, so `species` reads "oak (assumed)".
+
+It writes nothing observed: no inspections, findings, evidence, rasters, surveys or research
+results. Those come from people and from real runs. `--research` queues the Land's overview, the
+same `ensure_overview` behind `POST /land/{id}/overview`, once per boundary revision. It says
+when no research worker is running (`pnpm dev:research`).
+
+Running it again is safe. The Land's id is `uuid5(workspace, "demo-land/demo-ranch")`, and each
+feature's is the one `land_features.create` derives from a fixed request key. So a rerun finds
+them by id, creates what is missing, and brings the outline, the words, the sources and the
+geometry back to the file's as new revisions, which keeps any edit in the history. Some things
+stay the user's: the Land's and features' names, a feature's status (confirmed or retired), the
+evidence they linked, and anything they added. `create_land` takes an optional `identifier`
+for this, which the API never passes.
+
+In the console: with the demo ranch open, select Oak Bench Ranch in **Land**. Its ranch zones
+overlap the Land, so `groundModeFor` layers it: the project stays the demo ranch, with its fleet
+and zones Z-14, Z-21 and Z-08. The fence, the creek and the oak woodland join them as private
+zones, and the boundary stays with the Land layer. "Monitor the fence every week" then names
+the fence. Two console details came out of checking this in a browser:
+
+- A line feature's chip now sits halfway along its line (`halfwayAlong`). The middle of the
+  fence's bounds was in the middle of the ranch.
+- A zone's card no longer prints the same source twice when its note and attribution are the
+  same, as they are for every Land zone.
+
+Tests: `tests/test_demo_land.py` covers the listed Land, the features and their sources, the
+ground's notes, geometry inside the outline, a rerun that changes nothing, a rerun that puts the
+file back and keeps the user's choices, a changed file, workspace scoping, the queued overview,
+the command's output, and a check that no inspection, evidence, finding, artifact, raster,
+survey, document or action exists. `landGround.test.ts` checks that the seeded outline layers
+onto the demo ranch's project and where line chips sit.

@@ -58,12 +58,13 @@ cp .env.example .env                      # fill in tokens later; nothing is req
 docker compose -f infra/docker-compose.yml up -d   # PostGIS on :5432, MinIO on :9000/:9001
 pnpm install
 cd apps/api && uv sync && uv run alembic upgrade head && uv run python -m app.seed && cd ../..
+cd apps/api && uv run python -m app.seed.demo_land && cd ../..   # optional: the demo ranch as a saved Land
 pnpm dev:api                              # http://localhost:8000/api/v1/docs  (terminal 1)
 pnpm dev                                  # http://localhost:5173              (terminal 2)
 pnpm dev:research  # land research worker (terminal 3; only needed for Land analyses)
 ```
 
-Open <http://localhost:5173>, click **View high-resolution demo**.
+Open <http://localhost:5173>, click **Open the demo ranch**.
 
 Three pages are served, not one. `/` is the globe; `/admin.html` is the data console —
 every capture in storage, every run that produced it, and the form that launches more;
@@ -74,6 +75,15 @@ Without Docker: any PostgreSQL 16 with the PostGIS extension works; point `DATAB
 and `TEST_DATABASE_URL` at it. Without the API at all, the web app still boots with the
 built-in demo ranch and scan showcase and labels itself "Catalog API offline". The seed is
 manual (`uv run python -m app.seed`, also after a deploy).
+
+The demo ranch as a saved Land is a separate, opt-in seed:
+`cd apps/api && uv run python -m app.seed.demo_land` saves Oak Bench Ranch in the pilot
+workspace's Land, with three inventory features that name their sources: the perimeter fence
+(simulated), Figueroa Creek (USGS NHD) and the oak woodland (ESA WorldCover 2021; oak assumed).
+Select it in **Land** while the demo ranch is open and its features join the ranch's zones,
+fleet and all. It is idempotent, and `--research` also queues the Land's overview for
+`pnpm dev:research`. It records no inspections, findings or evidence: those come from people
+and real research runs ([docs/LAND_EXPLORATION.md](docs/LAND_EXPLORATION.md)).
 
 ### Environment variables
 

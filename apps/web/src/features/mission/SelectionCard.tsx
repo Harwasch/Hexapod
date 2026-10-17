@@ -145,7 +145,8 @@ export function SelectionCard() {
                   valueText={`${zone.progressPct}%`}
                 />
                 <div className="mc-card__note">{zone.note}</div>
-                {zone.attribution && (
+                {/* A Land's zones carry their source in both: say it once. */}
+                {zone.attribution && zone.attribution !== zone.note && (
                   <div className="mc-card__note mc-muted" data-testid="zone-attribution">
                     {zone.attribution}
                   </div>

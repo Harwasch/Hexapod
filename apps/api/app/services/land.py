@@ -87,8 +87,17 @@ def get_land(db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID) -> LandRe
     return _read(*result)
 
 
-def create_land(db: Session, workspace_id: uuid.UUID, payload: LandCreate) -> LandRead:
+def create_land(
+    db: Session,
+    workspace_id: uuid.UUID,
+    payload: LandCreate,
+    *,
+    identifier: uuid.UUID | None = None,
+) -> LandRead:
+    """`identifier` is for a seed that finds its own land again by id (`app.seed.demo_land`);
+    the API never passes one."""
     row = LandArea(
+        id=identifier or uuid.uuid4(),
         workspace_id=workspace_id,
         name=payload.name,
         description=payload.description,
