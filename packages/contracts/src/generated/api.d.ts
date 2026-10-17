@@ -1054,6 +1054,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/knowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Grid */
+        get: operations["grid_api_v1_land__land_id__knowledge_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/knowledge/cell": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cell */
+        get: operations["cell_api_v1_land__land_id__knowledge_cell_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/{land_id}/knowledge/scout-areas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scout Areas */
+        post: operations["scout_areas_api_v1_land__land_id__knowledge_scout_areas_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/overview": {
         parameters: {
             query?: never;
@@ -4894,6 +4945,243 @@ export interface components {
              */
             updatedAt: string;
         };
+        /** KnowledgeCellRead */
+        KnowledgeCellRead: {
+            /** Bounds */
+            bounds: number[] | null;
+            /** Cellm */
+            cellM: number;
+            /** Column */
+            column: number | null;
+            /** Density */
+            density: number | null;
+            /** Inside */
+            inside: boolean;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Notcounted */
+            notCounted: components["schemas"]["NotCountedRead"][];
+            /** Policyversion */
+            policyVersion: string;
+            /** Records */
+            records: components["schemas"]["KnowledgeCellRecord"][];
+            /** Row */
+            row: number | null;
+        };
+        /** KnowledgeCellRecord */
+        KnowledgeCellRecord: {
+            /** Arithmetic */
+            arithmetic: string;
+            /** Best */
+            best: boolean;
+            /** Credit */
+            credit: number;
+            record: components["schemas"]["KnowledgeRecordRead"];
+        };
+        /** KnowledgeClassRead */
+        KnowledgeClassRead: {
+            /** Example */
+            example: string;
+            /** Halflifedays */
+            halfLifeDays: number;
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "centimetre" | "field" | "aerial" | "satellite" | "regional";
+            /** Label */
+            label: string;
+            /** Maxresolutionm */
+            maxResolutionM: number | null;
+            /** Quality */
+            quality: number;
+        };
+        /** KnowledgeGridRead */
+        KnowledgeGridRead: {
+            /**
+             * Asof
+             * Format: date-time
+             */
+            asOf: string;
+            best: components["schemas"]["LonLatGrid"];
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            density: components["schemas"]["LonLatGrid"];
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Notcounted */
+            notCounted: components["schemas"]["NotCountedRead"][];
+            policy: components["schemas"]["KnowledgePolicyRead"];
+            /** Records */
+            records: components["schemas"]["KnowledgeRecordRead"][];
+            summary: components["schemas"]["KnowledgeSummary"];
+        };
+        /**
+         * KnowledgeLink
+         * @description Where the record lives in the app: a scan site, an inventory feature, a land raster, an
+         *     aligned archive image, a research evidence row or a field survey.
+         */
+        KnowledgeLink: {
+            /** Detail */
+            detail?: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "site" | "inventory" | "raster" | "registration" | "evidence" | "survey";
+        };
+        /** KnowledgePolicyRead */
+        KnowledgePolicyRead: {
+            /** Classes */
+            classes: components["schemas"]["KnowledgeClassRead"][];
+            /** Fieldreachm */
+            fieldReachM: {
+                [key: string]: number;
+            };
+            /** Foggythreshold */
+            foggyThreshold: number;
+            /** Formula */
+            formula: string;
+            /** Undatedfactor */
+            undatedFactor: number;
+            /** Version */
+            version: string;
+        };
+        /** KnowledgeProvenance */
+        KnowledgeProvenance: {
+            /** Attribution */
+            attribution: string;
+            /** License */
+            license: string;
+            /** Provider */
+            provider: string;
+            /** Url */
+            url?: string | null;
+        };
+        /** KnowledgeRecordRead */
+        KnowledgeRecordRead: {
+            /** Agedays */
+            ageDays: number | null;
+            /** Arithmetic */
+            arithmetic: string;
+            /** Cells */
+            cells: number;
+            /**
+             * Classid
+             * @enum {string}
+             */
+            classId: "centimetre" | "field" | "aerial" | "satellite" | "regional";
+            /** Classnote */
+            classNote: string | null;
+            /**
+             * Countedclassid
+             * @enum {string}
+             */
+            countedClassId: "centimetre" | "field" | "aerial" | "satellite" | "regional";
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "capture" | "inspection" | "raster-observation" | "archive-alignment" | "research-evidence" | "survey";
+            link: components["schemas"]["KnowledgeLink"];
+            /** Located */
+            located: boolean;
+            /** Observedat */
+            observedAt: string | null;
+            /** Observedlabel */
+            observedLabel: string;
+            /** Peakcredit */
+            peakCredit: number;
+            /** Positionaluncertaintym */
+            positionalUncertaintyM: number | null;
+            provenance: components["schemas"]["KnowledgeProvenance"];
+            /**
+             * Recordedat
+             * Format: date-time
+             */
+            recordedAt: string;
+            /** Resolutionm */
+            resolutionM: number | null;
+            /** Title */
+            title: string;
+        };
+        /** KnowledgeScoutArea */
+        KnowledgeScoutArea: {
+            /** Aream2 */
+            areaM2: number;
+            /** Bestclasscounts */
+            bestClassCounts: {
+                [key: string]: number;
+            };
+            /** Cells */
+            cells: number;
+            footprint: components["schemas"]["Polygon"];
+            /** Meandensity */
+            meanDensity: number;
+            /** Reason */
+            reason: string;
+        };
+        /** KnowledgeScoutRead */
+        KnowledgeScoutRead: {
+            /** Areas */
+            areas: components["schemas"]["KnowledgeScoutArea"][];
+            /** Budgetm2 */
+            budgetM2: number | null;
+            /** Forecast */
+            forecast: string;
+            /** Policyversion */
+            policyVersion: string;
+            /** Threshold */
+            threshold: number;
+            /** Truncatedbybudget */
+            truncatedByBudget: boolean;
+        };
+        /** KnowledgeScoutRequest */
+        KnowledgeScoutRequest: {
+            /** Budgetm2 */
+            budgetM2?: number | null;
+            /**
+             * Cellm
+             * @default 20
+             */
+            cellM?: number;
+            /** Focus */
+            focus?: number[] | null;
+            /**
+             * Maxareas
+             * @default 3
+             */
+            maxAreas?: number;
+            /**
+             * Threshold
+             * @default 0.5
+             */
+            threshold?: number;
+        };
+        /** KnowledgeSummary */
+        KnowledgeSummary: {
+            /** Bybestclass */
+            byBestClass: {
+                [key: string]: number;
+            };
+            /** Foggyfraction */
+            foggyFraction: number;
+            /** Insidecells */
+            insideCells: number;
+            /** Mediandensity */
+            medianDensity: number | null;
+        };
         /** LandActionCreate */
         LandActionCreate: {
             /** Assumptions */
@@ -6038,6 +6326,46 @@ export interface components {
             /** Stepsstarted */
             stepsStarted: number;
         };
+        /**
+         * LonLatGrid
+         * @description `value = raw * scale + offset`, except raw == `nodata`. `data` is base64 of the raw
+         *     values, little-endian, row-major from the north-west cell.
+         */
+        LonLatGrid: {
+            /** Cellm */
+            cellM: number;
+            /** Columns */
+            columns: number;
+            /** Data */
+            data: string;
+            /** East */
+            east: number;
+            /**
+             * Encoding
+             * @enum {string}
+             */
+            encoding: "u8" | "u16" | "f32";
+            /** Nodata */
+            nodata?: number | null;
+            /** North */
+            north: number;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset?: number;
+            /** Rows */
+            rows: number;
+            /**
+             * Scale
+             * @default 1
+             */
+            scale?: number;
+            /** South */
+            south: number;
+            /** West */
+            west: number;
+        };
         /** MapFeature */
         MapFeature: {
             /** Geometry */
@@ -6156,6 +6484,13 @@ export interface components {
             type: "mvt";
             /** Urltemplate */
             urlTemplate: string;
+        };
+        /** NotCountedRead */
+        NotCountedRead: {
+            /** Reason */
+            reason: string;
+            /** Title */
+            title: string;
         };
         /**
          * OrphanObject
@@ -6365,6 +6700,7 @@ export interface components {
         PlanArea: {
             /** Attribution */
             attribution?: string | null;
+            capture?: components["schemas"]["ScoutCapture"] | null;
             /** Footprint */
             footprint: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
             /** Id */
@@ -6626,6 +6962,7 @@ export interface components {
              * @default 0
              */
             acres?: number;
+            capture?: components["schemas"]["ScoutCapture"] | null;
             /** Geometry */
             geometry?: (components["schemas"]["Point"] | components["schemas"]["LineString"] | components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
             /** Id */
@@ -7818,6 +8155,31 @@ export interface components {
             requestKey?: string;
             /** Solarassessmentid */
             solarAssessmentId?: string | null;
+        };
+        /** ScoutCapture */
+        ScoutCapture: {
+            /** Altitudem */
+            altitudeM: number;
+            /**
+             * Camera
+             * @default dji-m3e-wide
+             * @constant
+             */
+            camera?: "dji-m3e-wide";
+            /** Forwardoverlap */
+            forwardOverlap: number;
+            /** Headingdeg */
+            headingDeg?: number | null;
+            /**
+             * Purpose
+             * @default lift-knowledge-fog
+             * @constant
+             */
+            purpose?: "lift-knowledge-fog";
+            /** Sideoverlap */
+            sideOverlap: number;
+            /** Speedms */
+            speedMs: number;
         };
         /** SelectionInstruction */
         SelectionInstruction: {
@@ -9233,6 +9595,18 @@ export type SchemaJobRead = components['schemas']['JobRead'];
 export type SchemaJobRetry = components['schemas']['JobRetry'];
 export type SchemaJobStepLog = components['schemas']['JobStepLog'];
 export type SchemaJobStepRead = components['schemas']['JobStepRead'];
+export type SchemaKnowledgeCellRead = components['schemas']['KnowledgeCellRead'];
+export type SchemaKnowledgeCellRecord = components['schemas']['KnowledgeCellRecord'];
+export type SchemaKnowledgeClassRead = components['schemas']['KnowledgeClassRead'];
+export type SchemaKnowledgeGridRead = components['schemas']['KnowledgeGridRead'];
+export type SchemaKnowledgeLink = components['schemas']['KnowledgeLink'];
+export type SchemaKnowledgePolicyRead = components['schemas']['KnowledgePolicyRead'];
+export type SchemaKnowledgeProvenance = components['schemas']['KnowledgeProvenance'];
+export type SchemaKnowledgeRecordRead = components['schemas']['KnowledgeRecordRead'];
+export type SchemaKnowledgeScoutArea = components['schemas']['KnowledgeScoutArea'];
+export type SchemaKnowledgeScoutRead = components['schemas']['KnowledgeScoutRead'];
+export type SchemaKnowledgeScoutRequest = components['schemas']['KnowledgeScoutRequest'];
+export type SchemaKnowledgeSummary = components['schemas']['KnowledgeSummary'];
 export type SchemaLandActionCreate = components['schemas']['LandActionCreate'];
 export type SchemaLandActionRead = components['schemas']['LandActionRead'];
 export type SchemaLandActionRequestRead = components['schemas']['LandActionRequestRead'];
@@ -9277,6 +9651,7 @@ export type SchemaLiveProgress = components['schemas']['LiveProgress'];
 export type SchemaLiveSplat = components['schemas']['LiveSplat'];
 export type SchemaLiveStage = components['schemas']['LiveStage'];
 export type SchemaLiveState = components['schemas']['LiveState'];
+export type SchemaLonLatGrid = components['schemas']['LonLatGrid'];
 export type SchemaMapFeature = components['schemas']['MapFeature'];
 export type SchemaMapOutput = components['schemas']['MapOutput'];
 export type SchemaMemberRead = components['schemas']['MemberRead'];
@@ -9285,6 +9660,7 @@ export type SchemaMessageRead = components['schemas']['MessageRead'];
 export type SchemaMissingObject = components['schemas']['MissingObject'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
+export type SchemaNotCountedRead = components['schemas']['NotCountedRead'];
 export type SchemaOrphanObject = components['schemas']['OrphanObject'];
 export type SchemaOutline = components['schemas']['Outline'];
 export type SchemaOutlinePoint = components['schemas']['OutlinePoint'];
@@ -9362,6 +9738,7 @@ export type SchemaScenarioRead = components['schemas']['ScenarioRead'];
 export type SchemaScenarioRequestRead = components['schemas']['ScenarioRequestRead'];
 export type SchemaScenarioResult = components['schemas']['ScenarioResult'];
 export type SchemaScenarioRevise = components['schemas']['ScenarioRevise'];
+export type SchemaScoutCapture = components['schemas']['ScoutCapture'];
 export type SchemaSelectionInstruction = components['schemas']['SelectionInstruction'];
 export type SchemaSelectionInterpretation = components['schemas']['SelectionInterpretation'];
 export type SchemaSidecarAttach = components['schemas']['SidecarAttach'];
@@ -14179,6 +14556,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InvestigationRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    grid_api_v1_land__land_id__knowledge_get: {
+        parameters: {
+            query?: {
+                asOf?: string | null;
+                cellM?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeGridRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cell_api_v1_land__land_id__knowledge_cell_get: {
+        parameters: {
+            query: {
+                asOf?: string | null;
+                cellM?: number;
+                latitude: number;
+                longitude: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeCellRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    scout_areas_api_v1_land__land_id__knowledge_scout_areas_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnowledgeScoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeScoutRead"];
                 };
             };
             /** @description Missing or wrong write token */

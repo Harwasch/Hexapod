@@ -1,5 +1,5 @@
 {
-  "about": "Shared coverage fixtures: packages/geo/src/coverage.test.ts (coveragePath, outer rings) and apps/api/tests/test_coverage.py (app.services.coverage.measure) hold their numbers to these. Coordinates are metre offsets from (-122.139, 47.644) near Redmond, WA.",
+  "about": "Shared coverage fixtures: packages/geo/src/coverage.test.ts (footprintLanes on every case; coveragePath, outer ring only, on the cases without holes or parts) and apps/api/tests/test_coverage.py (app.services.coverage.measure) hold their numbers to these. Coordinates are metre offsets from (-122.139, 47.644) near Redmond, WA.",
   "cases": [
     {
       "name": "rectangle 200 x 100 m",
@@ -97,7 +97,7 @@
         "passes": 10,
         "lengthM": 1750,
         "lengthTolM": 40,
-        "pythonOnly": true
+        "outerRingOnlyFails": true
       }
     },
     {
@@ -129,7 +129,7 @@
       "expect": {
         "lengthMin": 3800,
         "lengthMax": 4200,
-        "pythonOnly": true
+        "outerRingOnlyFails": true
       }
     }
   ]

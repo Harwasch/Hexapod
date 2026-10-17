@@ -941,9 +941,12 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("agent-stream")).toContainText("Drafted");
     await app.getByTestId("agent-stream-toggle").click();
     await expect(app.getByTestId("agent-stream")).toHaveCount(0);
-    // The draft is drawn on the map: coverage passes for Z-21, a step marker, no route (one zone).
+    // The draft is drawn on the map: coverage passes for Z-21 (the fence strip's passes split
+    // where it turns, so several strokes), a step marker, no route (one zone).
     await expect
-      .poll(() => planEntityIds(app))
+      .poll(async () => [
+        ...new Set((await planEntityIds(app)).map((id) => id.replace(/(passes:Z-21):\d+$/, "$1"))),
+      ])
       .toEqual(["mission:plan:passes:Z-21", "mission:plan:step:Z-21"]);
     // Plain words in the bar change the open draft.
     await app.getByTestId("command-input").fill("use TR-12 as well");

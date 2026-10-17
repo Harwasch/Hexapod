@@ -12,7 +12,7 @@
 
 import type { Position } from "geojson";
 
-import { bearing, coveragePath, destination, haversineDistance, toAcres } from "@twin/geo";
+import { bearing, coverageLanes, destination, haversineDistance, toAcres } from "@twin/geo";
 
 import {
   BUILTIN_RANCH_ID,
@@ -82,18 +82,20 @@ function miles(meters: number): string {
 }
 
 /**
- * The point `fraction` of the way through the coverage passes' working length (the spans
- * inside the zone; the turns between them are not work), with the path vertices before it and
- * the direction of travel there. The passes are the ones the plan preview draws.
+ * The point `fraction` of the way through the coverage passes' working length (the lanes
+ * inside the zone, holes left out; the turns between them are not work), with the path
+ * vertices before it and the direction of travel there. The passes are the ones the plan
+ * preview draws (`footprintLanes` in MissionManager.showPlan), so a machine never stands in a
+ * hole the preview leaves open.
  */
 export function alongPasses(
-  ring: Position[],
+  polygon: Position[][],
   fraction: number,
 ): { position: LonLat; track: LonLat[]; headingDeg: number } {
-  const path = coveragePath(ring, {
+  const path = coverageLanes(polygon, {
     swathM: PREVIEW_SWATH_M,
     maxPasses: PREVIEW_MAX_PASSES,
-  }).positions;
+  }).lanes.flatMap((lane) => [lane.a, lane.b]);
   // Spans are (start, end) pairs: segment i→i+1 is work when i is even, a turn when it is odd.
   let total = 0;
   for (let i = 0; i + 1 < path.length; i += 2) {
@@ -126,7 +128,6 @@ export function alongPasses(
 export function buildDemoProject(ranch: DemoRanch): Project {
   const z = ranch.derived.zones;
   const acres = (id: DemoZoneId) => Math.round(toAcres(z[id].areaM2));
-  const ring = (id: DemoZoneId) => z[id].footprint.coordinates[0] ?? [];
   const ac14 = acres("Z-14");
   const ac21 = acres("Z-21");
   const ac08 = acres("Z-08");
@@ -146,9 +147,9 @@ export function buildDemoProject(ranch: DemoRanch): Project {
   const surveyRate = assumedAcresPerHour("survey");
   const seedRate = assumedAcresPerHour("seed");
 
-  const tr04 = alongPasses(ring("Z-14"), PROGRESS["Z-14"]);
-  const tr12 = alongPasses(ring("Z-21"), PROGRESS["Z-21"]);
-  const tr18 = alongPasses(ring("Z-08"), PROGRESS["Z-08"]);
+  const tr04 = alongPasses(z["Z-14"].footprint.coordinates, PROGRESS["Z-14"]);
+  const tr12 = alongPasses(z["Z-21"].footprint.coordinates, PROGRESS["Z-21"]);
+  const tr18 = alongPasses(z["Z-08"].footprint.coordinates, PROGRESS["Z-08"]);
   const base1 = ranch.bases["Base 1"] ?? ranch.derived.centroid;
   const base2 = ranch.bases["Base 2"] ?? ranch.derived.centroid;
   // Beside Base 1 rather than on it, so the two markers there do not stack.

@@ -62,6 +62,13 @@ export interface SceneEvents extends Record<string, unknown> {
    */
   living: LivingSurveyStatus;
   "area-candidate-pick": string;
+  /**
+   * A plain click on empty ground (no feature, entity or scan object under it), raised only
+   * while a consumer asked for them (`SelectionManager.wantGroundTaps`: the fog's cell card);
+   * on a mission zone's fill too, where the consumer claims the ground. x and y are CSS px
+   * from the canvas's top left.
+   */
+  "ground-tap": { longitude: number; latitude: number; x: number; y: number };
 }
 
 export interface GeocodeResult {

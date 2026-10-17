@@ -2178,7 +2178,7 @@ a zone id, attributes each area to the approved action revision, and rejects ano
 Planning: the planner sizes a zone that comes with an outline from a shapely port of the
 console's coverage passes (`services/coverage.py`; holes and MultiPolygons included), using the
 assumed machine classes in `services/machine_classes.json`, the one table the web app reads too
-(robotic brush mower, seed drill, survey rover, consumer mapping drone; every label says
+(robotic brush mower, seed drill, survey rover, Mavic 3 Enterprise class mapping drone; every label says
 "assumed"). Hours are path length over the class speed plus turns, with each zone's basis
 sentence on the draft and one combined line under assumptions. A measured work-log rate still
 sets an area's hours. Zones without an outline (the simulated demo fleet's) are sized exactly as
@@ -2340,3 +2340,87 @@ mapped, and a view saved on it reopened on band 20 in a fresh browser. Hydrograp
 Figueroa Creek), 34 ephemeral and 1 artificial path; the generalised query answered in 1.5 s.
 Known limit: land rasters are Cesium imagery layers, which are not drawn while Google
 Photorealistic 3D Tiles are on; the maps above were checked in the open world mode.
+
+## Implemented increment: the Fog of Knowing (fog-v1)
+
+A saved land can show how fine and how fresh the knowledge this workspace has _stored_ about
+each patch of it is: soft fog over the map that is thick where nothing is stored, or only old or
+coarse records, and thin where there is recent, fine evidence. It is computed, never measured,
+and it lifts only when new evidence is stored; computing it again changes nothing.
+
+Policy `fog-v1` (`apps/api/app/analysis/knowledge.py`). Cells are lon/lat-aligned, 20 m by
+default (10 to 100 m, grown until the grid is at most 256 x 256), and a cell is inside when its
+centre is (holes stay out).
+
+    density = 1 - max over records r covering the cell of Q(class r) x 0.5^(age r / H(class r))
+
+| Class                              | Q    | Half-life | Example                                         |
+| ---------------------------------- | ---- | --------- | ----------------------------------------------- |
+| Centimetre capture (5 cm or finer) | 1.00 | 180 d     | a drone or phone capture                        |
+| Field inspection                   | 0.85 | 120 d     | a person's dated inspection of a mapped feature |
+| Aerial imagery (5 cm to 1 m)       | 0.70 | 365 d     | an aligned air photo or historical map          |
+| Satellite (1 to 20 m)              | 0.45 | 90 d      | a cloud-masked Sentinel-2 scene                 |
+| Regional or unlocated              | 0.20 | 5 y       | a soil map, a 30 m elevation model, a document  |
+
+- An undated record counts at Q x 0.25, as if two half-lives old. The age is from the
+  observation (or publication) date, never the retrieval date.
+- A record with no published location (all research evidence and field surveys today) counts
+  for the whole land with Q capped at the regional 0.20; its half-life stays its class's.
+- A record placed less precisely than a cell (a capture's georeference uncertainty, an aligned
+  image's leave-one-out RMS) drops one class.
+- An inspected point reaches 15 m, a line 5 m; a footprint covers the cells it touches.
+- The qualities and half-lives are judgement, not measurement. Any change is a new policy
+  version, and the version is shown beside every number.
+
+Counted: public scan sites whose assets meet the land (class from the recorded ground
+resolution; a scan with none is assumed centimetre and says so), inspections of the land's
+inventory features (on the geometry as inspected), the land's newest 20 rasters (each dated
+Sentinel-2 scene on the cells it actually saw, so cloud-masked cells earn nothing; the
+`sentinel-2-signature` dataset counts the same way from its observations; ESA WorldCover as
+2021; Copernicus and USGS 3DEP elevation as regional and undated), archive images aligned to the
+ground, research evidence and field surveys. Not counted, and listed in the legend: the Google
+photorealistic basemap (no capture date), public NAIP air photos and Sentinel-2 scenes that are
+not stored here (the Time Lantern shows them; they count once stored), and mission plans, the
+simulated fleet and its tracks, Living Survey motion and inferred fill. GBIF records withhold
+their coordinates and are never drawn as points. Derived analyses (solar, scenarios) and name
+lookups are not observations.
+
+API, read-only and workspace-scoped (viewers may ask): `GET /land/{id}/knowledge?cellM&asOf`
+returns the grid as two `LonLatGrid`s (the shared wire format in `app/schemas/grids.py`, row 0 at
+the north: density u8, 0..250 = density x 250, 255 outside; best record u16, 65535 none), the
+records, a summary and the policy. `GET /land/{id}/knowledge/cell` lists every record covering
+one cell with its credit arithmetic. `POST /land/{id}/knowledge/scout-areas` returns the foggiest
+patches within a budget, nearest a focus point when the fog is even. Each kind of record is read
+in one statement, so the query count does not grow with the evidence.
+
+Console: the strip's "Fog of knowing" pill shows the fog over the selected land, one ground
+drape (`cesium/GroundGridLayer.ts`) whose noise breaks it into fog rather than a heatmap. While
+it shows, a plain click inside the land opens the cell's card, on a mission zone's fill as well
+(outside the land, or before the grid is in, the zone is selected as usual; the map menu has
+"What do we know here" too); otherwise a click on the ground still does nothing. Saving an
+inspection, editing the inventory, aligning an archive image, saving a field survey, finishing a
+research run, registering a capture or revising the boundary refreshes everything computed from
+the land's records (`invalidateLandDerived`); the grid is also keyed by the boundary revision, so
+a revised boundary never shows the old grid. Where fog went it dissolves over 1.5 s. The drape's
+fragment shader reads two texels and two 3-octave noise fields (the land's edge comes pre-softened
+in the texture), since it covers the screen on the photorealistic tiles. "Fetch latest satellite
+look" stores one Sentinel-2 scene from the last 30 days.
+
+"Lift the fog" asks for the foggiest ground within one battery (about 64 acres at the assumed
+drone's flight) near the view and drafts a survey over it through a fresh plan card (one left
+open, a revision included, is replaced, as "Plan on this land" does): the patches
+are private area zones carrying their scout capture (`PlanArea.capture`), the map draws their
+real flight lines dashed with "Would lift fog · forecast", and the planner flies them at those
+numbers. The draft or the approved plan exports a DJI WPML route (KMZ: `wpmz/template.kml` and
+`wpmz/waylines.wpml`) for a Mavic 3 Enterprise class aircraft in DJI Pilot 2 or FlightHub 2:
+one waypoint at each end of every drawn lane, areas in the plan's step order as the map routes
+them and each with its own capture's lanes, photos every photo spacing along lanes and none on
+transit legs, heights relative to the take-off point. Areas set to different heights or overlaps
+are not exported as one route. Changing the height restates the detail in the goal and in the
+planner's detail answer. Caveats, said in the console as well: the route is a draft that has not
+been imported into DJI Pilot 2 or FlightHub 2 or flown; it does not follow terrain (the card
+samples the 3D surface under the patches once per outline, at most 150 points reused across
+heights, and gives the resulting detail range and lowest clearance); the zip is store-only; the
+battery time is assumed; check airspace
+(B4UFLY or LAANC) and fly under Part 107. The drone class in `machine_classes.json` is now that
+aircraft's wide camera (73.7 degrees across), so lines at 60 m are 27 m apart.

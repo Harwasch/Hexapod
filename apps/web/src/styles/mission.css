@@ -2630,3 +2630,27 @@ a.mc-link {
   font-size: 12px;
   text-align: center;
 }
+
+/* A scout route over fog patches (features/mission/ScoutExport.tsx): the computed flight and
+   the export, in the plan card under PATH and in an approved plan's detail. */
+.mc-scout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.mc-scout__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.mc-scout__facts dt {
+  color: var(--text-tertiary);
+}
+
+.mc-scout__facts dd {
+  margin: 0;
+}

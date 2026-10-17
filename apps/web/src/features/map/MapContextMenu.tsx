@@ -1,12 +1,22 @@
-import { ClipboardList, Info, LandPlot, Navigation, Ruler, type LucideIcon } from "lucide-react";
+import {
+  ClipboardList,
+  CloudFog,
+  Info,
+  LandPlot,
+  Navigation,
+  Ruler,
+  type LucideIcon,
+} from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 
+import { footprintContains } from "@twin/geo";
 import { GlassPanel } from "@twin/ui";
 
 import { env } from "@/app/env";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { useScene } from "@/cesium/SceneContext";
+import { useKnowledge } from "@/state/knowledge";
 import { useLand } from "@/state/land";
 import { useLandAccessReady, useLandCanEdit } from "@/state/landIdentity";
 import { useUi, type MapMenuAt } from "@/state/ui";
@@ -62,15 +72,36 @@ function outline(unsaved: boolean): MapAction {
 }
 
 /**
+ * The Fog of Knowing at the point: the fog shows over the selected land and the card opens on
+ * the cell there, listing every stored record that covers it (`KnowledgeFogBridge`).
+ */
+function knowledgeHere(landId: string): MapAction {
+  return {
+    id: "knowledge",
+    label: "What do we know here",
+    icon: CloudFog,
+    run: (_scene, at) => useKnowledge.getState().selectAt(landId, at.longitude, at.latitude),
+  };
+}
+
+/**
  * The menu's items. The Land item comes after Plan here, and only where land exploration is
  * on, the workspace is ready and the user's role can add land, as the inspector's "Outline
  * this land" (PlaceFacts): otherwise it would clear the selected land for an outline that
- * could not be saved.
+ * could not be saved. "What do we know here" follows What's here, on the selected land only.
  */
-function actions(land: { offered: boolean; unsaved: boolean }): readonly MapAction[] {
-  if (!land.offered) return ACTIONS;
-  const plan = ACTIONS.findIndex((action) => action.id === "plan") + 1;
-  return [...ACTIONS.slice(0, plan), outline(land.unsaved), ...ACTIONS.slice(plan)];
+function actions(land: {
+  offered: boolean;
+  unsaved: boolean;
+  knowledgeOf: string | null;
+}): readonly MapAction[] {
+  const items = [...ACTIONS];
+  if (land.offered) {
+    const plan = items.findIndex((action) => action.id === "plan") + 1;
+    items.splice(plan, 0, outline(land.unsaved));
+  }
+  if (land.knowledgeOf) items.splice(1, 0, knowledgeHere(land.knowledgeOf));
+  return items;
 }
 
 /**
@@ -100,6 +131,15 @@ function MapMenu({ at }: { at: MapMenuAt }) {
   const canAddLand = useLandCanEdit();
   const unsaved = useLand(hasUnsavedOutline);
   const offerLand = env.landExplorationEnabled && landReady && canAddLand;
+  // The fog is about the selected land: offered at points inside it.
+  const knowledgeOf = useLand((s) =>
+    env.landExplorationEnabled &&
+    landReady &&
+    s.active &&
+    footprintContains(s.active.boundary, { longitude: at.longitude, latitude: at.latitude })
+      ? s.active.id
+      : null,
+  );
   // Leaving (its exit fade), it takes no more keys or presses.
   const present = useIsPresent();
   const root = useRef<HTMLDivElement>(null);
@@ -190,24 +230,26 @@ function MapMenu({ at }: { at: MapMenuAt }) {
         aria-label="Map"
         onKeyDown={onKeyDown}
       >
-        {actions({ offered: offerLand, unsaved }).map(({ id, label, icon: Icon, run }) => (
-          <button
-            key={id}
-            type="button"
-            role="menuitem"
-            tabIndex={-1}
-            className="map-menu__item"
-            disabled={!scene}
-            data-testid={`map-menu-${id}`}
-            onClick={() => {
-              close();
-              if (scene) run(scene, at);
-            }}
-          >
-            <Icon size={15} aria-hidden="true" />
-            {label}
-          </button>
-        ))}
+        {actions({ offered: offerLand, unsaved, knowledgeOf }).map(
+          ({ id, label, icon: Icon, run }) => (
+            <button
+              key={id}
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              className="map-menu__item"
+              disabled={!scene}
+              data-testid={`map-menu-${id}`}
+              onClick={() => {
+                close();
+                if (scene) run(scene, at);
+              }}
+            >
+              <Icon size={15} aria-hidden="true" />
+              {label}
+            </button>
+          ),
+        )}
       </GlassPanel>
     </motion.div>
   );

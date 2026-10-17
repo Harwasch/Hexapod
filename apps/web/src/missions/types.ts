@@ -5,7 +5,7 @@
  * provider; the `MissionProvider` seam is where a backend / ROS bridge plugs in.
  */
 
-import type { Footprint, PlanStep } from "@twin/contracts";
+import type { Footprint, PlanStep, ScoutCapture } from "@twin/contracts";
 import type { LineString } from "geojson";
 
 export type MachineStatus = "working" | "attention" | "idle";
@@ -61,6 +61,12 @@ export interface Zone {
    * workspace's mission routes, and it is never written to browser storage.
    */
   private?: boolean;
+  /**
+   * A scout area's capture ("Lift the fog"): flown by a mapping drone at these numbers. The
+   * map draws its passes dashed as a forecast, the planner sizes it from them, and the plan
+   * keeps them so the route can be exported (`missions/scout.ts`, `missions/wpml.ts`).
+   */
+  scout?: ScoutCapture;
 }
 
 /** Where a land zone comes from. */

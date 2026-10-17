@@ -11,6 +11,7 @@ from pydantic import Field, model_validator
 from app.schemas.agent import Cadence, PlanEstimates, PlannerSource, PlanStep
 from app.schemas.base import CamelModel
 from app.schemas.geojson import Footprint
+from app.schemas.scout import ScoutCapture
 
 PlanStatus = Literal["scheduled", "dispatched", "paused", "done", "cancelled"]
 
@@ -25,6 +26,9 @@ class PlanArea(CamelModel):
     # Where the outline came from ("© OpenStreetMap contributors", "Saved boundary, revision
     # 2"), shown wherever the area is drawn. The one provenance field areas carry.
     attribution: str | None = Field(default=None, max_length=300)
+    # A scout area's capture parameters (a "Lift the fog" patch): kept so an approved plan can
+    # still be exported as a flight route. In the plans' areas JSONB, so no migration.
+    capture: ScoutCapture | None = None
 
 
 class PlanBody(CamelModel):

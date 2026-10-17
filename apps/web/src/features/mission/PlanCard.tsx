@@ -13,6 +13,13 @@ import { DEMO_RANCH_PROJECT_ID } from "@/missions/demoRanchData";
 import { isLandZone } from "@/missions/landGround";
 import { machineClassSummary } from "@/missions/machineClasses";
 import { diffDrafts, formatMachineHours, idLabel, overlayFor } from "@/missions/planDraft";
+import {
+  goalAtDetail,
+  scoutGeometry,
+  scoutOf,
+  scoutResolution,
+  scoutZonesInOrder,
+} from "@/missions/scout";
 import type { Project, Zone } from "@/missions/types";
 import { useMeasurements } from "@/state/measurements";
 import { useMission } from "@/state/mission";
@@ -20,6 +27,7 @@ import { useUi } from "@/state/ui";
 
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
+import { ScoutExport } from "./ScoutExport";
 import { groundFromView, waitForGround } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
 
@@ -646,6 +654,28 @@ function DraftReview({
         </span>
       </div>
       <PathList draft={draft} project={project} />
+      <ScoutExport
+        zones={scoutZonesInOrder(
+          project.zones,
+          overlayFor({ zoneIds: draft.zoneIds, machineIds: draft.machineIds, steps: draft.steps }),
+        )}
+        onAltitude={(altitudeM) => {
+          // The patches fly at the new height: the map's lanes and the planner's hours follow,
+          // and so does the detail the goal and its answer name (the plan states it).
+          let gsdM: number | null = null;
+          for (const zone of project.zones) {
+            if (!zone.scout || !draft.zoneIds.includes(zone.id)) continue;
+            const scout = { ...zone.scout, altitudeM };
+            gsdM ??= scoutGeometry(scoutOf(scout)).gsdM;
+            useMission.getState().addArea(project.id, { ...zone, scout });
+          }
+          void startPlanDraft(gsdM === null ? goal : goalAtDetail(goal, gsdM), {
+            zoneIds: composer?.zoneIds ?? draft.zoneIds,
+            reshaped: true,
+            ...(gsdM === null ? {} : { answers: { resolution: scoutResolution(gsdM) } }),
+          });
+        }}
+      />
       <Assumptions
         items={assumed(draft.clarifications ?? [], composer?.asked ?? {}, composer?.answers ?? {})}
         answers={composer?.answers ?? {}}

@@ -21,6 +21,7 @@ import {
 import type { InventoryShape } from "./inventoryGeometry";
 import { InventoryImport } from "./InventoryImport";
 import { LandInspectionForm } from "./LandInspectionForm";
+import { invalidateLandDerived } from "./landDerived";
 
 type Feature = components["schemas"]["LandFeatureRead"];
 type FeatureDraft = components["schemas"]["LandFeatureCreate"];
@@ -197,7 +198,11 @@ function Inventory({ land, scope }: { land: LandArea; scope: string }) {
     else useLandContext.getState().removeLayer("inventory-draft");
     return () => useLandContext.getState().removeLayer("inventory-draft");
   }, [draft]);
-  const refresh = () => cache.invalidateQueries({ queryKey: ["land-inventory", scope, land.id] });
+  const refresh = () => {
+    // The ground and the fog are computed from the inventory: ask them again too.
+    void invalidateLandDerived(cache, land.id);
+    return cache.invalidateQueries({ queryKey: ["land-inventory", scope, land.id] });
+  };
   const frame = (geometry: LandMapGeometry) => {
     const coordinates =
       geometry.type === "Point"
@@ -903,7 +908,11 @@ function Inventory({ land, scope }: { land: LandArea; scope: string }) {
               key={selected.id}
               landId={land.id}
               featureId={selected.id}
-              onSaved={() => inspections.refetch()}
+              onSaved={() => {
+                // A dated inspection is evidence: the fog over this land lifts where it reaches.
+                void invalidateLandDerived(cache, land.id);
+                return inspections.refetch();
+              }}
             />
           )}
         </article>

@@ -311,10 +311,17 @@ def _hours_text(hours: float) -> str:
 
 
 def _coverage_effort(
-    kind: TaskKind, machine: MachineClassId, answers: dict[str, AnswerValue]
+    kind: TaskKind,
+    machine: MachineClassId,
+    answers: dict[str, AnswerValue],
+    *,
+    captured: bool = False,
 ) -> tuple[float, str]:
     """Multipliers the answers put on a measured path, and how the basis says so. Survey
-    detail scales flying only: a ground rover's path does not change with camera detail."""
+    detail scales flying only: a ground rover's path does not change with camera detail, and
+    a scout area's own capture numbers already say how it is flown."""
+    if captured:
+        return 1.0, ""
     if kind == "treat" and _answer_text(answers, "passes") == "two":
         return 2.0, ", doubled for a second pass"
     if kind == "scan" and (_answer_text(answers, "views") or "oblique") == "oblique":
@@ -336,7 +343,19 @@ def _size_zone(
     if zone.geometry is None:
         return None
     flown_at: float | None = None
-    if machine == "drone":
+    capture = zone.capture if machine == "drone" else None
+    if capture is not None:
+        # A scout area ("Lift the fog") is flown at the capture numbers it carries, the ones
+        # its exported route uses: lines one image footprint apart, less the side overlap.
+        drone = MACHINE_CLASSES.drone
+        altitude = capture.altitude_m
+        spacing = drone.footprint_width_m(altitude) * (1 - capture.side_overlap)
+        speed, turn, label, flown_at = capture.speed_ms, 0.0, drone.label, altitude
+        how = (
+            f"{altitude:g} m above take-off, lines {spacing:.0f} m apart for "
+            f"{capture.side_overlap * 100:g} % side overlap, the area's scout capture"
+        )
+    elif machine == "drone":
         drone = MACHINE_CLASSES.drone
         detail = _answer_text(answers, "resolution")
         gsd = detail if kind == "scan" and detail in SCAN_HEIGHT_M else "2"
@@ -359,7 +378,7 @@ def _size_zone(
     if both_sides:
         # A treatment along a line works one pass each side of it.
         length, passes, spans = length * 2, 2, 2
-    effort, effort_note = _coverage_effort(kind, machine, answers)
+    effort, effort_note = _coverage_effort(kind, machine, answers, captured=capture is not None)
     hours = ((length + measured.transit_m) / speed + spans * turn) / 3600 * effort
     timing = f"{turn:g} s per turn" if turn else "turns not timed"
     if measured.kind == "line":

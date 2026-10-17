@@ -97,9 +97,10 @@ def test_machine_classes_load_and_derive_the_drone_spacing(tmp_path: Path) -> No
     assert MACHINE_CLASSES.mower.speed_mps == 1.4 and MACHINE_CLASSES.mower.swath_m == 2.0
     assert MACHINE_CLASSES.seeder.turn_s == 12 and MACHINE_CLASSES.survey.swath_m == 10
     assert all("(assumed)" in c.label for c in (drone, MACHINE_CLASSES.mower))
-    # 60 m up with an 82° lens sees ~104 m across; 70 % side overlap leaves ~31 m between lines.
-    assert drone.footprint_width_m() == pytest.approx(104.3, abs=0.1)
-    assert drone.line_spacing_m() == pytest.approx(31.3, abs=0.1)
+    # The wide camera of a Mavic 3 Enterprise class drone: 73.7 degrees across (24 mm
+    # equivalent), so 89.9 m of ground across at 60 m and lines 27 m apart at 70 % side overlap.
+    assert drone.footprint_width_m() == pytest.approx(89.9, abs=0.1)
+    assert drone.line_spacing_m() == pytest.approx(27.0, abs=0.1)
     assert drone.line_spacing_m(120) == pytest.approx(2 * drone.line_spacing_m())
     broken = tmp_path / "classes.json"
     broken.write_text(json.dumps({"mower": {"label": "x"}}))
