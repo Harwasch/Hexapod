@@ -2207,3 +2207,56 @@ or workspace switch forgets them.
 Known limits: a land's own project has no machines, so its plans draft unassigned. The planner
 receives land outlines briefly through the write-gated, stateless plan-draft endpoint. The
 console's map preview of passes still uses its own preview spacing, not the machine classes.
+
+## Implemented increment: seasonal signatures, bare-earth terrain and NHD flowlines
+
+Three land-scale data sources for the later "Show once, everywhere" and Dress Rehearsal work.
+They are computed or read once per boundary revision through the existing research run, raster
+processor and private raster storage; no migration.
+
+- **Seasonal 10 m signatures** (`sentinel-2-signature`, "Prepare 10 m signatures" in Explore this
+  land). For each of two to six chronological windows (the button asks for 30-day windows centred
+  on mid-January, April, July and October of the latest complete year) the processor selects one
+  Sentinel-2 L2A scene with the same bounded catalog search and local SCL check as the vegetation
+  comparison (`vegetation.select_scene`, at most two quality masks per window) and samples green
+  B03, red B04, NIR B08, SWIR B11 and NDVI on the shared 10 m grid. One SCL 4/5 mask per window
+  applies to all five bands, so a cell is a full sample in a window or missing; nothing is
+  interpolated. B11 and the mask are 20 m sources resampled nearest. The COG holds five float32
+  bands per window, band-interleaved without a float predictor (smaller and faster to tile than
+  pixel interleaving or PREDICTOR=3 on real data). Metadata carries the dated scenes as a
+  `VegetationTimeline` (each window's NDVI band, acquisition date, quality counts, common-cell
+  means), which the existing timeline view shows, and a `SignatureInfo` listing every band with
+  the common-cell mean and spread that a later similarity's z-scores use. Common cells are clear
+  in every band of every window. The map shows the dated NDVI bands; the download and point
+  sample hold all of them. Warnings say a similar signature is not a species identification, cover
+  estimate or habitat assessment and that "alike" is relative to the variety on this land.
+- **Bare-earth terrain** (`usgs-3dep-13`, "Analyze bare-earth terrain"). USGS 3DEP 1/3
+  arc-second DTM tiles (`prd-tnm.s3.amazonaws.com`, now in the `raster_io` allowlist, read
+  through `RasterOpener`) are warped bilinearly onto the 10 m grid and merged by tile name;
+  `terrain.derive` gives elevation (NAVD88 m) and slope (degrees). Each tile is cited with its
+  ETag and FGDC metadata link; its file date is not an acquisition date. Outside the United
+  States, or where USGS publishes no tile, the run fails with "use cop-dem-glo-30 here", and the
+  button is disabled with that reason.
+- **NHD flowlines** (`GET /land/{id}/hydrography`). USGS NHD Flowline - Large Scale features
+  within 100 m of the boundary, read live by the API (the browser cannot ask NHD), clipped with
+  shapely, each with its permanent identifier, GNIS name, FCode and a kind (perennial,
+  intermittent, ephemeral, other). It answers "uncovered" outside the US, "unavailable" on any
+  upstream failure, says when the 500-record limit was hit, and keeps good answers in memory for
+  an hour per land revision. Responses are private, no-store.
+
+The research agent's `analyze_raster` text describes both datasets. Processor limits: signature
+120 CPU s and 200 s wall time with a 128 MiB / 1,024-request / 180 s read budget; 3DEP 75 CPU s
+and 90 s with a 64 MiB / 256-request / 60 s budget; both keep the 16 MiB output limit.
+
+Measured on the Oak Bench Ranch demo outline (1,349 ac, 254 x 255 cells at 10 m) with the API,
+the research worker and the buttons in a browser, through this environment's proxy: bare-earth
+terrain finished 6.0 s after the click (5.3 s processing), read 1.8 MB from one tile (n35w121)
+and stored 0.49 MB (elevation 312 to 505 m, mean slope 13.2 degrees, every boundary cell
+valid). Seasonal signatures finished 98.7 s after the click (96.9 s processing), read 43.5 MB
+from 28 cited files and stored 3.35 MB in 20 bands; scenes acquired 2025-01-15, 2025-04-05,
+2025-07-24 and 2025-10-17 left 54,436 of 54,596 cells (99.7%) clear in every window, with
+common-cell NDVI 0.29, 0.52, 0.26 and 0.29. The July NDVI band shows the oaks and the Figueroa
+Creek corridor staying green over dry annual grass. Hydrography answered in 2.9 s (17 ms
+cached) with 55 flowlines in 56 clipped pieces: 21 intermittent (10 of them Figueroa Creek),
+34 ephemeral and 1 other. Known limit: land rasters are Cesium imagery layers, which are not drawn while Google
+Photorealistic 3D Tiles are on; the maps above were checked in the open world mode.

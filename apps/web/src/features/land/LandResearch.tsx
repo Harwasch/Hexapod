@@ -6,6 +6,7 @@ import type {
   LandArea,
   LandEvidence,
   LandFinding,
+  RasterDataset,
   ResearchEvent,
 } from "@twin/contracts";
 import { api, unwrap } from "@/api/client";
@@ -36,6 +37,7 @@ import {
 } from "./researchDraft";
 import { LandDocumentViewer } from "./LandDocumentViewer";
 import { VegetationStart } from "./VegetationStart";
+import { coversUs, RASTER_RUNS, rasterRequest, signaturePeriods } from "./rasterRuns";
 import { ResearchWorkerNotice } from "./ResearchWorkerNotice";
 import {
   TYPE_A_QUESTION,
@@ -44,6 +46,8 @@ import {
   workerIdleNote,
 } from "./researchAvailability";
 import "./research.css";
+
+type Period = components["schemas"]["VegetationPeriod"];
 
 function eventText(event: ResearchEvent): string {
   const value =
@@ -278,6 +282,9 @@ export function LandResearch({ land }: { land: LandArea }) {
   // Every disabled research button says why (researchAvailability.ts), in one place below
   // the analyses and next to Investigate, instead of greying out in silence.
   const blocked = analysisBlocker({ ready, canEdit, run: lastRun });
+  const bounds = boundsOf(land.boundary);
+  const inUs = coversUs((bounds.west + bounds.east) / 2, (bounds.south + bounds.north) / 2);
+  const seasons = signaturePeriods();
   const [questionTouched, setQuestionTouched] = useState(false);
   const progress = useResearchProgress(lastRun?.id, running);
   const [activityLimit, setActivityLimit] = useState(100);
@@ -340,24 +347,11 @@ export function LandResearch({ land }: { land: LandArea }) {
       setBusy(false);
     }
   };
-  const analyzeRaster = async (
-    dataset: "cop-dem-glo-30" | "esa-worldcover-2021" | "sentinel-2-ndvi",
-    periods?: components["schemas"]["VegetationPeriod"][],
-  ) => {
+  const analyzeRaster = async (dataset: RasterDataset, periods?: Period[]) => {
     if (!canEdit) return;
-    const analysis: components["schemas"]["RasterRequest"] = {
-      dataset,
-      resolutionM: dataset === "esa-worldcover-2021" ? 10 : dataset === "sentinel-2-ndvi" ? 20 : 30,
-      maxDimension: 512,
-      ...(periods ? { periods } : {}),
-    };
+    const analysis = rasterRequest(dataset, periods);
     const signature = JSON.stringify(analysis);
-    const title =
-      dataset === "sentinel-2-ndvi"
-        ? "Vegetation through time"
-        : dataset === "esa-worldcover-2021"
-          ? "Land cover in 2021"
-          : "Surface elevation and slope";
+    const { title, question } = RASTER_RUNS[dataset];
     setBusy(true);
     setError(null);
     try {
@@ -375,17 +369,7 @@ export function LandResearch({ land }: { land: LandArea }) {
       await unwrap(
         api.POST("/api/v1/research/investigations/{investigation_id}/runs", {
           params: { path: { investigation_id: operation.investigationId } },
-          body: {
-            kind: "raster",
-            question:
-              dataset === "sentinel-2-ndvi"
-                ? "Compare dated vegetation signals on common clear cells inside this land."
-                : dataset === "esa-worldcover-2021"
-                  ? "Analyze the broad land-cover classes mapped in 2021 inside this land."
-                  : "Analyze surface elevation and slope inside this land.",
-            requestKey: operation.key,
-            analysis,
-          },
+          body: { kind: "raster", question, requestKey: operation.key, analysis },
         }),
       );
       setChosen(operation.investigationId);
@@ -607,6 +591,29 @@ export function LandResearch({ land }: { land: LandArea }) {
         </button>
       </div>
       <div className="land-terrain-start">
+        <strong>Bare-earth terrain</strong>
+        <p className="land-footnote">
+          Map ground elevation and slope at 10 m from the USGS 3DEP model, which leaves out trees
+          and buildings. Covers the United States only.
+        </p>
+        <button
+          type="button"
+          disabled={busy || running || !ready || !canEdit || !inUs}
+          aria-describedby={
+            blocked ? "land-research-blocked" : !inUs ? "land-research-outside-us" : undefined
+          }
+          onClick={() => void analyzeRaster("usgs-3dep-13")}
+        >
+          {busy ? "Starting…" : "Analyze bare-earth terrain"}
+        </button>
+        {!inUs && (
+          <p id="land-research-outside-us" className="land-footnote">
+            This land is outside the United States, where USGS 3DEP has no data. Use Analyze terrain
+            above.
+          </p>
+        )}
+      </div>
+      <div className="land-terrain-start">
         <strong>What covers this land?</strong>
         <p className="land-footnote">
           Explore tree cover, grassland, water and other broad classes mapped in 2021. Use these as
@@ -627,6 +634,25 @@ export function LandResearch({ land }: { land: LandArea }) {
         busy={busy}
         onStart={(periods) => void analyzeRaster("sentinel-2-ndvi", periods)}
       />
+      <div className="land-terrain-start">
+        <strong>Seasonal 10 m signatures</strong>
+        <p className="land-footnote">
+          Read four dated Sentinel-2 scenes, one per season, and keep green, red, near-infrared,
+          shortwave-infrared and NDVI for every 10 m cell that is clear in all four. Takes a minute
+          or two. A similar signature means similar reflectance, not the same species.
+        </p>
+        <p className="land-footnote">
+          {seasons.map((period) => period.startDate.slice(0, 7)).join(" · ")} · 10 m grid
+        </p>
+        <button
+          type="button"
+          disabled={busy || running || !ready || !canEdit}
+          aria-describedby={blocked ? "land-research-blocked" : undefined}
+          onClick={() => void analyzeRaster("sentinel-2-signature", seasons)}
+        >
+          {busy ? "Starting…" : "Prepare 10 m signatures"}
+        </button>
+      </div>
       <div className="land-terrain-start">
         <strong>A place with a past</strong>
         <p className="land-footnote">
