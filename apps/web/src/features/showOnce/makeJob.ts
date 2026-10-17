@@ -14,7 +14,7 @@
 import type { LandArea, SignatureScene, SignatureZone, SignatureZones } from "@twin/contracts";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
-import { nextAreaId, zoneFromFootprint } from "@/missions/areas";
+import { LAND_AREA_PREFIX, nextAreaId, zoneFromFootprint } from "@/missions/areas";
 import type { Zone } from "@/missions/types";
 import { missionLandId, useMission } from "@/state/mission";
 import { useShowOnce } from "@/state/showOnce";
@@ -69,7 +69,7 @@ export function likeHereZones(
     read.attribution;
   const zones: Zone[] = [];
   const add = (area: SignatureZone, name: string) => {
-    const id = nextAreaId([...existing, ...zones]);
+    const id = nextAreaId([...existing, ...zones], LAND_AREA_PREFIX);
     zones.push({
       ...zoneFromFootprint(id, name, area.footprint),
       tone: "amber",

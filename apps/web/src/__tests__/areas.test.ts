@@ -6,6 +6,7 @@ import { anywhereProject } from "@/missions/anywhere";
 import {
   areaFromMeasurement,
   isAreaZone,
+  LAND_AREA_PREFIX,
   nextAreaId,
   rectangleFootprint,
   viewAreaZone,
@@ -22,6 +23,10 @@ describe("drawn areas", () => {
   it("numbers areas past the highest in use and sizes them from the footprint", () => {
     expect(nextAreaId([])).toBe("A-01");
     expect(nextAreaId([{ id: "A-03" }, { id: "Z-14" }])).toBe("A-04");
+    // Areas derived from a Land are numbered apart: neither range takes the other's ids.
+    expect(nextAreaId([{ id: "A-L03" }])).toBe("A-01");
+    expect(nextAreaId([{ id: "A-07" }, { id: "A-L02" }], LAND_AREA_PREFIX)).toBe("A-L03");
+    expect(isAreaZone({ id: "A-L03" })).toBe(true);
     const rect = rectangleFootprint(center, 200, 100);
     expect(footprintAreaM2(rect)).toBeCloseTo(400 * 200, -3);
     const zone = zoneFromFootprint("A-01", "Test", rect);

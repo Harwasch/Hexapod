@@ -80,9 +80,10 @@ describe("Lift the fog", () => {
         { footprint: square(-120.04), reason: "Next" },
       ],
       { id: "land-1", revision: 3 },
-      [{ id: "A-01" }, { id: "Z-14" }],
+      [{ id: "A-01" }, { id: "A-L01" }, { id: "Z-14" }],
     );
-    expect(zones.map((z) => z.id)).toEqual(["A-02", "A-03"]);
+    // Numbered apart from drawn areas (A-01 …), which public plans use too.
+    expect(zones.map((z) => z.id)).toEqual(["A-L02", "A-L03"]);
     expect(zones.map((z) => z.name)).toEqual(["Fog patch 1", "Fog patch 2"]);
     for (const zone of zones) {
       expect(zone.scout).toEqual(DEFAULT_SCOUT);

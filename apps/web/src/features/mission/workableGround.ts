@@ -27,7 +27,7 @@ import type {
 import { api, unwrap } from "@/api/client";
 import type { LeftOutGround } from "@/cesium/RehearsalManager";
 import { useScene } from "@/cesium/SceneContext";
-import { nextAreaId, zoneFromFootprint } from "@/missions/areas";
+import { LAND_AREA_PREFIX, nextAreaId, zoneFromFootprint } from "@/missions/areas";
 import type { Rehearsal } from "@/missions/rehearsal";
 import type { Project, Zone } from "@/missions/types";
 import { useMission } from "@/state/mission";
@@ -327,7 +327,7 @@ export function redraftOnWorkable(input: {
   const made: { target: WorkableTarget; result: WorkableGround; zone: Zone }[] = [];
   const whole: WorkableTarget[] = [];
   for (const { target, result } of input.answers) {
-    const id = nextAreaId([...project.zones, ...made.map((m) => m.zone)]);
+    const id = nextAreaId([...project.zones, ...made.map((m) => m.zone)], LAND_AREA_PREFIX);
     const zone = workableZone(result, target, id);
     if (zone) made.push({ target, result, zone });
     else whole.push(target);

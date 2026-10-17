@@ -19,7 +19,7 @@ import { footprintAreaM2, toAcres } from "@twin/geo";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { describeError } from "@/lib/log";
-import { nextAreaId, zoneFromFootprint } from "@/missions/areas";
+import { LAND_AREA_PREFIX, nextAreaId, zoneFromFootprint } from "@/missions/areas";
 import {
   DEFAULT_SCOUT,
   SCOUT_SHORT,
@@ -49,7 +49,7 @@ export function scoutZones(
 ): Zone[] {
   const zones: Zone[] = [];
   areas.forEach((area, index) => {
-    const id = nextAreaId([...existing, ...zones]);
+    const id = nextAreaId([...existing, ...zones], LAND_AREA_PREFIX);
     zones.push({
       ...zoneFromFootprint(id, `Fog patch ${index + 1}`, area.footprint),
       short: SCOUT_SHORT,

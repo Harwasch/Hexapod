@@ -9,7 +9,13 @@ import { anywhereProject } from "@/missions/anywhere";
 import { bookedWindows } from "@/missions/conflicts";
 import { demoRanchProject } from "@/missions/demo";
 import { boundaryZoneOf, landProject, landZones } from "@/missions/landGround";
-import { buildDraftRequest, planFromRecord, PRIVATE_PLAN_TITLE } from "@/missions/planDraft";
+import {
+  buildDraftRequest,
+  planFromRecord,
+  PRIVATE_PLAN_TITLE,
+  separatePrivateAreas,
+  zonesFromRecord,
+} from "@/missions/planDraft";
 import { useLand } from "@/state/land";
 import { migrateMissionStorage, missionLandId, persistable, useMission } from "@/state/mission";
 
@@ -47,7 +53,8 @@ vi.mock("@/state/landIdentity", async (importOriginal) => {
   return { ...actual, landScope: () => scope.current ?? actual.landScope() };
 });
 
-const { approveDraft, setPlanStatus } = await import("@/features/mission/planDrafting");
+const { approveDraft, planIsPrivate, setPlanStatus } =
+  await import("@/features/mission/planDrafting");
 const { engageLand, missionProjectName, planOnLand } =
   await import("@/features/mission/landPlanning");
 
@@ -350,6 +357,81 @@ describe("plans on a saved land stay private", () => {
     // The Land's own copy of a feature keeps its metadata over a stored copy of it.
     const fence = useMission.getState().project?.zones.find((z) => z.id === "L-aaaa0001");
     expect(fence?.land?.line).not.toBeNull();
+  });
+
+  it("never lets a private mission's area and a public plan's share one id on a shared project", () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    const z14 = demo.zones[0]!;
+    const box = (west: number) => ({
+      type: "Polygon" as const,
+      coordinates: [
+        [
+          [west, 34.69],
+          [west + 0.002, 34.69],
+          [west + 0.002, 34.692],
+          [west, 34.692],
+          [west, 34.69],
+        ],
+      ],
+    });
+    const area = (west: number, name: string) => ({ id: "A-01", name, footprint: box(west) });
+    const body = (zoneIds: string[], areas: ReturnType<typeof area>[]) => ({
+      ...draft(zoneIds),
+      steps: [
+        {
+          title: "Work it",
+          detail: "",
+          when: "Day 1",
+          startDay: 0,
+          days: 1,
+          machineIds: [],
+          zoneId: zoneIds[0] ?? null,
+        },
+      ],
+      goal: "g",
+      projectId: demo.id,
+      areas,
+    });
+    // A visitor's public plan drew its own A-01; a land user's private mission stored a
+    // workable area as A-01 before derived areas were numbered apart; a second public plan
+    // covers the same drawn A-01.
+    const publicPlan = record(body(["A-01"], [area(-120.05, "Drawn field")]), {
+      id: "public-1",
+      private: false,
+      landId: null,
+      boundaryRevision: null,
+    });
+    const samePublic = { ...publicPlan, id: "public-2" };
+    const privatePlan = record(body(["A-01", z14.id], [area(-120.04, "Z-14, workable")]), {
+      id: "private-1",
+    });
+    const records = separatePrivateAreas([publicPlan, samePublic, privatePlan]);
+    const [keptPublic, , renamed] = records;
+    expect(keptPublic).toBe(publicPlan);
+    expect(renamed?.areas.map((a) => a.id)).toEqual(["A-L01"]);
+    expect(renamed?.zoneIds).toEqual(["A-L01", z14.id]);
+    expect(renamed?.steps[0]?.zoneId).toBe("A-L01");
+    // A private plan on the public plan's own outline shares its id.
+    const onPublic = record(body(["A-01"], [area(-120.05, "Drawn field")]), { id: "private-2" });
+    expect(separatePrivateAreas([publicPlan, onPublic])[1]).toBe(onPublic);
+
+    useMission.getState().mergeAreas(demo.id, records.flatMap(zonesFromRecord));
+    const project = useMission.getState().project!;
+    useMission.getState().setRemotePlans(
+      demo.id,
+      records.map((r) => planFromRecord(r, project)),
+    );
+    const zones = useMission.getState().project?.zones ?? [];
+    const ids = zones.map((z) => z.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(zones.find((z) => z.id === "A-01")?.footprint).toEqual(box(-120.05));
+    expect(zones.find((z) => z.id === "A-01")?.private).toBeUndefined();
+    expect(zones.find((z) => z.id === "A-L01")?.footprint).toEqual(box(-120.04));
+    // The public plan stays a public plan to revise; the mission keeps its own ground.
+    const now = useMission.getState().project!;
+    expect(planIsPrivate(now, ["A-01"])).toBe(false);
+    expect(now.plans.find((p) => p.id === "private-1")?.zoneIds).toEqual(["A-L01", z14.id]);
   });
 
   it("drops land-shaped ground from storage written before version 2", () => {

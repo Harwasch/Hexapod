@@ -92,8 +92,13 @@ function zonesRead(nativeResolutionM = 10): SignatureZones {
 
 describe("like-here zones", () => {
   it("are private, derived from the land, named by size and cited", () => {
-    const zones = likeHereZones(zonesRead(), land, [{ id: "A-01" }, { id: "Z-14" }]);
-    expect(zones.map((z) => z.id)).toEqual(["A-02", "A-03", "A-04"]);
+    const zones = likeHereZones(zonesRead(), land, [
+      { id: "A-01" },
+      { id: "A-L01" },
+      { id: "Z-14" },
+    ]);
+    // Numbered apart from drawn areas (A-01 …), which public plans use too.
+    expect(zones.map((z) => z.id)).toEqual(["A-L02", "A-L03", "A-L04"]);
     expect(zones.map((z) => z.name)).toEqual([
       "Like-here patch 1 (6.2 ac)",
       "Like-here patch 2 (1.5 ac)",
@@ -181,8 +186,8 @@ describe("Make this the job", () => {
     expect(summary.acres).toBeCloseTo(40_300 / 4046.8564224, 6);
     const { composer, project, log } = useMission.getState();
     const added = project?.zones.filter((z) => isLikeHereZone(z, land.id)) ?? [];
-    expect(added.map((z) => z.id)).toEqual(["A-01", "A-02", "A-03"]);
-    expect(composer?.zoneIds).toEqual(["A-01", "A-02", "A-03"]);
+    expect(added.map((z) => z.id)).toEqual(["A-L01", "A-L02", "A-L03"]);
+    expect(composer?.zoneIds).toEqual(["A-L01", "A-L02", "A-L03"]);
     expect(composer?.goal).toBe("");
     expect(composer?.ground?.source).toBe("signature");
     expect(composer?.ground?.note).toContain("at least 80% alike");
@@ -196,13 +201,13 @@ describe("Make this the job", () => {
     // The sentence in the bar keeps the like-here areas as the ground, never the boundary.
     await planFromText("mow these patches", null);
     expect(startPlanDraft).toHaveBeenCalledWith("mow these patches", {
-      zoneIds: ["A-01", "A-02", "A-03"],
+      zoneIds: ["A-L01", "A-L02", "A-L03"],
     });
 
     // Made again: the last job's areas, which no plan uses, are replaced.
     await makeJob(land, null);
     const again = useMission.getState().project?.zones.filter((z) => isLikeHereZone(z, land.id));
-    expect(again?.map((z) => z.id)).toEqual(["A-01", "A-02", "A-03"]);
+    expect(again?.map((z) => z.id)).toEqual(["A-L01", "A-L02", "A-L03"]);
   });
 
   it("says the grid's real spacing in the plan's ground, and counts patches it could not outline", async () => {

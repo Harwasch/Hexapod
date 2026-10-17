@@ -472,7 +472,13 @@ export const useMission = create<MissionState>()(
           // copy that a plans refetch brings back; stored areas fill in the rest.
           const local = s.areas[projectId] ?? [];
           const shaped = new Set(local.filter((z) => z.view ?? z.shaped).map((z) => z.id));
-          const incoming = zones.filter((z) => !shaped.has(z.id));
+          // Two plans covering one area each carry it: the first copy joins, once.
+          const seen = new Set<string>();
+          const incoming = zones.filter((z) => {
+            if (shaped.has(z.id) || seen.has(z.id)) return false;
+            seen.add(z.id);
+            return true;
+          });
           if (incoming.length === 0) return {};
           const ids = new Set(incoming.map((z) => z.id));
           const areas = {

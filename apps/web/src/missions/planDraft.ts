@@ -13,7 +13,7 @@ import type {
   PlanStep,
 } from "@twin/contracts";
 
-import { isAreaZone, zoneFromFootprint } from "./areas";
+import { isAreaZone, LAND_AREA_PREFIX, nextAreaId, zoneFromFootprint } from "./areas";
 import { bookedWindows } from "./conflicts";
 import { isLandZone, isPrivateZone, landIdOfProject } from "./landGround";
 import { learnedRates, type LearnedRate } from "./rates";
@@ -300,6 +300,50 @@ export function presentStatus(status: PlanRecordStatus): {
   action: string;
 } {
   return STATUS_PRESENTATION[status];
+}
+
+/**
+ * A project's stored plans with no area id standing for two different outlines across the
+ * public and private lists. A public plan's areas are numbered in browsers that never see a
+ * workspace's missions, so a private mission's area (one derived from a Land before those
+ * were numbered A-L…, or one drawn into it) can carry the id of another public area. That
+ * private area takes an A-L id here, the same in every private record that carries it, so
+ * neither plan's ground shadows the other's; revising the mission stores the new id. An area
+ * a private plan shares with a public one (the same outline) keeps its id.
+ */
+export function separatePrivateAreas(records: readonly PlanRecord[]): PlanRecord[] {
+  const outline = (area: PlanRecord["areas"][number]) => JSON.stringify(area.footprint);
+  const shared = new Map<string, string>();
+  for (const record of records)
+    if (!record.private) for (const area of record.areas) shared.set(area.id, outline(area));
+  const used = records.flatMap((record) => record.areas.map((area) => ({ id: area.id })));
+  const renamed = new Map<string, string>();
+  return records.map((record) => {
+    if (!record.private) return record;
+    const own = new Map<string, string>();
+    for (const area of record.areas) {
+      const theirs = shared.get(area.id);
+      if (theirs === undefined || theirs === outline(area)) continue;
+      const key = `${area.id} ${outline(area)}`;
+      let id = renamed.get(key);
+      if (!id) {
+        id = nextAreaId(used, LAND_AREA_PREFIX);
+        used.push({ id });
+        renamed.set(key, id);
+      }
+      own.set(area.id, id);
+    }
+    if (own.size === 0) return record;
+    const rename = (id: string) => own.get(id) ?? id;
+    return {
+      ...record,
+      areas: record.areas.map((area) => ({ ...area, id: rename(area.id) })),
+      zoneIds: record.zoneIds.map(rename),
+      steps: record.steps.map((step) =>
+        step.zoneId ? { ...step, zoneId: rename(step.zoneId) } : step,
+      ),
+    };
+  });
 }
 
 /**
