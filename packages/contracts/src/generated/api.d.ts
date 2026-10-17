@@ -1435,6 +1435,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/workable-ground": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Workable Ground
+         * @description The part of an outline on this land a ground machine class can work: less the slope
+         *     over its assumed limit (the land's elevation raster) and its assumed buffer around USGS
+         *     NHD creeks. Derived on request, never saved; what the dress rehearsal's hands ask for.
+         */
+        post: operations["workable_ground_api_v1_land__land_id__workable_ground_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/corridor": {
         parameters: {
             query?: never;
@@ -9765,6 +9787,141 @@ export interface components {
              */
             url: string;
         };
+        /** WorkableCreeks */
+        WorkableCreeks: {
+            /** Counted */
+            counted: number;
+            /** Ephemeralincluded */
+            ephemeralIncluded: boolean;
+            /** Label */
+            label: string;
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "empty" | "uncovered" | "unavailable";
+        };
+        /** WorkableElevation */
+        WorkableElevation: {
+            /**
+             * Dataset
+             * @enum {string}
+             */
+            dataset: "usgs-3dep-13" | "cop-dem-glo-30";
+            /** Edgem */
+            edgeM: number;
+            /** Fallback */
+            fallback: boolean;
+            /** Label */
+            label: string;
+            /** Published */
+            published: string | null;
+            /**
+             * Rasterid
+             * Format: uuid
+             */
+            rasterId: string;
+            /** Resolutionm */
+            resolutionM: number;
+            /** Stale */
+            stale: boolean;
+        };
+        /** WorkableGroundRead */
+        WorkableGroundRead: {
+            /** Assumptions */
+            assumptions: string[];
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            creeks: components["schemas"]["WorkableCreeks"];
+            elevation: components["schemas"]["WorkableElevation"];
+            /** Footprintm2 */
+            footprintM2: number;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Leftout */
+            leftOut: components["schemas"]["WorkableLeftOut"][];
+            limits: components["schemas"]["WorkableLimits"];
+            removed: components["schemas"]["WorkableRemoved"];
+            /** Sources */
+            sources: string[];
+            /** Warnings */
+            warnings: string[];
+            workable: components["schemas"]["MultiPolygon"] | null;
+            /** Workablem2 */
+            workableM2: number;
+        };
+        /** WorkableGroundRequest */
+        WorkableGroundRequest: {
+            /** Demrasterid */
+            demRasterId?: string | null;
+            /** Footprint */
+            footprint: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Includeephemeralcreeks
+             * @default false
+             */
+            includeEphemeralCreeks?: boolean;
+            /**
+             * Machineclass
+             * @enum {string}
+             */
+            machineClass: "mower" | "seeder" | "survey" | "drone";
+        };
+        /**
+         * WorkableLeftOut
+         * @description One reason's left-out ground, for the map to draw hatched.
+         */
+        WorkableLeftOut: {
+            /** Aream2 */
+            areaM2: number;
+            geometry: components["schemas"]["MultiPolygon"] | null;
+            /** Label */
+            label: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "steep" | "steep-edge" | "creek-buffer" | "sliver" | "no-data";
+        };
+        /** WorkableLimits */
+        WorkableLimits: {
+            /** Creekbufferm */
+            creekBufferM: number;
+            /** Label */
+            label: string;
+            /**
+             * Machineclass
+             * @enum {string}
+             */
+            machineClass: "mower" | "seeder" | "survey" | "drone";
+            /** Maxslopepct */
+            maxSlopePct: number;
+        };
+        /**
+         * WorkableRemoved
+         * @description Ground taken out of the outline, by reason. Each part is counted once, in the order
+         *     no data, too steep, steep edge, creek buffer, slivers, so the parts and `workableM2` add up
+         *     to `footprintM2`.
+         */
+        WorkableRemoved: {
+            /** Creekbufferm2 */
+            creekBufferM2: number;
+            /** Nodatam2 */
+            noDataM2: number;
+            /** Slivers */
+            slivers: number;
+            /** Sliversm2 */
+            sliversM2: number;
+            /** Steepedgem2 */
+            steepEdgeM2: number;
+            /** Steepm2 */
+            steepM2: number;
+        };
         /** WorkspaceCreate */
         WorkspaceCreate: {
             /** Name */
@@ -10243,6 +10400,13 @@ export type SchemaVegetationTimeline = components['schemas']['VegetationTimeline
 export type SchemaVersionReference = components['schemas']['VersionReference'];
 export type SchemaWmsSource = components['schemas']['WmsSource'];
 export type SchemaWmtsSource = components['schemas']['WmtsSource'];
+export type SchemaWorkableCreeks = components['schemas']['WorkableCreeks'];
+export type SchemaWorkableElevation = components['schemas']['WorkableElevation'];
+export type SchemaWorkableGroundRead = components['schemas']['WorkableGroundRead'];
+export type SchemaWorkableGroundRequest = components['schemas']['WorkableGroundRequest'];
+export type SchemaWorkableLeftOut = components['schemas']['WorkableLeftOut'];
+export type SchemaWorkableLimits = components['schemas']['WorkableLimits'];
+export type SchemaWorkableRemoved = components['schemas']['WorkableRemoved'];
 export type SchemaWorkspaceCreate = components['schemas']['WorkspaceCreate'];
 export type SchemaWorkspaceMissionCreate = components['schemas']['WorkspaceMissionCreate'];
 export type SchemaWorkspaceRead = components['schemas']['WorkspaceRead'];
@@ -16735,6 +16899,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LandViewRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    workable_ground_api_v1_land__land_id__workable_ground_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkableGroundRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkableGroundRead"];
                 };
             };
             /** @description Missing or wrong write token */

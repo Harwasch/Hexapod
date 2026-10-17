@@ -1029,7 +1029,20 @@ test.describe("mission control", () => {
     await expect(summary).toContainText("Limits: assumed per machine class");
     await expect(app.getByTestId("plan-approve")).toHaveText(/^Approve despite \d+ hands?$/);
     const approve = await app.getByTestId("plan-approve").textContent();
+    // Hands are grouped by rule with a count; on the map they stand in counting clusters.
+    const group = app.getByTestId("rehearsal-hand-group").first();
+    await expect(group).toContainText(/Inside a creek buffer\s*\d+ lanes?/);
+    await expect
+      .poll(
+        async () => (await entityIds(app)).filter((id) => id.startsWith("rehearsal:hand:")).length,
+      )
+      .toBeGreaterThan(0);
+    // Without a saved Land there is no terrain to work out the workable ground from: say so.
+    await expect(app.getByTestId("rehearsal-workable").last()).toContainText(
+      "Save this ground as a Land (or open the Land it is on) to read its terrain",
+    );
     // A hand opens with its rule; leaving its lane out says so and rehearses without it.
+    await group.locator("button").first().dispatchEvent("click");
     await app
       .getByTestId("rehearsal-hand")
       .first()

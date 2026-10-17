@@ -170,6 +170,104 @@ describe("RehearsalManager", () => {
     expect(rehearsalPick("mission:zone:Z-14")).toBeNull();
   });
 
+  it("stands one counting marker per cluster of hands, never one per hand", () => {
+    // Eight lanes side by side, 10 m apart, each crossing the same creek: eight hands, one
+    // band of neighbouring lanes, so one marker that counts them as the ghost reaches them.
+    const lanes = Array.from({ length: 8 }, (_, i) => ({
+      points:
+        i % 2 === 0
+          ? [at(-200 + i * 10, -300), at(-200 + i * 10, 300)]
+          : [at(-200 + i * 10, 300), at(-200 + i * 10, -300)],
+      pass: i,
+    }));
+    const run = planRehearsal({
+      zones: [{ zoneId: "A-01", label: "A-01", lanes, machineIds: ["TR-04"], classId: "mower" }],
+      machines: [{ id: "TR-04", name: "TR-04 Kestrel", model: "Ranger 2 · mower" }],
+      elevation: null,
+      creeks: {
+        label: "USGS NHD flowlines, 1:24,000",
+        lines: [
+          {
+            id: "nhd-1",
+            name: "Figueroa Creek",
+            kind: "intermittent",
+            coordinates: [at(-300, 0), at(0, 0)],
+          },
+        ],
+      },
+    });
+    expect(run.hands).toHaveLength(8);
+    const { manager, ids, entities } = setup();
+    manager.load(run, look);
+    const markers = ids().filter((id) => id.startsWith("rehearsal:hand:"));
+    expect(markers).toEqual([`rehearsal:hand:${run.hands[0]?.id}`]);
+    const marker = entities.getById(markers[0] ?? "");
+    const image = () => String(marker?.billboard?.image?.getValue());
+    manager.seek((run.hands[2]?.t ?? 0) + 1);
+    expect(marker?.show).toBe(true);
+    expect(decodeURIComponent(image())).toContain(">3</text>");
+    expect(marker?.label?.text?.getValue()).toBe("3 lanes inside a creek buffer · 15 m (assumed)");
+    manager.seek(Number.POSITIVE_INFINITY);
+    expect(decodeURIComponent(image())).toContain(">8</text>");
+    // The frame still counts every hand, not the markers.
+    expect(manager.frame?.raised).toBe(8);
+  });
+
+  it("marks the hand open in the card on its own, and a click on it keeps it open", () => {
+    const { manager, ids, entities } = setup();
+    const run = rehearsal();
+    manager.load(run, look);
+    const hand = run.hands[0];
+    manager.focus(hand?.id ?? null, false);
+    const id = `rehearsal:focus:${hand?.id}`;
+    expect(ids()).toContain(id);
+    expect(entities.getById(id)?.label?.text?.getValue()).toBe(hand?.label);
+    expect(rehearsalPick(id)).toEqual({ kind: "hand", handId: hand?.id });
+    manager.focus(null);
+    expect(ids()).not.toContain(id);
+  });
+
+  it("hatches left-out ground through a stop, until it is cleared", () => {
+    const { manager, ids, entities } = setup();
+    const square = (x: number, y: number, size: number) => ({
+      type: "MultiPolygon" as const,
+      coordinates: [
+        [
+          [
+            [at(x, y).longitude, at(x, y).latitude],
+            [at(x + size, y).longitude, at(x + size, y).latitude],
+            [at(x + size, y + size).longitude, at(x + size, y + size).latitude],
+            [at(x, y + size).longitude, at(x, y + size).latitude],
+            [at(x, y).longitude, at(x, y).latitude],
+          ],
+        ],
+      ],
+    });
+    manager.load(rehearsal(), look);
+    manager.showLeftOut(
+      [
+        { reason: "steep", label: "Left out: too steep", footprint: square(0, 0, 100) },
+        { reason: "steep", label: "Left out: too steep", footprint: square(300, 0, 20) },
+        { reason: "creek-buffer", label: "Left out: creek buffer", footprint: square(0, 200, 30) },
+        { reason: "sliver", label: "Left out: too small to work", footprint: square(500, 0, 5) },
+      ],
+      () => 250,
+    );
+    const hatched = () => ids().filter((id) => id.startsWith("rehearsal:left-out:"));
+    expect(hatched()).toHaveLength(6);
+    const steep = entities.getById("rehearsal:left-out:label:steep");
+    expect(steep?.label?.text?.getValue()).toBe("Left out: too steep · derived");
+    expect(entities.getById("rehearsal:left-out:label:creek-buffer")).toBeDefined();
+    expect(entities.getById("rehearsal:left-out:label:sliver")).toBeUndefined();
+    expect(entities.getById("rehearsal:left-out:0:0")?.name).toBe("Left out: too steep (derived)");
+    // Looked through on a click, like the rest of the rehearsal's drawing.
+    expect(rehearsalPick("rehearsal:left-out:0:0")).toBe("through");
+    manager.stop();
+    expect(hatched()).toHaveLength(6);
+    manager.showLeftOut([]);
+    expect(entities.values).toHaveLength(0);
+  });
+
   it("flies to a focused hand and clears everything on stop", () => {
     const { manager, mission, entities, heard } = setup();
     const run = rehearsal();

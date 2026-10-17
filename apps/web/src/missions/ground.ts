@@ -12,7 +12,7 @@ import { rectangleFootprint, zoneFromFootprint } from "./areas";
 import { OSM_ATTRIBUTION, fetchOsmContaining } from "./osm";
 import type { Zone } from "./types";
 
-export type GroundSource = "osm" | "vision" | "rough" | "land" | "fog" | "signature";
+export type GroundSource = "osm" | "vision" | "rough" | "land" | "fog" | "signature" | "workable";
 
 export interface ResolvedGround {
   zone: Zone;

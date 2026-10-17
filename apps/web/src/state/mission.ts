@@ -41,6 +41,13 @@ export interface PlanComposerState {
   /** Every clarification a draft has carried, by id, so an answered one stays a chip. */
   asked: Record<string, PlanClarification>;
   error: string | null;
+  /**
+   * Zones a derived area replaced in this card (a zone's workable ground, by source zone id):
+   * the planner is not offered the source while its replacement, or the replacement's own
+   * (`setAsideZones`), is in scope, so a goal that names it ("the west grassland") does not
+   * bring the whole of it back.
+   */
+  setAside?: Record<string, string>;
 }
 
 /**

@@ -84,6 +84,17 @@ describe("plan drafting", () => {
     expect(request.previousDraft).not.toHaveProperty("source");
   });
 
+  it("leaves out of the request a zone that derived ground replaced in the card", () => {
+    const request = buildDraftRequest(project, {
+      goal: "Mow the star thistle on the west grassland",
+      zoneIds: ["A-01"],
+      exclude: ["Z-14"],
+    });
+    // The goal still names the west grassland: the planner is not offered all of it again.
+    expect(request.zones?.map((z) => z.id)).not.toContain("Z-14");
+    expect(request.zones?.map((z) => z.id)).toContain("Z-21");
+  });
+
   it("turns an approved draft into a scheduled plan with steps and provenance", () => {
     const plan = planFromDraft(draft, project, { goal: "Mow Z-14" });
     expect(plan.status).toBe("idle");

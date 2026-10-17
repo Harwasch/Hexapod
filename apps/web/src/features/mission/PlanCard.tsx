@@ -33,6 +33,7 @@ import { approveLabel, useDressRehearsal } from "./dressRehearsal";
 import { ScoutExport } from "./ScoutExport";
 import { groundFromView, waitForGround } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
+import { useLeftOutHatch } from "./workableGround";
 
 /** The rehearsal's panel and styles load with its first "Rehearse", not with the app. */
 const RehearsalPanel = lazy(() =>
@@ -160,6 +161,8 @@ export function PlanCard({ project }: { project: Project }) {
   // Only the handles leave with the card; a pending click is the flow's to cancel (React's
   // development double-mount would otherwise cancel it at once).
   useEffect(() => () => scene?.areas.edit(null), [scene]);
+  // Ground a redraft onto workable ground left out stays hatched while the card is open.
+  useLeftOutHatch(project);
 
   if (!composer) return null;
   const status = composer.status;
@@ -355,6 +358,8 @@ function distance(metres: number): string {
 /**
  * The ground when it is a saved Land's: what it is and where it came from. It is changed in
  * Land (the outline, the inventory), so the card offers to go there rather than drag corners.
+ * Ground derived from the Land (workable ground, a Show Once area) says so: it is not the
+ * saved record.
  */
 function LandGroundSection({
   zone,
@@ -376,7 +381,9 @@ function LandGroundSection({
       : `${zone.acres.toLocaleString()} ac`;
   return (
     <section className="mc-ground" data-testid="plan-ground" data-ground="land">
-      <span className="mc-eyebrow">GROUND · YOUR SAVED LAND</span>
+      <span className="mc-eyebrow">
+        {land?.kind === "derived" ? "GROUND · DERIVED FROM YOUR LAND" : "GROUND · YOUR SAVED LAND"}
+      </span>
       <div className="mc-ground__row">
         <span className="mc-ground__name">
           <span className={`mc-dot mc-dot--${zone.tone}`} aria-hidden="true" />

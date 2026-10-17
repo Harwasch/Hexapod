@@ -144,6 +144,7 @@ async function rasterElevation(
       },
       label: elevationLabel(raster, grid.cellM),
       ref: `raster ${raster.id.slice(0, 8)}`,
+      rasterId: raster.id,
       extent: "it has heights inside the Land's saved outline only",
     },
   };

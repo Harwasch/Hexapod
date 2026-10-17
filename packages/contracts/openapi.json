@@ -20758,6 +20758,380 @@
         "title": "WmtsSource",
         "type": "object"
       },
+      "WorkableCreeks": {
+        "additionalProperties": false,
+        "properties": {
+          "counted": {
+            "minimum": 0.0,
+            "title": "Counted",
+            "type": "integer"
+          },
+          "ephemeralIncluded": {
+            "title": "Ephemeralincluded",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "label",
+          "counted",
+          "ephemeralIncluded",
+          "message"
+        ],
+        "title": "WorkableCreeks",
+        "type": "object"
+      },
+      "WorkableElevation": {
+        "additionalProperties": false,
+        "properties": {
+          "dataset": {
+            "enum": [
+              "usgs-3dep-13",
+              "cop-dem-glo-30"
+            ],
+            "title": "Dataset",
+            "type": "string"
+          },
+          "edgeM": {
+            "title": "Edgem",
+            "type": "number"
+          },
+          "fallback": {
+            "title": "Fallback",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "published": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published"
+          },
+          "rasterId": {
+            "format": "uuid",
+            "title": "Rasterid",
+            "type": "string"
+          },
+          "resolutionM": {
+            "title": "Resolutionm",
+            "type": "number"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rasterId",
+          "dataset",
+          "label",
+          "published",
+          "resolutionM",
+          "edgeM",
+          "stale",
+          "fallback"
+        ],
+        "title": "WorkableElevation",
+        "type": "object"
+      },
+      "WorkableGroundRead": {
+        "additionalProperties": false,
+        "properties": {
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "creeks": {
+            "$ref": "#/components/schemas/WorkableCreeks"
+          },
+          "elevation": {
+            "$ref": "#/components/schemas/WorkableElevation"
+          },
+          "footprintM2": {
+            "minimum": 0.0,
+            "title": "Footprintm2",
+            "type": "number"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "leftOut": {
+            "items": {
+              "$ref": "#/components/schemas/WorkableLeftOut"
+            },
+            "title": "Leftout",
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/WorkableLimits"
+          },
+          "removed": {
+            "$ref": "#/components/schemas/WorkableRemoved"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "workable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workableM2": {
+            "minimum": 0.0,
+            "title": "Workablem2",
+            "type": "number"
+          }
+        },
+        "required": [
+          "landId",
+          "boundaryRevision",
+          "workable",
+          "footprintM2",
+          "workableM2",
+          "removed",
+          "leftOut",
+          "limits",
+          "elevation",
+          "creeks",
+          "sources",
+          "assumptions",
+          "warnings"
+        ],
+        "title": "WorkableGroundRead",
+        "type": "object"
+      },
+      "WorkableGroundRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "demRasterId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Demrasterid"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "includeEphemeralCreeks": {
+            "default": false,
+            "title": "Includeephemeralcreeks",
+            "type": "boolean"
+          },
+          "machineClass": {
+            "enum": [
+              "mower",
+              "seeder",
+              "survey",
+              "drone"
+            ],
+            "title": "Machineclass",
+            "type": "string"
+          }
+        },
+        "required": [
+          "footprint",
+          "machineClass"
+        ],
+        "title": "WorkableGroundRequest",
+        "type": "object"
+      },
+      "WorkableLeftOut": {
+        "additionalProperties": false,
+        "description": "One reason's left-out ground, for the map to draw hatched.",
+        "properties": {
+          "areaM2": {
+            "minimum": 0.0,
+            "title": "Aream2",
+            "type": "number"
+          },
+          "geometry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "steep",
+              "steep-edge",
+              "creek-buffer",
+              "sliver",
+              "no-data"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "label",
+          "areaM2",
+          "geometry"
+        ],
+        "title": "WorkableLeftOut",
+        "type": "object"
+      },
+      "WorkableLimits": {
+        "additionalProperties": false,
+        "properties": {
+          "creekBufferM": {
+            "title": "Creekbufferm",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "machineClass": {
+            "enum": [
+              "mower",
+              "seeder",
+              "survey",
+              "drone"
+            ],
+            "title": "Machineclass",
+            "type": "string"
+          },
+          "maxSlopePct": {
+            "title": "Maxslopepct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "machineClass",
+          "label",
+          "maxSlopePct",
+          "creekBufferM"
+        ],
+        "title": "WorkableLimits",
+        "type": "object"
+      },
+      "WorkableRemoved": {
+        "additionalProperties": false,
+        "description": "Ground taken out of the outline, by reason. Each part is counted once, in the order\nno data, too steep, steep edge, creek buffer, slivers, so the parts and `workableM2` add up\nto `footprintM2`.",
+        "properties": {
+          "creekBufferM2": {
+            "minimum": 0.0,
+            "title": "Creekbufferm2",
+            "type": "number"
+          },
+          "noDataM2": {
+            "minimum": 0.0,
+            "title": "Nodatam2",
+            "type": "number"
+          },
+          "slivers": {
+            "minimum": 0.0,
+            "title": "Slivers",
+            "type": "integer"
+          },
+          "sliversM2": {
+            "minimum": 0.0,
+            "title": "Sliversm2",
+            "type": "number"
+          },
+          "steepEdgeM2": {
+            "minimum": 0.0,
+            "title": "Steepedgem2",
+            "type": "number"
+          },
+          "steepM2": {
+            "minimum": 0.0,
+            "title": "Steepm2",
+            "type": "number"
+          }
+        },
+        "required": [
+          "steepM2",
+          "steepEdgeM2",
+          "creekBufferM2",
+          "sliversM2",
+          "slivers",
+          "noDataM2"
+        ],
+        "title": "WorkableRemoved",
+        "type": "object"
+      },
       "WorkspaceCreate": {
         "additionalProperties": false,
         "properties": {
@@ -33593,6 +33967,112 @@
         "summary": "Rename",
         "tags": [
           "land views"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/workable-ground": {
+      "post": {
+        "description": "The part of an outline on this land a ground machine class can work: less the slope\nover its assumed limit (the land's elevation raster) and its assumed buffer around USGS\nNHD creeks. Derived on request, never saved; what the dress rehearsal's hands ask for.",
+        "operationId": "workable_ground_api_v1_land__land_id__workable_ground_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkableGroundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkableGroundRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Workable Ground",
+        "tags": [
+          "land"
         ]
       }
     },

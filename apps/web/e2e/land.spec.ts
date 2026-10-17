@@ -367,6 +367,274 @@ test("plan work on a saved land: the land is the ground, and the plan stays priv
   expect(stored).not.toContain(records.saved[0]?.id ?? "missing");
 });
 
+/**
+ * A saved land's bare-earth elevation (gentle west half, a 40 % slope over the east half), no
+ * mapped creeks, and the API's workable ground for it: the west half, the east half left out.
+ */
+async function workableApi(page: Page, land: () => LandArea | undefined) {
+  const asked: Record<string, unknown>[] = [];
+  const bounds = () => {
+    const ring = (land()?.boundary as { coordinates: number[][][] }).coordinates[0] ?? [];
+    const lons = ring.map((p) => p[0] ?? 0);
+    const lats = ring.map((p) => p[1] ?? 0);
+    return {
+      west: Math.min(...lons),
+      south: Math.min(...lats),
+      east: Math.max(...lons),
+      north: Math.max(...lats),
+    };
+  };
+  const rectangle = (west: number, south: number, east: number, north: number) => [
+    [
+      [
+        [west, south],
+        [east, south],
+        [east, north],
+        [west, north],
+        [west, south],
+      ],
+    ],
+  ];
+  await page.route("**/api/v1/land/*/rasters*", async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          id: "raster-dem",
+          runId: "run-0",
+          landId: land()?.id,
+          boundaryRevision: land()?.revision ?? 1,
+          request: { dataset: "usgs-3dep-13", resolutionM: 10, maxDimension: 512, periods: [] },
+          metadata: { resolutionM: 10, boundaryCells: 1200, warnings: [] },
+          createdAt: "2026-10-16T00:00:00Z",
+          stale: false,
+        },
+      ],
+    });
+  });
+  await page.route("**/api/v1/land/rasters/*/grid*", async (route) => {
+    const { west, south, east, north } = bounds();
+    const columns = 40;
+    const rows = 30;
+    const cellM =
+      ((east - west) * 111_320 * Math.cos((((south + north) / 2) * Math.PI) / 180)) / columns;
+    const values = new Float32Array(columns * rows);
+    for (let row = 0; row < rows; row++)
+      for (let column = 0; column < columns; column++)
+        values[row * columns + column] =
+          column < columns / 2
+            ? 100 + column * cellM * 0.05
+            : 100 + (columns / 2) * cellM * 0.05 + (column - columns / 2) * cellM * 0.4;
+    await route.fulfill({
+      json: {
+        west,
+        south,
+        east,
+        north,
+        columns,
+        rows,
+        cellM,
+        encoding: "f32",
+        scale: 1,
+        offset: 0,
+        nodata: null,
+        data: Buffer.from(values.buffer).toString("base64"),
+      },
+    });
+  });
+  await page.route("**/api/v1/land/*/hydrography", async (route) => {
+    await route.fulfill({
+      json: {
+        landId: land()?.id,
+        boundaryRevision: 1,
+        status: "empty",
+        message: "The USGS NHD maps no streams or ditches within 100 m of this land.",
+        bufferM: 100,
+        features: [],
+        truncated: false,
+        retrievedAt: "2026-10-16T00:00:00Z",
+        source: {
+          provider: "usgs-nhd",
+          name: "USGS National Hydrography Dataset (NHD) flowlines",
+          url: "https://example.test/nhd",
+          linkUrl: "https://example.test/nhd",
+          documentationUrl: "https://example.test/docs",
+          license: "Public domain (U.S. Government work)",
+          attribution: "U.S. Geological Survey",
+          resolution: "1:24,000 (Flowline - Large Scale); mapped channels",
+        },
+      },
+    });
+  });
+  await page.route("**/api/v1/land/*/workable-ground", async (route) => {
+    asked.push(route.request().postDataJSON() as Record<string, unknown>);
+    const { west, south, east, north } = bounds();
+    const middle = (west + east) / 2;
+    const acre = 4046.8564224;
+    await route.fulfill({
+      json: {
+        landId: land()?.id,
+        boundaryRevision: 1,
+        workable: { type: "MultiPolygon", coordinates: rectangle(west, south, middle, north) },
+        footprintM2: 40 * acre,
+        workableM2: 20 * acre,
+        removed: {
+          steepM2: 20 * acre,
+          steepEdgeM2: 0,
+          creekBufferM2: 0,
+          sliversM2: 0,
+          slivers: 0,
+          noDataM2: 0,
+        },
+        leftOut: [
+          {
+            reason: "steep",
+            label: "Left out: too steep",
+            areaM2: 20 * acre,
+            geometry: { type: "MultiPolygon", coordinates: rectangle(middle, south, east, north) },
+          },
+        ],
+        limits: {
+          machineClass: "mower",
+          label: "Robotic brush mower (assumed)",
+          maxSlopePct: 25,
+          creekBufferM: 15,
+        },
+        elevation: {
+          rasterId: "raster-dem",
+          dataset: "usgs-3dep-13",
+          label: "USGS 3DEP 1/3″ bare-earth DEM, 10 m",
+          published: "2025-08-27",
+          resolutionM: 10,
+          edgeM: 5,
+          stale: false,
+          fallback: false,
+        },
+        creeks: {
+          status: "empty",
+          label: "USGS National Hydrography Dataset (NHD) flowlines, 1:24,000",
+          counted: 0,
+          ephemeralIncluded: false,
+          message: "The USGS NHD maps no streams or ditches within 100 m of this land.",
+        },
+        sources: ["Slope: USGS 3DEP 1/3″ bare-earth DEM, 10 m, raster raster-d"],
+        assumptions: [],
+        warnings: [],
+      },
+    });
+  });
+  return asked;
+}
+
+test("rehearse a plan on a saved land, and work only the ground it can", async ({ app }) => {
+  const records = await landApi(app);
+  const asked = await workableApi(app, () => records.saved[0]);
+  await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+  await app.getByTestId("tool-land").click();
+  await app.evaluate(() => {
+    const twin = (
+      window as unknown as {
+        __twin: {
+          camera: {
+            cancelFlight(): void;
+            setView(lon: number, lat: number, height: number, heading: number, pitch: number): void;
+          };
+        };
+      }
+    ).__twin;
+    twin.camera.cancelFlight();
+    twin.camera.setView(-119.9, 36.6, 1500, 0, -90);
+  });
+  await app.getByRole("button", { name: /Draw a boundary/ }).click();
+  for (const [x, y] of [
+    [650, 300],
+    [1000, 300],
+    [1000, 550],
+    [650, 550],
+  ]) {
+    await app.mouse.click(x!, y!);
+  }
+  await app.getByRole("button", { name: "Review boundary", exact: true }).click();
+  await app.getByLabel("Name this land").fill("Bench pasture");
+  await app.getByRole("button", { name: "Save this land", exact: true }).click();
+  await expect(app.getByRole("heading", { name: "Bench pasture", exact: true })).toBeVisible();
+  await app.getByTestId("land-plan-work").click();
+  const plans = app.getByTestId("plans-panel");
+  await expect(plans.getByTestId("plan-ground")).toContainText("Bench pasture");
+  await expect(app.getByTestId("project-card")).toContainText("Bench pasture");
+  await app.getByTestId("command-input").fill("Mow this land");
+  await app.getByTestId("command-input").press("Enter");
+  await expect(plans.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+  await plans.getByTestId("plan-rehearse").dispatchEvent("click");
+  await expect(plans.getByTestId("rehearsal-clock")).toBeVisible({ timeout: 45_000 });
+  await plans.getByTestId("rehearsal-skip").dispatchEvent("click");
+  // The east half is over the mower's assumed 25 %: hands, grouped by rule.
+  await expect(plans.getByTestId("rehearsal-hand-group").first()).toContainText(/Too steep/);
+  const before = Number(
+    /(\d+) hands?/.exec((await plans.getByTestId("plan-approve").textContent()) ?? "")?.[1],
+  );
+  expect(before).toBeGreaterThan(0);
+  const offer = plans.getByTestId("rehearsal-workable-apply").last();
+  await expect(offer).toContainText("Work only the ground it can");
+  await expect(offer).toContainText("−20 ac too steep → 20 ac");
+  expect(asked[0]).toMatchObject({
+    machineClass: "mower",
+    demRasterId: "raster-dem",
+    includeEphemeralCreeks: false,
+  });
+  await offer.dispatchEvent("click");
+  // The plan is redrafted on the workable half, which is private and derived from the land, the
+  // steep half is hatched, and the new draft is rehearsed again on its own.
+  await expect(plans.getByTestId("plan-ground")).toContainText("Bench pasture, workable", {
+    timeout: 30_000,
+  });
+  // Ground derived from the land, not the saved land itself; NHD answered, so it is named.
+  await expect(plans.getByTestId("plan-ground")).toContainText("GROUND · DERIVED FROM YOUR LAND");
+  await expect(plans.getByTestId("plan-ground")).toContainText(
+    "Derived from USGS 3DEP 1/3″ bare-earth DEM, 10 m and USGS NHD creeks; the limits are assumed.",
+  );
+  await expect(plans.getByTestId("plan-ground")).toContainText(
+    "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m clear of steeper cells, on USGS 3DEP 1/3″ DEM, published 2025-08-27",
+  );
+  await expect(plans.getByTestId("rehearsal-after")).toContainText(
+    "Rehearsed again on the workable ground of Bench pasture",
+    { timeout: 45_000 },
+  );
+  await expect
+    .poll(async () =>
+      app.evaluate(
+        () =>
+          (
+            (
+              window as unknown as {
+                __twin: { viewer: { entities: { values: { id: string }[] } } };
+              }
+            ).__twin.viewer.entities.values ?? []
+          ).filter((e) => e.id.startsWith("rehearsal:left-out:")).length,
+      ),
+    )
+    .toBeGreaterThan(0);
+  const after = Number(
+    /(\d+) hands?/.exec((await plans.getByTestId("plan-approve").textContent()) ?? "")?.[1] ?? 0,
+  );
+  expect(after).toBeLessThan(before);
+  // Closing the card takes the hatch with it.
+  await plans.getByText("All plans").dispatchEvent("click");
+  await expect
+    .poll(async () =>
+      app.evaluate(
+        () =>
+          (
+            (
+              window as unknown as {
+                __twin: { viewer: { entities: { values: { id: string }[] } } };
+              }
+            ).__twin.viewer.entities.values ?? []
+          ).filter((e) => e.id.startsWith("rehearsal:")).length,
+      ),
+    )
+    .toBe(0);
+});
+
 /** The Fog of Knowing over the saved land: full fog but one inspected cell, from fixtures. */
 async function knowledgeApi(page: Page, land: () => LandArea | undefined) {
   const scouted: Record<string, unknown>[] = [];

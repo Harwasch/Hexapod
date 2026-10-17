@@ -211,3 +211,52 @@ describe("coverageLanes", () => {
     expect(coverageLanes(polygon, { swathM: 0 }).passes).toBe(0);
   });
 });
+
+describe("footprintLanes over many parts", () => {
+  // Two 200 m x 100 m rectangles (the long side east-west) 900 m apart north to south: a
+  // footprint 1.1 km across its passes, like workable ground left in pieces.
+  const southWest = origin;
+  const farNorth = destination(origin, 0, 1000);
+  const rectangleAt = (corner: { longitude: number; latitude: number }) => {
+    const e = destination(corner, 90, 200);
+    const n = destination(corner, 0, 100);
+    return [
+      [
+        [corner.longitude, corner.latitude],
+        [e.longitude, corner.latitude],
+        [e.longitude, n.latitude],
+        [corner.longitude, n.latitude],
+        [corner.longitude, corner.latitude],
+      ],
+    ];
+  };
+  const parts = {
+    type: "MultiPolygon" as const,
+    coordinates: [rectangleAt(southWest), rectangleAt(farNorth)],
+  };
+
+  it("caps the passes of the whole footprint, at one spacing for every part", () => {
+    const capped = footprintLanes(parts, { swathM: 6, maxPasses: 28, headingDeg: 90 });
+    // 1.1 km / 28 passes: about 39 m apart, so each 100 m part takes three passes, not the
+    // seventeen a 6 m spacing would give it alone.
+    expect(capped.swathM).toBeCloseTo(1100 / 28, 0);
+    const perPart = new Map<boolean, number>();
+    for (const lane of capped.lanes) {
+      const north = lane.a.latitude > (southWest.latitude + farNorth.latitude) / 2;
+      perPart.set(north, (perPart.get(north) ?? 0) + 1);
+    }
+    expect([...perPart.values()]).toEqual([3, 3]);
+    expect(capped.passes).toBe(6);
+    // Uncapped, each part is swept at the spacing asked for, as before.
+    const fine = footprintLanes(parts, { swathM: 10, headingDeg: 90 });
+    expect(fine.passes).toBe(20);
+    expect(fine.swathM).toBe(10);
+  });
+
+  it("sweeps one polygon exactly as before", () => {
+    const single = { type: "Polygon" as const, coordinates: rectangleAt(southWest) };
+    const lanes = footprintLanes(single, { swathM: 2, maxPasses: 8 });
+    expect(lanes.passes).toBe(8);
+    expect(lanes.swathM).toBeCloseTo(12.5, 1);
+  });
+});
