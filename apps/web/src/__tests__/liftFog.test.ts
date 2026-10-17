@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { KnowledgeScoutRead } from "@twin/contracts";
 
+import type * as Queries from "@/api/queries";
 import type * as KnowledgeApi from "@/features/knowledge/api";
 import type * as PlanDrafting from "@/features/mission/planDrafting";
-import { isPrivateZone, landProject } from "@/missions/landGround";
+import { isPrivateZone, landProject, landZones } from "@/missions/landGround";
+import { siteProject } from "@/missions/siteProject";
 import {
   DEFAULT_SCOUT,
   goalAtDetail,
@@ -13,9 +15,10 @@ import {
   scoutOf,
   scoutResolution,
 } from "@/missions/scout";
-import { useMission } from "@/state/mission";
+import { useLand } from "@/state/land";
+import { missionLandId, useMission } from "@/state/mission";
 
-import { ground, land } from "./landGroundFixture";
+import { ground, land, LAND_ID } from "./landGroundFixture";
 
 const startPlanDraft = vi.fn((..._args: unknown[]) => Promise.resolve());
 const requestScoutAreas = vi.fn((..._args: unknown[]): Promise<KnowledgeScoutRead> => {
@@ -25,6 +28,11 @@ const requestScoutAreas = vi.fn((..._args: unknown[]): Promise<KnowledgeScoutRea
 vi.mock("@/features/mission/planDrafting", async (importOriginal) => ({
   ...(await importOriginal<typeof PlanDrafting>()),
   startPlanDraft: (...args: unknown[]) => startPlanDraft(...args),
+}));
+const fetchLandGround = vi.fn((..._args: unknown[]) => Promise.resolve(ground));
+vi.mock("@/api/queries", async (importOriginal) => ({
+  ...(await importOriginal<typeof Queries>()),
+  fetchLandGround: (...args: unknown[]) => fetchLandGround(...args),
 }));
 vi.mock("@/features/knowledge/api", async (importOriginal) => ({
   ...(await importOriginal<typeof KnowledgeApi>()),
@@ -145,5 +153,78 @@ describe("Lift the fog from the map", () => {
       zoneIds: [patch],
       answers: { resolution: "2" },
     });
+  });
+
+  const foggy: KnowledgeScoutRead = {
+    areas: [
+      {
+        footprint: square(-120.05),
+        areaM2: 160_000,
+        cells: 400,
+        meanDensity: 0.95,
+        bestClassCounts: { none: 400 },
+        reason: "Foggiest ground within one battery",
+      },
+    ],
+    threshold: FOGGY_THRESHOLD,
+    budgetM2: 500_000,
+    truncatedByBudget: false,
+    forecast: "Forecast, not evidence.",
+    policyVersion: "fog-v1",
+  };
+
+  it("puts the patches on the land's own project when another site is current", async () => {
+    // A site switch keeps the land selected, and the fog with it.
+    const far = siteProject({
+      id: "far",
+      slug: "far",
+      name: "Redmond scan",
+      boundary: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [-122.14, 47.64],
+            [-122.13, 47.64],
+            [-122.13, 47.65],
+            [-122.14, 47.64],
+          ],
+        ],
+      },
+      areaM2: 800_000,
+      centroid: { longitude: -122.135, latitude: 47.645 },
+    } as unknown as Parameters<typeof siteProject>[0]);
+    useMission.getState().setProject(far);
+    useLand.getState().select(land);
+    requestScoutAreas.mockResolvedValueOnce(foggy);
+    await liftFog(null, land);
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(`land:${LAND_ID}`);
+    expect(missionLandId()).toBe(LAND_ID);
+    const [patch] = state.composer?.zoneIds ?? [];
+    expect(state.project?.zones.find((z) => z.id === patch)?.land?.landId).toBe(LAND_ID);
+    expect(state.areas[far.id] ?? []).toEqual([]);
+    useLand.getState().clear();
+  });
+
+  it("closes a card on another land's project and plans on this land's", async () => {
+    const otherId = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+    const other = { ...land, id: otherId, name: "Creek Field" };
+    const otherGround = { ...ground, landId: otherId, name: "Creek Field" };
+    useMission
+      .getState()
+      .engageLand(
+        { landId: otherId, zones: landZones(otherGround) },
+        landProject(other, otherGround),
+      );
+    useMission.getState().openComposer({ goal: "monitor the fence", zoneIds: ["L-aaaa0001"] });
+    useLand.getState().select(land);
+    requestScoutAreas.mockResolvedValueOnce(foggy);
+    await liftFog(null, land);
+    const state = useMission.getState();
+    // Filed under one land: the project and the patches' land agree, as the server requires.
+    expect(state.project?.id).toBe(`land:${LAND_ID}`);
+    expect(state.composer?.goal).toBe(scoutGoal());
+    expect(state.areas[`land:${otherId}`] ?? []).toEqual([]);
+    useLand.getState().clear();
   });
 });

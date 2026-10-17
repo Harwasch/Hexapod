@@ -5,7 +5,8 @@
  * the view when the fog is even), as smoothed patches. Each patch becomes an area zone that
  * carries its scout capture (`missions/scout.ts`: the drone class's flight), private and
  * marked as derived from the Land, so the plan goes to the workspace and never to browser
- * storage. A fresh plan composer then drafts a survey over them through the usual flow
+ * storage. They join the Land's mission ground (`engageLand`: its own project, or a fleet's it
+ * is layered on), never whatever project happens to be current. A fresh plan composer then drafts a survey over them through the usual flow
  * (`adoptAreas`, `startPlanDraft`); the map draws their real flight lines dashed, as a
  * forecast, and the draft can be exported as a DJI route (`ScoutExport`). The patches stay
  * editable with the area handles like any drawn area.
@@ -28,9 +29,10 @@ import {
   scoutResolution,
 } from "@/missions/scout";
 import type { Zone } from "@/missions/types";
-import { useMission } from "@/state/mission";
+import { missionLandId, useMission } from "@/state/mission";
 import { useToasts } from "@/state/toasts";
 
+import { engageLand } from "../mission/landPlanning";
 import { adoptAreas } from "../mission/planFlow";
 import { startPlanDraft } from "../mission/planDrafting";
 import { KNOWLEDGE_CELL_M, requestScoutAreas } from "./api";
@@ -94,8 +96,31 @@ export async function liftFog(scene: CesiumSceneManager | null, land: LandArea):
     });
     return;
   }
+  // The fog follows the selected Land, the project need not: a site switch keeps the Land, and
+  // a card on another Land holds its switch back. The patches are this Land's ground, so the
+  // plan goes on its mission ground; this is a new plan anyway, so an open card closes.
+  if (missionLandId() !== land.id) {
+    useMission.getState().closeComposer();
+    try {
+      await engageLand(land);
+    } catch (error) {
+      useToasts.getState().push({
+        tone: "error",
+        title: `Could not open ${land.name} for planning`,
+        body: `${describeError(error)} Try again in a moment.`,
+      });
+      return;
+    }
+  }
   const project = useMission.getState().project;
-  if (!project) return;
+  if (!project || missionLandId() !== land.id) {
+    useToasts.getState().push({
+      tone: "error",
+      title: `Could not open ${land.name} for planning`,
+      body: "Select the land again, then lift the fog.",
+    });
+    return;
+  }
   const zones = scoutZones(read.areas, land, project.zones);
   const acres = zones.reduce((sum, z) => sum + toAcres(footprintAreaM2(z.footprint)), 0);
   const { gsdM } = scoutGeometry(DEFAULT_SCOUT);
