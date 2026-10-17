@@ -163,29 +163,110 @@ function WorkableAction({ offer }: { offer: WorkableOffer }) {
   );
 }
 
-/** "Perimeter fence follows a line, so its 3 hands stay." */
-function keptText(kept: WorkableOffer["kept"]): string {
-  const hands = kept.reduce((sum, zone) => sum + zone.hands, 0);
-  const one = kept.length === 1;
-  return `${kept.map((zone) => zone.label).join(" and ")} ${one ? "follows a line" : "follow lines"}, so ${one ? "its" : "their"} ${hands} hand${hands === 1 ? "" : "s"} stay${hands === 1 ? "s" : ""}.`;
+function handCount(hands: number): string {
+  return hands === 0 ? "no hands" : `${hands} hand${hands === 1 ? "" : "s"}`;
 }
 
-/** After a redraft onto workable ground: the hands now against before, and why some stay. */
+/** "3 hands stay", "1 hand stays". */
+function stay(hands: number): string {
+  return `${hands} hand${hands === 1 ? " stays" : "s stay"}`;
+}
+
+/**
+ * Why some zones' hands stay: "Perimeter fence follows a line, so its 3 hands stay." or
+ * "Z-08 has every lane left out of the preview, so its 4 hands stay."
+ */
+function keptText(kept: WorkableOffer["kept"]): string {
+  const sentence = (zones: WorkableOffer["kept"], one: string, many: string) => {
+    if (zones.length === 0) return null;
+    const hands = zones.reduce((sum, zone) => sum + zone.hands, 0);
+    const single = zones.length === 1;
+    const owner = single ? "its" : "their";
+    return `${zones.map((zone) => zone.label).join(" and ")} ${single ? one : many}, so ${owner} ${stay(hands)}.`;
+  };
+  return [
+    sentence(
+      kept.filter((zone) => zone.why === "line"),
+      "follows a line",
+      "follow lines",
+    ),
+    sentence(
+      kept.filter((zone) => zone.why === "left-out"),
+      "has every lane left out of the preview",
+      "have every lane left out of the preview",
+    ),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * After a redraft onto workable ground: the hands on the workable areas against the hands on
+ * the ground they replaced, why some stay at its edges, then the hands elsewhere (a followed
+ * line, ground that was not reworked) and the total Approve counts, against the total before.
+ */
 function afterText(
   after: NonNullable<DressRehearsal["after"]>,
-  hands: number,
+  run: Pick<DressRehearsal, "rehearsal" | "leftOut" | "workable">,
   spacing: string | null,
 ): string {
-  const now = hands === 0 ? "no hands" : `${hands} hand${hands === 1 ? "" : "s"}`;
+  const hands = run.rehearsal?.hands ?? [];
+  const onArea = (zoneId: string) => after.zoneIds.includes(zoneId);
+  const leftOut = (keep: (zoneId: string) => boolean) =>
+    run.leftOut.filter((lane) => keep(lane.zoneId)).reduce((sum, lane) => sum + lane.hands, 0);
+  const now = hands.filter((h) => onArea(h.zoneId)).length + leftOut(onArea);
+  const total = hands.length + leftOut(() => true);
+  const elsewhere = total - now;
+  const there = elsewhere > 0 || after.handsBefore !== after.reworkedBefore ? " there" : "";
   const change =
-    hands < after.handsBefore
-      ? `${now}, down from ${after.handsBefore}`
-      : `${now} (${after.handsBefore} before)`;
-  const why =
-    hands > 0
-      ? ` The drawn lanes${spacing ? ` (${spacing})` : ""} run up to the left-out ground, and slope there is read from heights a cell either side, steep cells included, so hands stay at its edges: open them to see where.`
-      : "";
-  return `Rehearsed again on the workable ground of ${after.labels.join(" and ")}: ${change}.${why} The ground between drawn lanes is not checked.`;
+    now < after.reworkedBefore
+      ? `${handCount(now)}${there}, down from ${after.reworkedBefore}`
+      : `${handCount(now)}${there} (${after.reworkedBefore} before)`;
+  // Slope hands stay at the edges of the left-out ground; creek hands, where the cut had no
+  // creeks to buffer (NHD not read then) or did not count these ones.
+  const areaHands = hands.filter((h) => onArea(h.zoneId));
+  const creek = areaHands.filter((h) => h.kind === "creek-buffer").length;
+  const slope = areaHands.length - creek;
+  const slopeWhy =
+    slope > 0
+      ? `The drawn lanes${spacing ? ` (${spacing})` : ""} run up to the left-out ground, and slope there is read from heights a cell either side, steep cells included, so ${slope === now ? "hands stay" : `${slope} slope ${slope === 1 ? "hand stays" : "hands stay"}`} at its edges: open them to see where.`
+      : null;
+  const are = creek === 1 ? "is" : "are";
+  const creekWhy =
+    creek > 0
+      ? after.creeksRead
+        ? `${creek} ${are} inside a creek buffer, on creeks the cut did not count: open them to see which.`
+        : `${creek} ${are} inside a creek buffer the cut did not apply, because USGS NHD was not read then.`
+      : null;
+  // Hands on other ground: a kept line says why; the rest was not reworked.
+  const kept = run.workable.kept.filter((zone) => !onArea(zone.zoneId));
+  const keptHands = kept.reduce((sum, zone) => sum + zone.hands, 0);
+  const notReworked = [
+    ...new Set(
+      hands
+        .filter((h) => !onArea(h.zoneId) && !kept.some((zone) => zone.zoneId === h.zoneId))
+        .map((h) => h.zoneLabel),
+    ),
+  ];
+  const other = elsewhere - keptHands;
+  const rest =
+    other > 0
+      ? `${notReworked.length ? `${notReworked.join(" and ")}: ` : ""}${stay(other)} on ground that was not reworked.`
+      : null;
+  const totals = there
+    ? `Approve now counts ${handCount(total)}, ${total < after.handsBefore ? "down from" : "against"} ${after.handsBefore} before.`
+    : null;
+  return [
+    `Rehearsed again on the workable ground of ${after.labels.join(" and ")}: ${change}.`,
+    slopeWhy,
+    creekWhy,
+    kept.length ? keptText(kept) : null,
+    rest,
+    totals,
+    "The ground between drawn lanes is not checked.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /**
@@ -390,7 +471,7 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
               <span className="mc-eyebrow">END OF REHEARSAL</span>
               {run.after && (
                 <p className="mc-note mc-note--agent" data-testid="rehearsal-after">
-                  {afterText(run.after, rehearsal.hands.length, spacing)}
+                  {afterText(run.after, run, spacing)}
                 </p>
               )}
               <ul className="mc-list">

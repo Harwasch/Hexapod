@@ -43,8 +43,9 @@ export interface PlanComposerState {
   error: string | null;
   /**
    * Zones a derived area replaced in this card (a zone's workable ground, by source zone id):
-   * the planner is not offered the source while its replacement is in scope, so a goal that
-   * names it ("the west grassland") does not bring the whole of it back.
+   * the planner is not offered the source while its replacement, or the replacement's own
+   * (`setAsideZones`), is in scope, so a goal that names it ("the west grassland") does not
+   * bring the whole of it back.
    */
   setAside?: Record<string, string>;
 }

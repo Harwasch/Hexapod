@@ -33,8 +33,10 @@ import { useWorkable } from "@/state/workable";
 import type * as GroundModule from "./rehearsalGround";
 import type { RehearsalGround } from "./rehearsalGround";
 import {
+  creeksRead,
   redraftOnWorkable,
   requestWorkableGround,
+  unworkableText,
   workableOfferText,
   workableRequest,
   workableTargets,
@@ -142,6 +144,7 @@ export interface LeftOutLane {
  * needs-land / needs-terrain: what would make it possible (a saved Land; its elevation).
  * line-only: every hand is on a followed line (a fence), which has no ground to leave out.
  * nothing: every cell is within the limits, so there is nothing to leave out.
+ * unworkable: no ground is left within the limits, so there is nothing to redraft on.
  * loading / ready / error: the API's answer for the zones it can rework.
  */
 export interface WorkableOffer {
@@ -151,6 +154,7 @@ export interface WorkableOffer {
     | "needs-terrain"
     | "line-only"
     | "nothing"
+    | "unworkable"
     | "loading"
     | "ready"
     | "error";
@@ -161,7 +165,7 @@ export interface WorkableOffer {
   totals: WorkableTotals | null;
   /** The zones it would rework, as the rehearsal names them. */
   labels: string[];
-  /** Zones whose hands stay (a followed line). */
+  /** Zones whose hands stay (a followed line, or every lane left out of the preview). */
   kept: KeptZone[];
   /** Where the numbers came from. */
   sources: string[];
@@ -189,10 +193,18 @@ export interface DressRehearsal {
   raised: number;
   workable: WorkableOffer;
   /**
-   * This run is the one a redraft onto workable ground asked for: how many hands went up
-   * before, and on which zones the ground was cut.
+   * This run is the one a redraft onto workable ground asked for: how many hands Approve
+   * counted before, how many of them were on the zones whose ground was cut (named as the
+   * rehearsal named them), and the workable areas that took their place.
    */
-  after: { handsBefore: number; labels: string[] } | null;
+  after: {
+    handsBefore: number;
+    reworkedBefore: number;
+    /** Whether the cut applied the creek buffer: creek hands that stay say why. */
+    creeksRead: boolean;
+    labels: string[];
+    zoneIds: string[];
+  } | null;
   start: () => void;
   stop: () => void;
   play: () => void;
@@ -383,11 +395,18 @@ export function useDressRehearsal(
     project,
     draft,
     includeEphemeral,
+    leftOut,
   });
   const done = useWorkable((s) => s.done);
   const after =
     done && status === "ready" && done.zoneIds.every((id) => draft.zoneIds.includes(id))
-      ? { handsBefore: done.handsBefore, labels: done.labels }
+      ? {
+          handsBefore: done.handsBefore,
+          reworkedBefore: done.reworkedBefore,
+          creeksRead: done.creeksRead,
+          labels: done.labels,
+          zoneIds: done.zoneIds,
+        }
       : null;
   const leftOutHands = leftOut.reduce((sum, lane) => sum + lane.hands, 0);
   return {
@@ -429,10 +448,25 @@ export function useDressRehearsal(
   };
 }
 
-/** A footprint's identity for a cache key: its size and its first and last corners. */
-function footprintKey(zone: Zone): string {
-  const text = JSON.stringify(zone.footprint);
-  return `${text.length}:${text.slice(0, 80)}:${text.slice(-80)}`;
+/**
+ * A footprint's identity for a cache key: a 53-bit hash of all of its GeoJSON (cyrb53: two
+ * 32-bit multiply-xor lanes) and its length. A reshaped zone keeps its id, so the key must
+ * change with any corner of it; the whole outline in the key would be hashed by the query
+ * cache on every render, and a workable area can run to thousands of corners.
+ */
+export function footprintKey(footprint: Zone["footprint"]): string {
+  const text = JSON.stringify(footprint);
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const hash = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+  return `${text.length}:${hash.toString(36)}`;
 }
 
 /**
@@ -447,27 +481,27 @@ function useWorkableOffer(input: {
   project: Project;
   draft: PlanDraft;
   includeEphemeral: boolean;
+  leftOut: readonly LeftOutLane[];
 }): WorkableOffer {
-  const { status, rehearsal, ground, project, draft, includeEphemeral } = input;
+  const { status, rehearsal, ground, project, draft, includeEphemeral, leftOut } = input;
   const scope = useLandScope();
   const landId = useMission((s) => missionLandId(s));
   const [failure, setFailure] = useState<string | null>(null);
-  const { targets, kept } = useMemo(
-    () =>
-      rehearsal && status === "ready"
-        ? workableTargets(rehearsal, project.zones)
-        : { targets: [] as WorkableTarget[], kept: [] as KeptZone[] },
-    [rehearsal, status, project.zones],
-  );
+  const { targets, kept, keys } = useMemo(() => {
+    if (!rehearsal || status !== "ready")
+      return { targets: [] as WorkableTarget[], kept: [] as KeptZone[], keys: [] as string[] };
+    const found = workableTargets(rehearsal, project.zones, leftOut);
+    return { ...found, keys: found.targets.map((target) => footprintKey(target.zone.footprint)) };
+  }, [rehearsal, status, project.zones, leftOut]);
   const rasterId = ground?.elevation?.rasterId ?? null;
   const queries = useQueries({
-    queries: targets.map((target) => ({
+    queries: targets.map((target, index) => ({
       queryKey: [
         "land-workable",
         scope,
         landId,
         target.zoneId,
-        footprintKey(target.zone),
+        keys[index],
         target.machineClass,
         rasterId,
         includeEphemeral,
@@ -497,7 +531,9 @@ function useWorkableOffer(input: {
     },
     apply: () => undefined,
   };
-  if (status !== "ready" || !rehearsal?.hands.length)
+  // Every hand Approve counts: those of lanes left out of the preview too.
+  const handsBefore = (rehearsal?.hands.length ?? 0) + leftOut.reduce((s, l) => s + l.hands, 0);
+  if (status !== "ready" || !rehearsal || handsBefore === 0)
     return { ...base, state: "none", message: null };
   if (targets.length === 0)
     return {
@@ -537,40 +573,51 @@ function useWorkableOffer(input: {
     const result = results[index];
     return result ? [{ target, result }] : [];
   });
-  const totals = workableTotals(answers.map((a) => a.result));
+  // A zone with nothing left within the limits is not reworked: the redraft keeps it whole,
+  // so its acres are not in the offer's total, and the card says it stays.
+  const usable = answers.filter((a) => a.result.workable);
+  const whole = unworkableText(answers.filter((a) => !a.result.workable).map((a) => a.target));
+  const warnings = [...new Set(answers.flatMap((a) => a.result.warnings))];
+  if (usable.length === 0)
+    return {
+      ...base,
+      state: "unworkable",
+      message: [
+        `Nothing is left to work on ${labels.join(" and ")} (${workableOfferText(workableTotals(answers.map((a) => a.result)))}): every part is too steep, inside a creek buffer or too small for its machines' assumed limits. Change the plan in the bar, or approve despite the hands.`,
+        ...warnings,
+      ].join(" "),
+    };
+  const totals = workableTotals(usable.map((a) => a.result));
   // Every cell within the limits: the hands come from lanes read between cells, and there is
   // no ground to leave out. Say so rather than offer a redraft onto the same ground.
   if (totals.footprintM2 - totals.workableM2 < 0.05 * 4046.8564224)
     return {
       ...base,
       state: "nothing",
-      message: `On ${answers[0]?.result.elevation.label ?? "the Land's terrain"} every cell of ${labels.join(" and ")} is within its machines' assumed limits, so there is no ground to leave out: these hands are read between cells, where a lane's samples take in a steeper neighbour.`,
+      message: [
+        `On ${usable[0]?.result.elevation.label ?? "the Land's terrain"} every cell of ${usable.map((a) => a.target.label).join(" and ")} is within its machines' assumed limits, so there is no ground to leave out: these hands are read between cells, where a lane's samples take in a steeper neighbour.`,
+        whole,
+      ]
+        .filter(Boolean)
+        .join(" "),
     };
   return {
     ...base,
     state: "ready",
+    labels: usable.map((a) => a.target.label),
     totals,
     text: workableOfferText(totals),
-    sources: [...new Set(answers.flatMap((a) => a.result.sources))],
-    creeksRead: answers.every(
-      (a) => a.result.creeks.status === "available" || a.result.creeks.status === "empty",
-    ),
+    sources: [...new Set(usable.flatMap((a) => a.result.sources))],
+    creeksRead: usable.every((a) => creeksRead(a.result)),
     elevation: (() => {
-      const read = answers[0]?.result.elevation;
+      const read = usable[0]?.result.elevation;
       return read ? `${read.label}${read.published ? ` (published ${read.published})` : ""}` : null;
     })(),
-    message: [...new Set(answers.flatMap((a) => a.result.warnings))].join(" ") || null,
+    message: [whole, ...warnings].filter(Boolean).join(" ") || null,
     // The redraft starts at once and the review goes while it drafts, so one click is all.
     apply: () => {
       if (!ground) return;
-      setFailure(
-        redraftOnWorkable({
-          draft,
-          answers,
-          handsBefore: rehearsal.hands.length,
-          heightAt: ground.heightAt,
-        }),
-      );
+      setFailure(redraftOnWorkable({ draft, answers, handsBefore, heightAt: ground.heightAt }));
     },
   };
 }

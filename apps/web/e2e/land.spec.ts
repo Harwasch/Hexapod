@@ -587,6 +587,11 @@ test("rehearse a plan on a saved land, and work only the ground it can", async (
   await expect(plans.getByTestId("plan-ground")).toContainText("Bench pasture, workable", {
     timeout: 30_000,
   });
+  // Ground derived from the land, not the saved land itself; NHD answered, so it is named.
+  await expect(plans.getByTestId("plan-ground")).toContainText("GROUND · DERIVED FROM YOUR LAND");
+  await expect(plans.getByTestId("plan-ground")).toContainText(
+    "Derived from USGS 3DEP 1/3″ bare-earth DEM, 10 m and USGS NHD creeks; the limits are assumed.",
+  );
   await expect(plans.getByTestId("plan-ground")).toContainText(
     "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m clear of steeper cells, on USGS 3DEP 1/3″ DEM, published 2025-08-27",
   );

@@ -21,7 +21,7 @@ export interface CoverageOptions {
   swathM: number;
   /** Direction of travel of the passes, degrees clockwise from north. Default: the long axis. */
   headingDeg?: number;
-  /** Cap on drawn passes; above it the spacing widens (a preview, flagged by `swathM`). */
+  /** Cap on passes across the extent; above it the spacing widens (a preview, flagged by `swathM`). */
   maxPasses?: number;
 }
 
@@ -288,8 +288,11 @@ export function coverageLanes(polygon: Position[][], options: CoverageOptions): 
 }
 
 /**
- * The spacing a capped sweep of the whole footprint uses: `swathM`, widened so its passes
- * across every part together fit `maxPasses` (the API's `coverage.measure` caps the same way).
+ * The spacing a capped sweep of the whole footprint uses: `swathM`, widened so that
+ * `maxPasses` passes span the footprint's whole extent across the heading, gaps included (the
+ * API's `coverage.measure` caps the same way). The cap is on that extent, not a total: parts
+ * that sit side by side along the heading each sweep their own share of it, so the passes
+ * of all parts together can come to more than `maxPasses`.
  */
 function footprintSwath(
   footprint: Footprint,
@@ -322,8 +325,10 @@ function footprintSwath(
  * Lanes over every polygon of a footprint, in one heading (the whole footprint's long axis
  * unless given); passes are numbered on across the parts and the serpentine carries on. A cap
  * on passes is the whole footprint's: a footprint of many parts (workable ground, a remainder
- * of patches) is drawn at one spacing, as wide as the cap needs across all of them, not at the
- * fine spacing each small part would allow on its own. One polygon sweeps as before.
+ * of patches) is drawn at one spacing, as wide as `maxPasses` across the whole footprint's
+ * extent needs, not at the fine spacing each small part would allow on its own. Parts side by
+ * side along the heading each take their passes, so the total can pass the cap (see
+ * `footprintSwath`). One polygon sweeps as before.
  */
 export function footprintLanes(footprint: Footprint, options: CoverageOptions): CoverageLanes {
   const bounds = boundsOf(footprint);

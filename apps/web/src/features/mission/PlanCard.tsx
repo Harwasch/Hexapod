@@ -357,6 +357,8 @@ function distance(metres: number): string {
 /**
  * The ground when it is a saved Land's: what it is and where it came from. It is changed in
  * Land (the outline, the inventory), so the card offers to go there rather than drag corners.
+ * Ground derived from the Land (workable ground, a Show Once area) says so: it is not the
+ * saved record.
  */
 function LandGroundSection({
   zone,
@@ -378,7 +380,9 @@ function LandGroundSection({
       : `${zone.acres.toLocaleString()} ac`;
   return (
     <section className="mc-ground" data-testid="plan-ground" data-ground="land">
-      <span className="mc-eyebrow">GROUND · YOUR SAVED LAND</span>
+      <span className="mc-eyebrow">
+        {land?.kind === "derived" ? "GROUND · DERIVED FROM YOUR LAND" : "GROUND · YOUR SAVED LAND"}
+      </span>
       <div className="mc-ground__row">
         <span className="mc-ground__name">
           <span className={`mc-dot mc-dot--${zone.tone}`} aria-hidden="true" />

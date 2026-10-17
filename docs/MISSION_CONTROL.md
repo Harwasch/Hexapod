@@ -359,22 +359,31 @@ and offers it as one action with what it cuts: "−137 ac too steep, −39 ac st
 creek buffer, −1.1 ac too small to work → 225 ac". Each zone with slope or creek hands is cut to
 the strictest class driving it, on the raster the rehearsal read slope from; the steep edge is
 the half cell (5 m) beside too-steep cells, where slope read between cells takes in the steep
-one. Taking it makes the answer a private area derived from the Land ("West grassland,
+one. Hands on lanes left out of the preview count too, since the approved plan still drives
+them. The answer is cached per zone outline (a hash of all of it, so a dragged corner asks
+again) and dropped with the Land's other derived answers when its records change. Taking it
+makes the answer a private area derived from the Land ("West grassland,
 workable", attributed "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m
 clear of steeper cells, on USGS 3DEP 1/3″ DEM, published …, 15 m creek buffer (assumed) on USGS
 NHD, from West grassland (Z-14)"), puts it in the source zone's place in the plan, keeps the
-goal, machines and answers, and redrafts (`features/mission/workableGround.ts`). The source zone
-is set aside for that card (`PlanComposerState.setAside`), so a goal that names it ("the west
-grassland") does not bring all of it back. The ground left out is hatched on the map while the
-card is open (red too steep, lighter red its edge, blue a creek buffer, labelled "Left out: too
-steep · derived"), and the new draft is rehearsed again straight to its verdict. On Oak Bench
-Ranch, 414 ac and 174 machine-hours become 225 ac and 102 h, and 147 hands become none, so the
-button reads "Approve plan"; where hands remain (lanes run up to left-out ground between cells),
-the card says why and Approve counts them. A followed line (a fence) has no ground to leave out
-and keeps its hands; without a Land the card says "Save this ground as a Land (or open the Land
-it is on) to read its terrain", and without the Land's elevation it asks for the bare-earth
-analysis, each with "Open in Land". If NHD does not answer, the cut says the creek buffer was
-not applied, and the next rehearsal can still raise creek hands.
+goal, machines and answers, and redrafts (`features/mission/workableGround.ts`); the card's
+ground reads "GROUND · DERIVED FROM YOUR LAND". The source zone is set aside for that card
+(`PlanComposerState.setAside`, followed through a second cut of the workable area), so a goal
+that names it ("the west grassland") does not bring all of it back. A zone with nothing left
+within the limits is not reworked: it stays whole, and the offer and the note say so. The ground
+left out is hatched on the map while the card is open (red too steep, lighter red its edge, blue
+a creek buffer, labelled "Left out: too steep · derived"; slivers are counted, not drawn), and
+the new draft is rehearsed again straight to its verdict. On Oak Bench Ranch, 414 ac and 174
+machine-hours become 223 ac and 101 h, and 147 hands become none, so the button reads "Approve
+plan"; where hands remain on the workable area, the card says why (slope hands: lanes run up to
+left-out ground between cells; creek hands: the cut had no creeks to buffer, NHD not read
+then), counts them against the reworked zone's hands before, gives hands on other ground (a
+kept fence) their own reason, and says what Approve now counts against before. A
+followed line (a fence) has no ground to leave out and keeps its hands; without a Land the card
+says "Save this ground as a Land (or open the Land it is on) to read its terrain", and without
+the Land's elevation it asks for the bare-earth analysis, each with "Open in Land". If NHD does
+not answer, the cut and the redrafted plan's ground note say the creek buffer was not applied,
+and the next rehearsal can still raise creek hands.
 
 **Quality.** `apps/web/src/missions/planDraft.ts` converts between the API draft and the
 console's `Plan`; `apps/api/app/services/planner.py` holds both planners behind one `Planner`

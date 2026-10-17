@@ -47,12 +47,24 @@ export interface WorkableTarget {
   label: string;
   zone: Zone;
   machineClass: GroundClassId;
-  /** Its slope and creek hands. */
+  /** Its slope and creek hands, those on lanes left out of the preview included. */
   hands: number;
 }
 
-/** A zone whose hands stay: a followed line (a fence) has no ground to leave out. */
+/**
+ * A zone whose hands stay. line: a followed line (a fence) has no ground to leave out.
+ * left-out: every lane of it is left out of the preview, so no lane says which class drives it.
+ */
 export interface KeptZone {
+  zoneId: string;
+  label: string;
+  hands: number;
+  why: "line" | "left-out";
+}
+
+/** A lane left out of the preview, with its hands: the approved plan still drives it. */
+interface LeftOutHands {
+  zoneId: string;
   label: string;
   hands: number;
 }
@@ -61,17 +73,27 @@ export interface KeptZone {
  * The zones a redraft onto workable ground can rework: every zone with a raised hand whose
  * lanes ground machines drive over an outline. A zone driven by several classes is cut to the
  * strictest (the lowest slope limit, then the widest creek buffer), so no class's hands stay.
+ * Hands on lanes left out of the preview count too: the approved plan still drives those
+ * lanes, so a zone whose only hands are on them is still reworked.
  */
 export function workableTargets(
   rehearsal: Pick<Rehearsal, "hands" | "lanes" | "machines">,
   zones: readonly Zone[],
+  leftOut: readonly LeftOutHands[] = [],
 ): { targets: WorkableTarget[]; kept: KeptZone[] } {
   const targets: WorkableTarget[] = [];
   const kept: KeptZone[] = [];
-  const zoneIds = [...new Set(rehearsal.hands.map((h) => h.zoneId))];
+  const zoneIds = [
+    ...new Set([
+      ...rehearsal.hands.map((h) => h.zoneId),
+      ...leftOut.filter((lane) => lane.hands > 0).map((lane) => lane.zoneId),
+    ]),
+  ];
   for (const zoneId of zoneIds) {
-    const hands = rehearsal.hands.filter((h) => h.zoneId === zoneId);
-    const label = hands[0]?.zoneLabel ?? zoneId;
+    const raised = rehearsal.hands.filter((h) => h.zoneId === zoneId);
+    const away = leftOut.filter((lane) => lane.zoneId === zoneId);
+    const hands = raised.length + away.reduce((sum, lane) => sum + lane.hands, 0);
+    const label = raised[0]?.zoneLabel ?? away[0]?.label ?? zoneId;
     const zone = zones.find((z) => z.id === zoneId);
     const lanes = rehearsal.lanes.filter((l) => l.zoneId === zoneId);
     const classes = lanes.flatMap((lane) => {
@@ -85,16 +107,10 @@ export function workableTargets(
     )[0];
     const followsLine = lanes.length > 0 && lanes.every((lane) => !lane.removable);
     if (!zone || followsLine || !strictest || strictest.classId === "drone") {
-      kept.push({ label, hands: hands.length });
+      kept.push({ zoneId, label, hands, why: lanes.length === 0 ? "left-out" : "line" });
       continue;
     }
-    targets.push({
-      zoneId,
-      label,
-      zone,
-      machineClass: strictest.classId,
-      hands: hands.length,
-    });
+    targets.push({ zoneId, label, zone, machineClass: strictest.classId, hands });
   }
   return { targets, kept };
 }
@@ -249,17 +265,54 @@ export function workableZone(
   };
 }
 
-/** The left-out ground of an answer, for the hatch. */
+/**
+ * The left-out ground of an answer, for the hatch. Slivers are counted, not hatched: they are
+ * hundreds of pieces under 0.1 ac on a large outline, each a shape of its own on the map and
+ * too small to see at a zone's scale; the offer and the area's note give their acres.
+ */
 export function leftOutGround(result: WorkableGround): LeftOutGround[] {
   return result.leftOut.flatMap((piece) =>
-    piece.geometry ? [{ reason: piece.reason, label: piece.label, footprint: piece.geometry }] : [],
+    piece.geometry && piece.reason !== "sliver"
+      ? [{ reason: piece.reason, label: piece.label, footprint: piece.geometry }]
+      : [],
   );
+}
+
+/** Whether the creek buffer was applied: USGS NHD answered, with flowlines or none. */
+export function creeksRead(result: Pick<WorkableGround, "creeks">): boolean {
+  return result.creeks.status === "available" || result.creeks.status === "empty";
+}
+
+/**
+ * Where the cut came from, for the plan card's ground note and the agent's log: the creeks
+ * are named only when every answer read them.
+ */
+export function workableSourcesText(results: readonly WorkableGround[]): string {
+  const elevation = results[0]?.elevation.label ?? "the Land's elevation";
+  return results.every(creeksRead)
+    ? `Derived from ${elevation} and USGS NHD creeks; the limits are assumed.`
+    : `Derived from ${elevation}; creek buffer not applied (USGS NHD not read). The limits are assumed.`;
+}
+
+/**
+ * "Creek draw (Z-08) has no ground its machines can work, so it stays as it was, with its 12
+ * hands.": the zones whose answer left nothing, which a redraft keeps whole.
+ */
+export function unworkableText(
+  targets: readonly Pick<WorkableTarget, "zone" | "label" | "hands">[],
+): string {
+  if (targets.length === 0) return "";
+  const one = targets.length === 1;
+  const hands = targets.reduce((sum, target) => sum + target.hands, 0);
+  return `${targets.map(fromLabel).join(" and ")} ${one ? "has" : "have"} no ground ${one ? "its" : "their"} machines can work within the assumed limits, so ${one ? "it stays" : "they stay"} as ${one ? "it was" : "they were"}, with ${one ? "its" : "their"} ${hands} hand${hands === 1 ? "" : "s"}.`;
 }
 
 /**
  * Redrafts the open plan on workable ground: each reworked zone's place in the plan's scope
  * goes to its workable area, the machines and answers stay, the goal is the same, and the
- * rehearsal runs again on the new draft. Returns what went wrong, or null.
+ * rehearsal runs again on the new draft. A zone with no workable ground left stays as it was,
+ * and the note says so. `handsBefore` is every hand Approve counted (left-out lanes' too).
+ * Returns what went wrong, or null.
  */
 export function redraftOnWorkable(input: {
   draft: Pick<PlanDraft, "zoneIds" | "machineIds">;
@@ -272,10 +325,12 @@ export function redraftOnWorkable(input: {
   const composer = state.composer;
   if (!project || !composer) return "The plan is no longer open.";
   const made: { target: WorkableTarget; result: WorkableGround; zone: Zone }[] = [];
+  const whole: WorkableTarget[] = [];
   for (const { target, result } of input.answers) {
     const id = nextAreaId([...project.zones, ...made.map((m) => m.zone)]);
     const zone = workableZone(result, target, id);
     if (zone) made.push({ target, result, zone });
+    else whole.push(target);
   }
   if (made.length === 0)
     return "Nothing is left to work: every part of this ground is too steep or inside a creek buffer for its machines' assumed limits.";
@@ -283,8 +338,14 @@ export function redraftOnWorkable(input: {
   // The planner may have chosen the zones itself (the card's scope empty): the draft's are it.
   const scope = composer.zoneIds.length ? composer.zoneIds : input.draft.zoneIds;
   const zoneIds = [...new Set(scope.map((id) => swap.get(id) ?? id))];
-  const totals = workableTotals(made.map((m) => m.result));
-  const note = `${made.map((m) => fromLabel(m.target)).join(" and ")} less the ground its machines are assumed unable to work: ${workableOfferText(totals)}. Derived from ${made[0]?.result.elevation.label ?? "the Land's elevation"} and USGS NHD creeks; the limits are assumed.`;
+  const results = made.map((m) => m.result);
+  const note = [
+    `${made.map((m) => fromLabel(m.target)).join(" and ")} less the ground its machines are assumed unable to work: ${workableOfferText(workableTotals(results))}.`,
+    workableSourcesText(results),
+    unworkableText(whole),
+  ]
+    .filter(Boolean)
+    .join(" ");
   adoptAreas(
     made.map((m) => m.zone),
     { source: "workable", note },
@@ -306,6 +367,8 @@ export function redraftOnWorkable(input: {
   useWorkable.getState().remember(records, {
     zoneIds: made.map((m) => m.zone.id),
     handsBefore: input.handsBefore,
+    reworkedBefore: made.reduce((sum, m) => sum + m.target.hands, 0),
+    creeksRead: results.every(creeksRead),
     labels: made.map((m) => m.target.label),
   });
   useMission.getState().appendLog("agent", note);

@@ -21,6 +21,7 @@ import { SceneContext, SceneRegistry } from "@/cesium/SceneContext";
 import type { SceneEvents } from "@/cesium/types";
 import {
   approveLabel,
+  footprintKey,
   rehearsalZones,
   useDressRehearsal,
   type DressRehearsal,
@@ -31,7 +32,7 @@ import { startPlanDraft } from "@/features/mission/planDrafting";
 import type * as WorkableModule from "@/features/mission/workableGround";
 import { requestWorkableGround } from "@/features/mission/workableGround";
 import { Emitter } from "@/lib/emitter";
-import { planRehearsal } from "@/missions/rehearsal";
+import { planRehearsal, type RaisedHand } from "@/missions/rehearsal";
 import type { Project, Zone } from "@/missions/types";
 import { useMission } from "@/state/mission";
 import { useWorkable } from "@/state/workable";
@@ -501,6 +502,74 @@ describe("work only the ground it can", () => {
     expect(result.current.workable.message).toContain("Analyze bare-earth terrain (USGS 3DEP)");
   });
 
+  function composing() {
+    useMission.setState({
+      project: onRanch,
+      landGround: { landId: "land-1", projectId: onRanch.id, zones: [] },
+      composer: {
+        goal: "Mow the west grassland",
+        zoneIds: [],
+        machineIds: [],
+        replacePlanId: null,
+        status: "ready",
+        ground: null,
+        draft,
+        previousDraft: null,
+        answers: {},
+        asked: {},
+        error: null,
+      },
+    });
+  }
+
+  it("still offers it when the only hands are on a lane left out, and counts them before", async () => {
+    grounded("raster-1");
+    composing();
+    const { result } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.skipToEnd());
+    const hand = result.current.rehearsal?.hands[0];
+    if (!hand) throw new Error("expected a hand");
+    const before = result.current.rehearsal?.hands.length ?? 0;
+    scene.mission.leaveOutLane.mockImplementation(() => {
+      scene.mission.previewLanes.mockImplementation((id: string) =>
+        id === "Z-14" ? LANES.slice(1) : [],
+      );
+      scene.mission.previewLaneNumbers.mockImplementation((id: string) =>
+        id === "Z-14" ? [2, 4] : [],
+      );
+    });
+    act(() => result.current.leaveOut(hand));
+    expect(result.current.rehearsal?.hands).toEqual([]);
+    // The approved plan still drives the lane, so Z-14 is still reworked.
+    await waitFor(() => expect(result.current.workable.state).toBe("ready"));
+    expect(result.current.workable.labels).toEqual(["Z-14"]);
+    act(() => result.current.workable.apply());
+    expect(useWorkable.getState().rerun).toMatchObject({
+      handsBefore: before,
+      reworkedBefore: before,
+    });
+    expect(result.current.raised).toBe(before);
+  });
+
+  it("says so when nothing is left to work, rather than offer an empty redraft", async () => {
+    grounded("raster-1");
+    composing();
+    vi.mocked(requestWorkableGround).mockResolvedValue({
+      ...answer,
+      workable: null,
+      workableM2: 0,
+    });
+    const { result } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.workable.state).toBe("unworkable"));
+    expect(result.current.workable.message).toContain(
+      "Nothing is left to work on Z-14 (−15 ac too steep, −4.9 ac creek buffer → 0 ac)",
+    );
+    expect(result.current.workable.text).toBeNull();
+  });
+
   it("offers the cut with its acres, redrafts on what is left, and rehearses that again", async () => {
     grounded("raster-1");
     useMission.setState({
@@ -577,8 +646,38 @@ describe("work only the ground it can", () => {
     const again = renderHook(() => useDressRehearsal(redrafted, withArea, "b"), { wrapper });
     await waitFor(() => expect(again.result.current.status).toBe("ready"));
     expect(again.result.current.frame?.ended).toBe(true);
-    expect(again.result.current.after).toEqual({ handsBefore: before, labels: ["Z-14"] });
+    expect(again.result.current.after).toEqual({
+      handsBefore: before,
+      reworkedBefore: before,
+      creeksRead: true,
+      labels: ["Z-14"],
+      zoneIds: ["A-01"],
+    });
     expect(useWorkable.getState().rerun).toBeNull();
+  });
+});
+
+describe("the workable answer's cache key", () => {
+  it("changes with any corner of the outline, not only its first and last", () => {
+    const rectangle = (east: number, north: number) => ({
+      type: "Polygon" as const,
+      coordinates: [
+        [
+          [-120.051234, 34.691234],
+          [east, 34.691234],
+          [east, north],
+          [-120.051234, north],
+          [-120.051234, 34.691234],
+        ],
+      ],
+    });
+    // The far corner dragged: same length, same first and last 80 characters.
+    const before = rectangle(-120.041234, 34.701234);
+    const after = rectangle(-120.041234, 34.709876);
+    const text = (f: object) => JSON.stringify(f);
+    expect(text(after)).toHaveLength(text(before).length);
+    expect(footprintKey(after)).not.toBe(footprintKey(before));
+    expect(footprintKey(rectangle(-120.041234, 34.701234))).toBe(footprintKey(before));
   });
 });
 
@@ -683,7 +782,7 @@ describe("RehearsalPanel", () => {
         state: "ready",
         text: "−137 ac too steep, −14 ac creek buffer → 263 ac",
         labels: ["Z-14"],
-        kept: [{ label: "Perimeter fence", hands: 3 }],
+        kept: [{ zoneId: "L-fence", label: "Perimeter fence", hands: 3, why: "line" }],
         sources: ["Slope: USGS 3DEP 1/3″ bare-earth DEM, 10 m, raster 1108dcf3"],
         elevation: "USGS 3DEP 1/3″ bare-earth DEM, 10 m (published 2025-08-27)",
         creeksRead: true,
@@ -719,17 +818,78 @@ describe("RehearsalPanel", () => {
     );
   });
 
+  const ended = (of: typeof rehearsal) => ({
+    t: of.durationS,
+    durationS: of.durationS,
+    playing: false,
+    speed: 300 as const,
+    raised: of.hands.length,
+    ended: true,
+  });
+  // The rehearsal's one hand is inside a creek buffer; a slope hand at the same place.
+  const slopeHand = { ...rehearsal.hands[0], id: "slope", kind: "cross-slope" } as RaisedHand;
+
   it("after a redraft onto workable ground, says how many hands remain and why", () => {
+    const sloped = { ...rehearsal, hands: [slopeHand] };
+    const after = {
+      handsBefore: 147,
+      reworkedBefore: 147,
+      creeksRead: true,
+      labels: ["Z-14"],
+      zoneIds: ["Z-14"],
+    };
+    const { unmount } = render(
+      <RehearsalPanel run={run({ rehearsal: sloped, after, frame: ended(sloped) })} />,
+    );
+    const text = screen.getByTestId("rehearsal-after");
+    expect(text).toHaveTextContent(
+      "Rehearsed again on the workable ground of Z-14: 1 hand, down from 147.",
+    );
+    expect(text).toHaveTextContent("so hands stay at its edges");
+    expect(text).toHaveTextContent("The ground between drawn lanes is not checked.");
+    unmount();
+    // A creek hand is not a slope edge: the cut had no creeks to buffer, and it says so.
+    render(
+      <RehearsalPanel
+        run={run({ after: { ...after, creeksRead: false }, frame: ended(rehearsal) })}
+      />,
+    );
+    const creek = screen.getByTestId("rehearsal-after");
+    expect(creek).toHaveTextContent(
+      "1 is inside a creek buffer the cut did not apply, because USGS NHD was not read then.",
+    );
+    expect(creek).not.toHaveTextContent("edges");
+  });
+
+  it("after a redraft, gives the reworked ground's hands their reason and a kept line its own", () => {
+    const fence = { ...rehearsal.hands[0], id: "fence", zoneId: "L-fence", zoneLabel: "Fence" };
+    const withFence = {
+      ...rehearsal,
+      hands: [slopeHand, fence, { ...fence, id: "fence-2" }],
+    } as typeof rehearsal;
+    const offer = run().workable;
     render(
       <RehearsalPanel
         run={run({
-          after: { handsBefore: 147, labels: ["Z-14"] },
+          rehearsal: withFence,
+          // Before: 134 hands on Z-14, 3 on the fence, and 10 on lanes left out of the preview.
+          after: {
+            handsBefore: 147,
+            reworkedBefore: 134,
+            creeksRead: true,
+            labels: ["Z-14"],
+            zoneIds: ["Z-14"],
+          },
+          workable: {
+            ...offer,
+            kept: [{ zoneId: "L-fence", label: "Fence", hands: 2, why: "line" }],
+          },
           frame: {
-            t: rehearsal.durationS,
-            durationS: rehearsal.durationS,
+            t: withFence.durationS,
+            durationS: withFence.durationS,
             playing: false,
             speed: 300,
-            raised: 1,
+            raised: withFence.hands.length,
             ended: true,
           },
         })}
@@ -737,10 +897,13 @@ describe("RehearsalPanel", () => {
     );
     const after = screen.getByTestId("rehearsal-after");
     expect(after).toHaveTextContent(
-      "Rehearsed again on the workable ground of Z-14: 1 hand, down from 147.",
+      "Rehearsed again on the workable ground of Z-14: 1 hand there, down from 134.",
     );
     expect(after).toHaveTextContent("so hands stay at its edges");
-    expect(after).toHaveTextContent("The ground between drawn lanes is not checked.");
+    expect(after).toHaveTextContent("Fence follows a line, so its 2 hands stay.");
+    expect(after).toHaveTextContent("Approve now counts 3 hands, down from 147 before.");
+    // The fence's hands are not explained as edges of the left-out ground.
+    expect(after.textContent?.match(/edges/g)).toHaveLength(1);
   });
 
   it("after a redraft with no hands left, says so plainly", () => {
@@ -754,7 +917,13 @@ describe("RehearsalPanel", () => {
       <RehearsalPanel
         run={run({
           rehearsal: clear,
-          after: { handsBefore: 147, labels: ["Z-14"] },
+          after: {
+            handsBefore: 147,
+            reworkedBefore: 147,
+            creeksRead: true,
+            labels: ["Z-14"],
+            zoneIds: ["Z-14"],
+          },
           frame: {
             t: clear.durationS,
             durationS: clear.durationS,

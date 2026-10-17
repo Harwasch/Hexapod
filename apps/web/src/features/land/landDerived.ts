@@ -2,10 +2,16 @@ import type { QueryClient } from "@tanstack/react-query";
 
 /**
  * Query keys whose answers are computed from a Land's stored records: its mission ground
- * (boundary and inventory as zones), the Fog of Knowing, and its rasters. One place to say
- * "this land's records changed", so every view computed from them asks again.
+ * (boundary and inventory as zones), the Fog of Knowing, its rasters, and the workable ground
+ * the dress rehearsal offers (read on its elevation, named for its outline's revision). One
+ * place to say "this land's records changed", so every view computed from them asks again.
  */
-export const LAND_DERIVED_KEYS = ["land-ground", "land-knowledge", "land-rasters"] as const;
+export const LAND_DERIVED_KEYS = [
+  "land-ground",
+  "land-knowledge",
+  "land-rasters",
+  "land-workable",
+] as const;
 
 /**
  * Marks everything derived from a Land's records as stale after one of them changed: an

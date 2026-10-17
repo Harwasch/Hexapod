@@ -67,11 +67,7 @@ export async function startPlanDraft(
   });
   // The bar logs what the operator said; a chip or a dragged corner is not words.
   try {
-    // A zone replaced by its derived ground (workable ground) stays out while that ground is
-    // in scope; named again in the scope itself, it is back.
-    const exclude = Object.entries(composer?.setAside ?? {})
-      .filter(([source, replacement]) => zoneIds.includes(replacement) && !zoneIds.includes(source))
-      .map(([source]) => source);
+    const exclude = setAsideZones(composer?.setAside ?? {}, zoneIds);
     const request = buildDraftRequest(project, {
       goal: text,
       zoneIds,
@@ -104,6 +100,31 @@ export async function startPlanDraft(
     useMission.getState().updateComposer({ status: "error", error: message });
     useMission.getState().appendLog("agent", `I couldn't draft that: ${message}`);
   }
+}
+
+/**
+ * The zones kept out of a draft because ground derived from them is in scope: a zone replaced
+ * by its workable ground stays out while that ground (or ground derived from it in turn, the
+ * fix applied again) is in `zoneIds`; named again in the scope itself, it is back.
+ */
+export function setAsideZones(
+  setAside: Readonly<Record<string, string>>,
+  zoneIds: readonly string[],
+): string[] {
+  return Object.keys(setAside).filter((source) => {
+    if (zoneIds.includes(source)) return false;
+    // Follow the replacements (Z-14 → A-01 → A-02) until one is in scope; a loop ends it.
+    const seen = new Set([source]);
+    for (
+      let next = setAside[source];
+      next !== undefined && !seen.has(next);
+      next = setAside[next]
+    ) {
+      if (zoneIds.includes(next)) return true;
+      seen.add(next);
+    }
+    return false;
+  });
 }
 
 /**

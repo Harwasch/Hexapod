@@ -21,8 +21,12 @@ export interface WorkableRecord {
 /** The rehearsal a redraft onto workable ground runs again once its draft is ready. */
 export interface WorkableRerun {
   zoneIds: string[];
-  /** Hands the rehearsal raised before, for "down from" in the card. */
+  /** Every hand Approve counted before (left-out lanes' included), for "down from". */
   handsBefore: number;
+  /** Of those, the hands on the zones whose ground was cut. */
+  reworkedBefore: number;
+  /** Whether the cut applied the creek buffer (USGS NHD read for every zone). */
+  creeksRead: boolean;
   /** The zones whose ground was cut, as the rehearsal names them. */
   labels: string[];
 }
