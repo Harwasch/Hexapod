@@ -573,3 +573,54 @@ describe("the scene's keys", () => {
     standalone.destroy();
   });
 });
+
+describe("a zone's card", () => {
+  const ring = {
+    type: "Polygon" as const,
+    coordinates: [
+      [
+        [0, 0],
+        [0.001, 0],
+        [0.001, 0.001],
+        [0, 0.001],
+        [0, 0],
+      ],
+    ],
+  };
+  const zone = (id: string, note: string, attribution: string) => ({
+    id,
+    name: `${id} zone`,
+    short: "other",
+    footprint: ring,
+    tone: "amber" as const,
+    treated: false,
+    acres: 11.5,
+    task: "",
+    machines: "unassigned",
+    progressPct: 0,
+    note,
+    attribution,
+    anchor: { longitude: 0.0005, latitude: 0.0005 },
+  });
+
+  it("says where the zone came from once", () => {
+    // A Land's zone has its source as both its note and its attribution.
+    const source = "Inventory · candidate · revision 1 · Demo outline fence, simulated";
+    useMission.setState({
+      project: {
+        ...project,
+        zones: [zone("L-1", source, source), zone("Z-1", "Mowing west", "ESA WorldCover 2021")],
+      },
+    });
+    useMission.getState().select({ kind: "zone", id: "L-1" });
+    const { unmount } = render(wrap(<SelectionCard />));
+    const card = screen.getByTestId("selection-card");
+    expect(card.textContent?.split(source)).toHaveLength(2);
+    expect(within(card).queryByTestId("zone-attribution")).toBeNull();
+    unmount();
+
+    act(() => useMission.getState().select({ kind: "zone", id: "Z-1" }));
+    render(wrap(<SelectionCard />));
+    expect(screen.getByTestId("zone-attribution")).toHaveTextContent("ESA WorldCover 2021");
+  });
+});

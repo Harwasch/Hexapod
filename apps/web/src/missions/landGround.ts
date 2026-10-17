@@ -10,10 +10,13 @@
 
 import type { LandArea, LandGround } from "@twin/contracts";
 import {
+  bearing,
   boundsOf,
   centerOf,
+  destination,
   footprintAreaM2,
   footprintContains,
+  haversineDistance,
   toAcres,
   type LonLat,
 } from "@twin/geo";
@@ -47,6 +50,26 @@ export function isPrivateZone(zone: Pick<Zone, "private" | "land">): boolean {
   return Boolean(zone.private) || zone.land !== undefined;
 }
 
+/**
+ * The point halfway along a line, by distance. A line feature's chip sits there, on the line:
+ * the middle of its bounds can be far off it (a fence round three sides of a ranch).
+ */
+export function halfwayAlong(coordinates: readonly (readonly number[])[]): LonLat {
+  const points = coordinates.map(([longitude = 0, latitude = 0]) => ({ longitude, latitude }));
+  const segments = points.slice(1).map((to, i) => {
+    const from = points[i] ?? to;
+    return { from, to, length: haversineDistance(from, to) };
+  });
+  let remaining = segments.reduce((sum, segment) => sum + segment.length, 0) / 2;
+  for (const { from, to, length } of segments) {
+    if (remaining <= length) {
+      return length > 0 ? destination(from, bearing(from, to), remaining) : from;
+    }
+    remaining -= length;
+  }
+  return points.at(-1) ?? { longitude: 0, latitude: 0 };
+}
+
 /** The ground's items as zones: the boundary in teal, features in amber, all private. */
 export function landZones(ground: LandGround): Zone[] {
   return ground.items.map((item) => ({
@@ -63,7 +86,7 @@ export function landZones(ground: LandGround): Zone[] {
     progressPct: 0,
     note: item.source,
     attribution: item.source,
-    anchor: centerOf(item.footprint),
+    anchor: item.line ? halfwayAlong(item.line.coordinates) : centerOf(item.footprint),
     land: {
       kind: item.kind,
       landId: ground.landId,

@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { LandArea } from "@twin/contracts";
-import { destination } from "@twin/geo";
+import { destination, haversineDistance } from "@twin/geo";
 
 import { anywhereProject } from "@/missions/anywhere";
 import { demoRanchProject } from "@/missions/demo";
+import { DEMO_RANCH } from "@/missions/demoRanchData";
 import {
   boundaryZoneOf,
   groundModeFor,
+  halfwayAlong,
   isPrivateZone,
   landIdOfProject,
   landProject,
@@ -41,6 +43,27 @@ describe("land ground", () => {
     expect(fence?.land?.line?.coordinates).toHaveLength(2);
     expect(fence?.attribution).toContain("Walked with a GPS");
     expect(boundaryZoneOf(zones)?.id).toBe("L-0f1e2d3c");
+  });
+
+  it("puts a line feature's chip on its line, halfway along", () => {
+    const at = (east: number, north: number) =>
+      destination(destination(origin, 90, east), 0, north);
+    const xy = (east: number, north: number): [number, number] => {
+      const p = at(east, north);
+      return [p.longitude, p.latitude];
+    };
+    // Three sides of a square kilometre, like the demo ranch's perimeter fence: the middle of
+    // its bounds is in the field, 500 m from any of it.
+    const fence = [xy(0, 0), xy(0, 1000), xy(1000, 1000), xy(1000, 0)];
+    expect(haversineDistance(halfwayAlong(fence), at(500, 1000))).toBeLessThan(1);
+    // A repeated vertex (a zero-length segment) is stepped over.
+    expect(
+      haversineDistance(halfwayAlong([xy(0, 0), xy(0, 0), xy(0, 200)]), at(0, 100)),
+    ).toBeLessThan(0.01);
+    const north = landZones(ground)[1]!;
+    expect(haversineDistance(north.anchor, at(500, 995))).toBeLessThan(1);
+    // Polygons keep the middle of their bounds.
+    expect(haversineDistance(landZones(ground)[2]!.anchor, at(420, 420))).toBeLessThan(1);
   });
 
   it("gives a land of its own a project with no fleet and no numbers in its meta", () => {
@@ -81,6 +104,18 @@ describe("land ground", () => {
     const demo = demoRanchProject();
     const onDemo: LandArea = { ...land, boundary: demo.zones[0]!.footprint };
     expect(groundModeFor(demo, onDemo)).toBe("layer");
+  });
+
+  it("layers the seeded Oak Bench Ranch land onto the demo ranch, fleet and all", () => {
+    // `python -m app.seed.demo_land` saves demo_ranch.json's outline as the Land.
+    const seeded: LandArea = {
+      ...land,
+      name: DEMO_RANCH.name,
+      boundary: DEMO_RANCH.boundary.geometry,
+    };
+    const demo = demoRanchProject();
+    expect(groundModeFor(demo, seeded)).toBe("layer");
+    expect(demo.machines.length).toBeGreaterThan(0);
   });
 
   it("finds the zone a goal names by its name or by what its category holds", () => {
