@@ -2480,3 +2480,97 @@ research sources (`/research/sources`) and list what exists without storing evid
 overview does not run them. Not done: Esri Wayback and the Esri-hosted topo service (not openly
 licensed), image registrations and NDVI rasters in the lens (they need workspace auth on the
 tiles), and any check of alignment against the Google mesh.
+
+## Implemented increment: Show once, everywhere
+
+Tap one place on a saved land and every cell with a similar seasonal satellite signature
+lights up; slide how alike, protect patches, and make the lit ground the job. Cells are 10 m,
+or coarser on a land more than about 5 km across: the raster's grid keeps at most 506 cells
+across (`make_grid`), so a 6 km ranch is analysed at about 11.9 m, and every line that names the
+spacing (the card, the server's interpretation and errors, a job's provenance) takes it from
+the raster's `resolutionM`, never a fixed 10 m. The card shows the raster's coarsening warning
+then, and before preparing says what spacing the land's extent will give. It is computed on
+request from the land's stored `sentinel-2-signature` raster (above) and never saved; no
+migration.
+
+Similarity (`apps/api/app/analysis/similarity.py`). Only cells valid in every band of every
+window are compared. Each band is standardized by the mean and spread the raster's
+`SignatureInfo` stores for those common cells (a band with no spread is left out), each cell's
+vector is scaled to unit length, and two cells are as alike as the cosine of their vectors: 1 the
+same signature, 0 unrelated, below 0 opposite. Scores are quantized once,
+`round(max(0, cosine) x 250)`, and every threshold compares that number (`raw_threshold`, the
+console's `rawThreshold`), so the slider, its tally and the areas a job gets light the same
+cells. Alike is relative to the variety on this land, and the card says what it is whatever the
+slider: "Measured: satellite reflectance", "Inferred: similarity", "Similar seasonal satellite
+signature at 10 m. Not a species ID." (at the raster's spacing).
+
+API, read-only and workspace-scoped (viewers may ask), private and no-store:
+
+- `GET /land/rasters/{id}/similar?longitude&latitude` returns the tapped cell (its centre and
+  its values per dated scene), and the scores as a `LonLatGrid` at the analysis spacing (u8,
+  0..250 = cosine x 250, 255 outside the land or without a full signature), resampled nearest
+  from the analysis grid, with the cell area for a tally, the scenes, the method, the raster's
+  warnings and attribution, and whether the boundary changed since (stale). Only signature
+  rasters compare (409 otherwise); a point outside the boundary, or a cell cloudy, shadowed,
+  snowy or water in any window, is a 422 that says so.
+- `POST /land/rasters/{id}/similar/zones` (`longitude`, `latitude`, `threshold` 0.3 to 0.99,
+  `protected` as up to 5,000 lon/lat rectangles, `minPatchM2` 2,000, `maxZones` 8) recomputes on
+  the analysis grid and outlines the alike cells the way the fog's scout patches are made: cell
+  squares merged, closed by half a cell (single-cell gaps and diagonal steps bridged), simplified,
+  clipped to the boundary, with protected ground cut out afterwards so it is always a hole. The
+  largest patches become areas of their own and the rest one remainder area, so an oak-like
+  signature that fragments into hundreds of patches keeps the plan and the map sane; patches
+  under half an acre are left out and counted, as are alike cells that were protected.
+  Footprints are stored to 8 decimals; a patch whose ring that rounding pinches is snapped to it
+  with a valid result, and one narrower than the rounding is left out and counted
+  (`unoutlined`), never dropped without a word. A part that reprojection splits shares its cells
+  between the pieces by area. `nativeResolutionM` says the grid the areas were outlined on.
+
+The standardized vectors of a raster stay in memory between taps, keyed by its content hash
+(192 MB budget): a tap after the first is one matrix product.
+
+Console: the card leads the land's Ecology section. Without signatures for the current boundary
+it offers "Prepare 10 m signatures" (the same raster run Explore this land starts; "Prepare
+seasonal signatures" on a land too wide for 10 m) and follows the run. Signatures made only for
+an earlier boundary are offered again for this one. Signatures for this boundary in which no
+cell was clear in every season say so with the raster's own warning (which window was empty),
+and the button tries the year before the earliest year tried, since the same dates would read
+the same cloudy scenes; the status line stops once the list has the run's raster. With
+signatures, "Click a place" (Tap on a touch screen) starts a session. A bridge in the
+shell takes the ground taps while the card is on screen and drapes the answer with the shared
+`GroundGridLayer` 'ramp' material: magenta, a hue the land never has, deeper and more opaque the
+more alike, with the tapped cell outlined. "How alike" (30 to 99%, from 80%) is the drape's
+threshold uniform, so sliding fetches and uploads nothing; the tally counts the lit cells of the
+display grid and says it is approximate. In Protect mode a tap on a lit patch leaves the whole
+8-connected patch out (hatched in blue; a second tap brings it back); protected ground is sent as
+row runs and kept for the next tap on the same grid. Escape (not one typed into a field, nor one
+an open sheet, dialog or popover takes first), the fog taking the ground, another land or a
+revised boundary ends the session; hiding the card only lifts the drape and the taps.
+"Make this the job" opens a fresh plan card on the land with the areas, private and marked as
+derived from the land, each citing "Similar Sentinel-2 signature at 10 m to the cell at <lat,
+lon>, at least N% alike; scenes <dates>" (the raster's spacing) with the data's attribution; the
+ground note names the protected acres, the specks and any patch too thin to outline left out, and the bar asks what should happen there. A typed goal
+keeps derived areas as the ground (it used to swap them for the land's boundary). A job made
+again replaces the last one's areas unless a plan keeps them.
+
+Two fixes found tapping the ranch in a browser, shared with the fog: mid-click the depth pick came
+back empty, so a ground tap fell back to the bare ellipsoid, off by the ground's height along
+the ray (the ranch sits at 250 m: from 4.4 km a tap 1.3 km off-centre landed 90 m away). An
+approximate tap is now asked again after a fresh frame (or after 500 ms, when the ellipsoid
+stays the last resort), when the depth answers; a click made meanwhile supersedes it. And inside the
+land a click on an inventory polygon (the oak woodland) selected the feature instead of reaching
+the layer taking taps; there it is now ground, as a mission zone's fill already was. The drape
+also kept rebuilding its primitive on every show (it forgot the texture it had just uploaded), so
+a protect tap now swaps the texture in place.
+
+Measured on Oak Bench Ranch (54,436 compared cells) with the API, the worker and a browser:
+`/similar` answered in 0.55 s on the first tap and about 0.2 s after (88 KB); `/similar/zones`
+in 0.5 s at 80% and 0.85 s at 65%. A cell in a block of evergreen canopy (NDVI 0.69, 0.64, 0.58
+and 0.65 on 2025-01-15, 04-05, 07-24 and 10-17: green through the dry summer, as live oak is)
+lit 8,148 cells (201 ac) at 80%, 4,061 at 90% and 11,912 at 65%, following the oak woodland,
+the creek corridor and scattered oaks; protecting a 75-cell oak patch on the east fence left
+8,073. The job at 80% was 8 areas and one area of 33 smaller patches (195 ac), with 220 specks
+(21 ac) left out; "Survey these oak patches for sudden oak death next week" drafted it as a
+2-hour survey by the assumed mapping drone. Known limits: the display grid is the analysis grid
+resampled nearest onto lon/lat cells, so its tally is approximate; the signature is four dated
+scenes, so a field green in April only matches other April-green ground, whatever grows there.

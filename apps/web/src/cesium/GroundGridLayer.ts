@@ -15,7 +15,9 @@
  *   cost is kept low, since it draws on terrain and on the photorealistic tiles across the
  *   screen while the camera moves: two texture reads and two 3-octave fbm calls.
  * - `ramp` (batch 3, Show Once): a score in R, valid cells in G, protected cells in B, drawn
- *   above a `threshold` uniform in a two-colour ramp; moving a slider is a uniform update.
+ *   above a `threshold` uniform in a two-colour ramp, deeper and more opaque the more alike;
+ *   moving a slider is a uniform update. Magenta, a hue the land never has, so it reads over
+ *   green canopy and golden grass alike; protected cells are hatched in the agent blue.
  *
  * Each consumer owns its instance (its bridge makes it); `useGridDrape` lets one drape show
  * at a time, so a second one taking the ground hides the first.
@@ -117,16 +119,17 @@ czm_material czm_getMaterial(czm_materialInput materialInput) {
 }
 `;
 
-/** A score ramp above a threshold: crisp cells, protected ones hatched. */
+/** A score ramp above a threshold: crisp cells, the most alike strongest, protected ones hatched. */
 export const RAMP_SHADER = `
 czm_material czm_getMaterial(czm_materialInput materialInput) {
   czm_material material = czm_getDefaultMaterial(materialInput);
   vec4 cell = texture(values, materialInput.st);
   float lit = step(threshold, cell.r) * cell.g * (1.0 - cell.b);
-  float t = clamp((cell.r - threshold) / max(1.0 - threshold, 0.001), 0.0, 1.0);
+  float t = clamp((cell.r - threshold) / max(0.98 - threshold, 0.001), 0.0, 1.0);
   float hatch = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 10.0)) * cell.b * cell.g;
   material.diffuse = mix(mix(low.rgb, high.rgb, t), protectedColor.rgb, hatch);
-  material.alpha = max(lit * maxAlpha, hatch * protectedColor.a);
+  material.emission = material.diffuse * 0.25 * lit;
+  material.alpha = max(lit * maxAlpha * mix(0.6, 1.0, t), hatch * protectedColor.a);
   return material;
 }
 `;
@@ -194,10 +197,10 @@ function materialFor(
       uniforms: {
         values: placeholder,
         threshold: 0.8,
-        low: Color.fromCssColorString("#f0b254"),
-        high: Color.fromCssColorString("#f7e3a1"),
-        protectedColor: Color.fromCssColorString("#9db8f0").withAlpha(0.45),
-        maxAlpha: 0.7,
+        low: Color.fromCssColorString("#ff8fdc"),
+        high: Color.fromCssColorString("#ff1fb0"),
+        protectedColor: Color.fromCssColorString("#9db8f0").withAlpha(0.6),
+        maxAlpha: 0.85,
       },
       source: RAMP_SHADER,
     },
@@ -296,6 +299,9 @@ export class GroundGridLayer {
     this.primitive = primitive;
     this.material = material;
     this.bounds = { ...bounds };
+    // After `removePrimitive`, which forgets the old texture: the next show of the same grid
+    // only swaps this one.
+    this.current = canvas;
     this.scene.requestRender();
   }
 

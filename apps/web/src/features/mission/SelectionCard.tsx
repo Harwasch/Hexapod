@@ -135,7 +135,7 @@ export function SelectionCard() {
                 </div>
                 <div className="mc-card__meta">
                   {zone.land
-                    ? `${zone.land.kind === "boundary" ? "Saved land" : `Mapped ${zone.short}`} · private to your workspace`
+                    ? `${zone.land.kind === "boundary" ? "Saved land" : zone.land.kind === "derived" ? "Derived from your saved land" : `Mapped ${zone.short}`} · private to your workspace`
                     : `${zone.task} · ${zone.machines}`}
                 </div>
                 <GlassProgress

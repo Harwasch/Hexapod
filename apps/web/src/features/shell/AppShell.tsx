@@ -6,6 +6,7 @@ import { HOTKEYS } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
 import { LandRasterBridge } from "@/cesium/LandRasterBridge";
 import { KnowledgeFogBridge } from "@/cesium/KnowledgeFogBridge";
+import { ShowOnceBridge } from "@/cesium/ShowOnceBridge";
 import { LandContextBridge } from "@/cesium/LandContextBridge";
 import { LandBridge } from "@/cesium/LandBridge";
 import { LandIdentityBridge } from "../land/WorkspaceIdentity";
@@ -188,6 +189,7 @@ export function AppShell() {
           <LandContextBridge />
           <LandRasterBridge />
           <KnowledgeFogBridge />
+          <ShowOnceBridge />
           <LandMissionBridge />
         </>
       )}

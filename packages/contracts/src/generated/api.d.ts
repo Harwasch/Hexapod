@@ -1537,6 +1537,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/rasters/{raster_id}/similar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Similar
+         * @description How alike every cell of the land is to the tapped one, by seasonal Sentinel-2 signature
+         *     (a `sentinel-2-signature` raster; 409 for any other). Computed on request, never saved.
+         */
+        get: operations["similar_api_v1_land_rasters__raster_id__similar_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/land/rasters/{raster_id}/similar/zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Similar Zones
+         * @description The cells at least `threshold` alike to the tapped one, protected ground left out, as
+         *     areas for a plan: the largest patches each, the rest together. Read-only computation.
+         */
+        post: operations["similar_zones_api_v1_land_rasters__raster_id__similar_zones_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/rasters/{raster_id}/tiles/{band}/{z}/{x}/{y}.png": {
         parameters: {
             query?: never;
@@ -8523,6 +8565,178 @@ export interface components {
             /** Standardization */
             standardization: string;
         };
+        /** SignatureLeftOut */
+        SignatureLeftOut: {
+            /** Aream2 */
+            areaM2: number;
+            /** Patches */
+            patches: number;
+        };
+        /**
+         * SignatureScene
+         * @description One dated window of the signature: the scene it was read from.
+         */
+        SignatureScene: {
+            /** Acquiredat */
+            acquiredAt: string | null;
+            period: components["schemas"]["VegetationPeriod"];
+            /** Sceneid */
+            sceneId: string | null;
+            /** Window */
+            window: number;
+        };
+        /** SignatureSeed */
+        SignatureSeed: {
+            /** Celllatitude */
+            cellLatitude: number;
+            /** Celllongitude */
+            cellLongitude: number;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Windows */
+            windows: components["schemas"]["SignatureSeedWindow"][];
+        };
+        /**
+         * SignatureSeedWindow
+         * @description The tapped cell's own values in one window (reflectance 0..1, NDVI -1..1).
+         */
+        SignatureSeedWindow: {
+            /** Acquiredat */
+            acquiredAt: string | null;
+            /** Green */
+            green: number;
+            /** Ndvi */
+            ndvi: number;
+            /** Nir */
+            nir: number;
+            /** Red */
+            red: number;
+            /** Swir16 */
+            swir16: number;
+            /** Window */
+            window: number;
+        };
+        /** SignatureSimilarityRead */
+        SignatureSimilarityRead: {
+            /** Attribution */
+            attribution: string;
+            /** Boundarycells */
+            boundaryCells: number;
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Cellaream2 */
+            cellAreaM2: number;
+            /** Comparedcells */
+            comparedCells: number;
+            grid: components["schemas"]["LonLatGrid"];
+            /** Interpretation */
+            interpretation: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Method */
+            method: string;
+            /** Nativeresolutionm */
+            nativeResolutionM: number;
+            /**
+             * Rasterid
+             * Format: uuid
+             */
+            rasterId: string;
+            /** Scenes */
+            scenes: components["schemas"]["SignatureScene"][];
+            seed: components["schemas"]["SignatureSeed"];
+            /** Stale */
+            stale: boolean;
+            /** Warnings */
+            warnings: string[];
+        };
+        /** SignatureZone */
+        SignatureZone: {
+            /** Aream2 */
+            areaM2: number;
+            /** Cells */
+            cells: number;
+            /** Footprint */
+            footprint: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Meansimilarity */
+            meanSimilarity: number;
+            /** Patches */
+            patches: number;
+        };
+        /** SignatureZonesRead */
+        SignatureZonesRead: {
+            /** Attribution */
+            attribution: string;
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Cellaream2 */
+            cellAreaM2: number;
+            dropped: components["schemas"]["SignatureLeftOut"];
+            /** Interpretation */
+            interpretation: string;
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Matchedcells */
+            matchedCells: number;
+            /** Method */
+            method: string;
+            /** Nativeresolutionm */
+            nativeResolutionM: number;
+            /** Protectedcells */
+            protectedCells: number;
+            /**
+             * Rasterid
+             * Format: uuid
+             */
+            rasterId: string;
+            remainder: components["schemas"]["SignatureZone"] | null;
+            /** Scenes */
+            scenes: components["schemas"]["SignatureScene"][];
+            seed: components["schemas"]["SignatureSeed"];
+            /** Stale */
+            stale: boolean;
+            /** Threshold */
+            threshold: number;
+            unoutlined: components["schemas"]["SignatureLeftOut"];
+            /** Zones */
+            zones: components["schemas"]["SignatureZone"][];
+        };
+        /**
+         * SignatureZonesRequest
+         * @description The seed again (the server recomputes on the analysis grid), the slider's threshold
+         *     and the cells the operator protected.
+         */
+        SignatureZonesRequest: {
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /**
+             * Maxzones
+             * @default 8
+             */
+            maxZones?: number;
+            /**
+             * Minpatchm2
+             * @default 2000
+             */
+            minPatchM2?: number;
+            /** Protected */
+            protected?: number[][];
+            /**
+             * Threshold
+             * @default 0.8
+             */
+            threshold?: number;
+        };
         /** SiteCreate */
         SiteCreate: {
             /** Assets */
@@ -9958,6 +10172,14 @@ export type SchemaSidecarAttachment = components['schemas']['SidecarAttachment']
 export type SchemaSidecarFlag = components['schemas']['SidecarFlag'];
 export type SchemaSignatureFeature = components['schemas']['SignatureFeature'];
 export type SchemaSignatureInfo = components['schemas']['SignatureInfo'];
+export type SchemaSignatureLeftOut = components['schemas']['SignatureLeftOut'];
+export type SchemaSignatureScene = components['schemas']['SignatureScene'];
+export type SchemaSignatureSeed = components['schemas']['SignatureSeed'];
+export type SchemaSignatureSeedWindow = components['schemas']['SignatureSeedWindow'];
+export type SchemaSignatureSimilarityRead = components['schemas']['SignatureSimilarityRead'];
+export type SchemaSignatureZone = components['schemas']['SignatureZone'];
+export type SchemaSignatureZonesRead = components['schemas']['SignatureZonesRead'];
+export type SchemaSignatureZonesRequest = components['schemas']['SignatureZonesRequest'];
 export type SchemaSiteCreate = components['schemas']['SiteCreate'];
 export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
@@ -16862,6 +17084,133 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RasterSample"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    similar_api_v1_land_rasters__raster_id__similar_get: {
+        parameters: {
+            query: {
+                latitude: number;
+                longitude: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                raster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignatureSimilarityRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    similar_zones_api_v1_land_rasters__raster_id__similar_zones_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                raster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignatureZonesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignatureZonesRead"];
                 };
             };
             /** @description Missing or wrong write token */

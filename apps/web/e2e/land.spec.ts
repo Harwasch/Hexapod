@@ -612,6 +612,260 @@ test("show the fog of knowing, read a cell, and draft a scout flight with its DJ
   expect(download.suggestedFilename()).toMatch(/^scout-west-field-\d{4}-\d{2}-\d{2}\.kmz$/);
 });
 
+/**
+ * Show once, everywhere: the land's signatures, one tap's similarity on a 4 x 4 grid over the
+ * land (a 4-cell patch north-west, a 2-cell patch south-east, the rest unlike) and its areas.
+ */
+async function signatureApi(page: Page, land: () => LandArea | undefined) {
+  const asked: { similar: number; zones: Record<string, unknown>[] } = { similar: 0, zones: [] };
+  const frame = () => {
+    const ring = (land()?.boundary as { coordinates: number[][][] }).coordinates[0] ?? [];
+    const lons = ring.map((p) => p[0] ?? 0);
+    const lats = ring.map((p) => p[1] ?? 0);
+    return {
+      west: Math.min(...lons),
+      south: Math.min(...lats),
+      east: Math.max(...lons),
+      north: Math.max(...lats),
+      columns: 4,
+      rows: 4,
+    };
+  };
+  const scenes = ["2025-01-15", "2025-04-05", "2025-07-24", "2025-10-17"].map((day, window) => ({
+    window,
+    period: { startDate: `${day.slice(0, 8)}01`, endDate: `${day.slice(0, 8)}30` },
+    sceneId: `S2_FIXTURE_${window}`,
+    acquiredAt: `${day}T18:55:00Z`,
+  }));
+  await page.route("**/api/v1/land/*/rasters*", async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          id: "raster-1",
+          runId: "run-0",
+          landId: land()?.id,
+          boundaryRevision: land()?.revision ?? 1,
+          request: { dataset: "sentinel-2-signature", resolutionM: 10, maxDimension: 512 },
+          metadata: {
+            resolutionM: 10,
+            boundaryCells: 16,
+            warnings: [],
+            vegetation: { observations: scenes.map(({ acquiredAt }) => ({ acquiredAt })) },
+            signature: { commonCells: 16 },
+          },
+          stale: false,
+        },
+      ],
+    });
+  });
+  const seedOf = (longitude: number, latitude: number) => ({
+    longitude,
+    latitude,
+    cellLongitude: longitude,
+    cellLatitude: latitude,
+    windows: [0.69, 0.64, 0.58, 0.65].map((ndvi, window) => ({
+      window,
+      acquiredAt: scenes[window]?.acquiredAt,
+      green: 0.05,
+      red: 0.04,
+      nir: 0.3,
+      swir16: 0.2,
+      ndvi,
+    })),
+  });
+  await page.route("**/api/v1/land/rasters/*/similar*", async (route) => {
+    asked.similar += 1;
+    const url = new URL(route.request().url());
+    const scores = [250, 250, 0, 0, 250, 250, 0, 0, 0, 0, 0, 0, 0, 0, 240, 240];
+    await route.fulfill({
+      json: {
+        rasterId: "raster-1",
+        landId: land()?.id,
+        boundaryRevision: 1,
+        stale: false,
+        seed: seedOf(
+          Number(url.searchParams.get("longitude")),
+          Number(url.searchParams.get("latitude")),
+        ),
+        grid: {
+          ...frame(),
+          cellM: 10,
+          encoding: "u8",
+          scale: 0.004,
+          offset: 0,
+          nodata: 255,
+          data: Buffer.from(Uint8Array.from(scores)).toString("base64"),
+        },
+        cellAreaM2: 400,
+        nativeResolutionM: 10,
+        comparedCells: 16,
+        boundaryCells: 16,
+        scenes,
+        method: "cosine",
+        interpretation: "Similar seasonal satellite signature at 10 m. Not a species ID.",
+        warnings: [],
+        attribution: "Contains modified Copernicus Sentinel data",
+      },
+    });
+  });
+  await page.route("**/api/v1/land/rasters/*/similar/zones", async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    asked.zones.push(body);
+    const f = frame();
+    const box = (w: number, s: number, e: number, n: number) => ({
+      type: "Polygon",
+      coordinates: [
+        [
+          [f.west + (f.east - f.west) * w, f.south + (f.north - f.south) * s],
+          [f.west + (f.east - f.west) * e, f.south + (f.north - f.south) * s],
+          [f.west + (f.east - f.west) * e, f.south + (f.north - f.south) * n],
+          [f.west + (f.east - f.west) * w, f.south + (f.north - f.south) * n],
+          [f.west + (f.east - f.west) * w, f.south + (f.north - f.south) * s],
+        ],
+      ],
+    });
+    await route.fulfill({
+      json: {
+        rasterId: "raster-1",
+        landId: land()?.id,
+        boundaryRevision: 1,
+        stale: false,
+        threshold: body.threshold,
+        seed: seedOf(Number(body.longitude), Number(body.latitude)),
+        zones: [
+          {
+            footprint: box(0, 0.5, 0.5, 1),
+            areaM2: 16_000,
+            cells: 4,
+            meanSimilarity: 0.99,
+            patches: 1,
+          },
+        ],
+        remainder: null,
+        dropped: { patches: 0, areaM2: 0 },
+        unoutlined: { patches: 0, areaM2: 0 },
+        protectedCells: 2,
+        matchedCells: 4,
+        cellAreaM2: 100,
+        nativeResolutionM: 10,
+        scenes,
+        method: "cosine",
+        interpretation: "Similar seasonal satellite signature at 10 m. Not a species ID.",
+        attribution: "Contains modified Copernicus Sentinel data",
+      },
+    });
+  });
+  return { asked, frame };
+}
+
+/** Clicks the map at a point on the ground (the canvas position Cesium gives for it). */
+async function tapGround(page: Page, longitude: number, latitude: number) {
+  const at = await page.evaluate(
+    ([lon, lat]) => {
+      const viewer = (
+        window as unknown as {
+          __twin: {
+            viewer: {
+              camera: { position: { constructor: unknown } };
+              scene: { cartesianToCanvasCoordinates(p: unknown): { x: number; y: number } };
+            };
+          };
+        }
+      ).__twin.viewer;
+      const C3 = viewer.camera.position.constructor as {
+        fromDegrees(lon: number, lat: number, height: number): unknown;
+      };
+      const p = viewer.scene.cartesianToCanvasCoordinates(C3.fromDegrees(lon!, lat!, 0));
+      return { x: p.x, y: p.y };
+    },
+    [longitude, latitude],
+  );
+  const box = await page.locator(".cesium-widget canvas").boundingBox();
+  await page.mouse.click((box?.x ?? 0) + at.x, (box?.y ?? 0) + at.y);
+}
+
+test("show once: tap a place, slide how alike, protect a patch and make it the job", async ({
+  app,
+}) => {
+  const records = await landApi(app);
+  const { asked, frame } = await signatureApi(app, () => records.saved[0]);
+  await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+  await app.getByTestId("tool-land").click();
+  await app.evaluate(() => {
+    const twin = (
+      window as unknown as {
+        __twin: {
+          camera: {
+            cancelFlight(): void;
+            setView(lon: number, lat: number, height: number, heading: number, pitch: number): void;
+          };
+        };
+      }
+    ).__twin;
+    twin.camera.cancelFlight();
+    twin.camera.setView(-119.9, 36.6, 1500, 0, -90);
+  });
+  await app.getByRole("button", { name: /Draw a boundary/ }).click();
+  for (const [x, y] of [
+    [650, 300],
+    [1000, 300],
+    [1000, 550],
+    [650, 550],
+  ]) {
+    await app.mouse.click(x!, y!);
+  }
+  await app.getByRole("button", { name: "Review boundary", exact: true }).click();
+  await app.getByLabel("Name this land").fill("West field");
+  await app.getByRole("button", { name: "Save this land", exact: true }).click();
+  await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
+  await app.getByRole("tab", { name: "Ecology" }).click();
+  const card = app.getByTestId("show-once");
+  await expect(card).toContainText("Not a species ID");
+  await expect(app.getByTestId("show-once-scenes")).toContainText(
+    "Scenes Jan 15, Apr 5, Jul 24, Oct 17 2025",
+  );
+  await app.getByTestId("show-once-start").click();
+  await expect(app.locator(".cesium-widget canvas")).toHaveCSS("cursor", "crosshair");
+  // A cell of the north-west patch: the dimensions of the land are the grid's.
+  const f = frame();
+  const cell = (row: number, col: number) =>
+    [
+      f.west + ((col + 0.5) * (f.east - f.west)) / 4,
+      f.north - ((row + 0.5) * (f.north - f.south)) / 4,
+    ] as const;
+  await tapGround(app, ...cell(0, 0));
+  const tally = app.getByTestId("show-once-tally");
+  await expect(tally).toContainText("6 cells · ≈0.6 ac");
+  await expect(app.getByTestId("show-once-seed")).toContainText("Jan 15 0.69");
+  // Stricter: the 240s drop out; looser, back.
+  const slider = app.getByRole("slider", { name: "How alike" });
+  await slider.focus();
+  await app.keyboard.press("End");
+  await expect(app.getByTestId("show-once-threshold")).toHaveText("99%");
+  await expect(tally).toContainText("4 cells");
+  await app.keyboard.press("Home");
+  await expect(app.getByTestId("show-once-threshold")).toHaveText("30%");
+  await expect(tally).toContainText("6 cells");
+  for (let i = 0; i < 5; i++) await app.keyboard.press("PageUp");
+  await expect(app.getByTestId("show-once-threshold")).toHaveText("80%");
+  // Protect the south-east patch.
+  await app.getByTestId("show-once-mode-protect").click();
+  await tapGround(app, ...cell(3, 3));
+  await expect(app.getByTestId("show-once-protected")).toContainText("2 cells");
+  await expect(tally).toContainText("4 cells");
+  expect(asked.similar).toBe(1);
+  await app.getByTestId("show-once-make-job").click();
+  const plans = app.getByTestId("plans-panel");
+  await expect(plans.getByTestId("plan-ground")).toContainText("Like-here patch 1");
+  await expect(app.getByTestId("show-once-done")).toContainText("Drafted as a job: 1 area");
+  expect(asked.zones[0]).toMatchObject({ threshold: 0.8 });
+  // The protected patch travels as one row run: row 3, columns 2 and 3.
+  const [run] = asked.zones[0]?.protected as number[][];
+  expect(asked.zones[0]?.protected).toHaveLength(1);
+  expect(run?.[0]).toBeCloseTo(f.west + ((f.east - f.west) * 2) / 4, 9);
+  expect(run?.[3]).toBeCloseTo(f.south + (f.north - f.south) / 4, 9);
+});
+
 test("import with an exclusion and preserve the map on a phone", async ({ app }) => {
   const records = await landApi(app);
   await app.setViewportSize({ width: 390, height: 844 });
