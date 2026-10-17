@@ -38,3 +38,4 @@ body_motion:
   dz: [-0.07, 0.12]
   pitch_deg: [-10, 15] # positive is nose down
   yaw_deg: [-20, 20]
+  lean_dx: [0.10] # body slid forward over planted feet (the weed-pull simulation used 0.12)

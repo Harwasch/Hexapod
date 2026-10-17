@@ -26,7 +26,7 @@ import yaml
 from armdesign.evaluate import Tool, load_tools
 from armdesign.mjcf import ArmActuators, build_mjcf, leg_ik
 from armdesign.model import ROOT, ArmDesign, BodyPose, Hexapod, planar_ik, wrap
-from armdesign.optimize import load_catalog
+from armdesign.parts import resolve
 
 OUT = ROOT / "out" / "sim"
 Array = np.ndarray
@@ -588,6 +588,8 @@ def run(rig: Rig, segs: list[Seg], name: str, settle: float = 0.6) -> dict:
         events.append({"t": round(t, 3), "label": seg.label})
         a0, pose0, grip0 = a_cmd.copy(), pose, grip_cmd
         pose1 = seg.body if seg.body is not None else pose0
+        if not rig.hx.pose_ok(pose1):
+            raise ValueError(f"{name}: the legs cannot hold the body at {pose1} ({seg.label})")
         tgt = seg.target
         if tgt is not None and seg.in_body:
             r1, t1 = rig.hx.body_rt(pose1)
@@ -700,11 +702,13 @@ def sc_weed(rig: Rig, whole_body: bool) -> list[Seg]:
     legs first slide and tip the body forward over the weed, which shortens the lever from
     the shoulder to the root, then the legs do the lifting while the arm holds still."""
     w = np.array([WEED[0], WEED[1], 0.035])
+    # Slid 12 cm forward and tipped 8 degrees, the legs can still lift 9 cm (dz -0.05 to
+    # +0.04) with every foot planted; Hexapod.pose_ok checks both ends.
     lift = 0.09
-    lean = BodyPose(dz=-0.04, pitch=math.radians(10), dx=0.12)
+    lean = BodyPose(dz=-0.05, pitch=math.radians(8), dx=0.12)
     if whole_body:
         prep = [Seg("lean the body over the weed", 1.2, "hold", body=lean)]
-        pull = Seg("lift with the legs", 1.6, "hold", body=BodyPose(dz=-0.04 + lift, pitch=math.radians(10), dx=0.12))
+        pull = Seg("lift with the legs", 1.6, "hold", body=BodyPose(dz=-0.05 + lift, pitch=math.radians(8), dx=0.12))
         body = lean
     else:
         prep = []
@@ -828,7 +832,7 @@ SCENARIOS = [
         "gripper",
         lambda: [weed("weed", WEED, 60.0)],
         lambda r: sc_weed(r, True),
-        note="The legs slide the body 12 cm forward and tip it 10 degrees over the weed, then lift 9 cm while the arm holds.",
+        note="The legs slide the body 12 cm forward and tip it 8 degrees over the weed, then lift 9 cm while the arm holds.",
     ),
     Scenario(
         "weed_arm",
@@ -896,17 +900,10 @@ SCENARIOS = [
 
 def load_selected() -> tuple[ArmDesign, ArmActuators]:
     sel = yaml.safe_load((ROOT / "design" / "selected.yaml").read_text())
-    design = ArmDesign(**sel["design"])
-    cat = {a.id: a for a in load_catalog()}
-    a = sel["actuators"]
-    acts = ArmActuators(
-        cat[a["yaw"]],
-        cat[a["shoulder"]],
-        cat[a["elbow"]],
-        cat[a["wrist_pitch"]],
-        cat[a["tool_roll"]],
-        cat[a["forearm_roll"]] if "forearm_roll" in a else None,
-    )
+    chosen = sel["picks"][sel["chosen"]] if "picks" in sel else sel
+    design = ArmDesign(**chosen["design"])
+    a = resolve(chosen["actuators"], chosen.get("lever", "retail"))
+    acts = ArmActuators(a["yaw"], a["shoulder"], a["elbow"], a["wrist_pitch"], a["tool_roll"], a.get("forearm_roll"))
     return design, acts
 
 
