@@ -41,9 +41,12 @@ def _http() -> httpx.Client:
 @router.get(
     "/imagery/dated",
     response_model=DatedImageryCatalog,
+    responses={
+        503: {"description": "Every catalog builder is busy: ask again after Retry-After seconds."}
+    },
     summary="Dated public imagery for an area",
 )
-def dated(
+async def dated(
     request: Request,
     response: Response,
     settings: SettingsDep,
@@ -56,12 +59,26 @@ def dated(
     (each side at most 0.25°), newest first, each with its date's meaning, its licence and its
     stated positional accuracy. A provider that fails is listed as unavailable; the others
     still answer. Cached on this server for 6 h per area rounded to 0.01°; a catalog missing
-    something that may answer if asked again is cached for seconds, and not by browsers."""
+    something that may answer if asked again is cached for seconds, and not by browsers.
+
+    An `async def`, so a catalog waiting for one of the few catalog builders waits on the event
+    loop and holds none of the threads every other route runs on; the build runs on the
+    builders' own threads (dated_imagery.build). Past them it is answered busy (503)."""
     bbox = dated_imagery.check_bbox((west, south, east, north))
     catalog = dated_imagery.cached(bbox)
     if catalog is None:
         limit_imagery_catalog(request, settings)
-        catalog = dated_imagery.discover(bbox, _http())
+        try:
+            catalog = await dated_imagery.build(bbox, _http())
+        except dated_imagery.CatalogBusy as error:
+            raise HTTPException(
+                503,
+                "The imagery catalog is busy. Try again in a few seconds.",
+                headers={
+                    "Retry-After": str(dated_imagery.RETRY_AFTER_S),
+                    "Cache-Control": "no-store",
+                },
+            ) from error
     response.headers["Cache-Control"] = (
         "no-store" if dated_imagery.incomplete(catalog) else "public, max-age=600"
     )

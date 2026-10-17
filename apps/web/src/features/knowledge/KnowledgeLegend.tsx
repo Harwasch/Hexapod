@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudFog, Info } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
@@ -10,7 +10,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
 import { useKnowledge } from "@/state/knowledge";
 import { useLand } from "@/state/land";
-import { useLandCanEdit } from "@/state/landIdentity";
+import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 
 import { invalidateLandDerived } from "../land/landDerived";
 import { beginInvestigation, useInvestigation, useResearchStatus } from "../land/researchApi";
@@ -18,6 +18,7 @@ import { workerIdleNote } from "../land/researchAvailability";
 import { useKnowledgeGrid } from "./api";
 import { CLASS_ORDER, classLabel } from "./classes";
 import { liftFog } from "./liftFog";
+import { FETCHING_LOOK, satelliteLookNote } from "./satelliteLook";
 
 import "./knowledge.css";
 
@@ -73,10 +74,13 @@ function ClassBar({ grid }: { grid: KnowledgeGrid }) {
 /**
  * Starts a Sentinel-2 vegetation run over the last 30 days (the existing raster analysis, at
  * 20 m) and watches it: when it finishes, everything computed from the land's records is asked
- * again, so the fog lifts where the satellite saw the ground.
+ * again, so the fog lifts where the satellite saw the ground. What it says then is read from the
+ * raster the run stored, since a window with no clear scene still finishes as "succeeded".
  */
 function useSatelliteLook(land: LandArea) {
   const client = useQueryClient();
+  const scope = useLandScope();
+  const ready = useLandAccessReady();
   const [pending, setPending] = useState<{ investigationId: string; runId: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,6 +94,31 @@ function useSatelliteLook(land: LandArea) {
       void invalidateLandDerived(client, land.id);
     }
   }, [run, pending, client, land.id]);
+  const finished = run?.status === "succeeded" || run?.status === "partial";
+  const output = investigation.data?.artifacts.find(
+    (item) => item.runId === run?.id && item.output.kind === "raster",
+  )?.output;
+  const rasterId = output?.kind === "raster" ? output.rasterId : null;
+  const raster = useQuery({
+    queryKey: ["land-rasters", scope, rasterId, land.revision],
+    queryFn: () =>
+      unwrap(
+        api.GET("/api/v1/land/rasters/{raster_id}", {
+          params: { path: { raster_id: rasterId ?? "" } },
+        }),
+      ),
+    enabled: ready && finished && rasterId !== null,
+    retry: false,
+  });
+  // undefined while it is read; null when the finished run stored no raster.
+  const stored = !finished
+    ? undefined
+    : investigation.data && rasterId === null
+      ? null
+      : raster.data
+        ? (raster.data.metadata.vegetation?.observations ?? [])
+        : undefined;
+  const note = satelliteLookNote(run, stored, raster.isError ? describeError(raster.error) : null);
   const start = async () => {
     setBusy(true);
     setError(null);
@@ -119,7 +148,7 @@ function useSatelliteLook(land: LandArea) {
       setBusy(false);
     }
   };
-  return { start, busy, error, run };
+  return { start, busy, error, note };
 }
 
 /**
@@ -149,14 +178,7 @@ function Legend({ land }: { land: LandArea }) {
   const switchId = useId();
   const idle = workerIdleNote(status.data);
   const records = grid?.records.length ?? 0;
-  const lookState =
-    look.run?.status === "queued" || look.run?.status === "running"
-      ? "Fetching the latest satellite look…"
-      : look.run?.status === "succeeded" || look.run?.status === "partial"
-        ? "Satellite look stored. The fog now counts it."
-        : look.run?.status === "failed"
-          ? `The satellite look failed: ${look.run.error ?? "no reason given"}.`
-          : null;
+  const lookState = look.note;
   return (
     <div className="knowledge-pill-wrap">
       <div
@@ -267,9 +289,7 @@ function Legend({ land }: { land: LandArea }) {
             <div className="knowledge-actions">
               <GlassButton
                 size="sm"
-                disabled={
-                  !canEdit || look.busy || lookState === "Fetching the latest satellite look…"
-                }
+                disabled={!canEdit || look.busy || lookState === FETCHING_LOOK}
                 onClick={() => void look.start()}
                 data-testid="knowledge-satellite"
               >

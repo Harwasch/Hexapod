@@ -127,8 +127,9 @@ interface MissionState {
    * Engages a Land's zones as ground. With `project` (the Land's own project) it switches to
    * it as `setProject` does; while a composer is open the switch waits, and the zones join
    * the current project instead so the card in progress keeps its goal. Without `project`
-   * the zones join the current project (its fleet and zones stay). They never join another
-   * Land's own project: then nothing changes until the card closes.
+   * the zones join the current project (its fleet and zones stay), replacing another Land's
+   * layered there. They never join another Land's own project, nor replace another Land's
+   * layered zones while a card is open: then nothing changes until the card closes.
    */
   engageLand: (ground: { landId: string; zones: Zone[] }, project?: Project) => void;
   /** The Land's zones leave the current project; a Land's own project keeps its zones. */
@@ -400,8 +401,20 @@ export const useMission = create<MissionState>()(
           // changes, and the switch waits for the card (`landPlanning.ts`).
           const other = landIdOfProject(current.id);
           if (other !== null && other !== ground.landId) return {};
+          // Another Land layered here leaves with the switch: one Land's ground at a time, so
+          // the map, the ground a goal names and the Land a mission is filed under are this
+          // one's. A card in progress may hold that ground, so then nothing changes and the
+          // switch waits for the card, as above.
+          const previous =
+            s.landGround?.projectId === current.id && s.landGround.landId !== ground.landId
+              ? new Set(s.landGround.zones.map((z) => z.id))
+              : null;
+          if (previous && s.composer) return {};
+          const base = previous
+            ? { ...current, zones: current.zones.filter((z) => !previous.has(z.id)) }
+            : current;
           const landGround = { landId: ground.landId, projectId: current.id, zones: ground.zones };
-          return { landGround, project: compose(current, s.approvedPlans, s.areas, landGround) };
+          return { landGround, project: compose(base, s.approvedPlans, s.areas, landGround) };
         }),
       disengageLand: () =>
         set((s) => {

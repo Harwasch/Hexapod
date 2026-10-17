@@ -223,6 +223,11 @@ export function ScoutExport({
           <dl className="mc-scout__facts mc-mono" data-testid="scout-facts">
             <dt>Height</dt>
             <dd>{Math.round(geometry.altitudeM)} m above take-off</dd>
+            <dt>Return</dt>
+            <dd>
+              flies home at {Math.round(geometry.returnHeightM)} m above take-off, at the end or if
+              the controller link is lost
+            </dd>
             <dt>Detail</dt>
             <dd>{(geometry.gsdM * 100).toFixed(1)} cm per pixel over flat ground</dd>
             <dt>Lines</dt>

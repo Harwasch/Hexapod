@@ -5,9 +5,10 @@ import type { PlanDraft, PlanRecord } from "@twin/contracts";
 import type * as Queries from "@/api/queries";
 
 import { anywhereProject } from "@/missions/anywhere";
+import { bookedWindows } from "@/missions/conflicts";
 import { demoRanchProject } from "@/missions/demo";
-import { landProject, landZones } from "@/missions/landGround";
-import { planFromRecord } from "@/missions/planDraft";
+import { boundaryZoneOf, landProject, landZones } from "@/missions/landGround";
+import { buildDraftRequest, planFromRecord, PRIVATE_PLAN_TITLE } from "@/missions/planDraft";
 import { useLand } from "@/state/land";
 import { migrateMissionStorage, missionLandId, persistable, useMission } from "@/state/mission";
 
@@ -145,6 +146,52 @@ describe("plans on a saved land stay private", () => {
     expect(api.publicCreate).toHaveBeenCalledTimes(1);
   });
 
+  it("never lets a private mission's title reach a public plan through the planner's risks", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    const z14 = demo.zones[0]!.id;
+    const secret = "Mow thistle along Smith's north spring at 12 Oak Rd";
+    const privatePlan = planFromRecord(
+      record({
+        ...draft(["L-aaaa0001", z14]),
+        title: secret,
+        machineIds: [demo.machines[0]!.id],
+        goal: "g",
+        projectId: demo.id,
+        areas: [],
+      }),
+      useMission.getState().project!,
+    );
+    expect(privatePlan.scope).toBe("workspace");
+    expect(bookedWindows([privatePlan])[0]?.busy.length).toBeGreaterThan(0);
+    useMission.getState().setRemotePlans(demo.id, [privatePlan]);
+    const request = buildDraftRequest(useMission.getState().project!, { goal: "Mow Z-14" });
+    expect(JSON.stringify(request)).not.toContain(secret);
+    // The clash is still found: the mission's zones and booked windows still go.
+    expect(request.existingPlans?.find((p) => p.id === privatePlan.id)).toMatchObject({
+      title: PRIVATE_PLAN_TITLE,
+      zoneIds: ["L-aaaa0001", z14],
+      busy: bookedWindows([privatePlan])[0]?.busy ?? [],
+    });
+    // What the rules planner writes from that context (planner.py): the titles it was sent.
+    const risks = (request.existingPlans ?? []).map((p) => `“${p.title}” already covers ${z14}.`);
+    api.publicCreate.mockImplementation((body: Record<string, unknown>) =>
+      Promise.resolve(record(body, { private: false, landId: null, boundaryRevision: null })),
+    );
+    await approveDraft({ ...draft([z14]), risks }, "Mow Z-14");
+    expect(api.publicCreate).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(api.publicCreate.mock.calls[0]?.[0])).not.toContain(secret);
+    // On a Land's own project every plan is approved privately, so its titles still go.
+    const own = landProject(land, ground);
+    const mine = planFromRecord(
+      record({ ...draft(["L-aaaa0001"]), title: secret, goal: "g", projectId: own.id, areas: [] }),
+      own,
+    );
+    const onLand = buildDraftRequest({ ...own, plans: [mine] }, { goal: "monitor the fence" });
+    expect(onLand.existingPlans?.[0]?.title).toBe(secret);
+  });
+
   it("never keeps a private plan in the browser when the API is offline", async () => {
     useMission.getState().setProject(landProject(land, ground));
     api.workspaceCreate.mockRejectedValue(new TypeError("Failed to fetch"));
@@ -268,6 +315,57 @@ describe("plans on a saved land stay private", () => {
     await vi.waitFor(() => expect(useMission.getState().project?.id).toBe(`land:${OTHER_ID}`));
     state = useMission.getState();
     expect(state.landGround?.landId).toBe(OTHER_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
+  });
+
+  it("switching between two lands layered on one project leaves only the selected one's ground", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    api.fetchLandGround.mockResolvedValue(ground);
+    useLand.getState().select(land);
+    expect(await engageLand(land)).toBe("layer");
+    // The Land panel's library selects another Land straight away, with no clear between.
+    api.fetchLandGround.mockResolvedValue(otherGround);
+    useLand.getState().select(otherLand);
+    expect(await engageLand(otherLand)).toBe("layer");
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
+    expect(missionLandId()).toBe(OTHER_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
+    expect(state.project?.zones.filter((z) => z.land?.landId === OTHER_ID)).toHaveLength(
+      otherGround.items.length,
+    );
+    // A goal naming no feature grounds on the selected Land's boundary, not the last one's.
+    expect(boundaryZoneOf(state.project!.zones)?.land?.landId).toBe(OTHER_ID);
+    useMission.getState().disengageLand();
+    expect(useMission.getState().project?.zones.map((z) => z.id)).toEqual(
+      demo.zones.map((z) => z.id),
+    );
+  });
+
+  it("waits for an open card before switching between lands layered on one project", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    api.fetchLandGround.mockResolvedValue(ground);
+    useLand.getState().select(land);
+    expect(await engageLand(land)).toBe("layer");
+    useMission.getState().openComposer({ goal: "monitor the fence", zoneIds: ["L-aaaa0001"] });
+    api.fetchLandGround.mockResolvedValue(otherGround);
+    useLand.getState().select(otherLand);
+    expect(await engageLand(otherLand)).toBeNull();
+    // The card keeps the ground it was drafted on, so it is still filed and routed by it.
+    let state = useMission.getState();
+    expect(state.landGround?.landId).toBe(LAND_ID);
+    expect(state.project?.zones.some((z) => z.id === "L-aaaa0001")).toBe(true);
+    expect(state.project?.zones.some((z) => z.land?.landId === OTHER_ID)).toBe(false);
+    expect(state.composer?.goal).toBe("monitor the fence");
+    expect(state.log.at(-1)?.text).toBe(
+      `Creek Field opens in Plan once you approve or close the plan card on ${demo.name}.`,
+    );
+    useMission.getState().closeComposer();
+    await vi.waitFor(() => expect(useMission.getState().landGround?.landId).toBe(OTHER_ID));
+    state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
     expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
   });
 

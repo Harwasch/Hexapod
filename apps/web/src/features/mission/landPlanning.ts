@@ -54,7 +54,11 @@ export async function engageLand(
   const own = landIdOfProject(store.project?.id) === land.id;
   if (!own && groundModeFor(store.project, land) === "layer") {
     store.engageLand({ landId: land.id, zones });
-    return "layer";
+    if (useMission.getState().landGround?.landId === land.id) return "layer";
+    // A plan card is open with another Land layered here: its ground leaves with the switch,
+    // so the switch waits until the card is approved or closed.
+    waitForCard(land, options.onWaitedSwitch);
+    return null;
   }
   if (options.layerOnly && !own) return null;
   store.engageLand({ landId: land.id, zones }, landProject(land, ground));

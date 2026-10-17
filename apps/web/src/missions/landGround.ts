@@ -228,12 +228,24 @@ export function zonesNamedInGoal(goal: string, zones: readonly Zone[]): string[]
   return [...byName, ...byKind].slice(0, 5);
 }
 
-/** The smallest land zone under a point (a feature inside the boundary wins), or null. */
+/**
+ * A zone the Land itself records: its boundary or an inventory feature. Not an area derived
+ * from it (a fog patch, a like-here patch, workable ground), which stays on the project after
+ * its card closes and is no saved record of the Land.
+ */
+function isLandRecordZone(zone: Pick<Zone, "id" | "land">): boolean {
+  return isLandZone(zone) && zone.land?.kind !== "derived";
+}
+
+/**
+ * The smallest zone the Land records under a point (a feature inside the boundary wins), or
+ * null. Areas derived from the Land are never taken as its records.
+ */
 export function landZoneAt(point: LonLat, zones: readonly Zone[]): Zone | null {
   let best: Zone | null = null;
   let bestArea = Infinity;
   for (const zone of zones) {
-    if (!isLandZone(zone) || !footprintContains(zone.footprint, point)) continue;
+    if (!isLandRecordZone(zone) || !footprintContains(zone.footprint, point)) continue;
     const area = footprintAreaM2(zone.footprint);
     if (area < bestArea) {
       best = zone;
@@ -259,14 +271,22 @@ export function hiddenMissionZoneIds(
   );
 }
 
-/** What the plan card says about a land zone it took as ground. */
+/**
+ * What the plan card says about a land zone it took as ground. A derived area says it was
+ * derived and quotes how; a revision is named only when the zone carries one.
+ */
 export function landGroundNote(zone: Zone, landName: string): string {
   const land = zone.land;
+  if (land?.kind === "derived") {
+    const how = zone.attribution ? ` ${zone.attribution}.` : "";
+    return `${zone.name}, ${zone.acres.toLocaleString()} ac derived from ${landName}, not a saved record.${how}`;
+  }
   if (land?.kind === "boundary") {
     return `${landName}, ${zone.acres.toLocaleString()} ac, saved boundary revision ${land.revision ?? land.boundaryRevision ?? 1}.`;
   }
+  const feature = `inventory feature${land?.revision ? ` (revision ${land.revision})` : ""}`;
   if (land?.line && land.lengthM) {
-    return `${zone.name}, inventory feature (revision ${land.revision ?? 1}), ${(land.lengthM / 1000).toFixed(1)} km line from your saved land.`;
+    return `${zone.name}, ${feature}, ${(land.lengthM / 1000).toFixed(1)} km line from your saved land.`;
   }
-  return `${zone.name}, inventory feature (revision ${land?.revision ?? 1}), ${zone.acres.toLocaleString()} ac from your saved land.`;
+  return `${zone.name}, ${feature}, ${zone.acres.toLocaleString()} ac from your saved land.`;
 }

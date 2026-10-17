@@ -10,12 +10,28 @@ from app.services import plans as plan_service
 
 router = APIRouter(prefix="/plans", tags=["plans"])
 
+TRUNCATED_DOC = {
+    "description": "'true' when older plans were left out: a list holds the newest only.",
+    "schema": {"type": "string"},
+}
 
-@router.get("", response_model=list[PlanRead], summary="List a project's plans")
+
+@router.get(
+    "",
+    response_model=list[PlanRead],
+    responses={200: {"headers": {plan_service.TRUNCATED_HEADER: TRUNCATED_DOC}}},
+    summary="List a project's plans",
+)
 def list_plans(
-    db: DbSession, project_id: str = Query(alias="projectId", min_length=1, max_length=120)
+    db: DbSession,
+    response: Response,
+    project_id: str = Query(alias="projectId", min_length=1, max_length=120),
 ) -> list[PlanRead]:
-    return [plan_service.plan_to_read(p) for p in plan_service.list_plans(db, project_id)]
+    """The project's public plans, oldest first: the newest 200 when it has more."""
+    plans, truncated = plan_service.list_plans(db, project_id)
+    if truncated:
+        response.headers[plan_service.TRUNCATED_HEADER] = "true"
+    return [plan_service.plan_to_read(p) for p in plans]
 
 
 @router.post(

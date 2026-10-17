@@ -10,10 +10,11 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Response, status
 from sqlalchemy import select
 
 from app.api.deps import DbSession
+from app.api.v1.plans import TRUNCATED_DOC
 from app.api.workspace_deps import WorkspaceDep
 from app.models.land import LandBoundaryRevision
 from app.schemas.plan import (
@@ -31,22 +32,29 @@ router = APIRouter(prefix="/workspaces/missions", tags=["workspace missions"])
 LAND_PROJECT_PREFIX = "land:"
 
 
-@router.get("", response_model=list[PlanRead], summary="List the workspace's missions")
+@router.get(
+    "",
+    response_model=list[PlanRead],
+    responses={200: {"headers": {plan_service.TRUNCATED_HEADER: TRUNCATED_DOC}}},
+    summary="List the workspace's missions",
+)
 def list_missions(
     db: DbSession,
     scope: WorkspaceDep,
+    response: Response,
     project_id: Annotated[
         str | None, Query(alias="projectId", min_length=1, max_length=120)
     ] = None,
     land_id: Annotated[uuid.UUID | None, Query(alias="landId")] = None,
-    limit: Annotated[int, Query(ge=1, le=200)] = 200,
+    limit: Annotated[int, Query(ge=1, le=plan_service.LIST_LIMIT)] = plan_service.LIST_LIMIT,
 ) -> list[PlanRead]:
-    return [
-        plan_service.plan_to_read(plan)
-        for plan in plan_service.list_plans(
-            db, project_id, workspace_id=scope.id, land_id=land_id, limit=limit
-        )
-    ]
+    """The workspace's missions, oldest first: the newest `limit` when it has more."""
+    plans, truncated = plan_service.list_plans(
+        db, project_id, workspace_id=scope.id, land_id=land_id, limit=limit
+    )
+    if truncated:
+        response.headers[plan_service.TRUNCATED_HEADER] = "true"
+    return [plan_service.plan_to_read(plan) for plan in plans]
 
 
 @router.post(

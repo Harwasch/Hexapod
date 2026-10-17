@@ -148,8 +148,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # cross-origin phone page cannot read a header the server does not expose --
         # without this line the renewal chain silently breaks the moment the web app is
         # served from an origin other than the API's. Retry-After, so a map layer told "busy"
-        # (503) or "too many" (429) waits as long as asked (cesium/TimeLantern.ts).
-        expose_headers=["X-Handoff-Token", "Retry-After"],
+        # (503) or "too many" (429) waits as long as asked (cesium/TimeLantern.ts). X-Truncated,
+        # so a plan list that left older plans out can say so.
+        expose_headers=["X-Handoff-Token", "Retry-After", "X-Truncated"],
         max_age=600,
     )
 

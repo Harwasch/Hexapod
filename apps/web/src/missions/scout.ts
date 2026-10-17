@@ -114,6 +114,13 @@ export const SCOUT_ALTITUDES_M = [45, 60, 90, 120] as const;
 /** US Part 107: 400 ft above ground. Heights here are above take-off, so this is the cap. */
 export const MAX_ALTITUDE_M = 120;
 export const MIN_ALTITUDE_M = 20;
+/**
+ * How far above the route the drone climbs to fly home, and the least it climbs to: clear of
+ * trees and structures on the way back. Never above MAX_ALTITUDE_M, so the return stays under
+ * the same 400 ft cap as the route.
+ */
+export const RETURN_ABOVE_ROUTE_M = 20;
+export const MIN_RETURN_HEIGHT_M = 60;
 /** Flying time one battery gives with a reserve left: an assumption, labelled as one. */
 export const USABLE_BATTERY_MIN = 25;
 /** Share of a battery spent on lanes rather than turns and transit, for the budget. */
@@ -142,6 +149,11 @@ export interface ScoutGeometry {
   maxSpeedMs: number;
   /** The speed flown: the one asked for, never faster than the camera keeps up with. */
   speedMs: number;
+  /**
+   * The height above take-off the drone climbs to when it flies home at the end of the route
+   * or when it loses the controller: 20 m over the route, at least 60 m, at most 120 m.
+   */
+  returnHeightM: number;
   warnings: string[];
 }
 
@@ -179,6 +191,10 @@ export function scoutGeometry(scout: Scout): ScoutGeometry {
     photoSpacingM,
     maxSpeedMs,
     speedMs,
+    returnHeightM: Math.min(
+      Math.max(altitudeM + RETURN_ABOVE_ROUTE_M, MIN_RETURN_HEIGHT_M),
+      MAX_ALTITUDE_M,
+    ),
     warnings,
   };
 }

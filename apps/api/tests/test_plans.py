@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
+
+from app.services import plans as plan_service
 
 BODY = {
     "projectId": "blackrock-mesa",
@@ -117,3 +120,22 @@ def test_a_scout_area_keeps_its_capture_parameters(client: TestClient) -> None:
         "/api/v1/plans", json={**BODY, "areas": [{**areas[0], "capture": wrong}]}
     )
     assert rejected.status_code == 422
+
+
+def test_a_full_list_keeps_the_newest_plans_and_says_it_left_some_out(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(plan_service, "LIST_LIMIT", 3)
+    ids = [
+        client.post("/api/v1/plans", json={**BODY, "title": f"Plan {i}"}).json()["id"]
+        for i in range(4)
+    ]
+    params = {"projectId": "blackrock-mesa"}
+    listed = client.get("/api/v1/plans", params=params)
+    # The plan just approved is listed; the oldest is the one left out, and the list says so.
+    assert [p["id"] for p in listed.json()] == ids[1:]
+    assert listed.headers["x-truncated"] == "true"
+    assert client.delete(f"/api/v1/plans/{ids[0]}").status_code == 204
+    whole = client.get("/api/v1/plans", params=params)
+    assert [p["id"] for p in whole.json()] == ids[1:]
+    assert "x-truncated" not in whole.headers
