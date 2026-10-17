@@ -53,6 +53,7 @@ import { RepresentationSwitcher } from "../sites/RepresentationSwitcher";
 import { SiteLoadStatus } from "../sites/SiteLoadStatus";
 import { TimelineControl } from "../timeline/TimelineControl";
 import { DevReadouts } from "./DevReadouts";
+import { LandPanelSlot } from "./LandPanelSlot";
 import { MapCorner } from "./MapCorner";
 import { PhoneTabBar } from "./PhoneTabBar";
 import { stepBack } from "./stepBack";
@@ -77,8 +78,8 @@ function lazyNamed<K extends string, M extends Record<K, ComponentType>>(
 // and only rendered with the flag on, so a build with the flag off never requests any of it
 // (its chunks are still built) and the globe's first load carries none of it
 // (`scripts/check-bundle.mjs` holds that line). With the flag on they load as the shell mounts
-// and behave as before; a chunk that fails to load fails alone (`OnDemand` for the bridges, the
-// inline boundaries for the panel, card and legend).
+// and behave as before; a chunk that fails to load fails alone (`OnDemand` for the bridges,
+// `LandPanelSlot`'s own boundary for the panel, the inline boundaries for the card and legend).
 const LandIdentityBridge = lazyNamed(
   () => import("../land/WorkspaceIdentity"),
   "LandIdentityBridge",
@@ -95,7 +96,6 @@ const KnowledgeFogBridge = lazyNamed(
 );
 const ShowOnceBridge = lazyNamed(() => import("@/cesium/ShowOnceBridge"), "ShowOnceBridge");
 const LandMissionBridge = lazyNamed(() => import("../land/LandMissionBridge"), "LandMissionBridge");
-const LandPanel = lazyNamed(() => import("../land/LandPanel"), "LandPanel");
 const KnowledgeCellCard = lazyNamed(
   () => import("../knowledge/KnowledgeCellCard"),
   "KnowledgeCellCard",
@@ -266,11 +266,8 @@ export function AppShell() {
         <section className="hud-region hud-dock hud-dock--left" aria-label="Panel">
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
-            {env.landExplorationEnabled && (
-              <Suspense fallback={null}>
-                <LandPanel />
-              </Suspense>
-            )}
+            {/* Its own boundary: a Land chunk that fails to load leaves the other panels. */}
+            {env.landExplorationEnabled && <LandPanelSlot />}
             <MeasurePanel />
             <AddPanel />
           </ErrorBoundary>

@@ -16,6 +16,8 @@ interface Props {
    * leaves the rest of the HUD running.
    */
   quiet?: boolean;
+  /** What shows in the children's place after an error, instead of the built-in ones. */
+  fallback?: ReactNode;
   label?: string;
 }
 
@@ -44,6 +46,7 @@ export class ErrorBoundary extends Component<Props, State> {
   override render(): ReactNode {
     const { error } = this.state;
     if (!error) return this.props.children;
+    if (this.props.fallback !== undefined) return this.props.fallback;
     if (this.props.quiet) return null;
     if (this.props.inline) {
       return (
