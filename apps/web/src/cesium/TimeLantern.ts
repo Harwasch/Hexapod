@@ -114,6 +114,34 @@ function cyclingCandidates(): boolean {
   return select.index >= 0 && select.candidates.length > 1;
 }
 
+/**
+ * Where `shown` is in a new list of sources: the same source, else the one of its kind nearest
+ * it in time (the 2014 NAIP flight a re-centred list lists again; the nearest edition of a map),
+ * else `fallback` within the list.
+ */
+export function keptIndex(
+  sources: readonly Pick<LanternSource, "id" | "kind" | "sortDate">[],
+  shown: Pick<LanternSource, "id" | "kind" | "sortDate"> | undefined,
+  fallback: number,
+): number {
+  const clamped = Math.min(fallback, Math.max(0, sources.length - 1));
+  if (!shown) return clamped;
+  const same = sources.findIndex((s) => s.id === shown.id);
+  if (same >= 0) return same;
+  const at = Date.parse(shown.sortDate);
+  let best = -1;
+  let gap = Number.POSITIVE_INFINITY;
+  sources.forEach((source, i) => {
+    if (source.kind !== shown.kind) return;
+    const apart = Math.abs(Date.parse(source.sortDate) - at);
+    if (apart < gap) {
+      gap = apart;
+      best = i;
+    }
+  });
+  return best >= 0 ? best : clamped;
+}
+
 /** The area asked about, grown into the reach the lens may roam (degrees). */
 export function reachOf(area: LanternArea): LanternArea {
   const latitude = (area.south + area.north) / 2;
@@ -248,10 +276,9 @@ export class TimeLantern {
    * lens may roam the area grown by half (at least 3 km across), where the globe preloads.
    */
   setSources(sources: LanternSource[], area: LanternArea | null): void {
-    const previousId = this.sources[this.index]?.id;
+    const shown = this.sources[this.index];
     this.sources = sources;
-    const kept = previousId ? sources.findIndex((s) => s.id === previousId) : -1;
-    this.index = kept >= 0 ? kept : Math.min(this.index, Math.max(0, sources.length - 1));
+    this.index = keptIndex(sources, shown, this.index);
     const key = area ? `${area.west},${area.south},${area.east},${area.north}` : "";
     if (key !== this.reachKey) {
       this.reachKey = key;

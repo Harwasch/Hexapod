@@ -531,3 +531,55 @@ describe("the area looked back on", () => {
     expect(useLantern.getState().bboxOverride).toEqual([-120.1, 34.6, -120.08, 34.62]);
   });
 });
+
+describe("panning on around the view", () => {
+  afterEach(() => useLand.setState({ active: null }));
+
+  it("re-centres only when the view leaves the area, keeping the list, the layers and the year", async () => {
+    useLand.setState({ active: null });
+    useLantern.setState({ mode: "sticky", requested: true, bboxOverride: null, autoBbox: null });
+    const centre = { longitude: -120.04, latitude: 34.7 };
+    const setSources = vi.fn();
+    const events = new Emitter<SceneEvents>();
+    const registry = new SceneRegistry();
+    registry.set({
+      events,
+      camera: { viewCenter: () => ({ ...centre }) },
+      lantern: {
+        available: { ok: true },
+        setSources,
+        setMode: vi.fn(),
+        select: vi.fn(),
+      },
+    } as unknown as CesiumSceneManager);
+    let answer: (value: unknown) => void = () => undefined;
+    const get = vi
+      .spyOn(api, "GET")
+      .mockResolvedValueOnce({ data: CATALOG, response: new Response() })
+      .mockImplementation(() => new Promise((resolve) => (answer = resolve)) as never);
+    render(wrap(<LanternBridge />, registry));
+    await waitFor(() => expect(setSources.mock.lastCall?.[0]).toHaveLength(3));
+    const listed = setSources.mock.lastCall?.[1] as { west: number; east: number };
+    // The operator steps back to an older year.
+    act(() => useLantern.getState().select(1));
+    const move = (east: number) =>
+      act(() => {
+        centre.longitude = -120.04 + east / (111_320 * Math.cos((34.7 * Math.PI) / 180));
+        useViewer.getState().setCamera({ ...initialCamera, ...centre, altitude: 900 });
+      });
+    // 800 m on: still inside the area asked about, so no new catalog.
+    move(800);
+    expect(get).toHaveBeenCalledTimes(1);
+    // 2 km on: re-centred, and while the next list loads the lens keeps this one and its area.
+    move(2_000);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(setSources.mock.lastCall?.[0]).toHaveLength(3);
+    expect(setSources.mock.lastCall?.[1]).toEqual(listed);
+    expect(setSources).not.toHaveBeenCalledWith([], expect.anything());
+    expect(useLantern.getState().index).toBe(1);
+    // The next list arrives: its own area, and the chosen year is the scene's to keep.
+    act(() => answer({ data: CATALOG, response: new Response() }));
+    await waitFor(() => expect(setSources.mock.lastCall?.[1]).not.toEqual(listed));
+    expect(useLantern.getState().index).toBe(1);
+  });
+});
