@@ -1261,6 +1261,47 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("site-pin")).toHaveCount(0, { timeout: 15_000 });
     await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6);
   });
+
+  test("the rehearsal leaves the map with its plan card: another tab, All plans, another site", async ({
+    app,
+  }) => {
+    const onMap = async () =>
+      (await entityIds(app)).filter((id) => id.startsWith("rehearsal:")).length;
+    const draftAndRehearse = async () => {
+      if ((await app.getByTestId("plan-review").count()) === 0) {
+        await app.getByTestId("command-input").fill("Mow Z-08 with one mower");
+        await app.getByTestId("command-input").press("Enter");
+        await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+      }
+      await app.getByTestId("plan-rehearse").dispatchEvent("click");
+      await expect(app.getByTestId("rehearsal-clock")).toBeVisible({ timeout: 30_000 });
+      await expect.poll(onMap).toBeGreaterThan(0);
+    };
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, {
+      timeout: 30_000,
+    });
+    await draftAndRehearse();
+    // The Fleet tab: its ghosts, hands and lanes leave as the card does.
+    await app.getByTestId("view-tab-fleet").click({ force: true });
+    await expect.poll(onMap).toBe(0);
+    await expect(app.getByTestId("plan-review")).toHaveCount(0);
+    // The draft waits on the Plan tab, not rehearsing until asked again.
+    await app.getByTestId("view-tab-plan").click({ force: true });
+    await expect(app.getByTestId("plan-review")).toBeVisible();
+    await expect(app.getByTestId("plan-rehearsal")).toHaveCount(0);
+    await expect.poll(onMap).toBe(0);
+    await draftAndRehearse();
+    await app.getByText("All plans").dispatchEvent("click");
+    await expect(app.getByTestId("plan-review")).toHaveCount(0);
+    await expect.poll(onMap).toBe(0);
+    // Another site: the card closes with the project, and nothing of the run stays behind.
+    await draftAndRehearse();
+    await app.getByRole("button", { name: /switch site/ }).click();
+    await app.getByTestId("site-row-cesium-splat-demo").click();
+    await expect(app.getByTestId("plan-review")).toHaveCount(0);
+    await expect.poll(onMap).toBe(0);
+  });
 });
 
 test.describe("a scan object in the selection card", () => {
