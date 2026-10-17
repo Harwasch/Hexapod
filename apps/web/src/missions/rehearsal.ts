@@ -5,12 +5,18 @@
  * machine class) drives the lanes the map draws for its zones (`MissionManager.previewLanes`,
  * from `footprintLanes`). A zone's lanes go round-robin among its machines; a lane takes its
  * length over the class's assumed speed, a turn its assumed turn time, and the moves between
- * lanes and zones are straight. Every 5 m along a lane the ground is read: the slope from an
- * elevation grid, split into the grade along the lane and the cross-slope across it, and the
- * distance to mapped creeks. Where a lane goes past a limit its class is assumed to keep
- * (`maxSlopePct` and `creekBufferM` in apps/api/app/services/machine_classes.json, the one
- * table the planner also sizes work from) a hand is raised at the lane's worst point, one per
- * lane and rule, naming the rule, the value, and where both came from.
+ * lanes and zones are straight. Every 5 m along a lane the slope is read from an elevation
+ * grid, split into the grade along the lane and the cross-slope across it; a lane's distance
+ * to mapped creeks is measured exactly, piece against piece. Where a lane goes past a limit
+ * its class is assumed to keep (`maxSlopePct` and `creekBufferM` in
+ * apps/api/app/services/machine_classes.json, the one table the planner also sizes work from)
+ * a hand is raised at the lane's worst point, one per lane and rule, naming the rule, the
+ * value, and where both came from.
+ *
+ * It also counts what it could read: a lane outside the elevation grid, or beyond where the
+ * creek lines were fetched, is not "inside the limits", and the summary says how many lanes a
+ * rule was read on before it says that rule raised no hand. The lanes are the preview's, far
+ * wider apart than a machine's swath, and the summary says that too.
  *
  * Pure: no Cesium and no fetching. `features/mission/rehearsalGround.ts` gathers the ground and
  * `cesium/RehearsalManager.ts` plays the result. Nothing here is measured on a machine: the
@@ -21,12 +27,12 @@ import type { MachineClassId } from "@twin/contracts";
 import { DEG_TO_RAD, EARTH_RADIUS_M, type LonLat } from "@twin/geo";
 
 import { MACHINE_CLASSES } from "./machineClasses";
+import { lerp } from "./rehearsalClock";
+
+export { positionAt, REHEARSAL_SPEEDS, type RehearsalSpeed } from "./rehearsalClock";
 
 /** How often the ground is read along a lane, metres. */
 export const SAMPLE_M = 5;
-/** The two speeds a rehearsal plays at: simulated seconds per real second. */
-export const REHEARSAL_SPEEDS = [300, 600] as const;
-export type RehearsalSpeed = (typeof REHEARSAL_SPEEDS)[number];
 
 const CLASS_IDS: readonly MachineClassId[] = ["mower", "seeder", "survey", "drone"];
 
@@ -105,6 +111,11 @@ export interface RehearsalLaneInput {
   pass: number;
   /** The lane's number in the copy (default: its place in the list, from 1). */
   number?: number;
+  /**
+   * True for the mapped line a zone follows (a fence): it is the zone's whole work, not one of
+   * its drawn lanes, so it cannot be left out of the preview.
+   */
+  followsLine?: boolean;
 }
 
 export interface RehearsalZoneInput {
@@ -137,6 +148,8 @@ export interface ElevationSource {
   label: string;
   /** Which record they came from, e.g. "raster 8c5becbb"; null for live samples. */
   ref: string | null;
+  /** Where the grid has heights, said where a lane has none, e.g. "it covers the Land only". */
+  extent?: string;
 }
 
 export interface CreekLine {
@@ -147,10 +160,26 @@ export interface CreekLine {
   coordinates: LonLat[];
 }
 
+/** Where creek lines were fetched: beyond it a creek may run that the rehearsal never saw. */
+export interface CreekCoverage {
+  /** The outline the lines were read for: polygons, each its outer ring then its holes. */
+  polygons: LonLat[][][];
+  /** How far past the outline the lines still reach, metres (0: clipped to it). */
+  marginM: number;
+  /** The area in words, e.g. "within 100 m of Oak Bench Ranch". */
+  label: string;
+}
+
 export interface CreekSource {
   lines: CreekLine[];
   /** e.g. "USGS NHD flowlines, 1:24,000". */
   label: string;
+  /** Where the lines were read; absent when they cover everywhere the lanes go. */
+  coverage?: CreekCoverage | null;
+  /** The source stopped at its record limit: more lines may exist than were read. */
+  truncated?: boolean;
+  /** Anything else that limits the lines, in a sentence (the demo's single supplied creek). */
+  note?: string;
 }
 
 export interface ProjectMachineInput {
@@ -194,6 +223,13 @@ export interface RehearsalTrack {
   endS: number;
 }
 
+/**
+ * How much of a lane a rule could read: every sample, some, or none (outside the elevation
+ * grid, or beyond where creeks were fetched). Null where the rule does not apply: an air
+ * machine, or no source at all.
+ */
+export type LaneRead = "all" | "part" | "none" | null;
+
 export interface RehearsedLane extends LaneRef {
   /** How the copy numbers the lane. */
   number: number;
@@ -204,6 +240,10 @@ export interface RehearsedLane extends LaneRef {
   /** When the lane is started and finished, simulated seconds from the start. */
   t0: number;
   t1: number;
+  /** A drawn lane can be left out of the preview; a followed line (a fence) cannot. */
+  removable: boolean;
+  slopeRead: LaneRead;
+  creekRead: LaneRead;
 }
 
 export type HandKind = "cross-slope" | "grade" | "creek-buffer";
@@ -232,6 +272,15 @@ export interface RaisedHand extends LaneRef {
   creekName?: string | null;
 }
 
+/**
+ * One line of the end summary. info: what was driven; hand: lanes over a limit; clear: a rule
+ * that raised no hand on the lanes it read; gap: lanes or rules it could not read.
+ */
+export interface SummaryLine {
+  tone: "info" | "hand" | "clear" | "gap";
+  text: string;
+}
+
 export interface Rehearsal {
   machines: RehearsalMachine[];
   tracks: RehearsalTrack[];
@@ -239,7 +288,7 @@ export interface Rehearsal {
   hands: RaisedHand[];
   durationS: number;
   lengthM: number;
-  summary: string[];
+  summary: SummaryLine[];
   /** What was not checked, and why, in sentences. */
   skipped: string[];
   /** Where the checks came from, for the source chips. */
@@ -271,13 +320,6 @@ function toXY(frame: Frame, p: LonLat): XY {
   return {
     x: (p.longitude - frame.origin.longitude) * frame.kx,
     y: (p.latitude - frame.origin.latitude) * frame.ky,
-  };
-}
-
-function lerp(a: LonLat, b: LonLat, f: number): LonLat {
-  return {
-    longitude: a.longitude + (b.longitude - a.longitude) * f,
-    latitude: a.latitude + (b.latitude - a.latitude) * f,
   };
 }
 
@@ -357,23 +399,147 @@ export function gradientAt(
   return { east, north };
 }
 
-function segmentDistance(p: XY, a: XY, b: XY): number {
+/** The point of segment a→b nearest to p: its distance, and where it is along a→b (0 to 1). */
+function nearestOn(p: XY, a: XY, b: XY): { d: number; f: number } {
   const vx = b.x - a.x;
   const vy = b.y - a.y;
   const length2 = vx * vx + vy * vy;
-  const t =
+  const f =
     length2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / length2)) : 0;
-  return Math.hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy));
+  return { d: Math.hypot(p.x - (a.x + f * vx), p.y - (a.y + f * vy)), f };
 }
 
-interface CreekPiece {
-  line: CreekLine;
+/**
+ * How close segment p→q comes to segment a→b, and where along p→q (0 to 1): 0 at the crossing
+ * when they cross; otherwise the nearest pair of points, one of which is an end of a segment.
+ */
+function closestApproach(p: XY, q: XY, a: XY, b: XY): { d: number; f: number } {
+  const rx = q.x - p.x;
+  const ry = q.y - p.y;
+  const sx = b.x - a.x;
+  const sy = b.y - a.y;
+  const denominator = rx * sy - ry * sx;
+  if (denominator !== 0) {
+    const wx = a.x - p.x;
+    const wy = a.y - p.y;
+    const f = (wx * sy - wy * sx) / denominator;
+    const g = (wx * ry - wy * rx) / denominator;
+    if (f >= 0 && f <= 1 && g >= 0 && g <= 1) return { d: 0, f };
+  }
+  const toA = nearestOn(a, p, q);
+  const toB = nearestOn(b, p, q);
+  let best = { d: nearestOn(p, a, b).d, f: 0 };
+  const fromQ = nearestOn(q, a, b).d;
+  if (fromQ < best.d) best = { d: fromQ, f: 1 };
+  if (toA.d < best.d) best = toA;
+  if (toB.d < best.d) best = toB;
+  return best;
+}
+
+interface Edge {
   a: XY;
   b: XY;
   minX: number;
   maxX: number;
   minY: number;
   maxY: number;
+}
+
+function edgeOf(a: XY, b: XY): Edge {
+  return {
+    a,
+    b,
+    minX: Math.min(a.x, b.x),
+    maxX: Math.max(a.x, b.x),
+    minY: Math.min(a.y, b.y),
+    maxY: Math.max(a.y, b.y),
+  };
+}
+
+/** Even-odd: whether p is inside a ring (closed or not). */
+function ringContains(ring: readonly XY[], p: XY): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i];
+    const b = ring[j];
+    if (!a || !b || a.y > p.y === b.y > p.y) continue;
+    if (p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Whether the whole creek buffer around a lane point lies where creek lines were fetched: the
+ * point's signed distance to the outline (negative inside) is at most the margin the lines
+ * reach past it, less the buffer. Beyond that a creek could be inside the buffer unseen.
+ */
+function coverageTest(frame: Frame, coverage: CreekCoverage): (p: XY, bufferM: number) => boolean {
+  const polygons = coverage.polygons.map((rings) =>
+    rings.map((ring) => ring.map((q) => toXY(frame, q))),
+  );
+  const edges: Edge[] = [];
+  for (const rings of polygons)
+    for (const ring of rings)
+      ring.forEach((a, i) => {
+        const b = ring[(i + 1) % ring.length];
+        if (b && (a.x !== b.x || a.y !== b.y)) edges.push(edgeOf(a, b));
+      });
+  const inside = (p: XY) =>
+    polygons.some(
+      ([outer, ...holes]) =>
+        outer !== undefined && ringContains(outer, p) && !holes.some((h) => ringContains(h, p)),
+    );
+  return (p, bufferM) => {
+    const reach = coverage.marginM - bufferM;
+    const within = inside(p);
+    if (within && reach >= 0) return true;
+    if (!within && reach < 0) return false;
+    const r = Math.abs(reach);
+    const near = edges.some(
+      (e) =>
+        p.x >= e.minX - r &&
+        p.x <= e.maxX + r &&
+        p.y >= e.minY - r &&
+        p.y <= e.maxY + r &&
+        nearestOn(p, e.a, e.b).d <= r,
+    );
+    // Inside: covered unless the outline is nearer than the buffer reaches past the margin.
+    // Outside: covered only within the margin less the buffer.
+    return within ? !near : near;
+  };
+}
+
+/**
+ * How far apart a zone's drawn lanes are, metres: from its first lane to the first lane of
+ * another pass, over the passes between. Null for a followed line or a single pass.
+ */
+function laneSpacingM(frame: Frame, lanes: readonly RehearsalLaneInput[]): number | null {
+  const drawn = lanes.filter((lane) => !lane.followsLine && lane.points.length === 2);
+  const first = drawn[0];
+  const other = drawn.find((lane) => lane.pass !== first?.pass);
+  const [a0, b0] = first?.points ?? [];
+  const p0 = other?.points[0];
+  if (!first || !other || !a0 || !b0 || !p0) return null;
+  const a = toXY(frame, a0);
+  const b = toXY(frame, b0);
+  const p = toXY(frame, p0);
+  const length = Math.hypot(b.x - a.x, b.y - a.y);
+  if (!(length > 0)) return null;
+  const offset = Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / length;
+  return offset / Math.abs(other.pass - first.pass);
+}
+
+/** "~46 m apart", or "~20 to 46 m apart" over zones; null when no zone has drawn passes. */
+function spacingText(spacings: readonly number[]): string | null {
+  const rounded = spacings.filter(Number.isFinite).map((s) => Math.max(1, Math.round(s)));
+  if (rounded.length === 0) return null;
+  const low = Math.min(...rounded);
+  const high = Math.max(...rounded);
+  return low === high ? `~${low} m apart` : `~${low} to ${high} m apart`;
+}
+
+interface CreekPiece extends Edge {
+  line: CreekLine;
 }
 
 /** NHD kinds that count as creeks: every natural channel but the ephemeral, unless asked. */
@@ -395,17 +561,7 @@ function creekPieces(frame: Frame, creeks: CreekSource, includeEphemeral: boolea
       const p = line.coordinates[i];
       const q = line.coordinates[i + 1];
       if (!p || !q) continue;
-      const a = toXY(frame, p);
-      const b = toXY(frame, q);
-      pieces.push({
-        line,
-        a,
-        b,
-        minX: Math.min(a.x, b.x),
-        maxX: Math.max(a.x, b.x),
-        minY: Math.min(a.y, b.y),
-        maxY: Math.max(a.y, b.y),
-      });
+      pieces.push({ line, ...edgeOf(toXY(frame, p), toXY(frame, q)) });
     }
   }
   return pieces;
@@ -527,6 +683,61 @@ interface Worst {
   at: LonLat;
   t: number;
   creek?: CreekLine;
+  /** The lane runs over the creek's line. */
+  crosses?: boolean;
+}
+
+/**
+ * How many of the ground lanes a rule applies to it read in full, in part, or not at all, and
+ * how many metres of those lanes it could not read.
+ */
+interface ReadTally {
+  total: number;
+  all: number;
+  part: number;
+  none: number;
+  laneM: number;
+  unreadM: number;
+}
+
+/** Metres of a lane each rule could not read. */
+type Unread = Map<RehearsedLane, { slope: number; creek: number }>;
+
+function tally(
+  lanes: readonly RehearsedLane[],
+  rule: "slope" | "creek",
+  unread: Unread,
+): ReadTally {
+  const counts: ReadTally = { total: 0, all: 0, part: 0, none: 0, laneM: 0, unreadM: 0 };
+  for (const lane of lanes) {
+    const read = rule === "slope" ? lane.slopeRead : lane.creekRead;
+    if (read === null) continue;
+    counts.total++;
+    counts[read]++;
+    counts.laneM += lane.lengthM;
+    counts.unreadM += unread.get(lane)?.[rule] ?? 0;
+  }
+  return counts;
+}
+
+function readOf(samples: number, read: number): Exclude<LaneRead, null> {
+  if (read === 0) return "none";
+  return read === samples ? "all" : "part";
+}
+
+function lanesWord(n: number): string {
+  return `lane${n === 1 ? "" : "s"}`;
+}
+
+/** "140 m of 20.2 km of lanes (3 of 28 lanes wholly, 2 in part)": how much went unread. */
+function unreadText({ total, part, none, laneM, unreadM: unread }: ReadTally): string {
+  const which =
+    none && part
+      ? `${none} of ${total} lanes wholly, ${part} in part`
+      : none
+        ? `${none} of ${total} ${lanesWord(total)}`
+        : `in part on ${part} of ${total} ${lanesWord(total)}`;
+  return `${km(unread)} of ${km(laneM)} of lanes (${which})`;
 }
 
 /**
@@ -535,6 +746,7 @@ interface Worst {
  */
 export function planRehearsal(input: RehearsalInput): Rehearsal {
   const sampleM = input.sampleM ?? SAMPLE_M;
+  const includeEphemeral = input.includeEphemeral ?? false;
   const { machines, crews, notes } = castMachines(input.zones, input.machines);
   const allPoints = input.zones.flatMap((z) => z.lanes.flatMap((l) => l.points));
   const origin = allPoints.length
@@ -544,9 +756,9 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
       }
     : { longitude: 0, latitude: 0 };
   const frame = frameAt(origin);
-  const pieces = input.creeks
-    ? creekPieces(frame, input.creeks, input.includeEphemeral ?? false)
-    : [];
+  const creeks = input.creeks;
+  const pieces = creeks ? creekPieces(frame, creeks, includeEphemeral) : [];
+  const covered = creeks?.coverage ? coverageTest(frame, creeks.coverage) : null;
   const maxBuffer = Math.max(0, ...machines.map((m) => m.capability.creekBufferM ?? 0));
 
   const clocks = new Map<string, { t: number; at: LonLat | null; zoneId: string | null }>();
@@ -556,6 +768,7 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
     segments.set(machine.id, []);
   }
   const lanes: RehearsedLane[] = [];
+  const unread: Unread = new Map();
   const hands: RaisedHand[] = [];
   const skipped = new Set<string>();
   const airChecked = new Set<string>();
@@ -589,6 +802,13 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
           `${machine.id} is a ${capability.label}: it flies, so the slope and creek rules for ground machines were not checked on its lanes.`,
         );
       }
+      const maxSlope = ground ? capability.maxSlopePct : null;
+      const elevation = maxSlope !== null ? input.elevation : null;
+      const buffer = ground ? (capability.creekBufferM ?? 0) : 0;
+      const creekRule = creeks !== null && buffer > 0;
+      // Samples each rule could read on this lane, of those it tried.
+      const slopeRead = { samples: 0, read: 0 };
+      const creekRead = { samples: 0, read: 0 };
       for (let i = 0; i + 1 < lane.points.length; i++) {
         const a = lane.points[i];
         const b = lane.points[i + 1];
@@ -598,57 +818,66 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
         const t0 = laneT0 + lengthM / capability.speedMps;
         const t1 = t0 + pieceM / capability.speedMps;
         track.push({ t0, t1, from: a, to: b, lane: { zoneId: zone.zoneId, index } });
-        if (ground) {
-          const pa = toXY(frame, a);
-          const pb = toXY(frame, b);
-          const ux = (pb.x - pa.x) / pieceM;
-          const uy = (pb.y - pa.y) / pieceM;
-          const buffer = capability.creekBufferM ?? 0;
-          const near =
-            buffer > 0
-              ? pieces.filter(
-                  (c) =>
-                    c.maxX >= Math.min(pa.x, pb.x) - buffer &&
-                    c.minX <= Math.max(pa.x, pb.x) + buffer &&
-                    c.maxY >= Math.min(pa.y, pb.y) - buffer &&
-                    c.minY <= Math.max(pa.y, pb.y) + buffer,
-                )
-              : [];
-          const steps = Math.max(1, Math.ceil(pieceM / sampleM));
-          for (let k = 0; k <= steps; k++) {
-            // A shared corner is read once, at the start of the next piece.
-            if (k === steps && i + 2 < lane.points.length) continue;
-            const f = k / steps;
+        lengthM += pieceM;
+        if (!ground) continue;
+        const pa = toXY(frame, a);
+        const pb = toXY(frame, b);
+        if (creekRule) {
+          // Piece against piece, exactly: a lane that crosses a creek between two samples
+          // still crosses it, and its nearest point is where the hand goes.
+          for (const creek of pieces) {
+            if (
+              creek.maxX < Math.min(pa.x, pb.x) - buffer ||
+              creek.minX > Math.max(pa.x, pb.x) + buffer ||
+              creek.maxY < Math.min(pa.y, pb.y) - buffer ||
+              creek.minY > Math.max(pa.y, pb.y) + buffer
+            )
+              continue;
+            const near = closestApproach(pa, pb, creek.a, creek.b);
+            const current = worst.get("creek-buffer");
+            if (near.d >= buffer || (current && near.d >= current.value)) continue;
+            worst.set("creek-buffer", {
+              value: near.d,
+              at: lerp(a, b, near.f),
+              t: t0 + (t1 - t0) * near.f,
+              creek: creek.line,
+              crosses: near.d === 0,
+            });
+          }
+        }
+        if (!elevation && !creekRule) continue;
+        const ux = (pb.x - pa.x) / pieceM;
+        const uy = (pb.y - pa.y) / pieceM;
+        const steps = Math.max(1, Math.ceil(pieceM / sampleM));
+        for (let k = 0; k <= steps; k++) {
+          // A shared corner is read once, at the start of the next piece.
+          if (k === steps && i + 2 < lane.points.length) continue;
+          const f = k / steps;
+          if (elevation && maxSlope !== null) {
             const at = lerp(a, b, f);
-            const t = t0 + (t1 - t0) * f;
-            if (input.elevation && capability.maxSlopePct !== null) {
-              const g = gradientAt(input.elevation.grid, at.longitude, at.latitude);
-              if (g) {
-                const grade = Math.abs(g.east * ux + g.north * uy) * 100;
-                const cross = Math.abs(-g.east * uy + g.north * ux) * 100;
-                for (const [kind, value] of [
-                  ["grade", grade],
-                  ["cross-slope", cross],
-                ] as const) {
-                  if (value <= capability.maxSlopePct) continue;
-                  const current = worst.get(kind);
-                  if (!current || value > current.value) worst.set(kind, { value, at, t });
-                }
-              }
-            }
-            if (near.length && capability.creekBufferM !== null) {
-              const p = { x: pa.x + (pb.x - pa.x) * f, y: pa.y + (pb.y - pa.y) * f };
-              for (const piece of near) {
-                const d = segmentDistance(p, piece.a, piece.b);
-                if (d >= capability.creekBufferM) continue;
-                const current = worst.get("creek-buffer");
-                if (!current || d < current.value)
-                  worst.set("creek-buffer", { value: d, at, t, creek: piece.line });
+            slopeRead.samples++;
+            const g = gradientAt(elevation.grid, at.longitude, at.latitude);
+            if (g) {
+              slopeRead.read++;
+              const grade = Math.abs(g.east * ux + g.north * uy) * 100;
+              const cross = Math.abs(-g.east * uy + g.north * ux) * 100;
+              const t = t0 + (t1 - t0) * f;
+              for (const [kind, value] of [
+                ["grade", grade],
+                ["cross-slope", cross],
+              ] as const) {
+                if (value <= maxSlope) continue;
+                const current = worst.get(kind);
+                if (!current || value > current.value) worst.set(kind, { value, at, t });
               }
             }
           }
+          if (creekRule) {
+            creekRead.samples++;
+            const p = { x: pa.x + (pb.x - pa.x) * f, y: pa.y + (pb.y - pa.y) * f };
+            if (!covered || covered(p, buffer)) creekRead.read++;
+          }
         }
-        lengthM += pieceM;
       }
       const laneT1 = laneT0 + lengthM / capability.speedMps;
       const end = lane.points[lane.points.length - 1] ?? start;
@@ -656,7 +885,12 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
       clock.at = end;
       clock.zoneId = zone.zoneId;
       const number = lane.number ?? index + 1;
-      lanes.push({
+      let creekReading: LaneRead = creekRule ? readOf(creekRead.samples, creekRead.read) : null;
+      const unreadPart = (read: { samples: number; read: number }) =>
+        read.samples > 0 ? lengthM * (1 - read.read / read.samples) : lengthM;
+      // A creek line found past the fetched area is still a creek: the lane was read there.
+      if (creekReading === "none" && worst.has("creek-buffer")) creekReading = "part";
+      const rehearsed: RehearsedLane = {
         zoneId: zone.zoneId,
         index,
         number,
@@ -666,6 +900,14 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
         pass: lane.pass,
         t0: laneT0,
         t1: laneT1,
+        removable: !lane.followsLine,
+        slopeRead: elevation ? readOf(slopeRead.samples, slopeRead.read) : null,
+        creekRead: creekReading,
+      };
+      lanes.push(rehearsed);
+      unread.set(rehearsed, {
+        slope: elevation ? unreadPart(slopeRead) : 0,
+        creek: creekRule ? unreadPart(creekRead) : 0,
       });
       for (const kind of ["cross-slope", "grade", "creek-buffer"] as const) {
         const found = worst.get(kind);
@@ -677,7 +919,7 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
             number,
             machine,
             elevation: input.elevation,
-            creeks: input.creeks,
+            creeks,
           }),
         );
       }
@@ -698,41 +940,95 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
   const lengthM = lanes.reduce((s, l) => s + l.lengthM, 0);
   hands.sort((a, b) => a.t - b.t || a.id.localeCompare(b.id));
 
-  const groundMachines = tracks.filter((t) => t.machine.capability.kind === "ground");
-  if (groundMachines.length > 0) {
+  const groundLanes = lanes.filter(
+    (lane) => machines.find((m) => m.id === lane.machineId)?.capability.kind === "ground",
+  );
+  const slope = tally(groundLanes, "slope", unread);
+  const water = tally(groundLanes, "creek", unread);
+  const slopeChecked = slope.all + slope.part;
+  const creekChecked = water.all + water.part;
+  const spacing = spacingText(
+    input.zones.map((z) => laneSpacingM(frame, z.lanes)).filter((s): s is number => s !== null),
+  );
+  const drawn = spacing ? `preview spacing, ${spacing}` : null;
+
+  // What could not be read, said in the summary as well as the list: a rule read on no lane,
+  // or on only some, has not shown those lanes to be inside the limits.
+  const gaps: string[] = [];
+  if (groundLanes.length > 0) {
     if (!input.elevation)
-      skipped.add(input.elevationMissing ?? "Slope not checked: no terrain for this ground.");
-    if (!input.creeks)
-      skipped.add(
+      gaps.push(input.elevationMissing ?? "Slope not checked: no terrain for this ground.");
+    else if (slope.none || slope.part)
+      gaps.push(
+        `Slope not read on ${unreadText(slope)}: ${input.elevation.label} has no heights there${input.elevation.extent ? `; ${input.elevation.extent}` : ""}.`,
+      );
+    if (!creeks)
+      gaps.push(
         input.creeksMissing ?? "Creek buffer not checked: no mapped creeks for this ground.",
       );
-    else if (!input.includeEphemeral && input.creeks.lines.some((l) => l.kind === "ephemeral"))
+    else if (water.total > 0) {
+      if (creeks.coverage && (water.none || water.part))
+        gaps.push(
+          `Creeks checked only ${creeks.coverage.label}: ${unreadText(water)} lie outside it, so a creek there would raise no hand.`,
+        );
+      if (creeks.truncated)
+        gaps.push(
+          `${creeks.label} stopped at its record limit here: more flowlines may exist than the ${creeks.lines.length} read.`,
+        );
+    }
+  }
+  for (const gap of gaps) skipped.add(gap);
+  if (groundLanes.length > 0 && creeks) {
+    if (!includeEphemeral && creeks.lines.some((l) => l.kind === "ephemeral"))
       skipped.add(
         "Ephemeral drainages (NHD channels that run only after rain) are not counted as creeks.",
       );
+    if (creeks.note) skipped.add(creeks.note);
   }
   skipped.add(
-    "The ghosts drive the lanes the map draws (preview spacing), not every swath, so the ground between drawn lanes is not checked; turns and moves between lanes are straight and not checked.",
+    `The ghosts drive the lanes the map draws${drawn ? ` (${drawn})` : ""}, not every swath, so the ground between drawn lanes is not checked; turns and moves between lanes are straight and not checked.`,
   );
 
-  const summary: string[] = [];
-  summary.push(
-    `${tracks.length} simulated machine${tracks.length === 1 ? "" : "s"} drove ${lanes.length} drawn lane${lanes.length === 1 ? "" : "s"} (${km(lengthM)}) in ${formatSimDuration(durationS)} at assumed speeds.`,
-  );
-  const checked = lanes.filter(
-    (lane) => machines.find((m) => m.id === lane.machineId)?.capability.kind === "ground",
-  ).length;
-  summary.push(...handLines(hands, checked));
-  if (hands.length === 0 && groundMachines.length > 0 && (input.elevation || input.creeks))
-    summary.push("No hands raised: every lane stayed inside the assumed limits.");
+  const summary: SummaryLine[] = [
+    {
+      tone: "info",
+      text: `${tracks.length} simulated machine${tracks.length === 1 ? "" : "s"} drove ${lanes.length} drawn lane${lanes.length === 1 ? "" : "s"} (${km(lengthM)}${drawn ? `, ${drawn}` : ""}) in ${formatSimDuration(durationS)} at assumed speeds.`,
+    },
+  ];
+  for (const text of handLines(hands, { slope: slopeChecked, creek: creekChecked }))
+    summary.push({ tone: "hand", text });
+  // A rule that raised no hand is clear only on the lanes it read, and only on those lanes.
+  const fully: string[] = [];
+  const partly: string[] = [];
+  if (input.elevation && slopeChecked > 0 && !hands.some((h) => h.kind !== "creek-buffer")) {
+    if (slope.none || slope.part)
+      partly.push(
+        `No slope hands on the ${slopeChecked} of ${slope.total} lanes where slope was read.`,
+      );
+    else fully.push("slope");
+  }
+  if (creeks && creekChecked > 0 && !hands.some((h) => h.kind === "creek-buffer")) {
+    if (water.none || water.part || creeks.truncated)
+      partly.push(
+        `No creek-buffer hands on the ${creekChecked} of ${water.total} lanes checked for creeks.`,
+      );
+    else fully.push("the creek buffer");
+  }
+  if (fully.length)
+    summary.push({
+      tone: "clear",
+      text: `No hands for ${fully.join(" or ")} on the drawn lanes${drawn ? ` (${drawn}); the ground between them is not checked` : ""}.`,
+    });
+  for (const text of partly) summary.push({ tone: "clear", text });
+  for (const text of gaps) summary.push({ tone: "gap", text });
 
   const sources: string[] = [];
-  if (input.elevation && groundMachines.length > 0)
+  if (input.elevation && slopeChecked > 0)
     sources.push(
       `Slope: ${input.elevation.label}${input.elevation.ref ? `, ${input.elevation.ref}` : ""}`,
     );
-  const checkedCreeks = input.creeks && groundMachines.length > 0 && maxBuffer > 0;
-  if (checkedCreeks && input.creeks) sources.push(`Creek: ${input.creeks.label}`);
+  const checkedCreeks = creeks !== null && groundLanes.length > 0 && maxBuffer > 0;
+  if (creeks && creekChecked > 0) sources.push(`Creek: ${creeks.label}`);
   sources.push("Limits: assumed per machine class (machine_classes.json)");
 
   return {
@@ -746,10 +1042,8 @@ export function planRehearsal(input: RehearsalInput): Rehearsal {
     skipped: [...notes, ...skipped],
     sources,
     creeks:
-      checkedCreeks && input.creeks
-        ? input.creeks.lines.filter((line) =>
-            countsAsCreek(line.kind, input.includeEphemeral ?? false),
-          )
+      checkedCreeks && creeks
+        ? creeks.lines.filter((line) => countsAsCreek(line.kind, includeEphemeral))
         : [],
   };
 }
@@ -787,8 +1081,7 @@ function raiseHand(
     const limit = capability.creekBufferM ?? 0;
     const creek = found.creek;
     const name = creek?.name ?? "a mapped creek";
-    // Under a metre is on the line: the lane crosses the creek.
-    const crosses = found.value < 1;
+    const crosses = found.crosses === true;
     return {
       ...base,
       value: found.value,
@@ -812,11 +1105,16 @@ function raiseHand(
   };
 }
 
-/** One summary line per rule that raised hands: how many of the checked lanes, and which. */
-function handLines(hands: readonly RaisedHand[], checked: number): string[] {
+/**
+ * One summary line per rule that raised hands: how many of the lanes that rule read, and
+ * which. `checked` counts the ground lanes each rule could read at all.
+ */
+function handLines(
+  hands: readonly RaisedHand[],
+  checked: { slope: number; creek: number },
+): string[] {
   const lines: string[] = [];
-  const of = (n: number) =>
-    checked > n ? `${n} of ${checked} lanes` : `${n} lane${n === 1 ? "" : "s"}`;
+  const of = (n: number, k: number) => `${n} of ${k} checked ${lanesWord(k)}`;
   const refs = (list: readonly RaisedHand[]) =>
     lanesText(list.map((h) => ({ label: h.zoneLabel, number: h.number })));
   const count = (list: readonly RaisedHand[]) =>
@@ -829,7 +1127,7 @@ function handLines(hands: readonly RaisedHand[], checked: number): string[] {
       limits.length === 1
         ? `over ${pct(limits[0] ?? 0)} ${kind}`
         : `over their class's ${kind} limit`;
-    lines.push(`${of(count(list))} ${over} (${refs(list)})`);
+    lines.push(`${of(count(list), checked.slope)} ${over} (${refs(list)})`);
   }
   const creek = hands.filter((h) => h.kind === "creek-buffer");
   if (creek.length) {
@@ -845,31 +1143,7 @@ function handLines(hands: readonly RaisedHand[], checked: number): string[] {
           : "mapped creeks"
         : `${named.join(", ")}${unnamed ? ` and ${unnamed} unnamed channel${unnamed === 1 ? "" : "s"}` : ""}`;
     const buffer = limits.length === 1 ? `the ${limits[0]} m buffer` : "their class's buffer";
-    lines.push(`${of(count(creek))} inside ${buffer} of ${creeks} (${refs(creek)})`);
+    lines.push(`${of(count(creek), checked.creek)} inside ${buffer} of ${creeks} (${refs(creek)})`);
   }
   return lines;
-}
-
-/** Where a ghost is at `t`, and the lane it is on (null between lanes or when done). */
-export function positionAt(
-  track: RehearsalTrack,
-  t: number,
-): { at: LonLat; lane: LaneRef | null } | null {
-  const segments = track.segments;
-  const first = segments[0];
-  const last = segments[segments.length - 1];
-  if (!first || !last) return null;
-  if (t <= first.t0) return { at: first.from, lane: null };
-  if (t >= last.t1) return { at: last.to, lane: null };
-  let lo = 0;
-  let hi = segments.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if ((segments[mid]?.t1 ?? 0) < t) lo = mid + 1;
-    else hi = mid;
-  }
-  const segment = segments[lo] ?? last;
-  const span = segment.t1 - segment.t0;
-  const f = span > 0 ? Math.min(1, Math.max(0, (t - segment.t0) / span)) : 1;
-  return { at: lerp(segment.from, segment.to, f), lane: segment.lane };
 }

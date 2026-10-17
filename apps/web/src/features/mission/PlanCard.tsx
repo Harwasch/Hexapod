@@ -1,5 +1,5 @@
 import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
 
@@ -28,10 +28,14 @@ import { useUi } from "@/state/ui";
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
 import { approveLabel, useDressRehearsal } from "./dressRehearsal";
-import { RehearsalPanel } from "./Rehearsal";
 import { ScoutExport } from "./ScoutExport";
 import { groundFromView, waitForGround } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
+
+/** The rehearsal's panel and styles load with its first "Rehearse", not with the app. */
+const RehearsalPanel = lazy(() =>
+  import("./Rehearsal").then((module) => ({ default: module.RehearsalPanel })),
+);
 
 const EXAMPLES = [
   "3D scan this field into a gaussian splat",
@@ -770,7 +774,11 @@ function DraftReview({
           </ul>
         </details>
       )}
-      <RehearsalPanel run={rehearsal} />
+      {rehearsal.status !== "idle" && (
+        <Suspense fallback={null}>
+          <RehearsalPanel run={rehearsal} />
+        </Suspense>
+      )}
       <div className="mc-actions">
         <button type="button" className="mc-btn" onClick={() => showPlanOnMap(draft)}>
           Fit on map

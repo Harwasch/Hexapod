@@ -1006,6 +1006,7 @@ test.describe("mission control", () => {
     );
     await expect(summary).toContainText("Limits: assumed per machine class");
     await expect(app.getByTestId("plan-approve")).toHaveText(/^Approve despite \d+ hands?$/);
+    const approve = await app.getByTestId("plan-approve").textContent();
     // A hand opens with its rule; leaving its lane out says so and rehearses without it.
     await app
       .getByTestId("rehearsal-hand")
@@ -1020,6 +1021,9 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("rehearsal-left-out")).toContainText(
       "Left out of this draft's preview: Z-08 lane",
     );
+    // The approved plan still drives that lane: its hands still count.
+    await expect(app.getByTestId("rehearsal-left-out")).toContainText("still count");
+    await expect(app.getByTestId("plan-approve")).toHaveText(approve ?? "");
     // Stopping clears the map and the count.
     await app.getByTestId("rehearsal-stop").dispatchEvent("click");
     await expect(app.getByTestId("plan-rehearsal")).toHaveCount(0);

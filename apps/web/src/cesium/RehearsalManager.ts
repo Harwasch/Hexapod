@@ -15,19 +15,35 @@ import {
 
 import type { LonLat } from "@twin/geo";
 
-import {
-  positionAt,
-  REHEARSAL_SPEEDS,
-  type RaisedHand,
-  type Rehearsal,
-  type RehearsalSpeed,
-  type RehearsalTrack,
-} from "@/missions/rehearsal";
+import type { RaisedHand, Rehearsal, RehearsalTrack } from "@/missions/rehearsal";
+import { positionAt, REHEARSAL_SPEEDS, type RehearsalSpeed } from "@/missions/rehearsalClock";
 
 import type { MissionManager } from "./MissionManager";
 
-/** Every entity the rehearsal draws; a click on one is the rehearsal's (SelectionManager). */
+/** Every entity the rehearsal draws. */
 export const REHEARSAL_ENTITY_PREFIX = "rehearsal:";
+/** A raised hand: a click opens it in the plan card. */
+export const REHEARSAL_HAND_PREFIX = `${REHEARSAL_ENTITY_PREFIX}hand:`;
+/** The ghost of one of the project's machines: a click selects that machine. */
+export const REHEARSAL_GHOST_PREFIX = `${REHEARSAL_ENTITY_PREFIX}ghost:`;
+/** An assumed generic machine's ghost: nothing to select, so a click goes to what is under it. */
+const REHEARSAL_SIM_PREFIX = `${REHEARSAL_ENTITY_PREFIX}sim:`;
+
+/**
+ * What a click on a rehearsal entity means (SelectionManager): a hand opens in the card, a
+ * project machine's ghost selects the machine, and everything else the rehearsal draws (lanes,
+ * creeks, generic ghosts) is looked through to the zone, machine or place under it. Null for an
+ * entity that is not the rehearsal's.
+ */
+export function rehearsalPick(
+  id: string,
+): { kind: "hand"; handId: string } | { kind: "machine"; machineId: string } | "through" | null {
+  if (id.startsWith(REHEARSAL_HAND_PREFIX))
+    return { kind: "hand", handId: id.slice(REHEARSAL_HAND_PREFIX.length) };
+  if (id.startsWith(REHEARSAL_GHOST_PREFIX))
+    return { kind: "machine", machineId: id.slice(REHEARSAL_GHOST_PREFIX.length) };
+  return id.startsWith(REHEARSAL_ENTITY_PREFIX) ? "through" : null;
+}
 
 const PENDING = Color.fromCssColorString("#c9d1cc").withAlpha(0.75);
 const HAND = Color.fromCssColorString("#f0b254");
@@ -60,7 +76,10 @@ export interface RehearsalFrame {
 export type RehearsalFrameListener = (frame: RehearsalFrame | null) => void;
 
 export interface RehearsalLook {
-  /** A machine's colour: the project's for its own machines, a palette one for a generic. */
+  /**
+   * A machine's colour: the project's for its own machines; for a generic one (or one the
+   * project does not list) a palette slot after the project's own, so no two ghosts share one.
+   */
   colorOf: (machineId: string) => Color;
   /** Ellipsoid height of the ground at a point, metres (ghosts and hands stand on it). */
   heightAt: (longitude: number, latitude: number) => number;
@@ -152,6 +171,7 @@ export class RehearsalManager {
         }),
       );
     });
+    const flagged = new Set(rehearsal.hands.map((h) => laneId(h.zoneId, h.index)));
     for (const lane of rehearsal.lanes) {
       const id = laneId(lane.zoneId, lane.index);
       this.pending.set(
@@ -166,12 +186,28 @@ export class RehearsalManager {
           },
         }),
       );
+      // Drawn once and shown when done: adding and removing a ground polyline rebuilds its
+      // whole batch, every finished lane with it, on each lane and each scrub.
+      const warn = flagged.has(id);
+      this.done.set(
+        id,
+        this.viewer.entities.add({
+          id: `${REHEARSAL_ENTITY_PREFIX}done:${id}`,
+          show: false,
+          polyline: {
+            positions: positions(lane.points),
+            width: warn ? 3 : 2.4,
+            material: warn ? HAND : look.colorOf(lane.machineId).withAlpha(0.9),
+            clampToGround: true,
+          },
+        }),
+      );
     }
     for (const hand of rehearsal.hands) {
       this.hands.set(
         hand.id,
         this.viewer.entities.add({
-          id: `${REHEARSAL_ENTITY_PREFIX}hand:${hand.id}`,
+          id: `${REHEARSAL_HAND_PREFIX}${hand.id}`,
           name: `Raised hand: ${hand.label}`,
           show: false,
           position: this.standing(hand.at, 2),
@@ -205,7 +241,7 @@ export class RehearsalManager {
       const color = look.colorOf(track.machine.id);
       this.ghosts.push(
         this.viewer.entities.add({
-          id: `${REHEARSAL_ENTITY_PREFIX}ghost:${track.machine.id}`,
+          id: `${track.machine.generic ? REHEARSAL_SIM_PREFIX : REHEARSAL_GHOST_PREFIX}${track.machine.id}`,
           name: `${track.machine.name} (simulated rehearsal)`,
           position: new CallbackPositionProperty(() => this.ghostPosition(track), false),
           billboard: {
@@ -339,36 +375,15 @@ export class RehearsalManager {
   /** The lanes done by now and the hands reached by now, drawn as such. */
   private sync(): void {
     const rehearsal = this.rehearsal;
-    const look = this.look;
-    if (!rehearsal || !look) return;
-    const flagged = new Set(rehearsal.hands.map((h) => laneId(h.zoneId, h.index)));
+    if (!rehearsal) return;
     for (const lane of rehearsal.lanes) {
       const id = laneId(lane.zoneId, lane.index);
       // At the end every lane is done, whatever rounding left in its finishing time.
       const finished = this.t >= lane.t1 || this.t >= rehearsal.durationS;
-      const drawn = this.done.get(id);
-      if (finished && !drawn) {
-        const warn = flagged.has(id);
-        this.done.set(
-          id,
-          this.viewer.entities.add({
-            id: `${REHEARSAL_ENTITY_PREFIX}done:${id}`,
-            polyline: {
-              positions: Cartesian3.fromDegreesArray(
-                lane.points.flatMap((p) => [p.longitude, p.latitude]),
-              ),
-              width: warn ? 3 : 2.4,
-              material: warn ? HAND : look.colorOf(lane.machineId).withAlpha(0.9),
-              clampToGround: true,
-            },
-          }),
-        );
-      } else if (!finished && drawn) {
-        this.viewer.entities.remove(drawn);
-        this.done.delete(id);
-      }
+      const done = this.done.get(id);
+      if (done && done.show !== finished) done.show = finished;
       const pending = this.pending.get(id);
-      if (pending) pending.show = !finished;
+      if (pending?.show === finished) pending.show = !finished;
     }
     const raised = rehearsal.hands.filter((h) => this.t >= h.t);
     // The focused hand speaks alone; otherwise the latest to go up.

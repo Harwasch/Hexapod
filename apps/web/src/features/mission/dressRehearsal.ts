@@ -2,7 +2,8 @@
  * The plan card's dress rehearsal as state: "Rehearse" reads the ground once
  * (`rehearsalGround.ts`), plans the run (`missions/rehearsal.ts`) and plays it on the map
  * (`cesium/RehearsalManager.ts`); the card shows it (`Rehearsal.tsx`) and the approve button
- * counts its raised hands.
+ * counts its raised hands. The planner and the ground reader load on the first "Rehearse":
+ * most visits never rehearse, so they are not in the app's first download.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -13,19 +14,30 @@ import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import type { RehearsalFrame } from "@/cesium/RehearsalManager";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
+import { boundaryZoneOf } from "@/missions/landGround";
 import { overlayFor } from "@/missions/planDraft";
-import {
-  planRehearsal,
-  REHEARSAL_SPEEDS,
-  type RaisedHand,
-  type Rehearsal,
-  type RehearsalSpeed,
-  type RehearsalZoneInput,
-} from "@/missions/rehearsal";
+import type * as PlannerModule from "@/missions/rehearsal";
+import type { RaisedHand, Rehearsal, RehearsalZoneInput } from "@/missions/rehearsal";
+import { REHEARSAL_SPEEDS, type RehearsalSpeed } from "@/missions/rehearsalClock";
 import type { Project, Zone } from "@/missions/types";
 import { missionLandId } from "@/state/mission";
 
-import { rehearsalGround, type RehearsalGround } from "./rehearsalGround";
+import type * as GroundModule from "./rehearsalGround";
+import type { RehearsalGround } from "./rehearsalGround";
+
+type Planner = typeof PlannerModule;
+type GroundReader = typeof GroundModule;
+
+let loading: Promise<[Planner, GroundReader]> | null = null;
+
+/** The planner and the ground reader, fetched once; a failed fetch is tried again next time. */
+function loadRehearsal(): Promise<[Planner, GroundReader]> {
+  loading ??= Promise.all([import("@/missions/rehearsal"), import("./rehearsalGround")]);
+  loading.catch(() => {
+    loading = null;
+  });
+  return loading;
+}
 
 /** How a zone is named in the rehearsal's lists: its id, or a Land zone's name. */
 function zoneLabel(zone: Zone): string {
@@ -62,6 +74,7 @@ export function rehearsalZones(
                 latitude: latitude ?? 0,
               })),
               pass: 0,
+              followsLine: true,
             },
           ]
         : scene.mission.previewLanes(zone.id).map((lane, index) => ({
@@ -98,6 +111,11 @@ export interface LeftOutLane {
   zoneId: string;
   label: string;
   number: number;
+  /**
+   * The lane's hands when it was left out. The approved plan still drives the lane (only the
+   * preview lost it), so they still count on the approve button.
+   */
+  hands: number;
 }
 
 export interface DressRehearsal {
@@ -109,7 +127,10 @@ export interface DressRehearsal {
   focused: string | null;
   leftOut: LeftOutLane[];
   includeEphemeral: boolean;
-  /** Hands the ghosts have reached so far: what the approve button says. */
+  /**
+   * What the approve button counts: the hands the ghosts have reached so far, plus every hand
+   * of a lane left out of the preview, which the approved plan still drives.
+   */
   raised: number;
   start: () => void;
   stop: () => void;
@@ -146,6 +167,7 @@ export function useDressRehearsal(
   const [speed, setSpeedState] = useState<RehearsalSpeed>(REHEARSAL_SPEEDS[0]);
   const [read, setRead] = useState<RehearsalGround | null>(null);
   const ground = useRef<RehearsalGround | null>(null);
+  const planner = useRef<Planner | null>(null);
   const run = useRef(0);
 
   const reset = useCallback(() => {
@@ -165,11 +187,9 @@ export function useDressRehearsal(
   useEffect(() => {
     if (!scene) return;
     const offFrame = scene.rehearsal.onFrame(setFrame);
-    const offPick = scene.events.on("rehearsal-pick", ({ id }) => {
-      if (!id.startsWith("hand:")) return;
-      const handId = id.slice("hand:".length);
-      setFocused(handId);
-      scene.rehearsal.focus(handId);
+    const offPick = scene.events.on("rehearsal-hand", ({ id }) => {
+      setFocused(id);
+      scene.rehearsal.focus(id);
     });
     return () => {
       offFrame();
@@ -183,7 +203,8 @@ export function useDressRehearsal(
   const replan = useCallback(
     (options: { includeEphemeral: boolean }, keepT: number) => {
       const read = ground.current;
-      if (!scene || !read) return null;
+      const planRehearsal = planner.current?.planRehearsal;
+      if (!scene || !read || !planRehearsal) return null;
       const result = planRehearsal({
         zones: rehearsalZones(draft, project, scene),
         machines: project.machines,
@@ -193,11 +214,15 @@ export function useDressRehearsal(
         creeksMissing: read.creeksMissing,
         includeEphemeral: options.includeEphemeral,
       });
-      scene.rehearsal.load(
-        result,
-        { colorOf: (id) => scene.mission.machineColor(id), heightAt: read.heightAt },
-        keepT,
-      );
+      // The project's machines keep their colours; the others (assumed generic ones) take the
+      // palette slots after them, so no two ghosts share one.
+      const own = project.machines.map((m) => m.id);
+      const others = result.machines.map((m) => m.id).filter((id) => !own.includes(id));
+      const colorOf = (id: string) =>
+        own.includes(id)
+          ? scene.mission.machineColor(id)
+          : scene.mission.paletteColor(own.length + Math.max(0, others.indexOf(id)));
+      scene.rehearsal.load(result, { colorOf, heightAt: read.heightAt }, keepT);
       setRehearsal(result);
       return result;
     },
@@ -218,7 +243,23 @@ export function useDressRehearsal(
       setError("Nothing to rehearse: this plan has no lanes drawn on the map.");
       return;
     }
-    rehearsalGround(scene, { landId: missionLandId(), projectId: project.id, points })
+    const landId = missionLandId();
+    const boundary = landId ? boundaryZoneOf(project.zones, landId) : null;
+    loadRehearsal()
+      .then(
+        ([loadedPlanner, reader]) => {
+          planner.current = loadedPlanner;
+          return reader.rehearsalGround(scene, {
+            landId,
+            projectId: project.id,
+            points,
+            land: boundary ? { name: boundary.name, footprint: boundary.footprint } : null,
+          });
+        },
+        (cause: unknown) => {
+          throw new Error(`the rehearsal did not load (${describeError(cause)}). Try again.`);
+        },
+      )
       .then((read) => {
         if (run.current !== ticket) return;
         ground.current = read;
@@ -240,17 +281,22 @@ export function useDressRehearsal(
       if (!scene) return;
       const lane = scene.mission.previewLanes(hand.zoneId)[hand.index];
       if (!lane) return;
+      // Every hand on the lane, raised yet or not: the approved plan still drives all of it.
+      const hands =
+        rehearsal?.hands.filter((h) => h.zoneId === hand.zoneId && h.index === hand.index).length ??
+        1;
       scene.mission.leaveOutLane(hand.zoneId, lane);
       setLeftOut((list) => [
         ...list,
-        { zoneId: hand.zoneId, label: hand.zoneLabel, number: hand.number },
+        { zoneId: hand.zoneId, label: hand.zoneLabel, number: hand.number, hands },
       ]);
       setFocused(null);
       replan({ includeEphemeral }, frame?.t ?? 0);
     },
-    [scene, replan, includeEphemeral, frame],
+    [scene, replan, includeEphemeral, frame, rehearsal],
   );
 
+  const leftOutHands = leftOut.reduce((sum, lane) => sum + lane.hands, 0);
   return {
     status,
     error,
@@ -260,7 +306,7 @@ export function useDressRehearsal(
     focused,
     leftOut,
     includeEphemeral,
-    raised: status === "ready" ? (frame?.raised ?? 0) : 0,
+    raised: status === "ready" ? (frame?.raised ?? 0) + leftOutHands : 0,
     start,
     stop: reset,
     play: () => scene?.rehearsal.play(speed),

@@ -29,6 +29,7 @@ import { rehearsalGround } from "@/features/mission/rehearsalGround";
 import { Emitter } from "@/lib/emitter";
 import { planRehearsal } from "@/missions/rehearsal";
 import type { Project, Zone } from "@/missions/types";
+import { useMission } from "@/state/mission";
 
 vi.mock("@/features/mission/rehearsalGround", () => ({ rehearsalGround: vi.fn() }));
 
@@ -121,7 +122,8 @@ function fakeScene() {
   const mission = {
     previewLanes: vi.fn((id: string) => (id === "Z-14" ? LANES : [])),
     previewLaneNumbers: vi.fn((id: string) => (id === "Z-14" ? [1, 2, 4] : [])),
-    machineColor: () => Color.CYAN,
+    machineColor: vi.fn(() => Color.CYAN),
+    paletteColor: vi.fn(() => Color.ORANGE),
     leaveOutLane: vi.fn(),
     restoreLanes: vi.fn(),
     setPreviewPassesShown: vi.fn(),
@@ -160,6 +162,8 @@ describe("what the rehearsal drives", () => {
     );
     expect(zones[0]).toMatchObject({ zoneId: "L-fence", label: "Perimeter fence", machineIds: [] });
     expect(zones[0]?.lanes).toHaveLength(1);
+    // Two clicks drew this fence: still the line the zone follows, not a lane to leave out.
+    expect(zones[0]?.lanes[0]).toMatchObject({ followsLine: true });
     expect(zones[0]?.lanes[0]?.points).toHaveLength(2);
   });
 
@@ -207,6 +211,7 @@ describe("useDressRehearsal", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.mocked(rehearsalGround).mockReset();
+    useMission.setState({ project: null, landGround: null });
   });
 
   it("reads the ground once, plays, counts hands as they go up, and stops when the plan changes", async () => {
@@ -229,7 +234,7 @@ describe("useDressRehearsal", () => {
     expect(result.current.frame?.ended).toBe(true);
     // A click on the hand on the map opens it in the card.
     const hand = result.current.rehearsal?.hands[0];
-    act(() => scene.events.emit("rehearsal-pick", { id: `hand:${hand?.id}` }));
+    act(() => scene.events.emit("rehearsal-hand", { id: hand?.id ?? "" }));
     expect(result.current.focused).toBe(hand?.id);
     expect(scene.mission.flyToPoint).toHaveBeenCalled();
     rerender({ key: "b" });
@@ -238,11 +243,12 @@ describe("useDressRehearsal", () => {
     expect(scene.rehearsal.loaded).toBeNull();
   });
 
-  it("leaves a lane out of the preview and rehearses without it", async () => {
+  it("leaves a lane out of the preview, and its hands still count on Approve", async () => {
     const { result } = renderHook(() => useDressRehearsal(draft, project, "a"), { wrapper });
     act(() => result.current.start());
     await waitFor(() => expect(result.current.status).toBe("ready"));
     act(() => result.current.skipToEnd());
+    expect(result.current.raised).toBe(1);
     const hand = result.current.rehearsal?.hands[0];
     if (!hand) throw new Error("expected a hand");
     // Leaving it out redraws the preview without it, as MissionManager does.
@@ -256,12 +262,50 @@ describe("useDressRehearsal", () => {
     });
     act(() => result.current.leaveOut(hand));
     expect(scene.mission.leaveOutLane).toHaveBeenCalledWith("Z-14", LANES[0]);
-    expect(result.current.leftOut).toEqual([{ zoneId: "Z-14", label: "Z-14", number: 1 }]);
+    expect(result.current.leftOut).toEqual([
+      { zoneId: "Z-14", label: "Z-14", number: 1, hands: 1 },
+    ]);
+    // The preview rehearses without the lane, but the approved plan still drives it.
     expect(result.current.rehearsal?.lanes.map((l) => l.number)).toEqual([2, 4]);
     expect(result.current.rehearsal?.hands).toEqual([]);
+    expect(result.current.raised).toBe(1);
+    expect(approveLabel(0, result.current.raised)).toBe("Approve despite 1 hand");
+    scene.mission.restoreLanes.mockImplementation(() => {
+      scene.mission.previewLanes.mockImplementation((id: string) => (id === "Z-14" ? LANES : []));
+      scene.mission.previewLaneNumbers.mockImplementation((id: string) =>
+        id === "Z-14" ? [1, 2, 4] : [],
+      );
+    });
     act(() => result.current.restoreLanes());
     expect(scene.mission.restoreLanes).toHaveBeenCalled();
     expect(result.current.leftOut).toEqual([]);
+    // Back in the run, and counted once.
+    expect(result.current.raised).toBe(1);
+  });
+
+  it("colours generic ghosts after the project's machines, and reads the Land's outline", async () => {
+    const landZone = zone("L-boundary", {
+      name: "Oak Bench Ranch",
+      land: { kind: "boundary", landId: "land-1", featureId: null },
+    });
+    const onLand = { ...project, id: "land:land-1", zones: [...project.zones, landZone] };
+    const plan = { ...draft, steps: [], machineIds: [] } as unknown as PlanDraft;
+    // The plan's Land comes from the mission: a Land's own project here.
+    useMission.setState({ project: onLand, landGround: null });
+    const { result } = renderHook(() => useDressRehearsal(plan, onLand, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(rehearsalGround).toHaveBeenCalledWith(
+      scene,
+      expect.objectContaining({
+        landId: "land-1",
+        land: { name: "Oak Bench Ranch", footprint: landZone.footprint },
+      }),
+    );
+    expect(result.current.rehearsal?.machines.map((m) => m.id)).toEqual(["SIM-1"]);
+    // SIM-1 takes the slot after the project's two machines, not the first machine's colour.
+    expect(scene.mission.paletteColor).toHaveBeenCalledWith(2);
+    expect(scene.mission.machineColor).not.toHaveBeenCalledWith("SIM-1");
   });
 
   it("says why when there is nothing to rehearse", () => {
@@ -357,6 +401,49 @@ describe("RehearsalPanel", () => {
     expect(controls.leaveOut).toHaveBeenCalledWith(hand);
   });
 
+  it("offers no Leave this lane out on a followed line (a fence)", () => {
+    const fence = planRehearsal({
+      zones: rehearsalZones(
+        { ...draft, zoneIds: ["L-fence"], steps: [], machineIds: [] },
+        project,
+        fakeScene() as unknown as CesiumSceneManager,
+      ),
+      machines: project.machines,
+      elevation: null,
+      creeks: {
+        label: "USGS NHD flowlines, 1:24,000",
+        lines: [
+          {
+            id: "nhd-9",
+            name: "Figueroa Creek",
+            kind: "perennial",
+            coordinates: [at(40, -50), at(40, 50)],
+          },
+        ],
+      },
+    });
+    const crossing = fence.hands[0];
+    expect(crossing?.label).toBe("Crosses Figueroa Creek · buffer 15 m (assumed)");
+    render(
+      <RehearsalPanel
+        run={run({
+          rehearsal: fence,
+          focused: crossing?.id ?? null,
+          frame: {
+            t: fence.durationS,
+            durationS: fence.durationS,
+            playing: false,
+            speed: 300,
+            raised: 1,
+            ended: true,
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText(crossing?.rule ?? "")).toBeInTheDocument();
+    expect(screen.queryByTestId("rehearsal-leave-out")).toBeNull();
+  });
+
   it("ends with the summary and where its numbers came from, and says what was left out", () => {
     render(
       <RehearsalPanel
@@ -369,7 +456,7 @@ describe("RehearsalPanel", () => {
             raised: 1,
             ended: true,
           },
-          leftOut: [{ zoneId: "Z-14", label: "Z-14", number: 4 }],
+          leftOut: [{ zoneId: "Z-14", label: "Z-14", number: 4, hands: 2 }],
           ground: {
             elevation: null,
             creeks: null,
@@ -380,11 +467,18 @@ describe("RehearsalPanel", () => {
       />,
     );
     const summary = screen.getByTestId("rehearsal-summary");
-    for (const line of rehearsal.summary) expect(summary).toHaveTextContent(line);
+    for (const line of rehearsal.summary) expect(summary).toHaveTextContent(line.text);
+    // A hand warns; a rule that could not be read warns too, dashed, so it never reads as clear.
+    const hands = summary.querySelector('[data-tone="hand"]');
+    expect(hands).toHaveClass("mc-note--warn");
+    expect(hands).toHaveTextContent("1 of 3 checked lanes inside the 15 m buffer");
+    const gap = summary.querySelector('[data-tone="gap"]');
+    expect(gap).toHaveClass("mc-note--warn", "mc-rehearsal__gap");
+    expect(gap).toHaveTextContent("Slope not checked");
     expect(summary).toHaveTextContent("Creek: USGS NHD flowlines, 1:24,000");
     expect(summary).toHaveTextContent("Limits: assumed per machine class");
     expect(screen.getByTestId("rehearsal-left-out")).toHaveTextContent(
-      "Left out of this draft's preview: Z-14 lane 4.",
+      "Left out of this draft's preview: Z-14 lane 4. The approved plan still drives it, so its 2 hands still count on Approve",
     );
     expect(summary).toHaveTextContent("analyze bare-earth terrain (USGS 3DEP)");
     expect(screen.getByTestId("rehearsal-play")).toHaveTextContent("Play again");

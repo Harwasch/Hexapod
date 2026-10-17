@@ -12,6 +12,7 @@ and `cellM` says how coarse.
 
 from __future__ import annotations
 
+import rasterio
 from rasterio.enums import Resampling
 from shapely.geometry import box
 from sqlalchemy.orm import Session
@@ -38,7 +39,9 @@ def band_grid(db: Session, row: LandRaster, band: int) -> LonLatGrid:
     spec = grid_for(box(west, south, east, north), metadata.resolution_m, max_cells=MAX_CELLS)
     source = land_rasters.band_array(db, row, band)
     resampling = Resampling.nearest if definition.palette == "categorical" else Resampling.bilinear
-    values = reproject_band(
-        spec, source.data, source.transform, source.crs, source.nodata, resampling
-    )
+    # GDAL's block cache capped as `land_rasters.tile()` caps it: a request is one small warp.
+    with rasterio.Env(GDAL_CACHEMAX=16 * 1024 * 1024):
+        values = reproject_band(
+            spec, source.data, source.transform, source.crs, source.nodata, resampling
+        )
     return encode(spec, values, "f32")

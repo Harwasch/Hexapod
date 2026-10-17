@@ -3,7 +3,7 @@ import { DEG_TO_RAD, EARTH_RADIUS_M, type LonLat } from "@twin/geo";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MissionManager } from "@/cesium/MissionManager";
-import { RehearsalManager, type RehearsalFrame } from "@/cesium/RehearsalManager";
+import { rehearsalPick, RehearsalManager, type RehearsalFrame } from "@/cesium/RehearsalManager";
 import { planRehearsal } from "@/missions/rehearsal";
 
 const origin = { longitude: -120.04, latitude: 34.698 };
@@ -15,7 +15,7 @@ const at = (x: number, y: number): LonLat => ({
 });
 
 /** Two 600 m lanes for one mower; a creek 10 m from the first raises one hand on it. */
-function rehearsal() {
+function rehearsal(machineIds = ["TR-04"]) {
   return planRehearsal({
     zones: [
       {
@@ -25,7 +25,7 @@ function rehearsal() {
           { points: [at(-200, -300), at(-200, 300)], pass: 0 },
           { points: [at(-180, 300), at(-180, -300)], pass: 1 },
         ],
-        machineIds: ["TR-04"],
+        machineIds,
         classId: "mower",
       },
     ],
@@ -92,30 +92,37 @@ describe("RehearsalManager", () => {
         `rehearsal:hand:${run.hands[0]?.id}`,
       ]),
     );
-    // Nothing is done and no hand is up at the start.
-    expect(ids().some((id) => id.startsWith("rehearsal:done:"))).toBe(false);
+    // Nothing is done and no hand is up at the start; each lane's done line waits, hidden.
+    const done = ids().filter((id) => id.startsWith("rehearsal:done:"));
+    expect(done).toEqual(["rehearsal:done:A-01:0", "rehearsal:done:A-01:1"]);
+    expect(done.every((id) => shown(id) === false)).toBe(true);
     expect(shown(`rehearsal:hand:${run.hands[0]?.id}`)).toBe(false);
     expect(heard.at(-1)).toMatchObject({ t: 0, playing: false, raised: 0, ended: false });
   });
 
   it("marks lanes done and raises hands as the clock passes them, and undoes it going back", () => {
-    const { manager, ids, shown, heard } = setup();
+    const { manager, ids, shown, heard, entities } = setup();
     const run = rehearsal();
     manager.load(run, look);
     const first = run.lanes[0];
     const hand = run.hands[0];
     if (!first || !hand) throw new Error("expected a lane and a hand");
+    const drawn = ids();
     manager.seek(first.t1 + 1);
-    expect(ids()).toContain("rehearsal:done:A-01:0");
+    expect(shown("rehearsal:done:A-01:0")).toBe(true);
+    expect(shown("rehearsal:done:A-01:1")).toBe(false);
     expect(shown("rehearsal:lane:A-01:0")).toBe(false);
     expect(shown(`rehearsal:hand:${hand.id}`)).toBe(true);
     expect(heard.at(-1)?.raised).toBe(1);
     manager.seek(0);
-    expect(ids()).not.toContain("rehearsal:done:A-01:0");
+    expect(shown("rehearsal:done:A-01:0")).toBe(false);
+    expect(shown("rehearsal:lane:A-01:0")).toBe(true);
     expect(shown(`rehearsal:hand:${hand.id}`)).toBe(false);
     manager.seek(Number.POSITIVE_INFINITY);
-    expect(ids()).toContain("rehearsal:done:A-01:1");
+    expect(shown("rehearsal:done:A-01:1")).toBe(true);
     expect(heard.at(-1)).toMatchObject({ ended: true, playing: false, t: run.durationS });
+    // Scrubbing shows and hides; nothing is added or removed (a ground polyline batch rebuild).
+    expect(entities.values.map((e) => e.id)).toEqual(drawn);
   });
 
   it("plays on its own frames at the chosen speed, asking the scene to render only then", () => {
@@ -139,6 +146,28 @@ describe("RehearsalManager", () => {
     frames.shift()?.(10_000);
     frames.shift()?.(70_000);
     expect(manager.frame?.t).toBeCloseTo(600, 6);
+  });
+
+  it("names ghosts so a click selects a project machine and looks through the rest", () => {
+    const { manager, ids } = setup();
+    manager.load(rehearsal(), look);
+    expect(ids()).toContain("rehearsal:ghost:TR-04");
+    // A zone nobody is assigned to: an assumed generic machine, which is not a machine to select.
+    manager.load(rehearsal([]), look);
+    expect(ids()).toContain("rehearsal:sim:SIM-1");
+    expect(rehearsalPick("rehearsal:hand:A-01:0:creek-buffer")).toEqual({
+      kind: "hand",
+      handId: "A-01:0:creek-buffer",
+    });
+    expect(rehearsalPick("rehearsal:ghost:TR-04")).toEqual({ kind: "machine", machineId: "TR-04" });
+    for (const id of [
+      "rehearsal:sim:SIM-1",
+      "rehearsal:lane:A-01:0",
+      "rehearsal:done:A-01:0",
+      "rehearsal:creek:0",
+    ])
+      expect(rehearsalPick(id)).toBe("through");
+    expect(rehearsalPick("mission:zone:Z-14")).toBeNull();
   });
 
   it("flies to a focused hand and clears everything on stop", () => {

@@ -124,7 +124,7 @@ export class MissionManager {
    * out"), by zone and lane geometry, so a redraw of the same outline keeps them out and a
    * changed outline drops them. Only the preview: a plan's zones and hours are unchanged.
    */
-  private readonly leftOut = new Map<string, CoverageLane & { zoneId: string }>();
+  private readonly leftOut = new Set<string>();
   /** Off while a rehearsal draws the lanes in its own states (pending, done, a raised hand). */
   private passesShown = true;
   private overlay: PlanOverlay | null = null;
@@ -282,7 +282,15 @@ export class MissionManager {
   /** Colour used for a machine's passes, stable for the project. */
   machineColor(machineId: string): Color {
     const index = this.project?.machines.findIndex((m) => m.id === machineId) ?? -1;
-    return MACHINE_PALETTE[(index < 0 ? 0 : index) % MACHINE_PALETTE.length] ?? ROUTE_COLOR;
+    return this.paletteColor(index < 0 ? 0 : index);
+  }
+
+  /**
+   * The machine palette's colour at `slot`; slot n is the project's nth machine. A rehearsal's
+   * assumed generic machines take the slots after the project's own.
+   */
+  paletteColor(slot: number): Color {
+    return MACHINE_PALETTE[slot % MACHINE_PALETTE.length] ?? ROUTE_COLOR;
   }
 
   /**
@@ -459,7 +467,7 @@ export class MissionManager {
 
   /** Takes one drawn lane out of the draft's preview and redraws it without. */
   leaveOutLane(zoneId: string, lane: CoverageLane): void {
-    this.leftOut.set(laneKey(zoneId, lane), { ...lane, zoneId });
+    this.leftOut.add(laneKey(zoneId, lane));
     if (this.overlay) this.showPlan(this.overlay);
   }
 
@@ -468,11 +476,6 @@ export class MissionManager {
     if (this.leftOut.size === 0) return;
     this.leftOut.clear();
     if (this.overlay) this.showPlan(this.overlay);
-  }
-
-  /** The lanes left out of the current preview, in the order they were left out. */
-  leftOutLanes(): readonly (CoverageLane & { zoneId: string })[] {
-    return [...this.leftOut.values()];
   }
 
   /** Shows or hides the drawn passes (zone outlines and step markers stay). */

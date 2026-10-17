@@ -1,13 +1,39 @@
 import { Hand, LandPlot, Pause, Play, SkipForward, Square, Undo2 } from "lucide-react";
 
 import { env } from "@/app/env";
-import { formatSimDuration, REHEARSAL_SPEEDS, type RaisedHand } from "@/missions/rehearsal";
+import {
+  formatSimDuration,
+  REHEARSAL_SPEEDS,
+  type RaisedHand,
+  type SummaryLine,
+} from "@/missions/rehearsal";
 import { useUi } from "@/state/ui";
 
 import type { DressRehearsal } from "./dressRehearsal";
 
+import "./rehearsal.css";
+
 /** Raised hands listed while the ghosts drive; the summary names every lane at the end. */
 const LISTED_HANDS = 8;
+
+/** How each kind of summary line reads: hands and gaps warn, what was driven and clear do not. */
+const TONE: Record<SummaryLine["tone"], string> = {
+  info: "mc-note--agent",
+  hand: "mc-note--warn",
+  clear: "mc-note--agent",
+  gap: "mc-note--warn mc-rehearsal__gap",
+};
+
+/**
+ * The lanes left out of the preview, and why their hands still count: only the preview lost
+ * them, and the approved plan still drives them.
+ */
+function leftOutText(leftOut: DressRehearsal["leftOut"]): string {
+  const one = leftOut.length === 1;
+  const hands = leftOut.reduce((sum, lane) => sum + lane.hands, 0);
+  const lanes = leftOut.map((lane) => `${lane.label} lane ${lane.number}`).join(", ");
+  return `Left out of this draft's preview: ${lanes}. The approved plan still drives ${one ? "it" : "them"}, so ${one ? "its" : "their"} ${hands} hand${hands === 1 ? " still counts" : "s still count"} on Approve; the plan's zones and hours are unchanged.`;
+}
 
 function HandItem({
   hand,
@@ -164,6 +190,7 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
           <p className="mc-muted mc-rehearsal__note">
             Ghosts drive the lanes drawn on the map at their class's assumed speed; the clock is the
             time to drive those lanes, not the plan's machine-hours.
+            {!frame.ended && " Approve counts the hands raised so far; skip to the end for all."}
           </p>
           {raised.length > 0 && (
             <div>
@@ -180,7 +207,7 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
                     onLeaveOut={
                       rehearsal.lanes.find(
                         (l) => l.zoneId === hand.zoneId && l.index === hand.index,
-                      )?.points.length === 2
+                      )?.removable
                         ? () => run.leaveOut(hand)
                         : null
                     }
@@ -197,12 +224,8 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
             </div>
           )}
           {run.leftOut.length > 0 && (
-            <div className="mc-note mc-note--agent" data-testid="rehearsal-left-out">
-              <span>
-                Left out of this draft's preview:{" "}
-                {run.leftOut.map((l) => `${l.label} lane ${l.number}`).join(", ")}. The plan's zones
-                and hours are unchanged; the approved plan still covers the whole zone.
-              </span>
+            <div className="mc-note mc-note--warn" data-testid="rehearsal-left-out">
+              <span>{leftOutText(run.leftOut)}</span>
               <button type="button" className="mc-btn mc-btn--sm" onClick={run.restoreLanes}>
                 <Undo2 size={12} aria-hidden="true" /> Put back
               </button>
@@ -212,12 +235,13 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
             <div className="mc-rehearsal__summary" data-testid="rehearsal-summary">
               <span className="mc-eyebrow">END OF REHEARSAL</span>
               <ul className="mc-list">
-                {rehearsal.summary.map((line, index) => (
+                {rehearsal.summary.map((line) => (
                   <li
-                    key={line}
-                    className={`mc-note ${index > 0 && rehearsal.hands.length ? "mc-note--warn" : "mc-note--agent"}`}
+                    key={line.text}
+                    className={`mc-note ${TONE[line.tone]}`}
+                    data-tone={line.tone}
                   >
-                    {line}
+                    {line.text}
                   </li>
                 ))}
               </ul>
