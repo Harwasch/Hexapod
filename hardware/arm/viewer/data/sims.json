@@ -5,28 +5,31 @@
   "summary": {
    "duration_s": 17.65,
    "peak_torque": [
-    1.8,
-    5.06,
-    1.99,
-    1.01,
-    0.01
+    1.89,
+    4.31,
+    2.26,
+    0.87,
+    0.0,
+    0.39
    ],
    "peak_util": [
-    0.3,
-    0.23,
-    0.181,
-    0.294,
-    0.001
+    0.344,
+    0.26,
+    0.136,
+    0.253,
+    0.001,
+    0.134
    ],
    "rms_util": [
-    0.327,
-    0.163,
-    0.146,
-    0.234,
-    0.001
+    0.335,
+    0.215,
+    0.174,
+    0.217,
+    0.002,
+    0.125
    ],
-   "min_margin_m": 0.2951,
-   "max_tool_force": 13.6
+   "min_margin_m": 0.293,
+   "max_tool_force": 13.3
   },
   "tool": "gripper",
   "note": ""
@@ -37,28 +40,31 @@
   "summary": {
    "duration_s": 8.9,
    "peak_torque": [
-    2.07,
-    4.85,
-    1.7,
-    0.99,
-    0.01
+    2.2,
+    3.51,
+    2.02,
+    0.9,
+    0.01,
+    0.72
    ],
    "peak_util": [
-    0.345,
-    0.221,
-    0.154,
-    0.288,
-    0.001
+    0.4,
+    0.212,
+    0.122,
+    0.262,
+    0.002,
+    0.246
    ],
    "rms_util": [
-    0.29,
-    0.134,
-    0.104,
-    0.281,
-    0.001
+    0.302,
+    0.164,
+    0.124,
+    0.265,
+    0.002,
+    0.15
    ],
-   "min_margin_m": 0.2671,
-   "max_tool_force": 14.5
+   "min_margin_m": 0.2674,
+   "max_tool_force": 12.1
   },
   "tool": "gripper",
   "note": ""
@@ -69,31 +75,34 @@
   "summary": {
    "duration_s": 9.9,
    "peak_torque": [
-    1.78,
-    13.87,
-    1.4,
-    1.49,
-    0.01
+    1.87,
+    10.59,
+    1.76,
+    0.77,
+    0.0,
+    0.42
    ],
    "peak_util": [
-    0.296,
-    0.631,
-    0.127,
-    0.434,
-    0.001
+    0.34,
+    0.639,
+    0.106,
+    0.225,
+    0.002,
+    0.141
    ],
    "rms_util": [
-    0.237,
-    0.268,
-    0.114,
-    0.227,
-    0.001
+    0.247,
+    0.303,
+    0.131,
+    0.155,
+    0.001,
+    0.095
    ],
-   "min_margin_m": 0.1212,
-   "max_tool_force": 57.7
+   "min_margin_m": 0.1182,
+   "max_tool_force": 58.0
   },
   "tool": "gripper",
-  "note": "The legs slide the body 12 cm forward and tip it 10 degrees over the weed, then lift 9 cm while the arm holds."
+  "note": "The legs slide the body 12 cm forward and tip it 8 degrees over the weed, then lift 9 cm while the arm holds."
  },
  {
   "id": "weed_arm",
@@ -101,28 +110,31 @@
   "summary": {
    "duration_s": 8.7,
    "peak_torque": [
-    1.78,
-    17.51,
-    3.45,
-    0.67,
-    0.01
+    1.87,
+    15.22,
+    4.12,
+    0.66,
+    0.0,
+    0.42
    ],
    "peak_util": [
-    0.296,
-    0.796,
-    0.314,
-    0.194,
-    0.001
+    0.34,
+    0.919,
+    0.249,
+    0.192,
+    0.002,
+    0.141
    ],
    "rms_util": [
-    0.253,
-    0.361,
-    0.133,
-    0.172,
-    0.001
+    0.263,
+    0.466,
+    0.164,
+    0.146,
+    0.001,
+    0.102
    ],
-   "min_margin_m": 0.1899,
-   "max_tool_force": 59.6
+   "min_margin_m": 0.1884,
+   "max_tool_force": 59.3
   },
   "tool": "gripper",
   "note": "Same weed, body still: the root's pull acts on the arm's full lever."
@@ -131,33 +143,36 @@
   "id": "rock",
   "title": "Lift a 1 kg rock at full reach and stow it on the deck",
   "summary": {
-   "duration_s": 9.1,
+   "duration_s": 9.7,
    "peak_torque": [
-    5.45,
-    8.57,
-    3.26,
-    2.88,
-    0.25
+    1.9,
+    5.56,
+    4.16,
+    1.87,
+    0.25,
+    0.88
    ],
    "peak_util": [
-    0.908,
-    0.389,
-    0.297,
-    0.84,
-    0.039
+    0.345,
+    0.336,
+    0.251,
+    0.544,
+    0.084,
+    0.301
    ],
    "rms_util": [
-    0.583,
-    0.313,
-    0.2,
-    0.496,
-    0.031
+    0.296,
+    0.339,
+    0.309,
+    0.322,
+    0.068,
+    0.228
    ],
-   "min_margin_m": 0.259,
+   "min_margin_m": 0.2643,
    "max_tool_force": 0.0
   },
   "tool": "gripper",
-  "note": ""
+  "note": "With the rock in hand the swing to the tray takes 1.6 s. At 1.0 s the yaw saturates and the rock lands 42 mm off."
  },
  {
   "id": "soil_probe",
@@ -165,28 +180,31 @@
   "summary": {
    "duration_s": 7.8,
    "peak_torque": [
-    0.02,
-    15.93,
-    5.59,
-    2.35,
+    0.01,
+    12.18,
+    0.99,
+    1.49,
+    0.0,
     0.0
    ],
    "peak_util": [
-    0.003,
-    0.724,
-    0.508,
-    0.685,
-    0.0
+    0.002,
+    0.736,
+    0.06,
+    0.434,
+    0.0,
+    0.001
    ],
    "rms_util": [
-    0.005,
-    1.092,
-    0.576,
-    1.011,
+    0.001,
+    1.066,
+    0.09,
+    0.492,
+    0.0,
     0.0
    ],
-   "min_margin_m": 0.1974,
-   "max_tool_force": 63.5
+   "min_margin_m": 0.1251,
+   "max_tool_force": 71.8
   },
   "tool": "probe",
   "note": ""
@@ -197,27 +215,30 @@
   "summary": {
    "duration_s": 5.64,
    "peak_torque": [
-    3.38,
-    6.08,
-    5.09,
-    1.13,
-    0.01
+    3.55,
+    6.47,
+    7.26,
+    1.03,
+    0.0,
+    0.34
    ],
    "peak_util": [
-    0.562,
-    0.277,
-    0.463,
-    0.33,
-    0.001
+    0.646,
+    0.391,
+    0.438,
+    0.301,
+    0.001,
+    0.115
    ],
    "rms_util": [
-    0.64,
-    0.153,
-    0.195,
-    0.149,
-    0.001
+    0.65,
+    0.239,
+    0.272,
+    0.132,
+    0.001,
+    0.05
    ],
-   "min_margin_m": 0.2794,
+   "min_margin_m": 0.266,
    "max_tool_force": 0.0
   },
   "tool": "sprayer",

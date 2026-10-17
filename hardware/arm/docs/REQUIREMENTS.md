@@ -1,4 +1,4 @@
-# FA-1 requirements
+# Field arm requirements
 
 What the arm has to do, where each number comes from, and how it is encoded for the
 optimizer. The task library itself is `data/tasks.yaml`; the research behind the forces,
@@ -12,14 +12,17 @@ study uses a reference host in `data/hexapod.yaml`: 12 kg without the arm, a 0.5
 0.80 × 0.90 m hexagon. With the feet planted, the legs can move the body ±7–12 cm in
 height, −10 to +15° in pitch and ±20° in yaw. The optimizer and the planner use that motion.
 
-| Constraint                 | Value                  | Why                                                                |
-| -------------------------- | ---------------------- | ------------------------------------------------------------------ |
-| Arm mass, tools excluded   | ≤ 2.5 kg               | chosen with the medium-hexapod host                                |
-| Tip-over margin, holding   | ≥ 5 cm inside the feet | centre of pressure inside the support polygon                      |
-| Tip-over margin, pull/push | ≥ 2 cm                 | short events, the planner can lean the body                        |
-| Weight left on the feet    | ≥ 25 %                 | a push must not lift the robot off the ground                      |
-| Cost                       | minimised              | "incredibly low cost", traded against capability                   |
-| Precision                  | ≤ 6 mm open loop (RSS) | dosing and stamping want ±2–5 mm; the wrist camera closes the rest |
+| Constraint                 | Value                          | Why                                                                                  |
+| -------------------------- | ------------------------------ | ------------------------------------------------------------------------------------ |
+| Arm mass, tools excluded   | ≤ 2.5 kg, field kit included   | chosen with the medium-hexapod host                                                  |
+| Tip-over margin, holding   | ≥ 5 cm inside the feet         | centre of pressure inside the support polygon                                        |
+| Tip-over margin, pull/push | ≥ 2 cm                         | short events; the planner can lean the body                                          |
+| Weight left on the feet    | ≥ 25 %                         | a push must not lift the robot off the ground                                        |
+| Cost                       | minimised, delivered to the US | "incredibly low cost", traded against capability; list price + duty + freight        |
+| Precision                  | ≤ 6 mm open loop (RSS)         | dosing and stamping want ±2–5 mm; the wrist camera closes the rest                   |
+| Base joints                | backdrivable QDD, ≥ 30 rpm     | current as a force sensor, survives being back-driven, 0.5 s dosing cycle            |
+| Base joints' output angle  | known at power-up              | no homing sweep from the stowed pose on the deck                                     |
+| Tool twist                 | ≥ 3 Nm at the tool roll (peak) | valves and knobs; without it the cheapest designs drop the valve task to save weight |
 
 ## Tasks
 
@@ -60,11 +63,23 @@ three times as much as a gate latch.
   A geared shear (about 10 Nm at the pivot, ~0.4 kg) keeps that force off the arm.
 - **Fruit needs force control, not force.** Detachment is 3–30 N, but the bruising limit is
   10–24 N of grip: a compliant fin-ray gripper and a motor-current force limit.
-- **Very little in this price class is sealed.** Only one actuator found (RobStride 02, IP67,
-  $240) has an ingress rating. The plan is IP54 joints using TPU gaiters and covers, with
-  the wrist and tool sealed to IP65–67.
+- **Very little in this price class is sealed, and seals cost backdrivability.** Only one
+  actuator found (RobStride 02, IP67, about $248 delivered) has an ingress rating. Seal
+  friction grows with diameter squared, so the plan
+  ([research/rugged.md](research/rugged.md)) is:
+  - V-rings and printed labyrinths at the two 20–25 mm shafts leaving the turret;
+  - a drip skirt at the yaw;
+  - sealed pods for the wrist servos.
+  - **Do not** put O-rings, lip seals or TPU bellows on a QDD joint.
+  - Realistic protection is about IPX3–4 at the turret and IPX5–6 at the wrist until a
+    hose test says otherwise.
+- **Sun, not rain, sets the material.** A dark horizontal surface runs about 50 K over
+  ambient. PETG (HDT 69–78 °C) must not carry load in the sun. Use white ASA outside and
+  PA12-CF near the motors. The motors need shaded aluminium to shed heat; the gravity
+  springs keep their continuous current low.
 
 ## Environment
 
-−10 to +45 °C (with sun-load margin), dust, rain and herbicide spray. ASA or PETG-CF for
-printed parts (UV stable), stainless fasteners, conformal-coated electronics.
+−10 to +45 °C (with sun-load margin), dust, rain and herbicide spray. White ASA for exterior
+printed parts and PA12-CF for loaded parts near the motors, stainless fasteners,
+conformal-coated electronics, and Dyneema DM20 rope kept in the shade inside the turret.

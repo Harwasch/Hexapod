@@ -9,10 +9,13 @@
    "turret plate (printed)",
    "turret cheek, shoulder side (printed)",
    "turret cheek, elbow side (printed)",
+   "turret box (printed)",
    "actuator",
    "actuator output",
+   "shoulder capstan pinion (2 mm Dyneema DM20)",
    "actuator",
    "actuator output",
+   "elbow capstan pinion (2 mm Dyneema DM20)",
    "spring pulley mast (printed)"
   ],
   "upper": [
@@ -32,7 +35,12 @@
   "fore": [
    "forearm hub and rear lever (printed)",
    "aluminium tube",
-   "wrist clamp (printed)",
+   "forearm roll clamp (printed)",
+   "servo",
+   "servo horn"
+  ],
+  "froll": [
+   "forearm roll yoke (printed)",
    "servo",
    "servo horn"
   ],
@@ -80,19 +88,25 @@
   {
    "part": "turret plate (printed)",
    "file": "stl/turret_plate.stl",
-   "grams": 27.8,
+   "grams": 16.2,
    "link": "turret"
   },
   {
    "part": "turret cheek, shoulder side (printed)",
    "file": "stl/turret_cheek_shoulder_side.stl",
-   "grams": 35.0,
+   "grams": 41.4,
    "link": "turret"
   },
   {
    "part": "turret cheek, elbow side (printed)",
    "file": "stl/turret_cheek_elbow_side.stl",
-   "grams": 42.4,
+   "grams": 43.4,
+   "link": "turret"
+  },
+  {
+   "part": "turret box (printed)",
+   "file": "stl/turret_box.stl",
+   "grams": 25.9,
    "link": "turret"
   },
   {
@@ -126,10 +140,16 @@
    "link": "fore"
   },
   {
-   "part": "wrist clamp (printed)",
-   "file": "stl/wrist_clamp.stl",
-   "grams": 25.5,
+   "part": "forearm roll clamp (printed)",
+   "file": "stl/forearm_roll_clamp.stl",
+   "grams": 24.1,
    "link": "fore"
+  },
+  {
+   "part": "forearm roll yoke (printed)",
+   "file": "stl/forearm_roll_yoke.stl",
+   "grams": 20.7,
+   "link": "froll"
   },
   {
    "part": "wrist bracket (printed)",
@@ -187,5 +207,5 @@
   }
  ],
  "step": "arm_assembly.step",
- "printed_grams": 449.8
+ "printed_grams": 490.8
 }

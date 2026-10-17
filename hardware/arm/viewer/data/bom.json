@@ -1,138 +1,148 @@
 [
  {
   "group": "Actuators",
-  "item": "RobStride EduLite 05",
+  "item": "RobStride 05",
   "where": "yaw",
   "qty": 1,
-  "usd": 80.0,
-  "kg": 0.242
+  "usd": 112.0,
+  "source": "Zennixtek DDP $105 + $7 shipping"
  },
  {
   "group": "Actuators",
-  "item": "Steadywin GIM8108-8 + output encoder",
+  "item": "RobStride EduLite 05",
   "where": "shoulder",
   "qty": 1,
-  "usd": 135.0,
-  "kg": 0.396
+  "usd": 82.0,
+  "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)"
+ },
+ {
+  "group": "Reductions",
+  "item": "3:1 capstan (drum, pinion, cable, bearings)",
+  "where": "shoulder",
+  "qty": 1,
+  "usd": 11.0
  },
  {
   "group": "Actuators",
-  "item": "Steadywin GIM6010-8 + output encoder",
+  "item": "RobStride EduLite 05",
   "where": "elbow",
   "qty": 1,
-  "usd": 105.0,
-  "kg": 0.388
+  "usd": 82.0,
+  "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)"
+ },
+ {
+  "group": "Reductions",
+  "item": "3:1 capstan (drum, pinion, cable, bearings)",
+  "where": "elbow",
+  "qty": 1,
+  "usd": 11.0
  },
  {
   "group": "Actuators",
   "item": "Hiwonder HX-35HM",
   "where": "wrist pitch",
   "qty": 1,
-  "usd": 36.0,
-  "kg": 0.071
+  "usd": 39.0,
+  "source": "retail"
  },
  {
   "group": "Actuators",
-  "item": "Hiwonder HX-65HM",
+  "item": "Feetech STS3215 (12 V, C018)",
+  "where": "forearm roll",
+  "qty": 1,
+  "usd": 27.4,
+  "source": "OpenELAB DDP (AliExpress ~$20, unverified)"
+ },
+ {
+  "group": "Actuators",
+  "item": "Feetech STS3215 (12 V, C018)",
   "where": "tool roll",
   "qty": 1,
-  "usd": 50.0,
-  "kg": 0.1435
+  "usd": 27.4,
+  "source": "OpenELAB DDP (AliExpress ~$20, unverified)"
  },
  {
   "group": "Structure",
   "item": "aluminium tube",
   "where": "",
   "qty": 1,
-  "usd": 10.22,
-  "kg": 0.195
+  "usd": 10.64
  },
  {
   "group": "Structure",
   "item": "printed parts",
   "where": "",
   "qty": 1,
-  "usd": 24.0,
-  "kg": null
+  "usd": 24.0
  },
  {
   "group": "Structure",
   "item": "bearings",
   "where": "",
   "qty": 1,
-  "usd": 16.0,
-  "kg": null
+  "usd": 16.0
  },
  {
   "group": "Structure",
   "item": "fasteners",
   "where": "",
   "qty": 1,
-  "usd": 10.0,
-  "kg": null
+  "usd": 10.0
  },
  {
   "group": "End effector",
   "item": "tool changer",
   "where": "",
   "qty": 1,
-  "usd": 14.0,
-  "kg": null
+  "usd": 14.0
  },
  {
   "group": "End effector",
   "item": "gripper (servo + fin-ray fingers)",
   "where": "",
   "qty": 1,
-  "usd": 24.0,
-  "kg": null
+  "usd": 24.0
  },
  {
   "group": "Sensing",
   "item": "wrist camera + ToF",
   "where": "",
   "qty": 1,
-  "usd": 43.0,
-  "kg": null
+  "usd": 43.0
  },
  {
   "group": "Electrical + sealing",
   "item": "harness + connectors",
   "where": "",
   "qty": 1,
-  "usd": 18.0,
-  "kg": null
+  "usd": 18.0
  },
  {
   "group": "Electrical + sealing",
-  "item": "seals + boots",
+  "item": "field kit (seals, vents, servo pods, heat plate)",
   "where": "",
   "qty": 1,
-  "usd": 10.0,
-  "kg": null
+  "usd": 57.0
  },
  {
   "group": "Structure",
   "item": "parallelogram rod + rod ends",
   "where": "",
   "qty": 1,
-  "usd": 8.0,
-  "kg": 0.07
+  "usd": 8.0
  },
  {
   "group": "Structure",
   "item": "gravity springs",
   "where": "",
   "qty": 1,
-  "usd": 14.0,
-  "kg": 0.16
+  "usd": 14.0
  },
  {
   "group": "Electrical + sealing",
   "item": "servo bus adapter",
   "where": "",
   "qty": 1,
-  "usd": 10.0,
-  "kg": null
+  "usd": 10.0
  }
 ]
