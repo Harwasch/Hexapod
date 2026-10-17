@@ -33,8 +33,11 @@ const PENDING = Color.fromCssColorString("#c9d1cc").withAlpha(0.75);
 const HAND = Color.fromCssColorString("#f0b254");
 const WATER = Color.fromCssColorString("#6ec3f0").withAlpha(0.9);
 const INK = "#0a0e09";
-/** How many raised hands carry their label at once (besides the focused one): the latest. */
-const LABELLED_HANDS = 3;
+/**
+ * How many raised hands carry their label at once when none is focused: the latest only, since
+ * the hands of one lane often stand close together and their labels would overlap.
+ */
+const LABELLED_HANDS = 1;
 /** React hears the clock at most this often while playing; state changes go at once. */
 const FRAME_INTERVAL_MS = 100;
 /**
@@ -368,9 +371,12 @@ export class RehearsalManager {
       if (pending) pending.show = !finished;
     }
     const raised = rehearsal.hands.filter((h) => this.t >= h.t);
-    const labelled = new Set(raised.slice(-LABELLED_HANDS).map((h) => h.id));
-    if (this.focused) labelled.add(this.focused);
-    for (const hand of rehearsal.hands) this.showHand(hand, raised.includes(hand), labelled);
+    // The focused hand speaks alone; otherwise the latest to go up.
+    const labelled = new Set(
+      this.focused ? [this.focused] : raised.slice(-LABELLED_HANDS).map((h) => h.id),
+    );
+    const up = new Set(raised.map((h) => h.id));
+    for (const hand of rehearsal.hands) this.showHand(hand, up.has(hand.id), labelled);
   }
 
   private showHand(hand: RaisedHand, up: boolean, labelled: ReadonlySet<string>): void {

@@ -1014,7 +1014,7 @@ test.describe("mission control", () => {
       .first()
       .dispatchEvent("click");
     await expect(app.getByTestId("rehearsal-hand").first()).toContainText(
-      "is assumed to keep 15 m",
+      "Assumed buffer for a robotic brush mower: 15 m",
     );
     await app.getByTestId("rehearsal-leave-out").dispatchEvent("click");
     await expect(app.getByTestId("rehearsal-left-out")).toContainText(

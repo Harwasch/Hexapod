@@ -780,16 +780,21 @@ function raiseHand(
     t: found.t,
   };
   const where = `${zone.label} lane ${number}`;
+  // "a robotic brush mower": the class in a sentence that already says the limit is assumed.
+  const plain = capability.label.replace(/\s*\(assumed\)$/, "");
+  const machineClass = `${plain.slice(0, 1).toLowerCase()}${plain.slice(1)}`;
   if (kind === "creek-buffer") {
     const limit = capability.creekBufferM ?? 0;
     const creek = found.creek;
     const name = creek?.name ?? "a mapped creek";
+    // Under a metre is on the line: the lane crosses the creek.
+    const crosses = found.value < 1;
     return {
       ...base,
       value: found.value,
       limit,
-      label: `${Math.round(found.value)} m from ${creek?.name ?? "a creek"} · buffer ${limit} m (assumed)`,
-      rule: `${where} comes within ${Math.round(found.value)} m of ${name}. A ${capability.label} is assumed to keep ${limit} m from creeks.`,
+      label: `${crosses ? `Crosses ${creek?.name ?? "a creek"}` : `${Math.round(found.value)} m from ${creek?.name ?? "a creek"}`} · buffer ${limit} m (assumed)`,
+      rule: `${where} ${crosses ? `crosses ${name}` : `comes within ${Math.round(found.value)} m of ${name}`}. Assumed buffer for a ${machineClass}: ${limit} m from creeks.`,
       source: `Creek: ${context.creeks?.label ?? "mapped creeks"}${creek ? `, flowline ${creek.id} (${creek.kind})` : ""}`,
       creekId: creek?.id,
       creekName: creek?.name ?? null,
@@ -802,7 +807,7 @@ function raiseHand(
     value: found.value,
     limit,
     label: `${pct(found.value)} ${what} · limit ${pct(limit)} (assumed)`,
-    rule: `${where} reaches ${pct(found.value)} ${what === "grade" ? "grade along the lane" : "cross-slope across the lane"} at its steepest. A ${capability.label} is assumed to work up to ${pct(limit)}.`,
+    rule: `${where} reaches ${pct(found.value)} ${what === "grade" ? "grade along the lane" : "cross-slope across the lane"} at its steepest. Assumed limit for a ${machineClass}: ${pct(limit)}.`,
     source: `Slope: ${context.elevation?.label ?? "elevation"}${context.elevation?.ref ? `, ${context.elevation.ref}` : ""}`,
   };
 }

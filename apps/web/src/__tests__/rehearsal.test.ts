@@ -158,7 +158,7 @@ describe("planRehearsal", () => {
     expect(hand?.value).toBeCloseTo(30, 0);
     expect(hand?.label).toBe("30 % cross-slope · limit 25 % (assumed)");
     expect(hand?.rule).toContain("A-01 lane 2");
-    expect(hand?.rule).toContain("Robotic brush mower (assumed)");
+    expect(hand?.rule).toContain("Assumed limit for a robotic brush mower: 25 %.");
     expect(hand?.source).toBe("Slope: USGS 3DEP 1/3″ bare-earth DEM, 10 m, raster 8c5becbb");
     expect(result.summary).toContain("1 of 2 lanes over 25 % cross-slope (A-01 lane 2)");
     expect(result.sources[0]).toContain("raster 8c5becbb");
@@ -189,6 +189,27 @@ describe("planRehearsal", () => {
     // Asked to, the ephemeral channel beside the ramp lane counts too.
     const withEphemeral = planRehearsal(input({ elevation: null, includeEphemeral: true }));
     expect(withEphemeral.hands.filter((h) => h.kind === "creek-buffer")).toHaveLength(2);
+  });
+
+  it("says a lane crosses a creek when it runs over the line", () => {
+    const across: CreekSource = {
+      label: creeks.label,
+      lines: [
+        {
+          id: "nhd-3",
+          name: "Figueroa Creek",
+          kind: "perennial",
+          coordinates: [at(-300, 0), at(-100, 0)],
+        },
+      ],
+    };
+    const result = planRehearsal(input({ elevation: null, creeks: across }));
+    const hand = result.hands.find((h) => h.kind === "creek-buffer");
+    expect(hand?.label).toBe("Crosses Figueroa Creek · buffer 15 m (assumed)");
+    expect(hand?.rule).toBe(
+      "A-01 lane 1 crosses Figueroa Creek. Assumed buffer for a robotic brush mower: 15 m from creeks.",
+    );
+    expect(hand?.source).toBe("Creek: USGS NHD flowlines (1:24,000), flowline nhd-3 (perennial)");
   });
 
   it("says what it could not check", () => {
