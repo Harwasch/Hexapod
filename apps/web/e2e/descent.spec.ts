@@ -46,7 +46,8 @@ test("descends to typed coordinates in one flight, onto the arrival card", async
   // One flight, re-pointed on the way: never a second take-off.
   expect(await app.evaluate<number>("window.__twin.camera.flights")).toBe(flightsBefore + 1);
 
-  if (process.env.VITE_ENABLE_LAND_EXPLORATION === "true") {
+  // The app's own Land flag (the rail has a Land tool only with it), whatever this process's env.
+  if ((await app.getByTestId("tool-land").count()) > 0) {
     await app.getByRole("button", { name: "Outline this land" }).click();
     const panel = app.getByTestId("land-panel");
     await expect(panel).toBeVisible();
