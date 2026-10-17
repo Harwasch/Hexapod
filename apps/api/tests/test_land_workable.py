@@ -19,6 +19,7 @@ from shapely.geometry import LineString, MultiPolygon, box, mapping, shape
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.raster_grid import make_grid
+from app.analysis.similarity import polygon_parts
 from app.analysis.terrain import TerrainResult, band_statistics, derive, encode_cog
 from app.analysis.workable import (
     MIN_PART_M2,
@@ -115,6 +116,20 @@ def test_ground_is_split_in_order_and_the_parts_add_up_to_the_outline() -> None:
     assert edged.steep_edge.area == pytest.approx(5 * 200 + (400 - 100))
     assert edged.slivers.area == pytest.approx(100)
     assert edged.workable.area == pytest.approx(split.workable.area - 5 * 200)
+
+
+def test_the_steep_edge_keeps_square_corners() -> None:
+    # One steep cell in gentle ground: its edge is a ring half a cell wide with square corners,
+    # the cell's outline offset rather than rounded, so it gains no arcs (four corners outside,
+    # four inside) and reaches half a cell along both axes at a corner.
+    slope = np.full((5, 5), 10.0, dtype=np.float32)
+    slope[2, 2] = 40.0
+    split = split_ground(box(0, 0, 50, 50), slope, grid(5, 5), max_slope_pct=25, edge_m=5)
+    assert split.steep.area == pytest.approx(100)
+    assert split.steep_edge.equals(box(15, 15, 35, 35).difference(box(20, 20, 30, 30)))
+    (ring,) = polygon_parts(split.steep_edge)
+    assert len(ring.exterior.coords) == 5 and [len(hole.coords) for hole in ring.interiors] == [5]
+    assert split.workable.area == pytest.approx(2500 - 400)
 
 
 def test_an_outline_off_the_data_is_all_no_data() -> None:

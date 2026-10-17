@@ -20,7 +20,11 @@ outline and nothing is counted twice:
 3. **steep edge**: the rest within half a cell of a steep cell. Slope at a point is read from
    heights a cell either side of it (the rehearsal reads it so along a lane), so next to a
    steep cell it takes in part of that cell's slope: a lane run up to the cell edge would
-   still raise a hand. Half a cell is the raster's resolution, not a machine assumption;
+   still raise a hand. Half a cell is the raster's resolution, not a machine assumption.
+   The margin keeps the cells' square corners (a mitred buffer, so at a corner it reaches
+   half a cell along both axes, a little more than half a cell away): the steep ground's
+   staircase outline is offset, not rounded, and gains no arcs, which would triple the
+   vertices of every outline cut along it;
 4. **creek buffer**: the rest within the buffer of a counted creek line;
 5. **slivers**: pieces of what is left too small to work (under 0.1 ac), dropped and counted;
 6. **workable**: everything else.
@@ -177,8 +181,9 @@ def split_ground(
     ground = _area(outline.intersection(read))
     steep = _area(ground.intersection(steep_cells))
     rest = _area(ground.difference(steep_cells))
+    # Square corners: at least `edge_m` from every steep cell, and still a staircase.
     edge = (
-        make_valid(steep_cells.buffer(edge_m, quad_segs=4))
+        make_valid(steep_cells.buffer(edge_m, join_style="mitre"))
         if edge_m > 0 and not steep_cells.is_empty
         else Polygon()
     )
