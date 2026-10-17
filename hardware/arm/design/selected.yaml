@@ -22,9 +22,36 @@ fa1:
     tool_roll: hx_65hm
   lever: retail
   score_v2: 0.8671
-  cost: 812.72
+  cost: 819.72
   cost_list: 607.22
-  cost_sourced: 713.72
+  cost_sourced: 720.72
+  cost_field_kit: 47.0
+  parts:
+    yaw:
+      name: RobStride EduLite 05
+      price: 118.0
+      rated: 1.8
+      peak: 6.0
+    shoulder:
+      name: Steadywin GIM8108-8 + output encoder
+      price: 198.0
+      rated: 7.5
+      peak: 22.0
+    elbow:
+      name: Steadywin GIM6010-8 + output encoder
+      price: 156.0
+      rated: 5.0
+      peak: 11.0
+    wrist_pitch:
+      name: Hiwonder HX-35HM
+      price: 39.0
+      rated: 1.2
+      peak: 3.43
+    tool_roll:
+      name: Hiwonder HX-65HM
+      price: 53.5
+      rated: 2.2
+      peak: 6.37
   mass: 2.734
   backlash_mm: 5.66
 picks:
@@ -55,7 +82,7 @@ picks:
       tool_roll: OpenELAB DDP
     lever: bought
     score: 0.8655626773834229
-    cost: 626.46
+    cost: 645.46
     mass: 2.458
     backlash_mm: 4.02
     label: 5DOF para+spring L1=0.31 L2=0.25 x=0.26 ped=0.10
@@ -88,7 +115,7 @@ picks:
       tool_roll: OpenELAB DDP
     lever: bought
     score: 0.901518702507019
-    cost: 736.64
+    cost: 755.64
     mass: 2.499
     backlash_mm: 4.37
     label: 6DOF para L1=0.31 L2=0.37 x=0.26 ped=0.16
@@ -121,7 +148,7 @@ picks:
       tool_roll: OpenELAB DDP
     lever: all
     score: 0.9134616255760193
-    cost: 809.84
+    cost: 816.84
     mass: 2.47
     backlash_mm: 4.43
     label: 6DOF para L1=0.31 L2=0.37 x=0.26 ped=0.16

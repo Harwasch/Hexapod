@@ -28,7 +28,7 @@
     0.001,
     0.08
    ],
-   "min_margin_m": 0.2931,
+   "min_margin_m": 0.2936,
    "max_tool_force": 13.4
   },
   "tool": "gripper",

@@ -126,7 +126,8 @@ def load_stages() -> tuple[Stage, ...]:
 
 def stage_fits(s: Stage, joint: str, arch: str, pedestal: float) -> bool:
     """A stage can drive this joint on this geometry: the joint is on the turret, the
-    stage is meant for it, and a capstan drum clears the deck under the shoulder axis."""
+    stage is meant for it, and a capstan drum fits under the shoulder axis. The turret
+    plate is pocketed under the drum, so the drum may come within its flange of the deck."""
     if joint == "elbow" and arch != "parallelogram":
         return False
     if joint not in s.joints:
@@ -227,11 +228,14 @@ def with_stage(a: Actuator, s: Stage) -> Actuator | None:
     peak = min(a.peak * s.ratio * s.efficiency, s.max_torque)
     rated = min(a.rated * s.ratio * s.efficiency, s.max_torque)
     total = a.ratio * s.ratio
-    fs = a.force_sense
-    if fs in ("yes", "partly") and total > PARTLY_RATIO:
-        fs = "no"
-    elif fs == "yes" and total > FORCE_SENSE_RATIO:
-        fs = "partly"
+
+    def through(v: str) -> str:
+        # Behind a high total ratio a joint no longer back-drives well, nor senses force.
+        if v in ("yes", "partly") and total > PARTLY_RATIO:
+            return "no"
+        return "partly" if v == "yes" and total > FORCE_SENSE_RATIO else v
+
+    fs, bd = through(a.force_sense), through(a.backdrivable)
     return replace(
         a,
         id=f"{a.id}+{s.id}",
@@ -244,6 +248,7 @@ def with_stage(a: Actuator, s: Stage) -> Actuator | None:
         price=round(a.price + s.cost + (0.0 if a.needs_driver else s.joint_encoder), 2),
         backlash_deg=a.backlash_deg / s.ratio + s.backlash_deg,
         force_sense=fs,
+        backdrivable=bd,
         ratio=total,
         stage=f"{s.ratio:g}:1 {s.kind}",
         inertia=a.inertia * s.ratio**2,

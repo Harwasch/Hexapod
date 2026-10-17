@@ -258,8 +258,10 @@ def _joint_ok(tt: TorqueTable, slot_mass: Array, j: int, rated: Array, peak_avai
 def _prune(opts: list[Actuator], ok: Array) -> list[int]:
     """Indices of options not beaten by another that serves a superset of the points for
     no more money, mass, backlash or rotor inertia, and without needing the driver board
-    when the beaten one doesn't. Exact: swapping a beaten option for its better never
-    loses capability or breaks a budget.
+    when the beaten one doesn't. Exact for the joint being pruned. Across joints it
+    assumes a lighter distal part never raises a proximal joint's torque; with gravity
+    springs or opposing task loads a heavier part can occasionally lower one. A brute-force
+    check (no pruning) on several finalists gave identical frontiers.
 
     "No worse on every count" is transitive, so an option is beaten exactly when some
     option ranked before it (lexicographically on the same counts) is no worse."""
