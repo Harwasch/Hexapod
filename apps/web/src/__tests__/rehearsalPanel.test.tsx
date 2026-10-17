@@ -4,13 +4,14 @@
  * reader mocked and the real RehearsalManager on a fake viewer.
  */
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type CesiumWidget, Color, EntityCollection } from "cesium";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { PlanDraft } from "@twin/contracts";
+import type { PlanDraft, WorkableGround } from "@twin/contracts";
 import { DEG_TO_RAD, EARTH_RADIUS_M, type CoverageLane, type LonLat } from "@twin/geo";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
@@ -26,12 +27,21 @@ import {
 } from "@/features/mission/dressRehearsal";
 import { RehearsalPanel } from "@/features/mission/Rehearsal";
 import { rehearsalGround } from "@/features/mission/rehearsalGround";
+import { startPlanDraft } from "@/features/mission/planDrafting";
+import type * as WorkableModule from "@/features/mission/workableGround";
+import { requestWorkableGround } from "@/features/mission/workableGround";
 import { Emitter } from "@/lib/emitter";
 import { planRehearsal } from "@/missions/rehearsal";
 import type { Project, Zone } from "@/missions/types";
 import { useMission } from "@/state/mission";
+import { useWorkable } from "@/state/workable";
 
 vi.mock("@/features/mission/rehearsalGround", () => ({ rehearsalGround: vi.fn() }));
+vi.mock("@/features/mission/planDrafting", () => ({ startPlanDraft: vi.fn() }));
+vi.mock("@/features/mission/workableGround", async (original) => ({
+  ...(await original<typeof WorkableModule>()),
+  requestWorkableGround: vi.fn(),
+}));
 
 const origin = { longitude: -120.04, latitude: 34.698 };
 const kx = Math.cos(origin.latitude * DEG_TO_RAD) * DEG_TO_RAD * EARTH_RADIUS_M;
@@ -179,12 +189,16 @@ describe("what the rehearsal drives", () => {
 describe("useDressRehearsal", () => {
   let scene: ReturnType<typeof fakeScene>;
   let registry: SceneRegistry;
+  let queries: QueryClient;
   const wrapper = ({ children }: { children: ReactNode }) => (
-    <SceneContext.Provider value={registry}>{children}</SceneContext.Provider>
+    <QueryClientProvider client={queries}>
+      <SceneContext.Provider value={registry}>{children}</SceneContext.Provider>
+    </QueryClientProvider>
   );
 
   beforeEach(() => {
     scene = fakeScene();
+    queries = new QueryClient();
     registry = new SceneRegistry();
     registry.set(scene as unknown as CesiumSceneManager);
     vi.stubGlobal("requestAnimationFrame", () => 1);
@@ -211,7 +225,10 @@ describe("useDressRehearsal", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.mocked(rehearsalGround).mockReset();
-    useMission.setState({ project: null, landGround: null });
+    vi.mocked(requestWorkableGround).mockReset();
+    vi.mocked(startPlanDraft).mockReset();
+    useMission.setState({ project: null, landGround: null, composer: null });
+    useWorkable.getState().clear();
   });
 
   it("reads the ground once, plays, counts hands as they go up, and stops when the plan changes", async () => {
@@ -318,6 +335,245 @@ describe("useDressRehearsal", () => {
   });
 });
 
+describe("work only the ground it can", () => {
+  let scene: ReturnType<typeof fakeScene>;
+  let registry: SceneRegistry;
+  let queries: QueryClient;
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queries}>
+      <SceneContext.Provider value={registry}>{children}</SceneContext.Provider>
+    </QueryClientProvider>
+  );
+  // A square around the lanes, as Z-14's outline.
+  const square = {
+    type: "Polygon" as const,
+    coordinates: [
+      [
+        [at(-300, -400).longitude, at(-300, -400).latitude],
+        [at(0, -400).longitude, at(-300, -400).latitude],
+        [at(0, 400).longitude, at(0, 400).latitude],
+        [at(-300, -400).longitude, at(0, 400).latitude],
+        [at(-300, -400).longitude, at(-300, -400).latitude],
+      ],
+    ],
+  };
+  const workable = {
+    type: "MultiPolygon" as const,
+    coordinates: [
+      [
+        [
+          [at(-200, -400).longitude, at(-200, -400).latitude],
+          [at(0, -400).longitude, at(-200, -400).latitude],
+          [at(0, 400).longitude, at(0, 400).latitude],
+          [at(-200, -400).longitude, at(0, 400).latitude],
+          [at(-200, -400).longitude, at(-200, -400).latitude],
+        ],
+      ],
+    ],
+  };
+  const answer = {
+    landId: "land-1",
+    boundaryRevision: 3,
+    workable,
+    footprintM2: 240_000,
+    workableM2: 160_000,
+    removed: { steepM2: 60_000, creekBufferM2: 20_000, sliversM2: 0, slivers: 0, noDataM2: 0 },
+    leftOut: [
+      { reason: "steep", label: "Left out: too steep", areaM2: 60_000, geometry: workable },
+    ],
+    limits: {
+      machineClass: "mower",
+      label: "Robotic brush mower (assumed)",
+      maxSlopePct: 25,
+      creekBufferM: 15,
+    },
+    elevation: {
+      rasterId: "raster-1",
+      dataset: "usgs-3dep-13",
+      label: "USGS 3DEP 1/3″ bare-earth DEM, 10 m",
+      published: "2025-08-27",
+      resolutionM: 10,
+      stale: false,
+      fallback: false,
+    },
+    creeks: {
+      status: "available",
+      label: "USGS National Hydrography Dataset (NHD) flowlines, 1:24,000",
+      counted: 1,
+      ephemeralIncluded: false,
+      message: "1 mapped flowline",
+    },
+    sources: ["Slope: USGS 3DEP 1/3″ bare-earth DEM, 10 m, raster raster-1"],
+    assumptions: [],
+    warnings: [],
+  } as unknown as WorkableGround;
+  const onRanch = {
+    ...project,
+    siteId: null,
+    plans: [],
+    zones: [zone("Z-14", { name: "West grassland", footprint: square, task: "Mow" })],
+  } as unknown as Project;
+
+  function grounded(rasterId: string | null) {
+    vi.mocked(rehearsalGround).mockResolvedValue({
+      elevation: rasterId
+        ? {
+            grid: {
+              west: at(-400, -500).longitude,
+              south: at(-400, -500).latitude,
+              east: at(100, 500).longitude,
+              north: at(100, 500).latitude,
+              columns: 2,
+              rows: 2,
+              values: Float32Array.from([300, 300, 300, 300]),
+            },
+            label: "USGS 3DEP 1/3″ bare-earth DEM, 10 m",
+            ref: "raster raster-1",
+            rasterId,
+          }
+        : null,
+      creeks: {
+        label: "USGS NHD flowlines, 1:24,000",
+        lines: [
+          {
+            id: "nhd-1",
+            name: "Figueroa Creek",
+            kind: "intermittent",
+            coordinates: [at(-210, -50), at(-210, 50)],
+          },
+        ],
+      },
+      heightAt: () => 300,
+      better: null,
+    });
+  }
+
+  beforeEach(() => {
+    scene = fakeScene();
+    queries = new QueryClient();
+    registry = new SceneRegistry();
+    registry.set(scene as unknown as CesiumSceneManager);
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+    vi.mocked(requestWorkableGround).mockResolvedValue(answer);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.mocked(rehearsalGround).mockReset();
+    vi.mocked(requestWorkableGround).mockReset();
+    vi.mocked(startPlanDraft).mockReset();
+    useMission.setState({ project: null, landGround: null, composer: null });
+    useWorkable.getState().clear();
+  });
+
+  it("says what is needed without a Land", async () => {
+    grounded(null);
+    useMission.setState({ project: onRanch, landGround: null });
+    const { result } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.skipToEnd());
+    expect(result.current.workable.state).toBe("needs-land");
+    expect(result.current.workable.message).toContain("Save this ground as a Land");
+    expect(requestWorkableGround).not.toHaveBeenCalled();
+  });
+
+  it("asks for the Land's terrain when the slope came from the globe", async () => {
+    grounded(null);
+    useMission.setState({
+      project: onRanch,
+      landGround: { landId: "land-1", projectId: onRanch.id, zones: [] },
+    });
+    const { result } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.skipToEnd());
+    expect(result.current.workable.state).toBe("needs-terrain");
+    expect(result.current.workable.message).toContain("Analyze bare-earth terrain (USGS 3DEP)");
+  });
+
+  it("offers the cut with its acres, redrafts on what is left, and rehearses that again", async () => {
+    grounded("raster-1");
+    useMission.setState({
+      project: onRanch,
+      landGround: { landId: "land-1", projectId: onRanch.id, zones: [] },
+      composer: {
+        goal: "Mow the west grassland",
+        zoneIds: [],
+        machineIds: [],
+        replacePlanId: null,
+        status: "ready",
+        ground: null,
+        draft,
+        previousDraft: null,
+        answers: {},
+        asked: {},
+        error: null,
+      },
+    });
+    const { result, unmount } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), {
+      wrapper,
+    });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.workable.state).toBe("ready"));
+    // The strictest class on Z-14 (both mowers), with the raster the rehearsal read slope from.
+    expect(requestWorkableGround).toHaveBeenCalledWith("land-1", {
+      footprint: square,
+      machineClass: "mower",
+      demRasterId: "raster-1",
+      includeEphemeralCreeks: false,
+    });
+    expect(result.current.workable.text).toBe("−15 ac too steep, −4.9 ac creek buffer → 40 ac");
+    act(() => result.current.skipToEnd());
+    const before = result.current.rehearsal?.hands.length ?? 0;
+    expect(before).toBeGreaterThan(0);
+    act(() => result.current.workable.apply());
+    // A private area derived from the Land takes Z-14's place in the plan, machines kept.
+    const state = useMission.getState();
+    const area = state.project?.zones.find((z) => z.id === "A-01");
+    expect(area).toMatchObject({
+      name: "West grassland, workable",
+      private: true,
+      land: { kind: "derived", landId: "land-1", featureId: null, boundaryRevision: 3 },
+    });
+    expect(area?.attribution).toBe(
+      "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed) on USGS 3DEP 1/3″ DEM, published 2025-08-27, 15 m creek buffer (assumed) on USGS NHD, from West grassland (Z-14)",
+    );
+    expect(state.composer?.zoneIds).toEqual(["A-01"]);
+    // Z-14 is set aside while its workable ground is in scope: a goal naming it does not
+    // bring all of it back.
+    expect(state.composer?.setAside).toEqual({ "Z-14": "A-01" });
+    expect(state.composer?.ground?.source).toBe("workable");
+    expect(startPlanDraft).toHaveBeenCalledWith("Mow the west grassland", {
+      zoneIds: ["A-01"],
+      machineIds: ["TR-04"],
+      reshaped: true,
+    });
+    expect(useWorkable.getState().records["A-01"]?.leftOut).toEqual([
+      { reason: "steep", label: "Left out: too steep", footprint: workable },
+    ]);
+    unmount();
+    // The redraft's review rehearses the new ground again, straight to its verdict.
+    const redrafted = {
+      ...draft,
+      zoneIds: ["A-01"],
+      steps: draft.steps?.map((step) => ({ ...step, zoneId: "A-01" })),
+      coverage: [{ zoneId: "A-01", machineClass: "mower" }],
+    } as unknown as PlanDraft;
+    scene.mission.previewLanes.mockImplementation((id: string) => (id === "A-01" ? LANES : []));
+    scene.mission.previewLaneNumbers.mockImplementation((id: string) =>
+      id === "A-01" ? [1, 2, 3] : [],
+    );
+    const withArea = useMission.getState().project ?? onRanch;
+    const again = renderHook(() => useDressRehearsal(redrafted, withArea, "b"), { wrapper });
+    await waitFor(() => expect(again.result.current.status).toBe("ready"));
+    expect(again.result.current.frame?.ended).toBe(true);
+    expect(again.result.current.after).toEqual({ handsBefore: before, labels: ["Z-14"] });
+    expect(useWorkable.getState().rerun).toBeNull();
+  });
+});
+
 describe("RehearsalPanel", () => {
   const rehearsal = planRehearsal({
     zones: rehearsalZones(draft, project, fakeScene() as unknown as CesiumSceneManager),
@@ -355,6 +611,20 @@ describe("RehearsalPanel", () => {
       leftOut: [],
       includeEphemeral: false,
       raised: 1,
+      workable: {
+        state: "none",
+        message: null,
+        text: null,
+        totals: null,
+        labels: [],
+        kept: [],
+        sources: [],
+        elevation: null,
+        applying: false,
+        apply: vi.fn(),
+        retry: vi.fn(),
+      },
+      after: null,
       start: vi.fn(),
       stop: vi.fn(),
       play: vi.fn(),
@@ -381,6 +651,11 @@ describe("RehearsalPanel", () => {
     expect(screen.getByRole("status")).toHaveTextContent("SIMULATED REHEARSAL");
     expect(screen.getByTestId("rehearsal-clock")).toHaveTextContent(/of .* sim · 300×/);
     expect(screen.getByText("1 HAND RAISED")).toBeInTheDocument();
+    // Hands are grouped by rule with their count; a group opens to every lane.
+    const group = screen.getByTestId("rehearsal-hand-group");
+    expect(group).toHaveTextContent("Inside a creek buffer1 lane");
+    expect(screen.queryByTestId("rehearsal-hand")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Inside a creek buffer/ }));
     expect(screen.getByTestId("rehearsal-hand")).toHaveTextContent(hand?.label ?? "");
     await userEvent.click(screen.getByTestId("rehearsal-pause"));
     expect(controls.pause).toHaveBeenCalled();
@@ -390,6 +665,73 @@ describe("RehearsalPanel", () => {
     expect(controls.skipToEnd).toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: /buffer 15 m \(assumed\)/ }));
     expect(controls.focus).toHaveBeenCalledWith(hand?.id);
+  });
+
+  it("offers Work only the ground it can with what it cuts, or says what it needs", async () => {
+    const offer = run().workable;
+    const ready = run({
+      workable: {
+        ...offer,
+        state: "ready",
+        text: "−137 ac too steep, −14 ac creek buffer → 263 ac",
+        labels: ["Z-14"],
+        kept: [{ label: "Perimeter fence", hands: 3 }],
+        sources: ["Slope: USGS 3DEP 1/3″ bare-earth DEM, 10 m, raster 1108dcf3"],
+        elevation: "USGS 3DEP 1/3″ bare-earth DEM, 10 m (published 2025-08-27)",
+      },
+    });
+    const { unmount } = render(<RehearsalPanel run={ready} />);
+    const action = screen.getByTestId("rehearsal-workable-apply");
+    expect(action).toHaveTextContent("Work only the ground it can");
+    expect(action).toHaveTextContent("−137 ac too steep, −14 ac creek buffer → 263 ac");
+    const box = screen.getByTestId("rehearsal-workable");
+    expect(box).toHaveTextContent("Redrafts the plan on what is left of Z-14");
+    expect(box).toHaveTextContent(
+      "Derived from USGS 3DEP 1/3″ bare-earth DEM, 10 m (published 2025-08-27) and USGS NHD creeks; the limits are assumed.",
+    );
+    expect(box).toHaveTextContent("Perimeter fence follows a line, so its 3 hands stay");
+    await userEvent.click(action);
+    expect(ready.workable.apply).toHaveBeenCalled();
+    unmount();
+    render(
+      <RehearsalPanel
+        run={run({
+          workable: {
+            ...offer,
+            state: "needs-land",
+            message: "Save this ground as a Land to read its terrain.",
+          },
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("rehearsal-workable-apply")).toBeNull();
+    expect(screen.getByTestId("rehearsal-workable")).toHaveTextContent(
+      "Save this ground as a Land to read its terrain.",
+    );
+  });
+
+  it("after a redraft onto workable ground, says how many hands remain and why", () => {
+    render(
+      <RehearsalPanel
+        run={run({
+          after: { handsBefore: 147, labels: ["Z-14"] },
+          frame: {
+            t: rehearsal.durationS,
+            durationS: rehearsal.durationS,
+            playing: false,
+            speed: 300,
+            raised: 1,
+            ended: true,
+          },
+        })}
+      />,
+    );
+    const after = screen.getByTestId("rehearsal-after");
+    expect(after).toHaveTextContent(
+      "Rehearsed again on the workable ground of Z-14: 1 hand, down from 147.",
+    );
+    expect(after).toHaveTextContent("so hands stay at its edges");
+    expect(after).toHaveTextContent("The ground between drawn lanes is not checked.");
   });
 
   it("opens a hand with its rule, its source and Leave this lane out", async () => {

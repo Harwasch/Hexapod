@@ -148,6 +148,8 @@ export interface ElevationSource {
   label: string;
   /** Which record they came from, e.g. "raster 8c5becbb"; null for live samples. */
   ref: string | null;
+  /** The Land raster's id, when the heights are one (workable ground reads the same one). */
+  rasterId?: string;
   /** Where the grid has heights, said where a lane has none, e.g. "it covers the Land only". */
   extent?: string;
 }
@@ -510,23 +512,29 @@ function coverageTest(frame: Frame, coverage: CreekCoverage): (p: XY, bufferM: n
 }
 
 /**
- * How far apart a zone's drawn lanes are, metres: from its first lane to the first lane of
- * another pass, over the passes between. Null for a followed line or a single pass.
+ * How far apart a zone's drawn lanes are, metres: the median distance across from a lane to
+ * the next pass's, so a zone in several parts (each swept from its own edge) is not measured
+ * from one part to the next. Null for a followed line or a single pass.
  */
 function laneSpacingM(frame: Frame, lanes: readonly RehearsalLaneInput[]): number | null {
   const drawn = lanes.filter((lane) => !lane.followsLine && lane.points.length === 2);
-  const first = drawn[0];
-  const other = drawn.find((lane) => lane.pass !== first?.pass);
-  const [a0, b0] = first?.points ?? [];
-  const p0 = other?.points[0];
-  if (!first || !other || !a0 || !b0 || !p0) return null;
-  const a = toXY(frame, a0);
-  const b = toXY(frame, b0);
-  const p = toXY(frame, p0);
-  const length = Math.hypot(b.x - a.x, b.y - a.y);
-  if (!(length > 0)) return null;
-  const offset = Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / length;
-  return offset / Math.abs(other.pass - first.pass);
+  const offsets: number[] = [];
+  for (let i = 0; i < drawn.length; i++) {
+    const lane = drawn[i];
+    const next = drawn.slice(i + 1).find((other) => other.pass === (lane?.pass ?? 0) + 1);
+    const [a0, b0] = lane?.points ?? [];
+    const p0 = next?.points[0];
+    if (!a0 || !b0 || !p0) continue;
+    const a = toXY(frame, a0);
+    const b = toXY(frame, b0);
+    const p = toXY(frame, p0);
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (length > 0)
+      offsets.push(Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / length);
+  }
+  if (offsets.length === 0) return null;
+  offsets.sort((x, y) => x - y);
+  return offsets[Math.floor(offsets.length / 2)] ?? null;
 }
 
 /** "~46 m apart", or "~20 to 46 m apart" over zones; null when no zone has drawn passes. */

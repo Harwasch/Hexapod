@@ -43,6 +43,11 @@ from app.analysis.similarity import centres_in, polygon_parts
 ACRE_M2 = 4046.8564224
 #: Workable pieces smaller than this are slivers: too small to work as a pass.
 MIN_PART_M2 = 0.1 * ACRE_M2
+#: The creek buffer is drawn this much wider than the class's limit, with fine arcs: a buffer
+#: polygon's chords cut inside its true circle, and a lane run along the cut edge must not
+#: come back from the rehearsal a hair inside the limit (it reads distance exactly).
+BUFFER_EDGE_M = 0.1
+BUFFER_QUAD_SEGS = 16
 #: NHD kinds counted as creeks, as the rehearsal counts them (`countsAsCreek`): every natural
 #: channel and the artificial paths that carry one through a pond; ephemeral drainages only
 #: on request; canals, ditches, connectors and pipelines never.
@@ -166,7 +171,14 @@ def split_ground(
     steep = _area(ground.intersection(steep_cells))
     rest = _area(ground.difference(steep_cells))
     buffers = (
-        make_valid(unary_union([line.buffer(buffer_m, quad_segs=4) for line in creeks]))
+        make_valid(
+            unary_union(
+                [
+                    line.buffer(buffer_m + BUFFER_EDGE_M, quad_segs=BUFFER_QUAD_SEGS)
+                    for line in creeks
+                ]
+            )
+        )
         if creeks and buffer_m > 0
         else Polygon()
     )

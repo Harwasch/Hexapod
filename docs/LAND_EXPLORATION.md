@@ -2606,6 +2606,38 @@ the plan or sent to the planner, lanes cannot be dragged, machine kinematics (he
 turning radius, battery), machine-to-machine conflicts and aerial rules (altitude, wind,
 airspace) are not simulated.
 
+## Implemented increment: workable ground
+
+The rehearsal's hands have one answer that changes what is approved: work only the ground the
+machines can. `POST /api/v1/land/{id}/workable-ground` takes an outline on the Land (a plan's
+zone), a machine class, and optionally the elevation raster to read (`demRasterId`) and whether
+ephemeral drainages count as creeks. It reads the Land's newest elevation raster for its current
+outline, USGS 3DEP before Copernicus GLO-30 (a surface model, said so in a warning; none at all
+is a 409 `no_elevation` that says to analyze bare-earth terrain), the NHD flowlines of
+`GET /land/{id}/hydrography` under the rehearsal's rule (perennial, intermittent, unclassified
+and artificial paths; ephemeral on request), and the class's assumed `maxSlopePct` and
+`creekBufferM` (`machine_classes.json`; a drone is refused). On the raster's own metric grid each
+cell's slope is its steepest gradient (central differences one cell either side, one-sided at the
+edge of the data, as the rehearsal reads it), so a cell within the limit can be driven in any
+direction. The outline is split in order, so the parts add up to it: no data (no height in the
+raster; the ring of cells the Land's outline cuts takes its steepest neighbour's slope, so the
+outline's edge is not lost to the cell-centre rule), too steep (whole cells), creek buffer (drawn
+10 cm wide of the limit with fine arcs, so a lane along its edge reads outside it), slivers under
+0.1 ac (dropped and counted), and workable. The answer gives the workable MultiPolygon, the
+square metres of each part, each left-out part's geometry for the hatch, the limits, the raster
+(dataset, label, the source file's publication date, stale or a fallback), the creeks read,
+sources, assumptions and warnings. Workspace-scoped, `Cache-Control: private, no-store`, computed
+on request and never saved (`app/analysis/workable.py`, `app/services/land_workable.py`; tests
+on a synthetic DEM saved through the worker in `tests/test_land_workable.py`).
+
+Measured on Oak Bench Ranch (USGS 3DEP 10 m, 22 counted NHD flowlines): the west grassland
+(414 ac) for a mower leaves out 137 ac over 25 %, 14 ac within 15 m of creeks and 1.2 ac of 49
+slivers, leaving 263 ac in 28 pieces (about 2,500 vertices) in about two seconds on first read.
+Not done: no setback from steep ground or headland is assumed (the rehearsal's remaining hands
+sit on those edges), the cut is not remembered with the approved plan beyond its area's
+attribution, and there is no undo button: naming the zone in the bar ("mow Z-14") or picking
+the ground again brings the whole zone back.
+
 ## Polish: the Land feature on demand, on a phone and in the command box
 
 The audit's remaining Land items, each tested:

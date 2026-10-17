@@ -29,6 +29,8 @@ export interface DraftSeed {
   /** The plan being revised, left out of the booked windows sent to the planner. */
   replacePlanId?: string | null;
   answers?: Record<string, string | number | boolean>;
+  /** Zones not offered to the planner (replaced in the card by derived ground). */
+  exclude?: readonly string[];
 }
 
 type PlannerZoneRequest = NonNullable<PlanDraftRequest["zones"]>[number];
@@ -73,17 +75,19 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
       task: m.task,
       batteryPct: m.batteryPct,
     })),
-    zones: project.zones.map((z) => ({
-      id: z.id,
-      name: z.name,
-      acres: z.acres,
-      task: z.task,
-      progressPct: z.progressPct,
-      treated: z.treated,
-      note: z.note,
-      geometry: outline(z),
-      ...(z.scout ? { capture: z.scout } : {}),
-    })),
+    zones: project.zones
+      .filter((z) => !seed.exclude?.includes(z.id))
+      .map((z) => ({
+        id: z.id,
+        name: z.name,
+        acres: z.acres,
+        task: z.task,
+        progressPct: z.progressPct,
+        treated: z.treated,
+        note: z.note,
+        geometry: outline(z),
+        ...(z.scout ? { capture: z.scout } : {}),
+      })),
     existingPlans: project.plans
       .filter((p) => p.id !== seed.replacePlanId)
       .map((p) => {

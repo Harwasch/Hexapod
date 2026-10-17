@@ -67,10 +67,16 @@ export async function startPlanDraft(
   });
   // The bar logs what the operator said; a chip or a dragged corner is not words.
   try {
+    // A zone replaced by its derived ground (workable ground) stays out while that ground is
+    // in scope; named again in the scope itself, it is back.
+    const exclude = Object.entries(composer?.setAside ?? {})
+      .filter(([source, replacement]) => zoneIds.includes(replacement) && !zoneIds.includes(source))
+      .map(([source]) => source);
     const request = buildDraftRequest(project, {
       goal: text,
       zoneIds,
       machineIds,
+      exclude,
       replacePlanId: composer?.replacePlanId ?? null,
       answers,
       ...(options.refinement ? { refinement: options.refinement } : {}),

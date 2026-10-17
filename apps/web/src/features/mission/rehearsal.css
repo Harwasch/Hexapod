@@ -167,3 +167,95 @@
 .mc-rehearsal__gap {
   border-left-style: dashed;
 }
+
+/* Raised hands grouped by rule: a row per rule with its count, open to every lane. */
+.mc-rehearsal__raised {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.mc-rehearsal__groups {
+  gap: 0.3rem;
+}
+
+.mc-rehearsal__group {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.mc-rehearsal__group-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 178, 84, 0.3);
+  background: rgba(240, 178, 84, 0.08);
+  color: var(--text-primary);
+  font: 600 12px var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-rehearsal__group-head svg {
+  color: var(--warn);
+}
+
+.mc-rehearsal__group-head .mc-mono {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.mc-rehearsal__group-head:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.mc-rehearsal__chevron {
+  transition: transform 120ms ease;
+}
+
+.mc-rehearsal__group-head[aria-expanded="true"] .mc-rehearsal__chevron {
+  transform: rotate(180deg);
+}
+
+.mc-rehearsal__group .mc-rehearsal__hands {
+  padding-left: 0.6rem;
+}
+
+/* "Work only the ground it can": the one action that changes what is approved. */
+.mc-rehearsal__workable {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.mc-rehearsal__workable-btn {
+  display: grid;
+  justify-items: start;
+  gap: 0.15rem;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+}
+
+.mc-rehearsal__workable-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.mc-rehearsal__workable-sum {
+  font-size: 11.5px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.mc-rehearsal__workable > .mc-btn--sm {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}

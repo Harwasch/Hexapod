@@ -32,6 +32,7 @@ import { approveLabel, useDressRehearsal } from "./dressRehearsal";
 import { ScoutExport } from "./ScoutExport";
 import { groundFromView, waitForGround } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
+import { useLeftOutHatch } from "./workableGround";
 
 /** The rehearsal's panel and styles load with its first "Rehearse", not with the app. */
 const RehearsalPanel = lazy(() =>
@@ -159,6 +160,8 @@ export function PlanCard({ project }: { project: Project }) {
   // Only the handles leave with the card; a pending click is the flow's to cancel (React's
   // development double-mount would otherwise cancel it at once).
   useEffect(() => () => scene?.areas.edit(null), [scene]);
+  // Ground a redraft onto workable ground left out stays hatched while the card is open.
+  useLeftOutHatch(project);
 
   if (!composer) return null;
   const status = composer.status;

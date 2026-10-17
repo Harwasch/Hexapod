@@ -222,3 +222,7 @@ export type SignatureScene = Schemas["SignatureScene"];
 export type SignatureZonesRequest = Schemas["SignatureZonesRequest"];
 export type SignatureZones = Schemas["SignatureZonesRead"];
 export type SignatureZone = Schemas["SignatureZone"];
+// Workable ground: an outline less what an assumed machine class cannot work there.
+export type WorkableGroundRequest = Schemas["WorkableGroundRequest"];
+export type WorkableGround = Schemas["WorkableGroundRead"];
+export type WorkableLeftOut = Schemas["WorkableLeftOut"];

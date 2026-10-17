@@ -1,20 +1,30 @@
-import { Hand, LandPlot, Pause, Play, SkipForward, Square, Undo2 } from "lucide-react";
+import {
+  ChevronDown,
+  Hand,
+  LandPlot,
+  Pause,
+  Play,
+  Scissors,
+  SkipForward,
+  Square,
+  Undo2,
+} from "lucide-react";
+import { useState } from "react";
 
 import { env } from "@/app/env";
 import {
   formatSimDuration,
   REHEARSAL_SPEEDS,
+  type HandKind,
   type RaisedHand,
   type SummaryLine,
 } from "@/missions/rehearsal";
+import { HAND_KIND_TITLE, HAND_KINDS } from "@/missions/rehearsalClusters";
 import { useUi } from "@/state/ui";
 
-import type { DressRehearsal } from "./dressRehearsal";
+import type { DressRehearsal, WorkableOffer } from "./dressRehearsal";
 
 import "./rehearsal.css";
-
-/** Raised hands listed while the ghosts drive; the summary names every lane at the end. */
-const LISTED_HANDS = 8;
 
 /** How each kind of summary line reads: hands and gaps warn, what was driven and clear do not. */
 const TONE: Record<SummaryLine["tone"], string> = {
@@ -80,18 +90,124 @@ function HandItem({
   );
 }
 
+/** The raised hands by kind, each in lane order: a group per rule, its count, every lane. */
+function handGroups(raised: readonly RaisedHand[]): { kind: HandKind; hands: RaisedHand[] }[] {
+  return HAND_KINDS.map((kind) => ({
+    kind,
+    hands: raised
+      .filter((h) => h.kind === kind)
+      .sort((a, b) => a.zoneLabel.localeCompare(b.zoneLabel) || a.number - b.number),
+  })).filter((group) => group.hands.length > 0);
+}
+
+/**
+ * "Work only the ground it can": the plan redrafted on the ground its machines can work, with
+ * what that cuts. Or, where it cannot be offered, what would make it possible.
+ */
+function WorkableAction({ offer }: { offer: WorkableOffer }) {
+  if (offer.state === "none") return null;
+  const needsLand = offer.state === "needs-land" || offer.state === "needs-terrain";
+  return (
+    <div
+      className="mc-rehearsal__workable"
+      data-testid="rehearsal-workable"
+      data-state={offer.state}
+    >
+      {(offer.state === "ready" || offer.state === "loading") && (
+        <button
+          type="button"
+          className="mc-btn mc-btn--accent mc-rehearsal__workable-btn"
+          onClick={offer.apply}
+          disabled={offer.state !== "ready" || offer.applying}
+          data-testid="rehearsal-workable-apply"
+        >
+          <span className="mc-rehearsal__workable-title">
+            <Scissors size={13} aria-hidden="true" /> Work only the ground it can
+          </span>
+          <span className="mc-mono mc-rehearsal__workable-sum">
+            {offer.state === "ready" ? offer.text : "Reading the terrain and creeks…"}
+          </span>
+        </button>
+      )}
+      {offer.state === "ready" && (
+        <p className="mc-muted mc-rehearsal__note">
+          Redrafts the plan on what is left of {offer.labels.join(" and ")}, hatches what is left
+          out, and rehearses again. Derived from {offer.elevation ?? "the Land's terrain"} and USGS
+          NHD creeks; the limits are assumed.
+          {offer.kept.length > 0 &&
+            ` ${offer.kept.map((k) => k.label).join(", ")} follows a line, so its ${offer.kept.reduce((s, k) => s + k.hands, 0)} hands stay.`}
+        </p>
+      )}
+      {offer.state !== "loading" && offer.message && (
+        <p
+          className={`mc-rehearsal__note ${offer.state === "error" ? "mc-note mc-note--warn" : "mc-muted"}`}
+        >
+          {offer.message}
+        </p>
+      )}
+      {offer.state === "error" && (
+        <button type="button" className="mc-btn mc-btn--sm" onClick={offer.retry}>
+          Try again
+        </button>
+      )}
+      {needsLand && env.landExplorationEnabled && (
+        <button
+          type="button"
+          className="mc-btn mc-btn--sm"
+          onClick={() => useUi.getState().setPanel("land")}
+          data-testid="rehearsal-workable-open-land"
+        >
+          <LandPlot size={12} aria-hidden="true" /> Open in Land
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** After a redraft onto workable ground: the hands now against before, and why some stay. */
+function afterText(
+  after: NonNullable<DressRehearsal["after"]>,
+  hands: number,
+  spacing: string | null,
+): string {
+  const now = `${hands} hand${hands === 1 ? "" : "s"}`;
+  const change =
+    hands < after.handsBefore
+      ? `${now}, down from ${after.handsBefore}`
+      : `${now} (${after.handsBefore} before)`;
+  const why =
+    hands > 0
+      ? ` The drawn lanes${spacing ? ` (${spacing})` : ""} run up to the left-out ground, and slope there is read from heights a cell either side, steep cells included, so hands stay at its edges: open them to see where.`
+      : "";
+  return `Rehearsed again on the workable ground of ${after.labels.join(" and ")}: ${change}.${why} The ground between drawn lanes is not checked.`;
+}
+
 /**
  * The rehearsal in the plan card, under the steps: the banner, the simulated clock and its
- * controls, the hands as they go up, and at the end the summary with where each check's
- * numbers came from. Renders nothing until "Rehearse" is pressed.
+ * controls, the hands as they go up (grouped by rule, each group open to every lane), the
+ * one-click answer to them, and at the end the summary with where each check's numbers came
+ * from. Renders nothing until "Rehearse" is pressed.
  */
 export function RehearsalPanel({ run }: { run: DressRehearsal }) {
   const { status, rehearsal, frame, ground } = run;
+  const [open, setOpen] = useState<ReadonlySet<HandKind>>(new Set());
+  // A hand opened from the map (or in the list) keeps its group open.
+  const focusedKind = rehearsal?.hands.find((h) => h.id === run.focused)?.kind ?? null;
   if (status === "idle") return null;
   const raised = rehearsal && frame ? rehearsal.hands.filter((h) => frame.t >= h.t) : [];
-  const listed = [...raised].reverse().slice(0, LISTED_HANDS);
-  const focusedHand = rehearsal?.hands.find((h) => h.id === run.focused) ?? null;
-  if (focusedHand && !listed.includes(focusedHand)) listed.unshift(focusedHand);
+  const groups = handGroups(raised);
+  const expanded = (kind: HandKind) => open.has(kind) || kind === focusedKind;
+  const toggle = (kind: HandKind) => {
+    const closing = expanded(kind);
+    if (closing && kind === focusedKind) run.focus(null);
+    setOpen((kinds) => {
+      const next = new Set(kinds);
+      if (closing) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  };
+  const spacing = rehearsal?.summary[0]?.text.match(/preview spacing, ([^)]*apart)/)?.[1] ?? null;
   const ephemeral = ground?.creeks?.lines.some((line) => line.kind === "ephemeral") ?? false;
   return (
     <section className="mc-rehearsal" data-testid="plan-rehearsal" aria-label="Simulated rehearsal">
@@ -193,34 +309,66 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
             {!frame.ended && " Approve counts the hands raised so far; skip to the end for all."}
           </p>
           {raised.length > 0 && (
-            <div>
+            <div className="mc-rehearsal__raised" data-testid="rehearsal-hands">
               <span className="mc-eyebrow">
                 {raised.length} HAND{raised.length === 1 ? "" : "S"} RAISED
               </span>
-              <ul className="mc-list mc-rehearsal__hands">
-                {listed.map((hand) => (
-                  <HandItem
-                    key={hand.id}
-                    hand={hand}
-                    open={hand.id === run.focused}
-                    onOpen={() => run.focus(hand.id === run.focused ? null : hand.id)}
-                    onLeaveOut={
-                      rehearsal.lanes.find(
-                        (l) => l.zoneId === hand.zoneId && l.index === hand.index,
-                      )?.removable
-                        ? () => run.leaveOut(hand)
-                        : null
-                    }
-                  />
-                ))}
+              <ul className="mc-list mc-rehearsal__groups">
+                {groups.map((group) => {
+                  const shown = expanded(group.kind);
+                  const lanes = group.hands.length;
+                  return (
+                    <li
+                      key={group.kind}
+                      className="mc-rehearsal__group"
+                      data-testid="rehearsal-hand-group"
+                      data-kind={group.kind}
+                    >
+                      <button
+                        type="button"
+                        className="mc-rehearsal__group-head"
+                        onClick={() => toggle(group.kind)}
+                        aria-expanded={shown}
+                      >
+                        <Hand size={13} aria-hidden="true" />
+                        <span>{HAND_KIND_TITLE[group.kind]}</span>
+                        <span className="mc-mono">
+                          {lanes} lane{lanes === 1 ? "" : "s"}
+                        </span>
+                        <ChevronDown
+                          size={13}
+                          aria-hidden="true"
+                          className="mc-rehearsal__chevron"
+                        />
+                      </button>
+                      {shown && (
+                        <ul className="mc-list mc-rehearsal__hands">
+                          {group.hands.map((hand) => (
+                            <HandItem
+                              key={hand.id}
+                              hand={hand}
+                              open={hand.id === run.focused}
+                              onOpen={() => run.focus(hand.id === run.focused ? null : hand.id)}
+                              onLeaveOut={
+                                rehearsal.lanes.find(
+                                  (l) => l.zoneId === hand.zoneId && l.index === hand.index,
+                                )?.removable
+                                  ? () => run.leaveOut(hand)
+                                  : null
+                              }
+                            />
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
-              {raised.length > listed.length && (
-                <p className="mc-muted mc-rehearsal__note">
-                  {raised.length - listed.length} earlier hand
-                  {raised.length - listed.length === 1 ? "" : "s"} are on the map; the summary names
-                  every lane.
-                </p>
-              )}
+              <p className="mc-muted mc-rehearsal__note">
+                One hand per lane and rule, at its worst point. On the map, hands close together
+                share a marker that counts them; click one to open its first hand here.
+              </p>
+              {!frame.ended && <WorkableAction offer={run.workable} />}
             </div>
           )}
           {run.leftOut.length > 0 && (
@@ -234,6 +382,11 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
           {frame.ended && (
             <div className="mc-rehearsal__summary" data-testid="rehearsal-summary">
               <span className="mc-eyebrow">END OF REHEARSAL</span>
+              {run.after && (
+                <p className="mc-note mc-note--agent" data-testid="rehearsal-after">
+                  {afterText(run.after, rehearsal.hands.length, spacing)}
+                </p>
+              )}
               <ul className="mc-list">
                 {rehearsal.summary.map((line) => (
                   <li
@@ -252,6 +405,7 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
                   </span>
                 ))}
               </div>
+              <WorkableAction offer={run.workable} />
               {ground?.better && (
                 <div className="mc-rehearsal__better">
                   <p className="mc-muted mc-rehearsal__note">{ground.better}</p>
