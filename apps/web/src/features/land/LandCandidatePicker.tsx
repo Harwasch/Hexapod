@@ -9,6 +9,7 @@ import { api, unwrap } from "@/api/client";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { describeError } from "@/lib/log";
+import { tapOrClick } from "@/lib/pointer";
 import { drawingReferences } from "./boundarySources";
 
 export function LandCandidatePicker() {
@@ -183,7 +184,7 @@ export function LandCandidatePicker() {
       </label>
       <p aria-live="polite">
         {!points.length
-          ? "Click near your land on the map."
+          ? `${tapOrClick()} near your land on the map.`
           : result
             ? result.message
             : "Looking for mapped records near your point…"}

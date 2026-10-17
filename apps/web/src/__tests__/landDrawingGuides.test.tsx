@@ -21,6 +21,8 @@ vi.mock("@/cesium/SceneContext", () => ({
   useScene: () => ({
     camera: { flyToRectangle: vi.fn() },
     areas: { cancelPick: vi.fn(), edit: vi.fn() },
+    // A canvas with no layout: the review's framing (landFraming.ts) measures nothing to fix.
+    viewer: { canvas: document.createElement("canvas") },
   }),
 }));
 

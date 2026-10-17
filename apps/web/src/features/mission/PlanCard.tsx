@@ -6,6 +6,7 @@ import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contra
 import { usePlannerStatus } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { planningEdited } from "@/lib/planningMetrics";
+import { tapOrClick } from "@/lib/pointer";
 import { areaFromMeasurement, isAreaZone, nextAreaId } from "@/missions/areas";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
 import { DEMO_EXAMPLES } from "@/missions/demo";
@@ -217,7 +218,7 @@ export function PlanCard({ project }: { project: Project }) {
                   onClick={pickAgain}
                   data-testid="ground-pick"
                 >
-                  <Crosshair size={13} aria-hidden="true" /> Click the ground on the map
+                  <Crosshair size={13} aria-hidden="true" /> {tapOrClick()} the ground on the map
                 </button>
               </div>
             )}
@@ -226,10 +227,10 @@ export function PlanCard({ project }: { project: Project }) {
         {status === "awaiting-ground" && (
           <div className="mc-prompt mc-prompt--live" data-testid="plan-awaiting-ground">
             <Crosshair size={22} aria-hidden="true" className="mc-prompt__icon" />
-            <div className="mc-prompt__title">Click the ground you mean on the map.</div>
+            <div className="mc-prompt__title">{tapOrClick()} the ground you mean on the map.</div>
             <p className="mc-muted">
-              I'll outline the field, pond or lot under your click and draft “{composer.goal}”. Esc
-              to cancel.
+              I'll outline the field, pond or lot under your {tapOrClick(true)} and draft “
+              {composer.goal}”. Esc to cancel.
             </p>
             <div className="mc-actions mc-actions--start">
               <button

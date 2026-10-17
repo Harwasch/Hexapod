@@ -5,6 +5,7 @@ import { boundsOf } from "@twin/geo";
 import { api, unwrap, ApiError } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
+import { tapOrClick } from "@/lib/pointer";
 import { useLandScope, useLandCanEdit, useLandAccessReady } from "@/state/landIdentity";
 import { useLandContext } from "@/state/landContext";
 import { useSelection } from "@/state/selection";
@@ -510,7 +511,7 @@ function Inventory({ land, scope }: { land: LandArea; scope: string }) {
       )}
       {picker === pickOwner && (
         <p role="status">
-          Click the map to place the asset.{" "}
+          {tapOrClick()} the map to place the asset.{" "}
           <button type="button" onClick={() => scene?.areas.cancelPick()}>
             Cancel asset placement
           </button>

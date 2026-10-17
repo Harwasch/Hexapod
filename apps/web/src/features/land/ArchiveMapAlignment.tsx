@@ -4,6 +4,7 @@ import type { components } from "@twin/contracts";
 import { api, ApiError, unwrap } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
+import { tapOrClick } from "@/lib/pointer";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
@@ -428,7 +429,9 @@ function AlignmentEditor({ id, image, url, title, attribution, scope }: Props & 
             )}
           </div>
           {picking && (
-            <p role="status">Click the matching place on the globe. Press Escape to cancel.</p>
+            <p role="status">
+              {tapOrClick()} the matching place on the globe. Press Escape to cancel.
+            </p>
           )}
           <details>
             <summary>Enter map coordinates instead</summary>
