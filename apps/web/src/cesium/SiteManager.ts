@@ -863,17 +863,10 @@ export class SiteManager {
 
   /**
    * The terrain under a point at the most detailed level the terrain has there, or undefined
-   * when there is none to be had: the ellipsoid (no terrain layer), a tile that failed.
+   * when there is none to be had (CameraController.groundHeightAt).
    */
-  private async sampleGround(longitude: number, latitude: number): Promise<number | undefined> {
-    try {
-      const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
-        Cartographic.fromDegrees(longitude, latitude),
-      ]);
-      return sample && Number.isFinite(sample.height) ? sample.height : undefined;
-    } catch {
-      return undefined;
-    }
+  private sampleGround(longitude: number, latitude: number): Promise<number | undefined> {
+    return this.camera.groundHeightAt(longitude, latitude);
   }
 
   /**

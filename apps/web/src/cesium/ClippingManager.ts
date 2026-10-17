@@ -24,6 +24,8 @@ const ALL: ClipTargets = { globe: true, world: true };
 const GLOBE_LIMIT_MARGIN_DEG = 0.002;
 /** A few metres of Antarctica nobody looks at, so an inverse clip always has a polygon. */
 const SENTINEL_KEY = "__sentinel";
+/** The Time Lantern's ground window: globe-only, never a footprint (`setLanternWindow`). */
+const LANTERN_KEY = "__lantern";
 const SENTINEL: Footprint = {
   type: "Polygon",
   coordinates: [
@@ -56,6 +58,10 @@ export class ClippingManager {
   /** Seen from orbit: the photorealistic world gives way to the whole globe (`setOrbit`). */
   private orbit = false;
   private floorless: string | null = null;
+  /** The ground under the Time Lantern's lens, where the globe is drawn too (`setLanternWindow`). */
+  private lanternWindow: Cartesian3[] | null = null;
+  /** Where the lens may go, preloaded while hidden (`setLanternReach`). */
+  private lanternReach: Rectangle | null = null;
 
   constructor(private readonly scene: Scene) {
     this.supported = ClippingPolygonCollection.isSupported(scene);
@@ -104,6 +110,7 @@ export class ClippingManager {
     // inverse clip active (and every tile culled) when no site is engaged.
     if (photorealistic)
       this.addTo(this.globeCollection, this.globePolygons, SENTINEL_KEY, SENTINEL);
+    if (this.lanternWindow && this.lanternSupported) this.addLanternWindow(this.lanternWindow);
     this.syncEnabled();
   }
 
@@ -125,7 +132,73 @@ export class ClippingManager {
     this.syncEnabled();
   }
 
-  /** Bounding rectangle of every footprint the globe carries, with a margin; the sentinel alone otherwise. */
+  /**
+   * Whether the Time Lantern's window can be drawn: only in the photorealistic world, where the
+   * globe is otherwise clipped away, below orbit, with clipping supported and switched on.
+   */
+  get lanternSupported(): boolean {
+    return this.supported && this.enabled && this.photorealistic && !this.orbit;
+  }
+
+  /** The world the clip serves now: the photorealistic one (the globe hidden but where kept). */
+  get photorealisticWorld(): boolean {
+    return this.photorealistic;
+  }
+
+  /** Seen from orbit, where the globe is drawn whole (`setOrbit`). */
+  get orbitView(): boolean {
+    return this.orbit;
+  }
+
+  /**
+   * The Time Lantern's window (cesium/TimeLantern.ts): a ring of ground positions around the
+   * lens, where the globe -- terrain with dated imagery draped on it -- is kept as well, so that
+   * where the lens cuts the photorealistic mesh away the globe shows instead of the sky.
+   *
+   * Globe only, and never a footprint: a polygon added to the world tileset's collection marks
+   * every tile of it for a rebake (Cesium3DTileset._clippingPolygonsNeedRebake), which per frame
+   * is far too slow, and a footprint would change what `syncEnabled` and `activeKeys` mean. The
+   * globe releases its clipping data and rebuilds small textures only for the tiles the polygon
+   * touches, cheap enough to swap the window as the lens moves. Polygons are immutable, so it is
+   * swapped, never moved. No-op outside the photorealistic world, from orbit, or with clipping
+   * off. Requests a render; the enable state is not re-synced per frame.
+   */
+  setLanternWindow(positions: Cartesian3[] | null): void {
+    if (!this.supported || !this.globeCollection) return;
+    const had = this.globePolygons.has(LANTERN_KEY);
+    this.removeFrom(this.globeCollection, this.globePolygons, LANTERN_KEY);
+    this.lanternWindow =
+      positions && positions.length >= 3 && this.lanternSupported ? positions : null;
+    if (this.lanternWindow) this.addLanternWindow(this.lanternWindow);
+    if (had || this.lanternWindow) this.scene.requestRender();
+  }
+
+  /**
+   * Where the lens may go: the globe loads terrain and imagery there (its limit rectangle takes
+   * it in) while the clip still hides it, so a lens moved anywhere inside finds its ground
+   * loaded. Null when the lantern closes, back to the engaged outlines alone.
+   */
+  setLanternReach(
+    reach: { west: number; south: number; east: number; north: number } | null,
+  ): void {
+    this.lanternReach = reach
+      ? Rectangle.fromDegrees(reach.west, reach.south, reach.east, reach.north)
+      : null;
+    this.syncEnabled();
+  }
+
+  private addLanternWindow(positions: Cartesian3[]): void {
+    if (!this.globeCollection) return;
+    try {
+      const polygon = this.globeCollection.add(new ClippingPolygon({ positions }));
+      this.globePolygons.set(LANTERN_KEY, [polygon]);
+    } catch (error) {
+      log.error("failed to build the lantern window", { error: String(error) });
+    }
+  }
+
+  /** Bounding rectangle of every footprint the globe carries, with a margin, and of the lantern's
+   *  reach while it has one; the sentinel alone otherwise. */
   private globeLimit(): Rectangle {
     let west = Number.POSITIVE_INFINITY;
     let south = Number.POSITIVE_INFINITY;
@@ -142,14 +215,17 @@ export class ClippingManager {
           north = Math.max(north, lat);
         }
     }
-    if (!Number.isFinite(west)) return Rectangle.fromDegrees(0, -89.99, 0.001, -89.989);
+    const reach = this.lanternReach;
+    if (!Number.isFinite(west))
+      return reach ? Rectangle.clone(reach) : Rectangle.fromDegrees(0, -89.99, 0.001, -89.989);
     const margin = GLOBE_LIMIT_MARGIN_DEG;
-    return Rectangle.fromDegrees(
+    const limit = Rectangle.fromDegrees(
       Math.max(-180, west - margin),
       Math.max(-90, south - margin),
       Math.min(180, east + margin),
       Math.min(90, north + margin),
     );
+    return reach ? Rectangle.union(limit, reach, limit) : limit;
   }
 
   /**
@@ -286,6 +362,8 @@ export class ClippingManager {
   }
 
   destroy(): void {
+    this.lanternWindow = null;
+    this.lanternReach = null;
     this.footprints.clear();
     this.globePolygons.clear();
     this.worldPolygons.clear();

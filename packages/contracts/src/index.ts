@@ -206,3 +206,11 @@ export type KnowledgeScoutRequest = Schemas["KnowledgeScoutRequest"];
 export type KnowledgeScoutRead = Schemas["KnowledgeScoutRead"];
 export type KnowledgeScoutArea = Schemas["KnowledgeScoutArea"];
 export type ScoutCapture = Schemas["ScoutCapture"];
+/** Dated public imagery for the Time Lantern (stream lantern): NAIP years, dry-season
+ * Sentinel-2 scenes and USGS historical map editions, each with its date's meaning, licence
+ * and stated positional accuracy. */
+export type DatedImageryCatalog = Schemas["DatedImageryCatalog"];
+export type DatedImagerySource = Schemas["DatedImagerySource"];
+export type DatedImageryPart = Schemas["DatedImageryPart"];
+export type DatedImageryProviderStatus = Schemas["DatedImageryProviderStatus"];
+export type StatedAccuracy = Schemas["StatedAccuracy"];

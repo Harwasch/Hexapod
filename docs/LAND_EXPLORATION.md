@@ -2424,3 +2424,59 @@ heights, and gives the resulting detail range and lowest clearance); the zip is 
 battery time is assumed; check airspace
 (B4UFLY or LAANC) and fly under Part 107. The drone class in `machine_classes.json` is now that
 aircraft's wide camera (73.7 degrees across), so lines at 60 m are 27 m apart.
+
+## Implemented increment: the Descent and the Time Lantern
+
+The welcome card asks "Where is your land?" (with the Land flag off, "Where do you want to
+go?"). An address or place is geocoded once, on submit, never per keystroke (Nominatim, the
+fallback geocoder, forbids autocomplete); coordinates ("34.698, -120.04", with or without ° and
+N/S/E/W) skip the geocoder. One place flies there at once, several are offered as choices, none
+says so in place. The flight is one glide (`features/descent/descent.ts`, CameraController.glide)
+from wherever the camera is to a 700 m square around the point, re-pointed on the way by the
+terrain sampled at full detail and by the OpenStreetMap area containing the point, which is drawn
+as "Mapped area from OpenStreetMap, not a legal parcel". A geocoder box more than 8 km across is
+a town or a region: a plain flight to its box, no lookup. Overpass is never waited for; its
+failure is a line on the arrival card. The arrival card offers "Outline this land", which goes
+through `landEntry` (`proposeOutline` for the mapped area, a new `drawOutline` otherwise) so a
+selected land is never revised by it, and "Look back in time", which opens the Time Lantern over
+the place.
+
+The Time Lantern (Y, or Look back in the strip; ADR 0010) shows dated public imagery under the
+cursor through the photorealistic world: each year NAIP was flown (Planetary Computer mosaics,
+U.S. public domain), the clearest June to September Sentinel-2 scene of each year since 2016
+(off by default: 10 m), and each edition of the USGS topographic sheets covering the place, which
+this API tiles from USGS's own GeoTIFFs (`/api/v1/imagery/usgs-topo/tiles`, through the raster
+allowlist, the collar cut at the neatline). The wheel over the map steps through real
+acquisitions only, Alt peeks, Esc closes (a sheet or popover open over the map takes Esc first).
+The rim names the source, its date (the record's under the cursor), its licence and its
+positional accuracy on whose word: the sentence the year's NAIP records state where they have
+one ("+/- 6 meters to ground specification"; one record is read per year and state, and the
+four quarter quads over the ranch say the same in every year that has records), "not stated"
+where they have none, "could not be read" when the record did not answer, the 1947 National Map
+Accuracy Standards for sheets made after them, "predates the standards" before; for a sheet,
+also the stated accuracy of its NAD27 to WGS 84 shift ("datum shift ±7 m": the NADCON grids that
+would do better are not installed on the server); and every source says "not checked against
+today's 3D world". Under the rail the strip says what the date means ("Catalog publication
+year; surveying, revision and scanning may have different dates") and every caveat in the
+catalog's words (the datum shift, a sheet edge that could not be matched to the map grid, a
+scene's cloud), with a link to the record under the lens (or the source's only record). When the
+cursor is outside the area listed, it says where the list is for. A source that could not be
+reached is counted apart from a source with nothing here ("2 sources could not be reached, 1 has
+nothing here"), an empty rail with one of them says the list may be incomplete rather than that
+nothing exists, and "Try again" asks again.
+
+`GET /api/v1/imagery/dated` is a public, rate-limited read (each side at most 0.25°; each
+provider's answer cached 6 h per area rounded to 0.01°, and a cached answer spends no token). A
+catalog missing a provider that could not be reached is held 30 s and marked `no-store`; the next
+one asks that provider alone. A saved land's bounds are rounded outward to 0.05° before they
+reach it, and a land selected after a descent replaces the descent's area as the place looked
+back on. The topo tile route is an `async def`: a tile waits for one of four sheet readers on the
+event loop, holding none of the threads every other route runs on, and the reads run on threads
+of their own. Past twelve waiting, or four seconds, a tile is answered 503 with Retry-After,
+which the lantern's layers wait out and ask again (`cesium/busyTiles.ts`). The bytes a sheet is
+read for (its size and ETag, its header and IFDs, the image blocks neighbouring tiles share) are
+kept in process, so a tile costs only the ranges no tile has read yet. The three sources are registered with the
+research sources (`/research/sources`) and list what exists without storing evidence; the
+overview does not run them. Not done: Esri Wayback and the Esri-hosted topo service (not openly
+licensed), image registrations and NDVI rasters in the lens (they need workspace auth on the
+tiles), and any check of alignment against the Google mesh.

@@ -66,6 +66,21 @@ export const HOTKEYS = {
   compare: { combo: "c", label: "Compare layers", group: "Tools" },
   sites: { combo: "s", label: "Switch site", group: "Tools" },
   bookmarks: { combo: "v", label: "Saved views", group: "Tools" },
+  lantern: { combo: "y", label: "Time Lantern: dated imagery under the cursor", group: "Tools" },
+  lanternPeek: {
+    combo: "",
+    keys: ["Alt"],
+    label: "Hold over the map to peek through the Time Lantern; scroll to travel in time",
+    group: "Tools",
+    scene: true,
+  },
+  lanternStep: {
+    combo: "",
+    keys: ["[", "]"],
+    label: "Newer / older imagery while the Time Lantern shows",
+    group: "Tools",
+    scene: true,
+  },
   brush: { combo: "b", label: "Paint to select objects (brush)", group: "Objects" },
   poke: {
     combo: "k",

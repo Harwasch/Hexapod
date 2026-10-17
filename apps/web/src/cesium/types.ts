@@ -9,6 +9,8 @@ import type { ToastTone } from "@/state/toasts";
 import type { MapMenuAt } from "@/state/ui";
 import type { CameraPose, PerformanceSnapshot, TokenState, ViewerStatus } from "@/state/viewer";
 
+import type { LanternFrame } from "./lanternTypes";
+
 export type { LoadState };
 
 /** Events the Cesium subsystem raises; a bridge component mirrors them into React stores. */
@@ -69,6 +71,8 @@ export interface SceneEvents extends Record<string, unknown> {
    * from the canvas's top left.
    */
   "ground-tap": { longitude: number; latitude: number; x: number; y: number };
+  /** The Time Lantern's lens and what it shows (cesium/TimeLantern.ts, lanternTypes.ts). */
+  lantern: LanternFrame;
 }
 
 export interface GeocodeResult {

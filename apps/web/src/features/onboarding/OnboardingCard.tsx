@@ -11,6 +11,8 @@ import { BUILTIN_RANCH_ID, DEMO_RANCH, DEMO_RANCH_SLUG } from "@/missions/demoRa
 import { useSettings } from "@/state/settings";
 import { useViewer } from "@/state/viewer";
 
+import { DescentForm } from "../descent/DescentForm";
+
 const SPRING = { type: "spring", stiffness: 300, damping: 30 } as const;
 
 const isSplat = (site: SiteSummary) => site.representations.includes("gaussian-splat");
@@ -83,6 +85,12 @@ export function OnboardingCard() {
           <p className="onboarding__note">
             A real place on {DEMO_RANCH.region}. The fleet, zones and plans are simulated.
           </p>
+          <DescentForm
+            reducedMotion={Boolean(reduceMotion)}
+            onDescend={() => {
+              if (root.current) root.current.inert = true;
+            }}
+          />
           <div className="onboarding__actions">
             <GlassButton
               variant="glass"

@@ -4,7 +4,7 @@ import {
   Transforms,
   Matrix4,
   Ray,
-  type BoundingSphere,
+  BoundingSphere,
   Cartesian2,
   Cartesian3,
   Cartographic,
@@ -17,8 +17,8 @@ import {
   type CesiumWidget,
 } from "cesium";
 
-import type { CameraBookmark } from "@twin/contracts";
-import { metersPerPixel, scaleBandForAltitude } from "@twin/geo";
+import type { CameraBookmark, Footprint } from "@twin/contracts";
+import { boundsOf, metersPerPixel, scaleBandForAltitude } from "@twin/geo";
 
 import type { CameraPose } from "@/state/viewer";
 import type { Viewport } from "@/missions/framing";
@@ -29,7 +29,7 @@ import { throttle } from "@/lib/throttle";
 
 import { CameraOwnership } from "./cameraOwnership";
 import type { ArrivalPose } from "./flightRetarget";
-import { Glide, type GlideCarry, type GlidePose } from "./glide";
+import { Glide, type GlideCarry, type GlidePose, type PoseGround } from "./glide";
 import { plausibleGround } from "./placement";
 import type { ScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatCollider } from "./SplatCollider";
@@ -55,6 +55,19 @@ export interface GlideOptions {
   onComplete?: () => void;
   /** Called instead when another flight, a gesture or a key takes the camera first. */
   onCancel?: () => void;
+}
+
+/** How `rectangleArrival` frames an area: the ground under it, and the view onto it. */
+export interface RectangleArrivalOptions {
+  /** Ellipsoid height of the ground (m), when it has been measured (`groundHeightAt`). Without
+   *  it the globe's loaded terrain is the guess, which a glide re-aims as finer tiles arrive. */
+  groundHeight?: number;
+  /** Degrees; 0 looks north. */
+  heading?: number;
+  /** Degrees (negative looks down). */
+  pitch?: number;
+  /** How many bounding radii back from the centre the camera stands. */
+  rangeMultiplier?: number;
 }
 
 /** A flight `glide` started: pointed at a better pose on the way, or stopped. */
@@ -146,6 +159,10 @@ const SURFACE_ZOOM_STEP = 0.75;
 const DEFAULT_ARRIVAL_PITCH = -45;
 /** Arrival tilt for an object of a scan: lower, so its sides show as well as its top. */
 const OBJECT_ARRIVAL_PITCH = -35;
+/** Arrival over an area of land (`rectangleArrival`): low enough to read the lie of the land. */
+const RECTANGLE_ARRIVAL_PITCH = -38;
+/** ...from this many bounding radii away, so the whole area fits with some ground around it. */
+const RECTANGLE_ARRIVAL_RANGE = 2.4;
 /** A flight that arcs at least this far above both of its ends looks straight down at the top. */
 const LOOK_DOWN_CLIMB_M = 150;
 
@@ -1385,6 +1402,7 @@ export class CameraController {
       easingFunction: EasingFunction.QUADRATIC_IN_OUT,
       pitchAdjustHeight: this.pitchAdjustHeight(this.pose().altitude),
       complete: options.onComplete,
+      cancel: options.onCancel,
     });
   }
 
@@ -1436,6 +1454,71 @@ export class CameraController {
       heading,
       pitch,
     };
+  }
+
+  /**
+   * The terrain under a point at the most detailed level the terrain has there, or undefined
+   * when there is none worth believing: the ellipsoid (no terrain layer), a tile that failed, a
+   * height outside the plausible band. What a flight aims at before the globe has loaded the
+   * ground it is going to (SiteManager.flyTo, the Descent).
+   */
+  async groundHeightAt(longitude: number, latitude: number): Promise<number | undefined> {
+    try {
+      const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
+        Cartographic.fromDegrees(longitude, latitude),
+      ]);
+      const height = sample?.height;
+      if (height === undefined || !Number.isFinite(height)) return undefined;
+      if (height < PLAUSIBLE_HEIGHT_M[0] || height > PLAUSIBLE_HEIGHT_M[1]) return undefined;
+      return height;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Where to arrive to see an area (degrees) whole, as a pose `glide` can fly to: the sphere
+   * around its four corners at the ground's height, from the south (heading 0) and a pitch that
+   * shows the lie of the land. The ground is measured when `groundHeight` is given, else the
+   * globe's loaded terrain (plausible only) or the ellipsoid, guessed: a glide re-aims a guessed
+   * end as the terrain under it loads.
+   */
+  rectangleArrival(
+    west: number,
+    south: number,
+    east: number,
+    north: number,
+    options: RectangleArrivalOptions = {},
+  ): GlidePose {
+    let ground: PoseGround;
+    if (options.groundHeight !== undefined)
+      ground = { height: options.groundHeight, measured: true };
+    else {
+      const loaded = plausibleGround(
+        this.scene.globe.getHeight(
+          Cartographic.fromDegrees((west + east) / 2, (south + north) / 2, 0, scratchCarto),
+        ),
+      );
+      ground = { height: loaded ?? 0, measured: false };
+    }
+    const corners = [
+      Cartesian3.fromDegrees(west, south, ground.height),
+      Cartesian3.fromDegrees(east, south, ground.height),
+      Cartesian3.fromDegrees(east, north, ground.height),
+      Cartesian3.fromDegrees(west, north, ground.height),
+    ];
+    const pose = this.sphereArrival(BoundingSphere.fromPoints(corners), {
+      heading: options.heading ?? 0,
+      pitch: options.pitch ?? RECTANGLE_ARRIVAL_PITCH,
+      rangeMultiplier: options.rangeMultiplier ?? RECTANGLE_ARRIVAL_RANGE,
+    });
+    return { ...pose, ground };
+  }
+
+  /** `rectangleArrival` for an outline's bounds. */
+  footprintArrival(footprint: Footprint, options: RectangleArrivalOptions = {}): GlidePose {
+    const { west, south, east, north } = boundsOf(footprint);
+    return this.rectangleArrival(west, south, east, north, options);
   }
 
   /** Steep approach to a sphere, looking down at it: the standard "arrive at a site" move. */

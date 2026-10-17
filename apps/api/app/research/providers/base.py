@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -61,7 +62,7 @@ class SourceError(Exception):
 def fetch_json(
     client: httpx.Client,
     spec: SourceSpec,
-    params: dict[str, str | int | float | bool],
+    params: Mapping[str, Any],
     *,
     method: Literal["GET", "POST"] = "GET",
     encoding: Literal["form", "json"] = "form",
@@ -70,6 +71,8 @@ def fetch_json(
     # Only registry endpoints are fetched. Redirects cannot turn a trusted endpoint
     # into an arbitrary URL, and response size is bounded even without Content-Length.
     # Point lookups (app/research/place.py) pass a shorter timeout: someone is waiting.
+    # Query strings and forms take flat values; a JSON body may nest (a STAC search's
+    # cql2 filter, providers/dated_imagery.py).
     with client.stream(
         method,
         spec.endpoint,

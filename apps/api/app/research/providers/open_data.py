@@ -17,6 +17,8 @@ from app.research.providers.base import (
     evidence,
     fetch_json,
 )
+from app.research.providers.dated_imagery import ADAPTERS as DATED_IMAGERY_ADAPTERS
+from app.research.providers.dated_imagery import DATED_IMAGERY_SOURCES
 from app.research.providers.ecology import ECOLOGY_SOURCES, ecological_sites, regions
 from app.research.providers.taxonomy import CHECKLIST
 from app.research.providers.us_land import US_SOURCES, flood_zones, soils
@@ -61,6 +63,8 @@ SOURCES = {
 SOURCES.update(US_SOURCES)
 OVERVIEW_SOURCES = tuple(SOURCES)
 SOURCES.update(ARCHIVE_SOURCES)
+# Dated imagery (the Time Lantern's catalog): listed with the sources, never run by the overview.
+SOURCES.update(DATED_IMAGERY_SOURCES)
 SOURCES.update(ECOLOGY_SOURCES)
 
 
@@ -282,6 +286,7 @@ ADAPTERS = {
     "fema-flood-zones": flood_zones,
     "commons-place-images": commons,
     "usgs-historical-maps": historical_maps,
+    **DATED_IMAGERY_ADAPTERS,
 }
 
 
