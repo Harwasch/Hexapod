@@ -601,6 +601,11 @@ test("review and schedule an action, then preserve that mission when revising", 
   await app.getByRole("tab", { name: "Actions", exact: true }).click();
   const actions = app.getByRole("region", { name: "Land actions" });
   await actions.getByRole("button", { name: "Plan an action", exact: true }).click();
+  // Save on an empty draft lists what to fix, sends nothing and puts the cursor on the first.
+  await actions.getByRole("button", { name: "Save action draft", exact: true }).click();
+  await expect(actions.getByRole("alert")).toContainText("Before saving, fix 4 things:");
+  await expect(actions.getByLabel("Action title", { exact: true })).toBeFocused();
+  expect(requests).toEqual([]);
   await actions.getByLabel("Action title", { exact: true }).fill("Baseline survey");
   await actions.getByLabel("Outcome to achieve", { exact: true }).fill("Measure native cover");
   await actions.getByLabel("Step 1 name", { exact: true }).fill("Survey quadrats");
@@ -610,6 +615,12 @@ test("review and schedule an action, then preserve that mission when revising", 
   await actions.getByRole("button", { name: "Save action draft", exact: true }).click();
   await expect(actions.getByRole("article", { name: "Action review" })).toBeVisible();
   expect(requests).toEqual(["draft"]);
+  await expect(
+    actions.getByRole("button", { name: "Approve revision 1", exact: true }),
+  ).toBeDisabled();
+  await expect(actions.getByRole("list", { name: "Before approving" })).toHaveText(
+    "Add a review note. It is stored with the approval.",
+  );
   await actions.getByLabel("Review note", { exact: true }).fill("Reviewed work area and access");
   await actions.getByRole("button", { name: "Approve revision 1", exact: true }).click();
   await actions.getByLabel("Scheduling note", { exact: true }).fill("Schedule the reviewed survey");

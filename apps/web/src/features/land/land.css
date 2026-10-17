@@ -858,3 +858,52 @@
   margin: 0;
   flex: 1 1 14rem;
 }
+
+/* Why an action cannot be saved, approved or scheduled yet: each reason sits beside the
+   control it holds back. */
+.land-action-workspace [aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+}
+.land-workspace .land-field-problem {
+  margin-top: -6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger);
+}
+/* A step's details stack by margin, not by the fieldset's flex gap. */
+.land-action-step details > .land-field-problem {
+  margin-top: 6px;
+}
+.land-draft-problems ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+}
+.land-draft-problems .land-evidence-link {
+  padding: 2px 0;
+  text-align: left;
+  font-size: 12px !important;
+  line-height: 1.5;
+}
+.land-blockers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+.land-blockers .is-hint {
+  color: var(--text-secondary, #adb5a9);
+}
+.land-blockers button {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+}

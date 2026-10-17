@@ -17,8 +17,11 @@ import { EvidenceView } from "./LandResearch";
 import { ActionPlanSummary } from "./ActionPlanSummary";
 import {
   actionDraftKey,
+  actionDraftProblems,
   actionEdit,
+  actionFieldId,
   actionPayload,
+  approvalBlockers,
   downloadActionDraft,
   parseActionDraft,
   sameAction,
@@ -156,6 +159,11 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [reviewNote, setReviewNote] = useState("");
+  // Save was pressed with problems: the list shows and the named fields are marked invalid.
+  const [attempted, setAttempted] = useState(false);
+  // The review (action:revision:status) whose note field was left, so its empty-note reason
+  // turns from a hint into a warning only once someone has been there.
+  const [noteVisited, setNoteVisited] = useState<string | null>(null);
   const project = useMission((state) => state.project);
   // A fleet's project that works this land keeps its missions together; otherwise the land's
   // own plans, the project "Plan work on this land" uses.
@@ -279,6 +287,43 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
   });
   const selected =
     selectedRecord.data ?? catalog.data?.find((item) => item.id === selectedId) ?? null;
+  const problems = draft ? actionDraftProblems(draft) : [];
+  const flagged = new Set(attempted ? problems.map((problem) => problem.id) : []);
+  // A field the problem list can name: its id (the list's focus target) and, once Save was
+  // pressed, aria-invalid and the reason `issue` shows under it.
+  const field = (id: string) => ({
+    id,
+    "aria-invalid": flagged.has(id) || undefined,
+    "aria-describedby": flagged.has(id) ? `${id}-problem` : undefined,
+  });
+  // The field's own reason, in place: focus lands on the first field, far from the list above
+  // Save, and a red outline alone does not say what is wrong.
+  const issue = (id: string) =>
+    flagged.has(id) ? (
+      <p className="land-field-problem" id={`${id}-problem`}>
+        {problems
+          .filter((problem) => problem.id === id)
+          .map((problem) => problem.message)
+          .join(" ")}
+      </p>
+    ) : null;
+  const focusField = (id: string) => {
+    const target = document.getElementById(id);
+    const details = target?.closest("details");
+    if (details) details.open = true;
+    target?.focus();
+  };
+  const saveBlocked = !canEdit
+    ? "Your workspace role can view actions but not save them."
+    : conflict
+      ? "Choose how to handle the changed action above before saving."
+      : null;
+  const reviewKey = selected ? `${selected.id}:${selected.revision}:${selected.status}` : null;
+  const blockers = selected
+    ? approvalBlockers(selected, reviewNote, selected.status === "draft" ? "approve" : "schedule")
+    : [];
+  const noteLeftEmpty = noteVisited === reviewKey && !reviewNote.trim();
+  const reviseBlocker = blockers.find((blocker) => blocker.revise);
   useEffect(() => {
     if (!draft && selected?.id) review.current?.scrollIntoView({ block: "nearest" });
   }, [draft, selected?.id]);
@@ -372,6 +417,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
       () => {
         clearStored();
         setConflict(null);
+        setAttempted(false);
         setDraft(null);
         setEditing(null);
         setReviewNote("");
@@ -384,6 +430,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
     setNotice(null);
     setError(null);
     setReviewNote("");
+    setAttempted(false);
     setEditing(actionEdit(action));
     setDraft(editable(action));
   };
@@ -431,6 +478,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
           );
       }
       if (ticket.current !== current) return;
+      setAttempted(false);
       setEditing(baseline);
       setDraft(value);
       setRecovery(null);
@@ -588,6 +636,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
               setEditing(null);
               setNotice(null);
               setError(null);
+              setAttempted(false);
               setDraft(fresh(land));
             }}
           >
@@ -607,6 +656,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                   setEditing(null);
                   setNotice(null);
                   setError(null);
+                  setAttempted(false);
                   setDraft(fromScenario(land, scenario));
                 }}
               >
@@ -623,8 +673,17 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
       {draft && (
         <form
           className="land-action-form"
+          // The checklist below replaces the browser's bubbles, which cannot reach a field in a
+          // collapsed <details>. `required` stays on the fields for assistive technology.
+          noValidate
           onSubmit={(event) => {
             event.preventDefault();
+            const first = problems[0];
+            if (first) {
+              setAttempted(true);
+              focusField(first.id);
+              return;
+            }
             void save();
           }}
         >
@@ -633,25 +692,30 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
             <label className="land-name">
               Action title
               <input
+                {...field(actionFieldId.title)}
                 required
                 maxLength={200}
                 value={draft.title}
                 onChange={(event) => setDraft({ ...draft, title: event.target.value })}
               />
             </label>
+            {issue(actionFieldId.title)}
             <label className="land-name">
               Outcome to achieve
               <textarea
+                {...field(actionFieldId.objective)}
                 required
                 maxLength={2000}
                 value={draft.objective}
                 onChange={(event) => setDraft({ ...draft, objective: event.target.value })}
               />
             </label>
+            {issue(actionFieldId.objective)}
             <div className="land-action-grid">
               <label className="land-name">
                 Start date
                 <input
+                  {...field(actionFieldId.start)}
                   required
                   type="date"
                   value={draft.startDate}
@@ -661,6 +725,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
               <label className="land-name">
                 Cost currency
                 <input
+                  {...field(actionFieldId.currency)}
                   required
                   pattern="[A-Z]{3}"
                   maxLength={3}
@@ -671,6 +736,8 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                 />
               </label>
             </div>
+            {issue(actionFieldId.start)}
+            {issue(actionFieldId.currency)}
             <label className="land-name">
               Supporting scenario
               <select
@@ -738,6 +805,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                 <label className="land-name">
                   Step name
                   <input
+                    {...field(actionFieldId.step(index, "title"))}
                     aria-label={`Step ${index + 1} name`}
                     required
                     maxLength={200}
@@ -745,18 +813,22 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                     onChange={(event) => updateStep(index, { title: event.target.value })}
                   />
                 </label>
+                {issue(actionFieldId.step(index, "title"))}
                 <label className="land-name">
                   Work description
                   <textarea
+                    {...field(actionFieldId.step(index, "detail"))}
                     maxLength={1000}
                     value={step.detail ?? ""}
                     onChange={(event) => updateStep(index, { detail: event.target.value })}
                   />
                 </label>
+                {issue(actionFieldId.step(index, "detail"))}
                 <div className="land-action-grid">
                   <label className="land-name">
                     Start day
                     <input
+                      {...field(actionFieldId.step(index, "start"))}
                       aria-label={`Step ${index + 1} start day`}
                       type="number"
                       min={1}
@@ -771,6 +843,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                   <label className="land-name">
                     Duration (days)
                     <input
+                      {...field(actionFieldId.step(index, "days"))}
                       type="number"
                       min={1}
                       max={3650}
@@ -780,9 +853,12 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                     />
                   </label>
                 </div>
+                {issue(actionFieldId.step(index, "start"))}
+                {issue(actionFieldId.step(index, "days"))}
                 <label className="land-name">
                   Success measure
                   <textarea
+                    {...field(actionFieldId.step(index, "success"))}
                     aria-label={`Step ${index + 1} success measure`}
                     required
                     maxLength={2000}
@@ -790,9 +866,11 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                     onChange={(event) => updateStep(index, { successMeasure: event.target.value })}
                   />
                 </label>
+                {issue(actionFieldId.step(index, "success"))}
                 <label className="land-name">
                   Step work area
                   <select
+                    {...field(actionFieldId.step(index, "area"))}
                     aria-label={`Step ${index + 1} work area`}
                     value={step.footprint ? "custom" : "whole"}
                     onChange={(event) => {
@@ -832,20 +910,24 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                       ))}
                   </select>
                 </label>
+                {issue(actionFieldId.step(index, "area"))}
                 <details>
                   <summary>Resources, costs and prerequisites</summary>
                   <label className="land-name">
                     Resources (one per line)
                     <textarea
+                      {...field(actionFieldId.step(index, "resources"))}
                       value={(step.resources ?? []).join("\n")}
                       onChange={(event) =>
                         updateStep(index, { resources: event.target.value.split("\n") })
                       }
                     />
                   </label>
+                  {issue(actionFieldId.step(index, "resources"))}
                   <label className="land-name">
                     Estimated cost ({draft.currency})
                     <input
+                      {...field(actionFieldId.step(index, "cost"))}
                       type="number"
                       min={0}
                       step="any"
@@ -859,16 +941,20 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                       }
                     />
                   </label>
+                  {issue(actionFieldId.step(index, "cost"))}
                   {step.estimatedCost !== null && step.estimatedCost !== undefined && (
                     <label className="land-name">
                       Cost basis
                       <textarea
+                        {...field(actionFieldId.step(index, "cost-basis"))}
                         required
+                        maxLength={2000}
                         value={step.costBasis ?? ""}
                         onChange={(event) => updateStep(index, { costBasis: event.target.value })}
                       />
                     </label>
                   )}
+                  {issue(actionFieldId.step(index, "cost-basis"))}
                   {draft.steps
                     .filter((other) => other.id !== step.id)
                     .map((other) => (
@@ -1068,11 +1154,21 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
               <p>{draft.exclusions?.length ?? 0} excluded footprints</p>
               {Boolean(draft.exclusions?.length) && (
                 <div className="land-actions">
-                  <button type="button" onClick={() => setDraft({ ...draft, exclusions: [] })}>
+                  <button
+                    type="button"
+                    id={actionFieldId.exclusions}
+                    aria-describedby={
+                      flagged.has(actionFieldId.exclusions)
+                        ? `${actionFieldId.exclusions}-problem`
+                        : undefined
+                    }
+                    onClick={() => setDraft({ ...draft, exclusions: [] })}
+                  >
                     Clear exclusions
                   </button>
                 </div>
               )}
+              {issue(actionFieldId.exclusions)}
             </details>
           </fieldset>
           <fieldset disabled={busy || !canEdit}>
@@ -1082,7 +1178,9 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                 <label className="land-name">
                   Constraint
                   <textarea
+                    {...field(actionFieldId.constraint(index, "text"))}
                     required
+                    maxLength={2000}
                     value={constraint.text}
                     onChange={(event) =>
                       setDraft({
@@ -1094,6 +1192,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                     }
                   />
                 </label>
+                {issue(actionFieldId.constraint(index, "text"))}
                 <label className="land-dismissed">
                   <input
                     type="checkbox"
@@ -1113,7 +1212,9 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                   <label className="land-name">
                     How was it resolved?
                     <textarea
+                      {...field(actionFieldId.constraint(index, "resolution"))}
                       required
+                      maxLength={2000}
                       value={constraint.resolution ?? ""}
                       onChange={(event) =>
                         setDraft({
@@ -1126,6 +1227,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                     />
                   </label>
                 )}
+                {issue(actionFieldId.constraint(index, "resolution"))}
                 <div className="land-actions">
                   <button
                     type="button"
@@ -1157,16 +1259,48 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
             <label className="land-name">
               Assumptions (one per line)
               <textarea
+                {...field(actionFieldId.assumptions)}
                 value={(draft.assumptions ?? []).join("\n")}
                 onChange={(event) =>
                   setDraft({ ...draft, assumptions: event.target.value.split("\n") })
                 }
               />
             </label>
+            {issue(actionFieldId.assumptions)}
           </fieldset>
+          {attempted && problems.length > 0 && (
+            <div className="land-error land-draft-problems" role="alert" id="action-draft-problems">
+              <p>
+                Before saving, fix {problems.length} thing{problems.length > 1 ? "s" : ""}:
+              </p>
+              <ul>
+                {problems.map((problem, index) => (
+                  <li key={`${problem.id}:${index}`}>
+                    <button
+                      type="button"
+                      className="land-evidence-link"
+                      onClick={() => focusField(problem.id)}
+                    >
+                      {problem.message}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="land-actions">
-            <button type="submit" disabled={busy || !canEdit || !!conflict}>
-              {editing ? "Save action revision" : "Save action draft"}
+            <button
+              type="submit"
+              disabled={busy || !canEdit || !!conflict}
+              aria-describedby={
+                saveBlocked
+                  ? "action-save-blocked"
+                  : attempted && problems.length
+                    ? "action-draft-problems"
+                    : undefined
+              }
+            >
+              {busy ? "Saving…" : editing ? "Save action revision" : "Save action draft"}
             </button>
             <button
               type="button"
@@ -1176,6 +1310,7 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                 setConflict(null);
                 setNotice(null);
                 setError(null);
+                setAttempted(false);
                 setDraft(null);
                 setEditing(null);
               }}
@@ -1183,6 +1318,11 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
               Cancel edit
             </button>
           </div>
+          {saveBlocked && (
+            <p className="land-footnote" id="action-save-blocked">
+              {saveBlocked}
+            </p>
+          )}
         </form>
       )}
       {!draft && (
@@ -1344,8 +1484,10 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                   required
                   maxLength={2000}
                   aria-label={selected.status === "draft" ? "Review note" : "Scheduling note"}
+                  aria-invalid={noteLeftEmpty || undefined}
                   value={reviewNote}
                   onChange={(event) => setReviewNote(event.target.value)}
+                  onBlur={() => setNoteVisited(reviewKey)}
                 />
               </label>
               {selected.status === "approved" && (
@@ -1367,11 +1509,12 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
               )}
               <div className="land-actions">
                 <button
-                  disabled={
-                    busy ||
-                    Boolean(selected.staleReasons.length) ||
-                    Boolean(selected.constraints?.some((constraint) => !constraint.resolved)) ||
-                    !reviewNote.trim()
+                  disabled={busy || blockers.length > 0}
+                  // The reasons' own words, without the Revise button beside one of them.
+                  aria-describedby={
+                    blockers
+                      .map((blocker) => `action-approval-blockers-${blocker.kind}`)
+                      .join(" ") || undefined
                   }
                 >
                   {selected.status === "draft"
@@ -1379,6 +1522,34 @@ function Actions({ land, scope }: { land: LandArea; scope: string }) {
                     : "Schedule approved action"}
                 </button>
               </div>
+              {blockers.length > 0 && (
+                <ul
+                  id="action-approval-blockers"
+                  className="land-blockers"
+                  aria-label={
+                    selected.status === "draft" ? "Before approving" : "Before scheduling"
+                  }
+                >
+                  {blockers.map((blocker) => (
+                    <li
+                      key={blocker.kind}
+                      // Quiet until the note was visited and left empty: the structural reasons
+                      // are the news on a fresh review.
+                      className={blocker.kind === "note" && !noteLeftEmpty ? "is-hint" : undefined}
+                    >
+                      <span id={`action-approval-blockers-${blocker.kind}`}>{blocker.message}</span>
+                      {blocker === reviseBlocker && !recovery && (
+                        <>
+                          {" "}
+                          <button type="button" disabled={busy} onClick={() => beginEdit(selected)}>
+                            Revise action
+                          </button>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
               <p className="land-footnote">
                 {selected.status === "draft"
                   ? "Approval records your review of this version. Scheduling is a separate step."
