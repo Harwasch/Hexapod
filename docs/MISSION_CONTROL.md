@@ -293,6 +293,25 @@ the assumptions. A dispatched plan's detail shows progress from the work log aga
 the schedule expects it today (`missions/progress.ts`) and offers "Replan from here", which
 reopens the composer with the drift written into the goal.
 
+**Dress rehearsal.** "Rehearse" (beside Approve) plays the draft before anyone approves it:
+ghost machines labelled "SIM" drive the lanes the map draws for each zone, at 300x or 600x, and
+a hand goes up at a lane's worst point when it breaks a limit its machine class is assumed to
+keep: grade along the lane or cross-slope across it over `maxSlopePct`, or a lane inside
+`creekBufferM` of a mapped creek (both in `machine_classes.json`, both labelled assumed). Each
+hand names the value, the limit and the source; a click on it, on the map or in the card, flies
+there and offers "Leave this lane out", which takes that lane out of the draft's preview only.
+The end summary counts the lanes per rule, and the approve button reads "Approve despite N
+hands". Machines come from the zone's steps; their class from the model ("Ranger 2 · mower"),
+else the plan's class for the zone; a plan with no machines (a Land's own project) gets one
+assumed generic machine per class; a drone's lanes are flown but not checked. Slope comes from
+the Land's USGS 3DEP raster, else its Copernicus GLO-30 (a surface model with the canopy in
+it), else the globe's terrain sampled over the lanes; creeks from the Land's USGS NHD flowlines
+(ephemeral ones on request), or the demo ranch's supplied Figueroa Creek without a Land. The
+clock is the time to drive the drawn lanes, not the plan's machine-hours; the ground between
+drawn lanes, turns and transits are not checked, and the card says so. Code:
+`missions/rehearsal.ts` (pure), `features/mission/rehearsalGround.ts`, `dressRehearsal.ts`,
+`Rehearsal.tsx`, `cesium/RehearsalManager.ts`.
+
 **Quality.** `apps/web/src/missions/planDraft.ts` converts between the API draft and the
 console's `Plan`; `apps/api/app/services/planner.py` holds both planners behind one `Planner`
 protocol (`tests/test_agent.py`). `apps/api/evals/planner_cases.json` is the planner

@@ -974,6 +974,61 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plans-panel")).not.toContainText("with one mower");
   });
 
+  test("a draft is rehearsed before approval: ghosts, raised hands and the count on Approve", async ({
+    app,
+  }) => {
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, {
+      timeout: 30_000,
+    });
+    // The creek draw: its lanes run along Figueroa Creek (the demo ranch's NHD line).
+    await app.getByTestId("command-input").fill("Mow Z-08 with one mower");
+    await app.getByTestId("command-input").press("Enter");
+    await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+    await expect(app.getByTestId("plan-approve")).toHaveText("Approve plan");
+    await app.getByTestId("plan-rehearse").dispatchEvent("click");
+    await expect(app.getByTestId("rehearsal-clock")).toContainText("sim · 300×", {
+      timeout: 30_000,
+    });
+    await expect(app.getByTestId("plan-rehearsal")).toContainText("SIMULATED REHEARSAL");
+    await expect.poll(() => entityIds(app)).toContain("rehearsal:ghost:TR-04");
+    // The plan's own passes give way to the rehearsal's lanes.
+    await expect
+      .poll(
+        async () => (await entityIds(app)).filter((id) => id.startsWith("rehearsal:lane:")).length,
+      )
+      .toBeGreaterThan(0);
+    await app.getByTestId("rehearsal-skip").dispatchEvent("click");
+    const summary = app.getByTestId("rehearsal-summary");
+    await expect(summary).toContainText("inside the 15 m buffer of Figueroa Creek");
+    await expect(summary).toContainText(
+      "Creek: USGS National Hydrography Dataset (demo ranch data)",
+    );
+    await expect(summary).toContainText("Limits: assumed per machine class");
+    await expect(app.getByTestId("plan-approve")).toHaveText(/^Approve despite \d+ hands?$/);
+    // A hand opens with its rule; leaving its lane out says so and rehearses without it.
+    await app
+      .getByTestId("rehearsal-hand")
+      .first()
+      .locator("button")
+      .first()
+      .dispatchEvent("click");
+    await expect(app.getByTestId("rehearsal-hand").first()).toContainText(
+      "is assumed to keep 15 m",
+    );
+    await app.getByTestId("rehearsal-leave-out").dispatchEvent("click");
+    await expect(app.getByTestId("rehearsal-left-out")).toContainText(
+      "Left out of this draft's preview: Z-08 lane",
+    );
+    // Stopping clears the map and the count.
+    await app.getByTestId("rehearsal-stop").dispatchEvent("click");
+    await expect(app.getByTestId("plan-rehearsal")).toHaveCount(0);
+    await expect(app.getByTestId("plan-approve")).toHaveText("Approve plan");
+    await expect
+      .poll(async () => (await entityIds(app)).some((id) => id.startsWith("rehearsal:")))
+      .toBe(false);
+  });
+
   test("a plan can be made anywhere: click the ground, the agent outlines it and drafts", async ({
     app,
   }) => {

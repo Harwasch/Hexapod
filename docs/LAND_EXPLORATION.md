@@ -2480,3 +2480,23 @@ research sources (`/research/sources`) and list what exists without storing evid
 overview does not run them. Not done: Esri Wayback and the Esri-hosted topo service (not openly
 licensed), image registrations and NDVI rasters in the lens (they need workspace auth on the
 tiles), and any check of alignment against the Google mesh.
+
+## Implemented increment: the Dress Rehearsal
+
+A draft plan on a Land can be rehearsed before it is approved (docs/MISSION_CONTROL.md,
+"Dress rehearsal"). The rehearsal reads the Land's own records through two workspace routes:
+`GET /api/v1/land/rasters/{id}/grid?band=N` sends one band of a stored raster as a `LonLatGrid`
+(float32, NaN for no value, about the raster's cell size, at most 512 cells a side; bilinear for
+measured bands, nearest for categorical ones; `Cache-Control: private, no-store`), and
+`GET /land/{id}/hydrography` gives the USGS NHD flowlines. The newest USGS 3DEP raster made for
+the current outline is preferred (bare earth, so trees and buildings do not read as slope),
+then Copernicus GLO-30, which the card labels a 30 m surface model including canopy; a Land
+with neither is checked against the globe's terrain sampled over the lanes, labelled as such,
+and the card suggests analyzing bare-earth terrain. The raster heights are NAVD88 or EGM2008,
+so ghosts stand on them plus the median difference to the globe's terrain at a few points;
+slope is a difference of heights and does not need the datum. The limits are assumptions in
+`apps/api/app/services/machine_classes.json`: `maxSlopePct` (mower 25 %, seed drill 20 %,
+survey rover 35 %) and `creekBufferM` (15 m, 15 m and 5 m). Not done: hands are not stored with
+the plan or sent to the planner, lanes cannot be dragged, machine kinematics (headland turns,
+turning radius, battery), machine-to-machine conflicts and aerial rules (altitude, wind,
+airspace) are not simulated.
