@@ -588,7 +588,7 @@ test("rehearse a plan on a saved land, and work only the ground it can", async (
     timeout: 30_000,
   });
   await expect(plans.getByTestId("plan-ground")).toContainText(
-    "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed) on USGS 3DEP 1/3″ DEM, published 2025-08-27",
+    "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m clear of steeper cells, on USGS 3DEP 1/3″ DEM, published 2025-08-27",
   );
   await expect(plans.getByTestId("rehearsal-after")).toContainText(
     "Rehearsed again on the workable ground of Bench pasture",
