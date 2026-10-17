@@ -2176,9 +2176,12 @@ Routes, all workspace-scoped through `WorkspaceDep`:
   workspace's plan.
 
 Scheduling a land action now records the land and boundary revision on the mission, uses
-`LA-<8 hex of the action id>` area ids (and `-<n>` per step footprint) so two actions never share
-a zone id, attributes each area to the approved action revision, and rejects another land's
-`land:<id>` project id. Stored missions keep the ids they were written with.
+`LA-<8 hex of the action id>-r<revision>` area ids (and `-r<revision>-<n>` per step footprint) so
+two actions never share a zone id, and neither do two scheduled revisions of one action: a
+revision may cover other ground, and the console keys zones by id, so a shared id drew and
+rehearsed the second mission on the first revision's outline. It attributes each area to the
+approved action revision and rejects another land's `land:<id>` project id. Stored missions keep
+the ids they were written with.
 
 Planning: the planner sizes a zone that comes with an outline from a shapely port of the
 console's coverage passes (`services/coverage.py`; holes and MultiPolygons included), using the
@@ -2191,6 +2194,13 @@ before. Outlines are never sent to the model; the measured paths are. An outline
 valid (a corner dragged across an edge, OpenStreetMap outers that touch) is repaired with
 `make_valid`, or dropped so its zone is sized by acres, rather than failing the draft. Survey
 detail scales a drone's flying only, and each drone zone records the height it was flown at.
+One draft request measures within one budget, shared by the model's context and its draft: each
+outline once per spacing, at most 20 zones, outlines of up to 20,000 points (a Land boundary's
+limit) and 50,000 in all, and no zone started after 10 s of measuring. An outline whose passes
+break into more than 20,000 separate stretches is not traced pass by pass: its stretches and
+passes are counted from its edges and its length is the area over the spacing, and its basis
+says so. A zone left out of the budget is sized by its acres, and the draft's assumptions name
+it and say why.
 "Monitor", "patrol", "check", "watch", "count" and "scout" read as surveys as whole words, so a
 "county road" or a "checkpoint" does not turn a repair into one.
 
@@ -2532,7 +2542,9 @@ API, read-only and workspace-scoped (viewers may ask), private and no-store:
   between the pieces by area. `nativeResolutionM` says the grid the areas were outlined on.
 
 The standardized vectors of a raster stay in memory between taps, keyed by its content hash
-(192 MB budget): a tap after the first is one matrix product.
+(96 MiB budget, sized with the API's other in-process caches to fit the 1 GB API VM): a tap after
+the first is one matrix product. Cold builds run one at a time across rasters, because one peaks
+near 200 MB; a tap on a built stack never waits for them.
 
 Console: the card leads the land's Ecology section. Without signatures for the current boundary
 it offers "Prepare 10 m signatures" (the same raster run Explore this land starts; "Prepare
