@@ -7,7 +7,7 @@ import type * as Queries from "@/api/queries";
 import { anywhereProject } from "@/missions/anywhere";
 import { bookedWindows } from "@/missions/conflicts";
 import { demoRanchProject } from "@/missions/demo";
-import { landProject, landZones } from "@/missions/landGround";
+import { boundaryZoneOf, landProject, landZones } from "@/missions/landGround";
 import { buildDraftRequest, planFromRecord, PRIVATE_PLAN_TITLE } from "@/missions/planDraft";
 import { useLand } from "@/state/land";
 import { migrateMissionStorage, missionLandId, persistable, useMission } from "@/state/mission";
@@ -315,6 +315,57 @@ describe("plans on a saved land stay private", () => {
     await vi.waitFor(() => expect(useMission.getState().project?.id).toBe(`land:${OTHER_ID}`));
     state = useMission.getState();
     expect(state.landGround?.landId).toBe(OTHER_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
+  });
+
+  it("switching between two lands layered on one project leaves only the selected one's ground", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    api.fetchLandGround.mockResolvedValue(ground);
+    useLand.getState().select(land);
+    expect(await engageLand(land)).toBe("layer");
+    // The Land panel's library selects another Land straight away, with no clear between.
+    api.fetchLandGround.mockResolvedValue(otherGround);
+    useLand.getState().select(otherLand);
+    expect(await engageLand(otherLand)).toBe("layer");
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
+    expect(missionLandId()).toBe(OTHER_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
+    expect(state.project?.zones.filter((z) => z.land?.landId === OTHER_ID)).toHaveLength(
+      otherGround.items.length,
+    );
+    // A goal naming no feature grounds on the selected Land's boundary, not the last one's.
+    expect(boundaryZoneOf(state.project!.zones)?.land?.landId).toBe(OTHER_ID);
+    useMission.getState().disengageLand();
+    expect(useMission.getState().project?.zones.map((z) => z.id)).toEqual(
+      demo.zones.map((z) => z.id),
+    );
+  });
+
+  it("waits for an open card before switching between lands layered on one project", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    api.fetchLandGround.mockResolvedValue(ground);
+    useLand.getState().select(land);
+    expect(await engageLand(land)).toBe("layer");
+    useMission.getState().openComposer({ goal: "monitor the fence", zoneIds: ["L-aaaa0001"] });
+    api.fetchLandGround.mockResolvedValue(otherGround);
+    useLand.getState().select(otherLand);
+    expect(await engageLand(otherLand)).toBeNull();
+    // The card keeps the ground it was drafted on, so it is still filed and routed by it.
+    let state = useMission.getState();
+    expect(state.landGround?.landId).toBe(LAND_ID);
+    expect(state.project?.zones.some((z) => z.id === "L-aaaa0001")).toBe(true);
+    expect(state.project?.zones.some((z) => z.land?.landId === OTHER_ID)).toBe(false);
+    expect(state.composer?.goal).toBe("monitor the fence");
+    expect(state.log.at(-1)?.text).toBe(
+      `Creek Field opens in Plan once you approve or close the plan card on ${demo.name}.`,
+    );
+    useMission.getState().closeComposer();
+    await vi.waitFor(() => expect(useMission.getState().landGround?.landId).toBe(OTHER_ID));
+    state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
     expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
   });
 
