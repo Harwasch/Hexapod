@@ -256,6 +256,7 @@ async def test_a_full_queue_is_answered_busy_at_once_and_holds_no_shared_thread(
         return b"png"
 
     monkeypatch.setattr(topo, "draw", slow)
+    monkeypatch.setattr(topo, "SLOT_WAIT_S", 30.0)
     topo.clear_cache()
     tiles = [
         topo.plan(SHEET, NEATLINE, 14, x, 0)
@@ -278,7 +279,8 @@ async def test_a_full_queue_is_answered_busy_at_once_and_holds_no_shared_thread(
         started = time.monotonic()
         with pytest.raises(topo.RenderBusy):
             await topo.render_tile(tiles[-1])
-        assert time.monotonic() - started < 0.5
+        # Refused at once, not after the (deliberately long) slot wait.
+        assert time.monotonic() - started < topo.SLOT_WAIT_S / 3
         release.set()
     assert drawn == [b"png"] * (len(tiles) - 1)
 
@@ -294,7 +296,8 @@ async def test_a_tile_that_waits_too_long_is_answered_busy(monkeypatch: pytest.M
         started = time.monotonic()
         with pytest.raises(topo.RenderBusy):
             await topo.render_tile(topo.plan(SHEET, NEATLINE, 14, 1, 1))
-        assert 0.15 < time.monotonic() - started < 1.0
+        # It waited for a slot, and gave up long before the default 4 s wait.
+        assert 0.15 < time.monotonic() - started < 3.0
     finally:
         for _ in range(topo.MAX_IN_FLIGHT):
             topo._readers.release()
@@ -316,6 +319,8 @@ def test_route_answers_busy_at_once_when_every_reader_is_taken(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(topo, "MAX_WAITING", 0)
+    # A slot wait long enough that waiting for one can never pass for a slow machine.
+    monkeypatch.setattr(topo, "SLOT_WAIT_S", 30.0)
     topo.clear_cache()
     # The readers are taken on the app's own event loop, as requests in flight would hold them.
     portal = client.portal
@@ -335,7 +340,8 @@ def test_route_answers_busy_at_once_when_every_reader_is_taken(
     assert response.status_code == 503
     assert response.headers["retry-after"] == str(topo.RETRY_AFTER_S)
     assert response.headers["cache-control"] == "no-store"
-    assert elapsed < 1.0
+    # Answered at once, not after the slot wait (a loaded CI runner can take a second or two).
+    assert elapsed < topo.SLOT_WAIT_S / 3
 
 
 def test_route_refuses_another_host(client: TestClient) -> None:
