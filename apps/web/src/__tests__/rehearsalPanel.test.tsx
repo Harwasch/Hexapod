@@ -628,6 +628,7 @@ describe("RehearsalPanel", () => {
         kept: [],
         sources: [],
         elevation: null,
+        creeksRead: false,
         apply: vi.fn(),
         retry: vi.fn(),
       },
@@ -685,6 +686,7 @@ describe("RehearsalPanel", () => {
         kept: [{ label: "Perimeter fence", hands: 3 }],
         sources: ["Slope: USGS 3DEP 1/3″ bare-earth DEM, 10 m, raster 1108dcf3"],
         elevation: "USGS 3DEP 1/3″ bare-earth DEM, 10 m (published 2025-08-27)",
+        creeksRead: true,
       },
     });
     const { unmount } = render(<RehearsalPanel run={ready} />);

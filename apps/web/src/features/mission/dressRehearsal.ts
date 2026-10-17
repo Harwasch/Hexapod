@@ -167,6 +167,8 @@ export interface WorkableOffer {
   sources: string[];
   /** The elevation the slope was read on, with its date: "USGS 3DEP … (published 2025-08-27)". */
   elevation: string | null;
+  /** Whether the creek buffer was applied (NHD answered for every zone). */
+  creeksRead: boolean;
   apply: () => void;
   retry: () => void;
 }
@@ -488,6 +490,7 @@ function useWorkableOffer(input: {
     text: null,
     sources: [] as string[],
     elevation: null,
+    creeksRead: false,
     retry: () => {
       setFailure(null);
       for (const query of queries) if (query.isError) void query.refetch();
@@ -549,6 +552,9 @@ function useWorkableOffer(input: {
     totals,
     text: workableOfferText(totals),
     sources: [...new Set(answers.flatMap((a) => a.result.sources))],
+    creeksRead: answers.every(
+      (a) => a.result.creeks.status === "available" || a.result.creeks.status === "empty",
+    ),
     elevation: (() => {
       const read = answers[0]?.result.elevation;
       return read ? `${read.label}${read.published ? ` (published ${read.published})` : ""}` : null;

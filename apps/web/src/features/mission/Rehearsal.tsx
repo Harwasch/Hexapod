@@ -132,10 +132,9 @@ function WorkableAction({ offer }: { offer: WorkableOffer }) {
       {offer.state === "ready" && (
         <p className="mc-muted mc-rehearsal__note">
           Redrafts the plan on what is left of {offer.labels.join(" and ")}, hatches what is left
-          out, and rehearses again. Derived from {offer.elevation ?? "the Land's terrain"} and USGS
-          NHD creeks; the limits are assumed.
-          {offer.kept.length > 0 &&
-            ` ${offer.kept.map((k) => k.label).join(", ")} follows a line, so its ${offer.kept.reduce((s, k) => s + k.hands, 0)} hands stay.`}
+          out, and rehearses again. Derived from {offer.elevation ?? "the Land's terrain"}
+          {offer.creeksRead ? " and USGS NHD creeks" : ""}; the limits are assumed.
+          {offer.kept.length > 0 && ` ${keptText(offer.kept)}`}
         </p>
       )}
       {offer.state !== "loading" && offer.message && (
@@ -162,6 +161,13 @@ function WorkableAction({ offer }: { offer: WorkableOffer }) {
       )}
     </div>
   );
+}
+
+/** "Perimeter fence follows a line, so its 3 hands stay." */
+function keptText(kept: WorkableOffer["kept"]): string {
+  const hands = kept.reduce((sum, zone) => sum + zone.hands, 0);
+  const one = kept.length === 1;
+  return `${kept.map((zone) => zone.label).join(" and ")} ${one ? "follows a line" : "follow lines"}, so ${one ? "its" : "their"} ${hands} hand${hands === 1 ? "" : "s"} stay${hands === 1 ? "s" : ""}.`;
 }
 
 /** After a redraft onto workable ground: the hands now against before, and why some stay. */
