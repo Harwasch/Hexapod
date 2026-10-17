@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -62,7 +63,12 @@ QUALITY = {
     10: "Cirrus",
     11: "Snow / ice",
 }
-BANDS = {"red": "B04", "nir": "B08", "scl": "SCL"}
+BANDS = {"green": "B03", "red": "B04", "nir": "B08", "swir16": "B11", "scl": "SCL"}
+# Native source spacing of each band; a catalog that disagrees is refused.
+RESOLUTION_M = {"green": 10, "red": 10, "nir": 10, "swir16": 20, "scl": 20}
+NDVI_INTERPRETATION = (
+    "Quality-masked sampled vegetation index; not species cover, biomass or restoration success."
+)
 
 
 def digest(value: Any) -> str:
@@ -145,8 +151,9 @@ def read_band(
         raise ValueError("The vegetation band lacks its expected no-data metadata.")
     info = bands[0]
     expected_type = "uint8" if key == "scl" else "uint16"
-    if info.get("data_type") != expected_type or info.get("spatial_resolution") != (
-        20 if key == "scl" else 10
+    if (
+        info.get("data_type") != expected_type
+        or info.get("spatial_resolution") != RESOLUTION_M[key]
     ):
         raise ValueError("The vegetation band has unexpected type or source resolution.")
     scale, offset = (1.0, 0.0) if key == "scl" else (info.get("scale"), info.get("offset"))
@@ -204,6 +211,71 @@ def read_band(
     return values, record
 
 
+@dataclass(frozen=True)
+class SceneChoice:
+    """One window's scene: the candidate whose own quality mask has the most clear land cells."""
+
+    item: dict[str, Any] | None
+    quality: NDArray[np.float32] | None
+    clear: int
+    catalog_source: RasterSource
+    truncated: bool
+    count: int
+    candidates: int
+    scl_sources: list[RasterSource]
+
+    @property
+    def acquired(self) -> datetime | None:
+        if self.item is None:
+            return None
+        return datetime.fromisoformat(self.item["properties"]["datetime"].replace("Z", "+00:00"))
+
+
+def select_scene(
+    client: httpx.Client,
+    budget: ReadBudget,
+    grid: AnalysisGrid,
+    period: VegetationPeriod,
+    *,
+    limit: int = 3,
+) -> SceneChoice:
+    """Search one window and keep the candidate with the most SCL 4/5 cells inside the land.
+
+    Candidates come ranked by boundary overlap then catalog cloud fraction; only the first
+    `limit` quality masks are read, and every mask read is cited."""
+    candidates, catalog_source, truncated, count = catalog_candidates(client, grid, period)
+    examined = candidates[:limit]
+    best: tuple[int, dict[str, Any], NDArray[np.float32]] | None = None
+    scl_sources = []
+    for item in examined:
+        quality, source = read_band(client, budget, item, "scl", grid)
+        scl_sources.append(source)
+        clear = int(np.count_nonzero(grid.inside & np.isin(quality, [4, 5])))
+        if best is None or clear > best[0]:
+            best = (clear, item, quality)
+    return SceneChoice(
+        item=best[1] if best else None,
+        quality=best[2] if best else None,
+        clear=best[0] if best else 0,
+        catalog_source=catalog_source,
+        truncated=truncated,
+        count=count,
+        candidates=len(examined),
+        scl_sources=scl_sources,
+    )
+
+
+def quality_counts(inside: NDArray[np.bool_], quality: NDArray[np.float32]) -> dict[str, int]:
+    """Boundary cells per scene-classification class of the selected scene."""
+    counts = {
+        label: int(np.count_nonzero(inside & (quality == code)))
+        for code, label in QUALITY.items()
+        if code != 0
+    }
+    counts["No data"] = int(np.count_nonzero(inside & (~np.isfinite(quality) | (quality == 0))))
+    return counts
+
+
 def ndvi(
     red: NDArray[np.float32],
     nir: NDArray[np.float32],
@@ -232,6 +304,11 @@ def encode(
     definitions: list[RasterBand],
     grid: AnalysisGrid,
     metadata: RasterMetadata,
+    *,
+    algorithm: str = "sentinel-2-ndvi-v1",
+    interpretation: str = NDVI_INTERPRETATION,
+    name: str = "vegetation",
+    interleave: str | None = None,
 ) -> bytes:
     with MemoryFile() as source, MemoryFile() as output:
         with source.open(
@@ -251,11 +328,8 @@ def encode(
                 dataset.set_band_description(index, definition.name)
                 dataset.set_band_unit(index, definition.unit)
             dataset.update_tags(
-                algorithm="sentinel-2-ndvi-v1",
-                interpretation=(
-                    "Quality-masked sampled vegetation index; not species cover, biomass or restoration "
-                    "success."
-                ),
+                algorithm=algorithm,
+                interpretation=interpretation,
                 attribution=SPEC.attribution,
                 license=SPEC.license,
                 license_url=LICENSE_URL,
@@ -268,11 +342,12 @@ def encode(
             compress="DEFLATE",
             blocksize=128,
             overview_resampling="AVERAGE",
+            **({"interleave": interleave} if interleave else {}),
         )
         data: bytes = output.read()
     if len(data) > 16 * 1024 * 1024:
         raise ValueError(
-            "The vegetation raster exceeds its output limit. Use fewer dates or a smaller grid."
+            f"The {name} raster exceeds its output limit. Use fewer dates or a smaller grid."
         )
     return data
 
@@ -324,34 +399,19 @@ def analyze(boundary: Footprint, request: RasterRequest, client: httpx.Client) -
         AWS_NO_SIGN_REQUEST="YES",
     ):
         for index, period in enumerate(request.periods, 1):
-            candidates, catalog_source, truncated, count = catalog_candidates(client, grid, period)
-            sources.append(catalog_source)
-            best: tuple[int, dict[str, Any], NDArray[np.float32]] | None = None
-            for item in candidates:
-                quality, source = read_band(client, budget, item, "scl", grid)
-                sources.append(source)
-                clear = int(np.count_nonzero(grid.inside & np.isin(quality, [4, 5])))
-                if best is None or clear > best[0]:
-                    best = (clear, item, quality)
+            choice = select_scene(client, budget, grid, period)
+            sources.append(choice.catalog_source)
+            sources.extend(choice.scl_sources)
             values = np.full((grid.height, grid.width), np.nan, dtype=np.float32)
-            quality_counts = {}
+            counts: dict[str, int] = {}
             selected_id, acquired = None, None
             explanation = "No matching satellite scene was returned for this window."
-            if best is not None:
-                _, selected, quality = best
+            if choice.item is not None and choice.quality is not None:
+                selected, quality = choice.item, choice.quality
                 selected_id = selected["id"]
-                acquired = datetime.fromisoformat(
-                    selected["properties"]["datetime"].replace("Z", "+00:00")
-                )
-                quality_counts = {
-                    label: int(np.count_nonzero(grid.inside & (quality == code)))
-                    for code, label in QUALITY.items()
-                    if code != 0
-                }
-                quality_counts["No data"] = int(
-                    np.count_nonzero(grid.inside & (~np.isfinite(quality) | (quality == 0)))
-                )
-                if best[0]:
+                acquired = choice.acquired
+                counts = quality_counts(grid.inside, quality)
+                if choice.clear:
                     red, red_source = read_band(client, budget, selected, "red", grid)
                     nir, nir_source = read_band(client, budget, selected, "nir", grid)
                     sources.extend([red_source, nir_source])
@@ -378,18 +438,18 @@ def analyze(boundary: Footprint, request: RasterRequest, client: httpx.Client) -
                     band=index,
                     scene_id=selected_id,
                     acquired_at=acquired,
-                    candidate_count=count,
-                    catalog_truncated=truncated,
-                    quality_candidates_examined=len(candidates),
+                    candidate_count=choice.count,
+                    catalog_truncated=choice.truncated,
+                    quality_candidates_examined=choice.candidates,
                     valid_cells=definition.valid_cells,
                     coverage_fraction=definition.valid_cells / total if total else None,
                     mean_ndvi=definition.mean,
                     common_mean_ndvi=None,
-                    quality_counts=quality_counts,
+                    quality_counts=counts,
                     explanation=explanation,
                 )
             )
-            if truncated:
+            if choice.truncated:
                 warnings.append(
                     f"Catalog results for {period.start_date} through {period.end_date} were truncated "
                     "to 25 candidates; only the stated candidates were examined."

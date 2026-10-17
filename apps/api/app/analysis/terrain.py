@@ -16,7 +16,7 @@ from rasterio.io import MemoryFile
 from rasterio.shutil import copy as copy_raster
 from rasterio.vrt import WarpedVRT
 
-from app.analysis.raster_grid import make_grid
+from app.analysis.raster_grid import AnalysisGrid, make_grid
 from app.analysis.raster_io import RasterOpener, ReadBudget
 from app.research.providers.base import SourceSpec, fetch_json
 from app.schemas.geojson import Footprint
@@ -81,7 +81,22 @@ def derive(
     return elevation, slopes
 
 
-def encode_cog(bands: list[NDArray[np.float32]], crs: str, affine: Any) -> bytes:
+COPERNICUS_TAGS = {
+    "algorithm": "terrain-v1",
+    "source": "Copernicus DEM GLO-30",
+    "vertical_reference": "EGM2008 (elevation band)",
+    "interpretation": "Digital surface model; not surveyed bare-earth terrain.",
+}
+
+
+def encode_cog(
+    bands: list[NDArray[np.float32]],
+    crs: str,
+    affine: Any,
+    *,
+    names: tuple[str, str] = ("Surface elevation", "Surface slope"),
+    tags: dict[str, str] = COPERNICUS_TAGS,
+) -> bytes:
     with MemoryFile() as source, MemoryFile() as output:
         with source.open(
             driver="GTiff",
@@ -95,16 +110,9 @@ def encode_cog(bands: list[NDArray[np.float32]], crs: str, affine: Any) -> bytes
         ) as dataset:
             for index, band in enumerate(bands, 1):
                 dataset.write(np.where(np.isfinite(band), band, -9999).astype(np.float32), index)
-                dataset.set_band_description(
-                    index, "Surface elevation" if index == 1 else "Surface slope"
-                )
+                dataset.set_band_description(index, names[index - 1])
                 dataset.set_band_unit(index, "m" if index == 1 else "degrees")
-            dataset.update_tags(
-                algorithm="terrain-v1",
-                source="Copernicus DEM GLO-30",
-                vertical_reference="EGM2008 (elevation band)",
-                interpretation="Digital surface model; not surveyed bare-earth terrain.",
-            )
+            dataset.update_tags(**tags)
         copy_raster(
             source.name,
             output.name,
@@ -119,19 +127,27 @@ def encode_cog(bands: list[NDArray[np.float32]], crs: str, affine: Any) -> bytes
     return data
 
 
+def padded_bounds(grid: AnalysisGrid) -> list[float]:
+    """The boundary's lon/lat bounds padded so slope has neighboring samples outside it."""
+    west, south, east, north = grid.bounds
+    padding = max(
+        0.002, grid.resolution * 3 / 111000 / max(0.05, math.cos(math.radians(grid.latitude)))
+    )
+    return [
+        max(-180, west - padding),
+        max(-90, south - padding),
+        min(180, east + padding),
+        min(90, north + padding),
+    ]
+
+
 def analyze(boundary: Footprint, request: RasterRequest, client: httpx.Client) -> TerrainResult:
     grid = make_grid(boundary, request)
     west, south, east, north = grid.bounds
     metric_crs, affine, resolution = grid.crs, grid.affine, grid.resolution
     width, height, inside = grid.width, grid.height, grid.inside
     # Search a padded region because slope needs neighboring samples outside the boundary.
-    padding = max(0.002, resolution * 3 / 111000 / max(0.05, math.cos(math.radians(grid.latitude))))
-    bbox = [
-        max(-180, west - padding),
-        max(-90, south - padding),
-        min(180, east + padding),
-        min(90, north + padding),
-    ]
+    bbox = padded_bounds(grid)
     catalog, _ = fetch_json(
         client,
         SPEC,

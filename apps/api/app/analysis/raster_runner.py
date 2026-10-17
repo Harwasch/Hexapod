@@ -18,6 +18,12 @@ class RasterCancelledError(Exception):
     pass
 
 
+def wall_seconds(request: RasterRequest) -> float:
+    """How long a processor may run before it is stopped. Sentinel-2 runs read many scenes
+    through the network; four signature windows measured about a minute through a proxy."""
+    return {"sentinel-2-signature": 200, "sentinel-2-ndvi": 165}.get(request.dataset, 90)
+
+
 def run(
     boundary: Footprint, request: RasterRequest, cancelled: threading.Event | None = None
 ) -> TerrainResult:
@@ -39,9 +45,7 @@ def run(
                 if cancelled is not None and cancelled.is_set():
                     process.kill()
                     raise RasterCancelledError()
-                if time.monotonic() - started > (
-                    165 if request.dataset == "sentinel-2-ndvi" else 90
-                ):
+                if time.monotonic() - started > wall_seconds(request):
                     process.kill()
                     raise ValueError(
                         "Raster analysis reached its processing time limit. Try a smaller area."

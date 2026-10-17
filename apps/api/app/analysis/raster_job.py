@@ -28,17 +28,26 @@ def main() -> None:
         payload = json.loads((directory / "input.json").read_text())
         boundary: Footprint = TypeAdapter(Footprint).validate_python(payload["boundary"])
         request = RasterRequest.model_validate(payload["request"])
-        if request.dataset != "sentinel-2-ndvi":
+        # Sentinel-2 runs decode many scenes; the single-source rasters get less CPU.
+        if request.dataset not in ("sentinel-2-ndvi", "sentinel-2-signature"):
             resource.setrlimit(resource.RLIMIT_CPU, (75, 75))
         with httpx.Client(headers={"User-Agent": "LivingWorld-LandAnalysis/1.0"}) as client:
             if request.dataset == "sentinel-2-ndvi":
                 from app.analysis.vegetation import analyze as analyze_vegetation
 
                 result = analyze_vegetation(boundary, request, client)
+            elif request.dataset == "sentinel-2-signature":
+                from app.analysis.signature import analyze as analyze_signature
+
+                result = analyze_signature(boundary, request, client)
             elif request.dataset == "esa-worldcover-2021":
                 from app.analysis.worldcover import analyze as analyze_cover
 
                 result = analyze_cover(boundary, request, client)
+            elif request.dataset == "usgs-3dep-13":
+                from app.analysis.dem_3dep import analyze as analyze_3dep
+
+                result = analyze_3dep(boundary, request, client)
             else:
                 result = analyze(boundary, request, client)
         (directory / "output.tif").write_bytes(result.data)

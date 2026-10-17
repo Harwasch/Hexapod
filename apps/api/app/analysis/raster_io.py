@@ -24,6 +24,8 @@ HOSTS = frozenset(
         "esa-worldcover.s3.eu-central-1.amazonaws.com",
         "sentinel-cogs.s3.us-west-2.amazonaws.com",
         "e84-earth-search-sentinel-data.s3.us-west-2.amazonaws.com",
+        # USGS National Map staged products: 3DEP elevation tiles.
+        "prd-tnm.s3.amazonaws.com",
     }
 )
 BLOCK_SIZE = 64 * 1024
