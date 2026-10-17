@@ -566,6 +566,19 @@ test("show the fog of knowing, read a cell, and draft a scout flight with its DJ
   await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
   await app.getByTestId("tool-land").click();
   const legend = app.getByTestId("knowledge-legend");
+  // The strip reads in time order: dates, then the Time Lantern, then the fog.
+  await expect(app.getByTestId("lantern-control")).toBeVisible();
+  await expect(legend).toBeVisible();
+  const stripOrder = await app
+    .locator(".hud-strip")
+    .evaluate((strip) =>
+      [
+        ...strip.querySelectorAll(
+          '[data-testid="lantern-control"], [data-testid="knowledge-legend"]',
+        ),
+      ].map((node) => node.getAttribute("data-testid")),
+    );
+  expect(stripOrder).toEqual(["lantern-control", "knowledge-legend"]);
   await legend.getByLabel("Show the fog of knowing").click();
   await expect(app.getByTestId("knowledge-foggy")).toHaveText("94% foggy");
   await legend.getByTestId("knowledge-details").click();
@@ -909,6 +922,101 @@ test("import with an exclusion and preserve the map on a phone", async ({ app })
     ).length;
   });
   expect(outlines).toBe(2);
+});
+
+test.describe("on a touch phone", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  /** Where the drawn boundary is on screen, and where the Land sheet starts. */
+  async function boundaryOnScreen(page: Page) {
+    return page.evaluate(() => {
+      interface Twin {
+        viewer: {
+          entities: {
+            values: {
+              id: string;
+              polyline?: { positions: { getValue(time: unknown): unknown[] } };
+            }[];
+          };
+          clock: { currentTime: unknown };
+        };
+        scene: { cartesianToCanvasCoordinates(p: unknown): { x: number; y: number } | undefined };
+      }
+      const twin = (window as unknown as { __twin: Twin }).__twin;
+      const ring = twin.viewer.entities.values.find((e) => e.id === "land-boundary:ring:0:0");
+      const points = (ring?.polyline?.positions.getValue(twin.viewer.clock.currentTime) ?? []).map(
+        (p) => twin.scene.cartesianToCanvasCoordinates(p) ?? null,
+      );
+      const sheet = document.querySelector('[data-testid="land-panel"]')?.getBoundingClientRect();
+      return { points, sheetTop: sheet?.top ?? 0 };
+    });
+  }
+
+  test("says tap, reviews the boundary above the sheet, and reopens at the overview", async ({
+    app,
+  }) => {
+    await landApi(app);
+    await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+    await app.evaluate(() => {
+      const twin = (
+        window as unknown as {
+          __twin: {
+            camera: {
+              cancelFlight(): void;
+              setView(lon: number, lat: number, h: number, hd: number, p: number): void;
+            };
+          };
+        }
+      ).__twin;
+      twin.camera.cancelFlight();
+      twin.camera.setView(-119.9, 36.6, 1500, 0, -90);
+    });
+    await app.getByTestId("phone-tab-more").click();
+    await app.getByTestId("more-land").click();
+    // A finger taps: the copy says so.
+    await expect(app.getByText("Tap around your land on the map", { exact: true })).toBeVisible();
+    await app.getByRole("button", { name: /Draw a boundary/ }).click();
+    await expect(
+      app.getByText("0 points placed. Tap the map to add the first point."),
+    ).toBeVisible();
+    // Above the drawing sheet, reaching down to where the taller review sheet will be.
+    for (const [x, y] of [
+      [60, 150],
+      [330, 150],
+      [330, 300],
+      [60, 300],
+    ]) {
+      await app.mouse.click(x!, y!);
+    }
+    await expect(app.getByText(/4 points placed/)).toBeVisible();
+    await app.getByRole("button", { name: "Review boundary", exact: true }).click();
+    await expect(app.getByText("Review your boundary", { exact: true })).toBeVisible();
+    // The camera frames the boundary above the sheet that covers the lower screen.
+    await expect
+      .poll(
+        async () => {
+          const { points, sheetTop } = await boundaryOnScreen(app);
+          return (
+            points.length >= 4 &&
+            sheetTop > 0 &&
+            points.every((p) => p !== null && p.y < sheetTop && p.y > 0 && p.x > 0 && p.x < 390)
+          );
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+    await app.getByLabel("Name this land").fill("Phone field");
+    await app.getByRole("button", { name: "Save this land", exact: true }).click();
+    const title = app.getByRole("heading", { name: "Phone field", exact: true });
+    await expect(title).toBeVisible();
+    // Down to the list at the panel's foot, and the land opened again from it: the panel
+    // shows its overview, not the list it was opened from.
+    const row = app.locator(".land-library button", { hasText: "Phone field" });
+    await row.scrollIntoViewIfNeeded();
+    await expect(title).not.toBeInViewport();
+    await row.click();
+    await expect(app.getByText("Land overview", { exact: true })).toBeInViewport();
+  });
 });
 
 test("select a mapped transmission line and preview a described corridor", async ({ app }) => {

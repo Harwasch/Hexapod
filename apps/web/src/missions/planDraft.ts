@@ -16,7 +16,7 @@ import type {
 import { isAreaZone, zoneFromFootprint } from "./areas";
 import { bookedWindows } from "./conflicts";
 import { isLandZone } from "./landGround";
-import { learnedRates } from "./rates";
+import { learnedRates, type LearnedRate } from "./rates";
 import { SCOUT_SHORT } from "./scout";
 import type { Plan, PlanOverlay, Project, Zone } from "./types";
 
@@ -31,6 +31,8 @@ export interface DraftSeed {
   answers?: Record<string, string | number | boolean>;
 }
 
+type PlannerZoneRequest = NonNullable<PlanDraftRequest["zones"]>[number];
+
 const CADENCE_LABEL: Record<PlanCadence, string> = {
   once: "One-off",
   daily: "Daily",
@@ -40,13 +42,22 @@ const CADENCE_LABEL: Record<PlanCadence, string> = {
 };
 
 /**
- * Whether the planner gets a zone's outline to size work from. Areas found in the console, a
- * Land's zones (a fence as its line) and every zone of a real project do; a simulated
- * provider's zones do not, because their stated acres are the demo's story, not their
- * footprints' (lift this once the demo's acres equal its outlines).
+ * The outline the planner sizes a zone's work from: a Land's fence as its line, every other
+ * zone as its footprint. The simulated demo's zones send theirs too, now that their acres are
+ * their footprints' measured acres (demoRanchData.ts), so a demo draft's hours come from path
+ * length under the assumed machine classes, the same as on real ground.
  */
-function sendsGeometry(project: Project, zone: Zone): boolean {
-  return isAreaZone(zone) || isLandZone(zone) || !project.simulated;
+function outline(zone: Zone): NonNullable<PlannerZoneRequest["geometry"]> {
+  return zone.land?.line ?? zone.footprint;
+}
+
+/**
+ * Work rates the log measured, for the planner to prefer over a path estimate. A simulated
+ * project's log measured nothing (the demo's shifts are written at the assumed class rates),
+ * so it sends none and its drafts are sized from the outlines.
+ */
+function measuredRates(project: Project): LearnedRate[] {
+  return project.simulated ? [] : learnedRates(project.workLog);
 }
 
 /** The context the planner needs: the goal plus the project's zones, machines and plans. */
@@ -70,7 +81,7 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
       progressPct: z.progressPct,
       treated: z.treated,
       note: z.note,
-      ...(sendsGeometry(project, z) ? { geometry: z.land?.line ?? z.footprint } : {}),
+      geometry: outline(z),
       ...(z.scout ? { capture: z.scout } : {}),
     })),
     existingPlans: project.plans
@@ -85,7 +96,7 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
           busy: booked?.busy ?? [],
         };
       }),
-    rates: learnedRates(project.workLog),
+    rates: measuredRates(project),
     preferredZoneIds: seed.zoneIds ?? [],
     preferredMachineIds: seed.machineIds ?? [],
     today: new Date().toISOString().slice(0, 10),

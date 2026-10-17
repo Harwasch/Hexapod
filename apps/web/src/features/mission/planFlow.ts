@@ -11,6 +11,7 @@ import { centerOf, destination, type LonLat } from "@twin/geo";
 
 import { outlineGround } from "@/api/queries";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
+import { touchFirst } from "@/lib/pointer";
 import { isAreaZone, nextAreaId, viewAreaZone } from "@/missions/areas";
 import { resolveGround, type GroundSource } from "@/missions/ground";
 import {
@@ -217,7 +218,10 @@ export async function planFromText(
   // Otherwise: the operator points at the ground and the agent outlines it.
   useMission.getState().updateComposer({ status: "awaiting-ground" });
   void waitForGround(goal, scene);
-  return "Click the ground you mean on the map and I'll outline it. Esc to cancel.";
+  // A phone has no Escape key: the card's Cancel stops the wait there.
+  return touchFirst()
+    ? "Tap the ground you mean on the map and I'll outline it, or press Cancel on the plan."
+    : "Click the ground you mean on the map and I'll outline it. Esc to cancel.";
 }
 
 /** Waits for one click, outlines the ground under it, then drafts. */

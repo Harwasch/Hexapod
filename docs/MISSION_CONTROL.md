@@ -29,7 +29,13 @@ labelled tools above the bar.
 - **Site switcher** (`features/mission/ProjectCard`) names the site — one name per site,
   its project's when it has one (`features/sites/siteNames.ts`, `docs/GLOSSARY.md`) — and
   leaves room beside the name for a status chip. Its menu is where you change where you are:
-  every catalog site (fly there; the one you are at is marked), the current site's saved
+  every catalog site (fly there; the one you are at is marked) but developer fixtures — the
+  synthetic Living Survey tree and audit or probe records, known by their slugs
+  (`synthetic-tree`, `audit-…`, `probe-…`) and never by words in a name, listed with
+  Settings › Advanced › Show developer readouts on, never a dated capture, always the site you
+  are at
+  (`features/sites/siteFixtures.ts`; the command box and the status line count the same
+  list) — the current site's saved
   views (open, save the current camera, delete; `features/bookmarks/savedViews.ts`), "Add a
   site", and links to the scan gallery and the data console. `s` opens it on its sites, `v`
   on its saved views; both are command-box actions ("Switch site", "Saved views"). Views saved
@@ -104,8 +110,9 @@ labelled tools above the bar.
   without a plan) open the plan composer described below.
 - **Command box** (`features/command-palette/CommandBox`, `⌘K` / `Ctrl+K` or `/`) is the one
   text box: it replaced the search pill, the ⌘K palette and the agent bar. Results are grouped
-  — Sites, Zones and Plans (from the project), Layers, Actions with their keys, then Places
-  (the geocoder) — and the last row is always “Ask the agent: …”, which runs the words through
+  — Sites, Saved land (by name, with the Land feature on), Zones and Plans (from the project),
+  Layers, Actions with their keys (with Land on, "Open Land" and "Outline land" among them),
+  then Places (the geocoder) — and the last row is always “Ask the agent: …”, which runs the words through
   `lib/intents.ts` (machine and zone ids, views, layers, measure, camera, site fly-to,
   geocoding, and a sentence of work to the planner; `useAgentCommand`). Enter runs the
   highlighted row, the arrows move it, Escape closes. Which row is highlighted follows the
@@ -289,7 +296,21 @@ active plans (a machine booked on overlapping days, a zone another plan still co
 functions in `missions/conflicts.ts`). The planner request carries the same booked windows
 plus rates learned from the work log per task family (`missions/rates.ts`), so the rules
 planner prefers free machines and estimates from what the fleet actually did, saying so in
-the assumptions. A dispatched plan's detail shows progress from the work log against where
+the assumptions. A simulated project sends no rates: its log was written at the assumed class
+rates, so nothing in it was measured. Every zone sends its outline, the simulated demo's too
+(its acres are its footprints' measured acres), and a zone with an outline is sized from path
+length under the assumed machine classes (`apps/api/app/services/machine_classes.json`), each
+labelled "(assumed)" in the draft. The rules planner takes a zone or machine by the rest of a
+name that leads with its id ("the west grassland" for "Z-14 West grassland"), and without a
+count asked for its crew is the machines whose model suits the work (the mowers to mow, the
+seed drill to seed). The crew also settles how a survey is sized: with a drone it is flown,
+and with only survey scouts it is driven at the survey rover's assumptions. Flight lines never
+go to a machine whose model says it works on the ground, so a scan in a fleet with no drone
+has no crew and says the mapping drone is not in this fleet. On the demo, "Mow the star
+thistle on the west grassland" drafts two mowers over 414 acres, about 174 machine-hours at
+2.4 acres an hour, and "Survey the Figueroa Creek draw" drafts the two scouts over its 44
+acres, about 3.7 machine-hours at the survey rover's 10 m swath and 1.5 m/s. A dispatched
+plan's detail shows progress from the work log against where
 the schedule expects it today (`missions/progress.ts`) and offers "Replan from here", which
 reopens the composer with the drift written into the goal.
 

@@ -17,11 +17,12 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import type { Footprint, LandArea } from "@twin/contracts";
-import { boundsOf, footprintAreaM2 } from "@twin/geo";
+import { footprintAreaM2 } from "@twin/geo";
 
 import { useScene } from "@/cesium/SceneContext";
 import { ApiError, api, unwrap } from "@/api/client";
 import { describeError } from "@/lib/log";
+import { tapOrClick } from "@/lib/pointer";
 import { fetchOsmContaining } from "@/missions/osm";
 import { useLand, type LandMode } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
@@ -32,6 +33,7 @@ import { FloatingPanel } from "../shell/FloatingPanel";
 import { WriteTokenField } from "../captures/WriteTokenField";
 import { createCorridor, createLand, reviseLand, useBoundaryHistory, useLandAreas } from "./api";
 import { invalidateLandDerived } from "./landDerived";
+import { frameLand, revealLand } from "./landFraming";
 import { LandDraftRecovery } from "./LandDraftRecovery";
 import { LandBoundaryImport } from "./LandBoundaryImport";
 import { LandBoundarySplit } from "./LandBoundarySplit";
@@ -77,22 +79,38 @@ export function LandPanel() {
   const { corridorWidth: width, corridorUnit: unit } = state;
   const fileInput = useRef<HTMLInputElement>(null);
   const operation = useRef(0);
+  const overview = useRef<HTMLDivElement>(null);
   const { active, draft, points, mode } = state;
   const visible = draft ?? active;
   const area = draft ? footprintAreaM2(draft.boundary) : (active?.areaM2 ?? 0);
 
-  const frame = (boundary: Footprint) => {
-    const b = boundsOf(boundary);
-    const dx = Math.max(0.0001, b.east - b.west);
-    const dy = Math.max(0.0001, b.north - b.south);
-    // Leave room for the land panel and for the outline around the subject.
-    scene?.camera.flyToRectangle(
-      Math.max(-180, b.west - dx * 0.8),
-      Math.max(-90, b.south - dy * 0.35),
-      Math.min(180, b.east + dx * 0.35),
-      Math.min(90, b.north + dy * 0.35),
+  // Beside the panel on a desktop, above the sheet on a phone (landFraming.ts).
+  const frame = (boundary: Footprint) => frameLand(scene, boundary);
+
+  // A boundary under review stays in sight: on a phone the review sheet would otherwise cover
+  // the outline that was just drawn, so the camera frames it above the sheet. Checked whenever
+  // the boundary under review changes (a new draft, a combined shape), and framed only when
+  // something hides it.
+  const reviewing = open && draft !== null && mode === "browse";
+  const reviewBoundary = reviewing ? draft.boundary : null;
+  useEffect(() => {
+    if (!reviewBoundary) return;
+    return revealLand(scene, reviewBoundary);
+    // Keyed on the boundary itself: renaming the draft must not move the camera.
+  }, [scene, reviewBoundary]);
+
+  // Opening a saved land (from this list, the command box or the map) shows its overview, not
+  // wherever the panel was scrolled to, which was usually the list at its foot. Choosing the
+  // land already open from the list asks again (`toOverview`).
+  const activeId = open ? (active?.id ?? null) : null;
+  const [toOverview, setToOverview] = useState(0);
+  useEffect(() => {
+    if (!activeId) return;
+    const later = requestAnimationFrame(() =>
+      overview.current?.scrollIntoView({ block: "start", behavior: "auto" }),
     );
-  };
+    return () => cancelAnimationFrame(later);
+  }, [activeId, toOverview]);
   const begin = (next: LandMode) => {
     operation.current += 1;
     setBusy(false);
@@ -227,6 +245,7 @@ export function LandPanel() {
   const choose = (land: LandArea) => {
     state.select(land);
     setHistoryOpen(false);
+    setToOverview((n) => n + 1);
     frame(land.boundary);
   };
   const exportBoundary = () => {
@@ -320,7 +339,7 @@ export function LandPanel() {
                 <Pencil size={20} />
                 <span>
                   <strong>Draw a boundary</strong>
-                  <small>Click around your land on the map</small>
+                  <small>{tapOrClick()} around your land on the map</small>
                 </span>
                 <ChevronRight size={16} />
               </button>
@@ -425,8 +444,8 @@ export function LandPanel() {
               {mode === "pick"
                 ? points.length
                   ? "Looking for a mapped boundary…"
-                  : "Click a field, woodland, park, or body of water."
-                : `${points.length} points placed. Click the map to add ${points.length ? "another" : "the first"} point.`}
+                  : `${tapOrClick()} a field, woodland, park, or body of water.`
+                : `${points.length} points placed. ${tapOrClick()} the map to add ${points.length ? "another" : "the first"} point.`}
             </p>
             {mode === "corridor" && (
               <div className="land-width">
@@ -489,7 +508,7 @@ export function LandPanel() {
 
         {visible && (mode === "browse" || mode === "edit") && (
           <>
-            <div className="land-place-heading">
+            <div className="land-place-heading" ref={overview}>
               <span className="land-eyebrow">
                 {draft ? "Review your boundary" : "Land overview"}
               </span>

@@ -1,17 +1,16 @@
-import { lazy, Suspense, useEffect } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  type ComponentType,
+  type LazyExoticComponent,
+  type ReactNode,
+} from "react";
 
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { env } from "@/app/env";
 import { HOTKEYS } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
-import { LandRasterBridge } from "@/cesium/LandRasterBridge";
-import { KnowledgeFogBridge } from "@/cesium/KnowledgeFogBridge";
-import { ShowOnceBridge } from "@/cesium/ShowOnceBridge";
-import { LandContextBridge } from "@/cesium/LandContextBridge";
-import { LandBridge } from "@/cesium/LandBridge";
-import { LandIdentityBridge } from "../land/WorkspaceIdentity";
-import { LandMissionBridge } from "../land/LandMissionBridge";
-import { LandPanel } from "../land/LandPanel";
 import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
@@ -29,8 +28,6 @@ import { DescentArrival } from "../descent/DescentArrival";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
-import { KnowledgeCellCard } from "../knowledge/KnowledgeCellCard";
-import { KnowledgeLegend } from "../knowledge/KnowledgeLegend";
 import { LanternBridge } from "../lantern/LanternBridge";
 import { LanternRim } from "../lantern/LanternRim";
 import { UNAVAILABLE } from "../lantern/lanternWords";
@@ -65,6 +62,45 @@ import { useUndoHotkeys } from "./undoHotkeys";
 const SettingsSheet = lazy(() =>
   import("../settings/SettingsSheet").then((m) => ({ default: m.SettingsSheet })),
 );
+
+/** `React.lazy` for a module's named component (lazy wants a default export). */
+function lazyNamed<K extends string, M extends Record<K, ComponentType>>(
+  load: () => Promise<M>,
+  name: K,
+): LazyExoticComponent<M[K]> {
+  return lazy(() => load().then((module) => ({ default: module[name] })));
+}
+
+// The Land feature (VITE_ENABLE_LAND_EXPLORATION): its panel, the bridges that draw and sync it
+// on the globe, the fog of knowing, and the workspace sign-in behind them (oidc-client-ts, which
+// only the identity bridge and the panel reach). Each is loaded on demand like SettingsSheet,
+// and only rendered with the flag on, so a build with the flag off never requests any of it
+// (its chunks are still built) and the globe's first load carries none of it
+// (`scripts/check-bundle.mjs` holds that line). With the flag on they load as the shell mounts
+// and behave as before; a chunk that fails to load fails alone (`OnDemand` for the bridges, the
+// inline boundaries for the panel, card and legend).
+const LandIdentityBridge = lazyNamed(
+  () => import("../land/WorkspaceIdentity"),
+  "LandIdentityBridge",
+);
+const LandBridge = lazyNamed(() => import("@/cesium/LandBridge"), "LandBridge");
+const LandContextBridge = lazyNamed(
+  () => import("@/cesium/LandContextBridge"),
+  "LandContextBridge",
+);
+const LandRasterBridge = lazyNamed(() => import("@/cesium/LandRasterBridge"), "LandRasterBridge");
+const KnowledgeFogBridge = lazyNamed(
+  () => import("@/cesium/KnowledgeFogBridge"),
+  "KnowledgeFogBridge",
+);
+const ShowOnceBridge = lazyNamed(() => import("@/cesium/ShowOnceBridge"), "ShowOnceBridge");
+const LandMissionBridge = lazyNamed(() => import("../land/LandMissionBridge"), "LandMissionBridge");
+const LandPanel = lazyNamed(() => import("../land/LandPanel"), "LandPanel");
+const KnowledgeCellCard = lazyNamed(
+  () => import("../knowledge/KnowledgeCellCard"),
+  "KnowledgeCellCard",
+);
+const KnowledgeLegend = lazyNamed(() => import("../knowledge/KnowledgeLegend"), "KnowledgeLegend");
 
 /** The app's own keys, bound from the registry (`app/hotkeys.ts`) that the `?` sheet prints. */
 function GlobalHotkeys() {
@@ -140,9 +176,22 @@ function SettingsSheetLazy() {
   const open = useUi((s) => s.settingsOpen);
   if (!open) return null;
   return (
-    <Suspense fallback={null}>
+    <OnDemand label="Settings">
       <SettingsSheet />
-    </Suspense>
+    </OnDemand>
+  );
+}
+
+/**
+ * Where a component loaded on demand mounts: nothing while its chunk loads, and nothing (with a
+ * log line) if the chunk fails to load, from a flaky network or a tab left open across a deploy,
+ * so the failure stays its own rather than replacing the whole HUD.
+ */
+function OnDemand({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <ErrorBoundary quiet label={label}>
+      <Suspense fallback={null}>{children}</Suspense>
+    </ErrorBoundary>
   );
 }
 
@@ -183,7 +232,7 @@ export function AppShell() {
     <>
       <GlobalHotkeys />
       {env.landExplorationEnabled && (
-        <>
+        <OnDemand label="Land bridges">
           <LandIdentityBridge />
           <LandBridge />
           <LandContextBridge />
@@ -191,7 +240,7 @@ export function AppShell() {
           <KnowledgeFogBridge />
           <ShowOnceBridge />
           <LandMissionBridge />
-        </>
+        </OnDemand>
       )}
       <LanternBridge />
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">
@@ -217,7 +266,11 @@ export function AppShell() {
         <section className="hud-region hud-dock hud-dock--left" aria-label="Panel">
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
-            {env.landExplorationEnabled && <LandPanel />}
+            {env.landExplorationEnabled && (
+              <Suspense fallback={null}>
+                <LandPanel />
+              </Suspense>
+            )}
             <MeasurePanel />
             <AddPanel />
           </ErrorBoundary>
@@ -251,22 +304,28 @@ export function AppShell() {
             </ErrorBoundary>
             {env.landExplorationEnabled && (
               <ErrorBoundary inline label="Fog of knowing">
-                <KnowledgeCellCard />
+                <Suspense fallback={null}>
+                  <KnowledgeCellCard />
+                </Suspense>
               </ErrorBoundary>
             )}
           </div>
         </aside>
         <div className="hud-region hud-strip">
           <ExploreHud />
+          {/* Dates, then the lens over dated imagery, then how old what you know is: time
+              first, the way the strip reads left to right. */}
           <TimelineControl />
-          {env.landExplorationEnabled && (
-            <ErrorBoundary inline label="Fog of knowing">
-              <KnowledgeLegend />
-            </ErrorBoundary>
-          )}
           <ErrorBoundary inline label="Time Lantern">
             <TimeLanternControl />
           </ErrorBoundary>
+          {env.landExplorationEnabled && (
+            <ErrorBoundary inline label="Fog of knowing">
+              <Suspense fallback={null}>
+                <KnowledgeLegend />
+              </Suspense>
+            </ErrorBoundary>
+          )}
           <RepresentationSwitcher />
           <SiteLoadStatus />
         </div>

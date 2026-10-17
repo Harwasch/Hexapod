@@ -31,6 +31,7 @@ from app.schemas.agent import (
     PlanDraftBody,
     PlanDraftRequest,
     PlanEstimates,
+    PlannerMachine,
     PlannerStatus,
     PlannerZone,
     PlanStep,
@@ -92,11 +93,14 @@ def _today(request: PlanDraftRequest) -> date:
 
 
 def _mentioned(text: str, candidates: list[tuple[str, str]]) -> list[str]:
-    """Ids whose id or name appears in the text (word-bounded, case-insensitive)."""
+    """Ids whose id or name appears in the text (word-bounded, case-insensitive). A name that
+    leads with its id ("Z-14 West grassland", "TR-04 Kestrel") also answers to the rest of it,
+    which is how people say it: "mow the west grassland", "send Kestrel"."""
     lower = text.lower()
     found: list[str] = []
     for identifier, name in candidates:
-        for needle in (identifier, name):
+        rest = name[len(identifier) :].strip() if name.startswith(f"{identifier} ") else ""
+        for needle in (identifier, name, rest if len(rest) >= 4 else ""):
             if needle and re.search(rf"(?<![\w-]){re.escape(needle.lower())}(?![\w-])", lower):
                 if identifier not in found:
                     found.append(identifier)
@@ -142,6 +146,11 @@ def _label(identifier: str, name: str) -> str:
     if identifier.startswith(("L-", "LA-")):
         return name
     return name if name.startswith(identifier) else f"{identifier} {name}"
+
+
+def _lower_first(text: str) -> str:
+    """A class label inside a sentence: "a mapping drone, Mavic 3 Enterprise class (assumed)"."""
+    return text[:1].lower() + text[1:]
 
 
 def _task_family(task: str) -> str:
@@ -290,6 +299,10 @@ NOT_A_ROUTE = (
 )
 
 
+# A goal that asks for the air keeps a survey in the air whatever the fleet is.
+FLIGHT_WORDS = re.compile(r"\b(fly|flown|flight|from the air|aerial|drone|uav)")
+
+
 def _machine_class(kind: TaskKind, text: str) -> MachineClassId:
     lower = text.lower()
     if kind == "treat":
@@ -297,6 +310,53 @@ def _machine_class(kind: TaskKind, text: str) -> MachineClassId:
     if kind == "survey" and GROUND_SURVEY_WORDS.search(lower):
         return "survey"
     return "drone"
+
+
+# What a machine's model or name says it is, for the class of work a draft is sized for: a
+# draft that mows should take the mowers, not whichever machines happen to be idle.
+CLASS_FIT: dict[MachineClassId, re.Pattern[str]] = {
+    "mower": re.compile(r"\b(mow|mower|brush ?cutter)", re.I),
+    "seeder": re.compile(r"\b(seed|seeder|drill)", re.I),
+    "survey": re.compile(r"\b(survey|scout|rover)", re.I),
+    "drone": re.compile(r"\b(drone|uav|mavic|matrice|quadcopter)", re.I),
+}
+
+
+def _fits(machine: PlannerMachine, machine_class: MachineClassId) -> bool:
+    return CLASS_FIT[machine_class].search(f"{machine.model} {machine.name}") is not None
+
+
+def _grounded(machine: PlannerMachine) -> bool:
+    """A machine its model or name says works on the ground (a mower, drill or scout rover).
+    One that says nothing is not assumed either way."""
+    return not _fits(machine, "drone") and any(
+        _fits(machine, c) for c in ("mower", "seeder", "survey")
+    )
+
+
+def _work_class(
+    kind: TaskKind,
+    text: str,
+    machines: list[PlannerMachine],
+    crew: list[str] | None = None,
+) -> MachineClassId:
+    """The class a draft is crewed by and sized for. The words choose it, and the crew (before
+    there is one, the fleet) has the last say on a survey the words would fly: with no drone
+    in it and a survey rover that can do it, the survey is driven at the survey rover's
+    assumptions rather than sized as a flight nobody here can make. A scan, or a survey asked
+    for from the air, stays a flight."""
+    words = _machine_class(kind, text)
+    if words != "drone" or kind != "survey" or FLIGHT_WORDS.search(text.lower()):
+        return words
+    pool = [m for m in machines if m.id in crew] if crew else machines
+    if any(_fits(m, "drone") for m in pool) or not any(_fits(m, "survey") for m in pool):
+        return words
+    return "survey"
+
+
+def _no_flyer(machines: list[PlannerMachine]) -> bool:
+    """Every machine in the fleet works on the ground, so a flight has no one to fly it."""
+    return bool(machines) and all(_grounded(m) for m in machines)
 
 
 def _distance(metres: float) -> str:
@@ -338,8 +398,11 @@ def _size_zone(
     kind: TaskKind,
     machine: MachineClassId,
     answers: dict[str, AnswerValue],
+    *,
+    absent: bool = False,
 ) -> ZoneCoverage | None:
-    """One zone's path and machine-hours from its outline under the assumed machine class."""
+    """One zone's path and machine-hours from its outline under the assumed machine class;
+    `absent` says the fleet has no machine of that class, and the basis says so too."""
     if zone.geometry is None:
         return None
     flown_at: float | None = None
@@ -391,7 +454,8 @@ def _size_zone(
             path += ", spacing widened to stay under 5,000 passes"
     basis = (
         f"{zone.name}: {path} at {speed:g} m/s, {timing}{effort_note} → "
-        f"{_hours_text(hours)} machine-hours per run; {label}, {NOT_A_ROUTE}."
+        f"{_hours_text(hours)} machine-hours per run; {label}"
+        f"{', not in this fleet' if absent else ''}, {NOT_A_ROUTE}."
     )
     return ZoneCoverage(
         zone_id=zone.id,
@@ -417,22 +481,36 @@ def size_zones(
     zone_ids: list[str],
     kind: TaskKind,
     answers: dict[str, AnswerValue],
+    crew: list[str] | None = None,
 ) -> list[ZoneCoverage]:
-    """Coverage for every zone in scope that came with an outline; the rest are sized by acres."""
+    """Coverage for every zone in scope that came with an outline; the rest are sized by acres.
+    The class is the crew's (`_work_class`), so the hours are for the machines that do it."""
     text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
-    machine = _machine_class(kind, text)
+    machine = _work_class(kind, text, request.machines, crew)
+    absent = machine == "drone" and _no_flyer(request.machines)
     zone_by_id = {z.id: z for z in request.zones}
-    sized = (_size_zone(zone_by_id[z], kind, machine, answers) for z in zone_ids if z in zone_by_id)
+    sized = (
+        _size_zone(zone_by_id[z], kind, machine, answers, absent=absent)
+        for z in zone_ids
+        if z in zone_by_id
+    )
     return [c for c in sized if c is not None]
 
 
-def _path_assumption(coverage: list[ZoneCoverage], names: dict[str, str], cadence: Cadence) -> str:
+def _path_assumption(
+    coverage: list[ZoneCoverage],
+    names: dict[str, str],
+    cadence: Cadence,
+    *,
+    no_flyer: bool = False,
+) -> str:
     """The one persisted line that says how outline-sized hours were reached (the structured
     coverage lives on the draft only; assumptions are what an approved plan keeps)."""
-    labels = dict.fromkeys(
-        label[:1].lower() + label[1:]
-        for label in (getattr(MACHINE_CLASSES, c.machine_class).label for c in coverage)
-    )
+    labels: dict[str, None] = {}
+    for c in coverage:
+        label = getattr(MACHINE_CLASSES, c.machine_class).label
+        absent = ", not in this fleet" if no_flyer and c.machine_class == "drone" else ""
+        labels[_lower_first(label) + absent] = None
     parts = "; ".join(
         f"{names.get(c.zone_id, c.zone_id)} {_distance(c.length_m)} at {c.speed_mps:g} m/s"
         for c in coverage
@@ -467,11 +545,14 @@ class RulesPlanner:
         if cadence_answer in {"once", "daily", "weekly", "monthly", "seasonal"}:
             cadence = cadence_answer  # type: ignore[assignment]
         kind = _task_kind(text)
-        # Answers that scale the work: survey detail, scan detail and views, treatment passes.
+        work = _work_class(kind, text, request.machines, machine_ids)
+        no_flyer = work == "drone" and _no_flyer(request.machines)
+        # Answers that scale the work: survey detail (flying only), scan detail and views,
+        # treatment passes.
         effort = 1.0
         resolution = _answer_text(answers, "resolution")
-        if kind == "survey" and resolution in {"2", "5", "10"}:
-            effort *= {"2": 2.0, "5": 1.0, "10": 0.5}[resolution]
+        if kind == "survey" and work == "drone" and resolution in SURVEY_DETAIL_EFFORT:
+            effort *= SURVEY_DETAIL_EFFORT[resolution]
         passes = _answer_text(answers, "passes")
         if kind == "treat" and passes == "two":
             effort *= 2.0
@@ -494,7 +575,7 @@ class RulesPlanner:
         # Zones with an outline are sized from it (path length over the assumed machine class's
         # speed, plus turns), unless the work log measured a rate for the task: a measured rate
         # still sets an area's hours, and the coverage says so. The rest keep the acre rate.
-        coverage = size_zones(request, zone_ids, kind, answers)
+        coverage = size_zones(request, zone_ids, kind, answers, machine_ids)
         rated_notes: list[str] = []
         for index, measured in enumerate(coverage):
             learned = (
@@ -554,9 +635,10 @@ class RulesPlanner:
             first_title = "Capture plan"
         elif kind == "survey":
             first_title = "Survey plan"
-            first_detail = (
-                f"Lay out the survey lines over {zone_names or 'the area'} and confirm access, "
-                "airspace and the detail level before flying."
+            first_detail = f"Lay out the survey lines over {zone_names or 'the area'} and " + (
+                "confirm access, airspace and the detail level before flying."
+                if work == "drone"
+                else "confirm access, gates and crossings before driving them."
             )
         else:
             first_title = "Survey pass"
@@ -725,6 +807,11 @@ class RulesPlanner:
                     f"{machine_id} is already booked by “{busy[machine_id]}” in this window."
                 )
         for machine in request.machines:
+            if machine.id in machine_ids and work == "drone" and _grounded(machine):
+                risks.append(
+                    f"{_label(machine.id, machine.name)} works on the ground: the lines are "
+                    f"sized for a {_lower_first(MACHINE_CLASSES.drone.label)}."
+                )
             if machine.id in machine_ids and machine.battery_pct < 30:
                 risks.append(
                     f"{_label(machine.id, machine.name)} is at {machine.battery_pct}% battery."
@@ -740,7 +827,12 @@ class RulesPlanner:
         questions: list[str] = []
         if not zone_ids:
             questions.append("Which zones should this plan cover? None matched the goal.")
-        if not machine_ids:
+        if not machine_ids and no_flyer:
+            questions.append(
+                "Which drone flies this? No machine in this fleet flies, so the work is sized "
+                f"for a {_lower_first(MACHINE_CLASSES.drone.label)} and has no crew yet."
+            )
+        elif not machine_ids:
             questions.append("No machines are assigned to this project yet.")
         ongoing = cadence != "once"
         # A deadline answer caps the schedule: when the work needs longer, say so as a risk.
@@ -752,7 +844,7 @@ class RulesPlanner:
                 f"about {needed} machines, or a later date."
             )
         clarifications = self._clarifications(
-            request, text, zone_ids, machine_ids, cadence, kind, answers
+            request, text, zone_ids, machine_ids, cadence, kind, answers, work
         )
         assumptions = [
             *dict.fromkeys(rate_by_zone[z].note for z in rate_by_zone if z not in covered),
@@ -761,7 +853,9 @@ class RulesPlanner:
         ]
         if coverage:
             assumptions.append(
-                _path_assumption(coverage, {z.id: z.name for z in request.zones}, cadence)
+                _path_assumption(
+                    coverage, {z.id: z.name for z in request.zones}, cadence, no_flyer=no_flyer
+                )
             )
         if kind == "scan":
             assumptions.append(
@@ -808,6 +902,7 @@ class RulesPlanner:
         cadence: str,
         kind: TaskKind,
         answers: dict[str, AnswerValue],
+        work: MachineClassId = "drone",
     ) -> list[Clarification]:
         """What the agent asks before approval, each answered with a chip or a slider; a
         question is dropped once its answer arrives or the goal already settles it. The
@@ -929,7 +1024,8 @@ class RulesPlanner:
                     "metre or two.",
                 )
             )
-        if kind == "survey" and "resolution" not in answers:
+        # Detail changes how a survey is flown; a ground rover covers the same path at any.
+        if kind == "survey" and work == "drone" and "resolution" not in answers:
             out.append(
                 Clarification(
                     id="resolution",
@@ -956,8 +1052,10 @@ class RulesPlanner:
                 )
             )
         nouns = "machines?|mowers?|robots?|tractors?|units?|drones?"
+        # No count to ask for when nothing in the fleet may fly the lines.
         if (
             len(request.machines) > 1
+            and not (work == "drone" and _no_flyer(request.machines))
             and "crew" not in answers
             and _requested_count(text, nouns) is None
             and not _mentioned(text, [(m.id, m.name) for m in request.machines])
@@ -1010,6 +1108,7 @@ class RulesPlanner:
         nouns = "machines?|mowers?|robots?|tractors?|units?|drones?"
         # A count in the refinement ("use three machines") overrides one in the goal.
         wanted = _requested_count(request.refinement or "", nouns) or _requested_count(text, nouns)
+        asked = wanted is not None
         crew = _answer_text(request.answers, "crew")
         if crew == "all":
             wanted = len(request.machines)
@@ -1023,15 +1122,29 @@ class RulesPlanner:
         ]
         if chosen and (wanted is None or len(chosen) >= wanted):
             return chosen
+        asked = asked or crew is not None
         wanted = wanted or min(2, len(request.machines))
         order = {"idle": 0, "working": 1, "attention": 2}
         today = _today(request)
         # A rough window: nothing is scheduled yet, so "busy in the next two weeks" is the test.
         booked = _busy_machines(request, today, today + timedelta(days=14))
+        # Machines that suit the work first (mowers to mow), then free, idle and charged ones.
+        # Flight lines go only to machines that may fly: never to a mower, drill or scout rover.
+        machine_class = _work_class(_task_kind(text), text, request.machines)
         ranked = sorted(
-            request.machines,
-            key=lambda m: (m.id in booked, order.get(m.status, 1), -m.battery_pct),
+            (m for m in request.machines if machine_class != "drone" or not _grounded(m)),
+            key=lambda m: (
+                not _fits(m, machine_class),
+                m.id in booked,
+                order.get(m.status, 1),
+                -m.battery_pct,
+            ),
         )
+        # With no count asked for, the default crew is the machines that suit the work
+        # (the one seed drill drills alone rather than with a scout beside it).
+        suited = sum(1 for m in ranked if m.id not in excluded and _fits(m, machine_class))
+        if not asked and suited:
+            wanted = min(wanted, suited)
         for machine in ranked:
             if len(chosen) >= wanted:
                 break
@@ -1203,7 +1316,8 @@ class ClaudePlanner:
         # outlines' geodesic area when every zone in scope has one, and the path is reported.
         # The model's machine-hours stand; the card shows both.
         text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
-        coverage = size_zones(request, scoped, _task_kind(text), request.answers)
+        crew = [m for m in parsed.machine_ids if m in machine_ids]
+        coverage = size_zones(request, scoped, _task_kind(text), request.answers, crew)
         areas = [c.area_m2 for c in coverage if c.kind == "area" and c.area_m2]
         acres = (
             round(sum(areas) / ACRE_M2, 1)
@@ -1214,7 +1328,7 @@ class ClaudePlanner:
             title=parsed.title,
             objective=parsed.objective,
             zone_ids=scoped,
-            machine_ids=[m for m in parsed.machine_ids if m in machine_ids],
+            machine_ids=crew,
             cadence=parsed.cadence,
             start_date=_parse_date(parsed.start_date, today),
             end_date=_parse_date(parsed.end_date, None) if parsed.end_date else None,

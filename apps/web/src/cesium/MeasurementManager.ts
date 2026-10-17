@@ -32,6 +32,36 @@ const LINE = Color.fromCssColorString("#ffd60a");
 const FILL = LINE.withAlpha(0.22);
 const LABEL_BG = Color.fromCssColorString("#0f172a").withAlpha(0.72);
 
+/**
+ * How close in time and space a click must follow the last one to be the second click of a
+ * double-click: within the time most systems allow for one, and a few pixels of the first.
+ */
+const DOUBLE_CLICK_MS = 500;
+const DOUBLE_CLICK_PX = 6;
+/** Two points of a distance or height closer than this are the same point. */
+const SAME_POINT_M = 0.001;
+
+/** A click on the map: where (CSS px) and when (ms). */
+export interface MapClick {
+  x: number;
+  y: number;
+  at: number;
+}
+
+/**
+ * Whether a click is the second click of a double-click: soon after the last one and where it
+ * was. A double-click to finish a distance sends two clicks before its dblclick; taken as two
+ * points, the first ended the distance and the second started another on the same spot, which
+ * the next click turned into a 0 mm measurement.
+ */
+export function isRepeatClick(last: MapClick | null, next: MapClick): boolean {
+  return (
+    last !== null &&
+    next.at - last.at <= DOUBLE_CLICK_MS &&
+    Math.hypot(next.x - last.x, next.y - last.y) <= DOUBLE_CLICK_PX
+  );
+}
+
 interface Draft {
   id: string;
   mode: MeasureMode;
@@ -55,6 +85,8 @@ export class MeasurementManager {
   private collider: SplatCollider | null = null;
   /** The first point of the next measurement ("Measure from here"), until it starts. */
   private seeded: Cartesian3 | null = null;
+  /** The last click taken as a point, to know the second click of a double-click. */
+  private lastClick: MapClick | null = null;
   private readonly onKey = (event: KeyboardEvent) => {
     if (event.key === "Escape" && this.mode) {
       event.preventDefault();
@@ -117,6 +149,7 @@ export class MeasurementManager {
 
   stop(): void {
     this.seeded = null;
+    this.lastClick = null;
     if (this.draft) this.discardDraft();
     this.handler?.destroy();
     this.handler = null;
@@ -162,7 +195,15 @@ export class MeasurementManager {
     return position ?? null;
   }
 
-  private onClick(window: Cartesian2): void {
+  private onClick(window: Cartesian2, at = performance.now()): void {
+    const click = { x: window.x, y: window.y, at };
+    // The second click of a double-click is not another point (a double-click finishes an
+    // area, and people use one to finish a distance too). The next click is a point again.
+    if (isRepeatClick(this.lastClick, click)) {
+      this.lastClick = null;
+      return;
+    }
+    this.lastClick = click;
     const position = this.pick(window);
     if (position) this.place(position);
   }
@@ -185,6 +226,9 @@ export class MeasurementManager {
         this.addLine(draft);
         return;
       }
+      // A second point on the first measures nothing: keep waiting for the real end.
+      const first = this.draft.points[0];
+      if (first && Cartesian3.distance(first, position) < SAME_POINT_M) return;
       this.draft.points.push(position);
       this.addPoint(this.draft, position);
       this.draft.floating = null;

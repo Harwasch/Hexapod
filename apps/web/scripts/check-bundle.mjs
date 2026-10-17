@@ -21,9 +21,17 @@
 // merged chunk is caught too. It prints what each page loads, globe included, so the same
 // run is the before/after measurement of the bundle.
 //
-// Exit status: 0 when every Cesium-free page is Cesium-free, 1 when one is not, 2 when the
-// build directory or an entry is missing -- a check that silently passed on an empty
-// directory would be worse than none.
+// The globe page has two more lines of its own. Its entry script (the `index-*.js` that
+// index.html names) has a gzip budget, `INDEX_ENTRY_GZIP_BUDGET`, so growth is a decision
+// rather than a drift. And it must not reach the Land feature before its first frame: AppShell
+// loads the Land panel, its bridges and the workspace sign-in (oidc-client-ts) on demand, so a
+// build with VITE_ENABLE_LAND_EXPLORATION off never sends any of it to a visitor (the chunks are
+// built, and nothing requests them). One static import
+// would quietly undo that, so the page fails if anything it loads carries `LAND_MARKERS`.
+//
+// Exit status: 0 when every Cesium-free page is Cesium-free and the globe page keeps its two
+// lines, 1 when one does not, 2 when the build directory or an entry is missing -- a check
+// that silently passed on an empty directory would be worse than none.
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, posix, resolve } from "node:path";
@@ -33,6 +41,22 @@ import { gzipSync } from "node:zlib";
 /** Pages that must not reach CesiumJS, and the one that is measured but allowed to. */
 export const CESIUM_FREE_PAGES = ["admin.html", "upload.html", "view.html"];
 export const GLOBE_PAGE = "index.html";
+
+/**
+ * Gzip bytes the globe page's entry script may weigh: 179.1 kB measured (Node's gzip, as
+ * `measure` counts) on 2026-10-17, once the Land feature loaded on demand, plus 10 %. Raise it
+ * on purpose, with the new measurement in this comment, when the entry grows for a reason.
+ */
+export const INDEX_ENTRY_GZIP_BUDGET = 197_000;
+
+/**
+ * Strings only the Land feature's own code contains: the Land panel's saved-land list and its
+ * workspace's tabs (class names in their markup), and the sign-in method of oidc-client-ts,
+ * which nothing but the Land workspace uses. Any of them in what the globe page loads before
+ * its first frame means a static import brought the feature back. (Not the panel's test id:
+ * the shell's own framing helper looks the panel up by it.)
+ */
+export const LAND_MARKERS = ["land-library", "land-workspace-tabs", "signinRedirect"];
 
 /** Engine chunks by name, and by the GLSL built-in prefix only CesiumJS's shaders use. */
 const CESIUM_CHUNK_NAME = /^cesium[-.]/i;
@@ -60,6 +84,17 @@ export function documentResources(html) {
       const rel = (attribute(tag, "rel") ?? "").toLowerCase().split(/\s+/);
       if (rel.includes("modulepreload") || rel.includes("stylesheet")) url = attribute(tag, "href");
     }
+    if (!url || /^(?:[a-z]+:)?\/\//i.test(url) || url.startsWith("data:")) continue;
+    found.push(url.split(/[?#]/)[0].replace(/^\//, ""));
+  }
+  return found;
+}
+
+/** The module scripts an HTML document runs (its entries), relative to the build root. */
+export function entryScripts(html) {
+  const found = [];
+  for (const match of html.matchAll(/<script\b[^>]*>/gi)) {
+    const url = attribute(match[0], "src");
     if (!url || /^(?:[a-z]+:)?\/\//i.test(url) || url.startsWith("data:")) continue;
     found.push(url.split(/[?#]/)[0].replace(/^\//, ""));
   }
@@ -129,6 +164,34 @@ export function measure(files) {
   return total;
 }
 
+/**
+ * The globe page's own lines: its entry script within `INDEX_ENTRY_GZIP_BUDGET`, and no Land
+ * code in anything it loads before its first frame. Returns whether either was crossed.
+ */
+function checkGlobePage(root, page, files, log) {
+  let failed = false;
+  for (const entry of entryScripts(readFileSync(join(root, page), "utf8"))) {
+    const contents = files.get(entry);
+    if (!contents) continue;
+    const gzip = gzipSync(contents).length;
+    const verdict = gzip > INDEX_ENTRY_GZIP_BUDGET ? "over" : "within";
+    const line = `  ${page} entry ${entry}: ${kilobytes(gzip)} gz, ${verdict} its ${kilobytes(INDEX_ENTRY_GZIP_BUDGET)} budget`;
+    if (verdict === "over") {
+      log.error(`${line} (INDEX_ENTRY_GZIP_BUDGET in this script says how to raise it)`);
+      failed = true;
+    } else log.info(line);
+  }
+  for (const [path, contents] of files) {
+    if (!/\.m?js$/.test(path)) continue;
+    const text = contents.toString("utf8");
+    const marker = LAND_MARKERS.find((m) => text.includes(m));
+    if (!marker) continue;
+    log.error(`  ${page} loads the Land feature before its first frame: ${path} ("${marker}")`);
+    failed = true;
+  }
+  return failed;
+}
+
 /** Runs the check over one build directory. Returns the exit status; prints a report. */
 export function checkBundle(root, log = console) {
   if (!existsSync(root)) {
@@ -152,7 +215,10 @@ export function checkBundle(root, log = console) {
       log.error(`  ${page} names ${path}, which is not in the build`);
       status = 2;
     }
-    if (!CESIUM_FREE_PAGES.includes(page)) continue;
+    if (page === GLOBE_PAGE) {
+      if (checkGlobePage(root, page, files, log) && status === 0) status = 1;
+      continue;
+    }
     const scripts = [...files].filter(([path]) => /\.m?js$/.test(path));
     if (scripts.length === 0) {
       log.error(`  ${page} loads no script at all; is this the right build directory?`);
@@ -164,7 +230,10 @@ export function checkBundle(root, log = console) {
       if (status === 0) status = 1;
     }
   }
-  if (status === 0) log.info(`check-bundle: ${CESIUM_FREE_PAGES.join(", ")} load no CesiumJS`);
+  if (status === 0) {
+    log.info(`check-bundle: ${CESIUM_FREE_PAGES.join(", ")} load no CesiumJS`);
+    log.info(`check-bundle: ${GLOBE_PAGE} keeps its entry budget and loads no Land code up front`);
+  }
   return status;
 }
 

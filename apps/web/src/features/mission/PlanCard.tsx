@@ -1,4 +1,4 @@
-import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan } from "lucide-react";
+import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
@@ -6,6 +6,7 @@ import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contra
 import { usePlannerStatus } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { planningEdited } from "@/lib/planningMetrics";
+import { tapOrClick, touchFirst } from "@/lib/pointer";
 import { areaFromMeasurement, isAreaZone, nextAreaId } from "@/missions/areas";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
 import { DEMO_EXAMPLES } from "@/missions/demo";
@@ -223,7 +224,7 @@ export function PlanCard({ project }: { project: Project }) {
                   onClick={pickAgain}
                   data-testid="ground-pick"
                 >
-                  <Crosshair size={13} aria-hidden="true" /> Click the ground on the map
+                  <Crosshair size={13} aria-hidden="true" /> {tapOrClick()} the ground on the map
                 </button>
               </div>
             )}
@@ -232,10 +233,10 @@ export function PlanCard({ project }: { project: Project }) {
         {status === "awaiting-ground" && (
           <div className="mc-prompt mc-prompt--live" data-testid="plan-awaiting-ground">
             <Crosshair size={22} aria-hidden="true" className="mc-prompt__icon" />
-            <div className="mc-prompt__title">Click the ground you mean on the map.</div>
+            <div className="mc-prompt__title">{tapOrClick()} the ground you mean on the map.</div>
             <p className="mc-muted">
-              I'll outline the field, pond or lot under your click and draft “{composer.goal}”. Esc
-              to cancel.
+              I'll outline the field, pond or lot under your {tapOrClick(true)} and draft “
+              {composer.goal}”.{touchFirst() ? "" : " Esc to cancel."}
             </p>
             <div className="mc-actions mc-actions--start">
               <button
@@ -253,6 +254,14 @@ export function PlanCard({ project }: { project: Project }) {
                 data-testid="ground-view"
               >
                 <Scan size={12} aria-hidden="true" /> Use what's in view
+              </button>
+              <button
+                type="button"
+                className="mc-btn mc-btn--sm"
+                onClick={() => scene?.areas.cancelPick()}
+                data-testid="ground-cancel"
+              >
+                <X size={12} aria-hidden="true" /> Cancel
               </button>
             </div>
           </div>
@@ -419,6 +428,10 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
   const altitudes = coverage.flatMap((c) =>
     c.machineClass === "drone" && c.altitudeM != null ? [c.altitudeM] : [],
   );
+  // A flight with no crew in a project that has machines: none of them flies (the planner
+  // never hands a mower or a scout rover flight lines), so the drone is not in this fleet.
+  const noFlyer =
+    classes.includes("drone") && draft.machineIds.length === 0 && project.machines.length > 0;
   return (
     <section data-testid="plan-path">
       <span className="mc-eyebrow">PATH</span>
@@ -442,6 +455,7 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
       <p className="mc-muted mc-path__note">
         Computed from the outline; speeds assumed.{" "}
         {classes.map((id) => machineClassSummary(id, id === "drone" ? altitudes : [])).join(". ")}.
+        {noFlyer && " No machine in this fleet flies, so the drone has no crew yet."}
       </p>
     </section>
   );

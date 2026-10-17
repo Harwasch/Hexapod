@@ -64,7 +64,9 @@ legal, or financial findings are shown in place of missing integrations.
 Apply migrations through the current Alembic head to an isolated development/preview database and run the API normally.
 Set `VITE_ENABLE_LAND_EXPLORATION=true` on the web development server or build. It defaults
 to false, including in development, so current production flows remain unchanged until a
-deployer explicitly enables it. Set `VITE_API_BASE_URL` to the preview API when using a
+deployer explicitly enables it. A build with it off never loads any of the Land code: the shell
+loads the panel, its bridges and the workspace sign-in on demand (see "Polish" below), so their
+chunks are built and deployed but never requested. Set `VITE_API_BASE_URL` to the preview API when using a
 separate port; `API_CORS_ORIGINS` is a comma-separated list, not JSON.
 
 The desktop rail exposes **Land**, also available with Shift+L. On phones it is under
@@ -253,6 +255,9 @@ Run browser checks with the preview flag enabled:
 ```sh
 VITE_ENABLE_LAND_EXPLORATION=true pnpm --filter @twin/web exec playwright test e2e/land.spec.ts --project=chromium
 ```
+
+CI runs exactly that in its own job, "Web · Playwright (Land)" (`.github/workflows/ci.yml`),
+whenever the web app changes; every other spec keeps the flag off, as production does.
 
 These drive the real map for drawing, saving, inspecting underlying ground, revising,
 reloading, importing exclusions, and phone layout. Their API fixture is deterministic.
@@ -2600,3 +2605,37 @@ survey rover 35 %) and `creekBufferM` (15 m, 15 m and 5 m). Not done: hands are 
 the plan or sent to the planner, lanes cannot be dragged, machine kinematics (headland turns,
 turning radius, battery), machine-to-machine conflicts and aerial rules (altitude, wind,
 airspace) are not simulated.
+
+## Polish: the Land feature on demand, on a phone and in the command box
+
+The audit's remaining Land items, each tested:
+
+- **On demand.** `AppShell` loads the Land panel, the land bridges (`LandIdentityBridge`,
+  `LandBridge`, `LandContextBridge`, `LandRasterBridge`, `KnowledgeFogBridge`,
+  `LandMissionBridge`), the fog of knowing's card and legend, and with them oidc-client-ts, with
+  `React.lazy`, and renders them only with the flag on. With it off their chunks are still
+  built, but nothing requests them. The globe's entry chunk went from 383 kB to 179 kB gzipped.
+  `apps/web/scripts/check-bundle.mjs` fails a build whose globe page reaches the Land code
+  before its first frame, and holds the entry to a gzip budget (`INDEX_ENTRY_GZIP_BUDGET`). A
+  chunk that fails to load (a flaky network, a tab left open across a deploy) fails alone: the
+  bridges and the settings sheet mount under a quiet error boundary (`OnDemand` in `AppShell`)
+  and the panel, card and legend under their inline ones, so the HUD keeps running.
+- **On a phone.** The review sheet covers the lower half of the map, so a boundary going to
+  review is framed above it when anything hides it (`features/land/landFraming.ts`, arithmetic in
+  `lib/viewFraming.ts`); opening a saved land frames it beside the panel on a desktop and above
+  the sheet on a phone. Opening a saved land, from the panel's list, the command box or the map,
+  scrolls the panel to the land's overview. On a touch screen (`(pointer: coarse)`) the Land
+  tool and the plan composer say "Tap the map", not "Click the map" (`lib/pointer.ts`), and a
+  wait for a point on the map never says "Escape": it names the button that cancels it (the
+  plan card's **Cancel**, the map alignment's **Cancel map pick**).
+- **In the command box.** With the flag on, the Actions include "Open Land" (`Shift+L`) and
+  "Outline land" ("Return to your unsaved outline" while one is open), and saved land is
+  listed by name under "Saved land": choosing one opens it and frames it.
+- **The strip** reads TimelineControl, TimeLanternControl, KnowledgeLegend: dates, the lens over
+  dated imagery, then how old what you know is.
+
+Tests: `landPanelPhone.test.tsx` (tap copy, review framing above the sheet, overview on
+reopening), `touchPickCancel.test.tsx` and `landImageAlignment.test.tsx` (no Escape on a phone,
+a Cancel that ends the wait), `errorBoundaryQuiet.test.tsx`, `viewFraming.test.ts`,
+`commandBox.test.tsx` ("the Land tool in the command box"), `checkBundle.test.ts`, and in
+`e2e/land.spec.ts` "on a touch phone" and the strip order in the fog test.

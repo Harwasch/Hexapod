@@ -1,11 +1,13 @@
 /**
  * `scripts/check-bundle.mjs`, the CI check that the admin, phone and scan-viewer pages of a
- * production build load no CesiumJS. It is run as CI runs it -- `node <script> <dist>` --
+ * production build load no CesiumJS, and that the globe page keeps its entry script within
+ * budget and loads no Land code before its first frame. It is run as CI runs it -- `node <script> <dist>` --
  * against small hand-made builds, because the exit status is the whole contract: a check
  * that passed on the bug it exists for (the admin page modulepreloading the engine through a
  * shared `tslib`) or on an empty directory would be worse than none.
  */
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,6 +15,8 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = resolve(__dirname, "../../scripts/check-bundle.mjs");
+/** The script's own budget, read the way CI's build would meet it. */
+const { INDEX_ENTRY_GZIP_BUDGET } = (await import(SCRIPT)) as { INDEX_ENTRY_GZIP_BUDGET: number };
 
 function page(entry: string, preloads: string[] = []): string {
   const links = preloads
@@ -50,6 +54,8 @@ function cleanBuild(): Record<string, string> {
     "assets/client-1.js": `import{a}from"./helpers-1.js";export const r=a;`,
     "assets/upload-1.js": `export {};`,
     "assets/view-1.js": `const later=()=>import("./cesium-1.js");export{later};`,
+    // The Land panel, on demand: AppShell's lazy import, never a static one.
+    "assets/LandPanel-1.js": `export const p={className:\`land-library\`};`,
   };
 }
 
@@ -94,6 +100,37 @@ describe("check-bundle.mjs", () => {
     // view-1.js in the clean build does `import("./cesium-1.js")`; that alone passes.
     const { status } = run(build(cleanBuild()));
     expect(status).toBe(0);
+  });
+
+  it("holds the globe page's entry script to its gzip budget", () => {
+    const clean = run(build(cleanBuild()));
+    expect(clean.output).toMatch(/index\.html entry assets\/index-1\.js: .* gz, within its/);
+    const files = cleanBuild();
+    // Random bytes do not compress: a little over the budget once gzipped.
+    const bulk = randomBytes(Math.ceil(INDEX_ENTRY_GZIP_BUDGET * 1.1)).toString("base64");
+    files["assets/index-1.js"] = `import"./cesium-1.js";const b="${bulk}";export{b};`;
+    const { status, output } = run(build(files));
+    expect(output).toMatch(/index\.html entry assets\/index-1\.js: .* gz, over its/);
+    expect(status).toBe(1);
+  });
+
+  it("fails when the globe page reaches the Land feature before its first frame", () => {
+    // A lazy Land panel passes; the same chunk imported statically, two hops away, does not.
+    const lazyLand = cleanBuild();
+    lazyLand["assets/index-1.js"] =
+      `import"./cesium-1.js";const l=()=>import("./LandPanel-1.js");export{l};`;
+    expect(run(build(lazyLand)).status).toBe(0);
+    const files = cleanBuild();
+    files["assets/helpers-1.js"] = `import"./LandPanel-1.js";var o=Object.assign;export{o as a};`;
+    const { status, output } = run(build(files));
+    expect(output).toContain(
+      'index.html loads the Land feature before its first frame: assets/LandPanel-1.js ("land-library")',
+    );
+    expect(status).toBe(1);
+    // The workspace sign-in (oidc-client-ts) is Land's too.
+    const signIn = cleanBuild();
+    signIn["assets/index-1.js"] = `import"./cesium-1.js";const u={signinRedirect(){}};export{u};`;
+    expect(run(build(signIn)).output).toContain('("signinRedirect")');
   });
 
   it("refuses a missing build or a page that names a file the build lacks", () => {

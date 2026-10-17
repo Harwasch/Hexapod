@@ -6,7 +6,7 @@
  * must answer each of their questions without making the operator say which one they meant:
  * a place name flies there, "settings" opens Settings, "Z-21" selects the zone, and a
  * sentence of work goes to the agent. The groups are listed in a fixed order — what the
- * console already knows (sites, zones, plans, layers, actions) above what the geocoder finds
+ * console already knows (sites, saved lands, zones, plans, layers, actions) above what the geocoder finds
  * (places), so the best local match is the top row — and what changes with the words is
  * which row is highlighted for Enter (`defaultActiveId`).
  */
@@ -16,7 +16,7 @@ import type { LucideIcon } from "lucide-react";
 import { isWorkRequest } from "@/lib/intents";
 
 export type CommandGroupId =
-  "places" | "sites" | "zones" | "plans" | "layers" | "actions" | "agent";
+  "places" | "sites" | "lands" | "zones" | "plans" | "layers" | "actions" | "agent";
 
 export interface CommandRow {
   /** Unique across every group: the option's DOM id and the highlight's key. */
@@ -44,6 +44,7 @@ export interface CommandGroup {
  */
 export const GROUP_ORDER: readonly CommandGroupId[] = [
   "sites",
+  "lands",
   "zones",
   "plans",
   "layers",
@@ -55,6 +56,7 @@ export const GROUP_ORDER: readonly CommandGroupId[] = [
 export const GROUP_HEADINGS: Record<CommandGroupId, string> = {
   places: "Places",
   sites: "Sites",
+  lands: "Saved land",
   zones: "Zones",
   plans: "Plans",
   layers: "Layers",
@@ -66,6 +68,7 @@ export const GROUP_HEADINGS: Record<CommandGroupId, string> = {
 export const GROUP_LIMITS: Record<CommandGroupId, number> = {
   places: 4,
   sites: 4,
+  lands: 4,
   zones: 4,
   plans: 4,
   layers: 5,
