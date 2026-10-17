@@ -29,6 +29,7 @@ import type { CameraController } from "./CameraController";
 import type { LayerManager } from "./LayerManager";
 import { LongPress } from "./longPress";
 import { ZONE_ENTITY_PREFIX } from "./MissionManager";
+import { REHEARSAL_ENTITY_PREFIX } from "./RehearsalManager";
 import type { SiteManager } from "./SiteManager";
 import type { SceneEvents } from "./types";
 import type { SplatCollider } from "./SplatCollider";
@@ -290,6 +291,13 @@ export class SelectionManager {
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
       return;
+    // A rehearsal's hands and ghosts are the rehearsal's to explain (features/mission/Rehearsal.tsx).
+    if (isEntityPick(picked) && picked.id.id.startsWith(REHEARSAL_ENTITY_PREFIX)) {
+      this.events.emit("rehearsal-pick", {
+        id: picked.id.id.slice(REHEARSAL_ENTITY_PREFIX.length),
+      });
+      return;
+    }
     if (isEntityPick(picked) && picked.id.id.startsWith("land-context:")) {
       const properties = picked.id.properties?.getValue(this.viewer.clock.currentTime) as
         Record<string, unknown> | undefined;

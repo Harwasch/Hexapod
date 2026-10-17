@@ -27,6 +27,8 @@ import { useUi } from "@/state/ui";
 
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
+import { approveLabel, useDressRehearsal } from "./dressRehearsal";
+import { RehearsalPanel } from "./Rehearsal";
 import { ScoutExport } from "./ScoutExport";
 import { groundFromView, waitForGround } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
@@ -600,6 +602,9 @@ function DraftReview({
     return () => clearPlanOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw only when the scope changes
   }, [overlayKey, showPlanOnMap, clearPlanOverlay]);
+  // The dress rehearsal runs this draft's lanes; a change to what it drives stops it.
+  const rehearsalKey = `${overlayKey}|${(draft.coverage ?? []).map((c) => `${c.zoneId}:${c.machineClass}`).join(";")}`;
+  const rehearsal = useDressRehearsal(draft, project, rehearsalKey);
   const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
   const zoneName = (id: string | null | undefined) =>
     id ? (project.zones.find((z) => z.id === id)?.name ?? id) : null;
@@ -765,9 +770,24 @@ function DraftReview({
           </ul>
         </details>
       )}
+      <RehearsalPanel run={rehearsal} />
       <div className="mc-actions">
         <button type="button" className="mc-btn" onClick={() => showPlanOnMap(draft)}>
           Fit on map
+        </button>
+        <button
+          type="button"
+          className="mc-btn"
+          onClick={rehearsal.start}
+          disabled={!scene || drafting || rehearsal.status === "loading"}
+          data-testid="plan-rehearse"
+          title="Simulated machines drive the drawn lanes and raise a hand where a lane breaks a limit their class is assumed to keep"
+        >
+          {rehearsal.status === "loading"
+            ? "Reading the ground…"
+            : rehearsal.status === "ready"
+              ? "Rehearse again"
+              : "Rehearse"}
         </button>
         <button
           type="button"
@@ -776,7 +796,7 @@ function DraftReview({
           disabled={draft.zoneIds.length === 0 || approving || drafting}
           data-testid="plan-approve"
         >
-          {approving ? "Saving…" : conflicts.length ? "Approve despite conflicts" : "Approve plan"}
+          {approving ? "Saving…" : approveLabel(conflicts.length, rehearsal.raised)}
         </button>
       </div>
       <p className="mc-muted mc-review__hint">

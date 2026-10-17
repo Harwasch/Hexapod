@@ -2654,3 +2654,153 @@ a.mc-link {
 .mc-scout__facts dd {
   margin: 0;
 }
+
+/* The dress rehearsal in the plan card (features/mission/Rehearsal.tsx): simulated machines on
+   the draft's lanes, its clock and controls, the hands as they go up, the end summary. Amber,
+   the colour of a raised hand, marks all of it as simulated. */
+.mc-rehearsal {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border-radius: 14px;
+  border: 1px solid rgba(240, 178, 84, 0.35);
+  background: rgba(240, 178, 84, 0.06);
+}
+
+.mc-rehearsal__banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  font: 700 12px var(--font-sans);
+  letter-spacing: 0.12em;
+  color: var(--warn);
+}
+
+.mc-rehearsal__banner .mc-mono {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.mc-rehearsal__clock {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.mc-rehearsal__scrub {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--warn);
+}
+
+.mc-rehearsal__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mc-rehearsal__controls .mc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mc-rehearsal__speeds {
+  margin-top: 0;
+}
+
+.mc-rehearsal__note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.mc-rehearsal__hands {
+  gap: 0.3rem;
+}
+
+.mc-rehearsal__hand {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mc-rehearsal__hand.is-open {
+  border-color: rgba(240, 178, 84, 0.5);
+}
+
+.mc-rehearsal__hand-head {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.1rem 0.45rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: 500 12px var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-rehearsal__hand-head svg {
+  color: var(--warn);
+}
+
+.mc-rehearsal__hand-head .mc-mono {
+  grid-column: 2;
+  font-size: 11px;
+}
+
+.mc-rehearsal__hand-head:focus-visible {
+  outline: none;
+  border-radius: 10px;
+  box-shadow: var(--focus-ring);
+}
+
+.mc-rehearsal__hand-body {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0 0.6rem 0.6rem 1.9rem;
+  font: 400 12px/1.45 var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.mc-rehearsal__hand-body p {
+  margin: 0;
+}
+
+.mc-rehearsal__hand-body .mc-btn {
+  justify-self: start;
+}
+
+.mc-rehearsal__summary {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.mc-rehearsal__sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.mc-rehearsal__source {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  font: 500 11px/1.4 var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.mc-rehearsal__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font: 400 12px var(--font-sans);
+  color: var(--text-secondary);
+}

@@ -47,6 +47,8 @@ export interface SceneEvents extends Record<string, unknown> {
   "land-feature-select": { id: string };
   "land-research-feature-select": { layerId: string; featureId: string };
   "mission-select": { kind: "zone" | "machine"; id: string };
+  /** A click on a dress rehearsal's hand or ghost: the entity id after "rehearsal:". */
+  "rehearsal-pick": { id: string };
   /** The operator reshaped an area on the map; the store takes the new outline. */
   "area-edit": { zoneId: string; footprint: Footprint };
   /** True while a handle is held (the camera is paused for the duration). */

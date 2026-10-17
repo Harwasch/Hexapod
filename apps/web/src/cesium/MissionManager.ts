@@ -33,7 +33,7 @@ import { eyeOf, frameGround, projectGroundPoints, viewportOptions } from "@/miss
 import { PREVIEW_MAX_PASSES, PREVIEW_SWATH_M } from "@/missions/preview";
 import { scoutLanes, scoutOf } from "@/missions/scout";
 import { siteAnchor } from "@/missions/sitePin";
-import type { Machine, PlanOverlay, Project, Zone } from "@/missions/types";
+import type { LonLat, Machine, PlanOverlay, Project, Zone } from "@/missions/types";
 
 import type { CameraController } from "./CameraController";
 import type { SceneEvents } from "./types";
@@ -77,6 +77,12 @@ const MAX_TILESET_TERRAIN_GAP_M = 60;
 const MOVING_HEIGHT_TTL_MS = 1500;
 const RESTING_HEIGHT_TTL_MS = 4000;
 
+/** A lane's identity in a zone: its ends, to a centimetre or so. */
+function laneKey(zoneId: string, lane: CoverageLane): string {
+  const p = (q: LonLat) => `${q.longitude.toFixed(7)},${q.latitude.toFixed(7)}`;
+  return `${zoneId}|${p(lane.a)}|${p(lane.b)}`;
+}
+
 function isPlausibleHeight(height: number | undefined): height is number {
   return height !== undefined && Number.isFinite(height) && height > -500 && height < 9000;
 }
@@ -111,6 +117,16 @@ export class MissionManager {
   private readonly planEntities: Entity[] = [];
   /** The lanes drawn for each zone of the plan overlay (`previewLanes`). */
   private readonly drawnLanes = new Map<string, CoverageLane[]>();
+  /** Each drawn lane's number in its zone counting the left-out ones, so numbers stay put. */
+  private readonly drawnNumbers = new Map<string, number[]>();
+  /**
+   * Lanes the operator left out of the draft's preview (the rehearsal's "Leave this lane
+   * out"), by zone and lane geometry, so a redraw of the same outline keeps them out and a
+   * changed outline drops them. Only the preview: a plan's zones and hours are unchanged.
+   */
+  private readonly leftOut = new Map<string, CoverageLane & { zoneId: string }>();
+  /** Off while a rehearsal draws the lanes in its own states (pending, done, a raised hand). */
+  private passesShown = true;
   private overlay: PlanOverlay | null = null;
   private readonly listeners = new Set<FrameListener>();
   private readonly removeFrame: () => void;
@@ -279,10 +295,14 @@ export class MissionManager {
    * preview passes (see PREVIEW_SWATH_M). `previewLanes` hands out exactly what is drawn.
    */
   showPlan(overlay: PlanOverlay | null): void {
+    // A different plan, or none: lanes left out of the last one's preview come back.
+    const zones = (o: PlanOverlay | null) => (o?.zones.map((z) => z.zoneId) ?? []).join(",");
+    if (!overlay || zones(overlay) !== zones(this.overlay)) this.leftOut.clear();
     this.overlay = overlay;
     for (const entity of this.planEntities) this.viewer.entities.remove(entity);
     this.planEntities.length = 0;
     this.drawnLanes.clear();
+    this.drawnNumbers.clear();
     this.setSelectedZone(null);
     const project = this.project;
     if (!overlay || !project) {
@@ -298,7 +318,7 @@ export class MissionManager {
       // corridor.
       const line = zone.land?.line?.coordinates ?? null;
       const scout = zone.scout ? scoutOf(zone.scout) : null;
-      const lanes: CoverageLane[] = line
+      const all: CoverageLane[] = line
         ? []
         : scout
           ? scoutLanes(zone.footprint, scout)
@@ -306,7 +326,15 @@ export class MissionManager {
               swathM: PREVIEW_SWATH_M,
               maxPasses: PREVIEW_MAX_PASSES,
             }).lanes;
+      const lanes: CoverageLane[] = [];
+      const numbers: number[] = [];
+      all.forEach((lane, index) => {
+        if (this.leftOut.has(laneKey(zone.id, lane))) return;
+        lanes.push(lane);
+        numbers.push(index + 1);
+      });
       this.drawnLanes.set(zone.id, lanes);
+      this.drawnNumbers.set(zone.id, numbers);
       if (line && line.length >= 2) {
         this.planEntities.push(
           this.viewer.entities.add({
@@ -328,6 +356,7 @@ export class MissionManager {
             // The first stroke keeps the zone's plain id; one split by a hole or a notch
             // adds numbered ones.
             id: `${PLAN_ENTITY_PREFIX}passes:${zone.id}${strokeIndex ? `:${strokeIndex}` : ""}`,
+            show: this.passesShown,
             polyline: {
               positions: Cartesian3.fromDegreesArray(
                 stroke.flatMap((p) => [p.longitude, p.latitude]),
@@ -421,6 +450,62 @@ export class MissionManager {
    */
   previewLanes(zoneId: string): readonly CoverageLane[] {
     return this.drawnLanes.get(zoneId) ?? [];
+  }
+
+  /** The number of each of `previewLanes(zoneId)`, from 1, with left-out lanes still counted. */
+  previewLaneNumbers(zoneId: string): readonly number[] {
+    return this.drawnNumbers.get(zoneId) ?? [];
+  }
+
+  /** Takes one drawn lane out of the draft's preview and redraws it without. */
+  leaveOutLane(zoneId: string, lane: CoverageLane): void {
+    this.leftOut.set(laneKey(zoneId, lane), { ...lane, zoneId });
+    if (this.overlay) this.showPlan(this.overlay);
+  }
+
+  /** Every lane left out of the preview comes back. */
+  restoreLanes(): void {
+    if (this.leftOut.size === 0) return;
+    this.leftOut.clear();
+    if (this.overlay) this.showPlan(this.overlay);
+  }
+
+  /** The lanes left out of the current preview, in the order they were left out. */
+  leftOutLanes(): readonly (CoverageLane & { zoneId: string })[] {
+    return [...this.leftOut.values()];
+  }
+
+  /** Shows or hides the drawn passes (zone outlines and step markers stay). */
+  setPreviewPassesShown(shown: boolean): void {
+    this.passesShown = shown;
+    for (const entity of this.planEntities)
+      if (typeof entity.id === "string" && entity.id.startsWith(`${PLAN_ENTITY_PREFIX}passes:`))
+        entity.show = shown;
+    this.scene.requestRender();
+  }
+
+  /**
+   * Flies to a point on the ground, framing `radiusM` around it; like `flyToZones`, the framed
+   * centre moves screen-right by `sideOffset` radii so the point lands beside the plan window.
+   */
+  flyToPoint(point: LonLat, radiusM = 80, sideOffset = 0.75): void {
+    const heading = 20;
+    const h = (heading * Math.PI) / 180;
+    const target = destination(
+      point,
+      (Math.atan2(Math.cos(h), -Math.sin(h)) * 180) / Math.PI,
+      radiusM * sideOffset,
+    );
+    const key = `point-fly:${target.longitude.toFixed(5)},${target.latitude.toFixed(5)}`;
+    void this.detailedHeight(target.longitude, target.latitude, key).then((height) => {
+      this.camera.flyToBoundingSphere(
+        new BoundingSphere(
+          Cartesian3.fromDegrees(target.longitude, target.latitude, height),
+          radiusM * (1 + sideOffset * 0.4),
+        ),
+        { heading, pitch: -40, rangeMultiplier: 2.6, durationS: 1.4 },
+      );
+    });
   }
 
   /**
