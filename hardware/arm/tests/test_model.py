@@ -18,6 +18,7 @@ from armdesign.model import (
     BodyPose,
     Hexapod,
     Load,
+    body_pose_grid,
     load_torques,
     planar_ik,
     solve_poses,
@@ -165,3 +166,82 @@ def test_task_library_loads() -> None:
 
 def _cross2(a: np.ndarray, b: np.ndarray) -> float:
     return float(a[0] * b[1] - a[1] * b[0])
+
+
+def test_capstan_stage_multiplies_torque_and_divides_backlash() -> None:
+    from armdesign.parts import load_catalog, load_stages, with_stage
+
+    motor = next(a for a in load_catalog("reductions") if a.id == "rs_edulite_05")
+    stage = next(s for s in load_stages() if s.kind == "capstan" and s.ratio == 3)
+    geared = with_stage(motor, stage)
+    assert geared is not None
+    assert geared.peak == pytest.approx(min(motor.peak * 3 * stage.efficiency, stage.max_torque))
+    assert geared.backlash_deg == pytest.approx(motor.backlash_deg / 3 + stage.backlash_deg)
+    assert geared.speed == pytest.approx(motor.speed / 3)
+    assert geared.inertia == pytest.approx(motor.inertia * 9)
+    assert geared.price == pytest.approx(motor.price + stage.cost)
+
+
+def test_capstan_drum_must_clear_the_deck() -> None:
+    from armdesign.parts import load_stages, stage_fits
+
+    caps = [s for s in load_stages() if s.kind == "capstan"]
+    for s in caps:
+        # drum radius = ratio x rope-centre pinion radius, plus half a rope and a flange
+        assert s.drum_r == pytest.approx(
+            s.ratio * s.pinion_r + 0.00275 if "1.5" in s.rope else s.ratio * s.pinion_r + 0.003
+        )
+        assert s.max_torque == pytest.approx(0.2 * (2256 if "1.5" in s.rope else 4000) * s.ratio * s.pinion_r)
+        assert stage_fits(s, "shoulder", "parallelogram", 0.05) == (s.drum_r <= 0.05)
+        assert not stage_fits(s, "yaw", "parallelogram", 1.0)
+        assert not stage_fits(s, "elbow", "direct", 1.0)
+    # FA-1's 5 cm shoulder takes a 1.5 mm rope up to 7.5:1 (about 20 Nm), or a 2 mm rope
+    # on the thicker pinion up to 5:1 (36 Nm)
+    fits = [s for s in caps if stage_fits(s, "shoulder", "parallelogram", 0.05)]
+    thin = max((s for s in fits if "1.5" in s.rope), key=lambda s: s.ratio)
+    thick = max((s for s in fits if "2 mm" in s.rope), key=lambda s: s.ratio)
+    assert thin.ratio == 7.5 and 19 < thin.max_torque < 21
+    assert thick.ratio == 5 and thick.max_torque == pytest.approx(36)
+
+
+def test_pruning_never_drops_a_needed_option() -> None:
+    """The set-dominance prune is exact: the best score reachable at every budget is the
+    same with and without it."""
+    from armdesign.model import Actuator
+    from armdesign.optimize import _prune
+
+    rng = np.random.default_rng(3)
+    opts = [
+        Actuator(f"a{i}", "x", "qdd", 1, 1, float(rng.uniform(0.2, 0.5)), 10, float(p), 0.05, 0.05, "yes", "CAN", 0.2)
+        for i, p in enumerate(rng.uniform(50, 200, 12))
+    ]
+    ok = rng.random((12, 40, 6)) < 0.5
+    keep = _prune(opts, ok)
+    for i in range(12):
+        if i in keep:
+            continue
+        # Something kept serves at least as much, for no more money or mass.
+        assert any(
+            opts[k].price <= opts[i].price and opts[k].mass <= opts[i].mass and not np.any(ok[i] & ~ok[k]) for k in keep
+        )
+
+
+def test_pose_check_rejects_overstretched_legs(hx: Hexapod) -> None:
+    assert hx.pose_ok(BodyPose())
+    assert not hx.pose_ok(BodyPose(dz=0.12, pitch=math.radians(15)))
+    assert all(hx.pose_ok(b) for b in body_pose_grid(hx))
+
+
+def test_merge_points_keeps_every_combination_score() -> None:
+    from armdesign.optimize import _merge_points
+
+    rng = np.random.default_rng(1)
+    e, s, y = (rng.choice([0, 1, 2, 255], size=(n, 400)).astype(np.uint8) for n in (3, 5, 4))
+    e[:, :50] = s[:, :50] = y[:, :50] = 255  # served by everything
+    s[:, 50:80] = 0  # never served
+    w = rng.random(400).astype(np.float32)
+    full = ((e[:, None, None] & s[None, :, None] & y[None, None, :]) != 0).astype(np.float32) @ w
+    eb, sb, yb, wm, always = _merge_points(e, s, y, w)
+    merged = ((eb[:, None, None] & sb[None, :, None] & yb[None, None, :]) != 0).astype(np.float32) @ wm + always
+    assert eb.shape[1] < 400 - 80
+    np.testing.assert_allclose(merged, full, rtol=1e-5)

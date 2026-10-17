@@ -86,6 +86,7 @@ class Hexapod:
     dz_range: tuple[float, float]
     pitch_range: tuple[float, float]
     yaw_range: tuple[float, float]
+    lean: tuple[float, ...] = ()
 
     @classmethod
     def load(cls, mass: float | None = None) -> Hexapod:
@@ -107,6 +108,7 @@ class Hexapod:
             dz_range=tuple(m["dz"]),
             pitch_range=tuple(math.radians(x) for x in m["pitch_deg"]),
             yaw_range=tuple(math.radians(x) for x in m["yaw_deg"]),
+            lean=tuple(m.get("lean_dx", [])),
         )
 
     @property
@@ -139,6 +141,24 @@ class Hexapod:
             out[i] = (hip, coxa_end, knee, foot)
         return out
 
+    def pose_ok(self, pose: BodyPose, reach: float = 0.95) -> bool:
+        """Whether every foot can stay planted with the body at this pose: each leg within
+        its reach and its coxa within +-1 rad of its nominal heading."""
+        r, t = self.body_rt(pose)
+        for hip_b, foot in zip(self.hips, self.feet, strict=True):
+            hip = r @ hip_b + t
+            nominal = math.atan2(foot[1] - hip_b[1], foot[0] - hip_b[0])
+            fb = r.T @ (foot - t) - hip_b
+            heading = math.atan2(fb[1], fb[0])
+            if abs((heading - nominal + math.pi) % (2 * math.pi) - math.pi) > 1.0:
+                return False
+            flat = foot - hip
+            flat[2] = 0.0
+            d = float(np.linalg.norm(foot - (hip + self.coxa * unit(flat))))
+            if not (abs(self.femur - self.tibia) + 0.04 <= d <= reach * (self.femur + self.tibia)):
+                return False
+        return True
+
     def support_edges(self) -> tuple[Array, Array]:
         """Edge start points and unit directions of the support polygon (counter-clockwise)."""
         p = self.feet.copy()
@@ -147,8 +167,10 @@ class Hexapod:
         return p, unit(q - p)
 
 
-def body_pose_grid(hexapod: Hexapod, fine: bool = True) -> list[BodyPose]:
-    """The body poses the planner may use. The nominal pose comes first."""
+def body_pose_grid(hexapod: Hexapod, fine: bool = True, lean: bool = True) -> list[BodyPose]:
+    """The body poses the planner may use, each one checked for the legs' reach. The
+    nominal pose comes first. `lean` adds the body slid forward over planted feet, which
+    the simulations showed shortens the lever for a heavy pull or push."""
     lo_z, hi_z = hexapod.dz_range
     lo_p, hi_p = hexapod.pitch_range
     lo_y, hi_y = hexapod.yaw_range
@@ -160,7 +182,9 @@ def body_pose_grid(hexapod: Hexapod, fine: bool = True) -> list[BodyPose]:
         dzs = [0.0, lo_z, hi_z]
         pitches = [0.0, hi_p]
         yaws = [0.0, lo_y, hi_y]
-    return [BodyPose(z, p, y) for z in dzs for p in pitches for y in yaws]
+    dxs = [0.0, *hexapod.lean] if lean else [0.0]
+    poses = [BodyPose(z, p, y, x) for x in dxs for z in dzs for p in pitches for y in yaws]
+    return [b for b in poses if hexapod.pose_ok(b)]
 
 
 # --- the arm -----------------------------------------------------------------------
@@ -182,10 +206,12 @@ class MassModel:
     construction the CAD builds; the CAD reports its own masses for comparison."""
 
     tube_kg_per_m: float = 0.36  # 25 x 1.5 mm 6061 tube, 0.30 kg/m, plus harness
-    turret_kg: float = 0.30
+    # Field kit (docs/research/rugged.md): aluminium heat plate, sun shield, drip skirt and
+    # gaskets on the turret; sealed pods and a detent clutch at the wrist.
+    turret_kg: float = 0.55
     elbow_housing_kg: float = 0.09
     rod_kg: float = 0.07  # parallelogram rod + crank
-    wrist_housing_kg: float = 0.08
+    wrist_housing_kg: float = 0.18
     flange_kg: float = 0.11  # tool changer, wrist camera and ToF sensor
     spring_kg: float = 0.08
     roll_offset: float = 0.045  # wrist pitch axis -> tool-roll actuator centre
@@ -554,6 +580,12 @@ class Actuator:
     output_encoder: str = "yes"
     ip: str = "none"
     notes: str = ""
+    ratio: float = 1.0  # total reduction, motor to output
+    stage: str = ""  # added reduction stage, e.g. "capstan 4:1"; empty when none
+    needs_driver: bool = False  # bare motor + gearbox, driven by the custom board
+    source: str = "retail"  # where the price comes from
+    retail: float = 0.0  # US retail price of the motor part, for comparison
+    inertia: float = 0.0  # rotor inertia reflected to the output, kg m^2
 
     @cached_property
     def usd_per_nm(self) -> float:

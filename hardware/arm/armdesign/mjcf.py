@@ -34,6 +34,11 @@ class ArmActuators:
     forearm_roll: Actuator | None = None
 
 
+def _arm(act: Actuator) -> str:
+    """Joint armature: the motor's rotor inertia seen at the joint, at least the default."""
+    return f"{max(0.006, act.inertia):.5g}"
+
+
 def _f(*xs: float) -> str:
     return " ".join(f"{x:.5g}" for x in xs)
 
@@ -126,7 +131,7 @@ def build_mjcf(
         y_off = -(acts.shoulder.length / 2 + acts.elbow.length / 2 + 0.01)
         crank = f"""
         <body name="crank" pos="0 0 {design.pedestal}">
-          <joint name="arm_crank" axis="0 -1 0" class="arm"/>
+          <joint name="arm_crank" axis="0 -1 0" class="arm" armature="{_arm(acts.elbow)}"/>
           {_cyl_inertia_geom("act_elbow", acts.elbow, (0, y_off, 0), "y", blue)}
           <geom type="capsule" fromto="0 0 0 {-CRANK} 0 0" size="0.008" mass="0.02" rgba="{dark}" class="vis"/>
           <body name="rod" pos="{-CRANK} 0 0">
@@ -177,15 +182,15 @@ def build_mjcf(
       <geom name="tray_wall_b" type="box" size="0.004 0.09 0.02" pos="-0.21 0 {hx.deck_z + 0.02}" rgba="0.15 0.5 0.35 1" contype="4" conaffinity="0"/>
       {"".join(legs)}
       <body name="turret" pos="{design.mount_x} 0 {hx.deck_z}">
-        <joint name="arm_yaw" axis="0 0 1" range="-3.5 3.5" class="arm"/>
+        <joint name="arm_yaw" axis="0 0 1" range="-3.5 3.5" class="arm" armature="{_arm(acts.yaw)}"/>
         {_cyl_inertia_geom("act_yaw", acts.yaw, (0, 0, yaw_h / 2), "z", blue)}
         <geom type="box" size="0.035 0.05 {design.pedestal / 2:.4g}" pos="0 0 {design.pedestal / 2:.4g}" mass="{mm.turret_kg:.4g}" rgba="{grey}" class="vis"/>
         <body name="upper" pos="0 0 {design.pedestal}">
-          <joint name="arm_shoulder" axis="0 -1 0" range="-0.7 2.7" class="arm"/>
+          <joint name="arm_shoulder" axis="0 -1 0" range="-0.7 2.7" class="arm" armature="{_arm(acts.shoulder)}"/>
           {_cyl_inertia_geom("act_shoulder", acts.shoulder, (0, acts.shoulder.length / 2 + 0.005, 0), "y", blue)}
           <geom type="capsule" fromto="0 0 0 {l1} 0 0" size="{tube_r}" mass="{t1_mass:.4g}" rgba="{grey}" class="armcol"/>
           <body name="fore" pos="{l1} 0 0">
-            <joint name="arm_elbow" axis="0 -1 0" range="-2.95 0.1" class="{elbow_joint_class}"/>
+            <joint name="arm_elbow" axis="0 -1 0" range="-2.95 0.1" class="{elbow_joint_class}"{"" if para else f' armature="{_arm(acts.elbow)}"'}/>
             {elbow_geom}
             <geom type="capsule" fromto="{-CRANK if para else 0} 0 0 {l2} 0 0" size="{tube_r}" mass="{t2_mass:.4g}" rgba="{grey}" class="armcol"/>
             {froll}

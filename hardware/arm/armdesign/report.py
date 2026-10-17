@@ -35,6 +35,7 @@ from armdesign.evaluate import (
 from armdesign.model import (
     JOINTS,
     ROOT,
+    Actuator,
     ArmDesign,
     BodyPose,
     Hexapod,
@@ -53,29 +54,97 @@ VIEWER = ROOT / "viewer"
 KNEE = 0.95
 
 
-def choose(study: dict) -> dict:
-    field = study["frontier"]["field"]
+FA1 = {
+    "design": {
+        "arch": "parallelogram",
+        "dof": 5,
+        "l1": 0.37,
+        "l2": 0.28,
+        "mount_x": 0.26,
+        "pedestal": 0.05,
+        "spring": True,
+        "wrist_len": 0.09,
+    },
+    "actuators": {
+        "yaw": "rs_edulite_05",
+        "shoulder": "sw_gim8108_8",
+        "elbow": "sw_gim6010_8",
+        "wrist_pitch": "hx_35hm",
+        "tool_roll": "hx_65hm",
+    },
+    "lever": "retail",
+}
+# What v1 priced FA-1 at: list prices, before duty and freight.
+FA1_LIST_COST = 607.22
+
+
+def score_of(entry: dict) -> float:
+    """A design's capability under this study's rules (body poses, leg reach, speed)."""
+    from armdesign.parts import resolve
+
+    design = ArmDesign(**entry["design"])
+    acts = resolve(entry["actuators"], entry.get("lever", "retail"))
+    return workspace(design, acts, Hexapod.load())["score"]
+
+
+def cost_of(design: ArmDesign, acts: dict[str, Actuator]) -> float:
+    """Landed cost of one arm, the same sum the study makes."""
+    fixed = fixed_cost(design, load_costs(), any(a.needs_driver for a in acts.values()))
+    return round(sum(a.price for a in acts.values()) + sum(fixed.values()), 2)
+
+
+def choose(study: dict, fa1_score: float, fa1_cost: float) -> dict[str, dict]:
+    """Three picks on the all-levers field frontier: the cheapest that matches FA-1, the
+    best at FA-1's price, and the knee (the cheapest within 5% of the best anywhere)."""
+    field = study["frontier"]["all"]["field"]
     best = max(r["score"] for r in field)
-    ok = [r for r in field if r["score"] >= KNEE * best]
-    return min(ok, key=lambda r: r["cost"])
+    return {
+        "lite": min((r for r in field if r["score"] >= fa1_score - 1e-6), key=lambda r: r["cost"]),
+        "balanced": min((r for r in field if r["score"] >= KNEE * best), key=lambda r: r["cost"]),
+        "max": max((r for r in field if r["cost"] <= fa1_cost + 1e-6), key=lambda r: (r["score"], -r["cost"])),
+    }
 
 
 def select() -> None:
+    from armdesign.parts import resolve
+
     study = json.loads((OUT / "study.json").read_text())
-    pick = choose(study)
+    fa1_score = score_of(FA1)
+    fa1_acts = resolve(FA1["actuators"], "retail")
+    fa1_design = ArmDesign(**FA1["design"])
+    fa1_cost = cost_of(fa1_design, fa1_acts)
+    fa1_sourced = cost_of(fa1_design, resolve(FA1["actuators"], "sourcing"))
+    fa1_backlash, _ = precision_speed(fa1_design, fa1_acts)
+    fa1_mass = fixed_mass(fa1_design, MassModel()) + sum(a.mass for a in fa1_acts.values())
+    picks = choose(study, fa1_score, fa1_cost)
+    keep = ("design", "actuators", "stages", "sources", "lever", "score", "cost", "mass", "backlash_mm", "label")
     sel = {
-        "why": f"cheapest field-tier design within {round((1 - KNEE) * 100)}% of the best field-tier score",
-        "design": pick["design"],
-        "actuators": pick["actuators"],
-        "score": pick["score"],
-        "cost": pick["cost"],
-        "mass": pick["mass"],
+        "why": (
+            "FA-2 is the balanced pick: the cheapest field-grade design, all levers on, within "
+            f"{round((1 - KNEE) * 100)}% of the best field-grade score. lite matches FA-1's capability "
+            "for the least money; max is the most capability at FA-1's price."
+        ),
+        "chosen": "balanced",
+        "fa1": {
+            **FA1,
+            "score_v2": round(fa1_score, 4),
+            "cost": fa1_cost,
+            "cost_list": FA1_LIST_COST,
+            "cost_sourced": fa1_sourced,
+            "mass": round(fa1_mass, 3),
+            "backlash_mm": round(fa1_backlash, 2),
+        },
+        "picks": {k: {x: v[x] for x in keep if x in v} for k, v in picks.items()},
     }
     (ROOT / "design").mkdir(exist_ok=True)
     with (ROOT / "design" / "selected.yaml").open("w") as f:
         f.write("# Written by `python -m armdesign.report select` from out/study.json.\n")
         yaml.safe_dump(sel, f, sort_keys=False)
-    print(f"selected: ${pick['cost']} score {pick['score']:.3f} {pick['label']} {pick['actuators']}")
+    print(
+        f"FA-1 under these rules: score {fa1_score:.3f}, ${fa1_cost} landed (${fa1_sourced} same parts, best sources)"
+    )
+    for k, v in picks.items():
+        print(f"{k:9s} ${v['cost']} score {v['score']:.3f} {v['label']} {v['actuators']}")
 
 
 # --- metrics of the selected design -------------------------------------------------------
@@ -167,34 +236,43 @@ def workspace(design: ArmDesign, acts: dict, hx: Hexapod) -> dict:
 
 
 def bom(design: ArmDesign, acts: dict) -> list[dict]:
+    from armdesign.parts import load_stages
+
+    stages = {s.id: s for s in load_stages()}
+    costs = load_costs()
     rows = []
     for j in JOINTS:
-        if j in acts:
-            a = acts[j]
+        if j not in acts:
+            continue
+        a = acts[j]
+        where = j.replace("_", " ")
+        stage = stages.get(a.id.partition("+")[2])
+        driver = costs["custom_driver_per_axis"] if a.needs_driver else 0.0
+        motor = a.price - (stage.cost if stage else 0.0) - driver
+        name = a.name.split(" + ")[0] if stage else a.name
+        rows.append(
+            {"group": "Actuators", "item": name, "where": where, "qty": 1, "usd": round(motor, 2), "source": a.source}
+        )
+        if driver:
+            rows.append(
+                {"group": "Actuators", "item": "custom driver channel", "where": where, "qty": 1, "usd": driver}
+            )
+        if stage:
             rows.append(
                 {
-                    "group": "Actuators",
-                    "item": a.name,
-                    "where": j.replace("_", " "),
+                    "group": "Reductions",
+                    "item": f"{stage.ratio:g}:1 {stage.kind} (drum, pinion, cable, bearings)",
+                    "where": where,
                     "qty": 1,
-                    "usd": a.price,
-                    "kg": a.mass,
+                    "usd": stage.cost,
                 }
             )
-    costs = load_costs()
-    fixed = fixed_cost(design, costs)
-    mm = MassModel()
-    masses = {
-        "aluminium tube": mm.tube_kg_per_m * (design.l1 + design.l2) / 0.36 * 0.30,
-        "printed parts": None,
-        "parallelogram rod + rod ends": mm.rod_kg,
-        "gravity springs": mm.spring_kg * 2,
-    }
+    fixed = fixed_cost(design, costs, any(a.needs_driver for a in acts.values()))
     for k, v in fixed.items():
         group = "Sensing" if "camera" in k else "End effector" if k.startswith(("gripper", "tool")) else "Structure"
-        if k in ("harness + connectors", "seals + boots", "servo bus adapter"):
+        if k in ("harness + connectors", "seals + boots", "servo bus adapter") or "driver board" in k:
             group = "Electrical + sealing"
-        rows.append({"group": group, "item": k, "where": "", "qty": 1, "usd": round(v, 2), "kg": masses.get(k)})
+        rows.append({"group": group, "item": k, "where": "", "qty": 1, "usd": round(v, 2)})
     return rows
 
 
@@ -225,7 +303,8 @@ def main(argv: list[str]) -> None:
     ws = workspace(design, acts, hx)
     backlash, speed = precision_speed(design, acts)
     cad = json.loads((ROOT / "cad" / "cad.json").read_text())
-    total_cost = sum(a.price for a in acts.values()) + sum(fixed_cost(design, load_costs()).values())
+    rows_bom = bom(design, acts)
+    total_cost = sum(r["usd"] for r in rows_bom)
     selected = {
         "design": design.__dict__,
         "label": design.label,
@@ -245,6 +324,11 @@ def main(argv: list[str]) -> None:
                     "force_sense",
                     "ip",
                     "interface",
+                    "stage",
+                    "ratio",
+                    "source",
+                    "retail",
+                    "needs_driver",
                 )
             }
             for j, a in acts.items()
@@ -275,11 +359,28 @@ def main(argv: list[str]) -> None:
         "force_sensing",
         "kinds",
     )
+    sel = yaml.safe_load((ROOT / "design" / "selected.yaml").read_text())
+    keep += ("lever", "stages", "sources")
+    trim = lambda r: {x: r[x] for x in keep if x in r}  # noqa: E731
     slim = {
-        "frontier": {k: [{x: r[x] for x in keep} for r in v] for k, v in study["frontier"].items()},
-        "stage_b": [{x: r[x] for x in keep} for r in study["stage_b"]],
+        "frontier": {
+            lv: {t: [trim(r) for r in rows] for t, rows in tiers.items()} for lv, tiers in study["frontier"].items()
+        },
+        # Every frontier point of every geometry, field grade, for the scatter and the
+        # architecture chart; the any-tier points only for the cheapest setting.
+        "stage_b": [
+            trim(r)
+            for r in study["stage_b"]
+            if r["lever"] == "all" or (r["lever"] == "retail" and r["tier"] == "field")
+        ],
         "stage_a": [{"d": r["design"], "s": round(r["kin_score"], 4)} for r in study["stage_a"]],
+        "picks": sel.get("picks", {}),
+        "chosen": sel.get("chosen"),
+        "fa1": sel.get("fa1"),
     }
+    v1 = OUT / "study_v1.json"
+    if v1.exists():
+        slim["v1_frontier"] = [trim(r) for r in json.loads(v1.read_text())["frontier"]["field"]]
     with (ROOT / "data" / "benchmarks.csv").open() as f:
         bench = [row for row in csv.DictReader(f)]
     slim["benchmarks"] = [
@@ -303,7 +404,7 @@ def main(argv: list[str]) -> None:
     (data / "study.json").write_text(json.dumps(slim, separators=(",", ":")))
     (data / "selected.json").write_text(json.dumps(selected, indent=1))
     (data / "workspace.json").write_text(json.dumps(ws, separators=(",", ":")))
-    (data / "bom.json").write_text(json.dumps(bom(design, acts), indent=1))
+    (data / "bom.json").write_text(json.dumps(rows_bom, indent=1))
     sims = []
     for f in sorted((OUT / "sim").glob("*.json")):
         if f.name == "index.json":

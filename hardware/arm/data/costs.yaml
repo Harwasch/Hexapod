@@ -9,7 +9,21 @@ usd:
   gripper: 24.0 # STS3215 bus servo, TPU fin-ray fingers, printed body
   wrist_sensing: 43.0 # 12 MP wide camera module + 8x8 multizone ToF
   harness: 18.0 # silicone wire, JST-GH, XT30, cable glands, sleeving
-  seals: 10.0 # TPU gaiters at the joints, O-rings, conformal coat
+  seals: 41.0 # field kit (docs/research/rugged.md): V-rings + labyrinths, drip skirt, vents, servo pods, heat plate, sun shield
   parallelogram_rod: 8.0 # carbon rod + two M6 rod-end bearings
   spring_each: 7.0 # extension spring, Dyneema line, pulley
   servo_bus_adapter: 10.0 # TTL/RS-485 bus adapter for the servos on the arm
+  # Cost levers (armdesign/parts.py); sources in docs/research/.
+  # Landed basis: China-shipped, duty-unpaid prices pay ~40.3% US duty on arrival (MFN 2.8%
+  # + Section 301 25% + the 2026 forced-labor 301 tier 12.5%; de minimis is suspended).
+  import_duty_pct: 40.3
+  default_shipping_usd: 15.0 # per unit, express from China at qty 10 (aifitlab 4PX $16, Steadywin $15; verified)
+  # FTD-3 turret driver (docs/ELECTRONICS.md), JLCPCB-assembled, landed: about $133 a
+  # board (verified range $121-145: parts, JLC feeder/X-ray fees, fuse, phase connectors,
+  # brake chopper, sealed box, then ~35% US duty on PCB and SMT). Per axis: the power
+  # stage, two encoder satellites and a share of the heat spreader; the rest is fixed.
+  custom_driver_per_axis: 27.5
+  custom_driver_board_fixed: 50.5
+  # The board also hosts the 12 V servo rail and the TTL bus master ($2.27 x 1.403), which
+  # replaces the separate servo bus adapter.
+  custom_servo_rail: 3.2

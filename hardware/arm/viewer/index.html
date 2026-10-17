@@ -1,5 +1,5 @@
 <meta charset="utf-8" />
-<title>FA-1 Field Arm</title>
+<title>Hexapod Field Arm</title>
 <meta name="claude:viewport-fit-sides" content="cover" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -591,6 +591,9 @@
     align-content: start;
     min-width: 0;
   }
+  .card.wide {
+    grid-column: 1 / -1;
+  }
   .card .sub {
     color: var(--ink-2);
     font-size: 13.5px;
@@ -794,19 +797,28 @@
     <div class="eyebrow">Trade study</div>
     <h2>How the design was chosen</h2>
     <p id="study-lede">
-      Stage A swept 1,764 geometries (degrees of freedom, elbow drive, link lengths, mount position,
-      pedestal height) for reach, approach angle, collisions and tip-over. Stage B took the frontier
-      geometries, added gravity springs as an option, and tried every assignment of 27 real
-      actuators against the torque each task point needs.
+      The second study opened three cost levers: factory-direct sourcing, printed capstan reductions
+      on the turret-mounted motors, and bare motors run by our own driver board. It also let the
+      planner lean the body forward over planted feet, rejected body poses the legs cannot hold, and
+      required the base joints to turn fast enough for a 0.5 s dosing cycle. The same 1,764
+      geometries were swept; the frontier geometries were then tried with every assignment of parts
+      under each lever setting.
     </p>
   </section>
+  <div class="card">
+    <h3>Three ways to spend it</h3>
+    <p class="sub">
+      FA-1 re-scored under the same rules, and three picks from the new field-grade frontier.
+    </p>
+    <div class="tablewrap" id="compare" style="border: 0"></div>
+  </div>
   <div class="grid2">
     <div class="card">
       <h3>Cost against capability</h3>
       <p class="sub">
-        Each dot is a design on its own geometry's frontier. Capability is the weighted share of
-        task points served. "Field grade" requires a backdrivable, force-sensing shoulder and elbow
-        and under 6 mm of open-loop backlash at the tool.
+        Each dot is a field-grade design on its own geometry's frontier, all levers on. Capability
+        is the weighted share of task points served. Field grade means a backdrivable, force-sensing
+        shoulder and elbow and under 6 mm of open-loop backlash at the tool.
       </p>
       <div class="legend" id="lg-pareto"></div>
       <svg
@@ -815,6 +827,21 @@
         viewBox="0 0 560 330"
         role="img"
         aria-label="Cost against capability"
+      ></svg>
+    </div>
+    <div class="card">
+      <h3>What each lever is worth</h3>
+      <p class="sub">
+        The best field-grade capability for each parts budget with one lever on at a time, and with
+        all three. A lever that never moves its curve left or up bought nothing.
+      </p>
+      <div class="legend" id="lg-levers"></div>
+      <svg
+        class="chart"
+        id="ch-levers"
+        viewBox="0 0 560 330"
+        role="img"
+        aria-label="Capability by cost lever"
       ></svg>
     </div>
     <div class="card">
@@ -847,7 +874,7 @@
         aria-label="Coverage by link lengths"
       ></svg>
     </div>
-    <div class="card">
+    <div class="card wide">
       <h3>Against arms you can buy</h3>
       <p class="sub">
         Parts or list price per kilogram-metre of rated payload × reach (log scale). Vendors rate
@@ -1831,82 +1858,149 @@
       .join("");
     return `<b>${usd(r.cost)} · ${Math.round(r.score * 100)}% served</b><div class="row"><span>${r.label}</span></div><div class="row"><span>mass</span><span>${fmt(r.mass, 2)} kg</span></div><div class="row"><span>backlash</span><span>${fmt(r.backlash_mm, 1)} mm</span></div>${a}`;
   }
+  const LEVER_NAMES = {
+    retail: "US retail, integrated actuators",
+    sourcing: "+ factory-direct sourcing",
+    reductions: "+ printed capstan reductions",
+    custom: "+ custom driver electronics",
+    all: "All three levers",
+  };
+  const PICK_NAMES = { lite: "Lite", balanced: "FA-2", max: "Max" };
+  function scaleFor(rows, minCost) {
+    const costs = rows.map((r) => r.cost),
+      scores = rows.map((r) => r.score);
+    const x0 = Math.floor((Math.min(...costs, minCost) - 20) / 50) * 50;
+    const x1 = Math.ceil((Math.max(...costs) + 20) / 50) * 50;
+    const y0 = Math.max(0, Math.floor(Math.min(...scores) * 10) / 10);
+    return { x0, x1, y0 };
+  }
+  function costTicks(x0, x1) {
+    const step = x1 - x0 > 600 ? 200 : 100;
+    const out = [];
+    for (let v = Math.ceil(x0 / step) * step; v <= x1; v += step) out.push(v);
+    return out;
+  }
   function drawPareto() {
     const svg = $("#ch-pareto");
     svg.innerHTML = "";
-    const rows = study.stage_b;
-    const m = { l: 44, r: 12, t: 22, b: 40 },
+    const fr = study.frontier;
+    const v2 = fr.all?.field ?? [],
+      retail = fr.retail?.field ?? [],
+      v1 = study.v1_frontier ?? [];
+    const pts = study.stage_b.filter((r) => r.lever === "all" && r.tier === "field");
+    const picks = Object.entries(study.picks ?? {});
+    const fa1 = study.fa1;
+    const all = [...v2, ...retail, ...v1, ...pts];
+    const { x0, x1, y0 } = scaleFor(all, fa1 ? fa1.cost : 1e9);
+    const m = { l: 44, r: 14, t: 22, b: 40 },
       W = 560 - m.l - m.r,
       H = 330 - m.t - m.b;
-    const x0 = 250,
-      x1 = Math.max(1100, Math.ceil(Math.max(...rows.map((r) => r.cost)) / 100) * 100);
     const X = (v) => m.l + ((Math.min(v, x1) - x0) / (x1 - x0)) * W,
-      Y = (v) => m.t + H - v * H;
+      Y = (v) => m.t + H - ((v - y0) / (1 - y0)) * H;
+    const yt = [];
+    for (let v = y0; v <= 1.0001; v += 0.1) yt.push(Math.round(v * 10) / 10);
     axes(svg, {
       m,
       W,
       H,
       X,
       Y,
-      xt: [300, 500, 700, 900, x1].filter((v, i, a) => a.indexOf(v) === i && v <= x1),
-      yt: [0, 0.25, 0.5, 0.75, 1],
+      xt: costTicks(x0, x1),
+      yt,
       xl: "parts cost per arm",
       yl: "share of task points served",
       xf: usd,
       yf: (v) => Math.round(v * 100) + "%",
     });
-    const colors = { any: tok("--series-2"), field: tok("--series-1") };
-    const pts = el("g", {}, svg);
-    for (const r of rows)
-      el(
-        "circle",
-        { cx: X(r.cost), cy: Y(r.score), r: 3, fill: colors[r.tier], opacity: 0.22 },
-        pts,
-      );
-    for (const tier of ["any", "field"]) {
-      const f = frontierOf(rows.filter((r) => r.tier === tier));
+    const c2 = tok("--series-1"),
+      cR = tok("--series-2"),
+      cV1 = tok("--muted");
+    const g = el("g", {}, svg);
+    for (const r of pts)
+      el("circle", { cx: X(r.cost), cy: Y(r.score), r: 2.6, fill: c2, opacity: 0.2 }, g);
+    if (v1.length)
       el(
         "path",
-        { d: stepPath(f, X, Y), fill: "none", stroke: colors[tier], "stroke-width": 2 },
+        {
+          d: stepPath(frontierOf(v1), X, Y),
+          fill: "none",
+          stroke: cV1,
+          "stroke-width": 1.6,
+          "stroke-dasharray": "4 4",
+        },
         svg,
       );
-    }
-    const s = { cost: selected.cost, score: rows.length ? null : 0 };
-    const near = rows
-      .filter((r) => r.tier === "field")
-      .reduce(
-        (b, r) =>
-          Math.abs(r.cost - selected.cost) < Math.abs((b?.cost ?? 1e9) - selected.cost) ? r : b,
-        null,
+    if (retail.length)
+      el(
+        "path",
+        { d: stepPath(frontierOf(retail), X, Y), fill: "none", stroke: cR, "stroke-width": 2 },
+        svg,
       );
-    const sy = near ? near.score : selected.score;
-    el(
-      "circle",
-      {
-        cx: X(selected.cost),
-        cy: Y(sy),
-        r: 7,
-        fill: "none",
-        stroke: tok("--ink"),
-        "stroke-width": 2,
-      },
-      svg,
-    );
-    el("circle", { cx: X(selected.cost), cy: Y(sy), r: 3.5, fill: tok("--ink") }, svg);
-    const lx = X(selected.cost) + 10,
-      ly = Y(sy) + 22;
-    el("text", { x: lx, y: ly, fill: tok("--ink"), style: "font-weight:600" }, svg).textContent =
-      `FA-1 · ${usd(selected.cost)}`;
+    if (v2.length)
+      el(
+        "path",
+        { d: stepPath(frontierOf(v2), X, Y), fill: "none", stroke: c2, "stroke-width": 2.4 },
+        svg,
+      );
+    const marks = [];
+    if (fa1) marks.push({ name: "FA-1", cost: fa1.cost, score: fa1.score_v2, hollow: true });
+    for (const [k, r] of picks)
+      marks.push({
+        name: PICK_NAMES[k] ?? k,
+        cost: r.cost,
+        score: r.score,
+        chosen: k === study.chosen,
+      });
+    marks.sort((a, b) => a.cost - b.cost);
+    marks.forEach((mk, i) => {
+      const cx = X(mk.cost),
+        cy = Y(mk.score);
+      if (mk.hollow)
+        el(
+          "rect",
+          {
+            x: cx - 5,
+            y: cy - 5,
+            width: 10,
+            height: 10,
+            fill: tok("--panel"),
+            stroke: tok("--ink"),
+            "stroke-width": 2,
+          },
+          svg,
+        );
+      else {
+        el(
+          "circle",
+          { cx, cy, r: mk.chosen ? 8 : 6, fill: "none", stroke: tok("--ink"), "stroke-width": 2 },
+          svg,
+        );
+        el("circle", { cx, cy, r: 3, fill: tok("--ink") }, svg);
+      }
+      const above = i % 2 === 0;
+      el(
+        "text",
+        {
+          x: cx,
+          y: cy + (above ? -13 : 22),
+          "text-anchor": "middle",
+          fill: tok("--ink"),
+          style: "font-weight:650",
+        },
+        svg,
+      ).textContent = `${mk.name} ${usd(mk.cost)}`;
+    });
     $("#lg-pareto").innerHTML =
-      `<span><i class="dot" style="background:${colors.field}"></i>Field grade</span><span><i class="dot" style="background:${colors.any}"></i>Any actuator (hobby servos, steppers allowed)</span><span><i class="dot" style="border:2px solid ${tok("--ink")};background:transparent"></i>Chosen</span>`;
+      `<span><i style="background:${c2}"></i>All levers</span><span><i style="background:${cR}"></i>US retail only</span><span><i style="background:${cV1}"></i>First study (FA-1)</span><span><i class="dot" style="border:2px solid ${tok("--ink")};background:transparent"></i>Picks</span><span><i style="width:9px;height:9px;border:2px solid ${tok("--ink")};background:transparent"></i>FA-1, same rules</span>`;
     const hit = el("rect", { x: m.l, y: m.t, width: W, height: H, fill: "transparent" }, svg);
+    const pool = [...pts, ...retail];
     hit.addEventListener("pointermove", (ev) => {
       const r = svg.getBoundingClientRect();
       const sx = ((ev.clientX - r.left) / r.width) * 560,
         sy2 = ((ev.clientY - r.top) / r.height) * 330;
       let best = null,
         bd = 1e9;
-      for (const row of rows) {
+      for (const row of pool) {
         const d = (X(row.cost) - sx) ** 2 + (Y(row.score) - sy2) ** 2;
         if (d < bd) {
           bd = d;
@@ -1918,10 +2012,122 @@
     });
     hit.addEventListener("pointerleave", hideTip);
   }
+  function drawLevers() {
+    const svg = $("#ch-levers");
+    if (!svg) return;
+    svg.innerHTML = "";
+    const order = ["retail", "sourcing", "custom", "reductions", "all"];
+    const series = order
+      .filter((k) => study.frontier[k]?.field?.length)
+      .map((k, i) => ({ k, rows: frontierOf(study.frontier[k].field), color: tok(SERIES[i]) }));
+    const all = series.flatMap((s) => s.rows);
+    if (!all.length) return;
+    const { x0, x1, y0 } = scaleFor(all, 1e9);
+    const m = { l: 44, r: 14, t: 22, b: 40 },
+      W = 560 - m.l - m.r,
+      H = 330 - m.t - m.b;
+    const X = (v) => m.l + ((Math.min(v, x1) - x0) / (x1 - x0)) * W,
+      Y = (v) => m.t + H - ((v - y0) / (1 - y0)) * H;
+    const yt = [];
+    for (let v = y0; v <= 1.0001; v += 0.1) yt.push(Math.round(v * 10) / 10);
+    axes(svg, {
+      m,
+      W,
+      H,
+      X,
+      Y,
+      xt: costTicks(x0, x1),
+      yt,
+      xl: "parts cost per arm",
+      yl: "best field-grade share served",
+      xf: usd,
+      yf: (v) => Math.round(v * 100) + "%",
+    });
+    for (const s of series) {
+      el(
+        "path",
+        {
+          d: stepPath(s.rows, X, Y),
+          fill: "none",
+          stroke: s.color,
+          "stroke-width": s.k === "all" ? 2.6 : 1.8,
+        },
+        svg,
+      );
+      for (const r of s.rows)
+        el(
+          "circle",
+          {
+            cx: X(r.cost),
+            cy: Y(r.score),
+            r: 2.6,
+            fill: s.color,
+            stroke: tok("--panel"),
+            "stroke-width": 1.2,
+          },
+          svg,
+        );
+    }
+    $("#lg-levers").innerHTML = series
+      .map((s) => `<span><i style="background:${s.color}"></i>${LEVER_NAMES[s.k]}</span>`)
+      .join("");
+  }
+  function drawCompare() {
+    const box = $("#compare");
+    if (!box || !study.picks) return;
+    const cols = [];
+    if (study.fa1)
+      cols.push({
+        name: "FA-1",
+        sub: "first study, re-scored",
+        r: {
+          cost: study.fa1.cost,
+          score: study.fa1.score_v2,
+          mass: study.fa1.mass,
+          backlash_mm: study.fa1.backlash_mm,
+          actuators: study.fa1.actuators,
+          stages: {},
+        },
+      });
+    for (const k of ["lite", "balanced", "max"])
+      if (study.picks[k])
+        cols.push({
+          name: PICK_NAMES[k],
+          sub:
+            k === "lite"
+              ? "FA-1's capability, least money"
+              : k === "max"
+                ? "most capability at FA-1's price"
+                : "recommended",
+          r: study.picks[k],
+          chosen: k === study.chosen,
+        });
+    const part = (r, j) => {
+      const id = r.actuators?.[j];
+      if (!id) return "–";
+      const base = id
+        .split("+")[0]
+        .replace(/^(sw_|rs_|dm_|ft_|hx_|bare_)/, "")
+        .replace(/_/g, " ");
+      return base + (r.stages?.[j] ? ` · ${r.stages[j]}` : "");
+    };
+    const rows = [
+      ["Parts cost", (r) => usd(r.cost)],
+      ["Task points served", (r) => Math.round(r.score * 100) + "%"],
+      ["Arm mass", (r) => (r.mass ? fmt(r.mass, 2) + " kg" : "–")],
+      ["Backlash at the tool", (r) => (r.backlash_mm ? fmt(r.backlash_mm, 1) + " mm" : "–")],
+      ["Yaw", (r) => part(r, "yaw")],
+      ["Shoulder", (r) => part(r, "shoulder")],
+      ["Elbow", (r) => part(r, "elbow")],
+      ["Wrist pitch", (r) => part(r, "wrist_pitch")],
+      ["Tool roll", (r) => part(r, "tool_roll")],
+    ];
+    box.innerHTML = `<table><thead><tr><th></th>${cols.map((c) => `<th class="r" style="${c.chosen ? "color:var(--accent)" : ""}">${c.name}<br><span style="text-transform:none;letter-spacing:0;font-weight:400">${c.sub}</span></th>`).join("")}</tr></thead><tbody>${rows.map(([h, f]) => `<tr><td>${h}</td>${cols.map((c) => `<td class="r">${f(c.r)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  }
   function drawArch() {
     const svg = $("#ch-arch");
     svg.innerHTML = "";
-    const rows = study.stage_b.filter((r) => r.tier === "field");
+    const rows = study.stage_b.filter((r) => r.tier === "field" && (r.lever ?? "all") === "all");
     const groups = [
       ["5-DOF parallelogram", (r) => r.design.dof === 5 && r.design.arch === "parallelogram"],
       ["5-DOF direct elbow", (r) => r.design.dof === 5 && r.design.arch === "direct"],
@@ -2144,6 +2350,8 @@
     });
   }
   function drawCharts() {
+    drawLevers();
+    drawCompare();
     drawPareto();
     drawArch();
     drawHeat();
