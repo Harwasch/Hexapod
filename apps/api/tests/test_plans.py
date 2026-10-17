@@ -122,6 +122,18 @@ def test_a_scout_area_keeps_its_capture_parameters(client: TestClient) -> None:
     assert rejected.status_code == 422
 
 
+def test_a_long_area_name_is_clipped_not_refused(client: TestClient) -> None:
+    """Areas are named after a Land's features (up to 200 characters) and derived ground adds
+    to that ("…, workable"); the approval keeps a clipped name rather than failing."""
+    area: dict[str, Any] = dict(BODY["areas"][0])  # type: ignore[index, arg-type]
+    long_name = "North paddock along the seasonal creek " * 4
+    created = client.post("/api/v1/plans", json={**BODY, "areas": [{**area, "name": long_name}]})
+    assert created.status_code == 201, created.text
+    name = created.json()["areas"][0]["name"]
+    assert len(name) == 120 and name.endswith("…")
+    assert long_name.startswith(name[:-1])
+
+
 def test_a_full_list_keeps_the_newest_plans_and_says_it_left_some_out(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

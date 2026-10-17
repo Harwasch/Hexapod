@@ -18,6 +18,7 @@ from sqlalchemy import case, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.models.land_feature import LandFeature
+from app.schemas.agent import ZONE_NAME_MAX
 from app.schemas.geojson import LineString
 from app.schemas.land import BoundarySource
 from app.schemas.land_ground import LandGround, LandGroundItem
@@ -60,7 +61,9 @@ def ground(db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID) -> LandGrou
             kind="boundary",
             feature_id=None,
             revision=land.revision,
-            name=land.name,
+            # Land names run to 200 characters; a zone's name stops at 120 (ZoneName), as the
+            # feature names below do.
+            name=_clip(land.name, ZONE_NAME_MAX),
             category=None,
             status=None,
             footprint=land.boundary,

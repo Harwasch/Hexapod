@@ -600,6 +600,29 @@ def test_one_invalid_outline_out_of_scope_does_not_block_the_draft(client: TestC
     assert zones[2].geometry is None
 
 
+def test_a_long_derived_zone_name_is_clipped_not_refused(client: TestClient) -> None:
+    """A Land's names run to 200 characters and the console derives longer ones from them
+    ("<feature>, workable"); one such name must not refuse the whole draft."""
+    long_name = "Upper bench below the old oak line where the creek turns west " * 2
+    long_name = f"{long_name.strip()[:118]}, workable"
+    assert len(long_name) > 120
+    zones = [*ZONES, PlannerZone(id="A-07", name=long_name, acres=12, task="Mow thistle")]
+    assert zones[-1].name.endswith("…") and len(zones[-1].name) == 120
+    draft = RulesPlanner().draft(
+        request("Mow A-07 with one mower", zones=zones, preferred_zone_ids=["A-07"])
+    )
+    assert draft.zone_ids == ["A-07"]
+    body = {
+        "goal": "Mow A-07 with one mower",
+        "projectName": "Blackrock Mesa",
+        "zones": [*(z.model_dump(by_alias=True) for z in ZONES), {"id": "A-07", "name": long_name}],
+        "preferredZoneIds": ["A-07"],
+        "today": "2026-09-17",
+    }
+    response = client.post("/api/v1/agent/plan-draft", json=body)
+    assert response.status_code == 200, response.text
+
+
 def test_zones_without_outlines_are_sized_exactly_as_before() -> None:
     draft = RulesPlanner().draft(request("Mow Z-21 with one mower"))
     assert draft.coverage == [] and draft.estimates.path_m is None
