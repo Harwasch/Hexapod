@@ -14,7 +14,7 @@ import {
 } from "@/missions/planDraft";
 import { isPrivateZone, landIdOfProject } from "@/missions/landGround";
 import type { Plan, Project } from "@/missions/types";
-import { landUsesOidc, useLandIdentity } from "@/state/landIdentity";
+import { landScope, landUsesOidc, useLandIdentity } from "@/state/landIdentity";
 import { useMission } from "@/state/mission";
 
 /** Invalidated after every write so the plan list refetches (public and workspace plans). */
@@ -195,6 +195,10 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
     useMission.getState().setStreamOpen(true);
     return null;
   }
+  // Whose session the save is for: a sign-out or workspace switch while it is in flight has
+  // already dropped this session's private plans (`dropPrivate`), and its answer must not
+  // come back into the next one.
+  const scope = landScope();
   let plan: Plan;
   try {
     // A revision carries the plan body only: identity (project, site) never changes.
@@ -228,7 +232,9 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
     plan = planFromDraft(draft, project, { goal, ...(replaceId ? { id: replaceId } : {}) });
     plan.agentNote = `${plan.agentNote} Saved in this browser only: the API is offline.`;
   }
-  useMission.getState().approvePlan(plan);
+  if (isPrivate && landScope() !== scope) return null;
+  // Filed under the project it was drafted on, even when another one is current by now.
+  useMission.getState().approvePlan(plan, project.id);
   planningApproved();
   useMission
     .getState()

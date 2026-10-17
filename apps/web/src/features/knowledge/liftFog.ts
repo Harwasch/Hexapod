@@ -29,6 +29,7 @@ import {
   scoutResolution,
 } from "@/missions/scout";
 import type { Zone } from "@/missions/types";
+import { landScope } from "@/state/landIdentity";
 import { missionLandId, useMission } from "@/state/mission";
 import { useToasts } from "@/state/toasts";
 
@@ -71,6 +72,9 @@ export async function liftFog(scene: CesiumSceneManager | null, land: LandArea):
     return;
   }
   const center = scene?.camera.viewCenter() ?? null;
+  // The patches are this session's private ground: a sign-out or workspace switch while the
+  // API answers has dropped its private plans and ground, and the answer must not come back.
+  const scope = landScope();
   let read;
   try {
     read = await requestScoutAreas(land.id, {
@@ -88,6 +92,7 @@ export async function liftFog(scene: CesiumSceneManager | null, land: LandArea):
     });
     return;
   }
+  if (landScope() !== scope) return;
   if (read.areas.length === 0) {
     useToasts.getState().push({
       tone: "info",
@@ -104,6 +109,7 @@ export async function liftFog(scene: CesiumSceneManager | null, land: LandArea):
     try {
       await engageLand(land);
     } catch (error) {
+      if (landScope() !== scope) return;
       useToasts.getState().push({
         tone: "error",
         title: `Could not open ${land.name} for planning`,
@@ -112,6 +118,7 @@ export async function liftFog(scene: CesiumSceneManager | null, land: LandArea):
       return;
     }
   }
+  if (landScope() !== scope) return;
   const project = useMission.getState().project;
   if (!project || missionLandId() !== land.id) {
     useToasts.getState().push({

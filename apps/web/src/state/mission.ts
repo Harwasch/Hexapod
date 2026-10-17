@@ -114,7 +114,11 @@ interface MissionState {
   openComposer: (seed?: ComposerSeed) => void;
   closeComposer: () => void;
   updateComposer: (patch: Partial<PlanComposerState>) => void;
-  approvePlan: (plan: Plan) => void;
+  /**
+   * Files an approved plan under `projectId` (the current project when omitted). The plan card
+   * opens on it only while that project is current.
+   */
+  approvePlan: (plan: Plan, projectId?: string) => void;
   updatePlan: (planId: string, patch: Partial<Plan>) => void;
   removePlan: (planId: string) => void;
   /** Plans the API holds for a project replace the persisted ones; local-only plans stay. */
@@ -293,12 +297,15 @@ export const useMission = create<MissionState>()(
       setPlannerConfigured: (plannerConfigured) => set({ plannerConfigured }),
       updateComposer: (patch) =>
         set((s) => (s.composer ? { composer: { ...s.composer, ...patch } } : {})),
-      approvePlan: (plan) => {
+      approvePlan: (plan, projectId) => {
         const project = get().project;
-        if (!project) return;
+        const target = projectId ?? project?.id;
+        if (!target) return;
         set((s) => {
-          const current = (s.approvedPlans[project.id] ?? []).filter((p) => p.id !== plan.id);
-          const approvedPlans = { ...s.approvedPlans, [project.id]: [...current, plan] };
+          const current = (s.approvedPlans[target] ?? []).filter((p) => p.id !== plan.id);
+          const approvedPlans = { ...s.approvedPlans, [target]: [...current, plan] };
+          // Another project is current now: the plan joins its own, which shows it when opened.
+          if (project?.id !== target) return { approvedPlans };
           return {
             approvedPlans,
             project: compose(

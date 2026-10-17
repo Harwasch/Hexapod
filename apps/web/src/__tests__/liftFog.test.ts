@@ -5,6 +5,7 @@ import type { KnowledgeScoutRead } from "@twin/contracts";
 import type * as Queries from "@/api/queries";
 import type * as KnowledgeApi from "@/features/knowledge/api";
 import type * as PlanDrafting from "@/features/mission/planDrafting";
+import type * as LandIdentity from "@/state/landIdentity";
 import { isPrivateZone, landProject, landZones } from "@/missions/landGround";
 import { siteProject } from "@/missions/siteProject";
 import {
@@ -17,6 +18,7 @@ import {
 } from "@/missions/scout";
 import { useLand } from "@/state/land";
 import { missionLandId, useMission } from "@/state/mission";
+import { useToasts } from "@/state/toasts";
 
 import { ground, land, LAND_ID } from "./landGroundFixture";
 
@@ -38,6 +40,13 @@ vi.mock("@/features/knowledge/api", async (importOriginal) => ({
   ...(await importOriginal<typeof KnowledgeApi>()),
   requestScoutAreas: (...args: unknown[]) => requestScoutAreas(...args),
 }));
+
+// Whose session it is: a test signs someone else in by setting `scope.current`.
+const scope = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock("@/state/landIdentity", async (importOriginal) => {
+  const actual = await importOriginal<typeof LandIdentity>();
+  return { ...actual, landScope: () => scope.current ?? actual.landScope() };
+});
 
 const { FOGGY_THRESHOLD, liftFog, scoutZones, SCOUT_ATTRIBUTION } =
   await import("@/features/knowledge/liftFog");
@@ -107,6 +116,7 @@ describe("Lift the fog", () => {
 describe("Lift the fog from the map", () => {
   beforeEach(() => {
     startPlanDraft.mockClear();
+    scope.current = null;
     useMission.setState({ composer: null, landGround: null });
     useMission.getState().setProject(landProject(land, ground));
   });
@@ -204,6 +214,28 @@ describe("Lift the fog from the map", () => {
     expect(state.project?.zones.find((z) => z.id === patch)?.land?.landId).toBe(LAND_ID);
     expect(state.areas[far.id] ?? []).toEqual([]);
     useLand.getState().clear();
+  });
+
+  it("adopts nothing when the patches arrive after a sign-out", async () => {
+    let answer: (read: KnowledgeScoutRead) => void = () => undefined;
+    requestScoutAreas.mockImplementationOnce(
+      () => new Promise<KnowledgeScoutRead>((resolve) => (answer = resolve)),
+    );
+    useToasts.setState({ items: [] });
+    const lifting = liftFog(null, land);
+    // Signed out (or another workspace chosen) while the API answers.
+    scope.current = "someone-else/workspace-b";
+    useLand.getState().clear();
+    useMission.getState().dropPrivate();
+    answer(foggy);
+    await lifting;
+    const state = useMission.getState();
+    expect(state.composer).toBeNull();
+    expect(state.project?.zones.some((z) => z.task === "Scout")).toBe(false);
+    expect(JSON.stringify(state.areas)).not.toContain(LAND_ID);
+    expect(startPlanDraft).not.toHaveBeenCalled();
+    // Nor does the next session hear about the last one's land.
+    expect(JSON.stringify(useToasts.getState().items)).not.toContain(land.name);
   });
 
   it("closes a card on another land's project and plans on this land's", async () => {

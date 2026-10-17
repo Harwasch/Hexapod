@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlanDraft, PlanRecord } from "@twin/contracts";
 
 import type * as Queries from "@/api/queries";
+import type * as LandIdentity from "@/state/landIdentity";
 
 import { anywhereProject } from "@/missions/anywhere";
 import { bookedWindows } from "@/missions/conflicts";
@@ -38,6 +39,13 @@ vi.mock("@/api/queries", async (importOriginal) => ({
   },
   fetchLandGround: api.fetchLandGround,
 }));
+
+// Whose session it is: a test signs someone else in by setting `scope.current`.
+const scope = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock("@/state/landIdentity", async (importOriginal) => {
+  const actual = await importOriginal<typeof LandIdentity>();
+  return { ...actual, landScope: () => scope.current ?? actual.landScope() };
+});
 
 const { approveDraft, setPlanStatus } = await import("@/features/mission/planDrafting");
 const { engageLand, missionProjectName, planOnLand } =
@@ -92,8 +100,53 @@ function record(body: Record<string, unknown>, extra: Partial<PlanRecord> = {}):
 describe("plans on a saved land stay private", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    scope.current = null;
     useMission.setState({ composer: null, landGround: null, approvedPlans: {}, areas: {} });
     useLand.getState().clear();
+  });
+
+  it("drops a private plan whose save lands after a sign-out", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    let answer: (record: PlanRecord) => void = () => undefined;
+    api.workspaceCreate.mockImplementation(
+      () => new Promise<PlanRecord>((resolve) => (answer = resolve)),
+    );
+    const saving = approveDraft(draft(["L-aaaa0001"]), "monitor the fence");
+    // Signed out (or another workspace chosen) while the API answers.
+    scope.current = "someone-else/workspace-b";
+    useMission.getState().dropPrivate();
+    const body = api.workspaceCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    answer(record(body));
+    expect(await saving).toBeNull();
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
+    expect(state.project?.plans.some((p) => p.scope === "workspace")).toBe(false);
+    expect(JSON.stringify(state.approvedPlans)).not.toContain(LAND_ID);
+    expect(state.planId).toBeNull();
+    expect(state.log.some((entry) => entry.text.includes("Weekly fence check"))).toBe(false);
+  });
+
+  it("files a plan under the project it was drafted on when another is current by then", async () => {
+    const own = landProject(land, ground);
+    useMission.getState().setProject(own);
+    let answer: (record: PlanRecord) => void = () => undefined;
+    api.workspaceCreate.mockImplementation(
+      () => new Promise<PlanRecord>((resolve) => (answer = resolve)),
+    );
+    const saving = approveDraft(draft(["L-aaaa0001"]), "monitor the fence");
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    const body = api.workspaceCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    answer(record(body));
+    const plan = await saving;
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
+    expect(state.project?.plans.some((p) => p.id === plan?.id)).toBe(false);
+    expect(state.approvedPlans[demo.id] ?? []).toEqual([]);
+    expect(state.approvedPlans[own.id]?.map((p) => p.id)).toEqual([plan?.id]);
+    expect(state.planId).toBeNull();
   });
 
   it("sends a land project's plan to the workspace with the land and its boundary revision", async () => {
