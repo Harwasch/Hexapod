@@ -8,6 +8,7 @@ import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landId
 import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 import { describeError } from "@/lib/log";
+import { invalidateLandDerived } from "./landDerived";
 import { parseSurveyCorners, parseSurveyDraft } from "./surveyDraft";
 import { EcologyResearch } from "./EcologyResearch";
 import { SurveySummaryView } from "./SurveySummaryView";
@@ -225,6 +226,8 @@ function EcologyEditor({ land, scope }: { land: LandArea; scope: string }) {
           setPoints([]);
           useLandContext.getState().selectSurvey(result.id);
         }
+        // A dated field survey counts for the whole land: the fog over it is asked again.
+        void invalidateLandDerived(cache, land.id);
         await cache.invalidateQueries({ queryKey });
       } else {
         const result = await unwrap(

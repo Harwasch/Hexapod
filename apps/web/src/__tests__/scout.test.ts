@@ -1,17 +1,23 @@
 import type { Footprint } from "@twin/contracts";
-import { destination } from "@twin/geo";
+import { destination, footprintContains, haversineDistance } from "@twin/geo";
 import { describe, expect, it } from "vitest";
 
 import { MACHINE_CLASSES } from "@/missions/machineClasses";
 import {
   DEFAULT_SCOUT,
+  RELIEF_MAX_SAMPLES,
+  reliefFrom,
+  reliefPoints,
   routeStats,
   scoutBudgetM2,
   scoutGeometry,
   scoutLanes,
   scoutOf,
+  scoutZonesInOrder,
+  sharedScout,
   USABLE_BATTERY_MIN,
 } from "@/missions/scout";
+import type { Zone } from "@/missions/types";
 
 const origin = { longitude: -120.04, latitude: 34.698 };
 
@@ -103,5 +109,82 @@ describe("scout lanes and route", () => {
   it("honours a heading the area carries", () => {
     const lanes = scoutLanes(rectangle(600, 300), { ...DEFAULT_SCOUT, headingDeg: 0 });
     for (const lane of lanes) expect(lane.lengthM).toBeCloseTo(300, -1);
+  });
+});
+
+describe("one route, one capture", () => {
+  const area = (id: string, scout: Zone["scout"]) =>
+    ({ id, footprint: rectangle(300, 200), scout }) as Zone;
+
+  it("flies the areas in the overlay's order, scout areas only", () => {
+    const zones = [
+      area("A-01", DEFAULT_SCOUT),
+      area("A-02", DEFAULT_SCOUT),
+      area("Z-14", undefined),
+    ];
+    const overlay = {
+      zones: [
+        { zoneId: "A-02", machineIds: [] },
+        { zoneId: "Z-14", machineIds: [] },
+        { zoneId: "A-01", machineIds: [] },
+      ],
+    };
+    expect(scoutZonesInOrder(zones, overlay).map((z) => z.id)).toEqual(["A-02", "A-01"]);
+  });
+
+  it("shares a capture only when height, speed and overlaps match; heading may differ", () => {
+    expect(
+      sharedScout([area("A", DEFAULT_SCOUT), area("B", { ...DEFAULT_SCOUT, headingDeg: 30 })]),
+    ).toEqual(DEFAULT_SCOUT);
+    expect(
+      sharedScout([area("A", DEFAULT_SCOUT), area("B", { ...DEFAULT_SCOUT, altitudeM: 90 })]),
+    ).toBeNull();
+    expect(sharedScout([])).toBeNull();
+  });
+});
+
+describe("relief samples", () => {
+  it("are fixed by the outlines, bounded, on the outline and inside it", () => {
+    const small = rectangle(300, 200);
+    const points = reliefPoints([small]);
+    // 1,000 m of outline every 30 m at most, and a grid inside: well under the cap.
+    expect(points.length).toBeGreaterThan(30);
+    expect(points.length).toBeLessThanOrEqual(RELIEF_MAX_SAMPLES);
+    expect(points[0]?.longitude).toBeCloseTo(origin.longitude, 9);
+    expect(points[0]?.latitude).toBeCloseTo(origin.latitude, 9);
+    const inside = points.filter((p) => footprintContains(small, p));
+    expect(inside.length).toBeGreaterThan(10);
+    // The same outline gives the same points, whatever the height flown over it.
+    expect(reliefPoints([small])).toEqual(points);
+    // A big patch stays within the cap.
+    expect(reliefPoints([rectangle(3000, 2000), small]).length).toBeLessThanOrEqual(
+      RELIEF_MAX_SAMPLES,
+    );
+  });
+
+  it("takes the ground at the sample nearest the first waypoint, and the range over all", () => {
+    const points = reliefPoints([rectangle(300, 200)]);
+    const heights = points.map((_, i) => 100 + i);
+    const far = destination(origin, 90, 300);
+    const nearest = points.reduce(
+      (best, p, i) =>
+        haversineDistance(p, far) < haversineDistance(points[best] ?? p, far) ? i : best,
+      0,
+    );
+    const relief = reliefFrom(points, heights, far, "surface");
+    expect(relief).toEqual({
+      start: 100 + nearest,
+      min: 100,
+      max: 100 + points.length - 1,
+      source: "surface",
+    });
+    expect(
+      reliefFrom(
+        points,
+        points.map(() => undefined),
+        far,
+        "terrain",
+      ),
+    ).toBeNull();
   });
 });

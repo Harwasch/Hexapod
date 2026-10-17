@@ -594,6 +594,17 @@ test("show the fog of knowing, read a cell, and draft a scout flight with its DJ
   await expect(scout).toContainText("DJI Mavic 3 Enterprise wide camera (assumed)");
   await expect(scout).toContainText("Draft, not flight-tested");
   expect(scouted[0]).toMatchObject({ threshold: 0.5, maxAreas: 3, cellM: 20 });
+  // A new height redrafts the plan at the detail it gives, and the plan says so.
+  await expect(plans.getByLabel("Plan title")).toHaveValue(/1\.7 cm per pixel/);
+  await scout.getByRole("button", { name: "120 m", exact: true }).click();
+  await expect(scout.getByRole("button", { name: "120 m", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(scout).toContainText("3.4 cm per pixel over flat ground");
+  await expect(plans.getByLabel("Plan title")).toHaveValue(/3\.4 cm per pixel/, {
+    timeout: 30_000,
+  });
   const [download] = await Promise.all([
     app.waitForEvent("download"),
     scout.getByTestId("scout-download").click(),

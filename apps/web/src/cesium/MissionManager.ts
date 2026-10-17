@@ -47,6 +47,8 @@ const MACHINE_PALETTE = ["#7fd8c0", "#f0b254", "#9db8f0", "#e79ac8", "#c6e07a", 
 const ROUTE_COLOR = Color.fromCssColorString("#9db8f0");
 /** A scout area's passes: pale, dashed, a forecast of where the fog would lift. */
 const FOG_LIFT = Color.fromCssColorString("#e8eef0");
+/** How far below its zone's point the forecast label hangs: past the zone chip (about 31 px). */
+const FORECAST_LABEL_OFFSET_PX = 40;
 
 const TONE: Record<Zone["tone"], Color> = {
   teal: Color.fromCssColorString("#7fd8c0"),
@@ -386,10 +388,11 @@ export class MissionManager {
               showBackground: true,
               backgroundColor: FOG_LIFT.withAlpha(0.92),
               backgroundPadding: new Cartesian2(7, 4),
-              // Below the zone's chip.
+              // Below the zone's chip, an HTML button about 31 px tall that hangs from the same
+              // point and is drawn over the canvas: clear all of it, or it hides the label.
               horizontalOrigin: HorizontalOrigin.LEFT,
               verticalOrigin: VerticalOrigin.TOP,
-              pixelOffset: new Cartesian2(0, 16),
+              pixelOffset: new Cartesian2(0, FORECAST_LABEL_OFFSET_PX),
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
           }),

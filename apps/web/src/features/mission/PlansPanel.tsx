@@ -1,6 +1,6 @@
 import { ArrowLeft } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import { GlassPanel, GlassProgress } from "@twin/ui";
 
@@ -9,7 +9,8 @@ import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
 import { useScene } from "@/cesium/SceneContext";
-import { idLabel } from "@/missions/planDraft";
+import { idLabel, overlayFor } from "@/missions/planDraft";
+import { scoutZonesInOrder } from "@/missions/scout";
 import { planProgress, replanRefinement } from "@/missions/progress";
 
 import { openLandActions } from "./landPlanning";
@@ -175,21 +176,16 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
     const zone = project?.zones.find((z) => z.id === id);
     return zone ? idLabel(zone.id, zone.name) : id;
   };
-  // An open plan is drawn on the map for as long as its detail is open.
+  // An open plan is drawn on the map for as long as its detail is open, zones in step order
+  // as its draft was (`overlayFor`), so the route and a scout export read the same way.
+  const overlay = useMemo(
+    () => overlayFor({ zoneIds: plan.zoneIds, machineIds: plan.machineIds, steps: plan.steps }),
+    [plan.zoneIds, plan.machineIds, plan.steps],
+  );
   useEffect(() => {
-    scene?.mission.showPlan(
-      plan.zoneIds.length
-        ? {
-            zones: plan.zoneIds.map((zoneId) => ({
-              zoneId,
-              machineIds:
-                plan.steps?.find((s) => s.zoneId === zoneId)?.machineIds ?? plan.machineIds ?? [],
-            })),
-          }
-        : null,
-    );
+    scene?.mission.showPlan(overlay.zones.length ? overlay : null);
     return () => clearPlanOverlay();
-  }, [scene, plan.id, plan.zoneIds, plan.steps, plan.machineIds, clearPlanOverlay]);
+  }, [scene, plan.id, overlay, clearPlanOverlay]);
   const lifecycle = () => {
     const next = plan.status === "run" ? "paused" : "dispatched";
     void setPlanStatus(plan, next);
@@ -240,11 +236,7 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
             </div>
           ))}
         </div>
-        {project && (
-          <ScoutExport
-            zones={project.zones.filter((z) => z.scout && plan.zoneIds.includes(z.id))}
-          />
-        )}
+        {project && <ScoutExport zones={scoutZonesInOrder(project.zones, overlay)} />}
         <section>
           <div className="mc-row mc-row--between">
             <span className="mc-eyebrow">PROGRESS</span>

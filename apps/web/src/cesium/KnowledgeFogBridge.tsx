@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { queryKeys } from "@/api/queries";
 
@@ -27,17 +27,23 @@ import { useScene } from "./SceneContext";
  * While it shows, a plain click on the ground inside the Land opens that cell's card (the
  * selection asks for 'ground-tap' events only for as long as the fog is up; otherwise a click
  * on the ground still does nothing). New evidence arriving (an inspection saved, a raster run
- * finished: `invalidateLandDerived`; a capture registered as a site) brings a new grid; where fog went, it dissolves, and
- * nothing else moves: the fog thickening slowly with age is not animated, and nothing renders
- * at rest. Changing or leaving the Land clears the card and the fog.
+ * finished: `invalidateLandDerived`; a capture registered as a site) brings a new grid; where
+ * fog went, it dissolves, and nothing else moves: the fog thickening slowly with age is not
+ * animated, and nothing renders at rest. A revised boundary is a new grid (the query is keyed
+ * by the revision). Changing or leaving the Land, or revising its boundary, closes the card.
  */
 export function KnowledgeFogBridge() {
   const host = useScene();
   const landId = useLand((s) => s.active?.id ?? null);
+  const revision = useLand((s) => s.active?.revision ?? null);
+  const land = useMemo(
+    () => (landId !== null && revision !== null ? { id: landId, revision } : null),
+    [landId, revision],
+  );
   const visible = useKnowledge((s) => s.visible);
   const selected = useKnowledge((s) => s.selected);
   const pending = useKnowledge((s) => s.pending);
-  const query = useKnowledgeGrid(landId, visible);
+  const query = useKnowledgeGrid(land, visible);
   const client = useQueryClient();
   const layerRef = useRef<GroundGridLayer | null>(null);
   const shownRef = useRef<{ landId: string; grid: DecodedGrid } | null>(null);
@@ -73,18 +79,27 @@ export function KnowledgeFogBridge() {
     });
   }, [client, landId]);
 
-  // A card belongs to one Land.
+  // A card belongs to one Land, on one boundary: a revised one has other cells.
+  const boundaryRef = useRef<number | null>(revision);
   useEffect(() => {
+    const revised = boundaryRef.current !== revision;
+    boundaryRef.current = revision;
     const { selected: open, pending: asked } = useKnowledge.getState();
-    if ((open && open.landId !== landId) || (asked && asked.landId !== landId))
+    if ((open && (open.landId !== landId || revised)) || (asked && asked.landId !== landId))
       useKnowledge.getState().clear();
-  }, [landId]);
+  }, [landId, revision]);
 
   useEffect(() => {
     const layer = layerRef.current;
     if (!layer) return;
     const data = query.data;
-    if (!visible || !landId || data?.landId !== landId) {
+    // A grid of an older boundary than the one on screen is never drawn.
+    if (
+      !visible ||
+      !landId ||
+      data?.landId !== landId ||
+      (revision !== null && data.boundaryRevision < revision)
+    ) {
       layer.hide();
       shownRef.current = null;
       return;
@@ -98,7 +113,7 @@ export function KnowledgeFogBridge() {
       layer.show(grid, image, seedOf(landId));
     }
     shownRef.current = { landId, grid };
-  }, [query.data, visible, landId, host]);
+  }, [query.data, visible, landId, revision, host]);
 
   // A point asked about from the map menu becomes a cell once the grid is in.
   useEffect(() => {
@@ -114,12 +129,19 @@ export function KnowledgeFogBridge() {
 
   useEffect(() => {
     if (!host || !visible || !landId) return;
-    const release = host.selection.wantGroundTaps();
-    const off = host.events.on("ground-tap", (tap) => {
+    // The cell inside the shown grid's Land under a point; null outside it or with no grid.
+    const insideCell = (longitude: number, latitude: number) => {
       const shown = shownRef.current;
-      if (shown?.landId !== landId) return;
-      const at = cellAt(shown.grid, tap.longitude, tap.latitude);
-      if (!at || densityAt(shown.grid, at.col, at.row) === null) {
+      if (shown?.landId !== landId) return null;
+      const at = cellAt(shown.grid, longitude, latitude);
+      return at && densityAt(shown.grid, at.col, at.row) !== null ? at : null;
+    };
+    // Inside the Land a zone's fill is ground for the card; outside, it selects the zone.
+    const release = host.selection.wantGroundTaps((lon, lat) => insideCell(lon, lat) !== null);
+    const off = host.events.on("ground-tap", (tap) => {
+      if (shownRef.current?.landId !== landId) return;
+      const at = insideCell(tap.longitude, tap.latitude);
+      if (!at) {
         useKnowledge.getState().clear();
         return;
       }

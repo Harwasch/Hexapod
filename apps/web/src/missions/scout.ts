@@ -15,9 +15,21 @@
  */
 
 import type { Footprint, ScoutCapture } from "@twin/contracts";
-import { footprintLanes, haversineDistance, type CoverageLane } from "@twin/geo";
+import {
+  bearing,
+  boundsOf,
+  destination,
+  footprintAreaM2,
+  footprintContains,
+  footprintLanes,
+  haversineDistance,
+  outerRings,
+  type CoverageLane,
+  type LonLat,
+} from "@twin/geo";
 
 import { MACHINE_CLASSES } from "./machineClasses";
+import type { PlanOverlay, Zone } from "./types";
 
 export interface ScoutCamera {
   label: string;
@@ -65,6 +77,37 @@ export const DEFAULT_SCOUT: Scout = {
 
 /** What a scout area's chip on the map says: its passes are a forecast, not evidence. */
 export const SCOUT_SHORT = "would lift fog";
+
+function cmPerPixel(gsdM: number): number {
+  return Math.round(gsdM * 1000) / 10;
+}
+
+const GOAL_DETAIL = /\bat \d+(?:\.\d+)? cm per pixel\b/;
+
+/**
+ * The scout goal: a survey at the detail flown (it must never say "clear", which the planner
+ * reads as treat).
+ */
+export function scoutGoal(gsdM = scoutGeometry(DEFAULT_SCOUT).gsdM): string {
+  return `Survey the foggy ground from the air at ${cmPerPixel(gsdM)} cm per pixel so the fog can lift`;
+}
+
+/**
+ * The goal restated for a new height: the detail it names becomes the one flown. A goal that
+ * names no detail (the operator rewrote it) is kept as it is.
+ */
+export function goalAtDetail(goal: string, gsdM: number): string {
+  return goal.replace(GOAL_DETAIL, `at ${cmPerPixel(gsdM)} cm per pixel`);
+}
+
+/**
+ * The planner's answer to "How much detail?" (2, 5 or 10 cm per pixel) that a flight at this
+ * detail meets: the finest choice it is no coarser than.
+ */
+export function scoutResolution(gsdM: number): "2" | "5" | "10" {
+  const cm = gsdM * 100;
+  return cm <= 2 ? "2" : cm <= 5 ? "5" : "10";
+}
 
 /** Heights the export offers, metres above the take-off point. */
 export const SCOUT_ALTITUDES_M = [45, 60, 90, 120] as const;
@@ -140,6 +183,35 @@ export function scoutGeometry(scout: Scout): ScoutGeometry {
   };
 }
 
+/**
+ * A plan's scout areas in the order its overlay draws them (`overlayFor`: by step, then the
+ * rest of the scope): the order the map routes them and the export flies them.
+ */
+export function scoutZonesInOrder(zones: readonly Zone[], overlay: PlanOverlay): Zone[] {
+  return overlay.zones.flatMap(({ zoneId }) => {
+    const zone = zones.find((z) => z.id === zoneId);
+    return zone?.scout ? [zone] : [];
+  });
+}
+
+/**
+ * The one capture a set of scout areas shares, or null when they differ: a route is flown at
+ * one height, speed and overlap. Only the heading may differ, since it turns each area's own
+ * lanes.
+ */
+export function sharedScout(zones: readonly Pick<Zone, "scout">[]): Scout | null {
+  const scouts = zones.map((zone) => scoutOf(zone.scout));
+  const first = scouts[0];
+  if (!first) return null;
+  const same = (other: Scout) =>
+    other.camera === first.camera &&
+    other.altitudeM === first.altitudeM &&
+    other.speedMs === first.speedMs &&
+    other.forwardOverlap === first.forwardOverlap &&
+    other.sideOverlap === first.sideOverlap;
+  return scouts.every(same) ? first : null;
+}
+
 /** The lanes a scout area is flown in: one image footprint apart, less the side overlap. */
 export function scoutLanes(footprint: Footprint, scout: Scout): CoverageLane[] {
   const geometry = scoutGeometry(scout);
@@ -186,4 +258,94 @@ export function routeStats(routes: readonly CoverageLane[][], scout: Scout): Rou
 export function scoutBudgetM2(scout: Scout = DEFAULT_SCOUT): number {
   const geometry = scoutGeometry(scout);
   return geometry.lineSpacingM * geometry.speedMs * USABLE_BATTERY_MIN * 60 * TURN_EFFICIENCY;
+}
+
+/** Ground samples for the relief check: at most this many for all the areas together. */
+export const RELIEF_MAX_SAMPLES = 150;
+/** Closest two samples along an outline or across the grid inside it, metres. */
+const RELIEF_MIN_STEP_M = 30;
+
+/**
+ * Where the ground under scout areas is sampled for the relief check: each area's outline
+ * walked at an even step (lane ends, and so the first waypoint, lie on it) and a grid inside
+ * it, at most `max` points for all the areas. Fixed by the outlines alone, not by the height
+ * or the lanes, so a new height reuses the heights already sampled.
+ */
+export function reliefPoints(footprints: readonly Footprint[], max = RELIEF_MAX_SAMPLES): LonLat[] {
+  const rings = footprints.flatMap((footprint) => outerRings(footprint));
+  const at = (p: number[]): LonLat => ({ longitude: p[0] ?? 0, latitude: p[1] ?? 0 });
+  let perimeterM = 0;
+  for (const ring of rings)
+    for (let i = 1; i < ring.length; i++)
+      perimeterM += haversineDistance(at(ring[i - 1] ?? []), at(ring[i] ?? []));
+  if (perimeterM <= 0) return [];
+  const areaM2 = footprints.reduce((sum, footprint) => sum + footprintAreaM2(footprint), 0);
+  const edgeStepM = Math.max(RELIEF_MIN_STEP_M, perimeterM / (max / 2));
+  const gridStepM = Math.max(RELIEF_MIN_STEP_M, Math.sqrt(areaM2 / (max / 2)));
+  const points: LonLat[] = [];
+  for (const ring of rings) {
+    // Carried from one edge to the next, so the step stays even round a corner.
+    let next = 0;
+    for (let i = 1; i < ring.length; i++) {
+      const a = at(ring[i - 1] ?? []);
+      const b = at(ring[i] ?? []);
+      const length = haversineDistance(a, b);
+      const heading = bearing(a, b);
+      for (; next < length; next += edgeStepM) points.push(destination(a, heading, next));
+      next -= length;
+    }
+  }
+  for (const footprint of footprints) {
+    const { west, south, east, north } = boundsOf(footprint);
+    const dlat = gridStepM / 111_320;
+    const dlon = gridStepM / (111_320 * Math.cos((((south + north) / 2) * Math.PI) / 180));
+    for (let latitude = south + dlat / 2; latitude < north; latitude += dlat)
+      for (let longitude = west + dlon / 2; longitude < east; longitude += dlon)
+        if (footprintContains(footprint, { longitude, latitude }))
+          points.push({ longitude, latitude });
+  }
+  if (points.length <= max) return points;
+  const stride = points.length / max;
+  return points.filter((_, i) => Math.floor(i / stride) !== Math.floor((i - 1) / stride));
+}
+
+export interface Relief {
+  /** Ground at the sample nearest the first waypoint, where the take-off is assumed. */
+  start: number;
+  min: number;
+  max: number;
+  /** What was sampled: the drawn 3D surface (trees and roofs) or the bare terrain model. */
+  source: "surface" | "terrain";
+}
+
+/**
+ * The relief under a route from the heights sampled at `reliefPoints`: the lowest and highest
+ * ground over its areas and the ground nearest its first waypoint. Null with fewer than two
+ * heights.
+ */
+export function reliefFrom(
+  points: readonly LonLat[],
+  heights: readonly (number | undefined)[],
+  first: LonLat,
+  source: Relief["source"],
+): Relief | null {
+  let start: number | null = null;
+  let nearest = Infinity;
+  let min = Infinity;
+  let max = -Infinity;
+  let count = 0;
+  points.forEach((point, i) => {
+    const height = heights[i];
+    if (typeof height !== "number" || !Number.isFinite(height)) return;
+    count++;
+    min = Math.min(min, height);
+    max = Math.max(max, height);
+    const distance = haversineDistance(point, first);
+    if (distance < nearest) {
+      nearest = distance;
+      start = height;
+    }
+  });
+  if (count < 2 || start === null) return null;
+  return { start, min, max, source };
 }

@@ -20,6 +20,7 @@ const fixture = vi.hoisted(() => ({
   listeners: new Map<string, (value: unknown) => void>(),
   released: 0,
   wanted: 0,
+  claims: null as ((longitude: number, latitude: number) => boolean) | null,
   render: vi.fn(),
   entities: null as EntityCollection | null,
   data: undefined as KnowledgeGrid | undefined,
@@ -80,8 +81,9 @@ vi.mock("@/cesium/SceneContext", () => {
         },
         scene: { requestRender: fixture.render },
         selection: {
-          wantGroundTaps: () => {
+          wantGroundTaps: (claims: (longitude: number, latitude: number) => boolean) => {
             fixture.wanted++;
+            fixture.claims = claims;
             return () => {
               fixture.released++;
             };
@@ -98,8 +100,8 @@ vi.mock("@/cesium/SceneContext", () => {
 });
 
 vi.mock("@/features/knowledge/api", () => ({
-  useKnowledgeGrid: (landId: string | null, enabled: boolean) => ({
-    data: enabled && fixture.data?.landId === landId ? fixture.data : undefined,
+  useKnowledgeGrid: (land: { id: string; revision: number } | null, enabled: boolean) => ({
+    data: enabled && fixture.data?.landId === land?.id ? fixture.data : undefined,
     isLoading: false,
   }),
 }));
@@ -143,8 +145,8 @@ function grid(landId: string, density: number[]): KnowledgeGrid {
   };
 }
 
-function land(id: string): LandArea {
-  return { id, name: id, revision: 1 } as LandArea;
+function land(id: string, revision = 1): LandArea {
+  return { id, name: id, revision } as LandArea;
 }
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -170,6 +172,7 @@ afterEach(() => {
   fixture.listeners.clear();
   fixture.released = 0;
   fixture.wanted = 0;
+  fixture.claims = null;
   vi.clearAllMocks();
 });
 
@@ -193,6 +196,37 @@ it("drapes one unpickable ground primitive first, and a tap inside opens that ce
   );
   expect(useKnowledge.getState().selected).toBeNull();
   expect(fixture.entities?.getById("grid-outline:fog")).toBeUndefined();
+});
+
+it("claims a zone's fill as ground only inside the shown grid's land", () => {
+  const view = render(<KnowledgeFogBridge />, { wrapper });
+  const claims = fixture.claims!;
+  // North-east (col 1, row 0) is inside: a click on a zone there opens the cell.
+  expect(claims(-120.035, 34.698)).toBe(true);
+  // South-west is outside the land, and past the grid is no land at all: the zone selects.
+  expect(claims(-120.045, 34.692)).toBe(false);
+  expect(claims(-120.2, 34.698)).toBe(false);
+  // No grid shown (still loading, or failed): nothing is claimed.
+  fixture.data = undefined;
+  view.rerender(<KnowledgeFogBridge />);
+  expect(fixture.claims!(-120.035, 34.698)).toBe(false);
+});
+
+it("a revised boundary closes the card and never draws the older grid", () => {
+  const view = render(<KnowledgeFogBridge />, { wrapper });
+  act(() =>
+    useKnowledge.getState().select({ landId: "land-a", longitude: 0, latitude: 0, col: 1, row: 0 }),
+  );
+  // The boundary was revised: the grid in hand is of revision 1.
+  act(() => useLand.getState().select(land("land-a", 2)));
+  view.rerender(<KnowledgeFogBridge />);
+  expect(useKnowledge.getState().selected).toBeNull();
+  expect(fixture.removed).toHaveLength(1);
+  expect(useGridDrape.getState().owner).toBeNull();
+  // Its own grid arrives: drawn again.
+  fixture.data = { ...grid("land-a", [250, 250, 255, 120]), boundaryRevision: 2 };
+  view.rerender(<KnowledgeFogBridge />);
+  expect(fixture.primitives).toHaveLength(2);
 });
 
 it("hiding releases the ground taps and the drape", () => {

@@ -10,6 +10,7 @@ import type {
   KnowledgeGrid,
   KnowledgeScoutRead,
   KnowledgeScoutRequest,
+  LandArea,
 } from "@twin/contracts";
 
 import { api, unwrap } from "@/api/client";
@@ -18,12 +19,19 @@ import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
 /** Cell size the console asks for, metres. */
 export const KNOWLEDGE_CELL_M = 20;
 
+/** The Land a fog is asked for: its boundary revision is part of the answer's identity. */
+export type KnowledgeLand = Pick<LandArea, "id" | "revision">;
+
+/**
+ * Keyed by the boundary revision as well as the Land: a revised boundary is a new grid (new
+ * cells, a new inside), never the old one kept for its stale time.
+ */
 export function knowledgeKey(
   scope: string,
-  landId: string | null,
+  land: KnowledgeLand | null,
   cellM = KNOWLEDGE_CELL_M,
 ): readonly unknown[] {
-  return ["land-knowledge", scope, landId, cellM];
+  return ["land-knowledge", scope, land?.id ?? null, land?.revision ?? null, cellM];
 }
 
 export function fetchKnowledgeGrid(
@@ -38,13 +46,13 @@ export function fetchKnowledgeGrid(
 }
 
 /** The fog over a Land; refetched when evidence changes (`invalidateLandDerived`). */
-export function useKnowledgeGrid(landId: string | null, enabled: boolean) {
+export function useKnowledgeGrid(land: KnowledgeLand | null, enabled: boolean) {
   const scope = useLandScope();
   const ready = useLandAccessReady();
   return useQuery({
-    queryKey: knowledgeKey(scope, landId),
-    queryFn: () => fetchKnowledgeGrid(landId ?? ""),
-    enabled: enabled && ready && landId !== null,
+    queryKey: knowledgeKey(scope, land),
+    queryFn: () => fetchKnowledgeGrid(land?.id ?? ""),
+    enabled: enabled && ready && land !== null,
     staleTime: 30_000,
     retry: false,
   });
@@ -63,7 +71,10 @@ export function fetchKnowledgeCell(
   );
 }
 
-/** One cell's records; keyed by the cell, so reopening a card is instant. */
+/**
+ * One cell's records; keyed by the cell on this boundary revision's grid, so reopening a card
+ * is instant and a revised boundary asks again.
+ */
 export function useKnowledgeCell(
   selected: {
     landId: string;
@@ -72,6 +83,7 @@ export function useKnowledgeCell(
     col: number;
     row: number;
   } | null,
+  revision: number | null,
 ) {
   const scope = useLandScope();
   const ready = useLandAccessReady();
@@ -80,6 +92,7 @@ export function useKnowledgeCell(
       "land-knowledge",
       scope,
       selected?.landId ?? null,
+      revision,
       KNOWLEDGE_CELL_M,
       "cell",
       selected?.col,

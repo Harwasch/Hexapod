@@ -2262,22 +2262,32 @@ in one statement, so the query count does not grow with the evidence.
 
 Console: the strip's "Fog of knowing" pill shows the fog over the selected land, one ground
 drape (`cesium/GroundGridLayer.ts`) whose noise breaks it into fog rather than a heatmap. While
-it shows, a plain click inside the land opens the cell's card (the map menu has "What do we know
-here" too); otherwise a click on the ground still does nothing. Saving an inspection, editing the
-inventory, finishing a research run or registering a capture refreshes everything computed from
-the land's records (`invalidateLandDerived`), and where fog went it dissolves over 1.5 s. "Fetch
-latest satellite look" stores one Sentinel-2 scene from the last 30 days.
+it shows, a plain click inside the land opens the cell's card, on a mission zone's fill as well
+(outside the land, or before the grid is in, the zone is selected as usual; the map menu has
+"What do we know here" too); otherwise a click on the ground still does nothing. Saving an
+inspection, editing the inventory, aligning an archive image, saving a field survey, finishing a
+research run, registering a capture or revising the boundary refreshes everything computed from
+the land's records (`invalidateLandDerived`); the grid is also keyed by the boundary revision, so
+a revised boundary never shows the old grid. Where fog went it dissolves over 1.5 s. The drape's
+fragment shader reads two texels and two 3-octave noise fields (the land's edge comes pre-softened
+in the texture), since it covers the screen on the photorealistic tiles. "Fetch latest satellite
+look" stores one Sentinel-2 scene from the last 30 days.
 
 "Lift the fog" asks for the foggiest ground within one battery (about 64 acres at the assumed
-drone's flight) near the view and drafts a survey over it through the plan card: the patches
+drone's flight) near the view and drafts a survey over it through a fresh plan card (one left
+open, a revision included, is replaced, as "Plan on this land" does): the patches
 are private area zones carrying their scout capture (`PlanArea.capture`), the map draws their
 real flight lines dashed with "Would lift fog · forecast", and the planner flies them at those
 numbers. The draft or the approved plan exports a DJI WPML route (KMZ: `wpmz/template.kml` and
 `wpmz/waylines.wpml`) for a Mavic 3 Enterprise class aircraft in DJI Pilot 2 or FlightHub 2:
-one waypoint at each end of every drawn lane, photos every photo spacing along lanes and none on
-transit legs, heights relative to the take-off point. Caveats, said in the console as well: the
-route is a draft that has not been imported into DJI Pilot 2 or FlightHub 2 or flown; it does not
-follow terrain (the card samples the 3D surface under the route and gives the resulting detail
-range and lowest clearance); the zip is store-only; the battery time is assumed; check airspace
+one waypoint at each end of every drawn lane, areas in the plan's step order as the map routes
+them and each with its own capture's lanes, photos every photo spacing along lanes and none on
+transit legs, heights relative to the take-off point. Areas set to different heights or overlaps
+are not exported as one route. Changing the height restates the detail in the goal and in the
+planner's detail answer. Caveats, said in the console as well: the route is a draft that has not
+been imported into DJI Pilot 2 or FlightHub 2 or flown; it does not follow terrain (the card
+samples the 3D surface under the patches once per outline, at most 150 points reused across
+heights, and gives the resulting detail range and lowest clearance); the zip is store-only; the
+battery time is assumed; check airspace
 (B4UFLY or LAANC) and fly under Part 107. The drone class in `machine_classes.json` is now that
 aircraft's wide camera (73.7 degrees across), so lines at 60 m are 27 m apart.

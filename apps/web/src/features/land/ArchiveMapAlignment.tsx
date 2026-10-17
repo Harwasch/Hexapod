@@ -4,9 +4,11 @@ import type { components } from "@twin/contracts";
 import { api, ApiError, unwrap } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
+import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 import { useUi } from "@/state/ui";
+import { invalidateLandDerived } from "./landDerived";
 import { AlignmentFit, SavedAlignment } from "./SavedAlignment";
 
 type Point = components["schemas"]["ImageControlPoint"];
@@ -267,6 +269,8 @@ function AlignmentEditor({ id, image, url, title, attribution, scope }: Props & 
           opacity: 0.6,
         });
         void cache.invalidateQueries({ queryKey });
+        // An aligned image is dated evidence with a footprint: the fog lifts under it.
+        void invalidateLandDerived(cache, useLand.getState().active?.id ?? null);
       } else {
         const response = await unwrap(
           api.POST("/api/v1/research/evidence/{evidence_id}/image/registrations/preview", {

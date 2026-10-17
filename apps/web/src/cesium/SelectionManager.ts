@@ -49,6 +49,8 @@ interface PickContext {
  * here" inspects whatever is at the point, the ground included.
  */
 type SelectMode = "click" | "inspect";
+/** Whether a point (degrees) is ground a 'ground-tap' consumer answers for. */
+export type GroundClaim = (longitude: number, latitude: number) => boolean;
 
 /** How long the pointer must rest before a hover pick runs. */
 const HOVER_REST_MS = 120;
@@ -88,8 +90,11 @@ export class SelectionManager {
   private readonly longPress: LongPress;
   /** The selection last reported, until cleared: what a terrain sample may still refine. */
   private current: Selection | null = null;
-  /** Consumers that want plain clicks on empty ground as 'ground-tap' events. */
-  private groundTapWanted = 0;
+  /**
+   * Consumers that want plain clicks on empty ground as 'ground-tap' events, each with the
+   * ground it claims (where a click on a mission zone's fill is its tap, not the zone's).
+   */
+  private readonly groundTaps = new Set<{ claims: GroundClaim }>();
 
   constructor(
     private readonly viewer: CesiumWidget,
@@ -184,17 +189,23 @@ export class SelectionManager {
   }
 
   /**
-   * Asks for a 'ground-tap' on every plain click that finds nothing to select. Returns the
-   * release; while nobody holds one, a click on the ground does nothing at all, as before.
+   * Asks for a 'ground-tap' on every plain click that finds nothing to select. `claims` says
+   * where the consumer's own ground is (the fog: inside the Land of the grid it shows): there,
+   * a click on a mission zone's fill is a tap too; anywhere else, the zone is selected as
+   * usual. Returns the release; while nobody holds one, a click on the ground does nothing at
+   * all, as before.
    */
-  wantGroundTaps(): () => void {
-    this.groundTapWanted++;
-    let released = false;
+  wantGroundTaps(claims: GroundClaim = () => false): () => void {
+    const holder = { claims };
+    this.groundTaps.add(holder);
     return () => {
-      if (released) return;
-      released = true;
-      this.groundTapWanted = Math.max(0, this.groundTapWanted - 1);
+      this.groundTaps.delete(holder);
     };
+  }
+
+  private groundClaimed(longitude: number, latitude: number): boolean {
+    for (const holder of this.groundTaps) if (holder.claims(longitude, latitude)) return true;
+    return false;
   }
 
   clear(): void {
@@ -301,32 +312,31 @@ export class SelectionManager {
     // A plain click is for things on the map. On the ground, or on a site's surface (its mesh,
     // or the ground under a scan's splats), it does nothing at all: no marker, no card, and
     // what is open stays open. "What's here" in the map menu is how to ask about a place.
-    // While a ground layer asks for taps (the fog), a mission zone's fill is ground too: the
-    // tap goes to the layer, and the zone's chip on the map still selects the zone.
-    const zoneFill =
-      this.groundTapWanted > 0 &&
-      isEntityPick(picked) &&
-      typeof picked.id.id === "string" &&
-      picked.id.id.startsWith(ZONE_ENTITY_PREFIX);
-    if (
-      mode === "click" &&
-      (zoneFill || (!(picked instanceof Cesium3DTileFeature) && !isEntityPick(picked)))
-    ) {
-      // Unless something asked for it: then the point goes out as a 'ground-tap', and still
-      // nothing is selected here.
-      if (this.groundTapWanted > 0) {
-        const context = this.pickPosition(window, picked);
-        if (context)
-          this.events.emit("ground-tap", {
-            longitude: CesiumMath.toDegrees(context.carto.longitude),
-            latitude: CesiumMath.toDegrees(context.carto.latitude),
-            x: window.x,
-            y: window.y,
-          });
+    const onGround = !(picked instanceof Cesium3DTileFeature) && !isEntityPick(picked);
+    // Unless a ground layer asked for taps (the fog): then the point goes out as a
+    // 'ground-tap', and still nothing is selected here. On the ground the layer claims, a
+    // mission zone's fill is ground too; elsewhere (outside the Land, no grid shown yet) the
+    // zone is selected as it would be without the layer.
+    let tapped: PickContext | null | undefined;
+    if (mode === "click" && this.groundTaps.size > 0) {
+      const onZoneFill =
+        isEntityPick(picked) &&
+        typeof picked.id.id === "string" &&
+        picked.id.id.startsWith(ZONE_ENTITY_PREFIX);
+      if (onGround || onZoneFill) {
+        tapped = this.pickPosition(window, picked);
+        if (tapped) {
+          const longitude = CesiumMath.toDegrees(tapped.carto.longitude);
+          const latitude = CesiumMath.toDegrees(tapped.carto.latitude);
+          if (onGround || this.groundClaimed(longitude, latitude)) {
+            this.events.emit("ground-tap", { longitude, latitude, x: window.x, y: window.y });
+            return;
+          }
+        }
       }
-      return;
     }
-    const context = this.pickPosition(window, picked);
+    if (mode === "click" && onGround) return;
+    const context = tapped === undefined ? this.pickPosition(window, picked) : tapped;
     if (!context) {
       this.clear();
       return;

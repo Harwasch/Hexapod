@@ -141,7 +141,7 @@ function Legend({ land }: { land: LandArea }) {
   const setVisible = useKnowledge((s) => s.setVisible);
   const canEdit = useLandCanEdit();
   const status = useResearchStatus();
-  const query = useKnowledgeGrid(land.id, visible);
+  const query = useKnowledgeGrid(land, visible);
   const grid = query.data?.landId === land.id ? query.data : undefined;
   const [open, setOpen] = useState(false);
   const [lifting, setLifting] = useState(false);

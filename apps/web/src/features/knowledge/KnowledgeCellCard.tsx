@@ -128,14 +128,15 @@ export function KnowledgeCellCard() {
   const selected = useKnowledge((s) => s.selected);
   const visible = useKnowledge((s) => s.visible);
   const clear = useKnowledge((s) => s.clear);
-  const landId = useLand((s) => s.active?.id ?? null);
+  const land = useLand((s) => s.active);
+  const landId = land?.id ?? null;
   const open = visible && selected !== null && selected.landId === landId;
-  const gridQuery = useKnowledgeGrid(landId, visible);
+  const gridQuery = useKnowledgeGrid(land, visible);
   const decoded = useMemo(
     () => (gridQuery.data ? decodeGrid(gridQuery.data) : null),
     [gridQuery.data],
   );
-  const cell = useKnowledgeCell(open ? selected : null);
+  const cell = useKnowledgeCell(open ? selected : null, land?.revision ?? null);
   const density = decoded && selected ? densityAt(decoded, selected.col, selected.row) : null;
   const bestIndex =
     decoded && selected ? decoded.best[selected.row * decoded.columns + selected.col] : undefined;

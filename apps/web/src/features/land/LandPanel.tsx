@@ -31,6 +31,7 @@ import { planOnLand } from "../mission/landPlanning";
 import { FloatingPanel } from "../shell/FloatingPanel";
 import { WriteTokenField } from "../captures/WriteTokenField";
 import { createCorridor, createLand, reviseLand, useBoundaryHistory, useLandAreas } from "./api";
+import { invalidateLandDerived } from "./landDerived";
 import { LandDraftRecovery } from "./LandDraftRecovery";
 import { LandBoundaryImport } from "./LandBoundaryImport";
 import { LandBoundarySplit } from "./LandBoundarySplit";
@@ -222,6 +223,8 @@ export function LandPanel() {
           })
         : await createLand(draft);
       if (operation.current === ticket) state.select(saved);
+      // Its ground, fog and rasters are computed within the boundary: ask them again too.
+      if (active) void invalidateLandDerived(queryClient, saved.id);
       await queryClient.invalidateQueries({ queryKey: ["land-areas"] });
       await queryClient.invalidateQueries({ queryKey: ["land-history", saved.id] });
     } catch (error) {
