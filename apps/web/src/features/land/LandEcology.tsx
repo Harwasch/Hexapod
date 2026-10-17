@@ -11,6 +11,7 @@ import { describeError } from "@/lib/log";
 import { invalidateLandDerived } from "./landDerived";
 import { parseSurveyCorners, parseSurveyDraft } from "./surveyDraft";
 import { EcologyResearch } from "./EcologyResearch";
+import { ShowOnceCard } from "../showOnce/ShowOnceCard";
 import { SurveySummaryView } from "./SurveySummaryView";
 import "./ecology.css";
 
@@ -281,6 +282,7 @@ function EcologyEditor({ land, scope }: { land: LandArea; scope: string }) {
   };
   return (
     <section className="land-ecology" aria-label="Field ecology">
+      <ShowOnceCard land={land} />
       <span className="land-eyebrow">Ground the picture in observations</span>
       <h3>Species and field surveys.</h3>
       <p>

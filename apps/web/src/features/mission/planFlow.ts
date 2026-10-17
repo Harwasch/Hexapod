@@ -159,12 +159,15 @@ export async function planFromText(
   const composer = state.composer;
   // Ground already in scope: zones named in the goal, else what the open card already has.
   // A card seeded with a Land's boundary ("Plan work on this land") takes the feature the goal
-  // names instead ("monitor the fence" → the fence).
+  // names instead ("monitor the fence" → the fence). Areas derived from the Land (a fog patch,
+  // a like-here patch) are the ground the operator chose: they stay.
   let zoneIds = mentionedZones(goal, project.zones);
   let landNote: string | null = null;
   if (zoneIds.length === 0 && composer?.zoneIds.length) {
     zoneIds = composer.zoneIds;
-    const onLand = composer.zoneIds.every((id) => project.zones.some((z) => z.id === id && z.land));
+    const onLand = composer.zoneIds.every((id) =>
+      project.zones.some((z) => z.id === id && z.land && z.land.kind !== "derived"),
+    );
     const land = onLand ? landGroundFor(goal, project) : null;
     if (land?.note && land.zoneIds.some((id) => !composer.zoneIds.includes(id))) {
       zoneIds = land.zoneIds;

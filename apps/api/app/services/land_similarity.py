@@ -171,7 +171,9 @@ def _seed(
     latitude: float,
 ) -> tuple[int, SignatureSeed]:
     if not boundary.covers(Point(longitude, latitude)):
-        raise InvalidInputError("That point is outside the land's boundary. Tap inside it.")
+        raise InvalidInputError(
+            "That point is outside the land's boundary. Choose a place inside it."
+        )
     to_metric = Transformer.from_crs("EPSG:4326", stack.crs, always_xy=True)
     to_geographic = Transformer.from_crs(stack.crs, "EPSG:4326", always_xy=True)
     x, y = to_metric.transform(longitude, latitude)
@@ -182,7 +184,7 @@ def _seed(
     if position is None:
         raise InvalidInputError(
             "That 10 m cell has no full signature: at least one season was cloudy, shadowed, "
-            "snowy or water there. Tap another place."
+            "snowy or water there. Choose another place."
         )
     center_x, center_y = stack.transform @ (column + 0.5, row + 0.5)
     cell_longitude, cell_latitude = to_geographic.transform(center_x, center_y)
