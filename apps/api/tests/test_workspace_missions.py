@@ -128,6 +128,23 @@ def test_missions_on_land_are_created_private_and_checked_against_the_land(
     assert client.get("/api/v1/plans", params={"projectId": project}).json() == []
 
 
+def test_a_limited_mission_list_keeps_the_newest(client: TestClient) -> None:
+    land = client.post("/api/v1/land", json=BODY).json()
+    project = f"land:{land['id']}"
+    ids = [
+        client.post(
+            MISSIONS, json={**plan_body(project, title=f"Check {i}"), "landId": land["id"]}
+        ).json()["id"]
+        for i in range(3)
+    ]
+    listed = client.get(MISSIONS, params={"projectId": project, "limit": 2})
+    assert [p["id"] for p in listed.json()] == ids[1:]
+    assert listed.headers["x-truncated"] == "true"
+    whole = client.get(MISSIONS, params={"projectId": project})
+    assert [p["id"] for p in whole.json()] == ids
+    assert "x-truncated" not in whole.headers
+
+
 def test_missions_follow_workspace_roles_and_isolation(identity_client: IdentityClient) -> None:
     client, token = identity_client
     alice = headers(token())

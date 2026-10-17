@@ -1868,7 +1868,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List a project's plans */
+        /**
+         * List a project's plans
+         * @description The project's public plans, oldest first: the newest 200 when it has more.
+         */
         get: operations["list_plans_api_v1_plans_get"];
         put?: never;
         /** Approve a plan */
@@ -2576,7 +2579,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the workspace's missions */
+        /**
+         * List the workspace's missions
+         * @description The workspace's missions, oldest first: the newest `limit` when it has more.
+         */
         get: operations["list_missions_api_v1_workspaces_missions_get"];
         put?: never;
         /** Approve a mission in the workspace */
@@ -18592,6 +18598,8 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description 'true' when older plans were left out: a list holds the newest only. */
+                    "X-Truncated"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -21735,6 +21743,8 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description 'true' when older plans were left out: a list holds the newest only. */
+                    "X-Truncated"?: string;
                     [name: string]: unknown;
                 };
                 content: {

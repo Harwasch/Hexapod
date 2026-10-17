@@ -17,6 +17,10 @@ from app.schemas.plan import (
 from app.services.errors import ConflictError, NotFoundError
 
 ACTIVE_STATUSES: tuple[PlanStatus, ...] = ("scheduled", "dispatched", "paused")
+#: Plans a list answers with at most: the newest, so a plan just approved is always listed.
+LIST_LIMIT = 200
+#: Set on a list response that left older plans out.
+TRUNCATED_HEADER = "X-Truncated"
 
 
 def _body_columns(body: PlanBody) -> dict[str, object]:
@@ -36,11 +40,15 @@ def list_plans(
     *,
     workspace_id: uuid.UUID | None = None,
     land_id: uuid.UUID | None = None,
-    limit: int = 200,
-) -> list[Plan]:
+    limit: int | None = None,
+) -> tuple[list[Plan], bool]:
     """A project's plans in one scope: the public ones (no workspace) unless a workspace is
     given, and then only that workspace's. Never both, so a public list cannot carry a
-    private plan."""
+    private plan.
+
+    The newest `limit` (LIST_LIMIT by default), oldest first, and whether older ones were
+    left out: past the limit a list drops the oldest, never a plan just approved."""
+    limit = LIST_LIMIT if limit is None else limit
     scope = (
         Plan.workspace_id.is_(None) if workspace_id is None else Plan.workspace_id == workspace_id
     )
@@ -49,8 +57,13 @@ def list_plans(
         stmt = stmt.where(Plan.project_id == project_id)
     if land_id is not None:
         stmt = stmt.where(Plan.land_id == land_id)
-    stmt = stmt.options(selectinload(Plan.revisions)).order_by(Plan.created_at).limit(limit)
-    return list(db.scalars(stmt).all())
+    stmt = (
+        stmt.options(selectinload(Plan.revisions))
+        .order_by(Plan.created_at.desc(), Plan.id.desc())
+        .limit(limit + 1)
+    )
+    newest = list(db.scalars(stmt).all())
+    return newest[:limit][::-1], len(newest) > limit
 
 
 def get_plan(db: Session, plan_id: uuid.UUID, *, workspace_id: uuid.UUID | None = None) -> Plan:

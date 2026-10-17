@@ -34890,6 +34890,7 @@
     },
     "/api/v1/plans": {
       "get": {
+        "description": "The project's public plans, oldest first: the newest 200 when it has more.",
         "operationId": "list_plans_api_v1_plans_get",
         "parameters": [
           {
@@ -34917,7 +34918,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Truncated": {
+                "description": "'true' when older plans were left out: a list holds the newest only.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -39587,6 +39596,7 @@
     },
     "/api/v1/workspaces/missions": {
       "get": {
+        "description": "The workspace's missions, oldest first: the newest `limit` when it has more.",
         "operationId": "list_missions_api_v1_workspaces_missions_get",
         "parameters": [
           {
@@ -39667,7 +39677,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Truncated": {
+                "description": "'true' when older plans were left out: a list holds the newest only.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
