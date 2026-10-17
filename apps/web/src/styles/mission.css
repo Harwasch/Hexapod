@@ -2804,3 +2804,16 @@ a.mc-link {
   font: 400 12px var(--font-sans);
   color: var(--text-secondary);
 }
+
+.mc-rehearsal__better {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+
+.mc-rehearsal__better .mc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}

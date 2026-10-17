@@ -1,6 +1,8 @@
-import { Hand, Pause, Play, SkipForward, Square, Undo2 } from "lucide-react";
+import { Hand, LandPlot, Pause, Play, SkipForward, Square, Undo2 } from "lucide-react";
 
+import { env } from "@/app/env";
 import { formatSimDuration, REHEARSAL_SPEEDS, type RaisedHand } from "@/missions/rehearsal";
+import { useUi } from "@/state/ui";
 
 import type { DressRehearsal } from "./dressRehearsal";
 
@@ -226,7 +228,21 @@ export function RehearsalPanel({ run }: { run: DressRehearsal }) {
                   </span>
                 ))}
               </div>
-              {ground?.better && <p className="mc-muted mc-rehearsal__note">{ground.better}</p>}
+              {ground?.better && (
+                <div className="mc-rehearsal__better">
+                  <p className="mc-muted mc-rehearsal__note">{ground.better}</p>
+                  {env.landExplorationEnabled && (
+                    <button
+                      type="button"
+                      className="mc-btn mc-btn--sm"
+                      onClick={() => useUi.getState().setPanel("land")}
+                      data-testid="rehearsal-open-land"
+                    >
+                      <LandPlot size={12} aria-hidden="true" /> Open in Land
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {ephemeral && (

@@ -370,6 +370,12 @@ describe("RehearsalPanel", () => {
             ended: true,
           },
           leftOut: [{ zoneId: "Z-14", label: "Z-14", number: 4 }],
+          ground: {
+            elevation: null,
+            creeks: null,
+            heightAt: () => 0,
+            better: "For 10 m bare-earth slope, analyze bare-earth terrain (USGS 3DEP).",
+          },
         })}
       />,
     );
@@ -380,6 +386,7 @@ describe("RehearsalPanel", () => {
     expect(screen.getByTestId("rehearsal-left-out")).toHaveTextContent(
       "Left out of this draft's preview: Z-14 lane 4.",
     );
+    expect(summary).toHaveTextContent("analyze bare-earth terrain (USGS 3DEP)");
     expect(screen.getByTestId("rehearsal-play")).toHaveTextContent("Play again");
     expect(screen.queryByTestId("rehearsal-skip")).toBeNull();
   });
