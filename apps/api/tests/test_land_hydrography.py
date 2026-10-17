@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from typing import Any
+from uuid import UUID
 
 import httpx
 import pytest
@@ -237,7 +238,29 @@ def test_an_answer_too_large_to_read_says_so_and_is_kept_briefly(
     assert body["message"] == TOO_LARGE and "Trying again will not help" in TOO_LARGE
     assert client.get(url).json() == body and len(seen) == 1
     key = next(iter(land_hydrography._cache))
-    expires, kept = land_hydrography._cache[key]
-    land_hydrography._cache[key] = (expires - land_hydrography.TOO_LARGE_TTL_S, kept)
+    expires, kept, weight = land_hydrography._cache[key]
+    land_hydrography._cache[key] = (expires - land_hydrography.TOO_LARGE_TTL_S, kept, weight)
     client.get(url)
     assert len(seen) == 2  # Asked again after ten minutes, not an hour.
+
+
+def test_the_cache_drops_expired_answers_and_stays_within_its_byte_budget(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A revised boundary is a new key, so an expired answer would otherwise linger until
+    its own key came back; and an answer near NHD's 2 MB limit holds about 11 MB of objects,
+    so the cache is bounded by bytes, not by count."""
+    upstream(monkeypatch, lambda request: httpx.Response(200, json=collection()))
+    lands = [client.post("/api/v1/land", json={**BODY, "boundary": SQUARE}).json() for _ in "abc"]
+    first, second, third = (f"/api/v1/land/{land['id']}/hydrography" for land in lands)
+    assert client.get(first).json()["status"] == "available"
+    (stale,) = land_hydrography._cache
+    entry = land_hydrography._cache[stale]
+    land_hydrography._cache[stale] = (0.0, *entry[1:])  # Expired long ago.
+    client.get(second)
+    assert stale not in land_hydrography._cache, "an expired answer goes when another is kept"
+    assert len(land_hydrography._cache) == 1
+    # A budget smaller than one answer keeps only the newest.
+    monkeypatch.setattr(land_hydrography, "CACHE_BYTES", 1, raising=False)
+    client.get(third)
+    assert [key[0] for key in land_hydrography._cache] == [UUID(lands[2]["id"])]
