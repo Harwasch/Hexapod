@@ -93,17 +93,19 @@ describe("the fog's grid", () => {
     expect(densityAt(grid, 3, 1)).toBeCloseTo(0.156, 3);
   });
 
-  it("paints the texture with row 0 at the north: R density, G inside", () => {
+  it("paints the texture with row 0 at the north: R density, G inside softened", () => {
     const image = densityImage(decodeGrid(read));
     expect(image.width).toBe(4);
     expect(image.height).toBe(2);
     const px = (col: number, row: number) =>
       Array.from(image.data.slice((row * 4 + col) * 4, (row * 4 + col) * 4 + 4));
-    expect(px(0, 0)).toEqual([0, 0, 0, 255]); // outside: G 0
-    expect(px(1, 0)).toEqual([255, 255, 0, 255]); // full fog
-    expect(px(2, 0)).toEqual([128, 255, 0, 255]);
-    expect(px(3, 0)).toEqual([0, 255, 0, 255]); // inside, no fog left
-    expect(px(3, 1)).toEqual([40, 255, 0, 255]);
+    // G is the inside mask averaged with its four neighbours (an edge cell's own value past
+    // the grid): outside beside two inside cells, 2/5 of 255.
+    expect(px(0, 0)).toEqual([0, 102, 0, 255]);
+    expect(px(1, 0)).toEqual([255, 204, 0, 255]); // full fog, one neighbour outside
+    expect(px(2, 0)).toEqual([128, 204, 0, 255]);
+    expect(px(3, 0)).toEqual([0, 255, 0, 255]); // inside all round, no fog left
+    expect(px(3, 1)).toEqual([40, 204, 0, 255]);
   });
 
   it("says when fog lifted somewhere, not when it thickened or the grid changed", () => {

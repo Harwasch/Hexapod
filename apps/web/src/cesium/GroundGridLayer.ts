@@ -8,9 +8,12 @@
  * overlays draw above it.
  *
  * Two materials:
- * - `fog` (the Fog of Knowing): density in R, inside the land in G. Soft, uncoloured fog
- *   broken up by fbm noise, not a heatmap. `lift(next)` dissolves it towards a new density
- *   along the noise over 1.5 s, rendering only for that long (the scene renders on request).
+ * - `fog` (the Fog of Knowing): density in R, inside the land in G, already softened over a
+ *   cell (`densityImage`), so the edge costs no extra taps. Soft, uncoloured fog broken up by
+ *   fbm noise, not a heatmap. `lift(next)` dissolves it towards a new density along the noise
+ *   over 1.5 s, rendering only for that long (the scene renders on request). The fragment
+ *   cost is kept low, since it draws on terrain and on the photorealistic tiles across the
+ *   screen while the camera moves: two texture reads and two 3-octave fbm calls.
  * - `ramp` (batch 3, Show Once): a score in R, valid cells in G, protected cells in B, drawn
  *   above a `threshold` uniform in a two-colour ramp; moving a slider is a uniform update.
  *
@@ -56,7 +59,11 @@ export interface GridBounds {
   north: number;
 }
 
-/** fbm noise, shared by the fog's dissolve and its wisps. Names are unique to this material. */
+/**
+ * fbm noise, shared by the fog's dissolve, its wisps and its billows. Three octaves: the drape
+ * covers the screen, and each octave is four hashes per fragment. Names are unique to this
+ * material.
+ */
 const NOISE = `
 float knowledgeFogHash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -74,7 +81,7 @@ float knowledgeFogNoise(vec2 p) {
 float knowledgeFogFbm(vec2 p) {
   float value = 0.0;
   float amplitude = 0.5;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 3; i++) {
     value += amplitude * knowledgeFogNoise(p);
     p = p * 2.03 + vec2(17.0, 9.0);
     amplitude *= 0.5;
@@ -88,7 +95,8 @@ float knowledgeFogFbm(vec2 p) {
  * has burnt through at `lift` (0..1), so a lifting patch frays away rather than fading as a
  * block. Alpha follows density through a soft step, and two scales of noise keep even full
  * fog from reading as a flat sheet: broad billows (a few hundred metres) that thin it to
- * about half, and finer wisps. Only inside the land.
+ * about half, and the dissolve's own noise as finer wisps. Only inside the land, whose edge
+ * comes softened in G (one bilinear read of the pre-blurred mask, not a blur here).
  */
 export const FOG_SHADER = `${NOISE}
 czm_material czm_getMaterial(czm_materialInput materialInput) {
@@ -99,18 +107,9 @@ czm_material czm_getMaterial(czm_materialInput materialInput) {
   float n = knowledgeFogFbm(st * cells * 0.25 + drift);
   float burn = smoothstep(n - 0.08, n + 0.08, lift);
   float density = mix(from.r, to.r, burn);
-  // The land's edge, softened over a cell so the 20 m staircase does not show.
-  vec2 texel = 1.0 / cells;
-  vec2 dx = vec2(texel.x, 0.0);
-  vec2 dy = vec2(0.0, texel.y);
-  float insideFrom = (from.g + texture(densityFrom, st + dx).g + texture(densityFrom, st - dx).g
-    + texture(densityFrom, st + dy).g + texture(densityFrom, st - dy).g) / 5.0;
-  float insideTo = (to.g + texture(densityTo, st + dx).g + texture(densityTo, st - dx).g
-    + texture(densityTo, st + dy).g + texture(densityTo, st - dy).g) / 5.0;
-  float inside = smoothstep(0.15, 0.85, mix(insideFrom, insideTo, burn));
+  float inside = smoothstep(0.15, 0.85, mix(from.g, to.g, burn));
   float billow = knowledgeFogFbm(st * cells * 0.08 + drift * 0.3);
-  float wisp = knowledgeFogFbm(st * cells * 0.6 + drift * 0.5);
-  float body = mix(0.42, 1.0, smoothstep(0.25, 0.75, billow)) * (0.82 + 0.36 * wisp);
+  float body = mix(0.42, 1.0, smoothstep(0.25, 0.75, billow)) * (0.82 + 0.36 * n);
   material.diffuse = tint.rgb * (0.9 + 0.14 * billow);
   material.emission = tint.rgb * 0.12;
   material.alpha = smoothstep(0.02, 0.9, density) * clamp(body, 0.0, 1.0) * inside * maxAlpha;

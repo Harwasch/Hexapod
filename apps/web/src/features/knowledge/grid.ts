@@ -108,21 +108,37 @@ export function densityAt(grid: DecodedGrid, col: number, row: number): number |
 }
 
 /**
- * The drape's texture: R = density (0..250 stretched to 0..255), G = 255 inside the land and
- * 0 outside, B = 0, A = 255; row 0 at the north, as the grid.
+ * The drape's texture: R = density (0..250 stretched to 0..255); G = inside the land (255) or
+ * not (0), averaged with its four neighbours (an edge cell's own value beyond the grid), so
+ * one bilinear read in the shader gives an edge softened over a cell and the 20 m staircase
+ * does not show; B = 0, A = 255. Row 0 at the north, as the grid.
  */
 export function densityImage(grid: DecodedGrid): GridImage {
-  const count = grid.columns * grid.rows;
+  const { columns, rows } = grid;
+  const count = columns * rows;
+  const inside = (col: number, row: number) => {
+    const c = Math.min(columns - 1, Math.max(0, col));
+    const r = Math.min(rows - 1, Math.max(0, row));
+    return (grid.density[r * columns + c] ?? OUTSIDE) !== OUTSIDE ? 255 : 0;
+  };
   const data = new Uint8ClampedArray(count * 4);
   for (let i = 0; i < count; i++) {
     const value = grid.density[i] ?? OUTSIDE;
-    const inside = value !== OUTSIDE;
-    data[i * 4] = inside ? Math.round((value * 255) / 250) : 0;
-    data[i * 4 + 1] = inside ? 255 : 0;
+    const col = i % columns;
+    const row = Math.floor(i / columns);
+    data[i * 4] = value !== OUTSIDE ? Math.round((value * 255) / 250) : 0;
+    data[i * 4 + 1] = Math.round(
+      (inside(col, row) +
+        inside(col - 1, row) +
+        inside(col + 1, row) +
+        inside(col, row - 1) +
+        inside(col, row + 1)) /
+        5,
+    );
     data[i * 4 + 2] = 0;
     data[i * 4 + 3] = 255;
   }
-  return { width: grid.columns, height: grid.rows, data };
+  return { width: columns, height: rows, data };
 }
 
 /** True when the next grid is the same grid with fog gone somewhere: worth a dissolve. */
