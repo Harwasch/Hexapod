@@ -268,6 +268,23 @@ describe("MapContextMenu", () => {
     });
     expect(useUi.getState().mapMenu).toBeNull();
   });
+
+  it("keeps a menu reopened while the last one is still leaving open on a press inside it", async () => {
+    render(<MapContextMenu />);
+    open();
+    await screen.findByRole("menu");
+    // Closed by the camera and reopened at once: the first menu is still playing its exit, and
+    // a press inside the new one must not reach the leaving one's "press elsewhere" close.
+    act(() => scene.events.emit("motion", true));
+    open({ ...AT, x: 300 });
+    const menus = [...document.querySelectorAll<HTMLElement>(".map-menu")];
+    expect(menus.filter((menu) => menu.hasAttribute("inert"))).toHaveLength(1);
+    const current = menus.find((menu) => !menu.hasAttribute("inert"));
+    act(() => {
+      current?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(useUi.getState().mapMenu).not.toBeNull();
+  });
 });
 
 describe("placeMenu", () => {

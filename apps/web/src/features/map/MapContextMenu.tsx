@@ -166,8 +166,10 @@ function MapMenu({ at }: { at: MapMenuAt }) {
     root.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true });
   }, []);
 
-  // A press anywhere else, or the camera moving, closes it.
+  // A press anywhere else, or the camera moving, closes it. Only the menu that is present
+  // listens: one still playing its exit would otherwise close a menu opened in its place.
   useEffect(() => {
+    if (!present) return;
     const onDown = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setMapMenu(null);
     };
@@ -179,7 +181,7 @@ function MapMenu({ at }: { at: MapMenuAt }) {
       document.removeEventListener("pointerdown", onDown, { capture: true });
       offMotion?.();
     };
-  }, [scene, setMapMenu]);
+  }, [present, scene, setMapMenu]);
 
   const close = () => {
     setMapMenu(null);
