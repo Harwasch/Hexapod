@@ -566,6 +566,19 @@ test("show the fog of knowing, read a cell, and draft a scout flight with its DJ
   await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
   await app.getByTestId("tool-land").click();
   const legend = app.getByTestId("knowledge-legend");
+  // The strip reads in time order: dates, then the Time Lantern, then the fog.
+  await expect(app.getByTestId("lantern-control")).toBeVisible();
+  await expect(legend).toBeVisible();
+  const stripOrder = await app
+    .locator(".hud-strip")
+    .evaluate((strip) =>
+      [
+        ...strip.querySelectorAll(
+          '[data-testid="lantern-control"], [data-testid="knowledge-legend"]',
+        ),
+      ].map((node) => node.getAttribute("data-testid")),
+    );
+  expect(stripOrder).toEqual(["lantern-control", "knowledge-legend"]);
   await legend.getByLabel("Show the fog of knowing").click();
   await expect(app.getByTestId("knowledge-foggy")).toHaveText("94% foggy");
   await legend.getByTestId("knowledge-details").click();
