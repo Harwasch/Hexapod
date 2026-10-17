@@ -10,11 +10,13 @@ import {
   Gauge,
   Images,
   Keyboard,
+  LandPlot,
   Layers,
   Link2,
   Map as MapIcon,
   MapPin,
   MapPinPlus,
+  PenLine,
   Plus,
   Ruler,
   Settings2,
@@ -28,10 +30,12 @@ import {
 import { env } from "@/app/env";
 import { HOTKEYS, hotkeyKeys, type HotkeyId } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
+import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
 
+import { drawOutline, hasUnsavedOutline } from "../land/landEntry";
 import { openSiteSwitcher } from "../mission/siteSwitcher";
 
 export interface AppAction {
@@ -59,6 +63,7 @@ export function useAppActions(): AppAction[] {
   const exploreMode = useUi((s) => s.exploreMode);
   const devToolsOpen = useSettings((s) => s.devToolsOpen);
   const devReadouts = useSettings((s) => s.devReadouts);
+  const unsavedOutline = useLand(hasUnsavedOutline);
   const ui = useUi.getState;
   const mission = useMission.getState;
 
@@ -241,6 +246,26 @@ export function useAppActions(): AppAction[] {
       run: () => useSettings.getState().set({ devReadouts: !devReadouts }),
     },
   ];
+  // The Land tool (VITE_ENABLE_LAND_EXPLORATION): open it, or start an outline the way its own
+  // Draw button does. An outline in progress is returned to rather than replaced (landEntry.ts).
+  if (env.landExplorationEnabled)
+    actions.push(
+      {
+        id: "land",
+        label: "Open Land",
+        keywords: "land saved parcel boundary research workspace property",
+        icon: LandPlot,
+        shortcut: keys("land"),
+        run: () => ui().setPanel("land"),
+      },
+      {
+        id: "outline-land",
+        label: unsavedOutline ? "Return to your unsaved outline" : "Outline land",
+        keywords: "draw outline land boundary parcel field new",
+        icon: PenLine,
+        run: () => void drawOutline(scene),
+      },
+    );
   if (env.devToolsEnabled)
     actions.push({
       id: "dev-tools",

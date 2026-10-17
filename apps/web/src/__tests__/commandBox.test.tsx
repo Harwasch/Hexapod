@@ -4,9 +4,11 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { LandArea } from "@twin/contracts";
 import { GlassTooltipProvider } from "@twin/ui";
 
 import { api } from "@/api/client";
+import { env } from "@/app/env";
 import { HOTKEYS, hotkeyKeys, hotkeySheet, type Hotkey } from "@/app/hotkeys";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { SceneContext, SceneRegistry } from "@/cesium/SceneContext";
@@ -23,6 +25,7 @@ import {
 import { ShortcutSheet } from "@/features/command-palette/ShortcutSheet";
 import { MOD_LABEL } from "@/lib/hotkeys";
 import type { Project } from "@/missions/types";
+import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
@@ -274,6 +277,81 @@ describe("CommandBox", () => {
     const input = screen.getByRole("combobox");
     await waitFor(() => expect(input).toHaveFocus());
     expect(input).toHaveValue("Mow the orchard");
+  });
+});
+
+describe("the Land tool in the command box", () => {
+  const ranch = {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Oak Bench Ranch",
+    description: "",
+    boundary: square,
+    source: { method: "drawn", label: "Drawn on the map", meaning: "study-area" },
+    areaM2: 5_467_000,
+    perimeterM: 12_000,
+    revision: 3,
+    createdAt: "2026-10-17T00:00:00Z",
+    updatedAt: "2026-10-17T00:00:00Z",
+  } as LandArea;
+  const enabled = env.landExplorationEnabled;
+
+  beforeEach(() => {
+    env.landExplorationEnabled = true;
+    vi.spyOn(api, "GET").mockImplementation(((path: string) =>
+      path === "/api/v1/land"
+        ? Promise.resolve({ data: [ranch], response: new Response(null, { status: 200 }) })
+        : Promise.reject(new TypeError("offline"))) as never);
+    useUi.setState({ activePanel: null });
+    useMission.setState({ project, composer: null, log: [], selection: null, view: "map" });
+    useSettings.getState().reset();
+    useSettings.getState().set({ units: "imperial" });
+  });
+  afterEach(() => {
+    env.landExplorationEnabled = enabled;
+    useLand.getState().clear();
+    useUi.setState({ activePanel: null });
+    vi.restoreAllMocks();
+  });
+
+  it("offers Open Land and Outline land among the actions", async () => {
+    const user = userEvent.setup();
+    render(wrap(<CommandBox />));
+    await user.click(screen.getByRole("combobox"));
+    const actions = screen.getByRole("group", { name: "Actions" });
+    expect(within(actions).getByRole("option", { name: /Open Land/ })).toHaveTextContent(
+      hotkeyKeys(HOTKEYS.land).join(""),
+    );
+    await user.click(within(actions).getByRole("option", { name: /Outline land/ }));
+    expect(useUi.getState().activePanel).toBe("land");
+    expect(useLand.getState().mode).toBe("draw");
+    // With points placed, the same action goes back to them rather than starting over.
+    useLand.getState().addPoint([0.2, 0.2]);
+    await user.click(screen.getByRole("combobox"));
+    await user.type(screen.getByRole("combobox"), "outline");
+    expect(screen.getByRole("option", { name: /Return to your unsaved outline/ })).toBeVisible();
+  });
+
+  it("lists saved land by name and opens one on the map", async () => {
+    const user = userEvent.setup();
+    render(wrap(<CommandBox />));
+    const input = screen.getByRole("combobox");
+    await user.type(input, "oak bench");
+    const group = await screen.findByRole("group", { name: "Saved land" });
+    expect(group).toHaveTextContent("Oak Bench Ranch");
+    expect(group).toHaveTextContent("Saved land · 1,350.9 ac");
+    await user.keyboard("{Enter}");
+    expect(useLand.getState().active?.id).toBe(ranch.id);
+    expect(useUi.getState().activePanel).toBe("land");
+  });
+
+  it("lists neither with the Land feature off", async () => {
+    env.landExplorationEnabled = false;
+    const user = userEvent.setup();
+    render(wrap(<CommandBox />));
+    await user.type(screen.getByRole("combobox"), "land");
+    expect(screen.queryByRole("option", { name: /Open Land/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Saved land" })).not.toBeInTheDocument();
+    expect(api.GET).not.toHaveBeenCalledWith("/api/v1/land", expect.anything());
   });
 });
 

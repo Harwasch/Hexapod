@@ -31,6 +31,7 @@ import { useUi } from "@/state/ui";
 
 import { useSavedViews, type SavedView } from "../bookmarks/savedViews";
 import { WriteTokenField } from "../captures/WriteTokenField";
+import { useListedSites } from "../sites/siteFixtures";
 import { namedByProject, siteDisplayName, useSiteName } from "../sites/siteNames";
 
 /**
@@ -180,6 +181,8 @@ export function ProjectCard() {
 function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
   const scene = useScene();
   const sites = useSiteCatalog();
+  // Developer fixtures (the synthetic tree, audit records) only with developer readouts on.
+  const listed = useListedSites();
   const activeSiteId = useSites((s) => s.activeSiteId);
   const units = useSettings((s) => s.units);
   const openAdd = useUi((s) => s.openAdd);
@@ -236,7 +239,7 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
       </div>
       {sites.builtin && <p className="mc-project__note mc-muted">Built-in demo (API offline)</p>}
       <ul className="mc-project__menu-list" ref={list}>
-        {(sites.data ?? []).map((site) => {
+        {listed.shown.map((site) => {
           const here = site.id === activeSiteId;
           if (editing === site.id) {
             return (
@@ -300,6 +303,14 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
         })}
         {sites.data?.length === 0 && <li className="mc-project__empty mc-muted">No sites yet.</li>}
       </ul>
+      {listed.hidden > 0 && (
+        <p className="mc-project__note mc-muted" data-testid="switcher-fixtures-hidden">
+          {listed.hidden === 1
+            ? "1 developer fixture is not listed."
+            : `${listed.hidden} developer fixtures are not listed.`}{" "}
+          Turn on Settings › Advanced › Show developer readouts to list them.
+        </p>
+      )}
       {failed &&
         (isUnauthorized(rename.error) ? (
           <div className="mc-project__token">
