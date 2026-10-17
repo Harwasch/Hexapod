@@ -30,8 +30,10 @@ labelled tools above the bar.
   its project's when it has one (`features/sites/siteNames.ts`, `docs/GLOSSARY.md`) — and
   leaves room beside the name for a status chip. Its menu is where you change where you are:
   every catalog site (fly there; the one you are at is marked) but developer fixtures — the
-  synthetic Living Survey tree and audit or probe records, listed with Settings › Advanced ›
-  Show developer readouts on, never a real capture, always the site you are at
+  synthetic Living Survey tree and audit or probe records, known by their slugs
+  (`synthetic-tree`, `audit-…`, `probe-…`) and never by words in a name, listed with
+  Settings › Advanced › Show developer readouts on, never a dated capture, always the site you
+  are at
   (`features/sites/siteFixtures.ts`; the command box and the status line count the same
   list) — the current site's saved
   views (open, save the current camera, delete; `features/bookmarks/savedViews.ts`), "Add a

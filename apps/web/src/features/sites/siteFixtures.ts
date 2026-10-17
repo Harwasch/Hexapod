@@ -10,36 +10,30 @@ import { useSites } from "@/state/sites";
  * Developer fixtures in the site catalog, and the one rule for where they are listed.
  *
  * The catalog holds sites that exist for the code rather than for anyone's land: the synthetic
- * tree the Living Survey motion model is tested against ("Synthetic tree (Living Survey
- * fixture)", procedural, never captured), and records an audit or a probe left behind. Listed
- * beside the demo ranch and real scans they read as places someone captured. They stay in the
- * catalog (tests and the developer panel use them) and are listed when developer readouts are on
+ * tree the Living Survey motion model is tested against ("Synthetic tree (Living Survey fixture)",
+ * procedural, never captured), and records an audit or a probe script left behind. Listed beside
+ * the demo ranch and real scans they read as places someone captured. They stay in the catalog
+ * (tests and the developer panel use them) and are listed when developer readouts are on
  * (Settings › Advanced), and the site you are at is always listed.
  *
- * Never a real capture: a site with an observation date (a capture's photos have one) or one
- * that says it is a real capture is never taken for a fixture, whatever its name says.
+ * A fixture is known by an explicit marker in its slug, never by ordinary words in its name: "Barn
+ * roof audit" or "Soil probe plot" is someone's site. The markers are the known fixture slugs and
+ * the prefixes an audit or probe script gives the records it creates (`audit-…`, `probe-…`). Even
+ * then a site with an observation date (a capture's photos have one) is never taken for one.
  */
 
-type Described = Pick<SiteSummary, "slug" | "name" | "description" | "latestObservedAt">;
+type Described = Pick<SiteSummary, "slug" | "latestObservedAt">;
 
 /** Fixtures known by their catalog slug. */
 const FIXTURE_SLUGS = new Set(["synthetic-tree"]);
 
-/** Words that name a record as made for the code: a fixture, an audit's or a probe's. */
-const FIXTURE_WORDS = /\b(fixture|audit|probe)\b/i;
-
-/** Words a real capture's record uses about itself. */
-const REAL_CAPTURE = /\breal capture\b/i;
+/** The slug prefixes audit and probe scripts give the sites they create. */
+const SCRIPT_SLUG = /^(audit|probe)-/;
 
 /** Whether a catalog site is a developer fixture rather than a place someone captured. */
 export function isDeveloperFixture(site: Described): boolean {
   if (site.latestObservedAt) return false;
-  if (REAL_CAPTURE.test(site.name) || REAL_CAPTURE.test(site.description ?? "")) return false;
-  return (
-    FIXTURE_SLUGS.has(site.slug) ||
-    FIXTURE_WORDS.test(site.name) ||
-    FIXTURE_WORDS.test(site.slug.replace(/[-_]+/g, " "))
-  );
+  return FIXTURE_SLUGS.has(site.slug) || SCRIPT_SLUG.test(site.slug);
 }
 
 /**

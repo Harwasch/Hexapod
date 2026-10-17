@@ -306,9 +306,8 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
       {listed.hidden > 0 && (
         <p className="mc-project__note mc-muted" data-testid="switcher-fixtures-hidden">
           {listed.hidden === 1
-            ? "1 developer fixture is not listed."
-            : `${listed.hidden} developer fixtures are not listed.`}{" "}
-          Turn on Settings › Advanced › Show developer readouts to list them.
+            ? "1 developer fixture is not listed. Turn on Settings › Advanced › Show developer readouts to list it."
+            : `${listed.hidden} developer fixtures are not listed. Turn on Settings › Advanced › Show developer readouts to list them.`}
         </p>
       )}
       {failed &&

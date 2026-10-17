@@ -46,7 +46,7 @@ const soilProbe = site("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "soil-probe", "So
 });
 
 describe("isDeveloperFixture", () => {
-  it("knows the synthetic tree and audit or probe records", () => {
+  it("knows the synthetic tree and audit or probe records by their slugs", () => {
     expect(isDeveloperFixture(synthetic)).toBe(true);
     expect(isDeveloperFixture(audit)).toBe(true);
     expect(isDeveloperFixture(site("c", "probe-123", "Untitled"))).toBe(true);
@@ -59,6 +59,19 @@ describe("isDeveloperFixture", () => {
     expect(isDeveloperFixture(site("d", "cesium-splat-demo", "Cesium Gaussian splat demo"))).toBe(
       false,
     );
+  });
+
+  it("does not read ordinary words in a new site's name as a marker", () => {
+    // Just added, or added from a 3D Tiles or ion URL: no observation date yet, and listed.
+    expect(isDeveloperFixture(site("e", "barn-roof-audit", "Barn roof audit"))).toBe(false);
+    expect(isDeveloperFixture(site("f", "soil-probe-plot", "Soil probe plot"))).toBe(false);
+    expect(isDeveloperFixture(site("g", "light-fixture-scan", "Light fixture scan"))).toBe(false);
+    // A slug marker never outranks a capture date.
+    expect(
+      isDeveloperFixture(
+        site("h", "probe-9", "Probe 9", { latestObservedAt: "2026-09-01T00:00Z" }),
+      ),
+    ).toBe(false);
   });
 
   it("lists everything with developer readouts on, and always the site you are at", () => {
@@ -126,5 +139,14 @@ describe("the site switcher", () => {
     ).toBeInTheDocument();
     expect(within(all).getByText("Audit probe site")).toBeInTheDocument();
     expect(within(all).queryByTestId("switcher-fixtures-hidden")).not.toBeInTheDocument();
+  });
+
+  it("says 'list it' when one fixture is left out", async () => {
+    useSites.setState({ activeSiteId: synthetic.id });
+    render(wrap(<ProjectCard />));
+    const switcher = screen.getByRole("dialog", { name: "Switch site" });
+    expect(await within(switcher).findByTestId("switcher-fixtures-hidden")).toHaveTextContent(
+      "1 developer fixture is not listed. Turn on Settings › Advanced › Show developer readouts to list it.",
+    );
   });
 });
