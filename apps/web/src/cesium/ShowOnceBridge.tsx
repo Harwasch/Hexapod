@@ -8,6 +8,7 @@ import { compareAt, dropPendingTaps, protectAt } from "@/features/showOnce/sessi
 import { isTyping } from "@/lib/hotkeys";
 import { useGridDrape } from "@/state/gridDrape";
 import { useLand } from "@/state/land";
+import { missionLandId, useMission } from "@/state/mission";
 import { useShowOnce } from "@/state/showOnce";
 
 import { GroundGridLayer } from "./GroundGridLayer";
@@ -24,7 +25,8 @@ import { POPOVER_SELECTOR } from "./uiActivity";
  * sliding renders a frame and uploads nothing. Protecting swaps the texture on the same
  * rectangle. The tapped cell is outlined. A session takes the ground from the fog as it starts;
  * Escape ends it (unless it is typed into a field, or a sheet, dialog or popover is open to take
- * it first), as does the fog taking the ground back (one drape at a time, `state/gridDrape.ts`).
+ * it first), as does the fog taking the ground back (one drape at a time, `state/gridDrape.ts`)
+ * and a switch to a project the Land is not engaged on (another site from the switcher).
  * Hiding the card only lifts the drape and the taps; its answer waits for the card to come back.
  */
 /** The map's cursor while it takes taps (the area editor's pick uses the same crosshair). */
@@ -81,6 +83,21 @@ export function ShowOnceBridge() {
       useShowOnce.getState().stop();
     }
   }, [land?.id, land?.revision]);
+
+  // A session is on the ground in front of the operator: a switch to another site ends it, with
+  // its drape, outline and taps, though the Land stays selected. Opening the Land as its own
+  // project ("Make this the job" does) or layering it on a fleet's that works it keeps it.
+  useEffect(
+    () =>
+      useMission.subscribe((state, prev) => {
+        if (state.project?.id === prev.project?.id) return;
+        const current = useShowOnce.getState().session;
+        if (!current || missionLandId(state) === current.landId) return;
+        dropPendingTaps();
+        useShowOnce.getState().stop();
+      }),
+    [],
+  );
 
   useEffect(() => {
     const layer = layerRef.current;
