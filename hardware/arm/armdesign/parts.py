@@ -70,6 +70,9 @@ class Stage:
     drum_r: float = 0.0  # outer radius of a capstan drum about the joint axis, m
     pinion_r: float = 0.0  # effective (rope-centre) pinion radius, m
     rope: str = ""
+    # An integrated actuator's own output encoder sits before the stage and turns several
+    # times over the joint's range, so a staged joint needs its own absolute encoder.
+    joint_encoder: float = 0.0
     notes: str = ""
 
 
@@ -85,6 +88,7 @@ def load_stages() -> tuple[Stage, ...]:
             efficiency=float(s["efficiency"]),
             backlash_deg=float(s["backlash_deg"]),
             joints=tuple(s["joints"]),
+            joint_encoder=float(s["joint_encoder_usd"]),
             notes=str(s.get("notes", "")),
         )
         for n in s["ratios"]:
@@ -224,8 +228,10 @@ def with_stage(a: Actuator, s: Stage) -> Actuator | None:
     rated = min(a.rated * s.ratio * s.efficiency, s.max_torque)
     total = a.ratio * s.ratio
     fs = a.force_sense
-    if fs == "yes" and total > FORCE_SENSE_RATIO:
-        fs = "partly" if total <= PARTLY_RATIO else "no"
+    if fs in ("yes", "partly") and total > PARTLY_RATIO:
+        fs = "no"
+    elif fs == "yes" and total > FORCE_SENSE_RATIO:
+        fs = "partly"
     return replace(
         a,
         id=f"{a.id}+{s.id}",
@@ -234,7 +240,8 @@ def with_stage(a: Actuator, s: Stage) -> Actuator | None:
         peak=peak,
         mass=a.mass + s.mass,
         speed=speed,
-        price=round(a.price + s.cost, 2),
+        # Our driver board already reads an encoder at the joint; a bought actuator needs one.
+        price=round(a.price + s.cost + (0.0 if a.needs_driver else s.joint_encoder), 2),
         backlash_deg=a.backlash_deg / s.ratio + s.backlash_deg,
         force_sense=fs,
         ratio=total,

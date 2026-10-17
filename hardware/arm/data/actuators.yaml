@@ -391,8 +391,11 @@ actuators:
     peak_nm: 66
     mass_kg: 0.777
     speed_rpm: 20
-    price_usd: 180
-    landed_usd: 181
+    price_usd: 165
+    landed_usd: 246
+    price_alt_usd: 235
+    price_alt_source: OpenELAB DDP (GDK468 driver)
+    price_alt_confidence: med
     dia_mm: 80
     len_mm: 67.5
     backlash_deg: 0.4
@@ -401,7 +404,7 @@ actuators:
     interface: CAN
     output_encoder: true
     ip: IP54 (vendor claim)
-    notes: $165 + secondary encoder; 20 rpm rated, 70 rpm max
+    notes: aifitlab $165 with GDS68 (+ secondary encoder), duty unpaid; 20 rpm rated, 70 rpm max
   - id: rs_03
     name: RobStride 03
     kind: qdd

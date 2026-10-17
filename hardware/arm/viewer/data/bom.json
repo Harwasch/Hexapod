@@ -1,19 +1,19 @@
 [
  {
   "group": "Actuators",
-  "item": "RobStride 05",
-  "where": "yaw",
-  "qty": 1,
-  "usd": 112.0,
-  "source": "Zennixtek DDP $105 + $7 shipping"
- },
- {
-  "group": "Actuators",
   "item": "RobStride EduLite 05",
-  "where": "shoulder",
+  "where": "yaw",
   "qty": 1,
   "usd": 82.0,
   "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)"
+ },
+ {
+  "group": "Actuators",
+  "item": "Damiao DM-J4310-2EC (V4 driver)",
+  "where": "shoulder",
+  "qty": 1,
+  "usd": 132.0,
+  "source": "Zennixtek DDP $119 + $13 shipping"
  },
  {
   "group": "Reductions",
@@ -47,19 +47,19 @@
  },
  {
   "group": "Actuators",
-  "item": "Feetech STS3215 (12 V, C018)",
+  "item": "Feetech STS3250",
   "where": "forearm roll",
   "qty": 1,
-  "usd": 27.4,
-  "source": "OpenELAB DDP (AliExpress ~$20, unverified)"
+  "usd": 72.5,
+  "source": "OpenELAB DDP"
  },
  {
   "group": "Actuators",
-  "item": "Feetech STS3215 (12 V, C018)",
+  "item": "Feetech STS3250",
   "where": "tool roll",
   "qty": 1,
-  "usd": 27.4,
-  "source": "OpenELAB DDP (AliExpress ~$20, unverified)"
+  "usd": 72.5,
+  "source": "OpenELAB DDP"
  },
  {
   "group": "Structure",
@@ -130,13 +130,6 @@
   "where": "",
   "qty": 1,
   "usd": 8.0
- },
- {
-  "group": "Structure",
-  "item": "gravity springs",
-  "where": "",
-  "qty": 1,
-  "usd": 14.0
  },
  {
   "group": "Electrical + sealing",

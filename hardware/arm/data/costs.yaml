@@ -6,7 +6,7 @@ usd:
   bearings: 16.0 # thin-section yaw bearing, deep-groove pivots, thrust washers
   fasteners: 10.0 # stainless M3/M4, heat-set inserts, dowel pins
   tool_changer: 14.0 # 6 pogo pins + target pads, 4 N52 magnets, printed bayonet halves
-  gripper: 24.0 # STS3215 bus servo, TPU fin-ray fingers, printed body
+  gripper: 31.0 # STS3215 bus servo ($27.4 delivered, OpenELAB), TPU fin-ray fingers, printed body
   wrist_sensing: 43.0 # 12 MP wide camera module + 8x8 multizone ToF
   harness: 18.0 # silicone wire, JST-GH, XT30, cable glands, sleeving
   seals: 57.0 # field kit (docs/research/rugged.md, verified $50-65): V-rings + labyrinths, drip skirt, vents, servo pods with metal pins, heat plate, sun shield

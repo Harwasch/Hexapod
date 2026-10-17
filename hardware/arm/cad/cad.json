@@ -15,8 +15,7 @@
    "shoulder capstan pinion (2 mm Dyneema DM20)",
    "actuator",
    "actuator output",
-   "elbow capstan pinion (2 mm Dyneema DM20)",
-   "spring pulley mast (printed)"
+   "elbow capstan pinion (2 mm Dyneema DM20)"
   ],
   "upper": [
    "upper arm hub (printed)",
@@ -94,7 +93,7 @@
   {
    "part": "turret cheek, shoulder side (printed)",
    "file": "stl/turret_cheek_shoulder_side.stl",
-   "grams": 41.4,
+   "grams": 43.3,
    "link": "turret"
   },
   {
@@ -110,21 +109,15 @@
    "link": "turret"
   },
   {
-   "part": "spring pulley mast (printed)",
-   "file": "stl/spring_pulley_mast.stl",
-   "grams": 21.2,
-   "link": "turret"
-  },
-  {
    "part": "upper arm hub (printed)",
    "file": "stl/upper_arm_hub.stl",
-   "grams": 36.2,
+   "grams": 36.6,
    "link": "upper"
   },
   {
    "part": "elbow housing (printed)",
    "file": "stl/elbow_housing.stl",
-   "grams": 19.9,
+   "grams": 19.1,
    "link": "upper"
   },
   {
@@ -207,5 +200,5 @@
   }
  ],
  "step": "arm_assembly.step",
- "printed_grams": 490.8
+ "printed_grams": 471.1
 }

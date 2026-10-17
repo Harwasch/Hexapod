@@ -112,7 +112,7 @@ MIN_TOOL_TWIST_NM = 3.0
 TIERS = {
     "any": {},
     "field": {
-        "yaw": lambda a: a.kind == "qdd" and a.output_encoder == "yes",
+        "yaw": lambda a: a.kind == "qdd" and a.backdrivable == "yes" and a.output_encoder == "yes",
         "shoulder": lambda a: a.kind == "qdd" and a.force_sense == "yes" and a.output_encoder == "yes",
         "elbow": lambda a: a.kind == "qdd" and a.force_sense == "yes" and a.output_encoder == "yes",
         "tool_roll": lambda a: PEAK_DERATE * a.peak >= MIN_TOOL_TWIST_NM,
@@ -146,7 +146,10 @@ def joint_options(
         pool = [a for a in pool if a.mass <= 0.35]
 
     def beats(x: Actuator, y: Actuator) -> bool:
-        ge = x.price <= y.price and x.rated >= y.rated and x.peak >= y.peak and x.mass <= y.mass
+        # A part that needs our driver board never beats one that doesn't: the board's
+        # shared cost is paid once per arm, outside any one part's price.
+        ge = x.needs_driver <= y.needs_driver
+        ge &= x.price <= y.price and x.rated >= y.rated and x.peak >= y.peak and x.mass <= y.mass
         ge &= x.speed >= y.speed and x.backlash_deg <= y.backlash_deg and x.inertia <= y.inertia
         ge &= _rank(x.force_sense) >= _rank(y.force_sense)
         gt = x.price < y.price or x.rated > y.rated or x.peak > y.peak or x.mass < y.mass
@@ -254,8 +257,9 @@ def _joint_ok(tt: TorqueTable, slot_mass: Array, j: int, rated: Array, peak_avai
 
 def _prune(opts: list[Actuator], ok: Array) -> list[int]:
     """Indices of options not beaten by another that serves a superset of the points for
-    no more money, mass, backlash or rotor inertia. Exact: swapping a beaten option for
-    its better never loses capability or breaks a budget.
+    no more money, mass, backlash or rotor inertia, and without needing the driver board
+    when the beaten one doesn't. Exact: swapping a beaten option for its better never
+    loses capability or breaks a budget.
 
     "No worse on every count" is transitive, so an option is beaten exactly when some
     option ranked before it (lexicographically on the same counts) is no worse."""
@@ -275,16 +279,18 @@ def _prune(opts: list[Actuator], ok: Array) -> list[int]:
     back = np.array([a.backlash_deg for a in opts])
     inert = np.array([a.inertia for a in opts])
     sense = np.array([_rank(a.force_sense) for a in opts])
+    drv = np.array([a.needs_driver for a in opts], dtype=int)
     count = ok.reshape(n, -1).sum(axis=1)
     no_worse = (
-        (price[None, :] <= price[:, None])
+        (drv[None, :] <= drv[:, None])
+        & (price[None, :] <= price[:, None])
         & (mass[None, :] <= mass[:, None])
         & (back[None, :] <= back[:, None])
         & (inert[None, :] <= inert[:, None])
         & (sense[None, :] >= sense[:, None])
         & covers
     )
-    order = np.lexsort((np.arange(n), -count, -sense, inert, back, mass, price))
+    order = np.lexsort((np.arange(n), -count, -sense, inert, back, mass, drv, price))
     rank = np.empty(n, int)
     rank[order] = np.arange(n)
     beaten = np.any(no_worse & (rank[None, :] < rank[:, None]), axis=1)

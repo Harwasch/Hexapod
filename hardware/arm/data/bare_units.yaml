@@ -5,9 +5,10 @@
 # Sources: docs/research/custom_electronics.md and its verification (store reads 2026-10-17, aifitlab/Steadywin
 # catalogues). Where a vendor's rated torque disagrees with its own torque constant
 # (Kt x rated current), the smaller is used; peak never exceeds the vendor's stall torque
-# and never needs more than 40 A. Motor-only kits (WK*, GB*) are direct drive: they only
-# make sense through a capstan stage on the turret, and carry +$8 / +80 g for a printed
-# housing and two bearings. speed_rpm is a loaded estimate at 48 V.
+# and never needs more than 40 A. Motor-only units (WK*, GB*) are direct drive: they only
+# make sense through a capstan stage on the turret. The WK kits come without a housing and
+# carry +$8 / +80 g for a printed one and two bearings; the GB gimbal motors are housed.
+# speed_rpm is a loaded estimate at 48 V.
 # price_usd is the ex-duty list price (Steadywin direct or aifitlab, both ship from China
 # duty unpaid); the landed price adds US duty and freight from costs.yaml.
 units:

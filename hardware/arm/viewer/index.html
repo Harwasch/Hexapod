@@ -880,7 +880,7 @@
       <h3>Against arms you can buy</h3>
       <p class="sub">
         Parts or list price per kilogram-metre of rated payload × reach (log scale). Vendors rate
-        payload differently, so FA-1 is shown both ways: continuous at full stretch (conservative)
+        payload differently, so FA-2 is shown both ways: continuous at full stretch (conservative)
         and peak.
       </p>
       <svg
@@ -1886,13 +1886,22 @@
   }
   const LEVER_NAMES = {
     retail: "US retail, integrated actuators",
-    sourcing: "+ factory-direct sourcing",
+    sourcing: "+ duty-paid resellers",
     reductions: "+ printed capstan reductions",
     custom: "+ custom driver electronics",
     bought: "Sourcing + reductions (no custom board)",
     all: "All three levers",
   };
   const PICK_NAMES = { lite: "Lite", balanced: "FA-2", max: "Max" };
+  // One colour per lever setting, the same on every chart.
+  const LEVER_COLORS = {
+    retail: "--series-2",
+    sourcing: "--series-4",
+    reductions: "--series-5",
+    custom: "--series-7",
+    bought: "--series-3",
+    all: "--series-1",
+  };
   function scaleFor(rows, minCost) {
     const costs = rows.map((r) => r.cost),
       scores = rows.map((r) => r.score);
@@ -1939,24 +1948,12 @@
       xf: usd,
       yf: (v) => Math.round(v * 100) + "%",
     });
-    const c2 = tok("--series-1"),
-      cR = tok("--series-2"),
-      cB = tok("--series-3");
+    const c2 = tok(LEVER_COLORS.all),
+      cR = tok(LEVER_COLORS.retail),
+      cB = tok(LEVER_COLORS.bought);
     const g = el("g", {}, svg);
     for (const r of pts)
       el("circle", { cx: X(r.cost), cy: Y(r.score), r: 2.6, fill: c2, opacity: 0.2 }, g);
-    if (bought.length)
-      el(
-        "path",
-        {
-          d: stepPath(frontierOf(bought), X, Y),
-          fill: "none",
-          stroke: cB,
-          "stroke-width": 2,
-          "stroke-dasharray": "5 3",
-        },
-        svg,
-      );
     if (retail.length)
       el(
         "path",
@@ -1969,6 +1966,18 @@
         { d: stepPath(frontierOf(v2), X, Y), fill: "none", stroke: c2, "stroke-width": 2.4 },
         svg,
       );
+    if (bought.length)
+      el(
+        "path",
+        {
+          d: stepPath(frontierOf(bought), X, Y),
+          fill: "none",
+          stroke: cB,
+          "stroke-width": 2,
+          "stroke-dasharray": "5 3",
+        },
+        svg,
+      );
     const marks = [];
     if (fa1) marks.push({ name: "FA-1", cost: fa1.cost, score: fa1.score_v2, hollow: true });
     for (const [k, r] of picks)
@@ -1978,7 +1987,8 @@
         score: r.score,
         chosen: k === study.chosen,
       });
-    marks.sort((a, b) => a.cost - b.cost);
+    marks.sort((a, b) => (b.chosen ? 1 : 0) - (a.chosen ? 1 : 0) || a.cost - b.cost);
+    const placed = [];
     marks.forEach((mk, i) => {
       const cx = X(mk.cost),
         cy = Y(mk.score);
@@ -2004,23 +2014,45 @@
         );
         el("circle", { cx, cy, r: 3, fill: tok("--ink") }, svg);
       }
-      const above = i % 2 === 0;
+      // Greedy label placement: the first spot around the mark that overlaps no label
+      // placed so far (boxes approximated from the text length).
+      const label = `${mk.name} ${usd(mk.cost)}`;
+      const w = label.length * 6.6 + 6,
+        h = 14;
+      const spots = [
+        [0, -14, "middle"],
+        [0, 24, "middle"],
+        [-12, 4, "end"],
+        [12, 4, "start"],
+        [0, -30, "middle"],
+        [0, 40, "middle"],
+      ];
+      const box = ([dx, dy, a]) => {
+        const x0 = a === "middle" ? cx + dx - w / 2 : a === "end" ? cx + dx - w : cx + dx;
+        return { x0, x1: x0 + w, y0: cy + dy - h + 3, y1: cy + dy + 3 };
+      };
+      const hits = (b) =>
+        placed.some((q) => b.x0 < q.x1 && q.x0 < b.x1 && b.y0 < q.y1 && q.y0 < b.y1) ||
+        b.x0 < m.l ||
+        b.x1 > m.l + W;
+      const spot = spots.find((sp) => !hits(box(sp))) ?? spots[i % 2];
+      placed.push(box(spot));
       el(
         "text",
         {
-          x: cx,
-          y: cy + (above ? -13 : 22),
-          "text-anchor": "middle",
+          x: cx + spot[0],
+          y: cy + spot[1],
+          "text-anchor": spot[2],
           fill: tok("--ink"),
           style: "font-weight:650",
         },
         svg,
-      ).textContent = `${mk.name} ${usd(mk.cost)}`;
+      ).textContent = label;
     });
     $("#lg-pareto").innerHTML =
       `<span><i style="background:${c2}"></i>All levers</span><span><i style="background:${cR}"></i>US retail only</span><span><i style="background:${cB}"></i>Bought parts only (no custom board)</span><span><i class="dot" style="border:2px solid ${tok("--ink")};background:transparent"></i>Picks</span><span><i style="width:9px;height:9px;border:2px solid ${tok("--ink")};background:transparent"></i>FA-1, same rules and prices</span>`;
     const hit = el("rect", { x: m.l, y: m.t, width: W, height: H, fill: "transparent" }, svg);
-    const pool = [...pts, ...retail];
+    const pool = [...pts, ...retail, ...bought, ...picks.map(([, r]) => r)];
     hit.addEventListener("pointermove", (ev) => {
       const r = svg.getBoundingClientRect();
       const sx = ((ev.clientX - r.left) / r.width) * 560,
@@ -2046,7 +2078,7 @@
     const order = ["retail", "sourcing", "reductions", "custom", "bought", "all"];
     const series = order
       .filter((k) => study.frontier[k]?.field?.length)
-      .map((k, i) => ({ k, rows: frontierOf(study.frontier[k].field), color: tok(SERIES[i]) }));
+      .map((k) => ({ k, rows: frontierOf(study.frontier[k].field), color: tok(LEVER_COLORS[k]) }));
     const all = series.flatMap((s) => s.rows);
     if (!all.length) return;
     const { x0, x1, y0 } = scaleFor(all, 1e9);
@@ -2135,10 +2167,11 @@
     const part = (r, j) => {
       const id = r.actuators?.[j];
       if (!id) return "–";
-      const base = id
-        .split("+")[0]
-        .replace(/^(sw_|rs_|dm_|ft_|hx_|bare_)/, "")
-        .replace(/_/g, " ");
+      const b = id.split("+")[0];
+      const base = (study.part_names?.[b] ?? b)
+        .replace(/ \(.*\)$/, "")
+        .replace(" + output encoder", "")
+        .replace(/^(Steadywin|RobStride|Damiao|Feetech|Hiwonder) /, "");
       return base + (r.stages?.[j] ? ` · ${r.stages[j]}` : "");
     };
     const rows = [
@@ -2226,7 +2259,7 @@
     const L1 = [...new Set(rows.map((r) => r.d.l1))].sort((a, b) => a - b),
       L2 = [...new Set(rows.map((r) => r.d.l2))].sort((a, b) => a - b);
     $("#heat-sub").textContent =
-      `Kinematic coverage (reach, approach, collisions, tip-over) by upper-arm and forearm length, for a ${D.dof}-DOF ${D.arch === "parallelogram" ? "parallelogram" : "direct-elbow"} arm mounted ${Math.round(D.mount_x * 100)} cm forward with a ${Math.round(D.pedestal * 100)} cm pedestal. Longer links reach more but need bigger motors; the outlined cell is FA-1.`;
+      `Kinematic coverage (reach, approach, collisions, tip-over) by upper-arm and forearm length, for a ${D.dof}-DOF ${D.arch === "parallelogram" ? "parallelogram" : "direct-elbow"} arm mounted ${Math.round(D.mount_x * 100)} cm forward with a ${Math.round(D.pedestal * 100)} cm pedestal. Longer links reach more but need bigger motors; the outlined cell is FA-2.`;
     const m = { l: 56, r: 70, t: 14, b: 44 },
       W = 560 - m.l - m.r,
       H = 360 - m.t - m.b;
@@ -2318,12 +2351,12 @@
       .filter((r) => isFinite(r.v) && r.v > 0);
     const ours = [
       {
-        name: "FA-1, continuous, full stretch",
+        name: "FA-2, continuous, full stretch",
         v: selected.cost / (selected.payload.continuous_kg * selected.payload.reach_m),
         ours: true,
       },
       {
-        name: "FA-1, peak",
+        name: "FA-2, peak",
         v: selected.cost / (selected.payload.peak_kg * selected.payload.reach_m),
         ours: true,
       },
@@ -2405,23 +2438,31 @@
   const direct = bestAt((r) => r.design.arch === "direct" && r.design.dof === D.dof, at);
   const six = bestAt((r) => r.design.dof === 6, at),
     five = bestAt((r) => r.design.dof === 5, at);
+  const withSpring = bestAt((r) => r.design.spring, at),
+    noSpring = bestAt((r) => !r.design.spring, at);
   const weedArm = sims.find((s) => s.id === "weed_arm"),
     weedBody = sims.find((s) => s.id === "weed_body");
   const shIdx = 1;
   const fa1 = study.fa1 ?? {};
-  const sh = selected.actuators.shoulder;
+  const stagedJoint = ["shoulder", "elbow", "yaw"].find((j) => selected.actuators[j]?.stage);
+  const staged = stagedJoint ? selected.actuators[stagedJoint] : null;
+  const fa1Part = stagedJoint ? fa1.parts?.[stagedJoint] : null;
+  const motorPrice = (j) =>
+    bom.find((r) => r.group === "Actuators" && r.where === j.replace("_", " "))?.usd ?? 0;
   const decs = [
     [
       "Priced delivered, not listed",
-      fa1.cost_list ? `${usd(fa1.cost_list)} → ${usd(fa1.cost)}` : "",
-      `Nearly every motor ships from China with US duty unpaid: 40.3% since July 2026, plus express freight. FA-1's ${usd(fa1.cost_list ?? 0)} parts list was ${usd(fa1.cost ?? 0)} delivered. Buying the same parts from duty-paid resellers alone brings it to ${usd(fa1.cost_sourced ?? 0)}. Every price here is delivered, and each one was checked against a live cart.`,
+      fa1.cost_list ? `${usd(fa1.cost_list)} → ${usd(fa1.cost - (fa1.cost_field_kit ?? 0))}` : "",
+      `Nearly every motor ships from China with US duty unpaid: 40.3% since July 2026, plus express freight. FA-1's ${usd(fa1.cost_list ?? 0)} parts list costs ${usd((fa1.cost ?? 0) - (fa1.cost_field_kit ?? 0))} delivered, and ${usd(fa1.cost ?? 0)} with the ${usd(fa1.cost_field_kit ?? 0)} field kit every design now carries. Buying the same parts from duty-paid resellers alone brings it to ${usd(fa1.cost_sourced ?? 0)}. Every price here is delivered, and each one was checked against a live cart.`,
     ],
     [
       "Rope capstans on the turret",
-      sh.stage ? `${fmt(sh.rated, 1)} / ${fmt(sh.peak, 0)} Nm for ${usd(sh.price)}` : sh.name,
-      sh.stage
-        ? `A 2 mm Dyneema rope runs from a grooved steel pinion to a printed drum, giving a ${sh.stage} reduction with no backlash. It turns a ${usd(sh.price - 8 - parseFloat(sh.stage))} ${sh.name.split(" + ")[0]} into a shoulder of ${fmt(sh.rated, 1)} Nm continuous and ${fmt(sh.peak, 0)} Nm peak. FA-1 paid $198 delivered for a 7.5 / 22 Nm GIM8108-8. The parallelogram keeps both drives on the turret, so the reduction adds no moving mass.`
-        : "The shoulder drives the arm directly.",
+      stagedJoint
+        ? `${fmt(staged.rated, 1)} / ${fmt(staged.peak, 0)} Nm for ${usd(staged.price)}`
+        : "—",
+      stagedJoint
+        ? `A 2 mm Dyneema rope runs from a grooved steel pinion to a printed drum, giving a ${staged.stage} reduction with no backlash. It turns a ${usd(motorPrice(stagedJoint))} ${staged.name.split(" + ")[0]} into a ${MOTOR_NAMES[stagedJoint].toLowerCase()} of ${fmt(staged.rated, 1)} Nm continuous and ${fmt(staged.peak, 0)} Nm peak${staged.stage_limit && Math.abs(staged.peak - staged.stage_limit) < 0.05 ? " (the rope's limit)" : ""}, including an absolute encoder on the drum. ${fa1Part ? `FA-1 paid ${usd(fa1Part.price)} delivered for its ${fmt(fa1Part.rated, 1)} / ${fmt(fa1Part.peak, 0)} Nm ${fa1Part.name.split(" + ")[0]}. ` : ""}The parallelogram keeps both drives on the turret, so the reduction adds no moving mass.`
+        : "No joint on this design uses a reduction stage.",
     ],
     [
       "Parallelogram elbow",
@@ -2432,7 +2473,7 @@
       D.dof === 6 ? "A sixth axis at the wrist" : "Five axes are enough",
       `${pct(six)} vs ${pct(five)}`,
       D.dof === 6
-        ? `A forearm roll lets the tool come in from the side: stems, latches, leaves under the canopy. With the body's yaw already working as an axis, it was worth ${Math.round((six - five) * 100)} points at this price. It is a small bus servo, held level whenever a task does not need it.`
+        ? `A forearm roll lets the tool come in from the side: stems, latches, leaves under the canopy. With the body's yaw already working as an axis, it was worth ${Math.round((six - five) * 100)} point${Math.round((six - five) * 100) === 1 ? "" : "s"} at this price. It is a small bus servo, held level whenever a task does not need it.`
         : `At this price the best 6-axis design serves ${pct(six)} and the best 5-axis ${pct(five)}. The hexapod's body yaw already supplies the sixth axis, and a fifth servo at the wrist costs torque at every joint behind it.`,
     ],
     [
@@ -2440,7 +2481,7 @@
       D.spring ? "arm weight → 0" : "—",
       D.spring
         ? "With the parallelogram, each motor sees one absolute angle, so a zero-length spring (an extension spring and a cable over a pulley) cancels the arm's own weight at every pose. The motors carry only the payload and the task. That lets small motors hold a 1 kg rock at full reach, and it keeps continuous current, and heat in the sealed turret, low."
-        : "Springs did not pay for themselves on this geometry.",
+        : `At this price the best design without springs serves ${pct(noSpring)} and the best with them ${pct(withSpring)}. Within the 2.5 kg budget, the 0.16 kg of springs and pulleys bought more as motor than as balance. The capstan drives have torque to spare for the arm's own weight.`,
     ],
     [
       "The legs are three more axes",
@@ -2452,7 +2493,7 @@
     [
       "No custom driver board yet",
       "$133 + 16–24 wk",
-      "Bare Steadywin motors on our own 3-axis driver reach the most capability per dollar (the Max pick). But the board costs about $133 delivered, plus 16–24 or more person-weeks of engineering that 10 arms never repay. It pays only once the hexapod's 18 leg joints share it. docs/ELECTRONICS.md specifies it for that day.",
+      "Bare Steadywin motors on our own 3-axis driver reach the most capability at FA-1's price (the Max pick). But the board costs about $133 delivered, plus 16–24 or more person-weeks of engineering that 10 arms never repay. It pays only once the hexapod's 18 leg joints share it. docs/ELECTRONICS.md specifies it for that day.",
     ],
     [
       "One flange, many tools",

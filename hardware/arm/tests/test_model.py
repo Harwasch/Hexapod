@@ -179,7 +179,10 @@ def test_capstan_stage_multiplies_torque_and_divides_backlash() -> None:
     assert geared.backlash_deg == pytest.approx(motor.backlash_deg / 3 + stage.backlash_deg)
     assert geared.speed == pytest.approx(motor.speed / 3)
     assert geared.inertia == pytest.approx(motor.inertia * 9)
-    assert geared.price == pytest.approx(motor.price + stage.cost)
+    # a bought actuator behind a stage also needs an absolute encoder at the joint
+    assert geared.price == pytest.approx(motor.price + stage.cost + stage.joint_encoder)
+    bare = next(a for a in load_catalog("custom") if a.id == "bare_gwk6010_8")
+    assert with_stage(bare, stage).price == pytest.approx(bare.price + stage.cost)
 
 
 def test_capstan_drum_must_clear_the_deck() -> None:
