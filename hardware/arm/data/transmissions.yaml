@@ -27,6 +27,9 @@ stages:
     mass_kg: { base: 0.045, per_r2: 24.0 }
     # rope, 2-3 bearings, printed drum, steel pinion shaft, tensioner, magnet
     cost_usd: { base: 8.0, per_ratio: 1.0 }
+    # An MT6701 board on the drum ($3) and its share of reading it on the servo-bus
+    # board ($3). Not charged when our driver board drives the joint: it has the port.
+    joint_encoder_usd: 6.0
     notes: >-
       Anchor the rope mechanically on the pinion (Dyneema friction is only 0.05-0.08);
       re-tension after ~50 and ~1,000 cycles; light-coloured cover against sun and grit.
@@ -41,4 +44,5 @@ stages:
     max_pinion_nm: 2.0
     mass_kg: { base: 0.07, per_ratio: 0.006 }
     cost_usd: { base: 10.0, per_ratio: 1.0 }
+    joint_encoder_usd: 6.0
     notes: Printed ring and pinion measured 25-45 arcmin of backlash; tensioner idler on the turret.

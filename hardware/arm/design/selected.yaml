@@ -1,7 +1,8 @@
 # Written by `python -m armdesign.report select` from out/study.json.
-why: "FA-2 is the balanced pick: the cheapest field-grade design, all levers on, within
-  5% of the best field-grade score. lite matches FA-1's capability for the least
-  money; max is the most capability at FA-1's price."
+why: "FA-2 is the balanced pick: on the field-grade frontier of bought parts (sourcing
+  and printed reductions, no custom board), the cheapest design beyond which no upgrade
+  buys 2 points of capability per $100. lite matches FA-1's capability for the least
+  money; max is the most capability at FA-1's price with any lever."
 chosen: balanced
 fa1:
   design:
@@ -30,20 +31,19 @@ picks:
   lite:
     design:
       arch: parallelogram
-      dof: 6
+      dof: 5
       l1: 0.31
-      l2: 0.31
+      l2: 0.25
       mount_x: 0.26
-      pedestal: 0.05
+      pedestal: 0.1
       spring: true
       wrist_len: 0.09
     actuators:
       yaw: rs_edulite_05
       shoulder: rs_edulite_05+capstan3-d20
       elbow: rs_edulite_05+capstan3-d20
-      wrist_pitch: sts3215
-      forearm_roll: sts3215
-      tool_roll: sts3215
+      wrist_pitch: hx_35hm
+      tool_roll: sts3250
     stages:
       shoulder: 3:1 capstan
       elbow: 3:1 capstan
@@ -51,15 +51,14 @@ picks:
       yaw: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
       shoulder: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
       elbow: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
-      wrist_pitch: OpenELAB DDP (AliExpress ~$20, unverified)
-      forearm_roll: OpenELAB DDP (AliExpress ~$20, unverified)
-      tool_roll: OpenELAB DDP (AliExpress ~$20, unverified)
-    lever: all
-    score: 0.8727742433547974
-    cost: 598.0
-    mass: 2.499
-    backlash_mm: 4.04
-    label: 6DOF para+spring L1=0.31 L2=0.31 x=0.26 ped=0.05
+      wrist_pitch: retail
+      tool_roll: OpenELAB DDP
+    lever: bought
+    score: 0.8655626773834229
+    cost: 626.46
+    mass: 2.458
+    backlash_mm: 4.02
+    label: 5DOF para+spring L1=0.31 L2=0.25 x=0.26 ped=0.10
   balanced:
     design:
       arch: parallelogram
@@ -68,31 +67,31 @@ picks:
       l2: 0.37
       mount_x: 0.26
       pedestal: 0.16
-      spring: true
+      spring: false
       wrist_len: 0.09
     actuators:
-      yaw: rs_05
-      shoulder: rs_edulite_05+capstan3-d20
+      yaw: rs_edulite_05
+      shoulder: dm_j4310_v4+capstan3-d20
       elbow: rs_edulite_05+capstan3-d20
       wrist_pitch: hx_35hm
-      forearm_roll: sts3215
-      tool_roll: sts3215
+      forearm_roll: sts3250
+      tool_roll: sts3250
     stages:
       shoulder: 3:1 capstan
       elbow: 3:1 capstan
     sources:
-      yaw: Zennixtek DDP $105 + $7 shipping
-      shoulder: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
+      yaw: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
+      shoulder: Zennixtek DDP $119 + $13 shipping
       elbow: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
       wrist_pitch: retail
-      forearm_roll: OpenELAB DDP (AliExpress ~$20, unverified)
-      tool_roll: OpenELAB DDP (AliExpress ~$20, unverified)
-    lever: all
-    score: 0.882567822933197
-    cost: 640.44
-    mass: 2.486
-    backlash_mm: 3.94
-    label: 6DOF para+spring L1=0.31 L2=0.37 x=0.26 ped=0.16
+      forearm_roll: OpenELAB DDP
+      tool_roll: OpenELAB DDP
+    lever: bought
+    score: 0.901518702507019
+    cost: 736.64
+    mass: 2.499
+    backlash_mm: 4.37
+    label: 6DOF para L1=0.31 L2=0.37 x=0.26 ped=0.16
   max:
     design:
       arch: parallelogram

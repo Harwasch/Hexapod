@@ -84,10 +84,12 @@ class Obj:
     graspable: bool = True
 
 
+# Loose objects (fruit, rocks) land on the ground, the chassis, the legs and the deck tray
+# (conaffinity 1 | 4) but never push on the arm's own collision shapes.
 def strawberry(name: str, pos: tuple[float, float, float], breaks_at: float = 13.9) -> Obj:
     x, y, z = pos
     xml = f"""<body name="{name}" pos="{x} {y} {z}"><freejoint/>
-      <geom type="ellipsoid" size="0.015 0.015 0.019" mass="0.03" rgba="0.85 0.08 0.1 1" contype="0" conaffinity="0"/>
+      <geom type="ellipsoid" size="0.015 0.015 0.019" mass="0.03" rgba="0.85 0.08 0.1 1" contype="8" conaffinity="5"/>
       <geom type="cylinder" size="0.012 0.003" pos="0 0 0.019" mass="0.002" rgba="0.2 0.55 0.2 1" contype="0" conaffinity="0"/>
     </body>
     <body name="{name}_plant" pos="{x - 0.05} {y} 0"><geom type="cylinder" size="0.004 {z / 2 + 0.02:.3f}" pos="0 0 {z / 2 + 0.02:.3f}" rgba="0.25 0.5 0.2 1" contype="0" conaffinity="0"/>
@@ -113,7 +115,7 @@ def weed(name: str, pos: tuple[float, float], breaks_at: float) -> Obj:
 def rock(name: str, pos: tuple[float, float], mass: float = 1.0) -> Obj:
     x, y = pos
     xml = f"""<body name="{name}" pos="{x} {y} 0.031"><freejoint/>
-      <geom type="box" size="0.042 0.034 0.03" mass="{mass}" rgba="0.55 0.53 0.5 1" contype="1" conaffinity="1" friction="0.8 0.01 0.001"/>
+      <geom type="box" size="0.042 0.034 0.03" mass="{mass}" rgba="0.55 0.53 0.5 1" contype="1" conaffinity="5" friction="0.8 0.01 0.001"/>
     </body>"""
     return Obj(name, xml)
 
@@ -121,7 +123,7 @@ def rock(name: str, pos: tuple[float, float], mass: float = 1.0) -> Obj:
 def tomato(name: str, pos: tuple[float, float, float], breaks_at: float = 16.3) -> Obj:
     x, y, z = pos
     xml = f"""<body name="{name}" pos="{x} {y} {z}"><freejoint/>
-      <geom type="sphere" size="0.03" mass="0.2" rgba="0.9 0.2 0.1 1" contype="0" conaffinity="0"/>
+      <geom type="sphere" size="0.03" mass="0.2" rgba="0.9 0.2 0.1 1" contype="8" conaffinity="5"/>
     </body>
     <body name="{name}_plant" pos="{x + 0.12} {y} 0"><geom type="cylinder" size="0.008 {z / 2 + 0.15:.3f}" pos="0 0 {z / 2 + 0.15:.3f}" rgba="0.3 0.5 0.2 1" contype="0" conaffinity="0"/>
       <geom type="capsule" fromto="0 0 {z + 0.03:.3f} -0.12 0 {z + 0.03:.3f}" size="0.004" rgba="0.3 0.5 0.2 1" contype="0" conaffinity="0"/></body>"""
@@ -879,7 +881,7 @@ SCENARIOS = [
         "gripper",
         lambda: [rock("rock", (0.62, -0.12))],
         sc_rock,
-        note="With the rock in hand the swing to the tray takes 1.6 s. At 1.0 s the yaw saturates and the rock lands 42 mm off.",
+        note="With the rock in hand the swing to the tray takes 1.6 s. At 1.0 s the yaw saturates and the rock lands 37 mm off.",
     ),
     Scenario(
         "soil_probe",

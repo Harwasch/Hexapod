@@ -51,7 +51,9 @@ from armdesign.optimize import fixed_cost, fixed_mass, load_costs, precision_spe
 
 OUT = ROOT / "out"
 VIEWER = ROOT / "viewer"
-KNEE = 0.95
+# Points of capability (percent of task points served) per $100 below which an upgrade
+# is no longer worth it: where the frontier flattens.
+RETURN_FLOOR = 2.0
 
 
 FA1 = {
@@ -74,8 +76,9 @@ FA1 = {
     },
     "lever": "retail",
 }
-# What v1 priced FA-1 at: list prices, before duty and freight.
+# What v1 priced FA-1 at: list prices, before duty and freight, with a $10 seals line.
 FA1_LIST_COST = 607.22
+V1_SEALS_USD = 10.0
 
 
 def score_of(entry: dict) -> float:
@@ -87,6 +90,24 @@ def score_of(entry: dict) -> float:
     return workspace(design, acts, Hexapod.load())["score"]
 
 
+def stage_limit(a: Actuator) -> float | None:
+    """The torque a part's reduction stage can carry, or None without a stage."""
+    from armdesign.parts import load_stages
+
+    sid = a.id.partition("+")[2]
+    return round({s.id: s for s in load_stages()}[sid].max_torque, 2) if sid else None
+
+
+def part_names(sel: dict) -> dict[str, str]:
+    """Display names of every part the picks and FA-1 use, by base id."""
+    from armdesign.parts import load_catalog
+
+    cat = {a.id: a.name for a in load_catalog("all")}
+    entries = [*sel.get("picks", {}).values(), sel.get("fa1") or {}]
+    ids = {pid.partition("+")[0] for e in entries for pid in e.get("actuators", {}).values()}
+    return {i: cat[i] for i in sorted(ids) if i in cat}
+
+
 def cost_of(design: ArmDesign, acts: dict[str, Actuator]) -> float:
     """Landed cost of one arm, the same sum the study makes."""
     fixed = fixed_cost(design, load_costs(), any(a.needs_driver for a in acts.values()))
@@ -94,16 +115,27 @@ def cost_of(design: ArmDesign, acts: dict[str, Actuator]) -> float:
 
 
 def choose(study: dict, fa1_score: float, fa1_cost: float) -> dict[str, dict]:
-    """Three picks on the field-grade frontiers. lite: the cheapest that matches FA-1's
-    capability; balanced (FA-2): the cheapest within 5% of the best field-grade score
-    anywhere. Both come from bought parts only (no custom board, whose engineering 10
-    arms never repay). max: the most capability at FA-1's price, any lever."""
-    bought = study["frontier"]["bought"]["field"]
+    """Three picks on the field-grade frontiers.
+
+    lite: the cheapest that matches FA-1's capability (within half a point, the sampling
+    noise of the coverage score). balanced (FA-2): where returns diminish, the cheapest
+    design beyond which no upgrade buys RETURN_FLOOR points of capability per $100. Both
+    come from bought parts only (no custom board, whose engineering 10 arms never repay).
+    max: the most capability at FA-1's price, any lever."""
+    bought = sorted(study["frontier"]["bought"]["field"], key=lambda r: r["cost"])
     every = study["frontier"]["all"]["field"]
-    best = max(r["score"] for r in every)
+
+    def worth_upgrading(i: int) -> bool:
+        p = bought[i]
+        return any(
+            (q["score"] - p["score"]) * 100 / max(q["cost"] - p["cost"], 1e-6) * 100 >= RETURN_FLOOR
+            for q in bought[i + 1 :]
+        )
+
+    knee = next(r for i, r in enumerate(bought) if not worth_upgrading(i))
     return {
-        "lite": min((r for r in bought if r["score"] >= fa1_score - 1e-6), key=lambda r: r["cost"]),
-        "balanced": min((r for r in bought if r["score"] >= KNEE * best), key=lambda r: r["cost"]),
+        "lite": min((r for r in bought if r["score"] >= fa1_score - 0.005), key=lambda r: r["cost"]),
+        "balanced": knee,
         "max": max((r for r in every if r["cost"] <= fa1_cost + 1e-6), key=lambda r: (r["score"], -r["cost"])),
     }
 
@@ -123,10 +155,10 @@ def select() -> None:
     keep = ("design", "actuators", "stages", "sources", "lever", "score", "cost", "mass", "backlash_mm", "label")
     sel = {
         "why": (
-            "FA-2 is the balanced pick: the cheapest field-grade design built from bought parts "
-            f"(sourcing and printed reductions, no custom board) within {round((1 - KNEE) * 100)}% of "
-            "the best field-grade score at any price. lite matches FA-1's capability for the least "
-            "money; max is the most capability at FA-1's price with any lever."
+            "FA-2 is the balanced pick: on the field-grade frontier of bought parts (sourcing and "
+            "printed reductions, no custom board), the cheapest design beyond which no upgrade buys "
+            f"{RETURN_FLOOR:g} points of capability per $100. lite matches FA-1's capability for the "
+            "least money; max is the most capability at FA-1's price with any lever."
         ),
         "chosen": "balanced",
         "fa1": {
@@ -135,6 +167,12 @@ def select() -> None:
             "cost": fa1_cost,
             "cost_list": FA1_LIST_COST,
             "cost_sourced": fa1_sourced,
+            # v1 costed seals at $10; the field kit every design now carries is costs.seals.
+            "cost_field_kit": round(load_costs()["seals"] - V1_SEALS_USD, 2),
+            "parts": {
+                j: {"name": a.name, "price": a.price, "rated": round(a.rated, 2), "peak": round(a.peak, 2)}
+                for j, a in fa1_acts.items()
+            },
             "mass": round(fa1_mass, 3),
             "backlash_mm": round(fa1_backlash, 2),
         },
@@ -252,7 +290,8 @@ def bom(design: ArmDesign, acts: dict) -> list[dict]:
         where = j.replace("_", " ")
         stage = stages.get(a.id.partition("+")[2])
         driver = costs["custom_driver_per_axis"] if a.needs_driver else 0.0
-        motor = a.price - (stage.cost if stage else 0.0) - driver
+        encoder = stage.joint_encoder if stage and not a.needs_driver else 0.0
+        motor = a.price - (stage.cost if stage else 0.0) - driver - encoder
         name = a.name.split(" + ")[0] if stage else a.name
         rows.append(
             {"group": "Actuators", "item": name, "where": where, "qty": 1, "usd": round(motor, 2), "source": a.source}
@@ -269,6 +308,16 @@ def bom(design: ArmDesign, acts: dict) -> list[dict]:
                     "where": where,
                     "qty": 1,
                     "usd": stage.cost,
+                }
+            )
+        if encoder:
+            rows.append(
+                {
+                    "group": "Reductions",
+                    "item": "joint encoder (MT6701 on the drum, read on the servo-bus board)",
+                    "where": where,
+                    "qty": 1,
+                    "usd": encoder,
                 }
             )
     fixed = fixed_cost(design, costs, any(a.needs_driver for a in acts.values()))
@@ -335,6 +384,7 @@ def main(argv: list[str]) -> None:
                     "needs_driver",
                 )
             }
+            | {"stage_limit": stage_limit(a)}
             for j, a in acts.items()
         },
         "cost": round(total_cost, 2),
@@ -381,6 +431,7 @@ def main(argv: list[str]) -> None:
         "picks": sel.get("picks", {}),
         "chosen": sel.get("chosen"),
         "fa1": sel.get("fa1"),
+        "part_names": part_names(sel),
     }
     with (ROOT / "data" / "benchmarks.csv").open() as f:
         bench = [row for row in csv.DictReader(f)]

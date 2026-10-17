@@ -6,47 +6,47 @@
   "l2": 0.37,
   "mount_x": 0.26,
   "pedestal": 0.16,
-  "spring": true,
+  "spring": false,
   "wrist_len": 0.09
  },
- "label": "6DOF para+spring L1=0.31 L2=0.37 x=0.26 ped=0.16",
+ "label": "6DOF para L1=0.31 L2=0.37 x=0.26 ped=0.16",
  "actuators": {
   "yaw": {
-   "id": "rs_05",
-   "name": "RobStride 05",
+   "id": "rs_edulite_05",
+   "name": "RobStride EduLite 05",
    "kind": "qdd",
    "rated": 1.8,
-   "peak": 5.5,
-   "mass": 0.191,
-   "speed": 50.26548245743668,
-   "price": 112.0,
-   "backlash_deg": 0.2,
+   "peak": 6.0,
+   "mass": 0.242,
+   "speed": 45.0294947014537,
+   "price": 82.0,
+   "backlash_deg": 0.25,
    "force_sense": "yes",
    "ip": "none",
    "interface": "CAN",
    "stage": "",
-   "ratio": 7.75,
-   "source": "Zennixtek DDP $105 + $7 shipping",
-   "retail": 110.0,
+   "ratio": 9.0,
+   "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)",
+   "retail": 80.0,
    "needs_driver": false
   },
   "shoulder": {
-   "id": "rs_edulite_05+capstan3-d20",
-   "name": "RobStride EduLite 05 + 3:1 capstan",
+   "id": "dm_j4310_v4+capstan3-d20",
+   "name": "Damiao DM-J4310-2EC (V4 driver) + 3:1 capstan",
    "kind": "qdd",
-   "rated": 4.968000000000001,
-   "peak": 16.560000000000002,
-   "mass": 0.304496,
-   "speed": 15.009831567151233,
-   "price": 93.0,
-   "backlash_deg": 0.08333333333333333,
+   "rated": 9.66,
+   "peak": 18.359999999999996,
+   "mass": 0.387496,
+   "speed": 6.981317007977318,
+   "price": 143.0,
+   "backlash_deg": 0.06666666666666667,
    "force_sense": "yes",
    "ip": "none",
-   "interface": "CAN",
+   "interface": "CAN-FD",
    "stage": "3:1 capstan",
-   "ratio": 27.0,
-   "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)",
-   "retail": 80.0,
+   "ratio": 30.0,
+   "source": "Zennixtek DDP $119 + $13 shipping",
+   "retail": 125.0,
    "needs_driver": false
   },
   "elbow": {
@@ -88,62 +88,62 @@
    "needs_driver": false
   },
   "forearm_roll": {
-   "id": "sts3215",
-   "name": "Feetech STS3215 (12 V, C018)",
+   "id": "sts3250",
+   "name": "Feetech STS3250",
    "kind": "servo",
-   "rated": 0.98,
-   "peak": 2.94,
-   "mass": 0.055,
-   "speed": 4.71238898038469,
-   "price": 27.4,
-   "backlash_deg": 0.6,
+   "rated": 1.57,
+   "peak": 4.9,
+   "mass": 0.0745,
+   "speed": 7.853981633974483,
+   "price": 72.5,
+   "backlash_deg": 0.5,
    "force_sense": "no",
    "ip": "none",
    "interface": "TTL",
    "stage": "",
-   "ratio": 345.0,
-   "source": "OpenELAB DDP (AliExpress ~$20, unverified)",
-   "retail": 26.0,
+   "ratio": 300.0,
+   "source": "OpenELAB DDP",
+   "retail": 88.0,
    "needs_driver": false
   },
   "tool_roll": {
-   "id": "sts3215",
-   "name": "Feetech STS3215 (12 V, C018)",
+   "id": "sts3250",
+   "name": "Feetech STS3250",
    "kind": "servo",
-   "rated": 0.98,
-   "peak": 2.94,
-   "mass": 0.055,
-   "speed": 4.71238898038469,
-   "price": 27.4,
-   "backlash_deg": 0.6,
+   "rated": 1.57,
+   "peak": 4.9,
+   "mass": 0.0745,
+   "speed": 7.853981633974483,
+   "price": 72.5,
+   "backlash_deg": 0.5,
    "force_sense": "no",
    "ip": "none",
    "interface": "TTL",
    "stage": "",
-   "ratio": 345.0,
-   "source": "OpenELAB DDP (AliExpress ~$20, unverified)",
-   "retail": 26.0,
+   "ratio": 300.0,
+   "source": "OpenELAB DDP",
+   "retail": 88.0,
    "needs_driver": false
   }
  },
- "cost": 640.44,
- "mass": 2.486,
- "backlash_mm": 3.94,
- "tip_speed": 8.56,
+ "cost": 736.64,
+ "mass": 2.499,
+ "backlash_mm": 4.37,
+ "tip_speed": 5.43,
  "payload": {
-  "continuous_kg": 0.35,
+  "continuous_kg": 0.25,
   "peak_kg": 1.19,
   "reach_m": 0.846
  },
  "legs": {
-  "actuator": "RobStride EduLite 05 + 3:1 capstan",
+  "actuator": "Damiao DM-J4310-2EC (V4 driver) + 3:1 capstan",
   "femur_need_nm": 9.5,
   "femur_peak_need_nm": 19.0,
-  "rated_nm": 4.968000000000001,
-  "peak_nm": 16.560000000000002,
+  "rated_nm": 9.66,
+  "peak_nm": 18.359999999999996,
   "fits": false
  },
- "printed_grams": 490.8,
+ "printed_grams": 471.1,
  "printed_parts": [
   {
    "part": "deck seal ring (printed)",
@@ -160,7 +160,7 @@
   {
    "part": "turret cheek, shoulder side (printed)",
    "file": "stl/turret_cheek_shoulder_side.stl",
-   "grams": 41.4,
+   "grams": 43.3,
    "link": "turret"
   },
   {
@@ -176,21 +176,15 @@
    "link": "turret"
   },
   {
-   "part": "spring pulley mast (printed)",
-   "file": "stl/spring_pulley_mast.stl",
-   "grams": 21.2,
-   "link": "turret"
-  },
-  {
    "part": "upper arm hub (printed)",
    "file": "stl/upper_arm_hub.stl",
-   "grams": 36.2,
+   "grams": 36.6,
    "link": "upper"
   },
   {
    "part": "elbow housing (printed)",
    "file": "stl/elbow_housing.stl",
-   "grams": 19.9,
+   "grams": 19.1,
    "link": "upper"
   },
   {
@@ -296,8 +290,8 @@
    "name": "Stab or stamp a weed",
    "category": "weed",
    "weight": 2.0,
-   "reach": 0.667,
-   "served": 0.5,
+   "reach": 0.625,
+   "served": 0.583,
    "points": 48
   },
   {
@@ -324,7 +318,7 @@
    "category": "sample",
    "weight": 1.5,
    "reach": 0.583,
-   "served": 0.542,
+   "served": 0.583,
    "points": 48
   },
   {
@@ -369,7 +363,7 @@
    "category": "harvest",
    "weight": 2.0,
    "reach": 1.0,
-   "served": 0.963,
+   "served": 0.944,
    "points": 108
   },
   {
@@ -378,7 +372,7 @@
    "category": "maintain",
    "weight": 2.0,
    "reach": 1.0,
-   "served": 1.0,
+   "served": 0.958,
    "points": 48
   },
   {
@@ -414,7 +408,7 @@
    "category": "maintain",
    "weight": 0.5,
    "reach": 1.0,
-   "served": 0.0,
+   "served": 0.768,
    "points": 56
   },
   {
@@ -427,7 +421,7 @@
    "points": 126
   }
  ],
- "score": 0.8826,
+ "score": 0.9014,
  "hexapod": {
   "name": "H-M12 reference medium hexapod",
   "mass_kg": 12.0,
