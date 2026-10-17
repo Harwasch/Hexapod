@@ -4,6 +4,7 @@ import { GlassPanel } from "@twin/ui";
 
 import { isActivePlan } from "@/missions/conflicts";
 import { idLabel } from "@/missions/planDraft";
+import type { Machine, Plan } from "@/missions/types";
 import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
@@ -17,9 +18,26 @@ const TONE_CLASS = {
 } as const;
 
 /**
+ * Who drives a scheduled plan: its machines, or "unassigned" for a console plan with none. A demo
+ * plan names its crew in its facts rather than as ids, so it gets no line rather than a wrong one.
+ */
+function crewLine(plan: Plan, machines: readonly Machine[]): string | null {
+  if (!plan.machineIds) return null;
+  if (plan.machineIds.length === 0) return "unassigned";
+  return plan.machineIds
+    .map((id) => {
+      const machine = machines.find((m) => m.id === id);
+      return machine ? idLabel(machine.id, machine.name) : id;
+    })
+    .join(", ");
+}
+
+/**
  * Fleet table with stats, attention note and the treatment log (design: Fleet view + DATA
  * WINDOW), in the right-hand drawer. Picking a row flies to that machine and opens its card
- * beside the drawer; the table stays open, so the next row is one click away.
+ * beside the drawer; the table stays open, so the next row is one click away. What is
+ * scheduled follows the machines (and the log) in the same scrolling body, so the table's rows
+ * come first at any height, however many plans are on the books.
  */
 export function FleetPanel() {
   const project = useMission((s) => s.project);
@@ -120,44 +138,6 @@ export function FleetPanel() {
                     </div>
                   ))}
                 </div>
-                {scheduled.length > 0 && (
-                  <section className="mc-scheduled" data-testid="fleet-scheduled">
-                    <span className="mc-eyebrow">SCHEDULED</span>
-                    <ul className="mc-scheduled__list">
-                      {scheduled.map((plan) => (
-                        <li key={plan.id}>
-                          <button
-                            type="button"
-                            className="mc-scheduled__row"
-                            onClick={() => openPlan(plan.id)}
-                            data-testid={`fleet-scheduled-${plan.id}`}
-                          >
-                            <span
-                              className={`mc-dot mc-dot--glow mc-dot--${plan.status}`}
-                              aria-hidden="true"
-                            />
-                            <span className="mc-scheduled__title">{plan.title}</span>
-                            {plan.landId && <span className="mc-flag">Land</span>}
-                            <span className={`mc-scheduled__state mc-tone--${plan.status}`}>
-                              {plan.state}
-                            </span>
-                            <span className="mc-scheduled__meta mc-muted">
-                              {plan.span} ·{" "}
-                              {plan.machineIds?.length
-                                ? plan.machineIds
-                                    .map((id) => {
-                                      const machine = project.machines.find((m) => m.id === id);
-                                      return machine ? idLabel(machine.id, machine.name) : id;
-                                    })
-                                    .join(", ")
-                                : "unassigned"}
-                            </span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
                 <div className="mc-window__body mc-table-wrap">
                   <div className="mc-table mc-table--fleet" role="table" aria-label="Machines">
                     <div className="mc-table__head" role="row">
@@ -262,6 +242,38 @@ export function FleetPanel() {
                         <span role="cell" />
                       </div>
                     </div>
+                  )}
+                  {scheduled.length > 0 && (
+                    <section className="mc-scheduled" data-testid="fleet-scheduled">
+                      <span className="mc-eyebrow">SCHEDULED</span>
+                      <ul className="mc-scheduled__list">
+                        {scheduled.map((plan) => (
+                          <li key={plan.id}>
+                            <button
+                              type="button"
+                              className="mc-scheduled__row"
+                              onClick={() => openPlan(plan.id)}
+                              data-testid={`fleet-scheduled-${plan.id}`}
+                            >
+                              <span
+                                className={`mc-dot mc-dot--glow mc-dot--${plan.status}`}
+                                aria-hidden="true"
+                              />
+                              <span className="mc-scheduled__title">{plan.title}</span>
+                              {plan.landId && <span className="mc-flag">Land</span>}
+                              <span className={`mc-scheduled__state mc-tone--${plan.status}`}>
+                                {plan.state}
+                              </span>
+                              <span className="mc-scheduled__meta mc-muted">
+                                {[plan.span, crewLine(plan, project.machines)]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
                   )}
                 </div>
                 <div className="mc-window__foot">
