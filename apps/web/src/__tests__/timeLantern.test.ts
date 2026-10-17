@@ -11,6 +11,7 @@ import type { CameraController } from "@/cesium/CameraController";
 import type { ClippingManager } from "@/cesium/ClippingManager";
 import type { LanternFrame, LanternSource } from "@/cesium/lanternTypes";
 import type { LayerManager } from "@/cesium/LayerManager";
+import { BusyAwareImageryProvider } from "@/cesium/busyTiles";
 import { keptIndex, TimeLantern } from "@/cesium/TimeLantern";
 import type { SceneEvents } from "@/cesium/types";
 import type { WorldShader } from "@/cesium/worldShader";
@@ -235,6 +236,32 @@ describe("the Time Lantern's imagery", () => {
     lantern.setMode("off");
     expect(h().clipping.setLanternReach).toHaveBeenLastCalledWith(null);
     expect(order.every((layer) => !layer.show)).toBe(true);
+  });
+});
+
+describe("a layer that leaves the globe", () => {
+  it("stops its tiles waiting out a busy server from asking again", async () => {
+    const { lantern, imageryLayers, basemapDone } = h();
+    basemapDone();
+    lantern.setSources(SOURCES, AREA);
+    lantern.setMode("sticky");
+    await flush();
+    const cancel = vi.spyOn(BusyAwareImageryProvider.prototype, "cancel");
+    const dated = () =>
+      imageryLayers.order.filter(
+        (layer) => layer.imageryProvider instanceof BusyAwareImageryProvider,
+      );
+    const first = dated().map((layer) => layer.imageryProvider);
+    expect(first).toHaveLength(2);
+    // Scrolled four editions back: the first two layers are taken off.
+    lantern.select(4);
+    expect(cancel.mock.contexts).toEqual(expect.arrayContaining(first));
+    expect(cancel).toHaveBeenCalledTimes(2);
+    // A new area: every layer goes.
+    cancel.mockClear();
+    const shown = dated().map((layer) => layer.imageryProvider);
+    lantern.setSources(SOURCES, { ...AREA, west: AREA.west + 0.1, east: AREA.east + 0.1 });
+    expect(cancel.mock.contexts).toEqual(expect.arrayContaining(shown));
   });
 });
 

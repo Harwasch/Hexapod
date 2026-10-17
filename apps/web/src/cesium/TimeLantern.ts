@@ -40,6 +40,7 @@ import {
   SceneTransforms,
   WebMercatorTilingScheme,
   type CesiumWidget,
+  type ImageryLayerCollection,
   type Scene,
 } from "cesium";
 
@@ -715,7 +716,7 @@ export class TimeLantern {
     }
     for (const [id, layer] of this.imagery) {
       if (wanted.has(id)) continue;
-      collection.remove(layer, true);
+      removeDated(collection, layer);
       this.imagery.delete(id);
     }
     for (const i of [this.index - 1, this.index + 1, this.index]) {
@@ -788,7 +789,7 @@ export class TimeLantern {
   private disposeImagery(): void {
     if (this.viewer.isDestroyed()) return;
     const collection = this.viewer.imageryLayers;
-    for (const layer of this.imagery.values()) collection.remove(layer, true);
+    for (const layer of this.imagery.values()) removeDated(collection, layer);
     this.imagery.clear();
     if (this.backdrop) collection.remove(this.backdrop, true);
     this.backdrop = null;
@@ -842,6 +843,16 @@ export class TimeLantern {
     this.wheelOff = null;
     this.disposeImagery();
   }
+}
+
+/**
+ * A dated layer off the globe and destroyed. Its tiles still waiting out a busy server are not
+ * asked again: they would hold the requests the source on screen needs.
+ */
+function removeDated(collection: ImageryLayerCollection, layer: ImageryLayer): void {
+  const provider = layer.imageryProvider;
+  if (provider instanceof BusyAwareImageryProvider) provider.cancel();
+  collection.remove(layer, true);
 }
 
 /** Whether two windows are the same within half a metre at every corner. */
