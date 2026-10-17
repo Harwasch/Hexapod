@@ -9810,6 +9810,8 @@ export interface components {
              * @enum {string}
              */
             dataset: "usgs-3dep-13" | "cop-dem-glo-30";
+            /** Edgem */
+            edgeM: number;
             /** Fallback */
             fallback: boolean;
             /** Label */
@@ -9884,7 +9886,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "steep" | "creek-buffer" | "sliver" | "no-data";
+            reason: "steep" | "steep-edge" | "creek-buffer" | "sliver" | "no-data";
         };
         /** WorkableLimits */
         WorkableLimits: {
@@ -9903,8 +9905,8 @@ export interface components {
         /**
          * WorkableRemoved
          * @description Ground taken out of the outline, by reason. Each part is counted once, in the order
-         *     no data, too steep, creek buffer, slivers, so the parts and `workableM2` add up to
-         *     `footprintM2`.
+         *     no data, too steep, steep edge, creek buffer, slivers, so the parts and `workableM2` add up
+         *     to `footprintM2`.
          */
         WorkableRemoved: {
             /** Creekbufferm2 */
@@ -9915,6 +9917,8 @@ export interface components {
             slivers: number;
             /** Sliversm2 */
             sliversM2: number;
+            /** Steepedgem2 */
+            steepEdgeM2: number;
             /** Steepm2 */
             steepM2: number;
         };

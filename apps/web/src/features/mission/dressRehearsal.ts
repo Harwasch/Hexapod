@@ -163,11 +163,10 @@ export interface WorkableOffer {
   labels: string[];
   /** Zones whose hands stay (a followed line). */
   kept: KeptZone[];
-  /** Where the numbers came from, for the source chips. */
+  /** Where the numbers came from. */
   sources: string[];
   /** The elevation the slope was read on, with its date: "USGS 3DEP … (published 2025-08-27)". */
   elevation: string | null;
-  applying: boolean;
   apply: () => void;
   retry: () => void;
 }
@@ -450,7 +449,6 @@ function useWorkableOffer(input: {
   const { status, rehearsal, ground, project, draft, includeEphemeral } = input;
   const scope = useLandScope();
   const landId = useMission((s) => missionLandId(s));
-  const [applying, setApplying] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const { targets, kept } = useMemo(
     () =>
@@ -486,7 +484,6 @@ function useWorkableOffer(input: {
   const base = {
     labels,
     kept,
-    applying,
     totals: null,
     text: null,
     sources: [] as string[],
@@ -510,7 +507,7 @@ function useWorkableOffer(input: {
       ...base,
       state: "needs-land",
       message:
-        "Save this ground as a Land to read its terrain: working only the ground the machines can needs its elevation (USGS 3DEP) and the creeks around it.",
+        "Save this ground as a Land (or open the Land it is on) to read its terrain: working only the ground the machines can needs the Land's elevation (USGS 3DEP) and the creeks around it.",
     };
   if (!rasterId)
     return {
@@ -557,17 +554,17 @@ function useWorkableOffer(input: {
       return read ? `${read.label}${read.published ? ` (published ${read.published})` : ""}` : null;
     })(),
     message: [...new Set(answers.flatMap((a) => a.result.warnings))].join(" ") || null,
+    // The redraft starts at once and the review goes while it drafts, so one click is all.
     apply: () => {
-      if (applying || !rehearsal || !ground) return;
-      setApplying(true);
-      const problem = redraftOnWorkable({
-        draft,
-        answers,
-        handsBefore: rehearsal.hands.length,
-        heightAt: ground.heightAt,
-      });
-      setApplying(false);
-      setFailure(problem);
+      if (!ground) return;
+      setFailure(
+        redraftOnWorkable({
+          draft,
+          answers,
+          handsBefore: rehearsal.hands.length,
+          heightAt: ground.heightAt,
+        }),
+      );
     },
   };
 }

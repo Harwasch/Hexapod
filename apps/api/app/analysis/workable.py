@@ -17,9 +17,13 @@ outline and nothing is counted twice:
    outline cuts has no height either (cells count by their centre), so it takes the steepest
    slope of its neighbours: ground along the outline is not lost for want of a centre;
 2. **steep**: cells over the limit, as whole cell squares;
-3. **creek buffer**: the rest within the buffer of a counted creek line;
-4. **slivers**: pieces of what is left too small to work (under 0.1 ac), dropped and counted;
-5. **workable**: everything else.
+3. **steep edge**: the rest within half a cell of a steep cell. Slope at a point is read from
+   heights a cell either side of it (the rehearsal reads it so along a lane), so next to a
+   steep cell it takes in part of that cell's slope: a lane run up to the cell edge would
+   still raise a hand. Half a cell is the raster's resolution, not a machine assumption;
+4. **creek buffer**: the rest within the buffer of a counted creek line;
+5. **slivers**: pieces of what is left too small to work (under 0.1 ac), dropped and counted;
+6. **workable**: everything else.
 
 Pure: arrays, shapely geometry in the grid's metric CRS, no I/O.
 """
@@ -139,6 +143,7 @@ class GroundSplit:
     workable: BaseGeometry
     no_data: BaseGeometry
     steep: BaseGeometry
+    steep_edge: BaseGeometry
     creek_buffer: BaseGeometry
     slivers: BaseGeometry
     sliver_count: int
@@ -155,11 +160,13 @@ def split_ground(
     max_slope_pct: float,
     creeks: Sequence[BaseGeometry] = (),
     buffer_m: float = 0.0,
+    edge_m: float = 0.0,
     min_part_m2: float = MIN_PART_M2,
 ) -> GroundSplit:
-    """`footprint` (metric, the grid's CRS) split into no data, steep, creek buffer, slivers
-    and workable ground, in that order. `slope_pct` is per cell on `transform`'s grid (NaN for
-    no data; the ring of cells around the data takes its neighbours' slope, `edge_filled`)."""
+    """`footprint` (metric, the grid's CRS) split into no data, steep, steep edge (`edge_m`
+    around steep cells), creek buffer, slivers and workable ground, in that order.
+    `slope_pct` is per cell on `transform`'s grid (NaN for no data; the ring of cells around
+    the data takes its neighbours' slope, `edge_filled`)."""
     outline = _area(footprint)
     slope = edge_filled(slope_pct)
     known = np.isfinite(slope)
@@ -170,6 +177,14 @@ def split_ground(
     ground = _area(outline.intersection(read))
     steep = _area(ground.intersection(steep_cells))
     rest = _area(ground.difference(steep_cells))
+    edge = (
+        make_valid(steep_cells.buffer(edge_m, quad_segs=4))
+        if edge_m > 0 and not steep_cells.is_empty
+        else Polygon()
+    )
+    steep_edge = _area(rest.intersection(edge)) if not edge.is_empty else Polygon()
+    if not edge.is_empty:
+        rest = _area(rest.difference(edge))
     buffers = (
         make_valid(
             unary_union(
@@ -193,6 +208,7 @@ def split_ground(
         workable=MultiPolygon(kept) if kept else Polygon(),
         no_data=no_data,
         steep=steep,
+        steep_edge=steep_edge,
         creek_buffer=creek_buffer,
         slivers=make_valid(unary_union(small)) if small else Polygon(),
         sliver_count=len(small),

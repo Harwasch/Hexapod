@@ -36,10 +36,13 @@ class WorkableGroundRequest(CamelModel):
 
 class WorkableRemoved(CamelModel):
     """Ground taken out of the outline, by reason. Each part is counted once, in the order
-    no data, too steep, creek buffer, slivers, so the parts and `workableM2` add up to
-    `footprintM2`."""
+    no data, too steep, steep edge, creek buffer, slivers, so the parts and `workableM2` add up
+    to `footprintM2`."""
 
     steep_m2: Area
+    #: Within half a cell of a steep cell, where slope read between cells takes in the steep
+    #: one (`elevation.edgeM`).
+    steep_edge_m2: Area
     creek_buffer_m2: Area
     slivers_m2: Area
     #: Pieces under 0.1 ac left after the cuts.
@@ -52,7 +55,7 @@ class WorkableRemoved(CamelModel):
 class WorkableLeftOut(CamelModel):
     """One reason's left-out ground, for the map to draw hatched."""
 
-    reason: Literal["steep", "creek-buffer", "sliver", "no-data"]
+    reason: Literal["steep", "steep-edge", "creek-buffer", "sliver", "no-data"]
     #: e.g. "Left out: too steep".
     label: str
     area_m2: Area
@@ -77,6 +80,9 @@ class WorkableElevation(CamelModel):
     #: file date, not an acquisition date.
     published: str | None
     resolution_m: float
+    #: The margin left along too-steep cells: half a cell, where slope read between cells takes
+    #: in the steep one. The raster's resolution, not a machine assumption.
+    edge_m: float
     #: Made for an earlier outline of the Land.
     stale: bool
     #: The Copernicus surface model (canopy included) stood in for a missing 3DEP raster.

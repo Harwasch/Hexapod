@@ -1039,7 +1039,7 @@ test.describe("mission control", () => {
       .toBeGreaterThan(0);
     // Without a saved Land there is no terrain to work out the workable ground from: say so.
     await expect(app.getByTestId("rehearsal-workable").last()).toContainText(
-      "Save this ground as a Land to read its terrain",
+      "Save this ground as a Land (or open the Land it is on) to read its terrain",
     );
     // A hand opens with its rule; leaving its lane out says so and rehearses without it.
     await group.locator("button").first().dispatchEvent("click");

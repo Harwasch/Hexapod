@@ -377,7 +377,14 @@ describe("work only the ground it can", () => {
     workable,
     footprintM2: 240_000,
     workableM2: 160_000,
-    removed: { steepM2: 60_000, creekBufferM2: 20_000, sliversM2: 0, slivers: 0, noDataM2: 0 },
+    removed: {
+      steepM2: 60_000,
+      steepEdgeM2: 0,
+      creekBufferM2: 20_000,
+      sliversM2: 0,
+      slivers: 0,
+      noDataM2: 0,
+    },
     leftOut: [
       { reason: "steep", label: "Left out: too steep", areaM2: 60_000, geometry: workable },
     ],
@@ -393,6 +400,7 @@ describe("work only the ground it can", () => {
       label: "USGS 3DEP 1/3″ bare-earth DEM, 10 m",
       published: "2025-08-27",
       resolutionM: 10,
+      edgeM: 5,
       stale: false,
       fallback: false,
     },
@@ -538,7 +546,7 @@ describe("work only the ground it can", () => {
       land: { kind: "derived", landId: "land-1", featureId: null, boundaryRevision: 3 },
     });
     expect(area?.attribution).toBe(
-      "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed) on USGS 3DEP 1/3″ DEM, published 2025-08-27, 15 m creek buffer (assumed) on USGS NHD, from West grassland (Z-14)",
+      "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m clear of steeper cells, on USGS 3DEP 1/3″ DEM, published 2025-08-27, 15 m creek buffer (assumed) on USGS NHD, from West grassland (Z-14)",
     );
     expect(state.composer?.zoneIds).toEqual(["A-01"]);
     // Z-14 is set aside while its workable ground is in scope: a goal naming it does not
@@ -620,7 +628,6 @@ describe("RehearsalPanel", () => {
         kept: [],
         sources: [],
         elevation: null,
-        applying: false,
         apply: vi.fn(),
         retry: vi.fn(),
       },
@@ -732,6 +739,34 @@ describe("RehearsalPanel", () => {
     );
     expect(after).toHaveTextContent("so hands stay at its edges");
     expect(after).toHaveTextContent("The ground between drawn lanes is not checked.");
+  });
+
+  it("after a redraft with no hands left, says so plainly", () => {
+    const clear = planRehearsal({
+      zones: rehearsalZones(draft, project, fakeScene() as unknown as CesiumSceneManager),
+      machines: project.machines,
+      elevation: null,
+      creeks: null,
+    });
+    render(
+      <RehearsalPanel
+        run={run({
+          rehearsal: clear,
+          after: { handsBefore: 147, labels: ["Z-14"] },
+          frame: {
+            t: clear.durationS,
+            durationS: clear.durationS,
+            playing: false,
+            speed: 300,
+            raised: 0,
+            ended: true,
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId("rehearsal-after")).toHaveTextContent(
+      "Rehearsed again on the workable ground of Z-14: no hands, down from 147. The ground between drawn lanes is not checked.",
+    );
   });
 
   it("opens a hand with its rule, its source and Leave this lane out", async () => {

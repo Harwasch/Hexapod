@@ -477,7 +477,14 @@ async function workableApi(page: Page, land: () => LandArea | undefined) {
         workable: { type: "MultiPolygon", coordinates: rectangle(west, south, middle, north) },
         footprintM2: 40 * acre,
         workableM2: 20 * acre,
-        removed: { steepM2: 20 * acre, creekBufferM2: 0, sliversM2: 0, slivers: 0, noDataM2: 0 },
+        removed: {
+          steepM2: 20 * acre,
+          steepEdgeM2: 0,
+          creekBufferM2: 0,
+          sliversM2: 0,
+          slivers: 0,
+          noDataM2: 0,
+        },
         leftOut: [
           {
             reason: "steep",
@@ -498,6 +505,7 @@ async function workableApi(page: Page, land: () => LandArea | undefined) {
           label: "USGS 3DEP 1/3″ bare-earth DEM, 10 m",
           published: "2025-08-27",
           resolutionM: 10,
+          edgeM: 5,
           stale: false,
           fallback: false,
         },

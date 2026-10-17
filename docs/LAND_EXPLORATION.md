@@ -2621,9 +2621,12 @@ cell's slope is its steepest gradient (central differences one cell either side,
 edge of the data, as the rehearsal reads it), so a cell within the limit can be driven in any
 direction. The outline is split in order, so the parts add up to it: no data (no height in the
 raster; the ring of cells the Land's outline cuts takes its steepest neighbour's slope, so the
-outline's edge is not lost to the cell-centre rule), too steep (whole cells), creek buffer (drawn
-10 cm wide of the limit with fine arcs, so a lane along its edge reads outside it), slivers under
-0.1 ac (dropped and counted), and workable. The answer gives the workable MultiPolygon, the
+outline's edge is not lost to the cell-centre rule), too steep (whole cells), steep edge (the
+half cell beside a steep cell: slope at a point is read from heights a cell either side, so
+there it takes in the steep cell, and a lane run up to the cell edge would still go past the
+limit; half the raster's cell, not a machine assumption), creek buffer (drawn 10 cm wide of the
+limit with fine arcs, so a lane along its edge reads outside it), slivers under 0.1 ac (dropped
+and counted), and workable. The answer gives the workable MultiPolygon, the
 square metres of each part, each left-out part's geometry for the hatch, the limits, the raster
 (dataset, label, the source file's publication date, stale or a fallback), the creeks read,
 sources, assumptions and warnings. Workspace-scoped, `Cache-Control: private, no-store`, computed
@@ -2631,12 +2634,13 @@ on request and never saved (`app/analysis/workable.py`, `app/services/land_worka
 on a synthetic DEM saved through the worker in `tests/test_land_workable.py`).
 
 Measured on Oak Bench Ranch (USGS 3DEP 10 m, 22 counted NHD flowlines): the west grassland
-(414 ac) for a mower leaves out 137 ac over 25 %, 14 ac within 15 m of creeks and 1.2 ac of 49
-slivers, leaving 263 ac in 28 pieces (about 2,500 vertices) in about two seconds on first read.
-Not done: no setback from steep ground or headland is assumed (the rehearsal's remaining hands
-sit on those edges), the cut is not remembered with the approved plan beyond its area's
-attribution, and there is no undo button: naming the zone in the bar ("mow Z-14") or picking
-the ground again brings the whole zone back.
+(414 ac) for a mower leaves out 137 ac over 25 %, 39 ac of steep edge, 13 ac within 15 m of
+creeks and 1.1 ac of 91 slivers, leaving 225 ac in 23 pieces (about 5,900 vertices), in about
+two seconds on first read; rehearsed again on it, the mowers raise no hands (147 before).
+Without the steep edge the same cut left 263 ac and 35 hands, every one on the edge of the
+left-out ground. Not done: no headland or turning room is assumed, the cut is not remembered
+with the approved plan beyond its area's attribution, and there is no undo button: naming the
+zone in the bar ("mow Z-14") or picking the ground again brings the whole zone back.
 
 ## Polish: the Land feature on demand, on a phone and in the command box
 

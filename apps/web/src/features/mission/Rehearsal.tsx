@@ -118,7 +118,7 @@ function WorkableAction({ offer }: { offer: WorkableOffer }) {
           type="button"
           className="mc-btn mc-btn--accent mc-rehearsal__workable-btn"
           onClick={offer.apply}
-          disabled={offer.state !== "ready" || offer.applying}
+          disabled={offer.state !== "ready"}
           data-testid="rehearsal-workable-apply"
         >
           <span className="mc-rehearsal__workable-title">
@@ -170,7 +170,7 @@ function afterText(
   hands: number,
   spacing: string | null,
 ): string {
-  const now = `${hands} hand${hands === 1 ? "" : "s"}`;
+  const now = hands === 0 ? "no hands" : `${hands} hand${hands === 1 ? "" : "s"}`;
   const change =
     hands < after.handsBefore
       ? `${now}, down from ${after.handsBefore}`

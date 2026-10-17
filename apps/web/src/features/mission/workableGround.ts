@@ -127,6 +127,7 @@ export interface WorkableTotals {
   footprintM2: number;
   workableM2: number;
   steepM2: number;
+  steepEdgeM2: number;
   creekBufferM2: number;
   sliversM2: number;
   noDataM2: number;
@@ -138,6 +139,7 @@ export function workableTotals(results: readonly WorkableGround[]): WorkableTota
     footprintM2: sum((r) => r.footprintM2),
     workableM2: sum((r) => r.workableM2),
     steepM2: sum((r) => r.removed.steepM2),
+    steepEdgeM2: sum((r) => r.removed.steepEdgeM2),
     creekBufferM2: sum((r) => r.removed.creekBufferM2),
     sliversM2: sum((r) => r.removed.sliversM2),
     noDataM2: sum((r) => r.removed.noDataM2),
@@ -153,8 +155,8 @@ export function formatAcres(m2: number): string {
 }
 
 /**
- * The cut in a line, every part that rounds to something: "−137 ac too steep, −14 ac creek
- * buffer, −1.2 ac too small to work → 263 ac". The minus is a real minus sign.
+ * The cut in a line, every part that rounds to something: "−137 ac too steep, −38 ac steep
+ * edge, −14 ac creek buffer, −1.2 ac too small to work → 225 ac". The minus is a real minus.
  */
 export function workableOfferText(totals: WorkableTotals): string {
   const parts: string[] = [];
@@ -162,6 +164,7 @@ export function workableOfferText(totals: WorkableTotals): string {
     if (m2 / ACRE_M2 >= 0.05) parts.push(`−${formatAcres(m2)} ${what}`);
   };
   cut(totals.steepM2, "too steep");
+  cut(totals.steepEdgeM2, "steep edge");
   cut(totals.creekBufferM2, "creek buffer");
   cut(totals.sliversM2, "too small to work");
   cut(totals.noDataM2, "no slope data");
@@ -187,9 +190,9 @@ function elevationShort(result: WorkableGround): string {
 
 /**
  * Where a workable area came from, in one line (a zone's attribution, at most 300
- * characters): "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed) on USGS 3DEP
- * 1/3″ DEM, published 2025-08-27, 15 m creek buffer (assumed) on USGS NHD, from West grassland
- * (Z-14)".
+ * characters): "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m clear of
+ * steeper cells, on USGS 3DEP 1/3″ DEM, published 2025-08-27, 15 m creek buffer (assumed) on
+ * USGS NHD, from West grassland (Z-14)".
  */
 export function workableAttribution(result: WorkableGround, from: string): string {
   const { limits, creeks } = result;
@@ -197,7 +200,7 @@ export function workableAttribution(result: WorkableGround, from: string): strin
     creeks.status === "available" || creeks.status === "empty"
       ? `${limits.creekBufferM} m creek buffer (assumed) on USGS NHD`
       : "creek buffer not applied (USGS NHD not read)";
-  return `Workable ground for ${classPhrase(limits.label)}: slope ≤ ${limits.maxSlopePct} % (assumed) on ${elevationShort(result)}, ${buffer}, from ${from}`.slice(
+  return `Workable ground for ${classPhrase(limits.label)}: slope ≤ ${limits.maxSlopePct} % (assumed), ${result.elevation.edgeM} m clear of steeper cells, on ${elevationShort(result)}, ${buffer}, from ${from}`.slice(
     0,
     300,
   );
@@ -225,7 +228,7 @@ export function workableZone(
   const zone = zoneFromFootprint(id, `${plainName(target.zone)}, workable`, result.workable);
   const cut = [
     totals.steepM2 > 0 &&
-      `${formatAcres(totals.steepM2)} over ${result.limits.maxSlopePct} % slope`,
+      `${formatAcres(totals.steepM2 + totals.steepEdgeM2)} over ${result.limits.maxSlopePct} % slope or within ${result.elevation.edgeM} m of it`,
     totals.creekBufferM2 > 0 &&
       `${formatAcres(totals.creekBufferM2)} within ${result.limits.creekBufferM} m of creeks`,
   ].filter(Boolean);

@@ -72,6 +72,7 @@ const INK = "#0a0e09";
 /** The hatch of left-out ground, by why it was left out. */
 const LEFT_OUT_COLOR: Record<LeftOutReason, string> = {
   steep: "#e4572e",
+  "steep-edge": "#f09a6e",
   "creek-buffer": "#6ec3f0",
   sliver: "#c9d1cc",
   "no-data": "#c9d1cc",
@@ -99,7 +100,7 @@ export interface RehearsalFrame {
 
 export type RehearsalFrameListener = (frame: RehearsalFrame | null) => void;
 
-export type LeftOutReason = "steep" | "creek-buffer" | "sliver" | "no-data";
+export type LeftOutReason = "steep" | "steep-edge" | "creek-buffer" | "sliver" | "no-data";
 
 /** Ground left out of a workable-ground redraft, for the hatch. */
 export interface LeftOutGround {

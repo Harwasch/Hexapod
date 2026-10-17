@@ -355,23 +355,26 @@ count.
 **Work only the ground it can.** When hands go up on a Land's ground (the Land's own project,
 or the demo ranch with the seeded Oak Bench Ranch Land selected over it), the card asks the API
 what the machines could work instead (`POST /land/{id}/workable-ground`, docs/LAND_EXPLORATION.md)
-and offers it as one action with what it cuts: "−137 ac too steep, −14 ac creek buffer, −1.2 ac
-too small to work → 263 ac". Each zone with slope or creek hands is cut to the strictest class
-driving it, on the raster the rehearsal read slope from. Taking it makes the answer a private
-area derived from the Land ("West grassland, workable", attributed "Workable ground for a robotic
-brush mower: slope ≤ 25 % (assumed) on USGS 3DEP 1/3″ DEM, published …, 15 m creek buffer
-(assumed) on USGS NHD, from West grassland (Z-14)"), puts it in the source zone's place in the
-plan, keeps the goal, machines and answers, and redrafts (`features/mission/workableGround.ts`).
-The source zone is set aside for that card (`PlanComposerState.setAside`), so a goal that names
-it ("the west grassland") does not bring all of it back. The ground left out is hatched on the
-map while the card is open, red where too steep and blue in a creek buffer, labelled "Left out:
-too steep · derived", and the new draft is rehearsed again straight to its verdict. On Oak Bench
-Ranch that is 414 ac and 174 machine-hours becoming 263 ac and 119 h, and 147 hands becoming
-35: every one at the edge of the left-out ground, where the lanes run up to steep cells and
-slope is read from heights a cell either side; the card says so, and the approve button counts
-them. A followed line (a fence) has no ground to leave out and keeps its hands; without a Land
-the card says "Save this ground as a Land to read its terrain", and without the Land's elevation
-it asks for the bare-earth analysis, each with "Open in Land".
+and offers it as one action with what it cuts: "−137 ac too steep, −39 ac steep edge, −13 ac
+creek buffer, −1.1 ac too small to work → 225 ac". Each zone with slope or creek hands is cut to
+the strictest class driving it, on the raster the rehearsal read slope from; the steep edge is
+the half cell (5 m) beside too-steep cells, where slope read between cells takes in the steep
+one. Taking it makes the answer a private area derived from the Land ("West grassland,
+workable", attributed "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m
+clear of steeper cells, on USGS 3DEP 1/3″ DEM, published …, 15 m creek buffer (assumed) on USGS
+NHD, from West grassland (Z-14)"), puts it in the source zone's place in the plan, keeps the
+goal, machines and answers, and redrafts (`features/mission/workableGround.ts`). The source zone
+is set aside for that card (`PlanComposerState.setAside`), so a goal that names it ("the west
+grassland") does not bring all of it back. The ground left out is hatched on the map while the
+card is open (red too steep, lighter red its edge, blue a creek buffer, labelled "Left out: too
+steep · derived"), and the new draft is rehearsed again straight to its verdict. On Oak Bench
+Ranch, 414 ac and 174 machine-hours become 225 ac and 102 h, and 147 hands become none, so the
+button reads "Approve plan"; where hands remain (lanes run up to left-out ground between cells),
+the card says why and Approve counts them. A followed line (a fence) has no ground to leave out
+and keeps its hands; without a Land the card says "Save this ground as a Land (or open the Land
+it is on) to read its terrain", and without the Land's elevation it asks for the bare-earth
+analysis, each with "Open in Land". If NHD does not answer, the cut says the creek buffer was
+not applied, and the next rehearsal can still raise creek hands.
 
 **Quality.** `apps/web/src/missions/planDraft.ts` converts between the API draft and the
 console's `Plan`; `apps/api/app/services/planner.py` holds both planners behind one `Planner`

@@ -62,9 +62,10 @@ function answer(extra: Partial<WorkableGround> = {}): WorkableGround {
     boundaryRevision: 2,
     workable: { type: "MultiPolygon", coordinates: [square.coordinates] },
     footprintM2: 414 * ACRE,
-    workableM2: 262.8 * ACRE,
+    workableM2: 225.2 * ACRE,
     removed: {
       steepM2: 136.6 * ACRE,
+      steepEdgeM2: 37.6 * ACRE,
       creekBufferM2: 13.9 * ACRE,
       sliversM2: 1.19 * ACRE,
       slivers: 49,
@@ -83,6 +84,7 @@ function answer(extra: Partial<WorkableGround> = {}): WorkableGround {
       label: "USGS 3DEP 1/3″ bare-earth DEM, 10 m",
       published: "2025-08-27",
       resolutionM: 10,
+      edgeM: 5,
       stale: false,
       fallback: false,
     },
@@ -143,22 +145,29 @@ describe("the words and the zone", () => {
   it("says what it cuts and what is left, every part that rounds to something", () => {
     const totals = workableTotals([answer()]);
     expect(workableOfferText(totals)).toBe(
-      "−137 ac too steep, −14 ac creek buffer, −1.2 ac too small to work → 263 ac",
+      "−137 ac too steep, −38 ac steep edge, −14 ac creek buffer, −1.2 ac too small to work → 225 ac",
     );
     expect(formatAcres(4.24 * ACRE)).toBe("4.2 ac");
     expect(formatAcres(1263.4 * ACRE)).toBe("1,263 ac");
     const none = workableTotals([
       answer({
-        removed: { steepM2: 0, creekBufferM2: 0, sliversM2: 0, slivers: 0, noDataM2: 0 },
+        removed: {
+          steepM2: 0,
+          steepEdgeM2: 0,
+          creekBufferM2: 0,
+          sliversM2: 0,
+          slivers: 0,
+          noDataM2: 0,
+        },
       }),
     ]);
-    expect(workableOfferText(none)).toBe("Nothing to leave out: all 263 ac");
+    expect(workableOfferText(none)).toBe("Nothing to leave out: all 225 ac");
   });
 
   it("attributes every source and assumption, within a zone's 300 characters", () => {
     const line = workableAttribution(answer(), "West grassland (Z-14)");
     expect(line).toBe(
-      "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed) on USGS 3DEP 1/3″ DEM, published 2025-08-27, 15 m creek buffer (assumed) on USGS NHD, from West grassland (Z-14)",
+      "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m clear of steeper cells, on USGS 3DEP 1/3″ DEM, published 2025-08-27, 15 m creek buffer (assumed) on USGS NHD, from West grassland (Z-14)",
     );
     const surface = workableAttribution(
       answer({
@@ -184,7 +193,7 @@ describe("the words and the zone", () => {
       land: { kind: "derived", landId: "land-1", featureId: null, boundaryRevision: 2 },
     });
     expect(made?.note).toBe(
-      "Derived: the part of West grassland a robotic brush mower is assumed to work, 137 ac over 25 % slope and 14 ac within 15 m of creeks left out. Not measured on the ground.",
+      "Derived: the part of West grassland a robotic brush mower is assumed to work, 174 ac over 25 % slope or within 5 m of it and 14 ac within 15 m of creeks left out. Not measured on the ground.",
     );
     expect(
       workableZone(answer({ workable: null }), { zone: zone("Z-14"), label: "Z-14" }, "A-03"),

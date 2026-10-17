@@ -20810,6 +20810,10 @@
             "title": "Dataset",
             "type": "string"
           },
+          "edgeM": {
+            "title": "Edgem",
+            "type": "number"
+          },
           "fallback": {
             "title": "Fallback",
             "type": "boolean"
@@ -20849,6 +20853,7 @@
           "label",
           "published",
           "resolutionM",
+          "edgeM",
           "stale",
           "fallback"
         ],
@@ -21028,6 +21033,7 @@
           "reason": {
             "enum": [
               "steep",
+              "steep-edge",
               "creek-buffer",
               "sliver",
               "no-data"
@@ -21082,7 +21088,7 @@
       },
       "WorkableRemoved": {
         "additionalProperties": false,
-        "description": "Ground taken out of the outline, by reason. Each part is counted once, in the order\nno data, too steep, creek buffer, slivers, so the parts and `workableM2` add up to\n`footprintM2`.",
+        "description": "Ground taken out of the outline, by reason. Each part is counted once, in the order\nno data, too steep, steep edge, creek buffer, slivers, so the parts and `workableM2` add up\nto `footprintM2`.",
         "properties": {
           "creekBufferM2": {
             "minimum": 0.0,
@@ -21104,6 +21110,11 @@
             "title": "Sliversm2",
             "type": "number"
           },
+          "steepEdgeM2": {
+            "minimum": 0.0,
+            "title": "Steepedgem2",
+            "type": "number"
+          },
           "steepM2": {
             "minimum": 0.0,
             "title": "Steepm2",
@@ -21112,6 +21123,7 @@
         },
         "required": [
           "steepM2",
+          "steepEdgeM2",
           "creekBufferM2",
           "sliversM2",
           "slivers",

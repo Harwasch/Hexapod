@@ -56,6 +56,7 @@ DEM_DATASETS = ("usgs-3dep-13", "cop-dem-glo-30")
 MARGIN_CELLS = 2
 LABELS = {
     "steep": "Left out: too steep",
+    "steep-edge": "Left out: steep edge",
     "creek-buffer": "Left out: creek buffer",
     "sliver": "Left out: too small to work",
     "no-data": "Left out: no slope data",
@@ -148,7 +149,12 @@ def _multipolygon(
     if geometry.is_empty:
         return None
     lonlat = make_valid(transform_geometry(to_geographic, geometry))
-    parts = [orient(part) for part in polygon_parts(lonlat) if part.area > 0]
+    # Largest first: whatever reads a footprint's first polygon reads its main piece.
+    parts = sorted(
+        (orient(part) for part in polygon_parts(lonlat) if part.area > 0),
+        key=lambda part: part.area,
+        reverse=True,
+    )
     if not parts:
         return None
     try:
@@ -229,6 +235,7 @@ def workable_ground(
         max_slope_pct=machine.max_slope_pct,
         creeks=lines,
         buffer_m=machine.creek_buffer_m,
+        edge_m=resolution / 2,
     )
     if split.cells_read == 0:
         raise InvalidInputError(
@@ -237,6 +244,7 @@ def workable_ground(
         )
     removed = WorkableRemoved(
         steep_m2=split.steep.area,
+        steep_edge_m2=split.steep_edge.area,
         creek_buffer_m2=split.creek_buffer.area,
         slivers_m2=split.slivers.area,
         slivers=split.sliver_count,
@@ -251,6 +259,7 @@ def workable_ground(
         )
         for reason, geometry in (
             ("steep", split.steep),
+            ("steep-edge", split.steep_edge),
             ("creek-buffer", split.creek_buffer),
             ("sliver", split.slivers),
             ("no-data", split.no_data),
@@ -270,6 +279,9 @@ def workable_ground(
         f"Slope is each {resolution:g} m cell's steepest gradient on the {elevation_label}, so "
         "a cell within the limit can be driven across or up and down; a cell over it is left "
         "out whole.",
+        f"Ground within {resolution / 2:g} m (half a cell) of a too-steep cell is left out too: "
+        "slope is read from heights a cell either side, so beside a steep cell it takes in part "
+        "of that cell's slope, and a lane run up to it would still go past the limit.",
     ]
     if creeks_applied:
         kinds = "perennial, intermittent and unclassified channels and artificial paths"
@@ -341,6 +353,7 @@ def workable_ground(
             label=elevation_label,
             published=published,
             resolution_m=resolution,
+            edge_m=resolution / 2,
             stale=stale,
             fallback=fallback,
         ),

@@ -106,6 +106,15 @@ def test_ground_is_split_in_order_and_the_parts_add_up_to_the_outline() -> None:
     assert isinstance(split.workable, MultiPolygon) and len(split.workable.geoms) == 2
     assert split.workable.intersection(box(200, 0, 400, 200)).area == pytest.approx(0)
     assert split.cells_read == 20 * 39 and split.cells_steep == 20 * 20 - 4
+    # Half a cell along the steep ground goes too: a 5 m strip beside the steep half, and all
+    # but the middle of the gentle pocket, whose last 10 m x 10 m is then a sliver.
+    edged = split_ground(
+        outline, slope, transform, max_slope_pct=25, creeks=[creek], buffer_m=15, edge_m=5
+    )
+    assert edged.steep.area == pytest.approx(split.steep.area)
+    assert edged.steep_edge.area == pytest.approx(5 * 200 + (400 - 100))
+    assert edged.slivers.area == pytest.approx(100)
+    assert edged.workable.area == pytest.approx(split.workable.area - 5 * 200)
 
 
 def test_an_outline_off_the_data_is_all_no_data() -> None:
@@ -327,14 +336,17 @@ def test_workable_ground_leaves_out_the_steep_half_and_the_creek_buffer(
     footprint = answer["footprintM2"]
     assert footprint == pytest.approx(600 * 400, rel=0.01)
     removed = answer["removed"]
-    # The east half rises 32 m per 100 m, over the mower's assumed 25 %.
+    # The east half rises 32 m per 100 m, over the mower's assumed 25 %, and the half cell
+    # beside it goes with it.
     assert removed["steepM2"] == pytest.approx(footprint / 2, rel=0.03)
+    assert removed["steepEdgeM2"] == pytest.approx(5 * 400, rel=0.05)
     # 15 m either side of the intermittent creek, across the whole 400 m; not the ephemeral.
     assert removed["creekBufferM2"] == pytest.approx(30 * 400, rel=0.03)
     assert removed["noDataM2"] == pytest.approx(0, abs=1)
     total = (
         answer["workableM2"]
         + removed["steepM2"]
+        + removed["steepEdgeM2"]
         + removed["creekBufferM2"]
         + removed["sliversM2"]
         + removed["noDataM2"]
@@ -346,8 +358,9 @@ def test_workable_ground_leaves_out_the_steep_half_and_the_creek_buffer(
     assert workable.within(shape(RECTANGLE.model_dump()).buffer(1e-6))
     assert workable.bounds[2] < LONGITUDE + 5 / 91_000
     reasons = {item["reason"]: item for item in answer["leftOut"]}
-    assert set(reasons) == {"steep", "creek-buffer"}
+    assert set(reasons) == {"steep", "steep-edge", "creek-buffer"}
     assert reasons["steep"]["label"] == "Left out: too steep"
+    assert reasons["steep-edge"]["label"] == "Left out: steep edge"
     assert reasons["creek-buffer"]["label"] == "Left out: creek buffer"
     assert shape(reasons["steep"]["geometry"]).area > 0
     assert answer["limits"] == {
@@ -362,6 +375,7 @@ def test_workable_ground_leaves_out_the_steep_half_and_the_creek_buffer(
         "label": "USGS 3DEP 1/3″ bare-earth DEM, 10 m",
         "published": "2025-08-27",
         "resolutionM": 10,
+        "edgeM": 5,
         "stale": False,
         "fallback": False,
     }
@@ -376,6 +390,7 @@ def test_workable_ground_leaves_out_the_steep_half_and_the_creek_buffer(
     assert "works slopes up to 25 % and keeps 15 m from creeks" in assumptions
     assert "not ephemeral drainages" in assumptions
     assert "counts once, as too steep" in assumptions
+    assert "Ground within 5 m (half a cell) of a too-steep cell is left out too" in assumptions
     assert answer["warnings"] == []
 
     # Ephemeral drainages count on request; a stricter class leaves out more.
@@ -385,6 +400,7 @@ def test_workable_ground_leaves_out_the_steep_half_and_the_creek_buffer(
     survey = ask(client, land_id, machineClass="survey").json()
     # The survey rover's assumed 35 % takes the east half too; only its 5 m buffer is cut.
     assert survey["removed"]["steepM2"] == pytest.approx(0, abs=1)
+    assert survey["removed"]["steepEdgeM2"] == pytest.approx(0, abs=1)
     assert survey["removed"]["creekBufferM2"] == pytest.approx(10 * 400, rel=0.03)
 
 
