@@ -229,10 +229,13 @@ def make_fog_grid(boundary: BaseGeometry, cell_m: float = 20.0) -> FogGrid:
     metric = CRS.from_proj4(
         f"+proj=aeqd +lat_0={point.y} +lon_0={point.x} +datum=WGS84 +units=m +no_defs"
     )
+    inside = inside_mask(spec, boundary)
+    # Read-only: every record with no location shares it as its mask (`footprint_mask`).
+    inside.flags.writeable = False
     return FogGrid(
         spec=spec,
         boundary=boundary,
-        inside=inside_mask(spec, boundary),
+        inside=inside,
         metric_crs=metric,
         to_metric=Transformer.from_crs(4326, metric, always_xy=True),
         to_geographic=Transformer.from_crs(metric, 4326, always_xy=True),
@@ -307,11 +310,13 @@ def _reach(geometry: BaseGeometry) -> float:
 
 def footprint_mask(grid: FogGrid, source: KnowledgeSource) -> NDArray[np.bool_]:
     """The inside cells a record covers: its raster mask as given; a point or line buffered by
-    the field reach; a footprint as drawn (any cell it touches); unlocated, every cell."""
+    the field reach; a footprint as drawn (any cell it touches); unlocated, every cell. The
+    unlocated share the grid's read-only inside mask: research evidence and surveys run to
+    thousands of rows, and a copy each would hold 64 KB apiece for the request."""
     if source.mask is not None:
         return source.mask & grid.inside
     if not source.located or source.geometry is None or source.geometry.is_empty:
-        return grid.inside.copy()
+        return grid.inside
     geometry = source.geometry
     parts = list(getattr(geometry, "geoms", [geometry]))
     reached: list[BaseGeometry] = []

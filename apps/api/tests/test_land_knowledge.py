@@ -13,18 +13,24 @@ import pytest
 from fastapi.testclient import TestClient
 from rasterio.io import MemoryFile
 from shapely.geometry import shape
+from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from app.analysis import knowledge
 from app.analysis.lonlat_grid import decode, grid_for
 from app.analysis.raster_grid import make_grid
+from app.models.land_archive_image import LandArchiveImage
+from app.models.land_image_registration import LandImageRegistration
 from app.models.land_raster import LandRaster, LandRasterBlob
 from app.models.research import Evidence, Investigation, ResearchRun
 from app.schemas.geojson import Polygon
 from app.schemas.grids import LonLatGrid
 from app.schemas.land_rasters import RasterRequest, VegetationPeriod
+from app.services import land_knowledge
 from tests.test_land import BODY, polygon
 from tests.test_land_features import FEATURE
+from tests.test_land_surveys import BODY as SURVEY_LAND
+from tests.test_land_surveys import payload as survey_payload
 from tests.test_workspaces import IdentityClient, headers
 from tests.test_workspaces import identity_client as _identity_client
 
@@ -541,3 +547,174 @@ def test_knowledge_scoping(identity_client: IdentityClient) -> None:
             method.upper(), f"/api/v1/land/{land['id']}/knowledge{tail}", headers=bob, json=body
         )
         assert response.status_code == 404, response.text
+
+
+def archive_image(db: Session, land_id: str, **content: Any) -> Evidence:
+    run = research_run(db, land_id, kind="archive")
+    evidence = add_evidence(
+        db,
+        run,
+        provider="loc-archive",
+        title="Aerial view of the valley",
+        spatial_relevance="nearby",
+        **content,
+    )
+    db.add(LandArchiveImage(evidence_id=evidence.id, metadata_json={}, byte_size=1))
+    db.commit()
+    return evidence
+
+
+def registration(
+    db: Session, evidence: Evidence, footprint: dict[str, Any], **result: Any
+) -> LandImageRegistration:
+    row = LandImageRegistration(
+        evidence_id=evidence.id,
+        request={},
+        result={"footprint": footprint, **result},
+        sha256="0" * 64,
+        byte_size=1,
+        display_width=100,
+        display_height=100,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def square_around(longitude: float, latitude: float, metres: float) -> dict[str, Any]:
+    west, east = east_of(longitude, latitude, -metres), east_of(longitude, latitude, metres)
+    south, north = latitude - metres / 111_320, latitude + metres / 111_320
+    return {
+        "type": "Polygon",
+        "coordinates": [
+            [[west, south], [east, south], [east, north], [west, north], [west, south]]
+        ],
+    }
+
+
+def test_aligned_archive_image(client: TestClient, db: Session) -> None:
+    land = make_land(client)
+    evidence = archive_image(
+        db,
+        land["id"],
+        media={"title": "Valley 1994", "source_date": "circa 1994", "license": "No known"},
+    )
+    # The older alignment sits elsewhere and was placed tightly; the newest one counts.
+    older = registration(
+        db,
+        evidence,
+        square_around(-122.14, 47.648, 60),
+        rms_error_m=2.0,
+        leave_one_out_rms_m=3.0,
+        approximate_m_per_pixel=0.5,
+    )
+    older.created_at = datetime.now(UTC) - timedelta(days=2)
+    db.commit()
+    newest = registration(
+        db,
+        evidence,
+        square_around(*POINT, 60),
+        rms_error_m=12.0,
+        leave_one_out_rms_m=35.0,
+        approximate_m_per_pixel=0.5,
+    )
+    read = fog(client, land["id"])
+    aligned = [r for r in read["records"] if r["kind"] == "archive-alignment"]
+    assert [r["key"] for r in aligned] == [f"registration:{newest.id}"]
+    record = aligned[0]
+    # A 0.5 m image is aerial; placed to within 35 m (leave-one-out, not the fit's 12 m) on a
+    # 20 m grid, it counts one class down.
+    assert record["classId"] == "satellite" and record["resolutionM"] == 0.5
+    assert record["positionalUncertaintyM"] == 35.0
+    assert record["classNote"].startswith("One class down from aerial")
+    assert record["observedAt"].startswith("1994-07-01")
+    assert record["observedLabel"] == 'catalog says "circa 1994" (year only, dated mid-year)'
+    assert record["located"] and 0 < record["cells"] < read["summary"]["insideCells"]
+    assert record["link"]["detail"]["evidenceId"] == str(evidence.id)
+    # The aligned image is not also counted land-wide as a research record.
+    assert not any(r["key"] == f"evidence:{evidence.id}" for r in read["records"])
+    # Its footprint is the newest alignment's: the point under it, not the older square.
+    path = f"/api/v1/land/{land['id']}/knowledge/cell"
+    under = client.get(path, params={"longitude": POINT[0], "latitude": POINT[1]}).json()
+    assert [r["record"]["key"] for r in under["records"]] == [record["key"]]
+    elsewhere = client.get(path, params={"longitude": -122.14, "latitude": 47.648}).json()
+    assert elsewhere["inside"] and elsewhere["records"] == []
+
+
+def test_field_survey_counts_land_wide(client: TestClient) -> None:
+    land = make_land(client, SURVEY_LAND)
+    saved = client.post(f"/api/v1/land/{land['id']}/surveys", json=survey_payload())
+    assert saved.status_code == 201, saved.text
+    read = fog(client, land["id"])
+    [record] = read["records"]
+    assert record["kind"] == "survey" and record["key"] == f"survey:{saved.json()['id']}"
+    # Dated by the day it was observed, not the day it was stored.
+    assert record["observedAt"].startswith("2025-07-01")
+    assert record["observedLabel"] == "observed 2025-07-01"
+    # A person on the ground, but no mapped plots yet: field class, capped at regional.
+    assert record["classId"] == "field" and record["countedClassId"] == "regional"
+    assert not record["located"]
+    as_of = datetime.fromisoformat(read["asOf"])
+    observed = datetime(2025, 7, 1, tzinfo=UTC)
+    expected = knowledge.credit("field", observed, as_of, located=False)
+    assert record["peakCredit"] == pytest.approx(expected)
+    assert record["arithmetic"].startswith("min(0.85, 0.20)")
+    density = grid_values(read, "density")
+    inside = density != 255
+    assert np.all(density[inside] == round((1 - expected) * 250))
+    assert read["summary"]["byBestClass"]["regional"] == 1
+
+
+def test_raster_blobs_are_read_in_bounded_batches(
+    client: TestClient, db: Session, engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_query_counts import counting
+
+    land = make_land(client)
+    acquired = datetime.now(UTC) - timedelta(days=7)
+    first = ndvi_raster(db, land["id"], acquired)
+    ndvi_raster(db, land["id"], acquired - timedelta(days=10))
+
+    def blob_reads(statements: list[str]) -> int:
+        return sum("FROM land_raster_blobs" in statement for statement in statements)
+
+    def cells(read: dict[str, Any]) -> dict[str, int]:
+        return {record["key"]: record["cells"] for record in read["records"]}
+
+    land_knowledge._MASK_CACHE.clear()
+    db.expunge_all()
+    with counting(engine) as together:
+        whole = fog(client, land["id"])
+    # Two small rasters: one read. A batch only one blob fits in: one read each, same fog.
+    land_knowledge._MASK_CACHE.clear()
+    monkeypatch.setattr(land_knowledge, "BLOB_BATCH_BYTES", first.byte_size)
+    with counting(engine) as apart:
+        split = fog(client, land["id"])
+    assert blob_reads(together) == 1 and blob_reads(apart) == 2
+    assert len(whole["records"]) == 2 and cells(split) == cells(whole)
+    assert all(count > 0 for count in cells(whole).values())
+    # Warm: the masks are cached, no blob is read at all.
+    with counting(engine) as warm:
+        again = fog(client, land["id"])
+    assert blob_reads(warm) == 0 and cells(again) == cells(whole)
+
+
+def test_unlocated_records_share_one_read_only_mask() -> None:
+    grid = knowledge.make_fog_grid(shape(polygon()))
+    source = knowledge.KnowledgeSource(
+        key="evidence:1",
+        kind="research-evidence",
+        title="Soil map unit",
+        class_id="regional",
+        resolution_m=None,
+        observed_at=None,
+        observed_label="Undated",
+        recorded_at=datetime.now(UTC),
+        located=False,
+        positional_uncertainty_m=None,
+        provenance={},
+        link={},
+    )
+    mask = knowledge.footprint_mask(grid, source)
+    assert mask is grid.inside and not mask.flags.writeable
+    assert knowledge.footprint_mask(grid, source) is mask

@@ -86,6 +86,8 @@ from app.services.land import get_land
 
 #: The newest rasters weighed per request: each is a stored GeoTIFF warped onto the fog grid.
 RASTER_LIMIT = 20
+#: Most raster blob bytes read in one query on a cold mask cache (`_rasters`).
+BLOB_BATCH_BYTES = 32 * 1024 * 1024
 #: Newest rows read per kind; a Land with more keeps its newest evidence.
 ROW_LIMIT = 2000
 #: How the raster datasets count: class, and the native resolution of what the source saw.
@@ -590,24 +592,38 @@ def _rasters(db: Session, land_id: uuid.UUID, grid: FogGrid) -> list[KnowledgeSo
         dataset = str(row.request.get("dataset", ""))
         observations = _observations(row.metadata_json) if dataset.startswith("sentinel-2-") else []
         planned.append((row, observations, _bands_for(dataset, observations)))
-    # One query for every blob a cached mask does not already answer for.
-    uncached = [
-        row.id
-        for row, _, bands in planned
-        if any(_cache_get(_mask_key(grid, row, band)) is None for band in bands)
-    ]
-    blobs: dict[uuid.UUID, bytes] = {}
-    if uncached:
-        blobs = {
-            blob.raster_id: blob.data
-            for blob in db.scalars(
-                select(LandRasterBlob).where(LandRasterBlob.raster_id.in_(uncached))
-            )
-        }
+    # The blobs a cached mask does not already answer for, a few at a time: one query per
+    # batch of at most BLOB_BATCH_BYTES (one blob when it is bigger), each batch warped and
+    # let go before the next is read. A cold cache over twenty 16 MiB rasters would otherwise
+    # hold all of them at once; the usual land's few small rasters are still one query.
+    bands_by_row = {row.id: bands for row, _, bands in planned}
+    masks: dict[uuid.UUID, dict[int | None, NDArray[np.bool_]]] = {}
+    batch: list[LandRaster] = []
+    batch_bytes = 0
+
+    def warp(rows: list[LandRaster]) -> None:
+        by_id = {row.id: row for row in rows}
+        query = select(LandRasterBlob).where(LandRasterBlob.raster_id.in_(list(by_id)))
+        for blob in db.scalars(query):
+            row = by_id[blob.raster_id]
+            masks[row.id] = _raster_masks(grid, row, bands_by_row[row.id], blob.data)
+
+    for row, _, bands in planned:
+        cached = {band: _cache_get(_mask_key(grid, row, band)) for band in bands}
+        hits = {band: mask for band, mask in cached.items() if mask is not None}
+        if len(hits) == len(bands):
+            masks[row.id] = hits
+            continue
+        if batch and batch_bytes + row.byte_size > BLOB_BATCH_BYTES:
+            warp(batch)
+            batch, batch_bytes = [], 0
+        batch.append(row)
+        batch_bytes += row.byte_size
+    if batch:
+        warp(batch)
     sources: list[KnowledgeSource] = []
-    for row, observations, bands in planned:
-        masks = _raster_masks(grid, row, bands, blobs.get(row.id))
-        for source in _raster_sources(grid, row, observations, masks):
+    for row, observations, _ in planned:
+        for source in _raster_sources(grid, row, observations, masks.get(row.id, {})):
             source.link["detail"]["investigationId"] = str(investigations[row.id])
             sources.append(source)
     return sources
