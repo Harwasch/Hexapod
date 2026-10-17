@@ -19,7 +19,13 @@ import { useLantern, type LanternBbox, type LanternKind } from "@/state/lantern"
 export const NOT_CHECKED = "not checked against today's 3D world";
 /** The catalog route takes areas this size at most (degrees a side). */
 const MAX_SIDE_DEG = 0.25;
-/** A saved land's bounds reach the public catalog route only this coarsely (degrees). */
+/**
+ * A saved land's bounds reach the public catalog route only this coarsely (degrees), so that
+ * route never receives the land's own extent. It does not hide where the operator looks: the
+ * lens's tiles (USGS sheets from this API's public tile route down to level 17, about 150 m;
+ * NAIP and Sentinel-2 from Planetary Computer) are asked for the ground under it, as any
+ * map's tiles are.
+ */
 const PRIVATE_ROUNDING_DEG = 0.05;
 const ROUNDING_DEG = 0.01;
 const SIX_HOURS_MS = 6 * 3600 * 1000;
@@ -182,8 +188,9 @@ export interface DatedSources {
 
 /**
  * The dated imagery for where the lantern looks: the area a descent chose, else the selected
- * land (rounded outward to 0.05°, since the catalog route is public and logged), else around the
- * view's centre when the lantern opened. (A land selected after a descent takes over from the
+ * land (rounded outward to 0.05°, so the public catalog route never gets its extent; the lens's
+ * tiles still name the ground viewed, see PRIVATE_ROUNDING_DEG), else around the view's centre
+ * when the lantern opened. (A land selected after a descent takes over from the
  * descent's area: LanternBridge clears it.) Asked for only once the lantern has been opened, or
  * a descent has landed; cached for 6 h, as the server does, or 30 s when a source could not be
  * reached.

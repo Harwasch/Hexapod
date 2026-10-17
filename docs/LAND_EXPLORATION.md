@@ -2474,8 +2474,11 @@ nothing exists, and "Try again" asks again.
 provider's answer cached 6 h per area rounded to 0.01°, and a cached answer spends no token). A
 catalog missing a provider that could not be reached is held 30 s and marked `no-store`; the next
 one asks that provider alone. A saved land's bounds are rounded outward to 0.05° before they
-reach it, and a land selected after a descent replaces the descent's area as the place looked
-back on. The topo tile route is an `async def`: a tile waits for one of four sheet readers on the
+reach it, so the public route never receives the land's own extent. That does not hide where
+the operator looks: the lens's tiles are requested for the ground under it (USGS sheets from this
+API's public, cacheable tile route down to level 17, about 150 m; NAIP and Sentinel-2 from
+Planetary Computer), as any map's tiles are, so the access logs of both record the area viewed.
+A land selected after a descent replaces the descent's area as the place looked back on. The topo tile route is an `async def`: a tile waits for one of four sheet readers on the
 event loop, holding none of the threads every other route runs on, and the reads run on threads
 of their own. Past twelve waiting, or four seconds, a tile is answered 503 with Retry-After,
 which the lantern's layers wait out and ask again (`cesium/busyTiles.ts`). The bytes a sheet is
