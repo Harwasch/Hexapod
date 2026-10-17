@@ -63,22 +63,40 @@ export function machineClassLabel(id: MachineClassId): string {
 }
 
 /**
+ * A drone height the planner sized a zone's flight at, and what it is measured from: a scout
+ * area's capture is flown above its take-off point (its exported route is relative to it), so
+ * on sloping ground the clearance differs from the height; every other flight is planned above
+ * the ground.
+ */
+export interface FlightHeight {
+  altitudeM: number;
+  above: "ground" | "take-off";
+}
+
+/**
  * One line on what a class is assumed to do, e.g. "Robotic brush mower (assumed): 2 m swath at
  * 1.4 m/s, 8 s per turn". A drone's flight height depends on the detail asked for (a scan at
- * 2 cm flies at 70 m), so pass the heights the planner used (`ZoneCoverage.altitudeM`); the
- * line then names those, and the spacing they give, rather than the class default.
+ * 2 cm flies at 70 m), so pass the heights the planner used (`ZoneCoverage.altitudeM`) with
+ * what each is above; the line then names those, and the spacing they give, rather than the
+ * class default.
  */
 export function machineClassSummary(
   id: MachineClassId,
-  altitudesM: readonly number[] = [],
+  flights: readonly FlightHeight[] = [],
 ): string {
   if (id === "drone") {
     const drone = MACHINE_CLASSES.drone;
-    const heights = [...new Set(altitudesM.length ? altitudesM : [drone.altitudeAglM])].sort(
-      (a, b) => a - b,
-    );
+    const listed = flights.length
+      ? flights
+      : [{ altitudeM: drone.altitudeAglM, above: "ground" as const }];
+    const heights = [
+      ...new Map(listed.map((f) => [`${f.altitudeM} ${f.above}`, f] as const)).values(),
+    ].sort((a, b) => a.altitudeM - b.altitudeM || a.above.localeCompare(b.above));
     const flown = heights
-      .map((h) => `${h} m above ground (lines ${Math.round(droneLineSpacingM(h))} m apart)`)
+      .map(
+        (f) =>
+          `${f.altitudeM} m above ${f.above} (lines ${Math.round(droneLineSpacingM(f.altitudeM))} m apart)`,
+      )
       .join(" or ");
     return `${drone.label}: ${flown} at ${drone.speedMps} m/s, ${drone.sidelapPct} % side overlap`;
   }

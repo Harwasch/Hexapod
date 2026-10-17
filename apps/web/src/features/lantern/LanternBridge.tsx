@@ -21,7 +21,7 @@ function contains([west, south, east, north]: LanternBbox, longitude: number, la
  */
 export function LanternBridge() {
   const scene = useScene();
-  const { sources, bbox } = useDatedSources();
+  const { sources, listed } = useDatedSources();
   const mode = useLantern((s) => s.mode);
   const index = useLantern((s) => s.index);
   const override = useLantern((s) => s.bboxOverride);
@@ -57,7 +57,9 @@ export function LanternBridge() {
   );
 
   // Opened with no land selected: look back around the view's centre. An area a descent chose
-  // holds while the view stays on it; panned away, the view's centre takes over.
+  // holds while the view stays on it; panned away, the view's centre takes over. The area is
+  // re-centred only once the view's centre leaves it: the lens roams half as far again around
+  // it (TimeLantern's reach), and every new area is a new catalog and new layers.
   useEffect(() => {
     if (!scene || mode === "off" || land) return;
     const centre = scene.camera.viewCenter();
@@ -71,13 +73,7 @@ export function LanternBridge() {
     const dLon =
       AROUND_VIEW_M / (111_320 * Math.max(Math.cos((centre.latitude * Math.PI) / 180), 0.01));
     const current = store.autoBbox;
-    // The same place within a few hundred metres keeps its catalog.
-    if (
-      current &&
-      Math.abs((current[0] + current[2]) / 2 - centre.longitude) < dLon / 2 &&
-      Math.abs((current[1] + current[3]) / 2 - centre.latitude) < dLat / 2
-    )
-      return;
+    if (current && contains(current, centre.longitude, centre.latitude)) return;
     store.setAutoBbox([
       centre.longitude - dLon,
       centre.latitude - dLat,
@@ -86,19 +82,23 @@ export function LanternBridge() {
     ]);
   }, [scene, mode, override, land, cell]);
 
+  // The sources with the area they were listed for: while the next area's list loads, the
+  // last one (and its layers) stays on the lens.
   useEffect(() => {
     if (!scene) return;
-    const [west = 0, south = 0, east = 0, north = 0] = bbox ?? [];
-    scene.lantern.setSources(sources, bbox ? { west, south, east, north } : null);
-  }, [scene, sources, bbox]);
+    const [west = 0, south = 0, east = 0, north = 0] = listed ?? [];
+    scene.lantern.setSources(sources, listed ? { west, south, east, north } : null);
+  }, [scene, sources, listed]);
 
   useEffect(() => {
     scene?.lantern.setMode(mode);
   }, [scene, mode]);
 
+  // What the HUD chose. A new list is not a choice: the scene keeps the source it showed (or
+  // the nearest of its kind in time) and the store follows it through the "lantern" frame.
   useEffect(() => {
     scene?.lantern.select(index);
-  }, [scene, index, sources]);
+  }, [scene, index]);
 
   return null;
 }

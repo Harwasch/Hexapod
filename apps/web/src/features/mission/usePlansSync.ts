@@ -5,7 +5,7 @@ import type { PlanRecord } from "@twin/contracts";
 
 import { usePlans, useWorkspacePlans } from "@/api/queries";
 import { landIdOfProject } from "@/missions/landGround";
-import { planFromRecord, zonesFromRecord } from "@/missions/planDraft";
+import { planFromRecord, separatePrivateAreas, zonesFromRecord } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 
 import { plansInvalidate } from "./planDrafting";
@@ -45,7 +45,8 @@ export function usePlansSync(): void {
     if (landScoped && !privateData) return;
     const byId = new Map<string, PlanRecord>();
     for (const record of [...publicData, ...(privateData ?? [])]) byId.set(record.id, record);
-    const records = [...byId.values()];
+    // One id, one outline: a private mission's area never shadows a public plan's.
+    const records = separatePrivateAreas([...byId.values()]);
     useMission.getState().mergeAreas(current.id, records.flatMap(zonesFromRecord));
     const composed = useMission.getState().project ?? current;
     setRemotePlans(

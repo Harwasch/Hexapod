@@ -72,6 +72,34 @@ describe("a busy tile", () => {
     expect(fetch).toHaveBeenCalledTimes(5);
   });
 
+  it("is not asked again once its layer has left the globe", async () => {
+    const fetch = vi
+      .spyOn(UrlTemplateImageryProvider.prototype, "requestImage")
+      .mockImplementationOnce(() => failWith(busy(503, "retry-after: 1\r\n")))
+      .mockReturnValue(undefined);
+    const waiting = provider.requestImage(1, 2, 3);
+    const failed = expect(waiting).rejects.toBeInstanceOf(RequestErrorEvent);
+    // Another tile waits in the browser's queue to the server when the layer goes.
+    await vi.advanceTimersByTimeAsync(2_000);
+    const asked = fetch.mock.calls.length;
+    expect(asked).toBeGreaterThan(1);
+    provider.cancel();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await failed;
+    expect(fetch).toHaveBeenCalledTimes(asked);
+    // A tile waiting out the server's Retry-After when the layer goes gives up without asking.
+    const other = new BusyAwareImageryProvider({ url: "https://tiles.test/{z}/{x}/{y}.png" });
+    fetch.mockReset();
+    fetch.mockImplementation(() => failWith(busy(503, "retry-after: 3\r\n")));
+    const late = other.requestImage(4, 5, 6);
+    const gaveUp = expect(late).rejects.toBeInstanceOf(RequestErrorEvent);
+    await vi.advanceTimersByTimeAsync(1_000);
+    other.cancel();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await gaveUp;
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("fails after a few tries, and a tile that is not busy fails at once", async () => {
     const fetch = vi
       .spyOn(UrlTemplateImageryProvider.prototype, "requestImage")

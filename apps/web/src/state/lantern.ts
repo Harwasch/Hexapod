@@ -74,7 +74,9 @@ export const useLantern = create<LanternState>()((set) => ({
     }),
   toggleKind: (kind) => set((s) => ({ kinds: { ...s.kinds, [kind]: !s.kinds[kind] }, index: 0 })),
   setBbox: (bboxOverride) => set({ bboxOverride, index: 0 }),
-  setAutoBbox: (autoBbox) => set({ autoBbox, index: 0 }),
+  // Re-centred around the view, the lens keeps the source it shows (TimeLantern.setSources
+  // finds it, or the nearest of its kind in time, in the new list).
+  setAutoBbox: (autoBbox) => set({ autoBbox }),
   setAvailability: (availability) =>
     set((s) =>
       s.availability.ok === availability.ok &&

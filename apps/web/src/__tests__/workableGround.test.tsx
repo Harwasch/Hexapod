@@ -322,9 +322,9 @@ describe("the redraft", () => {
     expect(failure).toBeNull();
     const state = useMission.getState();
     // Z-14's place goes to its workable area; Z-08 has none, so it stays as it was.
-    expect(state.composer?.zoneIds).toEqual(["A-01", "Z-08"]);
-    expect(state.project?.zones.map((z) => z.id)).toEqual(["Z-14", "Z-08", "A-01"]);
-    expect(state.composer?.setAside).toEqual({ "Z-14": "A-01" });
+    expect(state.composer?.zoneIds).toEqual(["A-L01", "Z-08"]);
+    expect(state.project?.zones.map((z) => z.id)).toEqual(["Z-14", "Z-08", "A-L01"]);
+    expect(state.composer?.setAside).toEqual({ "Z-14": "A-L01" });
     const note = state.composer?.ground?.note ?? "";
     expect(note).toContain("creek buffer not applied (USGS NHD not read)");
     expect(note).not.toContain("NHD creeks");
@@ -334,14 +334,14 @@ describe("the redraft", () => {
     expect(state.log.at(-1)?.text).toBe(note);
     // "Down from" counts the reworked zone's hands; the total is what Approve counted.
     expect(useWorkable.getState().rerun).toEqual({
-      zoneIds: ["A-01"],
+      zoneIds: ["A-L01"],
       handsBefore: 147,
       reworkedBefore: 130,
       creeksRead: false,
       labels: ["Z-14"],
     });
     expect(startPlanDraft).toHaveBeenCalledWith("Mow the grassland and the creek draw", {
-      zoneIds: ["A-01", "Z-08"],
+      zoneIds: ["A-L01", "Z-08"],
       machineIds: ["TR-04"],
       reshaped: true,
     });

@@ -432,7 +432,11 @@ describe("scout areas", () => {
   };
 
   it("sends the capture to the planner and keeps it on the stored plan", () => {
-    const request = buildDraftRequest({ ...anywhere, zones: [patch] }, { goal: "survey" });
+    // The patches are the card's scope (liftFog), so the private patch is shown to the planner.
+    const request = buildDraftRequest(
+      { ...anywhere, zones: [patch] },
+      { goal: "survey", zoneIds: ["A-01"] },
+    );
     expect(request.zones?.[0]?.capture).toEqual(capture);
     const body = recordBodyFromDraft(scoutDraft, "survey", anywhere.id, null, [patch]);
     expect(body.areas?.[0]?.capture).toEqual(capture);

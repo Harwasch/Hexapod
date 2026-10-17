@@ -570,6 +570,61 @@ describe("work only the ground it can", () => {
     expect(result.current.workable.text).toBeNull();
   });
 
+  // Every cell within the slope limit, nothing cut: the creek hands are all there is.
+  const uncut = {
+    ...answer,
+    workableM2: answer.footprintM2,
+    removed: { ...answer.removed, steepM2: 0, creekBufferM2: 0 },
+    leftOut: [],
+  } as WorkableGround;
+
+  it("says the creek limit was not checked when NHD did not answer, and asks again", async () => {
+    grounded("raster-1");
+    composing();
+    vi.mocked(requestWorkableGround).mockResolvedValue({
+      ...uncut,
+      creeks: { ...answer.creeks, status: "unavailable", counted: 0, message: "No answer" },
+      warnings: ["Creek buffer not applied: USGS NHD did not answer."],
+    });
+    const { result } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.workable.state).toBe("error"));
+    const creekHands = result.current.rehearsal?.hands.filter((h) => h.kind === "creek-buffer");
+    expect(creekHands?.length).toBeGreaterThan(0);
+    const message = result.current.workable.message ?? "";
+    expect(message).toContain("The creek limit was not checked on Z-14 (USGS NHD was not read)");
+    expect(message).toContain("Creek buffer not applied: USGS NHD did not answer.");
+    expect(message).not.toContain("between cells");
+    // Try again asks for the answer that left the creeks out.
+    vi.mocked(requestWorkableGround).mockResolvedValue(uncut);
+    act(() => result.current.workable.retry());
+    await waitFor(() => expect(requestWorkableGround).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.workable.state).toBe("nothing"));
+  });
+
+  it("puts creek hands on the creek buffer, not between cells, when it cuts next to nothing", async () => {
+    grounded("raster-1");
+    composing();
+    vi.mocked(requestWorkableGround).mockResolvedValue({
+      ...uncut,
+      workableM2: answer.footprintM2 - 100,
+      removed: { ...uncut.removed, creekBufferM2: 100 },
+      warnings: ["2 ephemeral channels were left out."],
+    });
+    const { result } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.workable.state).toBe("nothing"));
+    const message = result.current.workable.message ?? "";
+    expect(message).toContain(
+      "On USGS 3DEP 1/3″ bare-earth DEM, 10 m and USGS NHD creeks, less than 0.05 ac of Z-14 is outside its machines' assumed limits",
+    );
+    expect(message).toContain(
+      "inside a creek buffer are on lanes that reach the assumed 15 m buffer",
+    );
+    expect(message).not.toContain("every cell");
+    expect(message).toContain("2 ephemeral channels were left out.");
+  });
+
   it("offers the cut with its acres, redrafts on what is left, and rehearses that again", async () => {
     grounded("raster-1");
     useMission.setState({
@@ -608,7 +663,7 @@ describe("work only the ground it can", () => {
     act(() => result.current.workable.apply());
     // A private area derived from the Land takes Z-14's place in the plan, machines kept.
     const state = useMission.getState();
-    const area = state.project?.zones.find((z) => z.id === "A-01");
+    const area = state.project?.zones.find((z) => z.id === "A-L01");
     expect(area).toMatchObject({
       name: "West grassland, workable",
       private: true,
@@ -617,30 +672,30 @@ describe("work only the ground it can", () => {
     expect(area?.attribution).toBe(
       "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m clear of steeper cells, on USGS 3DEP 1/3″ DEM, published 2025-08-27, 15 m creek buffer (assumed) on USGS NHD, from West grassland (Z-14)",
     );
-    expect(state.composer?.zoneIds).toEqual(["A-01"]);
+    expect(state.composer?.zoneIds).toEqual(["A-L01"]);
     // Z-14 is set aside while its workable ground is in scope: a goal naming it does not
     // bring all of it back.
-    expect(state.composer?.setAside).toEqual({ "Z-14": "A-01" });
+    expect(state.composer?.setAside).toEqual({ "Z-14": "A-L01" });
     expect(state.composer?.ground?.source).toBe("workable");
     expect(startPlanDraft).toHaveBeenCalledWith("Mow the west grassland", {
-      zoneIds: ["A-01"],
+      zoneIds: ["A-L01"],
       machineIds: ["TR-04"],
       reshaped: true,
     });
-    expect(useWorkable.getState().records["A-01"]?.leftOut).toEqual([
+    expect(useWorkable.getState().records["A-L01"]?.leftOut).toEqual([
       { reason: "steep", label: "Left out: too steep", footprint: workable },
     ]);
     unmount();
     // The redraft's review rehearses the new ground again, straight to its verdict.
     const redrafted = {
       ...draft,
-      zoneIds: ["A-01"],
-      steps: draft.steps?.map((step) => ({ ...step, zoneId: "A-01" })),
-      coverage: [{ zoneId: "A-01", machineClass: "mower" }],
+      zoneIds: ["A-L01"],
+      steps: draft.steps?.map((step) => ({ ...step, zoneId: "A-L01" })),
+      coverage: [{ zoneId: "A-L01", machineClass: "mower" }],
     } as unknown as PlanDraft;
-    scene.mission.previewLanes.mockImplementation((id: string) => (id === "A-01" ? LANES : []));
+    scene.mission.previewLanes.mockImplementation((id: string) => (id === "A-L01" ? LANES : []));
     scene.mission.previewLaneNumbers.mockImplementation((id: string) =>
-      id === "A-01" ? [1, 2, 3] : [],
+      id === "A-L01" ? [1, 2, 3] : [],
     );
     const withArea = useMission.getState().project ?? onRanch;
     const again = renderHook(() => useDressRehearsal(redrafted, withArea, "b"), { wrapper });
@@ -651,7 +706,7 @@ describe("work only the ground it can", () => {
       reworkedBefore: before,
       creeksRead: true,
       labels: ["Z-14"],
-      zoneIds: ["A-01"],
+      zoneIds: ["A-L01"],
     });
     expect(useWorkable.getState().rerun).toBeNull();
   });

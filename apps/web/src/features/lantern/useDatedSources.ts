@@ -19,7 +19,13 @@ import { useLantern, type LanternBbox, type LanternKind } from "@/state/lantern"
 export const NOT_CHECKED = "not checked against today's 3D world";
 /** The catalog route takes areas this size at most (degrees a side). */
 const MAX_SIDE_DEG = 0.25;
-/** A saved land's bounds reach the public catalog route only this coarsely (degrees). */
+/**
+ * A saved land's bounds reach the public catalog route only this coarsely (degrees), so that
+ * route never receives the land's own extent. It does not hide where the operator looks: the
+ * lens's tiles (USGS sheets from this API's public tile route down to level 17, about 150 m;
+ * NAIP and Sentinel-2 from Planetary Computer) are asked for the ground under it, as any
+ * map's tiles are.
+ */
 const PRIVATE_ROUNDING_DEG = 0.05;
 const ROUNDING_DEG = 0.01;
 const SIX_HOURS_MS = 6 * 3600 * 1000;
@@ -161,6 +167,11 @@ export type LanternAreaName =
 export interface DatedSources {
   /** The area listed, rounded; null until something says where. */
   bbox: LanternBbox | null;
+  /**
+   * The area `sources` were listed for. Panning on around the view, the last list stays (with
+   * its layers on the lens) until the next one has loaded, so this can lag `bbox`.
+   */
+  listed: LanternBbox | null;
   /** What that area is: the place a descent chose, the selected land, or the view's centre. */
   area: LanternAreaName | null;
   /** What the kind chips let through, newest first: the rail, and what the lens steps through. */
@@ -182,8 +193,9 @@ export interface DatedSources {
 
 /**
  * The dated imagery for where the lantern looks: the area a descent chose, else the selected
- * land (rounded outward to 0.05°, since the catalog route is public and logged), else around the
- * view's centre when the lantern opened. (A land selected after a descent takes over from the
+ * land (rounded outward to 0.05°, so the public catalog route never gets its extent; the lens's
+ * tiles still name the ground viewed, see PRIVATE_ROUNDING_DEG), else around the view's centre
+ * when the lantern opened. (A land selected after a descent takes over from the
  * descent's area: LanternBridge clears it.) Asked for only once the lantern has been opened, or
  * a descent has landed; cached for 6 h, as the server does, or 30 s when a source could not be
  * reached.
@@ -208,23 +220,30 @@ export function useDatedSources(): DatedSources {
     if (landName !== null) return { kind: "land", name: landName };
     return auto ? { kind: "view" } : null;
   }, [override, landName, auto]);
+  const aroundView = area?.kind === "view";
   const query = useQuery({
     queryKey: ["dated-imagery", ...(bbox ?? [])],
-    queryFn: ({ signal }) => {
+    queryFn: async ({ signal }) => {
       const [west = 0, south = 0, east = 0, north = 0] = bbox ?? [];
-      return unwrap(
+      const catalog = await unwrap(
         api.GET("/api/v1/imagery/dated", {
           params: { query: { west, south, east, north } },
           signal,
         }),
       );
+      return { bbox: [west, south, east, north] as LanternBbox, catalog };
     },
+    // Around the view, panning re-centres the area: the last list stays until the next one is
+    // in, so the lens keeps its layers and the year chosen rather than blanking meanwhile. A
+    // land or an area a descent chose is a new place, listed afresh.
+    placeholderData: (previous) => (aroundView ? previous : undefined),
     enabled: requested && bbox !== null,
-    staleTime: (q) => (incomplete(q.state.data) ? INCOMPLETE_STALE_MS : SIX_HOURS_MS),
+    staleTime: (q) => (incomplete(q.state.data?.catalog) ? INCOMPLETE_STALE_MS : SIX_HOURS_MS),
     gcTime: SIX_HOURS_MS,
     retry: 1,
   });
-  const all = useMemo(() => (query.data?.sources ?? []).map(toLanternSource), [query.data]);
+  const catalog = query.data?.catalog;
+  const all = useMemo(() => (catalog?.sources ?? []).map(toLanternSource), [catalog]);
   const sources = useMemo(() => all.filter((source) => kinds[kindOf(source)]), [all, kinds]);
   const { refetch, isStale } = query;
   const retry = useCallback(() => void refetch(), [refetch]);
@@ -233,14 +252,15 @@ export function useDatedSources(): DatedSources {
   }, [isStale, query.data, refetch]);
   return {
     bbox,
+    listed: query.data?.bbox ?? null,
     area,
     sources,
     all,
-    providers: query.data?.providers ?? [],
+    providers: catalog?.providers ?? [],
     status:
       !requested || !bbox ? "idle" : query.isError ? "error" : query.data ? "ready" : "loading",
     error: query.error ? String(query.error.message || query.error) : null,
-    incomplete: incomplete(query.data),
+    incomplete: incomplete(catalog),
     refreshing: query.isFetching && query.data !== undefined,
     retry,
     refreshIfStale,

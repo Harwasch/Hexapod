@@ -12,6 +12,8 @@ import type { PlanDraft, ZoneCoverage } from "@twin/contracts";
 import { api } from "@/api/client";
 import { PlanCard } from "@/features/mission/PlanCard";
 import { demoRanchProject } from "@/missions/demo";
+import { DEFAULT_SCOUT } from "@/missions/scout";
+import type { Project } from "@/missions/types";
 import { useMission } from "@/state/mission";
 
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => null }));
@@ -54,8 +56,7 @@ const scan: PlanDraft = {
   coverage: [flight],
 };
 
-function show(draft: PlanDraft) {
-  const project = demoRanchProject();
+function show(draft: PlanDraft, project: Project = demoRanchProject()) {
   useMission.setState({ composer: null });
   useMission.getState().setProject(project);
   useMission.getState().openComposer({ goal: draft.objective, zoneIds: draft.zoneIds });
@@ -94,4 +95,18 @@ it("says the drone has no crew when nothing in the fleet flies", () => {
 
 it("says nothing of the kind when the flight has a crew", () => {
   expect(show({ ...scan, machineIds: ["TR-11"] })).not.toHaveTextContent(/no crew yet/);
+});
+
+it("says a scout area's height is above take-off, as its route flies it", () => {
+  const demo = demoRanchProject();
+  // A fog patch on the creek draw: the planner sized it from the capture it carries.
+  const scouted = {
+    ...demo,
+    zones: demo.zones.map((z) => (z.id === "Z-08" ? { ...z, scout: { ...DEFAULT_SCOUT } } : z)),
+  };
+  const path = show({ ...scan, coverage: [{ ...flight, altitudeM: 60 }] }, scouted);
+  expect(path).toHaveTextContent(
+    "Mapping drone, Mavic 3 Enterprise class (assumed): 60 m above take-off (lines 27 m apart)",
+  );
+  expect(path).not.toHaveTextContent(/above ground/);
 });

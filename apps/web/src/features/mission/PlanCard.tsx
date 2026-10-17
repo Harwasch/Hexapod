@@ -13,7 +13,7 @@ import { describeConflict, planConflicts } from "@/missions/conflicts";
 import { DEMO_EXAMPLES } from "@/missions/demo";
 import { DEMO_RANCH_PROJECT_ID } from "@/missions/demoRanchData";
 import { isLandZone } from "@/missions/landGround";
-import { machineClassSummary } from "@/missions/machineClasses";
+import { machineClassSummary, type FlightHeight } from "@/missions/machineClasses";
 import { diffDrafts, formatMachineHours, idLabel, overlayFor } from "@/missions/planDraft";
 import {
   goalAtDetail,
@@ -432,9 +432,17 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
   if (coverage.length === 0) return null;
   const classes = [...new Set(coverage.map((c) => c.machineClass))];
   // The heights the planner flew each drone zone at, so the note states the same assumption
-  // the rows' spacing came from.
-  const altitudes = coverage.flatMap((c) =>
-    c.machineClass === "drone" && c.altitudeM != null ? [c.altitudeM] : [],
+  // the rows' spacing came from. A scout area is flown at its capture's height above take-off
+  // (the planner sizes it from the capture it carries), not above the ground under it.
+  const flights = coverage.flatMap((c): FlightHeight[] =>
+    c.machineClass === "drone" && c.altitudeM != null
+      ? [
+          {
+            altitudeM: c.altitudeM,
+            above: project.zones.find((z) => z.id === c.zoneId)?.scout ? "take-off" : "ground",
+          },
+        ]
+      : [],
   );
   // A flight with no crew in a project that has machines: none of them flies (the planner
   // never hands a mower or a scout rover flight lines), so the drone is not in this fleet.
@@ -462,7 +470,7 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
       </ul>
       <p className="mc-muted mc-path__note">
         Computed from the outline; speeds assumed.{" "}
-        {classes.map((id) => machineClassSummary(id, id === "drone" ? altitudes : [])).join(". ")}.
+        {classes.map((id) => machineClassSummary(id, id === "drone" ? flights : [])).join(". ")}.
         {noFlyer && " No machine in this fleet flies, so the drone has no crew yet."}
       </p>
     </section>

@@ -7,7 +7,9 @@
  * would show "no record" where there is one. Here a busy tile is asked again after the time the
  * server gave (a little more, so a sweep's tiles do not all come back at once), a few times,
  * while Cesium shows the coarser tile it has. Cesium's own error retry asks again at once, which
- * a busy server only refuses again.
+ * a busy server only refuses again. A layer taken off the globe is `cancel`led: its tiles still
+ * waiting are not asked again, so they never hold the browser's requests to that server, the
+ * tiler's readers or its rate limit from the source on screen.
  */
 import {
   NeverTileDiscardPolicy,
@@ -46,6 +48,8 @@ export function busyWait(error: unknown): number | null {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export class BusyAwareImageryProvider extends UrlTemplateImageryProvider {
+  private cancelled = false;
+
   constructor(options: UrlTemplateImageryProvider.ConstructorOptions) {
     // A discard policy makes Cesium fetch tiles as blobs, whose errors carry the HTTP status
     // and headers (an <img> error says neither); this one discards nothing.
@@ -63,14 +67,23 @@ export class BusyAwareImageryProvider extends UrlTemplateImageryProvider {
       ?.catch((error: unknown) => this.again(x, y, level, error));
   }
 
+  /** Its layer left the globe: a tile waiting out a busy server gives up at its next step. */
+  cancel(): void {
+    this.cancelled = true;
+  }
+
   private async again(x: number, y: number, level: number, error: unknown): Promise<ImageryTypes> {
     let last = error;
     for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
       const wait = busyWait(last);
-      if (wait === null) throw last;
+      if (wait === null || this.cancelled) throw last;
       await sleep(wait * 1000 * (1 + Math.random() * 0.5));
       let next = this.ask(x, y, level);
-      for (let queued = 0; !next && queued < MAX_THROTTLED_MS; queued += THROTTLED_MS) {
+      for (
+        let queued = 0;
+        !next && !this.cancelled && queued < MAX_THROTTLED_MS;
+        queued += THROTTLED_MS
+      ) {
         await sleep(THROTTLED_MS);
         next = this.ask(x, y, level);
       }
@@ -84,8 +97,12 @@ export class BusyAwareImageryProvider extends UrlTemplateImageryProvider {
     throw last;
   }
 
-  /** The tile asked again, as Cesium asks for imagery; undefined while that server is full. */
+  /**
+   * The tile asked again, as Cesium asks for imagery; undefined while that server is full, or
+   * once the layer is gone.
+   */
   private ask(x: number, y: number, level: number): Promise<ImageryTypes> | undefined {
+    if (this.cancelled) return undefined;
     return super.requestImage(
       x,
       y,

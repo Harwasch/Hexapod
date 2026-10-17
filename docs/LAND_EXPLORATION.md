@@ -2484,8 +2484,11 @@ nothing exists, and "Try again" asks again.
 provider's answer cached 6 h per area rounded to 0.01°, and a cached answer spends no token). A
 catalog missing a provider that could not be reached is held 30 s and marked `no-store`; the next
 one asks that provider alone. A saved land's bounds are rounded outward to 0.05° before they
-reach it, and a land selected after a descent replaces the descent's area as the place looked
-back on. The topo tile route is an `async def`: a tile waits for one of four sheet readers on the
+reach it, so the public route never receives the land's own extent. That does not hide where
+the operator looks: the lens's tiles are requested for the ground under it (USGS sheets from this
+API's public, cacheable tile route down to level 17, about 150 m; NAIP and Sentinel-2 from
+Planetary Computer), as any map's tiles are, so the access logs of both record the area viewed.
+A land selected after a descent replaces the descent's area as the place looked back on. The topo tile route is an `async def`: a tile waits for one of four sheet readers on the
 event loop, holding none of the threads every other route runs on, and the reads run on threads
 of their own. Past twelve waiting, or four seconds, a tile is answered 503 with Retry-After,
 which the lantern's layers wait out and ask again (`cesium/busyTiles.ts`). The bytes a sheet is
@@ -2560,7 +2563,9 @@ more alike, with the tapped cell outlined. "How alike" (30 to 99%, from 80%) is 
 threshold uniform, so sliding fetches and uploads nothing; the tally counts the lit cells of the
 display grid and says it is approximate. In Protect mode a tap on a lit patch leaves the whole
 8-connected patch out (hatched in blue; a second tap brings it back); protected ground is sent as
-row runs and kept for the next tap on the same grid. Escape (not one typed into a field, nor one
+row runs and kept for the next tap on the same grid. The card, the hatch and the job's note count
+the same protected cells: those still lit at the slider's setting, the ground protection keeps
+out of this job. Escape (not one typed into a field, nor one
 an open sheet, dialog or popover takes first), the fog taking the ground, another land or a
 revised boundary ends the session; hiding the card only lifts the drape and the taps.
 "Make this the job" opens a fresh plan card on the land with the areas, private and marked as

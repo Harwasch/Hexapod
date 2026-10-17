@@ -14,7 +14,7 @@ import {
 } from "@/missions/planDraft";
 import { isPrivateZone, landIdOfProject } from "@/missions/landGround";
 import type { Plan, Project } from "@/missions/types";
-import { landUsesOidc, useLandIdentity } from "@/state/landIdentity";
+import { landScope, landUsesOidc, useLandIdentity } from "@/state/landIdentity";
 import { useMission } from "@/state/mission";
 
 /** Invalidated after every write so the plan list refetches (public and workspace plans). */
@@ -173,7 +173,13 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
   const replaceId = state.composer?.replacePlanId ?? null;
   const existing = replaceId ? project.plans.find((p) => p.id === replaceId) : undefined;
   const body = recordBodyFromDraft(draft, goal, project.id, project.siteId, project.zones);
-  const isPrivate = planIsPrivate(project, draft.zoneIds, existing);
+  // The planner saw private ground when the card's own scope held it (`privateScope`): its
+  // text may name that ground even when the draft left it out, so the plan stays private.
+  const isPrivate = planIsPrivate(
+    project,
+    [...draft.zoneIds, ...(state.composer?.zoneIds ?? [])],
+    existing,
+  );
   if (isPrivate && existing?.persisted && existing.scope !== "workspace") {
     useMission
       .getState()
@@ -195,6 +201,10 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
     useMission.getState().setStreamOpen(true);
     return null;
   }
+  // Whose session the save is for: a sign-out or workspace switch while it is in flight has
+  // already dropped this session's private plans (`dropPrivate`), and its answer must not
+  // come back into the next one.
+  const scope = landScope();
   let plan: Plan;
   try {
     // A revision carries the plan body only: identity (project, site) never changes.
@@ -228,7 +238,9 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
     plan = planFromDraft(draft, project, { goal, ...(replaceId ? { id: replaceId } : {}) });
     plan.agentNote = `${plan.agentNote} Saved in this browser only: the API is offline.`;
   }
-  useMission.getState().approvePlan(plan);
+  if (isPrivate && landScope() !== scope) return null;
+  // Filed under the project it was drafted on, even when another one is current by now.
+  useMission.getState().approvePlan(plan, project.id);
   planningApproved();
   useMission
     .getState()

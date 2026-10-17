@@ -239,7 +239,11 @@ the spot: "Use current view" takes half the viewport around the view centre (60 
 way), "Draw area" borrows the measurement tool's polygon drawing and turns the finished polygon
 into a zone (`missions/areas.ts`, ids `A-01…`). Drawn areas are kept in the browser and stored
 on the plans that cover them (`areas` on the plan record), so a plan opened on another device
-brings its ground with it. The world redraws zones whenever the store's project changes.
+brings its ground with it. Areas derived from a saved Land (fog patches, like-here patches,
+workable ground) are private and numbered apart, `A-L01…`, so a public plan's area, numbered in
+a browser that never saw them, never takes the same id on a shared project; a private mission
+stored with an id a public plan's different outline also uses gets an `A-L…` id when the lists
+are merged (`separatePrivateAreas`). The world redraws zones whenever the store's project changes.
 
 **Planning from the command box.** The command box is the one place to talk. A sentence of work
 ("3D scan this field into a splat", "mow the orchard by Friday with two mowers", or the older

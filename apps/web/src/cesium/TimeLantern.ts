@@ -40,6 +40,7 @@ import {
   SceneTransforms,
   WebMercatorTilingScheme,
   type CesiumWidget,
+  type ImageryLayerCollection,
   type Scene,
 } from "cesium";
 
@@ -112,6 +113,34 @@ function same(a: LanternAvailability, b: LanternAvailability): boolean {
 function cyclingCandidates(): boolean {
   const select = useSceneSelect.getState();
   return select.index >= 0 && select.candidates.length > 1;
+}
+
+/**
+ * Where `shown` is in a new list of sources: the same source, else the one of its kind nearest
+ * it in time (the 2014 NAIP flight a re-centred list lists again; the nearest edition of a map),
+ * else `fallback` within the list.
+ */
+export function keptIndex(
+  sources: readonly Pick<LanternSource, "id" | "kind" | "sortDate">[],
+  shown: Pick<LanternSource, "id" | "kind" | "sortDate"> | undefined,
+  fallback: number,
+): number {
+  const clamped = Math.min(fallback, Math.max(0, sources.length - 1));
+  if (!shown) return clamped;
+  const same = sources.findIndex((s) => s.id === shown.id);
+  if (same >= 0) return same;
+  const at = Date.parse(shown.sortDate);
+  let best = -1;
+  let gap = Number.POSITIVE_INFINITY;
+  sources.forEach((source, i) => {
+    if (source.kind !== shown.kind) return;
+    const apart = Math.abs(Date.parse(source.sortDate) - at);
+    if (apart < gap) {
+      gap = apart;
+      best = i;
+    }
+  });
+  return best >= 0 ? best : clamped;
 }
 
 /** The area asked about, grown into the reach the lens may roam (degrees). */
@@ -248,10 +277,9 @@ export class TimeLantern {
    * lens may roam the area grown by half (at least 3 km across), where the globe preloads.
    */
   setSources(sources: LanternSource[], area: LanternArea | null): void {
-    const previousId = this.sources[this.index]?.id;
+    const shown = this.sources[this.index];
     this.sources = sources;
-    const kept = previousId ? sources.findIndex((s) => s.id === previousId) : -1;
-    this.index = kept >= 0 ? kept : Math.min(this.index, Math.max(0, sources.length - 1));
+    this.index = keptIndex(sources, shown, this.index);
     const key = area ? `${area.west},${area.south},${area.east},${area.north}` : "";
     if (key !== this.reachKey) {
       this.reachKey = key;
@@ -688,7 +716,7 @@ export class TimeLantern {
     }
     for (const [id, layer] of this.imagery) {
       if (wanted.has(id)) continue;
-      collection.remove(layer, true);
+      removeDated(collection, layer);
       this.imagery.delete(id);
     }
     for (const i of [this.index - 1, this.index + 1, this.index]) {
@@ -761,7 +789,7 @@ export class TimeLantern {
   private disposeImagery(): void {
     if (this.viewer.isDestroyed()) return;
     const collection = this.viewer.imageryLayers;
-    for (const layer of this.imagery.values()) collection.remove(layer, true);
+    for (const layer of this.imagery.values()) removeDated(collection, layer);
     this.imagery.clear();
     if (this.backdrop) collection.remove(this.backdrop, true);
     this.backdrop = null;
@@ -815,6 +843,16 @@ export class TimeLantern {
     this.wheelOff = null;
     this.disposeImagery();
   }
+}
+
+/**
+ * A dated layer off the globe and destroyed. Its tiles still waiting out a busy server are not
+ * asked again: they would hold the requests the source on screen needs.
+ */
+function removeDated(collection: ImageryLayerCollection, layer: ImageryLayer): void {
+  const provider = layer.imageryProvider;
+  if (provider instanceof BusyAwareImageryProvider) provider.cancel();
+  collection.remove(layer, true);
 }
 
 /** Whether two windows are the same within half a metre at every corner. */

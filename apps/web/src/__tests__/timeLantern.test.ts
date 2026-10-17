@@ -11,7 +11,8 @@ import type { CameraController } from "@/cesium/CameraController";
 import type { ClippingManager } from "@/cesium/ClippingManager";
 import type { LanternFrame, LanternSource } from "@/cesium/lanternTypes";
 import type { LayerManager } from "@/cesium/LayerManager";
-import { TimeLantern } from "@/cesium/TimeLantern";
+import { BusyAwareImageryProvider } from "@/cesium/busyTiles";
+import { keptIndex, TimeLantern } from "@/cesium/TimeLantern";
 import type { SceneEvents } from "@/cesium/types";
 import type { WorldShader } from "@/cesium/worldShader";
 import { Emitter } from "@/lib/emitter";
@@ -235,6 +236,68 @@ describe("the Time Lantern's imagery", () => {
     lantern.setMode("off");
     expect(h().clipping.setLanternReach).toHaveBeenLastCalledWith(null);
     expect(order.every((layer) => !layer.show)).toBe(true);
+  });
+});
+
+describe("a layer that leaves the globe", () => {
+  it("stops its tiles waiting out a busy server from asking again", async () => {
+    const { lantern, imageryLayers, basemapDone } = h();
+    basemapDone();
+    lantern.setSources(SOURCES, AREA);
+    lantern.setMode("sticky");
+    await flush();
+    const cancel = vi.spyOn(BusyAwareImageryProvider.prototype, "cancel");
+    const dated = () =>
+      imageryLayers.order.filter(
+        (layer) => layer.imageryProvider instanceof BusyAwareImageryProvider,
+      );
+    const first = dated().map((layer) => layer.imageryProvider);
+    expect(first).toHaveLength(2);
+    // Scrolled four editions back: the first two layers are taken off.
+    lantern.select(4);
+    expect(cancel.mock.contexts).toEqual(expect.arrayContaining(first));
+    expect(cancel).toHaveBeenCalledTimes(2);
+    // A new area: every layer goes.
+    cancel.mockClear();
+    const shown = dated().map((layer) => layer.imageryProvider);
+    lantern.setSources(SOURCES, { ...AREA, west: AREA.west + 0.1, east: AREA.east + 0.1 });
+    expect(cancel.mock.contexts).toEqual(expect.arrayContaining(shown));
+  });
+});
+
+describe("a new list for a re-centred area", () => {
+  it("keeps the source shown, else the nearest of its kind in time", () => {
+    const sheet = {
+      ...source(1919),
+      id: "usgs-topo-los-olivos-1919",
+      kind: "historical-map" as const,
+    };
+    const next = [source(2022), source(2016), { ...sheet, id: "usgs-topo-solvang-1959" }];
+    // The same flight, wherever it now sits.
+    expect(keptIndex(next, source(2016), 4)).toBe(1);
+    // A flight the new list lacks: the flight nearest it in time, never a map.
+    expect(keptIndex(next, source(2018), 0)).toBe(1);
+    // A sheet the new area lacks: the nearest edition of a map there.
+    expect(keptIndex(next, sheet, 0)).toBe(2);
+    // Nothing of its kind: the same place in the list, within it.
+    expect(keptIndex([source(2022)], sheet, 3)).toBe(0);
+    expect(keptIndex([], source(2016), 2)).toBe(0);
+  });
+
+  it("shows the same year after the list is replaced", () => {
+    const { lantern, events, basemapDone } = h();
+    basemapDone();
+    const frames: LanternFrame[] = [];
+    events.on("lantern", (frame) => frames.push(frame));
+    lantern.setSources(SOURCES, AREA);
+    lantern.select(3);
+    lantern.setSources([source(2022), source(2016), source(2012)], {
+      ...AREA,
+      west: AREA.west + 0.02,
+      east: AREA.east + 0.02,
+    });
+    expect(frames.at(-1)?.source?.id).toBe("naip-2016");
+    expect(frames.at(-1)?.index).toBe(1);
   });
 });
 
