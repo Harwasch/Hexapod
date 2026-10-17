@@ -235,8 +235,8 @@ class PlanDraftRequest(CamelModel):
     # Rates learned from the work log; the planner prefers them over its defaults.
     rates: list[PlannerRate] = Field(default_factory=list, max_length=100)
     # Operator pre-selections from the console (a selected zone, machines ticked in Fleet).
-    preferred_zone_ids: list[str] = Field(default_factory=list)
-    preferred_machine_ids: list[str] = Field(default_factory=list)
+    preferred_zone_ids: list[str] = Field(default_factory=list, max_length=500)
+    preferred_machine_ids: list[str] = Field(default_factory=list, max_length=200)
     # A follow-up instruction on a previous draft ("use three machines", "skip Z-21").
     refinement: str | None = Field(default=None, max_length=2000)
     # Answers to the planner's clarifications, by clarification id.

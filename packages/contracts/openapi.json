@@ -13000,6 +13000,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 200,
             "title": "Preferredmachineids",
             "type": "array"
           },
@@ -13007,6 +13008,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
             "title": "Preferredzoneids",
             "type": "array"
           },

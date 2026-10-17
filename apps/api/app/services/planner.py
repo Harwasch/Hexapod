@@ -15,8 +15,9 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -54,6 +55,15 @@ RULES_ACRES_PER_MACHINE_HOUR = 1.5
 RULES_HOURS_PER_DAY = 8
 RULES_MAX_ZONES = 3
 ACRE_M2 = 4046.8564224
+#: What one draft request may measure (`size_zones`): each zone once, at most SIZED_ZONES_MAX
+#: zones with SIZED_VERTICES_MAX outline vertices in all, and no zone started after
+#: SIZING_BUDGET_S seconds. One jagged outline can take seconds to measure at a 2 m swath, so
+#: without these one request could keep a thread busy for hours. A zone past them is sized by
+#: its acres at the assumed rate, as a zone without an outline is.
+SIZED_ZONES_MAX = 20
+SIZED_VERTICES_MAX = 50_000
+SIZING_BUDGET_S = 10.0
+_clock = time.monotonic
 # Zones sized from their outlines use the assumed machine classes in machine_classes.json
 # (speeds, swaths, the drone's camera); the acre rate above is for zones without one.
 
@@ -483,18 +493,40 @@ def size_zones(
     answers: dict[str, AnswerValue],
     crew: list[str] | None = None,
 ) -> list[ZoneCoverage]:
-    """Coverage for every zone in scope that came with an outline; the rest are sized by acres.
-    The class is the crew's (`_work_class`), so the hours are for the machines that do it."""
+    """Coverage for every zone in scope that came with an outline, within the request's
+    measuring budget (SIZED_ZONES_MAX); the rest are sized by acres. The class is the crew's
+    (`_work_class`), so the hours are for the machines that do it."""
     text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
     machine = _work_class(kind, text, request.machines, crew)
     absent = machine == "drone" and _no_flyer(request.machines)
     zone_by_id = {z.id: z for z in request.zones}
-    sized = (
-        _size_zone(zone_by_id[z], kind, machine, answers, absent=absent)
-        for z in zone_ids
-        if z in zone_by_id
-    )
-    return [c for c in sized if c is not None]
+    outlined = [
+        zone_by_id[z]
+        for z in dict.fromkeys(zone_ids)
+        if z in zone_by_id and zone_by_id[z].geometry is not None
+    ]
+    deadline = _clock() + SIZING_BUDGET_S
+    vertices = 0
+    sized: list[ZoneCoverage] = []
+    for zone in outlined[:SIZED_ZONES_MAX]:
+        assert zone.geometry is not None
+        count = _vertex_count(zone.geometry.coordinates)
+        if vertices + count > SIZED_VERTICES_MAX:
+            continue
+        if _clock() > deadline:
+            break
+        vertices += count
+        measured = _size_zone(zone, kind, machine, answers, absent=absent)
+        if measured is not None:
+            sized.append(measured)
+    return sized
+
+
+def _vertex_count(coordinates: Any) -> int:
+    """Positions in a GeoJSON coordinates array (a Point's is one)."""
+    if not coordinates or not isinstance(coordinates[0], list):
+        return 1
+    return sum(_vertex_count(item) for item in coordinates)
 
 
 def _path_assumption(
@@ -1263,7 +1295,9 @@ class ClaudePlanner:
         context["today"] = _today(request).isoformat()
         text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
         outlined = [z.id for z in request.zones if z.geometry is not None]
-        scoped = [z for z in request.preferred_zone_ids if z in outlined] or outlined[:20]
+        scoped = [
+            z for z in dict.fromkeys(request.preferred_zone_ids) if z in outlined
+        ] or outlined[:SIZED_ZONES_MAX]
         context["coverage"] = [
             c.model_dump(mode="json", by_alias=True)
             for c in size_zones(request, scoped, _task_kind(text), request.answers)
@@ -1311,7 +1345,7 @@ class ClaudePlanner:
         zone_ids = {z.id for z in request.zones}
         machine_ids = {m.id for m in request.machines}
         today = _today(request)
-        scoped = [z for z in parsed.zone_ids if z in zone_ids]
+        scoped = [z for z in dict.fromkeys(parsed.zone_ids) if z in zone_ids]
         # The server's own measurement rides along with the model's numbers: acres become the
         # outlines' geodesic area when every zone in scope has one, and the path is reported.
         # The model's machine-hours stand; the card shows both.

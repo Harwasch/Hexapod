@@ -896,3 +896,104 @@ def test_the_demo_examples_are_sized_for_the_crew_that_does_them() -> None:
     # Asked for from the air, a survey stays a flight even without a drone to fly it.
     aerial = demo_draft("Survey the creek draw from the air")
     assert aerial.machine_ids == [] and aerial.coverage[0].machine_class == "drone"
+
+
+def _square(index: int) -> dict[str, Any]:
+    west, south = -122.14 + index * 0.002, 47.64
+    ring = [[west, south], [west + 0.001, south], [west + 0.001, south + 0.001]]
+    return {"type": "Polygon", "coordinates": [[*ring, [west, south + 0.001], [west, south]]]}
+
+
+SQUARES = [
+    PlannerZone(id=f"A-{i:02d}", name=f"Patch {i}", acres=6, task="Mow", geometry=_square(i))
+    for i in range(30)
+]
+
+
+class _CountingMeasure:
+    """Stands in for coverage.measure: counts calls and advances a fake clock per call."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, seconds_each: float = 0.0) -> None:
+        from app.services import coverage, planner
+
+        self.calls = 0
+        self.now = 0.0
+        self._measure = coverage.measure
+        self._seconds = seconds_each
+        monkeypatch.setattr(coverage, "measure", self)
+        monkeypatch.setattr(planner, "_clock", lambda: self.now, raising=False)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls += 1
+        self.now += self._seconds
+        return self._measure(*args, **kwargs)
+
+
+def test_a_draft_request_bounds_its_preferred_ids() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        request("Mow", preferred_zone_ids=["Z-14"] * 501)
+    with pytest.raises(ValidationError):
+        request("Mow", preferred_machine_ids=["TR-04"] * 201)
+
+
+def test_sizing_measures_each_zone_once_and_a_bounded_amount_of_ground(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import planner
+    from app.services.planner import size_zones
+
+    measure = _CountingMeasure(monkeypatch)
+    many = request("Mow the patches", zones=SQUARES, machines=[])
+    assert len(size_zones(many, ["A-00"] * 400, "treat", {})) == 1
+    assert measure.calls == 1, "a zone named again is not measured again"
+    sized = size_zones(many, [z.id for z in SQUARES], "treat", {})
+    assert [c.zone_id for c in sized] == [f"A-{i:02d}" for i in range(planner.SIZED_ZONES_MAX)]
+    # Past the vertex budget a zone is sized by its acres (5 vertices a square).
+    monkeypatch.setattr(planner, "SIZED_VERTICES_MAX", 12)
+    assert len(size_zones(many, [z.id for z in SQUARES], "treat", {})) == 2
+    # Past the time budget no further zone is measured.
+    monkeypatch.setattr(planner, "SIZED_VERTICES_MAX", 50_000)
+    slow = _CountingMeasure(monkeypatch, seconds_each=planner.SIZING_BUDGET_S * 0.6)
+    assert len(size_zones(many, [z.id for z in SQUARES], "treat", {})) == 2
+    assert slow.calls == 2
+    # The rules planner sizes the rest from their acres, and says at what rate.
+    monkeypatch.setattr(planner, "SIZING_BUDGET_S", 1e9)
+    ids = [z.id for z in SQUARES]
+    draft = RulesPlanner().draft(
+        request("Mow the patches", zones=SQUARES, machines=MACHINES, preferred_zone_ids=ids)
+    )
+    assert len(draft.coverage) == planner.SIZED_ZONES_MAX and draft.zone_ids == ids
+    assert any("acres per machine-hour" in a for a in draft.assumptions)
+
+
+def test_claude_planner_sizes_a_repeated_preferred_zone_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parsed = ModelPlanDraft(
+        title="Mow the patch",
+        objective="Mow A-00.",
+        zone_ids=["A-00", "A-00", "A-01"],
+        machine_ids=[],
+        cadence="once",
+        start_date="2026-09-18",
+        end_date="2026-09-19",
+        estimated_acres=12,
+        estimated_machine_hours=4,
+        estimated_calendar_days=1,
+        steps=[],
+        assumptions=[],
+        risks=[],
+        questions=[],
+        clarifications=[],
+    )
+    measure = _CountingMeasure(monkeypatch)
+    settings = Settings(ANTHROPIC_API_KEY="k", ANTHROPIC_MODEL="claude-opus-5", _env_file=None)
+    planner = ClaudePlanner(settings, client=_FakeClient(parsed))  # type: ignore[arg-type]
+    draft = planner.draft(
+        land_request("Mow the patch", SQUARES[:2], preferred_zone_ids=["A-00"] * 500)
+    )
+    assert measure.calls == 3, "once for the model's context, once per zone in the draft"
+    assert draft.zone_ids == ["A-00", "A-01"]
+    assert [c.zone_id for c in draft.coverage] == ["A-00", "A-01"]
