@@ -23,6 +23,13 @@
   "usd": 11.0
  },
  {
+  "group": "Reductions",
+  "item": "joint encoder (MT6701 on the drum, read on the servo-bus board)",
+  "where": "shoulder",
+  "qty": 1,
+  "usd": 6.0
+ },
+ {
   "group": "Actuators",
   "item": "RobStride EduLite 05",
   "where": "elbow",
@@ -36,6 +43,13 @@
   "where": "elbow",
   "qty": 1,
   "usd": 11.0
+ },
+ {
+  "group": "Reductions",
+  "item": "joint encoder (MT6701 on the drum, read on the servo-bus board)",
+  "where": "elbow",
+  "qty": 1,
+  "usd": 6.0
  },
  {
   "group": "Actuators",
@@ -101,7 +115,7 @@
   "item": "gripper (servo + fin-ray fingers)",
   "where": "",
   "qty": 1,
-  "usd": 24.0
+  "usd": 31.0
  },
  {
   "group": "Sensing",

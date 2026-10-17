@@ -41,7 +41,7 @@ units:
     price_usd: 60
     price_alt_usd: 81
     price_alt_source: Steadywin direct $46.82 + 40.3% duty + $15 shipping
-    price_alt_confidence: high
+    price_alt_confidence: med
     dia_mm: 67.5
     len_mm: 30.5
     backlash_deg: 0.25
@@ -50,7 +50,7 @@ units:
     interface: CAN-FD (our board)
     output_encoder: yes
     ip: none
-    notes: "Vendor 5.68 Nm rated; Kt 0.39 x 12.3 A = 4.8 used. 0.85 ohm limits a 24 V bus to ~33 A, so 12.7 Nm peak"
+    notes: "aifitlab's specs: vendor 5.68 Nm rated, Kt 0.39 x 12.3 A = 4.8 used. Peak held to 12.7 Nm (~33 A): at 0.85 ohm, our 40 A on the 48 V bus would put ~1 kW into a 260 g motor. Steadywin's $46.82 SKU is its GIM6010-8 core (5 / 11 Nm at 24 V per Steadywin), which these numbers match within ~10%"
   - id: bare_gim6010_8
     name: Steadywin GIM6010-8 (bare)
     kind: qdd

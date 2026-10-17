@@ -28,7 +28,8 @@
    "ratio": 9.0,
    "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)",
    "retail": 80.0,
-   "needs_driver": false
+   "needs_driver": false,
+   "stage_limit": null
   },
   "shoulder": {
    "id": "dm_j4310_v4+capstan3-d20",
@@ -38,7 +39,7 @@
    "peak": 18.359999999999996,
    "mass": 0.387496,
    "speed": 6.981317007977318,
-   "price": 143.0,
+   "price": 149.0,
    "backlash_deg": 0.06666666666666667,
    "force_sense": "yes",
    "ip": "none",
@@ -47,7 +48,8 @@
    "ratio": 30.0,
    "source": "Zennixtek DDP $119 + $13 shipping",
    "retail": 125.0,
-   "needs_driver": false
+   "needs_driver": false,
+   "stage_limit": 18.36
   },
   "elbow": {
    "id": "rs_edulite_05+capstan3-d20",
@@ -57,7 +59,7 @@
    "peak": 16.560000000000002,
    "mass": 0.304496,
    "speed": 15.009831567151233,
-   "price": 93.0,
+   "price": 99.0,
    "backlash_deg": 0.08333333333333333,
    "force_sense": "yes",
    "ip": "none",
@@ -66,7 +68,8 @@
    "ratio": 27.0,
    "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)",
    "retail": 80.0,
-   "needs_driver": false
+   "needs_driver": false,
+   "stage_limit": 18.36
   },
   "wrist_pitch": {
    "id": "hx_35hm",
@@ -85,7 +88,8 @@
    "ratio": 300.0,
    "source": "retail",
    "retail": 36.0,
-   "needs_driver": false
+   "needs_driver": false,
+   "stage_limit": null
   },
   "forearm_roll": {
    "id": "sts3250",
@@ -104,7 +108,8 @@
    "ratio": 300.0,
    "source": "OpenELAB DDP",
    "retail": 88.0,
-   "needs_driver": false
+   "needs_driver": false,
+   "stage_limit": null
   },
   "tool_roll": {
    "id": "sts3250",
@@ -123,10 +128,11 @@
    "ratio": 300.0,
    "source": "OpenELAB DDP",
    "retail": 88.0,
-   "needs_driver": false
+   "needs_driver": false,
+   "stage_limit": null
   }
  },
- "cost": 736.64,
+ "cost": 755.64,
  "mass": 2.499,
  "backlash_mm": 4.37,
  "tip_speed": 5.43,
