@@ -2557,6 +2557,7 @@ a.mc-link {
 }
 
 .mc-actions--start {
+  flex-wrap: wrap;
   justify-content: flex-start;
 }
 

@@ -214,3 +214,40 @@ it("ignores a late preview after the user changes a point", async () => {
   expect(screen.queryByText("Leave-one-out RMS")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Save alignment and show overlay" })).toBeDisabled();
 });
+it("on a touch screen says tap and offers Cancel map pick rather than Escape", async () => {
+  vi.spyOn(window, "matchMedia").mockImplementation(
+    (query: string) =>
+      ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }) as unknown as MediaQueryList,
+  );
+  let resolve!: (point: { longitude: number; latitude: number } | null) => void;
+  scene.areas.pickGround.mockImplementation(
+    () =>
+      new Promise<{ longitude: number; latitude: number } | null>((done) => {
+        resolve = done;
+      }),
+  );
+  scene.areas.cancelPick.mockImplementation(() => resolve(null));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Align this map" }));
+  fill("Image X", 100);
+  fill("Image Y", 150);
+  fireEvent.click(screen.getByRole("button", { name: "Pick matching map point" }));
+  expect(
+    screen.getByText("Tap the matching place on the globe, or press Cancel map pick."),
+  ).toHaveAttribute("role", "status");
+  expect(screen.queryByText(/Escape to cancel/)).not.toBeInTheDocument();
+  const cancel = screen.getByRole("button", { name: "Cancel map pick" });
+  expect(cancel).toBeEnabled();
+  await act(async () => {
+    fireEvent.click(cancel);
+    await Promise.resolve();
+  });
+  expect(scene.areas.cancelPick).toHaveBeenCalled();
+  await waitFor(() => expect(useLandContext.getState().pointPicker).toBeNull());
+  expect(screen.queryByRole("button", { name: "Cancel map pick" })).not.toBeInTheDocument();
+});

@@ -1,4 +1,4 @@
-import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan } from "lucide-react";
+import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
@@ -6,7 +6,7 @@ import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contra
 import { usePlannerStatus } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { planningEdited } from "@/lib/planningMetrics";
-import { tapOrClick } from "@/lib/pointer";
+import { tapOrClick, touchFirst } from "@/lib/pointer";
 import { areaFromMeasurement, isAreaZone, nextAreaId } from "@/missions/areas";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
 import { DEMO_EXAMPLES } from "@/missions/demo";
@@ -230,7 +230,7 @@ export function PlanCard({ project }: { project: Project }) {
             <div className="mc-prompt__title">{tapOrClick()} the ground you mean on the map.</div>
             <p className="mc-muted">
               I'll outline the field, pond or lot under your {tapOrClick(true)} and draft “
-              {composer.goal}”. Esc to cancel.
+              {composer.goal}”.{touchFirst() ? "" : " Esc to cancel."}
             </p>
             <div className="mc-actions mc-actions--start">
               <button
@@ -248,6 +248,14 @@ export function PlanCard({ project }: { project: Project }) {
                 data-testid="ground-view"
               >
                 <Scan size={12} aria-hidden="true" /> Use what's in view
+              </button>
+              <button
+                type="button"
+                className="mc-btn mc-btn--sm"
+                onClick={() => scene?.areas.cancelPick()}
+                data-testid="ground-cancel"
+              >
+                <X size={12} aria-hidden="true" /> Cancel
               </button>
             </div>
           </div>
