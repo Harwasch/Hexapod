@@ -41,6 +41,8 @@ interface PickContext {
   carto: Cartographic;
   /** The splat tileset the position is on, when a scan's solids answered (SplatCollider). */
   splat?: object;
+  /** Only the bare ellipsoid answered: off by the ground's height along the ray. */
+  approximate?: boolean;
 }
 
 /**
@@ -208,6 +210,15 @@ export class SelectionManager {
     return false;
   }
 
+  /** Emits a 'ground-tap' at the picked point when it is bare ground or a layer claims it. */
+  private emitClaimedTap(tapped: PickContext, window: Cartesian2, bare = false): boolean {
+    const longitude = CesiumMath.toDegrees(tapped.carto.longitude);
+    const latitude = CesiumMath.toDegrees(tapped.carto.latitude);
+    if (!bare && !this.groundClaimed(longitude, latitude)) return false;
+    this.events.emit("ground-tap", { longitude, latitude, x: window.x, y: window.y });
+    return true;
+  }
+
   clear(): void {
     this.unhighlight();
     this.current = null;
@@ -237,9 +248,43 @@ export class SelectionManager {
     if (!position && this.scene.pickPositionSupported) position = this.scene.pickPosition(window);
     if (!position && ray) position = this.scene.globe.pick(ray, this.scene);
     // No terrain drawn there yet: the bare ellipsoid still says where the point is.
+    const approximate = !position;
     position ??= this.viewer.camera.pickEllipsoid(window, this.scene.globe.ellipsoid);
     if (!position) return null;
-    return { position, carto: Cartographic.fromCartesian(position), splat: splat?.tileset };
+    return {
+      position,
+      carto: Cartographic.fromCartesian(position),
+      splat: splat?.tileset,
+      approximate,
+    };
+  }
+
+  /**
+   * Where a ground tap landed. Mid-click the depth pick can come back empty (measured over a
+   * selected Land on the photorealistic tiles: every click), and the bare ellipsoid behind it
+   * is off by the ground's height along the ray: a ranch at 250 m seen from 4.4 km, tapped
+   * 1.3 km off-centre, landed 90 m away, a different 10 m cell altogether. So an approximate
+   * answer is asked again after a fresh frame, when the depth answers; the ellipsoid stays the
+   * last resort.
+   */
+  private async groundTapPosition(
+    window: Cartesian2,
+    picked: unknown,
+  ): Promise<PickContext | null> {
+    const first = this.pickPosition(window, picked);
+    if (!first?.approximate) return first;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        off();
+        clearTimeout(timer);
+        resolve();
+      };
+      const off = this.scene.postRender.addEventListener(done);
+      const timer = setTimeout(done, 500);
+      this.scene.requestRender();
+    });
+    if (this.scene.isDestroyed()) return null;
+    return this.pickPosition(window, picked) ?? first;
   }
 
   /**
@@ -290,6 +335,14 @@ export class SelectionManager {
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
       return;
+    // A ground layer taking taps answers for a mapped area of the Land on its own ground (an
+    // inventory polygon such as the oak woodland covers much of a ranch): there it is ground,
+    // as a zone's fill is below. Its lines and points, and areas off that ground, still select.
+    let tapped: PickContext | null | undefined;
+    if (mode === "click" && this.groundTaps.size > 0 && isLandAreaPick(picked)) {
+      tapped = await this.groundTapPosition(window, picked);
+      if (tapped && this.emitClaimedTap(tapped, window)) return;
+    }
     if (isEntityPick(picked) && picked.id.id.startsWith("land-context:")) {
       const properties = picked.id.properties?.getValue(this.viewer.clock.currentTime) as
         Record<string, unknown> | undefined;
@@ -313,26 +366,18 @@ export class SelectionManager {
     // or the ground under a scan's splats), it does nothing at all: no marker, no card, and
     // what is open stays open. "What's here" in the map menu is how to ask about a place.
     const onGround = !(picked instanceof Cesium3DTileFeature) && !isEntityPick(picked);
-    // Unless a ground layer asked for taps (the fog): then the point goes out as a
+    // Unless a ground layer asked for taps (the fog, Show once): then the point goes out as a
     // 'ground-tap', and still nothing is selected here. On the ground the layer claims, a
     // mission zone's fill is ground too; elsewhere (outside the Land, no grid shown yet) the
     // zone is selected as it would be without the layer.
-    let tapped: PickContext | null | undefined;
     if (mode === "click" && this.groundTaps.size > 0) {
       const onZoneFill =
         isEntityPick(picked) &&
         typeof picked.id.id === "string" &&
         picked.id.id.startsWith(ZONE_ENTITY_PREFIX);
       if (onGround || onZoneFill) {
-        tapped = this.pickPosition(window, picked);
-        if (tapped) {
-          const longitude = CesiumMath.toDegrees(tapped.carto.longitude);
-          const latitude = CesiumMath.toDegrees(tapped.carto.latitude);
-          if (onGround || this.groundClaimed(longitude, latitude)) {
-            this.events.emit("ground-tap", { longitude, latitude, x: window.x, y: window.y });
-            return;
-          }
-        }
+        tapped = await this.groundTapPosition(window, picked);
+        if (tapped && this.emitClaimedTap(tapped, window, onGround)) return;
       }
     }
     if (mode === "click" && onGround) return;
@@ -718,6 +763,16 @@ export class SelectionManager {
 
 function isEntityPick(value: unknown): value is { id: Entity } {
   return typeof value === "object" && value !== null && "id" in value && value.id instanceof Entity;
+}
+
+/** A mapped area of a Land on the map: a polygon of the inventory or of a research layer. */
+export function isLandAreaPick(value: unknown): boolean {
+  return (
+    isEntityPick(value) &&
+    typeof value.id.id === "string" &&
+    value.id.id.startsWith("land-context:") &&
+    value.id.polygon !== undefined
+  );
 }
 
 function isPrimitivePick(value: unknown): value is { primitive: unknown } {
