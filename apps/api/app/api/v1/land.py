@@ -29,7 +29,15 @@ from app.schemas.land_selection import (
     SelectionInstruction,
     SelectionInterpretation,
 )
-from app.services import land, land_ground, land_hydrography, land_import, land_selection
+from app.schemas.land_workable import WorkableGroundRead, WorkableGroundRequest
+from app.services import (
+    land,
+    land_ground,
+    land_hydrography,
+    land_import,
+    land_selection,
+    land_workable,
+)
 
 router = APIRouter(prefix="/land", tags=["land"])
 
@@ -106,6 +114,22 @@ def area_hydrography(
     # The answer is clipped to a private boundary: never let a shared cache keep it.
     response.headers["Cache-Control"] = "private, no-store"
     return land_hydrography.hydrography(db, workspace.id, land_id)
+
+
+@router.post("/{land_id}/workable-ground", response_model=WorkableGroundRead)
+def workable_ground(
+    land_id: uuid.UUID,
+    payload: WorkableGroundRequest,
+    db: DbSession,
+    workspace: WorkspaceDep,
+    response: Response,
+) -> WorkableGroundRead:
+    """The part of an outline on this land a ground machine class can work: less the slope
+    over its assumed limit (the land's elevation raster) and its assumed buffer around USGS
+    NHD creeks. Derived on request, never saved; what the dress rehearsal's hands ask for."""
+    # Ground clipped to a private boundary: never let a shared cache keep it.
+    response.headers["Cache-Control"] = "private, no-store"
+    return land_workable.workable_ground(db, workspace.id, land_id, payload)
 
 
 @router.delete("/{land_id}", status_code=204)
