@@ -46,6 +46,20 @@ test("descends to typed coordinates in one flight, onto the arrival card", async
   // One flight, re-pointed on the way: never a second take-off.
   expect(await app.evaluate<number>("window.__twin.camera.flights")).toBe(flightsBefore + 1);
 
+  // At 1440 x 900 the card sits over the strip, "Look back" right under it: both stay in view,
+  // the strip's controls below the reach of the card's shadow (12 px down, 32 px blur).
+  await expect(app.getByTestId("lantern-control")).toBeVisible();
+  const card = (await arrival.boundingBox())!;
+  const below: { name: string; top: number }[] = [];
+  for (const control of await app.locator(".hud-strip > *").all()) {
+    const box = await control.boundingBox();
+    if (!box || box.height < 1) continue;
+    const name = (await control.getAttribute("data-testid")) ?? (await control.innerText());
+    below.push({ name, top: Math.round(box.y - (card.y + card.height)) });
+  }
+  expect(below.map((control) => control.name)).toContain("lantern-control");
+  for (const control of below) expect(control.top, control.name).toBeGreaterThanOrEqual(44);
+
   // The app's own Land flag (the rail has a Land tool only with it), whatever this process's env.
   if ((await app.getByTestId("tool-land").count()) > 0) {
     await app.getByRole("button", { name: "Outline this land" }).click();
