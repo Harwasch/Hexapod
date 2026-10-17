@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { components, LandArea } from "@twin/contracts";
 import { api } from "@/api/client";
@@ -126,6 +126,121 @@ it("keeps approval disabled when supporting information changed or constraints r
   expect(post).not.toHaveBeenCalled();
 });
 
+it("says under a disabled Approve why, and its Revise action opens the draft", async () => {
+  const post = vi.spyOn(api, "POST");
+  mount({ ...action, constraints: [{ text: "Confirm access", resolved: false }] });
+  fireEvent.click(await screen.findByRole("button", { name: /Field survey.*draft/ }));
+  const approve = screen.getByRole("button", { name: "Approve revision 1" });
+  expect(approve).toBeDisabled();
+  const reasons = screen.getByRole("list", { name: "Before approving" });
+  expect(
+    within(reasons).getByText(/^Resolve 1 recorded constraint: revise the action/),
+  ).toBeVisible();
+  const note = within(reasons)
+    .getByText("Add a review note. It is stored with the approval.")
+    .closest("li");
+  // The reasons' words, not the Revise button's.
+  expect(approve).toHaveAccessibleDescription(
+    "Resolve 1 recorded constraint: revise the action, tick Resolved and record how. Add a review note. It is stored with the approval.",
+  );
+  // A hint until the note is visited and left empty, then a warning.
+  expect(note).toHaveClass("is-hint");
+  fireEvent.blur(screen.getByLabelText("Review note"));
+  expect(note).not.toHaveClass("is-hint");
+  expect(screen.getByLabelText("Review note")).toHaveAttribute("aria-invalid", "true");
+  fireEvent.change(screen.getByLabelText("Review note"), { target: { value: "Checked" } });
+  expect(within(reasons).queryByText(/Add a review note/)).toBeNull();
+  expect(approve).toBeDisabled();
+  fireEvent.click(within(reasons).getByRole("button", { name: "Revise action" }));
+  expect(screen.getByLabelText("Action title")).toHaveValue("Field survey");
+  expect(screen.getByLabelText("Constraint")).toHaveValue("Confirm access");
+  expect(post).not.toHaveBeenCalled();
+});
+
+it("enables Approve once nothing blocks it", async () => {
+  vi.spyOn(api, "POST").mockResolvedValue({ data: action, response: new Response() });
+  mount(action);
+  fireEvent.click(await screen.findByRole("button", { name: /Field survey.*draft/ }));
+  const approve = screen.getByRole("button", { name: "Approve revision 1" });
+  expect(approve).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Review note"), { target: { value: "Reviewed" } });
+  expect(approve).toBeEnabled();
+  expect(approve).not.toHaveAttribute("aria-describedby");
+  expect(screen.queryByRole("list", { name: "Before approving" })).toBeNull();
+});
+
+it("stops Save with a checklist that opens collapsed details and focuses the field", async () => {
+  const post = vi.spyOn(api, "POST");
+  mount(action);
+  fireEvent.click(await screen.findByRole("button", { name: "Plan an action" }));
+  fireEvent.change(screen.getByLabelText("Action title"), { target: { value: "Fence line" } });
+  fireEvent.change(screen.getByLabelText("Outcome to achieve"), {
+    target: { value: "Keep the fence line clear" },
+  });
+  fireEvent.change(screen.getByLabelText("Step 1 name"), { target: { value: "Clear brush" } });
+  fireEvent.change(screen.getByLabelText("Step 1 success measure"), {
+    target: { value: "No brush over 30 cm" },
+  });
+  const details = screen.getByText("Resources, costs and prerequisites").closest("details");
+  if (!details) throw new Error("The step's details are missing");
+  details.open = true;
+  fireEvent.change(screen.getByLabelText("Estimated cost (USD)"), { target: { value: "450" } });
+  details.open = false;
+  fireEvent.click(screen.getByRole("button", { name: "Save action draft" }));
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent("Before saving, fix 1 thing:");
+  expect(alert).toHaveTextContent("Step 1: explain the basis for its 450 USD estimate.");
+  expect(post).not.toHaveBeenCalled();
+  const basis = screen.getByLabelText("Cost basis");
+  expect(details.open).toBe(true);
+  expect(basis).toHaveFocus();
+  expect(basis).toHaveAttribute("aria-invalid", "true");
+  // The reason also sits under the field, where the cursor landed.
+  expect(basis).toHaveAccessibleDescription("Step 1: explain the basis for its 450 USD estimate.");
+  // Each listed problem is a way back to its field.
+  details.open = false;
+  basis.blur();
+  fireEvent.click(within(alert).getByRole("button", { name: /explain the basis/ }));
+  expect(details.open).toBe(true);
+  expect(basis).toHaveFocus();
+  // The list follows the draft: fixing the last problem clears it, and Save goes through.
+  post.mockResolvedValue({ data: action, response: new Response() });
+  fireEvent.change(basis, { target: { value: "Contractor quote, October" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(basis).not.toHaveAttribute("aria-invalid");
+  fireEvent.click(screen.getByRole("button", { name: "Save action draft" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+});
+
+it("focuses the first problem of an empty draft and lists the rest", async () => {
+  mount(action);
+  fireEvent.click(await screen.findByRole("button", { name: "Plan an action" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save action draft" }));
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent("Before saving, fix 4 things:");
+  expect(
+    within(alert)
+      .getAllByRole("button")
+      .map((item) => item.textContent),
+  ).toEqual([
+    "Add an action title.",
+    "Describe the outcome to achieve.",
+    "Step 1: add a step name.",
+    "Step 1: add a success measure.",
+  ]);
+  expect(screen.getByLabelText("Action title")).toHaveFocus();
+  expect(screen.getByLabelText("Action title")).toHaveAccessibleDescription("Add an action title.");
+  expect(screen.getByLabelText("Step 1 name")).toHaveAttribute("aria-invalid", "true");
+  expect(document.querySelectorAll(".land-field-problem")).toHaveLength(4);
+  // Typing a title clears its mark and its reason; the rest stay listed.
+  fireEvent.change(screen.getByLabelText("Action title"), { target: { value: "Fence line" } });
+  expect(screen.getByLabelText("Action title")).not.toHaveAttribute("aria-invalid");
+  expect(screen.getByRole("alert")).toHaveTextContent("Before saving, fix 3 things:");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Plan an action" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 it("recovers unfinished work and blank step timing without approving or scheduling", async () => {
   const first = mount(action);
   fireEvent.click(screen.getByRole("button", { name: "Plan an action" }));
@@ -233,6 +348,9 @@ it("requires review if an action was approved while the unfinished edit was clos
   fireEvent.click(screen.getByRole("button", { name: "Recover action draft" }));
   await screen.findByRole("region", { name: "Review changed action" });
   expect(screen.getByRole("button", { name: "Save action revision" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save action revision" })).toHaveAccessibleDescription(
+    "Choose how to handle the changed action above before saving.",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Keep my work as a new action" }));
   expect(screen.getByLabelText("Action title")).toHaveValue("My pending changes");
   expect(screen.getByRole("button", { name: "Save action draft" })).toBeEnabled();
