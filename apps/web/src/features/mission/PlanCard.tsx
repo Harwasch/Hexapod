@@ -414,6 +414,10 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
   const altitudes = coverage.flatMap((c) =>
     c.machineClass === "drone" && c.altitudeM != null ? [c.altitudeM] : [],
   );
+  // A flight with no crew in a project that has machines: none of them flies (the planner
+  // never hands a mower or a scout rover flight lines), so the drone is not in this fleet.
+  const noFlyer =
+    classes.includes("drone") && draft.machineIds.length === 0 && project.machines.length > 0;
   return (
     <section data-testid="plan-path">
       <span className="mc-eyebrow">PATH</span>
@@ -437,6 +441,7 @@ function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
       <p className="mc-muted mc-path__note">
         Computed from the outline; speeds assumed.{" "}
         {classes.map((id) => machineClassSummary(id, id === "drone" ? altitudes : [])).join(". ")}.
+        {noFlyer && " No machine in this fleet flies, so the drone has no crew yet."}
       </p>
     </section>
   );

@@ -63,7 +63,7 @@ const PROGRESS = { "Z-14": 0.58, "Z-21": 0.12, "Z-08": 0.34 } as const;
 /** Examples the plan composer offers on the demo ranch: work this place actually has. */
 export const DEMO_EXAMPLES = [
   "Mow the star thistle on the west grassland by Friday",
-  "Survey Figueroa Creek for blackberry every month",
+  "Survey the Figueroa Creek draw for blackberry every month",
   "3D scan this field into a gaussian splat",
 ];
 

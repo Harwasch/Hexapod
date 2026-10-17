@@ -301,9 +301,14 @@ length under the assumed machine classes (`apps/api/app/services/machine_classes
 labelled "(assumed)" in the draft. The rules planner takes a zone or machine by the rest of a
 name that leads with its id ("the west grassland" for "Z-14 West grassland"), and without a
 count asked for its crew is the machines whose model suits the work (the mowers to mow, the
-seed drill to seed, survey scouts for a survey when there is no drone). On the demo, "Mow the
-star thistle on the west grassland" drafts two mowers over 414 acres, about 174 machine-hours
-at 2.4 acres an hour. A dispatched plan's detail shows progress from the work log against where
+seed drill to seed). The crew also settles how a survey is sized: with a drone it is flown,
+and with only survey scouts it is driven at the survey rover's assumptions. Flight lines never
+go to a machine whose model says it works on the ground, so a scan in a fleet with no drone
+has no crew and says the mapping drone is not in this fleet. On the demo, "Mow the star
+thistle on the west grassland" drafts two mowers over 414 acres, about 174 machine-hours at
+2.4 acres an hour, and "Survey the Figueroa Creek draw" drafts the two scouts over its 44
+acres, about 3.7 machine-hours at the survey rover's 10 m swath and 1.5 m/s. A dispatched
+plan's detail shows progress from the work log against where
 the schedule expects it today (`missions/progress.ts`) and offers "Replan from here", which
 reopens the composer with the drift written into the goal.
 

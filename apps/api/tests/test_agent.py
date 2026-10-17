@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import json
+import re
 from datetime import date
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -725,8 +728,8 @@ def test_a_name_that_leads_with_its_id_answers_to_the_rest_of_it() -> None:
 
 def test_the_default_crew_is_the_machines_that_suit_the_work() -> None:
     """With no count asked for, mowing takes the mowers and drilling the one seed drill, not
-    whichever machines happen to be idle; a survey sized as a drone flight takes drones
-    first, then survey scouts. A count asked for still fills up from the rest."""
+    whichever machines happen to be idle; a survey in a fleet with no drone goes to its survey
+    scouts. A count asked for still fills up from the rest."""
     fleet = [
         PlannerMachine(
             id="TR-04", name="TR-04 Kestrel", model="Ranger 2 · mower", status="working"
@@ -737,59 +740,74 @@ def test_the_default_crew_is_the_machines_that_suit_the_work() -> None:
     ]
     zone = [PlannerZone(id="Z-14", name="Z-14 West grassland", acres=414, task="Mow thistle")]
 
-    def crew(goal: str) -> list[str]:
-        return RulesPlanner().draft(request(goal, zones=zone, machines=fleet)).machine_ids
+    def crew(goal: str, machines: list[PlannerMachine] = fleet) -> list[str]:
+        return RulesPlanner().draft(request(goal, zones=zone, machines=machines)).machine_ids
 
     assert crew("Mow the west grassland") == ["TR-04", "TR-12"]
     assert crew("Drill native seed on the west grassland") == ["TR-15"]
     assert crew("Survey the west grassland every month") == ["TR-11"]
     assert crew("Drill seed on the west grassland with two machines") == ["TR-15", "TR-11"]
+    # A drone in the fleet flies the survey, and only machines that may fly fill a flight.
+    drone = PlannerMachine(id="UA-01", name="UA-01 Kite", model="Mavic 3E drone", status="idle")
+    assert crew("Survey the west grassland every month", [*fleet, drone]) == ["UA-01"]
+    assert crew("3D scan the west grassland with two machines", [*fleet, drone]) == ["UA-01"]
+
+
+DEMO_NAMES = {"Z-14": "Z-14 West grassland", "Z-21": "Z-21 Fence line", "Z-08": "Z-08 Creek draw"}
+DEMO_TASKS = {"Z-14": "Mow yellow star thistle", "Z-21": "Buffer + mow queued", "Z-08": "Survey"}
+# The simulated fleet as apps/web/src/missions/demo.ts sends it.
+DEMO_FLEET = [
+    PlannerMachine(id="TR-04", name="TR-04 Kestrel", model="Ranger 2 · mower", status="working"),
+    PlannerMachine(id="TR-12", name="TR-12 Pipit", model="Ranger 2 · mower", status="working"),
+    PlannerMachine(id="TR-07", name="TR-07 Harrier", model="Ranger 2 · mower", status="attention"),
+    PlannerMachine(id="TR-18", name="TR-18 Shrike", model="Scout 1 · survey", status="attention"),
+    PlannerMachine(id="TR-11", name="TR-11 Vireo", model="Scout 1 · survey", status="idle"),
+    PlannerMachine(id="TR-15", name="TR-15 Towhee", model="Drill 1 · seeder", status="idle"),
+]
+REPO = Path(__file__).resolve().parents[3]
+
+
+def demo_ranch() -> tuple[dict[str, Any], list[PlannerZone]]:
+    """The demo ranch's derived zones and the planner zones the console sends for them: each
+    with its footprint, at its footprint's measured acres."""
+    ranch = json.loads((REPO / "apps/api/app/seed/demo_ranch.json").read_text())
+    derived = ranch["derived"]["zones"]
+    zones = [
+        PlannerZone(
+            id=zid,
+            name=name,
+            acres=round(derived[zid]["areaM2"] / 4046.8564224),
+            task=DEMO_TASKS[zid],
+            treated=zid == "Z-14",
+            geometry=derived[zid]["footprint"],
+        )
+        for zid, name in DEMO_NAMES.items()
+    ]
+    return derived, zones
+
+
+def demo_draft(goal: str) -> Any:
+    _, zones = demo_ranch()
+    return RulesPlanner().draft(
+        request(goal, zones=zones, machines=DEMO_FLEET, project_name="Oak Bench Ranch")
+    )
+
+
+def demo_examples() -> list[str]:
+    """The example chips the plan composer offers on the demo ranch, read from the console."""
+    source = (REPO / "apps/web/src/missions/demo.ts").read_text()
+    block = re.search(r"export const DEMO_EXAMPLES = \[(.*?)\];", source, re.S)
+    assert block, "DEMO_EXAMPLES moved: point this test at it"
+    return re.findall(r'"([^"]+)"', block.group(1))
 
 
 def test_the_demo_ranch_drafts_from_its_outlines_with_the_assumptions_shown() -> None:
     """The simulated demo's zones now send their outlines (their acres are the footprints'
     measured acres), so its drafts are sized from path length under the assumed machine
     classes, and say so. The numbers stay in a field's range: a 2 m mower at 1.4 m/s does
-    about 2.4 acres an hour, a 3 m drill at 1.2 m/s about 3, a mapping drone far more."""
-    import json
-    from pathlib import Path
-
-    ranch = json.loads((Path(__file__).parents[1] / "app" / "seed" / "demo_ranch.json").read_text())
-    derived = ranch["derived"]["zones"]
-    names = {"Z-14": "Z-14 West grassland", "Z-21": "Z-21 Fence line", "Z-08": "Z-08 Creek draw"}
-    tasks = {"Z-14": "Mow yellow star thistle", "Z-21": "Buffer + mow queued", "Z-08": "Survey"}
-    zones = [
-        PlannerZone(
-            id=zid,
-            name=name,
-            acres=round(derived[zid]["areaM2"] / 4046.8564224),
-            task=tasks[zid],
-            treated=zid == "Z-14",
-            geometry=derived[zid]["footprint"],
-        )
-        for zid, name in names.items()
-    ]
-    fleet = [
-        PlannerMachine(
-            id="TR-04", name="TR-04 Kestrel", model="Ranger 2 · mower", status="working"
-        ),
-        PlannerMachine(id="TR-12", name="TR-12 Pipit", model="Ranger 2 · mower", status="working"),
-        PlannerMachine(
-            id="TR-07", name="TR-07 Harrier", model="Ranger 2 · mower", status="attention"
-        ),
-        PlannerMachine(
-            id="TR-18", name="TR-18 Shrike", model="Scout 1 · survey", status="attention"
-        ),
-        PlannerMachine(id="TR-11", name="TR-11 Vireo", model="Scout 1 · survey", status="idle"),
-        PlannerMachine(id="TR-15", name="TR-15 Towhee", model="Drill 1 · seeder", status="idle"),
-    ]
-
-    def draft(goal: str) -> Any:
-        return RulesPlanner().draft(
-            request(goal, zones=zones, machines=fleet, project_name="Oak Bench Ranch")
-        )
-
-    mow = draft("Mow the star thistle on the west grassland by Friday")
+    about 2.4 acres an hour, a 3 m drill at 1.2 m/s about 3."""
+    derived, _ = demo_ranch()
+    mow = demo_draft("Mow the star thistle on the west grassland by Friday")
     assert mow.zone_ids == ["Z-14"] and mow.machine_ids == ["TR-04", "TR-12"]
     [c] = mow.coverage
     assert c.machine_class == "mower" and c.area_m2 == pytest.approx(derived["Z-14"]["areaM2"])
@@ -801,18 +819,57 @@ def test_the_demo_ranch_drafts_from_its_outlines_with_the_assumptions_shown() ->
 
     # The 30 m strip inside the fence turns far more often than the open grassland, so its
     # rate is a little lower.
-    fence = draft("Mow the fence line")
+    fence = demo_draft("Mow the fence line")
     assert fence.zone_ids == ["Z-21"] and fence.coverage[0].machine_class == "mower"
     assert 1.7 < fence.estimates.acres / fence.estimates.machine_hours < 2.6
 
-    seed = draft("Drill native seed on the west grassland")
+    seed = demo_draft("Drill native seed on the west grassland")
     assert seed.machine_ids == ["TR-15"] and seed.coverage[0].machine_class == "seeder"
     assert 2.5 < seed.estimates.acres / seed.estimates.machine_hours < 3.2
     assert "Seed drill (assumed)" in seed.coverage[0].basis
 
-    survey = draft("Survey the creek draw for blackberry every month")
-    assert survey.zone_ids == ["Z-08"] and survey.machine_ids == ["TR-11", "TR-18"]
-    assert survey.cadence == "monthly"
-    flight = survey.coverage[0]
-    assert flight.machine_class == "drone" and "(assumed)" in flight.basis
-    assert 20 < survey.estimates.acres / survey.estimates.machine_hours < 400
+
+def test_the_demo_examples_are_sized_for_the_crew_that_does_them() -> None:
+    """Every example chip on the demo ranch drafts work its simulated fleet can do, sized for
+    the machines it is given. The fleet has no drone: the creek survey goes to the survey
+    scouts at the survey rover's assumptions (10 m swath at 1.5 m/s is about 13 acres an hour
+    before turns), and the scan, which needs a mapping drone, gets no ground crew and says the
+    drone is not in this fleet."""
+    from app.services.machine_classes import MACHINE_CLASSES
+
+    mow_goal, survey_goal, scan_goal = demo_examples()
+    mow = demo_draft(mow_goal)
+    assert mow.machine_ids == ["TR-04", "TR-12"]
+    assert {c.machine_class for c in mow.coverage} == {"mower"}
+
+    survey = demo_draft(survey_goal)
+    assert survey.zone_ids == ["Z-08"], "the creek survey stays on the creek"
+    assert survey.machine_ids == ["TR-11", "TR-18"] and survey.cadence == "monthly"
+    [c] = survey.coverage
+    rover = MACHINE_CLASSES.survey
+    assert c.machine_class == "survey" and c.speed_mps == rover.speed_mps
+    assert c.spacing_m == rover.swath_m and c.altitude_m is None
+    assert "Survey rover (assumed)" in c.basis and "Mapping drone" not in c.basis
+    acres_per_hour = survey.estimates.acres / survey.estimates.machine_hours
+    assert 8 < acres_per_hour < 13.4, "a rover's pace, not a drone's"
+    assert 3 < survey.estimates.machine_hours < 5
+    assert "before driving them" in survey.steps[0].detail
+    assert any("by a survey rover (assumed)" in a for a in survey.assumptions)
+    assert all(c.id != "resolution" for c in survey.clarifications), "detail is a flight's"
+
+    scan = demo_draft(scan_goal)
+    assert scan.machine_ids == [] and all(not s.machine_ids for s in scan.steps)
+    assert {c.machine_class for c in scan.coverage} == {"drone"}
+    assert all("(assumed), not in this fleet" in c.basis for c in scan.coverage)
+    assert any("not in this fleet" in a for a in scan.assumptions)
+    assert any(q.startswith("Which drone flies this?") for q in scan.questions)
+    assert not any("No machines are assigned" in q for q in scan.questions)
+    assert all(c.id != "crew" for c in scan.clarifications), "no count of nothing to ask for"
+
+    # A ground machine named for a flight keeps the operator's choice, with the mismatch said.
+    named = demo_draft(f"{scan_goal} with TR-11")
+    assert named.machine_ids == ["TR-11"]
+    assert any("TR-11 Vireo works on the ground" in r for r in named.risks)
+    # Asked for from the air, a survey stays a flight even without a drone to fly it.
+    aerial = demo_draft("Survey the creek draw from the air")
+    assert aerial.machine_ids == [] and aerial.coverage[0].machine_class == "drone"
