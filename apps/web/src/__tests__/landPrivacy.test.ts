@@ -245,6 +245,48 @@ describe("plans on a saved land stay private", () => {
     expect(onLand.existingPlans?.[0]?.title).toBe(secret);
   });
 
+  it("shows the planner a layered land's ground only when the draft is private anyway", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    const project = useMission.getState().project!;
+    const z14 = demo.zones[0]!.id;
+    const fenceDraft = draft(["L-aaaa0001"]);
+    // A card on the fleet's own zone may be approved on the public routes: the model never
+    // reads the land's names, notes or outlines, nor a draft made over them.
+    const open = buildDraftRequest(project, {
+      goal: "Mow Z-14 and keep clear of the fence",
+      zoneIds: [z14],
+      refinement: "two passes",
+      previous: fenceDraft,
+    });
+    expect(open.zones?.map((z) => z.id)).toEqual(demo.zones.map((z) => z.id));
+    expect(JSON.stringify(open)).not.toContain("North fence");
+    expect(JSON.stringify(open)).not.toContain("Saved boundary");
+    expect(open.previousDraft).toBeUndefined();
+    // Nothing pre-selected: the planner picks among the fleet's zones only.
+    expect(
+      buildDraftRequest(project, { goal: "mow" }).zones?.some((z) => z.id === "L-aaaa0001"),
+    ).toBe(false);
+    // The land's ground in the card's scope: the plan is private, so the model sees it all.
+    const onLand = buildDraftRequest(project, {
+      goal: "monitor the fence",
+      zoneIds: ["L-aaaa0001"],
+      refinement: "weekly",
+      previous: fenceDraft,
+    });
+    expect(onLand.zones?.map((z) => z.id)).toContain("L-0f1e2d3c");
+    expect(onLand.previousDraft?.zoneIds).toEqual(["L-aaaa0001"]);
+    // A draft that left the card's private ground out is still approved privately.
+    api.workspaceCreate.mockImplementation((body: Record<string, unknown>) =>
+      Promise.resolve(record(body)),
+    );
+    useMission.getState().openComposer({ goal: "monitor the fence", zoneIds: ["L-aaaa0001"] });
+    await approveDraft(draft([z14]), "monitor the fence");
+    expect(api.publicCreate).not.toHaveBeenCalled();
+    expect(api.workspaceCreate).toHaveBeenCalledTimes(1);
+  });
+
   it("never keeps a private plan in the browser when the API is offline", async () => {
     useMission.getState().setProject(landProject(land, ground));
     api.workspaceCreate.mockRejectedValue(new TypeError("Failed to fetch"));

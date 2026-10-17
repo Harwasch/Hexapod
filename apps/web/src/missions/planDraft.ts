@@ -15,7 +15,7 @@ import type {
 
 import { isAreaZone, zoneFromFootprint } from "./areas";
 import { bookedWindows } from "./conflicts";
-import { isLandZone, landIdOfProject } from "./landGround";
+import { isLandZone, isPrivateZone, landIdOfProject } from "./landGround";
 import { learnedRates, type LearnedRate } from "./rates";
 import { SCOUT_SHORT } from "./scout";
 import type { Plan, PlanOverlay, Project, Zone } from "./types";
@@ -71,11 +71,26 @@ function measuredRates(project: Project): LearnedRate[] {
  */
 export const PRIVATE_PLAN_TITLE = "A private workspace mission";
 
+/**
+ * Whether a draft over `zoneIds` is approved privately whatever the planner picks: on a Land's
+ * own project, or with private ground (a Land's zones, areas derived from them) already in its
+ * scope. Only then may the planner see private ground; otherwise the draft may be stored on
+ * the public plan routes, and its steps and risks must not be able to name a Land's features.
+ */
+export function privateScope(project: Project, zoneIds: readonly string[]): boolean {
+  return (
+    landIdOfProject(project.id) !== null ||
+    project.zones.some((z) => zoneIds.includes(z.id) && isPrivateZone(z))
+  );
+}
+
 /** The context the planner needs: the goal plus the project's zones, machines and plans. */
 export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftRequest {
   // On a Land's own project every plan is approved privately (planIsPrivate), so private
   // titles may be quoted there; anywhere else the draft may go to the public plan routes.
   const onlyPrivate = landIdOfProject(project.id) !== null;
+  const showPrivate = privateScope(project, seed.zoneIds ?? []);
+  const isPrivate = (id: string) => project.zones.some((z) => z.id === id && isPrivateZone(z));
   const request: PlanDraftRequest = {
     goal: seed.goal.trim(),
     projectName: project.name,
@@ -88,7 +103,7 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
       batteryPct: m.batteryPct,
     })),
     zones: project.zones
-      .filter((z) => !seed.exclude?.includes(z.id))
+      .filter((z) => !seed.exclude?.includes(z.id) && (showPrivate || !isPrivateZone(z)))
       .map((z) => ({
         id: z.id,
         name: z.name,
@@ -119,7 +134,8 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
   };
   if (seed.refinement) request.refinement = seed.refinement;
   if (seed.answers && Object.keys(seed.answers).length) request.answers = seed.answers;
-  if (seed.previous) {
+  // A draft made over private ground is not shown to a draft that may go public.
+  if (seed.previous && (showPrivate || !seed.previous.zoneIds.some(isPrivate))) {
     const { source: _source, model: _model, note: _note, ...body } = seed.previous;
     request.previousDraft = body;
   }

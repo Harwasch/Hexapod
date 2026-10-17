@@ -173,7 +173,13 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
   const replaceId = state.composer?.replacePlanId ?? null;
   const existing = replaceId ? project.plans.find((p) => p.id === replaceId) : undefined;
   const body = recordBodyFromDraft(draft, goal, project.id, project.siteId, project.zones);
-  const isPrivate = planIsPrivate(project, draft.zoneIds, existing);
+  // The planner saw private ground when the card's own scope held it (`privateScope`): its
+  // text may name that ground even when the draft left it out, so the plan stays private.
+  const isPrivate = planIsPrivate(
+    project,
+    [...draft.zoneIds, ...(state.composer?.zoneIds ?? [])],
+    existing,
+  );
   if (isPrivate && existing?.persisted && existing.scope !== "workspace") {
     useMission
       .getState()
