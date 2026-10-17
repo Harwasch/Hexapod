@@ -52,7 +52,10 @@ class SourceContext:
 
 
 class SourceError(Exception):
-    pass
+    # too_large: the answer passed fetch_json's size limit, so asking again gets the same one.
+    def __init__(self, message: str = "", *, too_large: bool = False) -> None:
+        super().__init__(message)
+        self.too_large = too_large
 
 
 def fetch_json(
@@ -81,7 +84,9 @@ def fetch_json(
         for chunk in response.iter_bytes():
             chunks.extend(chunk)
             if len(chunks) > 2_000_000:
-                raise SourceError("The provider response exceeded the analysis size limit.")
+                raise SourceError(
+                    "The provider response exceeded the analysis size limit.", too_large=True
+                )
         result = json.loads(chunks)
         if not isinstance(result, dict):
             raise SourceError("The provider returned an unexpected response.")

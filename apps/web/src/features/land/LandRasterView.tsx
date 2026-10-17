@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { components } from "@twin/contracts";
+import type { components, RasterDataset } from "@twin/contracts";
 import { api, unwrap } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
@@ -11,6 +11,13 @@ import { VegetationTimelineView } from "./VegetationTimelineView";
 import { useSelection } from "@/state/selection";
 
 type Sample = components["schemas"]["RasterSample"];
+const SOURCES: Record<RasterDataset, string> = {
+  "cop-dem-glo-30": "Copernicus GLO-30",
+  "esa-worldcover-2021": "ESA WorldCover 2021",
+  "sentinel-2-ndvi": "Sentinel-2 Collection 1",
+  "sentinel-2-signature": "Sentinel-2 Collection 1 seasonal signatures",
+  "usgs-3dep-13": "USGS 3DEP 1/3 arc-second bare-earth model",
+};
 const number = (value: number | null | undefined, digits = 1) =>
   value == null ? "No data" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
 
@@ -37,8 +44,15 @@ export function LandRasterView({ id }: { id: string }) {
     retry: false,
   });
   const raster = query.data;
-  const band = raster?.metadata.bands.find((item) => item.index === chosenBand);
-  const show = (index = chosenBand, alpha = opacity) => {
+  // A signature holds five bands per season; its map shows the dated NDVI bands, the
+  // reflectance bands stay in the download and the point sample.
+  const ndviBands = raster?.metadata.signature?.features
+    .filter((feature) => feature.key === "ndvi")
+    .map((feature) => feature.band);
+  const choices =
+    raster?.metadata.bands.filter((item) => !ndviBands || ndviBands.includes(item.index)) ?? [];
+  const band = choices.find((item) => item.index === chosenBand) ?? choices[0];
+  const show = (index = band?.index ?? chosenBand, alpha = opacity) => {
     if (!raster) return;
     useLandContext.getState().setRaster({
       id,
@@ -106,6 +120,7 @@ export function LandRasterView({ id }: { id: string }) {
       </div>
     );
   const metadata = raster.metadata;
+  const dataset = raster.request.dataset ?? "cop-dem-glo-30";
   const categorical = band.palette === "categorical";
   const vegetation = metadata.vegetation;
   const mapName = vegetation ? "vegetation" : categorical ? "land-cover" : "terrain";
@@ -118,39 +133,44 @@ export function LandRasterView({ id }: { id: string }) {
     <section
       className="land-raster"
       aria-label={
-        vegetation
-          ? "Vegetation analysis"
-          : categorical
-            ? "Land-cover analysis"
-            : "Terrain analysis"
+        metadata.signature
+          ? "Seasonal signature analysis"
+          : vegetation
+            ? "Vegetation analysis"
+            : categorical
+              ? "Land-cover analysis"
+              : "Terrain analysis"
       }
     >
       <p className="land-footnote">
-        {vegetation
-          ? "Sentinel-2 Collection 1"
-          : categorical
-            ? "ESA WorldCover 2021"
-            : "Copernicus GLO-30"}{" "}
-        · {number(metadata.resolutionM)} m analysis grid · boundary {raster.boundaryRevision}
+        {SOURCES[dataset]} · {number(metadata.resolutionM)} m analysis grid · boundary{" "}
+        {raster.boundaryRevision}
       </p>
+      {metadata.signature && (
+        <p className="land-footnote">
+          {metadata.signature.commonCells.toLocaleString()} cells clear in every season carry a full{" "}
+          {metadata.signature.features.length}-band signature. The map shows each season's NDVI; the
+          download holds every band.
+        </p>
+      )}
       {raster.stale && (
         <p className="land-notice">
           This map uses an older boundary. Run this analysis again for your current land.
         </p>
       )}
       {vegetation && (
-        <VegetationTimelineView series={vegetation} band={chosenBand} onChoose={chooseBand} />
+        <VegetationTimelineView series={vegetation} band={band.index} onChoose={chooseBand} />
       )}
       <label className="land-name">
         Map measurement
         <select
-          value={chosenBand}
+          value={band.index}
           onChange={(event) => {
             const value = Number(event.target.value);
             chooseBand(value);
           }}
         >
-          {metadata.bands.map((item) => (
+          {choices.map((item) => (
             <option key={item.index} value={item.index}>
               {item.name} ({item.unit})
             </option>
@@ -286,7 +306,7 @@ export function LandRasterView({ id }: { id: string }) {
             onChange={(event) => {
               const value = Number(event.target.value);
               setOpacity(value);
-              show(chosenBand, value);
+              show(band.index, value);
             }}
           />
         </label>
@@ -384,7 +404,13 @@ export function LandRasterView({ id }: { id: string }) {
         ))}
         <p className="land-footnote">
           Computed {new Date(raster.createdAt).toLocaleString()} · {metadata.algorithm}. The
-          download preserves both measurement bands and their coordinate system.
+          download preserves{" "}
+          {metadata.bands.length === 1
+            ? "its measurement band"
+            : metadata.bands.length === 2
+              ? "both measurement bands"
+              : `all ${metadata.bands.length} measurement bands`}{" "}
+          and their coordinate system.
         </p>
       </details>
     </section>

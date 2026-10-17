@@ -21,6 +21,7 @@ from app.schemas.land import (
     LandRevise,
 )
 from app.schemas.land_ground import LandGround
+from app.schemas.land_hydrography import LandHydrography
 from app.schemas.land_import import BoundaryImportRead
 from app.schemas.land_selection import (
     CandidateRequest,
@@ -28,7 +29,7 @@ from app.schemas.land_selection import (
     SelectionInstruction,
     SelectionInterpretation,
 )
-from app.services import land, land_ground, land_import, land_selection
+from app.services import land, land_ground, land_hydrography, land_import, land_selection
 
 router = APIRouter(prefix="/land", tags=["land"])
 
@@ -95,6 +96,16 @@ def area_revisions(
 def area_ground(land_id: uuid.UUID, db: DbSession, workspace: WorkspaceDep) -> LandGround:
     """The land as mission ground: its boundary and inventory features as plannable zones."""
     return land_ground.ground(db, workspace.id, land_id)
+
+
+@router.get("/{land_id}/hydrography", response_model=LandHydrography)
+def area_hydrography(
+    land_id: uuid.UUID, db: DbSession, workspace: WorkspaceDep, response: Response
+) -> LandHydrography:
+    """USGS NHD streams and ditches within 100 m of the land, read live and cited."""
+    # The answer is clipped to a private boundary: never let a shared cache keep it.
+    response.headers["Cache-Control"] = "private, no-store"
+    return land_hydrography.hydrography(db, workspace.id, land_id)
 
 
 @router.delete("/{land_id}", status_code=204)

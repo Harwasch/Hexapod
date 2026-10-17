@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import io
+import threading
 import uuid
+from collections import OrderedDict
+from dataclasses import dataclass
 
 import morecantile
 import numpy as np
 import rasterio
+from affine import Affine
 from PIL import Image
+from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
@@ -27,6 +32,24 @@ from app.schemas.land_rasters import LandRasterRead, RasterMetadata, RasterReque
 from app.services.errors import InvalidInputError, NotFoundError
 
 TMS = morecantile.tms.get("WorldCRS84Quad")
+#: Decoded bands kept in memory between map tiles. One map view asks for 20 to 40 tiles of a
+#: band, and each would otherwise read the whole blob from Postgres (a signature holds 20
+#: bands, up to 16 MiB) and inflate that band again. Keyed by the blob's content hash, so a
+#: hit is always the same bytes a caller was already allowed to read.
+BAND_CACHE_BYTES = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class DecodedBand:
+    data: np.ndarray
+    transform: Affine
+    crs: CRS
+    nodata: float | None
+
+
+_bands: OrderedDict[tuple[str, int], DecodedBand] = OrderedDict()
+_loading: dict[tuple[str, int], threading.Lock] = {}
+_bands_lock = threading.Lock()
 
 
 def scoped(db: Session, workspace_id: uuid.UUID, raster_id: uuid.UUID) -> LandRaster:
@@ -112,6 +135,38 @@ def blob(db: Session, row: LandRaster) -> bytes:
     return original.data
 
 
+def band_array(db: Session, row: LandRaster, band: int) -> DecodedBand:
+    """One band of a stored raster on its analysis grid, from the in-memory cache when a
+    recent tile (or a later similarity) already decoded it. Callers check access first."""
+    key = (row.sha256, band)
+    with _bands_lock:
+        cached = _bands.get(key)
+        if cached is not None:
+            _bands.move_to_end(key)
+            return cached
+        loading = _loading.setdefault(key, threading.Lock())
+    # A map view's tiles arrive together: the first decodes, the rest wait and reuse it.
+    with loading:
+        with _bands_lock:
+            cached = _bands.get(key)
+        if cached is not None:
+            return cached
+        try:
+            with MemoryFile(blob(db, row)) as memory, memory.open(driver="GTiff") as dataset:
+                decoded = DecodedBand(
+                    dataset.read(band), dataset.transform, dataset.crs, dataset.nodata
+                )
+            with _bands_lock:
+                _bands[key] = decoded
+                size = sum(item.data.nbytes for item in _bands.values())
+                while size > BAND_CACHE_BYTES and len(_bands) > 1:
+                    size -= _bands.popitem(last=False)[1].data.nbytes
+        finally:
+            with _bands_lock:
+                _loading.pop(key, None)
+    return decoded
+
+
 def transparent_tile() -> bytes:
     output = io.BytesIO()
     Image.new("RGBA", (256, 256), (0, 0, 0, 0)).save(output, format="PNG")
@@ -133,17 +188,14 @@ def tile(db: Session, row: LandRaster, band: int, z: int, x: int, y: int) -> byt
     # hemisphere in a local metric CRS can allocate/work at source resolution for
     # the entire requested extent, even though the final tile is only 256 pixels.
     destination = np.full((256, 256), np.nan, dtype=np.float32)
-    with (
-        rasterio.Env(GDAL_CACHEMAX=16 * 1024 * 1024),
-        MemoryFile(blob(db, row)) as memory,
-        memory.open(driver="GTiff") as dataset,
-    ):
+    source = band_array(db, row, band)
+    with rasterio.Env(GDAL_CACHEMAX=16 * 1024 * 1024):
         reproject(
-            source=dataset.read(band),
+            source=source.data,
             destination=destination,
-            src_transform=dataset.transform,
-            src_crs=dataset.crs,
-            src_nodata=dataset.nodata,
+            src_transform=source.transform,
+            src_crs=source.crs,
+            src_nodata=source.nodata,
             dst_transform=from_bounds(*bounds, 256, 256),
             dst_crs="EPSG:4326",
             dst_nodata=float("nan"),
