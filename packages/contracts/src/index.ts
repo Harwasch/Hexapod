@@ -214,3 +214,11 @@ export type DatedImagerySource = Schemas["DatedImagerySource"];
 export type DatedImageryPart = Schemas["DatedImageryPart"];
 export type DatedImageryProviderStatus = Schemas["DatedImageryProviderStatus"];
 export type StatedAccuracy = Schemas["StatedAccuracy"];
+/** Show once, everywhere (stream showonce): how alike every 10 m cell of a Land is to one tapped
+ * cell by seasonal Sentinel-2 signature, and the alike cells as areas for a plan. */
+export type SignatureSimilarity = Schemas["SignatureSimilarityRead"];
+export type SignatureSeed = Schemas["SignatureSeed"];
+export type SignatureScene = Schemas["SignatureScene"];
+export type SignatureZonesRequest = Schemas["SignatureZonesRequest"];
+export type SignatureZones = Schemas["SignatureZonesRead"];
+export type SignatureZone = Schemas["SignatureZone"];

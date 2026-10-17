@@ -17322,6 +17322,469 @@
         "title": "SignatureInfo",
         "type": "object"
       },
+      "SignatureLeftOut": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "minimum": 0.0,
+            "title": "Aream2",
+            "type": "number"
+          },
+          "patches": {
+            "minimum": 0.0,
+            "title": "Patches",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "patches",
+          "areaM2"
+        ],
+        "title": "SignatureLeftOut",
+        "type": "object"
+      },
+      "SignatureScene": {
+        "additionalProperties": false,
+        "description": "One dated window of the signature: the scene it was read from.",
+        "properties": {
+          "acquiredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acquiredat"
+          },
+          "period": {
+            "$ref": "#/components/schemas/VegetationPeriod"
+          },
+          "sceneId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sceneid"
+          },
+          "window": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window",
+          "period",
+          "sceneId",
+          "acquiredAt"
+        ],
+        "title": "SignatureScene",
+        "type": "object"
+      },
+      "SignatureSeed": {
+        "additionalProperties": false,
+        "properties": {
+          "cellLatitude": {
+            "title": "Celllatitude",
+            "type": "number"
+          },
+          "cellLongitude": {
+            "title": "Celllongitude",
+            "type": "number"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureSeedWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "longitude",
+          "latitude",
+          "cellLongitude",
+          "cellLatitude",
+          "windows"
+        ],
+        "title": "SignatureSeed",
+        "type": "object"
+      },
+      "SignatureSeedWindow": {
+        "additionalProperties": false,
+        "description": "The tapped cell's own values in one window (reflectance 0..1, NDVI -1..1).",
+        "properties": {
+          "acquiredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acquiredat"
+          },
+          "green": {
+            "title": "Green",
+            "type": "number"
+          },
+          "ndvi": {
+            "title": "Ndvi",
+            "type": "number"
+          },
+          "nir": {
+            "title": "Nir",
+            "type": "number"
+          },
+          "red": {
+            "title": "Red",
+            "type": "number"
+          },
+          "swir16": {
+            "title": "Swir16",
+            "type": "number"
+          },
+          "window": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window",
+          "acquiredAt",
+          "green",
+          "red",
+          "nir",
+          "swir16",
+          "ndvi"
+        ],
+        "title": "SignatureSeedWindow",
+        "type": "object"
+      },
+      "SignatureSimilarityRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "boundaryCells": {
+            "minimum": 0.0,
+            "title": "Boundarycells",
+            "type": "integer"
+          },
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "cellAreaM2": {
+            "title": "Cellaream2",
+            "type": "number"
+          },
+          "comparedCells": {
+            "minimum": 0.0,
+            "title": "Comparedcells",
+            "type": "integer"
+          },
+          "grid": {
+            "$ref": "#/components/schemas/LonLatGrid"
+          },
+          "interpretation": {
+            "title": "Interpretation",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "nativeResolutionM": {
+            "title": "Nativeresolutionm",
+            "type": "number"
+          },
+          "rasterId": {
+            "format": "uuid",
+            "title": "Rasterid",
+            "type": "string"
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureScene"
+            },
+            "title": "Scenes",
+            "type": "array"
+          },
+          "seed": {
+            "$ref": "#/components/schemas/SignatureSeed"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rasterId",
+          "landId",
+          "boundaryRevision",
+          "stale",
+          "seed",
+          "grid",
+          "cellAreaM2",
+          "nativeResolutionM",
+          "comparedCells",
+          "boundaryCells",
+          "scenes",
+          "method",
+          "interpretation",
+          "warnings",
+          "attribution"
+        ],
+        "title": "SignatureSimilarityRead",
+        "type": "object"
+      },
+      "SignatureZone": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "minimum": 0.0,
+            "title": "Aream2",
+            "type": "number"
+          },
+          "cells": {
+            "minimum": 0.0,
+            "title": "Cells",
+            "type": "integer"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "meanSimilarity": {
+            "title": "Meansimilarity",
+            "type": "number"
+          },
+          "patches": {
+            "minimum": 1.0,
+            "title": "Patches",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "footprint",
+          "areaM2",
+          "cells",
+          "meanSimilarity",
+          "patches"
+        ],
+        "title": "SignatureZone",
+        "type": "object"
+      },
+      "SignatureZonesRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "cellAreaM2": {
+            "title": "Cellaream2",
+            "type": "number"
+          },
+          "dropped": {
+            "$ref": "#/components/schemas/SignatureLeftOut"
+          },
+          "interpretation": {
+            "title": "Interpretation",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "matchedCells": {
+            "minimum": 0.0,
+            "title": "Matchedcells",
+            "type": "integer"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "protectedCells": {
+            "minimum": 0.0,
+            "title": "Protectedcells",
+            "type": "integer"
+          },
+          "rasterId": {
+            "format": "uuid",
+            "title": "Rasterid",
+            "type": "string"
+          },
+          "remainder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignatureZone"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureScene"
+            },
+            "title": "Scenes",
+            "type": "array"
+          },
+          "seed": {
+            "$ref": "#/components/schemas/SignatureSeed"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "zones": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureZone"
+            },
+            "title": "Zones",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rasterId",
+          "landId",
+          "boundaryRevision",
+          "stale",
+          "threshold",
+          "seed",
+          "zones",
+          "remainder",
+          "dropped",
+          "protectedCells",
+          "matchedCells",
+          "cellAreaM2",
+          "scenes",
+          "method",
+          "interpretation",
+          "attribution"
+        ],
+        "title": "SignatureZonesRead",
+        "type": "object"
+      },
+      "SignatureZonesRequest": {
+        "additionalProperties": false,
+        "description": "The seed again (the server recomputes on the analysis grid), the slider's threshold\nand the cells the operator protected.",
+        "properties": {
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          },
+          "maxZones": {
+            "default": 8,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Maxzones",
+            "type": "integer"
+          },
+          "minPatchM2": {
+            "default": 2000,
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Minpatchm2",
+            "type": "number"
+          },
+          "protected": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            },
+            "maxItems": 5000,
+            "title": "Protected",
+            "type": "array"
+          },
+          "threshold": {
+            "default": 0.8,
+            "maximum": 0.99,
+            "minimum": 0.3,
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "required": [
+          "longitude",
+          "latitude"
+        ],
+        "title": "SignatureZonesRequest",
+        "type": "object"
+      },
       "SiteCreate": {
         "additionalProperties": false,
         "properties": {
@@ -24431,6 +24894,230 @@
           }
         ],
         "summary": "Sample",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
+    "/api/v1/land/rasters/{raster_id}/similar": {
+      "get": {
+        "description": "How alike every cell of the land is to the tapped one, by seasonal 10 m signature\n(a `sentinel-2-signature` raster; 409 for any other). Computed on request, never saved.",
+        "operationId": "similar_api_v1_land_rasters__raster_id__similar_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Longitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureSimilarityRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Similar",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
+    "/api/v1/land/rasters/{raster_id}/similar/zones": {
+      "post": {
+        "description": "The cells at least `threshold` alike to the tapped one, protected ground left out, as\nareas for a plan: the largest patches each, the rest together. Read-only computation.",
+        "operationId": "similar_zones_api_v1_land_rasters__raster_id__similar_zones_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignatureZonesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureZonesRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Similar Zones",
         "tags": [
           "land rasters"
         ]

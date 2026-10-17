@@ -9,7 +9,12 @@ from app.api.deps import DbSession
 from app.api.workspace_deps import WorkspaceDep
 from app.models.land_raster import LandRaster
 from app.schemas.land_rasters import LandRasterRead, RasterSample
-from app.services import land_rasters
+from app.schemas.land_similarity import (
+    SignatureSimilarityRead,
+    SignatureZonesRead,
+    SignatureZonesRequest,
+)
+from app.services import land_rasters, land_similarity
 from app.services.land import get_land
 
 router = APIRouter(tags=["land rasters"])
@@ -50,6 +55,35 @@ def sample(
     return land_rasters.sample(
         db, land_rasters.scoped(db, scope.id, raster_id), longitude, latitude
     )
+
+
+@router.get("/land/rasters/{raster_id}/similar", response_model=SignatureSimilarityRead)
+def similar(
+    raster_id: uuid.UUID,
+    db: DbSession,
+    scope: WorkspaceDep,
+    response: Response,
+    longitude: float = Query(ge=-180, le=180),
+    latitude: float = Query(ge=-90, le=90),
+) -> SignatureSimilarityRead:
+    """How alike every cell of the land is to the tapped one, by seasonal 10 m signature
+    (a `sentinel-2-signature` raster; 409 for any other). Computed on request, never saved."""
+    response.headers["Cache-Control"] = "private, no-store"
+    return land_similarity.similar(db, scope.id, raster_id, longitude, latitude)
+
+
+@router.post("/land/rasters/{raster_id}/similar/zones", response_model=SignatureZonesRead)
+def similar_zones(
+    raster_id: uuid.UUID,
+    body: SignatureZonesRequest,
+    db: DbSession,
+    scope: WorkspaceDep,
+    response: Response,
+) -> SignatureZonesRead:
+    """The cells at least `threshold` alike to the tapped one, protected ground left out, as
+    areas for a plan: the largest patches each, the rest together. Read-only computation."""
+    response.headers["Cache-Control"] = "private, no-store"
+    return land_similarity.zones(db, scope.id, raster_id, body)
 
 
 @router.get(
