@@ -2,7 +2,13 @@ import type { Footprint } from "@twin/contracts";
 import { boundsOf, destination } from "@twin/geo";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_SCOUT, scoutGeometry, scoutLanes } from "@/missions/scout";
+import {
+  DEFAULT_SCOUT,
+  MAX_ALTITUDE_M,
+  SCOUT_ALTITUDES_M,
+  scoutGeometry,
+  scoutLanes,
+} from "@/missions/scout";
 import { buildScoutKmz, escapeXml, templateKml, waylinesWpml, WPML_NS } from "@/missions/wpml";
 
 const origin = { longitude: -120.04, latitude: 34.698 };
@@ -67,6 +73,22 @@ describe("DJI WPML scout route", () => {
     expect(text(template, "heightMode")).toBe("relativeToStartPoint");
     expect(text(template, "author")).toBe("Land workspace (fog-v1 scout)");
     expect(Number(text(waylines, "globalRTHHeight"))).toBeGreaterThanOrEqual(60);
+  });
+
+  it("never climbs over the 400 ft cap to fly home, at any height the export offers", () => {
+    for (const altitudeM of SCOUT_ALTITUDES_M) {
+      const scout = { ...DEFAULT_SCOUT, altitudeM };
+      const flown = [scoutLanes(holed, scout)];
+      const heights = [
+        Number(text(parse(waylinesWpml(flown, scout)), "globalRTHHeight")),
+        Number(text(parse(templateKml(flown, scout, new Date(2026, 9, 16))), "globalRTHHeight")),
+      ];
+      // 20 m over the route, at least 60 m, never over the cap (120 m is 394 ft).
+      const expected = Math.min(Math.max(altitudeM + 20, 60), MAX_ALTITUDE_M);
+      expect(heights).toEqual([expected, expected]);
+      expect(scoutGeometry(scout).returnHeightM).toBe(expected);
+    }
+    expect(scoutGeometry({ ...DEFAULT_SCOUT, altitudeM: 120 }).returnHeightM).toBe(120);
   });
 
   it("puts one waypoint at each end of every lane, indexed from 0 without gaps", () => {

@@ -66,7 +66,7 @@ function missionConfig(scout: Scout): string {
     el("executeRCLostAction", "goBack"),
     el("takeOffSecurityHeight", 20),
     el("globalTransitionalSpeed", 10),
-    el("globalRTHHeight", Math.max(geometry.altitudeM + 20, 60)),
+    el("globalRTHHeight", geometry.returnHeightM),
     "<wpml:droneInfo>",
     el("droneEnumValue", camera.droneEnum),
     el("droneSubEnumValue", camera.droneSubEnum),
