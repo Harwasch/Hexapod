@@ -17,7 +17,8 @@
  * - `ramp` (batch 3, Show Once): a score in R, valid cells in G, protected cells in B, drawn
  *   above a `threshold` uniform in a two-colour ramp, deeper and more opaque the more alike;
  *   moving a slider is a uniform update. Magenta, a hue the land never has, so it reads over
- *   green canopy and golden grass alike; protected cells are hatched in the agent blue.
+ *   green canopy and golden grass alike; protected cells that clear it are hatched in the agent
+ *   blue.
  *
  * Each consumer owns its instance (its bridge makes it); `useGridDrape` lets one drape show
  * at a time, so a second one taking the ground hides the first.
@@ -119,14 +120,18 @@ czm_material czm_getMaterial(czm_materialInput materialInput) {
 }
 `;
 
-/** A score ramp above a threshold: crisp cells, the most alike strongest, protected ones hatched. */
+/**
+ * A score ramp above a threshold: crisp cells, the most alike strongest, protected ones hatched
+ * where they clear it too (the ground protection keeps out of this job, as the card counts it).
+ */
 export const RAMP_SHADER = `
 czm_material czm_getMaterial(czm_materialInput materialInput) {
   czm_material material = czm_getDefaultMaterial(materialInput);
   vec4 cell = texture(values, materialInput.st);
   float lit = step(threshold, cell.r) * cell.g * (1.0 - cell.b);
   float t = clamp((cell.r - threshold) / max(0.98 - threshold, 0.001), 0.0, 1.0);
-  float hatch = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 10.0)) * cell.b * cell.g;
+  float hatch = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 10.0)) * cell.b * cell.g
+    * step(threshold, cell.r);
   material.diffuse = mix(mix(low.rgb, high.rgb, t), protectedColor.rgb, hatch);
   material.emission = material.diffuse * 0.25 * lit;
   material.alpha = max(lit * maxAlpha * mix(0.6, 1.0, t), hatch * protectedColor.a);

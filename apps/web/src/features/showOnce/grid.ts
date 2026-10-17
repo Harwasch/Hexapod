@@ -98,7 +98,11 @@ export function isLit(score: number | undefined, raw: number): boolean {
   return score !== undefined && score !== NO_SCORE && score >= raw;
 }
 
-/** The lit cells at a threshold, protected ones aside, and the protected ones on their own. */
+/**
+ * The lit cells at a threshold, protected ones aside, and the protected ones on their own:
+ * those lit at the threshold, the ground protection keeps out of this job. The server counts
+ * the same cells (`land_similarity.zones`), so the card, the hatch and the job's note agree.
+ */
 export function litStats(
   grid: ScoreGrid,
   threshold: number,
@@ -108,9 +112,9 @@ export function litStats(
   let cells = 0;
   let held = 0;
   for (let i = 0; i < grid.scores.length; i++) {
-    if (guarded?.[i]) {
-      if (grid.scores[i] !== NO_SCORE) held += 1;
-    } else if (isLit(grid.scores[i], raw)) cells += 1;
+    if (!isLit(grid.scores[i], raw)) continue;
+    if (guarded?.[i]) held += 1;
+    else cells += 1;
   }
   return {
     cells,
@@ -161,8 +165,8 @@ export function patchAt(
 }
 
 /**
- * A protect tap: on protected ground it frees the protected patch it is part of; on a lit
- * patch it protects the whole patch; elsewhere nothing changes (null).
+ * A protect tap: on protected ground still lit (hatched) it frees the protected patch it is
+ * part of; on a lit patch it protects the whole patch; elsewhere nothing changes (null).
  */
 export function toggleProtected(
   grid: ScoreGrid,
@@ -171,7 +175,7 @@ export function toggleProtected(
   threshold: number,
 ): { mask: Uint8Array; change: "protected" | "freed"; cells: number } | null {
   const mask = guarded ? Uint8Array.from(guarded) : new Uint8Array(grid.scores.length);
-  if (mask[index]) {
+  if (mask[index] && isLit(grid.scores[index], rawThreshold(threshold))) {
     const cells = flood(grid, index, (i) => mask[i] === 1);
     for (const i of cells) mask[i] = 0;
     return { mask, change: "freed", cells: cells.length };

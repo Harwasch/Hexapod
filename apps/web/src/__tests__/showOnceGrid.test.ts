@@ -94,6 +94,10 @@ it("tallies the lit cells and acres, protected ones apart", () => {
   const stats = litStats(g, 0.8, guarded);
   expect(stats).toMatchObject({ cells: 3, protectedCells: 2 });
   expect(stats.protectedAcres).toBeCloseTo((2 * 100) / 4046.8564224, 6);
+  // Slid up to 85%: (0, 1) at 210 is no longer alike enough to be in the job, so protecting
+  // it keeps nothing out. The card counts what the server's job note counts (lit & protected).
+  expect(litStats(g, 0.85, guarded)).toMatchObject({ cells: 2, protectedCells: 1 });
+  expect(litStats(g, 0.85, guarded).protectedAcres).toBeCloseTo(100 / 4046.8564224, 6);
 });
 
 // Two lit patches at 80%, 5 x 3: the top-left pair with a diagonal step to (1, 2), and (2, 4)
@@ -123,6 +127,10 @@ it("protects a lit patch with one tap and frees it with another", () => {
   expect([...freed!.mask]).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
   // Unlit ground is already out of the job: nothing to protect there.
   expect(toggleProtected(g, null, 2, 0.8)).toBeNull();
+  // Nor to free: protected ground slid below the threshold is not hatched, and a tap there
+  // leaves the patch it belongs to as it is.
+  expect(toggleProtected(g, first!.mask, 7, 0.95)).toBeNull();
+  expect(toggleProtected(g, first!.mask, 0, 0.95)?.change).toBe("freed");
 });
 
 it("sends protected ground as row runs that cover exactly the protected cells", () => {
