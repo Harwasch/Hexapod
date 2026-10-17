@@ -118,13 +118,15 @@ function adopt(zone: Zone): void {
 /**
  * Ground on a saved Land, for a project that carries one: the features the goal names, or the
  * Land's boundary. Over a fleet's project (the Land layered on it) a goal naming the fleet's
- * own zones keeps them. Null when the project has no Land zones.
+ * own zones keeps them. Areas derived from the Land (fog patches, like-here patches, workable
+ * ground) are no saved record of it and are not taken here. Null when the project has no
+ * zones the Land records.
  */
 function landGroundFor(
   goal: string,
   project: Project,
 ): { zoneIds: string[]; note: string | null } | null {
-  const land = project.zones.filter((z) => z.land);
+  const land = project.zones.filter((z) => z.land && z.land.kind !== "derived");
   if (land.length === 0) return null;
   const named = zonesNamedInGoal(goal, land);
   const boundary = boundaryZoneOf(land);

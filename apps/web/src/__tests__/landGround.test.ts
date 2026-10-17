@@ -11,6 +11,7 @@ import {
   groundModeFor,
   halfwayAlong,
   isPrivateZone,
+  landGroundNote,
   landIdOfProject,
   landProject,
   landZoneAt,
@@ -136,5 +137,46 @@ describe("land ground", () => {
     const middle = destination(destination(origin, 90, 200), 0, 200);
     expect(landZoneAt(middle, zones)?.id).toBe("L-0f1e2d3c");
     expect(landZoneAt({ longitude: 0, latitude: 0 }, zones)).toBeNull();
+    // An area derived from the land (a fog patch) is never taken as one of its records.
+    const corner = (east: number, north: number): [number, number] => {
+      const p = destination(destination(origin, 90, east), 0, north);
+      return [p.longitude, p.latitude];
+    };
+    const patch = {
+      ...zones.find((z) => z.id === "L-aaaa0002")!,
+      id: "A-01",
+      name: "Fog patch 1",
+      // Inside the pond and smaller than it.
+      footprint: {
+        type: "Polygon" as const,
+        coordinates: [
+          [
+            corner(410, 410),
+            corner(430, 410),
+            corner(430, 430),
+            corner(410, 430),
+            corner(410, 410),
+          ],
+        ],
+      },
+      land: { kind: "derived" as const, landId: LAND_ID, featureId: null },
+    };
+    expect(landZoneAt(pond, [...zones, patch])?.id).toBe("L-aaaa0002");
+  });
+
+  it("says a derived area is derived, quoting how, and never invents a revision", () => {
+    const patch = {
+      ...landZones(ground)[0]!,
+      id: "A-01",
+      name: "Fog patch 1",
+      acres: 6,
+      attribution: "Fog of knowing fog-v1",
+      land: { kind: "derived" as const, landId: LAND_ID, featureId: null, boundaryRevision: 2 },
+    };
+    const note = landGroundNote(patch, "Oak Bench");
+    expect(note).toBe(
+      "Fog patch 1, 6 ac derived from Oak Bench, not a saved record. Fog of knowing fog-v1.",
+    );
+    expect(note).not.toMatch(/revision|inventory feature/);
   });
 });
