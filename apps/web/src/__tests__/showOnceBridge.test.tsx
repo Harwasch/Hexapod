@@ -24,6 +24,7 @@ const fixture = vi.hoisted(() => ({
   listeners: new Map<string, (value: unknown) => void>(),
   released: 0,
   claims: null as ((longitude: number, latitude: number) => boolean) | null,
+  overFeatures: false,
   render: vi.fn(),
   entities: null as EntityCollection | null,
   similar: vi.fn((..._args: unknown[]): Promise<unknown> => Promise.resolve(null)),
@@ -83,8 +84,12 @@ vi.mock("@/cesium/SceneContext", () => {
           },
         },
         selection: {
-          wantGroundTaps: (claims: (longitude: number, latitude: number) => boolean) => {
+          wantGroundTaps: (
+            claims: (longitude: number, latitude: number) => boolean,
+            options?: { overFeatures?: boolean },
+          ) => {
             fixture.claims = claims;
+            fixture.overFeatures = options?.overFeatures ?? false;
             return () => {
               fixture.released++;
             };
@@ -197,6 +202,8 @@ afterEach(() => {
 it("takes taps on the land, compares the place and drapes the answer", async () => {
   render(<ShowOnceBridge />);
   expect(fixture.canvas.style.cursor).toBe("crosshair");
+  // A tool in hand: a tap on the fence or the creek line is a tap too.
+  expect(fixture.overFeatures).toBe(true);
   // The Land's ground is claimed before any answer; past its boundary nothing is.
   expect(fixture.claims!(-120.04, 34.695)).toBe(true);
   expect(fixture.claims!(-120.2, 34.695)).toBe(false);

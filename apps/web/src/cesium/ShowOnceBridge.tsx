@@ -97,7 +97,9 @@ export function ShowOnceBridge() {
       }
       return footprintContains(boundary, { longitude, latitude });
     };
-    const release = host.selection.wantGroundTaps(inside);
+    // Taps are the tool in hand: on the Land's mapped lines too (the fence, the creek), where a
+    // lit riparian patch is often the one to protect. Clear or Escape gives features back.
+    const release = host.selection.wantGroundTaps(inside, { overFeatures: true });
     const off = host.events.on("ground-tap", (tap) => {
       const store = useShowOnce.getState();
       if (!inside(tap.longitude, tap.latitude)) {

@@ -96,7 +96,7 @@ export class SelectionManager {
    * Consumers that want plain clicks on empty ground as 'ground-tap' events, each with the
    * ground it claims (where a click on a mission zone's fill is its tap, not the zone's).
    */
-  private readonly groundTaps = new Set<{ claims: GroundClaim }>();
+  private readonly groundTaps = new Set<{ claims: GroundClaim; overFeatures: boolean }>();
 
   constructor(
     private readonly viewer: CesiumWidget,
@@ -195,10 +195,14 @@ export class SelectionManager {
    * where the consumer's own ground is (the fog: inside the Land of the grid it shows): there,
    * a click on a mission zone's fill is a tap too; anywhere else, the zone is selected as
    * usual. Returns the release; while nobody holds one, a click on the ground does nothing at
-   * all, as before.
+   * all, as before. With `overFeatures` (a tool in hand, such as Show once's taps) a Land's
+   * mapped lines and points on that ground are taps too, instead of opening the feature.
    */
-  wantGroundTaps(claims: GroundClaim = () => false): () => void {
-    const holder = { claims };
+  wantGroundTaps(
+    claims: GroundClaim = () => false,
+    options: { overFeatures?: boolean } = {},
+  ): () => void {
+    const holder = { claims, overFeatures: options.overFeatures ?? false };
     this.groundTaps.add(holder);
     return () => {
       this.groundTaps.delete(holder);
@@ -337,9 +341,15 @@ export class SelectionManager {
       return;
     // A ground layer taking taps answers for a mapped area of the Land on its own ground (an
     // inventory polygon such as the oak woodland covers much of a ranch): there it is ground,
-    // as a zone's fill is below. Its lines and points, and areas off that ground, still select.
+    // as a zone's fill is below. Its lines and points, and areas off that ground, still select,
+    // unless a tool in hand asked for them too (`overFeatures`).
     let tapped: PickContext | null | undefined;
-    if (mode === "click" && this.groundTaps.size > 0 && isLandAreaPick(picked)) {
+    const overFeatures = [...this.groundTaps].some((holder) => holder.overFeatures);
+    if (
+      mode === "click" &&
+      this.groundTaps.size > 0 &&
+      (isLandAreaPick(picked) || (overFeatures && isLandFeaturePick(picked)))
+    ) {
       tapped = await this.groundTapPosition(window, picked);
       if (tapped && this.emitClaimedTap(tapped, window)) return;
     }
@@ -763,6 +773,16 @@ export class SelectionManager {
 
 function isEntityPick(value: unknown): value is { id: Entity } {
   return typeof value === "object" && value !== null && "id" in value && value.id instanceof Entity;
+}
+
+/** Anything a Land's inventory or research layers put on the map: an area, a line, a point. */
+export function isLandFeaturePick(value: unknown): boolean {
+  return (
+    isEntityPick(value) &&
+    typeof value.id.id === "string" &&
+    value.id.id.startsWith("land-context:") &&
+    !value.id.id.startsWith("land-context:candidates/")
+  );
 }
 
 /** A mapped area of a Land on the map: a polygon of the inventory or of a research layer. */
