@@ -48,6 +48,13 @@ it("asks for four 30-day seasons of the latest complete year at 10 m", () => {
     maxDimension: 512,
   });
   expect(RASTER_RUNS["usgs-3dep-13"].title).toBe("Bare-earth elevation and slope (USGS 3DEP)");
+  // Each budget covers the processor's limit (wall_seconds in raster_runner.py) and the save.
+  const processing: Record<string, number> = {
+    "sentinel-2-signature": 200,
+    "sentinel-2-ndvi": 165,
+  };
+  for (const [dataset, run] of Object.entries(RASTER_RUNS))
+    expect(run.maxSeconds).toBeGreaterThanOrEqual((processing[dataset] ?? 90) + 15);
   expect(coversUs(-120.04, 34.698)).toBe(true);
   expect(coversUs(2.35, 48.85)).toBe(false);
 });
@@ -153,6 +160,8 @@ it("prepares seasonal signatures and bare-earth terrain as saved raster runs", a
       maxDimension: 512,
       periods: signaturePeriods(),
     },
+    // Up to 200 s of processing and 15 s to save; a default 180 s budget would cut it off.
+    budget: { maxSeconds: 300 },
   });
   expect(post.mock.calls[0]?.[1]).toMatchObject({
     body: { title: "Seasonal 10 m signatures" },
@@ -163,6 +172,7 @@ it("prepares seasonal signatures and bare-earth terrain as saved raster runs", a
   await waitFor(() => expect(runBodies(post)).toHaveLength(2));
   expect(runBodies(post)[1]).toMatchObject({
     analysis: { dataset: "usgs-3dep-13", resolutionM: 10 },
+    budget: { maxSeconds: 180 },
   });
   expect(runBodies(post)[1]?.analysis).not.toHaveProperty("periods");
 });

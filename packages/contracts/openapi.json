@@ -5638,6 +5638,8 @@
               "perennial",
               "intermittent",
               "ephemeral",
+              "unclassified",
+              "artificial-path",
               "other"
             ],
             "title": "Kind",
@@ -9118,7 +9120,7 @@
         "properties": {
           "band": {
             "default": 1,
-            "maximum": 16.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Band",
             "type": "integer"
@@ -9160,7 +9162,7 @@
           },
           "band": {
             "default": 1,
-            "maximum": 16.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Band",
             "type": "integer"

@@ -351,7 +351,7 @@ export function LandResearch({ land }: { land: LandArea }) {
     if (!canEdit) return;
     const analysis = rasterRequest(dataset, periods);
     const signature = JSON.stringify(analysis);
-    const { title, question } = RASTER_RUNS[dataset];
+    const { title, question, maxSeconds } = RASTER_RUNS[dataset];
     setBusy(true);
     setError(null);
     try {
@@ -369,7 +369,13 @@ export function LandResearch({ land }: { land: LandArea }) {
       await unwrap(
         api.POST("/api/v1/research/investigations/{investigation_id}/runs", {
           params: { path: { investigation_id: operation.investigationId } },
-          body: { kind: "raster", question, requestKey: operation.key, analysis },
+          body: {
+            kind: "raster",
+            question,
+            requestKey: operation.key,
+            analysis,
+            budget: { maxSeconds },
+          },
         }),
       );
       setChosen(operation.investigationId);
@@ -638,8 +644,9 @@ export function LandResearch({ land }: { land: LandArea }) {
         <strong>Seasonal 10 m signatures</strong>
         <p className="land-footnote">
           Read four dated Sentinel-2 scenes, one per season, and keep green, red, near-infrared,
-          shortwave-infrared and NDVI for every 10 m cell that is clear in all four. Takes a minute
-          or two. A similar signature means similar reflectance, not the same species.
+          shortwave-infrared and NDVI for each 10 m cell where that season is clear. Cells clear in
+          all four carry a full signature. Takes a minute or two. A similar signature means similar
+          reflectance, not the same species.
         </p>
         <p className="land-footnote">
           {seasons.map((period) => period.startDate.slice(0, 7)).join(" · ")} · 10 m grid

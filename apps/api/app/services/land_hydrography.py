@@ -3,7 +3,8 @@
 Read live from the NHD map service (Flowline - Large Scale, 1:24,000), clipped to the boundary
 grown by BUFFER_M so a creek just outside the line still counts, and never saved. The browser
 cannot ask NHD itself (no CORS), so the API asks on its behalf. An answer is kept in memory
-for an hour per land revision; a failure is not kept, so the next request tries again.
+for an hour per land revision. A failed lookup is not kept, so the next request tries again;
+an answer too large to read is kept for ten minutes, because asking again cannot help.
 """
 
 from __future__ import annotations
@@ -49,9 +50,15 @@ BUFFER_M = 100.0
 RECORD_LIMIT = 500
 TIMEOUT_S = 20
 CACHE_TTL_S = 3600
+TOO_LARGE_TTL_S = 600
 CACHE_SIZE = 256
-Kind = Literal["perennial", "intermittent", "ephemeral", "other"]
-#: NHD hydrographic categories of stream/river flowlines (FType 460).
+TOO_LARGE = (
+    "This land has more mapped flowlines nearby than one USGS NHD answer can carry, so none "
+    "are shown. Trying again will not help; a smaller outline would fit."
+)
+Kind = Literal["perennial", "intermittent", "ephemeral", "unclassified", "artificial-path", "other"]
+#: NHD hydrographic categories of stream/river flowlines (FType 460). A stream/river without
+#: one (FCode 46000, common in NHD) is "unclassified": a natural channel of unknown permanence.
 KINDS: dict[int, Kind] = {
     46006: "perennial",
     46003: "intermittent",
@@ -92,9 +99,16 @@ def _source(url: str) -> PlaceFactSource:
 
 
 def describe(fcode: int) -> tuple[Kind, str]:
-    kind: Kind = KINDS.get(fcode, "other")
-    label = FTYPES.get(fcode // 100, "Flowline")
-    return kind, label if kind == "other" else f"{label}, {kind}"
+    ftype = fcode // 100
+    label = FTYPES.get(ftype, "Flowline")
+    if ftype == 460:
+        kind: Kind = KINDS.get(fcode, "unclassified")
+        return kind, f"{label}, " + ("permanence not recorded" if kind == "unclassified" else kind)
+    if ftype == 558:
+        # NHD draws a stream's course through a pond, lake or wide river as an artificial
+        # path; keeping it with the streams keeps a creek's line unbroken.
+        return "artificial-path", f"{label} carrying a stream through a pond, lake or wide river"
+    return "other", label
 
 
 def _metric(geometry: BaseGeometry) -> tuple[Transformer, Transformer]:
@@ -199,6 +213,11 @@ def lookup(
         "spatialRel": "esriSpatialRelIntersects",
         "outFields": "permanent_identifier,gnis_name,fcode",
         "returnGeometry": "true",
+        # 6 decimals (about 0.1 m) and 1e-5 degrees (about 1 m) of generalisation keep a dense
+        # drainage network inside fetch_json's answer limit; at 1:24,000 NHD lines are good to
+        # about 12 m, so neither moves a channel meaningfully.
+        "geometryPrecision": 6,
+        "maxAllowableOffset": 0.00001,
         "resultRecordCount": RECORD_LIMIT,
         "f": "geojson",
     }
@@ -208,11 +227,13 @@ def lookup(
         if "error" in raw:
             raise SourceError("The hydrography service rejected the query.")
         features, truncated = parse(raw, boundary)
-    except (httpx.HTTPError, SourceError, ValueError, json.JSONDecodeError):
+    except (httpx.HTTPError, SourceError, ValueError, json.JSONDecodeError) as error:
         return LandHydrography(
             **common,
             status="unavailable",
-            message="The USGS hydrography service did not answer. Try again in a minute.",
+            message=TOO_LARGE
+            if isinstance(error, SourceError) and error.too_large
+            else "The USGS hydrography service did not answer. Try again in a minute.",
             features=[],
             truncated=False,
             source=_source(url),
@@ -253,9 +274,16 @@ def hydrography(db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID) -> Lan
     boundary = shape(land.boundary.model_dump())
     with _client() as client:
         result = lookup(land.id, land.revision, boundary, client)
-    if result.status != "unavailable":
+    keep = (
+        CACHE_TTL_S
+        if result.status != "unavailable"
+        else TOO_LARGE_TTL_S
+        if result.message == TOO_LARGE
+        else 0
+    )
+    if keep:
         with _lock:
-            _cache[key] = (now + CACHE_TTL_S, result)
+            _cache[key] = (now + keep, result)
             _cache.move_to_end(key)
             while len(_cache) > CACHE_SIZE:
                 _cache.popitem(last=False)

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from shapely.geometry import shape
 
 from app.services import land_hydrography
-from app.services.land_hydrography import parse
+from app.services.land_hydrography import TOO_LARGE, describe, parse
 from tests.test_land import BODY
 from tests.test_workspaces import IdentityClient, headers
 from tests.test_workspaces import identity_client as _identity_client
@@ -109,6 +109,14 @@ def test_flowlines_are_classified_clipped_to_the_land_plus_100_m_and_split() -> 
     assert by_id["W-1/2"].permanent_identifier == "W-1"
     _, limited = parse(collection(properties={"exceededTransferLimit": True}), shape(SQUARE))
     assert limited
+    # Streams NHD gives no permanence, and the paths that carry a creek through a pond, stay
+    # with the natural channels instead of joining the canals and pipelines in "other".
+    assert describe(46000) == ("unclassified", "Stream/river, permanence not recorded")
+    assert describe(55800) == (
+        "artificial-path",
+        "Artificial path carrying a stream through a pond, lake or wide river",
+    )
+    assert describe(42801) == ("other", "Pipeline")
 
 
 def test_land_hydrography_is_cited_cached_per_revision_and_private(
@@ -133,6 +141,8 @@ def test_land_hydrography_is_cited_cached_per_revision_and_private(
     params = seen[0].url.params
     assert seen[0].url.path == "/arcgis/rest/services/nhd/MapServer/6/query"
     assert (params["f"], params["outSR"], params["resultRecordCount"]) == ("geojson", "4326", "500")
+    # Coordinates to about 0.1 m, generalised by about 1 m: well inside NHD's 1:24,000 accuracy.
+    assert params["geometryPrecision"] == "6" and float(params["maxAllowableOffset"]) == 1e-5
     west, _, _, north = map(float, params["geometry"].split(","))
     assert west == pytest.approx(-120.05 - 100 / (111_320 * 0.8222), abs=2e-5)
     assert north == pytest.approx(34.70 + 100 / 110_574, abs=1e-6)
@@ -212,3 +222,22 @@ def test_hydrography_is_scoped_to_the_workspace(
     # The cached answer is never served across workspaces.
     assert client.get(url, headers=headers(token("bob"), bob_space)).status_code == 404
     assert client.get(url).status_code == 401
+
+
+def test_an_answer_too_large_to_read_says_so_and_is_kept_briefly(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Past fetch_json's 2,000,000-byte limit: the same land gets the same answer every time.
+    huge = b'{"type": "FeatureCollection", "features": [], "pad": "' + b"x" * 2_000_001 + b'"}'
+    seen = upstream(monkeypatch, lambda request: httpx.Response(200, content=huge))
+    land = client.post("/api/v1/land", json={**BODY, "boundary": SQUARE}).json()
+    url = f"/api/v1/land/{land['id']}/hydrography"
+    body = client.get(url).json()
+    assert body["status"] == "unavailable" and body["features"] == []
+    assert body["message"] == TOO_LARGE and "Trying again will not help" in TOO_LARGE
+    assert client.get(url).json() == body and len(seen) == 1
+    key = next(iter(land_hydrography._cache))
+    expires, kept = land_hydrography._cache[key]
+    land_hydrography._cache[key] = (expires - land_hydrography.TOO_LARGE_TTL_S, kept)
+    client.get(url)
+    assert len(seen) == 2  # Asked again after ten minutes, not an hour.

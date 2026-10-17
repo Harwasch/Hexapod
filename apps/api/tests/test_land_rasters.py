@@ -39,7 +39,10 @@ def terrain(monkeypatch: pytest.MonkeyPatch) -> TerrainResult:
         result = analyze(BOUNDARY, RasterRequest(), client)
 
     def calculate(
-        boundary: Footprint, request: RasterRequest, cancelled: threading.Event | None = None
+        boundary: Footprint,
+        request: RasterRequest,
+        cancelled: threading.Event | None = None,
+        seconds: float | None = None,
     ) -> TerrainResult:
         return result
 
@@ -269,3 +272,179 @@ def test_agent_can_request_terrain_and_continue_with_its_saved_evidence(
     assert detail["runs"][0]["status"] == "succeeded"
     assert detail["artifacts"][0]["output"]["kind"] == "raster"
     assert detail["evidence"][0]["id"] in detail["messages"][-1]["content"]
+
+
+def test_raster_processing_fits_inside_the_run_time_budget(
+    client: TestClient,
+    db: Session,
+    sessions: sessionmaker[Session],
+    terrain: TerrainResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from app.research.model import CompleteAction, DecisionResult, RasterAction, ResearchDecision
+
+    given: list[float] = []
+
+    def calculate(*args: Any) -> TerrainResult:
+        given.append(args[3])
+        return terrain
+
+    monkeypatch.setattr("app.research.worker.run_raster", calculate)
+    _, inv, _, body = start(client)
+    # The processor gets what the budget leaves after 15 s for saving, never the budget itself.
+    second = client.post(
+        f"/api/v1/research/investigations/{inv}/runs",
+        json={**body, "requestKey": str(uuid.uuid4()), "budget": {"maxSeconds": 300}},
+    ).json()
+    worker = ResearchWorker(sessions, Settings(_env_file=None))
+    assert worker.run_once() and worker.run_once()
+    db.expire_all()
+    assert client.get(f"/api/v1/research/runs/{second['id']}").json()["status"] == "succeeded"
+    assert 160 < given[0] <= 165 and 280 < given[1] <= 285
+    # Too little time left: refused before any download, saying why and what to do.
+    short = client.post(
+        f"/api/v1/research/investigations/{inv}/runs",
+        json={**body, "requestKey": str(uuid.uuid4()), "budget": {"maxSeconds": 40}},
+    ).json()
+    assert worker.run_once()
+    db.expire_all()
+    refused = client.get(f"/api/v1/research/runs/{short['id']}").json()
+    assert refused["status"] == "failed" and len(given) == 2
+    assert "s of this run's time budget is left" in refused["error"]
+    assert "Explore this land" in refused["error"]
+    assert db.scalar(select(func.count()).select_from(LandRaster)) == 2
+
+    # An agent sees the seconds it has left and the refusal as a tool result.
+    seen: list[dict[str, Any]] = []
+
+    class Model:
+        def decide(self, context: str, max_tokens: int) -> DecisionResult:
+            prompt = json.loads(context)
+            seen.append(prompt)
+            action: RasterAction | CompleteAction = (
+                RasterAction(kind="analyze_raster", analysis=RasterRequest(resolution_m=60))
+                if len(seen) == 1
+                else CompleteAction(kind="complete", summary="Not enough time.", evidence_ids=[])
+            )
+            return DecisionResult(ResearchDecision(progress="Checking", action=action), 100)
+
+    asked = client.post(
+        f"/api/v1/research/investigations/{inv}/runs",
+        json={"requestKey": str(uuid.uuid4()), "question": "Slope?", "budget": {"maxSeconds": 40}},
+    ).json()
+    assert ResearchWorker(sessions, Settings(_env_file=None), model=Model()).run_once()
+    db.expire_all()
+    assert client.get(f"/api/v1/research/runs/{asked['id']}").json()["status"] == "succeeded"
+    assert 30 < seen[0]["remainingSeconds"] <= 40
+    assert "time budget is left" in seen[1]["previousActions"][-1]["result"]
+    assert len(given) == 2
+
+
+def test_processor_stop_says_whether_the_budget_or_its_own_limit_ended_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+    import time
+
+    from app.analysis import raster_runner
+
+    class Stuck:
+        returncode = None
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.killed = False
+
+        def __enter__(self) -> Stuck:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def poll(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> None:
+            time.sleep(0.05)
+            raise subprocess.TimeoutExpired("raster_job", timeout)
+
+        def kill(self) -> None:
+            self.killed = True
+
+    monkeypatch.setattr(subprocess, "Popen", Stuck)
+    with pytest.raises(ValueError, match="time budget ran out before the raster finished"):
+        raster_runner.run(BOUNDARY, RasterRequest(), None, 0.1)
+    monkeypatch.setattr(raster_runner, "wall_seconds", lambda request: 0.1)
+    with pytest.raises(ValueError, match=r"processing time limit\. Try a smaller area"):
+        raster_runner.run(BOUNDARY, RasterRequest(), None, 60)
+
+
+def test_map_tiles_decode_each_band_once_within_a_bounded_cache(
+    client: TestClient,
+    db: Session,
+    sessions: sessionmaker[Session],
+    terrain: TerrainResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import land_rasters
+
+    _, inv, _, _ = start(client)
+    db.rollback()
+    assert ResearchWorker(sessions, Settings(_env_file=None)).run_once()
+    db.expire_all()
+    detail = client.get(f"/api/v1/research/investigations/{inv}").json()
+    base = f"/api/v1/land/rasters/{detail['artifacts'][0]['output']['rasterId']}/tiles"
+    reads: list[uuid.UUID] = []
+    original = land_rasters.blob
+
+    def counted(session: Session, row: LandRaster) -> bytes:
+        reads.append(row.id)
+        return original(session, row)
+
+    monkeypatch.setattr(land_rasters, "blob", counted)
+    land_rasters._bands.clear()
+    tile = TMS.tile(-122.132, 47.648, 14)
+    near = TMS.tile(-122.130, 47.650, 15)
+
+    def fetch(band: int, at: Any = tile) -> None:
+        response = client.get(f"{base}/{band}/{at.z}/{at.x}/{at.y}.png")
+        assert response.status_code == 200 and response.content.startswith(b"\x89PNG")
+
+    # A map view's many tiles of one band read and inflate the stored raster once.
+    for band, at in ((1, tile), (1, near), (2, tile), (2, near), (1, tile)):
+        fetch(band, at)
+    assert len(reads) == 2
+    # Past its byte limit the cache keeps only the newest band, so memory stays bounded.
+    monkeypatch.setattr(land_rasters, "BAND_CACHE_BYTES", 1)
+    land_rasters._bands.clear()
+    for band in (1, 2, 1):
+        fetch(band)
+    assert len(reads) == 5 and len(land_rasters._bands) == 1
+    land_rasters._bands.clear()
+
+
+def test_tiles_arriving_together_decode_a_band_once(
+    terrain: TerrainResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+
+    from app.services import land_rasters
+
+    reads: list[int] = []
+
+    def slow_blob(db: Session, row: LandRaster) -> bytes:
+        reads.append(1)
+        time.sleep(0.2)  # Long enough for every other tile to arrive while this one reads.
+        return terrain.data
+
+    monkeypatch.setattr(land_rasters, "blob", slow_blob)
+    land_rasters._bands.clear()
+    row = SimpleNamespace(sha256="c" * 64)
+    with ThreadPoolExecutor(8) as pool:
+        bands = list(pool.map(lambda _: land_rasters.band_array(None, row, 1), range(8)))  # type: ignore[arg-type]
+    assert len(reads) == 1 and all(band is bands[0] for band in bands)
+    assert not land_rasters._loading
+    land_rasters._bands.clear()

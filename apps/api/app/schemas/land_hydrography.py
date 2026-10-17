@@ -20,9 +20,13 @@ class HydrographyFeature(CamelModel):
     permanent_identifier: str = Field(max_length=60)
     name: str | None
     fcode: int
-    # The NHD hydrographic category; "other" covers canals, connectors, pipelines and the
-    # artificial paths drawn through lakes.
-    kind: Literal["perennial", "intermittent", "ephemeral", "other"]
+    # Natural stream channels (NHD Stream/River) by permanence: perennial, intermittent,
+    # ephemeral, or unclassified when NHD records none (FCode 46000). artificial-path carries a
+    # stream through a pond, lake or wide river, so with the channels it keeps a creek's line
+    # unbroken. other: canals and ditches, connectors, underground conduits, pipelines, coastline.
+    kind: Literal[
+        "perennial", "intermittent", "ephemeral", "unclassified", "artificial-path", "other"
+    ]
     # The feature code in words, e.g. "Stream/river, intermittent".
     description: str
     geometry: LineString
@@ -33,7 +37,9 @@ class LandHydrography(CamelModel):
     land_id: uuid.UUID
     boundary_revision: int
     # available: flowlines found. empty: NHD maps none here. uncovered: the land is outside the
-    # United States, which is all NHD covers. unavailable: the lookup failed; try again.
+    # United States, which is all NHD covers. unavailable: no flowlines could be read; the
+    # message says whether trying again can help (the service did not answer) or not (more
+    # mapped flowlines than one answer can carry).
     status: Literal["available", "empty", "uncovered", "unavailable"]
     message: str
     # Flowlines are clipped to the boundary grown by this distance, so a creek just outside

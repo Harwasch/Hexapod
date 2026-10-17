@@ -9,32 +9,45 @@ type RasterRequest = components["schemas"]["RasterRequest"];
 
 export const RASTER_RUNS: Record<
   RasterDataset,
-  { title: string; question: string; resolutionM: number }
+  {
+    title: string;
+    question: string;
+    resolutionM: number;
+    /** The run's time budget: at least the processor's limit (wall_seconds in
+     * apps/api/app/analysis/raster_runner.py: 200 s signature, 165 s NDVI, 90 s otherwise)
+     * plus its 15 s to save, or the worker stops the processor early. */
+    maxSeconds: number;
+  }
 > = {
   "cop-dem-glo-30": {
     title: "Surface elevation and slope",
     question: "Analyze surface elevation and slope inside this land.",
     resolutionM: 30,
+    maxSeconds: 180,
   },
   "esa-worldcover-2021": {
     title: "Land cover in 2021",
     question: "Analyze the broad land-cover classes mapped in 2021 inside this land.",
     resolutionM: 10,
+    maxSeconds: 180,
   },
   "sentinel-2-ndvi": {
     title: "Vegetation through time",
     question: "Compare dated vegetation signals on common clear cells inside this land.",
     resolutionM: 20,
+    maxSeconds: 240,
   },
   "sentinel-2-signature": {
     title: "Seasonal 10 m signatures",
     question: "Prepare seasonal 10 m signatures for this land.",
     resolutionM: 10,
+    maxSeconds: 300,
   },
   "usgs-3dep-13": {
     title: "Bare-earth elevation and slope (USGS 3DEP)",
     question: "Analyze bare-earth elevation and slope inside this land.",
     resolutionM: 10,
+    maxSeconds: 180,
   },
 };
 

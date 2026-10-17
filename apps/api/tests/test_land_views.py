@@ -204,3 +204,42 @@ def test_raster_band_opacity_and_unavailable_reference(client: TestClient, db: S
     opened = client.get(url).json()
     assert opened["rasters"] == [] and opened["state"]["rasters"] == []
     assert any("unavailable" in warning for warning in opened["warnings"])
+
+
+def test_view_saves_and_reopens_a_late_signature_band(client: TestClient, db: Session) -> None:
+    # Four seasons put October's NDVI at band 20; a saved view must keep it.
+    from app.analysis.signature import analyze
+    from app.models.land_raster import LandRaster
+    from tests.test_signature import fixture_client, request
+    from tests.test_vegetation import BOUNDARY
+
+    seasons = {"2025-01": "0116", "2025-04": "0416", "2025-07": "0716", "2025-10": "1016"}
+    land, _, run, _ = start(client)
+    with fixture_client(windows=seasons) as source:
+        signature = analyze(BOUNDARY, request(*seasons), source)
+    assert signature.metadata.bands[19].name == "2025-10-16 NDVI"
+    row = LandRaster(
+        land_id=uuid.UUID(land["id"]),
+        boundary_revision=1,
+        run_id=uuid.UUID(run["id"]),
+        request=request(*seasons).model_dump(mode="json"),
+        metadata_json=signature.metadata.model_dump(mode="json"),
+        sha256="b" * 64,
+        byte_size=1,
+    )
+    db.add(row)
+    db.commit()
+    path = f"/api/v1/land/{land['id']}/views"
+    body = payload()
+    body["state"]["rasters"] = [{"id": str(row.id), "kind": "raster", "band": 20, "opacity": 0.6}]
+    saved = client.post(path, json=body)
+    assert saved.status_code == 201, saved.text
+    opened = client.get(f"{path}/{saved.json()['id']}").json()
+    assert opened["rasters"][0]["band"] == 20 and opened["state"]["rasters"][0]["band"] == 20
+    assert opened["warnings"] == []
+    # Past the signature's 20 bands the view names the missing band; past 30 the schema refuses.
+    for band, reason in ((21, "Saved band 21"), (31, "less than or equal to 30")):
+        body["requestKey"] = str(uuid.uuid4())
+        body["state"]["rasters"][0]["band"] = band
+        refused = client.post(path, json=body)
+        assert refused.status_code == 422 and reason in refused.text, refused.text

@@ -4407,7 +4407,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "perennial" | "intermittent" | "ephemeral" | "other";
+            kind: "perennial" | "intermittent" | "ephemeral" | "unclassified" | "artificial-path" | "other";
             /** Lengthm */
             lengthM: number;
             /** Name */

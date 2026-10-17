@@ -339,10 +339,14 @@ biomass or restoration success; seasonal/measurement changes do not establish a 
 Use analyze_raster with sentinel-2-signature for seasonal 10 m signatures: green, red, NIR and
 SWIR reflectance plus NDVI per window, masked to each window's clear land cells. Supply two to
 six chronological nonoverlapping periods (one per season, e.g. 1-30 Jan, Apr, Jul and Oct of
-the latest complete year) and resolutionM 10. It takes a minute or two. Report the actual
-acquisition dates and common cells (clear in every window). Similar signatures mean similar
-reflectance on those dates relative to this land's variety, never the same species, cover or
-habitat; a cloudy window shrinks or empties the comparable cells and is never interpolated.
+the latest complete year) and resolutionM 10. Raster processing comes out of remainingSeconds
+and stops unsaved when the budget runs short. A signature can take up to 200 s (four windows
+on 1,350 ac took about 100 s): with under about 220 remainingSeconds do not start it; suggest
+Prepare 10 m signatures in Explore this land, which runs it with its own 300 s budget. Report
+the actual acquisition dates and common cells (clear in every window). Similar signatures mean
+similar reflectance on those dates relative to this land's variety, never the same species,
+cover or habitat; a cloudy window shrinks or empties the comparable cells and is never
+interpolated.
 Use read_solar_assessment to inspect existing savedSolarAssessments with their evidence before
 recomputing or answering follow-up questions. A saved assessment includes its pinned boundary and
 source coverage; distinguish stale boundaries and partial years. create_scenario can link a

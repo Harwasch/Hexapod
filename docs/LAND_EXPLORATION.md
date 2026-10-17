@@ -2228,7 +2228,8 @@ processor and private raster storage; no migration.
   means), which the existing timeline view shows, and a `SignatureInfo` listing every band with
   the common-cell mean and spread that a later similarity's z-scores use. Common cells are clear
   in every band of every window. The map shows the dated NDVI bands; the download and point
-  sample hold all of them. Warnings say a similar signature is not a species identification, cover
+  sample hold all of them. A saved view can keep any of a signature's bands (up to 30, the
+  six-window ceiling), such as October's NDVI at band 20 of four seasons. Warnings say a similar signature is not a species identification, cover
   estimate or habitat assessment and that "alike" is relative to the variety on this land.
 - **Bare-earth terrain** (`usgs-3dep-13`, "Analyze bare-earth terrain"). USGS 3DEP 1/3
   arc-second DTM tiles (`prd-tnm.s3.amazonaws.com`, now in the `raster_io` allowlist, read
@@ -2239,14 +2240,37 @@ processor and private raster storage; no migration.
   button is disabled with that reason.
 - **NHD flowlines** (`GET /land/{id}/hydrography`). USGS NHD Flowline - Large Scale features
   within 100 m of the boundary, read live by the API (the browser cannot ask NHD), clipped with
-  shapely, each with its permanent identifier, GNIS name, FCode and a kind (perennial,
-  intermittent, ephemeral, other). It answers "uncovered" outside the US, "unavailable" on any
-  upstream failure, says when the 500-record limit was hit, and keeps good answers in memory for
-  an hour per land revision. Responses are private, no-store.
+  shapely, each with its permanent identifier, GNIS name, FCode and a kind. Natural channels
+  are perennial, intermittent, ephemeral, or unclassified when NHD records no permanence (FCode
+  46000, common in NHD); `artificial-path` (FType 558) carries a stream through a pond, lake or
+  wide river, so a creek check that includes it keeps the creek unbroken; `other` is only canals
+  and ditches, connectors, conduits, pipelines and coastline. A creek check should take every
+  kind but `other` (and decide about ephemeral), never just perennial and intermittent. The
+  query asks for 6-decimal coordinates generalised by 1e-5 degrees (about 1 m, well inside the
+  1:24,000 accuracy of about 12 m), which made the same answer 40% smaller (98 KB instead of
+  166 KB). It answers "uncovered" outside the US and "unavailable" when it cannot read
+  flowlines: an upstream failure says to try again and is asked again next time; an answer past
+  the 2 MB response limit says trying again will not help and is kept for ten minutes. It says
+  when the 500-record limit was hit and keeps good answers in memory for an hour per land
+  revision. Responses are private, no-store.
 
 The research agent's `analyze_raster` text describes both datasets. Processor limits: signature
-120 CPU s and 200 s wall time with a 128 MiB / 1,024-request / 180 s read budget; 3DEP 75 CPU s
-and 90 s with a 64 MiB / 256-request / 60 s budget; both keep the 16 MiB output limit.
+120 CPU s and 200 s wall time with a 128 MiB / 1,024-request / 180 s read budget; NDVI 165 s;
+3DEP 75 CPU s and 90 s with a 64 MiB / 256-request / 60 s budget; all keep the 16 MiB output
+limit. A raster run's research time budget must cover its processor: Explore this land sends
+300 s for signatures, 240 s for NDVI and 180 s otherwise (`maxSeconds` in
+`features/land/rasterRuns.ts`; the default budget is 180 s). The worker stops a processor 15 s
+before the run's budget ends, so a raster that finishes is always saved with its evidence and
+a budget stop says plainly that no raster was saved; with under 45 s left (a resumed run counts
+from its first start) it refuses to start one and says why. An investigation's agent sees
+`remainingSeconds` and is told a signature needs about 220 s of it, which a default 180 s
+investigation never has, so it points the person to "Prepare 10 m signatures" instead.
+
+Map tiles of a stored raster decode each band once into a 64 MiB in-process cache keyed by the
+blob's content hash (`land_rasters.band_array`, for the later similarity too), instead of
+reading the whole blob from Postgres and inflating the band for every 256 px tile; tiles that
+arrive together wait for the one decode. Rendering one z15 view of the signature's October NDVI
+(30 tiles of band 20, 3.35 MB blob) took 3.29 s without it and 1.53 s with it, in process.
 
 Measured on the Oak Bench Ranch demo outline (1,349 ac, 254 x 255 cells at 10 m) with the API,
 the research worker and the buttons in a browser, through this environment's proxy: bare-earth
@@ -2256,7 +2280,10 @@ valid). Seasonal signatures finished 98.7 s after the click (96.9 s processing),
 from 28 cited files and stored 3.35 MB in 20 bands; scenes acquired 2025-01-15, 2025-04-05,
 2025-07-24 and 2025-10-17 left 54,436 of 54,596 cells (99.7%) clear in every window, with
 common-cell NDVI 0.29, 0.52, 0.26 and 0.29. The July NDVI band shows the oaks and the Figueroa
-Creek corridor staying green over dry annual grass. Hydrography answered in 2.9 s (17 ms
-cached) with 55 flowlines in 56 clipped pieces: 21 intermittent (10 of them Figueroa Creek),
-34 ephemeral and 1 other. Known limit: land rasters are Cesium imagery layers, which are not drawn while Google
+Creek corridor staying green over dry annual grass. Run again with the button's 300 s budget,
+signatures finished 95.1 s after the click (93.3 s in the worker); October's NDVI (band 20)
+mapped, and a view saved on it reopened on band 20 in a fresh browser. Hydrography answered in
+2.9 s (17 ms cached) with 55 flowlines in 56 clipped pieces: 21 intermittent (10 of them
+Figueroa Creek), 34 ephemeral and 1 artificial path; the generalised query answered in 1.5 s.
+Known limit: land rasters are Cesium imagery layers, which are not drawn while Google
 Photorealistic 3D Tiles are on; the maps above were checked in the open world mode.

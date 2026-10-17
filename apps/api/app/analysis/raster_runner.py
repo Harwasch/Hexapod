@@ -18,15 +18,31 @@ class RasterCancelledError(Exception):
     pass
 
 
+#: Time a research run keeps after its processor stops, to save the raster, its evidence,
+#: finding and map before the run's time budget ends it.
+SAVE_SECONDS = 15
+#: With less processing time than this left in a run's budget, no raster is started.
+MIN_SECONDS = 30
+
+
 def wall_seconds(request: RasterRequest) -> float:
     """How long a processor may run before it is stopped. Sentinel-2 runs read many scenes
-    through the network; four signature windows measured about a minute through a proxy."""
+    through the network; four signature windows measured 97 s on 1,349 ac through a proxy.
+    A raster run's time budget must cover this plus SAVE_SECONDS (web: rasterRuns.ts)."""
     return {"sentinel-2-signature": 200, "sentinel-2-ndvi": 165}.get(request.dataset, 90)
 
 
 def run(
-    boundary: Footprint, request: RasterRequest, cancelled: threading.Event | None = None
+    boundary: Footprint,
+    request: RasterRequest,
+    cancelled: threading.Event | None = None,
+    seconds: float | None = None,
 ) -> TerrainResult:
+    """Run the processor in a sandboxed subprocess. `seconds` is the processing time left in
+    the research run's budget: the processor stops at that or wall_seconds, whichever is
+    sooner, so a run never ends mid-calculation claiming its outputs were kept."""
+    own_limit = wall_seconds(request)
+    limit = own_limit if seconds is None else min(seconds, own_limit)
     with tempfile.TemporaryDirectory(prefix="land-raster-") as temporary:
         directory = Path(temporary)
         (directory / "input.json").write_text(
@@ -45,10 +61,14 @@ def run(
                 if cancelled is not None and cancelled.is_set():
                     process.kill()
                     raise RasterCancelledError()
-                if time.monotonic() - started > wall_seconds(request):
+                if time.monotonic() - started > limit:
                     process.kill()
                     raise ValueError(
                         "Raster analysis reached its processing time limit. Try a smaller area."
+                        if limit >= own_limit
+                        else "This run's time budget ran out before the raster finished, so no "
+                        "raster was saved. Start the analysis again from Explore this land, "
+                        "which gives it a fresh time budget."
                     )
                 with suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=0.25)

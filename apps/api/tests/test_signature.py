@@ -47,11 +47,15 @@ def request(*months: str) -> RasterRequest:
 
 
 def fixture_client(
-    *, empty: str = "", resolution: dict[str, int] | None = None, counter: list[int] | None = None
+    *,
+    empty: str = "",
+    resolution: dict[str, int] | None = None,
+    counter: list[int] | None = None,
+    windows: dict[str, str] | None = None,
 ) -> httpx.Client:
     rasters: dict[str, bytes] = {}
     scenes: dict[str, list[dict[str, Any]]] = {}
-    for month, day in WINDOWS.items():
+    for month, day in (windows or WINDOWS).items():
         candidates = []
         for cloudy in (True, False):
             stamp = f"{month.replace('-', '')}{day[2:] if not cloudy else '01'}"

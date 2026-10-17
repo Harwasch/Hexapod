@@ -19,7 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.dem_3dep import SPEC as DEM3DEP_SPEC
-from app.analysis.raster_runner import RasterCancelledError
+from app.analysis.raster_runner import MIN_SECONDS as RASTER_MIN_SECONDS
+from app.analysis.raster_runner import SAVE_SECONDS as RASTER_SAVE_SECONDS
+from app.analysis.raster_runner import RasterCancelledError, wall_seconds
 from app.analysis.raster_runner import run as run_raster
 from app.analysis.signature import SPEC as SIGNATURE_SPEC
 from app.analysis.solar_runner import SolarCancelledError
@@ -133,6 +135,13 @@ def pack(result: SourceResult) -> dict[str, Any]:
     }
 
 
+def remaining_seconds(budget: ResearchBudget, started_at: datetime | None) -> float:
+    """What is left of a run's time budget. It counts from the first claim, so a resumed run
+    has what its earlier attempts left; the lease keeper ends the run at zero."""
+    elapsed = (datetime.now(UTC) - started_at).total_seconds() if started_at else 0.0
+    return budget.max_seconds - elapsed
+
+
 def unpack(value: dict[str, Any]) -> SourceResult:
     return SourceResult(
         value["provider"],
@@ -207,11 +216,7 @@ class ResearchWorker:
                 with self.sessions() as db:
                     run = queue.locked(db, run_id, token)
                     budget = ResearchBudget.model_validate(run.budget)
-                    if (
-                        run.started_at
-                        and (datetime.now(UTC) - run.started_at).total_seconds()
-                        >= budget.max_seconds
-                    ):
+                    if remaining_seconds(budget, run.started_at) <= 0:
                         queue.finish(
                             db,
                             run_id,
@@ -418,6 +423,19 @@ class ResearchWorker:
         identifier = uuid.uuid5(run_id, key)
         row = db.get(LandRaster, identifier)
         if row is None:
+            # The processor stops before the run's time budget does, leaving time to save.
+            # Otherwise the lease keeper would end the run mid-calculation as "partial" and
+            # say outputs were kept when no raster was saved.
+            current = queue.locked(db, run_id, token)
+            left = remaining_seconds(
+                ResearchBudget.model_validate(current.budget), current.started_at
+            )
+            if left - RASTER_SAVE_SECONDS < RASTER_MIN_SECONDS:
+                raise ValueError(
+                    f"Only {max(0, left):.0f} s of this run's time budget is left, and "
+                    f"{spec.name} can take up to {wall_seconds(request):.0f} s. Start the "
+                    "analysis again from Explore this land, which gives it a fresh time budget."
+                )
             queue.checkpoint(
                 db,
                 run_id,
@@ -439,7 +457,9 @@ class ResearchWorker:
             )
             db.rollback()
             try:
-                calculated = run_raster(context.boundary, request, cancelled)
+                calculated = run_raster(
+                    context.boundary, request, cancelled, left - RASTER_SAVE_SECONDS
+                )
             except RasterCancelledError as error:
                 raise queue.LeaseLostError() from error
             run = queue.locked(db, run_id, token)
@@ -1106,6 +1126,7 @@ class ResearchWorker:
                 raise queue.LeaseLostError()
             context = SourceContext(FOOTPRINT.validate_python(boundary.boundary))
             budget = ResearchBudget.model_validate(run.budget)
+            started_at = run.started_at
             kind, question = run.kind, run.question
             focus_snapshot = run.focus_snapshot
             analysis_request = (
@@ -1398,6 +1419,7 @@ class ResearchWorker:
                             "retrieved": state["sources"],
                             "previousActions": state["actions"][-20:],
                             "remainingSteps": budget.max_steps - state["steps"],
+                            "remainingSeconds": round(remaining_seconds(budget, started_at)),
                             "remainingWebSearches": budget.max_web_searches
                             - state.get("web_searches", 0),
                         },
