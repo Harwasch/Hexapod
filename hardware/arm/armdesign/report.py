@@ -3,9 +3,11 @@
     uv run python -m armdesign.report select   # out/study.json -> design/selected.yaml
     uv run python -m armdesign.report          # selected design -> viewer/data/*, viewer/assets/*
 
-The pick: on the "field" frontier (backdrivable, force-sensing shoulder and elbow, within
-the mass budget and the backlash limit), the cheapest design within 5% of the best score
-any field design reaches. Past that knee each extra point of capability costs $25-100.
+The picks (see choose()): on the "field" frontier of bought parts (backdrivable,
+force-sensing base joints, a tool roll that turns a valve, within the mass budget and the
+backlash limit), FA-2 is where returns diminish: the cheapest design beyond which no upgrade
+buys RETURN_FLOOR points of capability per $100. Lite matches FA-1 for the least money; Max
+is the most capability at FA-1's price with any lever, the custom driver board included.
 """
 
 from __future__ import annotations
@@ -304,7 +306,12 @@ def bom(design: ArmDesign, acts: dict) -> list[dict]:
             rows.append(
                 {
                     "group": "Reductions",
-                    "item": f"{stage.ratio:g}:1 {stage.kind} (drum, pinion, cable, bearings)",
+                    "item": f"{stage.ratio:g}:1 {stage.kind} "
+                    + (
+                        "(drum, pinion, rope, bearings)"
+                        if stage.kind == "capstan"
+                        else "(toothed ring, pinion, belt, idler)"
+                    ),
                     "where": where,
                     "qty": 1,
                     "usd": stage.cost,
@@ -314,7 +321,7 @@ def bom(design: ArmDesign, acts: dict) -> list[dict]:
             rows.append(
                 {
                     "group": "Reductions",
-                    "item": "joint encoder (MT6701 on the drum, read on the servo-bus board)",
+                    "item": "joint encoder (MT6701 at the joint, read on the servo-bus board)",
                     "where": where,
                     "qty": 1,
                     "usd": encoder,

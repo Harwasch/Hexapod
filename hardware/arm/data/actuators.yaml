@@ -13,9 +13,9 @@
 #               sensor; partly = backdrivable but coarse; no = not backdrivable.
 # ratio         the part's own gear reduction (servo ratios are nominal).
 # price_usd     list price at the source of the original read (mostly China-shipped, ex duty).
-# landed_usd    what that order really costs delivered to the US: list x 1.403 (US duty on
-#               Chinese motors, Oct 2026) + freight, or list + freight from a duty-paid
-#               (DDP) seller. Parts without it get the same formula from costs.yaml.
+# landed_usd    only where the list price ships duty-paid (Hiwonder's USPS option). Every
+#               other part lands at list x 1.403 (US duty on Chinese motors, Oct 2026) +
+#               freight by mass (costs.yaml), the same formula for all of them.
 # price_alt_usd the cheapest credible landed price for the same variant
 #               (docs/research/sourcing.md, verified prices only), used with the "sourcing" lever.
 actuators:
@@ -28,7 +28,6 @@ actuators:
     mass_kg: 0.242
     speed_rpm: 430
     price_usd: 80
-    landed_usd: 118
     price_alt_usd: 82
     price_alt_source: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
     price_alt_confidence: high
@@ -50,7 +49,6 @@ actuators:
     mass_kg: 0.191
     speed_rpm: 480
     price_usd: 110
-    landed_usd: 160
     price_alt_usd: 112
     price_alt_source: Zennixtek DDP $105 + $7 shipping
     price_alt_confidence: med
@@ -72,7 +70,6 @@ actuators:
     mass_kg: 0.325
     speed_rpm: 200
     price_usd: 125
-    landed_usd: 183
     price_alt_usd: 132
     price_alt_source: Zennixtek DDP $119 + $13 shipping
     price_alt_confidence: med
@@ -94,7 +91,6 @@ actuators:
     mass_kg: 0.31
     speed_rpm: 315
     price_usd: 125
-    landed_usd: 183
     price_alt_usd: 138
     price_alt_source: Zennixtek DDP $125 + $13 shipping
     price_alt_confidence: med
@@ -116,7 +112,6 @@ actuators:
     mass_kg: 0.388
     speed_rpm: 420
     price_usd: 105
-    landed_usd: 156
     price_alt_usd: 132
     price_alt_source: OpenELAB DDP
     price_alt_confidence: high
@@ -138,7 +133,6 @@ actuators:
     mass_kg: 0.388
     speed_rpm: 200
     price_usd: 105
-    landed_usd: 156
     price_alt_usd: 132
     price_alt_source: OpenELAB DDP (48 V variant, same price)
     price_alt_confidence: med
@@ -160,7 +154,6 @@ actuators:
     mass_kg: 0.396
     speed_rpm: 320
     price_usd: 135
-    landed_usd: 198
     price_alt_usd: 159
     price_alt_source: OpenELAB DDP
     price_alt_confidence: high
@@ -200,7 +193,6 @@ actuators:
     mass_kg: 0.31
     speed_rpm: 63
     price_usd: 145
-    landed_usd: 211
     price_alt_usd: 197
     price_alt_source: OpenELAB DDP
     price_alt_confidence: high
@@ -222,7 +214,6 @@ actuators:
     mass_kg: 0.362
     speed_rpm: 100
     price_usd: 155
-    landed_usd: 226
     price_alt_usd: 202
     price_alt_source: Zennixtek DDP $189 + $13 shipping
     price_alt_confidence: med
@@ -244,7 +235,6 @@ actuators:
     mass_kg: 0.405
     speed_rpm: 360
     price_usd: 145
-    landed_usd: 212
     price_alt_usd: 152
     price_alt_source: Zennixtek DDP $139 + $13 shipping
     price_alt_confidence: med
@@ -266,7 +256,6 @@ actuators:
     mass_kg: 0.49
     speed_rpm: 360
     price_usd: 240
-    landed_usd: 342
     price_alt_usd: 248
     price_alt_source: Zennixtek DDP $235 + $13 shipping
     price_alt_confidence: med
@@ -288,7 +277,6 @@ actuators:
     mass_kg: 0.36
     speed_rpm: 390
     price_usd: 205
-    landed_usd: 297
     dia_mm: 87
     len_mm: 26
     backlash_deg: 0.25
@@ -307,7 +295,6 @@ actuators:
     mass_kg: 0.34
     speed_rpm: 288
     price_usd: 125
-    landed_usd: 191
     dia_mm: 87
     len_mm: 36
     backlash_deg: 0.25
@@ -326,7 +313,6 @@ actuators:
     mass_kg: 0.559
     speed_rpm: 120
     price_usd: 210
-    landed_usd: 307
     price_alt_usd: 226
     price_alt_source: Zennixtek DDP $209 + $17 shipping
     price_alt_confidence: med
@@ -348,7 +334,6 @@ actuators:
     mass_kg: 0.46
     speed_rpm: 125
     price_usd: 215
-    landed_usd: 312
     price_alt_usd: 222
     price_alt_source: Zennixtek DDP $209 + $13 shipping
     price_alt_confidence: med
@@ -370,7 +355,6 @@ actuators:
     mass_kg: 0.621
     speed_rpm: 100
     price_usd: 210
-    landed_usd: 308
     price_alt_usd: 222
     price_alt_source: Zennixtek DDP $205 + $17 shipping
     price_alt_confidence: med
@@ -392,7 +376,6 @@ actuators:
     mass_kg: 0.777
     speed_rpm: 20
     price_usd: 165
-    landed_usd: 246
     price_alt_usd: 235
     price_alt_source: OpenELAB DDP (GDK468 driver)
     price_alt_confidence: med
@@ -414,7 +397,6 @@ actuators:
     mass_kg: 0.88
     speed_rpm: 195
     price_usd: 225
-    landed_usd: 334
     price_alt_usd: 240
     price_alt_source: Zennixtek DDP $219 + $21 shipping
     price_alt_confidence: med
@@ -436,7 +418,6 @@ actuators:
     mass_kg: 0.628
     speed_rpm: 60
     price_usd: 265
-    landed_usd: 387
     price_alt_usd: 280
     price_alt_source: Zennixtek DDP $259 + $21 shipping
     price_alt_confidence: med
@@ -458,7 +439,6 @@ actuators:
     mass_kg: 0.055
     speed_rpm: 45
     price_usd: 26
-    landed_usd: 38
     price_alt_usd: 27.4
     price_alt_source: OpenELAB DDP (AliExpress ~$20, unverified)
     price_alt_confidence: high
@@ -519,7 +499,6 @@ actuators:
     mass_kg: 0.0745
     speed_rpm: 75
     price_usd: 88
-    landed_usd: 126
     price_alt_usd: 72.5
     price_alt_source: OpenELAB DDP
     price_alt_confidence: high
@@ -541,7 +520,6 @@ actuators:
     mass_kg: 0.103
     speed_rpm: 60
     price_usd: 116
-    landed_usd: 166
     price_alt_usd: 136
     price_alt_source: Zennixtek DDP $129 + $7 shipping
     price_alt_confidence: med
@@ -563,7 +541,6 @@ actuators:
     mass_kg: 0.1945
     speed_rpm: 31
     price_usd: 140
-    landed_usd: 201
     price_alt_usd: 146
     price_alt_source: Zennixtek DDP $139 + $7 shipping
     price_alt_confidence: med

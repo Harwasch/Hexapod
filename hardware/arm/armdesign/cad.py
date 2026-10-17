@@ -57,6 +57,12 @@ CHEEK_T = 8.0
 ROPE_PITCH = 1.2  # helical groove pitch on the pinion, x rope diameter
 DRUM_FLANGE = 2.0
 BELT_PINION_R = 7.16
+SHAFT_R = 5.0  # 10 mm steel joint and pinion shafts in 6800 bearings (10 x 19 x 5)
+BEARING_R = 9.5
+# Where a staged motor sits round the shoulder axis, degrees from the arm's forward
+# direction: below and in front, outside the upper arm's sweep (the shoulder) and the
+# crank and rod end's sweep (the elbow) over the joints' reachable range.
+MOTOR_ANGLE = {1: -90.0, -1: -50.0}
 BELT_W = 9.0
 BELT_T = 2.4
 PRINT_DENSITY = 1.30e-3  # g/mm^3, ASA / PETG-CF solid
@@ -159,15 +165,17 @@ def capstan_drum(r_eff: float, rope: float, y0: float, y1: float) -> Part:
     return cyl_y(r_eff - rope / 2, lo + 1.5, hi - 1.5) + cyl_y(r_out, lo, lo + 1.5) + cyl_y(r_out, hi - 1.5, hi)
 
 
-def capstan_pinion(x: float, z: float, r_eff: float, rope: float, y0: float, y1: float) -> Part:
-    """A steel pinion on the y axis with one helical groove for the wraps."""
-    lo, hi = min(y0, y1), max(y0, y1)
-    core = r_eff - rope / 2
+def capstan_pinion(x: float, z: float, r_eff: float, rope: float, g0: float, g1: float, shaft_to: float) -> Part:
+    """A steel pinion on the y axis: one helical groove whose rope centreline sits at r_eff
+    (so the ratio is the stage's), only between the drum's flanges (g0..g1), and a 10 mm
+    shaft from there through the cheek bearing to the motor at shaft_to."""
+    lo, hi = min(g0, g1), max(g0, g1)
     length = hi - lo
-    helix = Helix(pitch=rope * ROPE_PITCH, height=length - 3, radius=core + rope * 0.15)
+    helix = Helix(pitch=rope * ROPE_PITCH, height=length - 1, radius=r_eff)
     groove = sweep(Plane(origin=helix @ 0, z_dir=helix % 0) * Circle(rope * 0.55), path=helix)
-    pin = Cylinder(core + rope * 0.4, length, align=(Align.CENTER, Align.CENTER, Align.MIN)) - Pos(0, 0, 1.5) * groove
-    return Pos(x, lo, z) * (Rot(-90, 0, 0) * pin)
+    pin = Cylinder(r_eff + rope * 0.3, length, align=(Align.CENTER, Align.CENTER, Align.MIN)) - Pos(0, 0, 0.5) * groove
+    shaft_lo, shaft_hi = (hi, shaft_to) if shaft_to > hi else (shaft_to, lo)
+    return Pos(x, lo, z) * (Rot(-90, 0, 0) * pin) + cyl_y(SHAFT_R, shaft_lo, shaft_hi, x, z)
 
 
 def belt_loop(c: float, r1: float, r2: float, z0: float, z1: float) -> Part:
@@ -211,7 +219,7 @@ class Layout:
     sh_stage: Stage | None = None  # capstan at the shoulder, None for a coaxial motor
     el_stage: Stage | None = None
     yaw_stage: Stage | None = None  # belt round a ring under the turret
-    cheek_in: float = 20.0  # inner faces of the turret cheeks at +-cheek_in
+    cheek_in: float = 30.0  # inner faces of the turret cheeks at +-cheek_in (clear of the tube socket)
 
     @property
     def cheek_out(self) -> float:
@@ -223,11 +231,33 @@ class Layout:
         coax = [d / 2 + 4 for d, s in ((self.sh_dia, self.sh_stage), (self.el_dia, self.el_stage)) if not s]
         return max(drums + coax) if self.para else max(drums or [self.sh_dia / 2 + 4])
 
-    def motor_x(self, side: int) -> float:
-        """Where a turret motor's axis sits along x: on the shoulder axis, or behind it by
-        the capstan's centre distance (drum radius plus pinion radius)."""
+    def motor_pos(self, side: int) -> tuple[float, float]:
+        """Where a turret motor's axis sits (x, z): on the shoulder axis, or the capstan's
+        centre distance (drum radius plus pinion radius) away at MOTOR_ANGLE."""
         s = self.sh_stage if side > 0 else self.el_stage
-        return -(s.ratio + 1) * s.pinion_r * 1000 if s else 0.0
+        if not s:
+            return 0.0, self.ped
+        d = (s.ratio + 1) * s.pinion_r * 1000
+        a = math.radians(MOTOR_ANGLE[side])
+        return d * math.cos(a), self.ped + d * math.sin(a)
+
+    def drum_span(self, side: int) -> tuple[float, float]:
+        """The y range of a capstan drum: on the upper hub (shoulder) or beside the crank."""
+        return (3.0, 17.0) if side > 0 else (-self.cheek_in + 0.5, -12.5)
+
+    @property
+    def box_top(self) -> float:
+        """Top of the turret box: under the drums, the pinions and the crank and rod end's
+        sweep round the shoulder axis."""
+        clear = [self.head_r]
+        if self.para:
+            clear.append(CRANK * 1000 + 8)  # rod-end eye radius
+        for side in (1, -1):
+            s = self.sh_stage if side > 0 else self.el_stage
+            if s:
+                _, mz = self.motor_pos(side)
+                clear.append(self.ped - mz + s.pinion_r * 1000 + rope_mm(s))
+        return self.ped - max(clear) - 6
 
 
 def stage_of(act: object) -> Stage | None:
@@ -284,6 +314,11 @@ def turret_plate(lo: Layout) -> Part:
     plate = Pos(0, 0, 2.5) * Box(lo.head_r * 2 - 6, w, 7, align=(Align.CENTER, Align.CENTER, Align.MIN))
     plate -= bolt_circle(lo.yaw_dia / 2 * 0.42, 6, 1.7, lambda a, b, r: cyl_z(r, 0, 20, a, b))
     plate -= cyl_z(6, 0, 20)  # cable pass-through on the yaw axis
+    for side, st in ((1, lo.sh_stage), (-1, lo.el_stage)):
+        if st and lo.ped - drum_r(st) < 11:
+            # Pocket under a drum that sweeps down to the plate.
+            ya, yb = lo.drum_span(side)
+            plate -= Pos(0, (ya + yb) / 2, 2.5) * Box(2 * drum_r(st) + 4, abs(yb - ya) + 2, 20)
     return plate
 
 
@@ -297,24 +332,35 @@ def cheek(lo: Layout, side: int) -> Part:
         2 * r - 6, CHEEK_T, lo.ped - 5.5 + 6
     )
     dia = lo.sh_dia if side > 0 else lo.el_dia
-    mx = lo.motor_x(side)
+    mx, mz = lo.motor_pos(side)
     if mx:
-        # The motor sits behind the axis; the cheek carries it and a bearing for the joint.
-        prof += cyl_y(dia / 2 + 4, y0, y1, mx, lo.ped)
-        prof += Pos(mx / 2, (y0 + y1) / 2, lo.ped) * Box(abs(mx), CHEEK_T, dia * 0.8)
-        prof -= cyl_y(12, y0 - 1, y1 + 1, 0, lo.ped)  # 6802 bearing for the joint shaft
-    prof -= cyl_y(dia / 2 * 0.62 + 1.0, y0 - 1, y1 + 1, mx, lo.ped)
-    prof -= bolt_circle(dia / 2 * 0.8, 6, 1.7, lambda a, b, hr: cyl_y(hr, y0 - 1, y1 + 1, mx + a, lo.ped + b))
-    # Lightening window below the axis.
-    if lo.ped > 55:
+        # The motor sits off the axis; the cheek carries it, a bearing for the joint shaft
+        # and one for the pinion shaft.
+        prof += cyl_y(dia / 2 + 4, y0, y1, mx, mz)
+        n = max(2, round(math.hypot(mx, mz - lo.ped) / 8))
+        for k in range(n + 1):
+            f = k / n
+            prof += cyl_y(dia * 0.4, y0, y1, f * mx, lo.ped + f * (mz - lo.ped))
+        prof -= cyl_y(BEARING_R, y0 - 1, y1 + 1, 0, lo.ped)  # 6800 bearing for the joint shaft
+        prof -= cyl_y(BEARING_R, y0 - 1, y1 + 1, mx, mz)  # and for the pinion shaft
+    else:
+        prof -= cyl_y(dia / 2 * 0.62 + 1.0, y0 - 1, y1 + 1, mx, mz)
+    prof -= bolt_circle(dia / 2 * 0.8, 6, 1.7, lambda a, b, hr: cyl_y(hr, y0 - 1, y1 + 1, mx + a, mz + b))
+    if lo.spring and lo.para:
+        # An ear out to the spring mast, which sits beyond the crank's sweep.
+        x0 = -mast_x(lo)
+        prof += Pos(-(x0 + r - 6) / 2, (y0 + y1) / 2, lo.ped + 25) * Box(x0 - r + 16, CHEEK_T, 66)
+    # Lightening window below the axis, unless the turret box closes the column.
+    if lo.ped > 55 and lo.box_top <= 40:
         prof -= Pos(0, (y0 + y1) / 2, (lo.ped - r * 0.6 + 14) / 2) * Box(r, CHEEK_T + 2, max(lo.ped - r * 0.6 - 14, 4))
     return prof
 
 
 def turret_box(lo: Layout) -> Part:
-    """On a tall pedestal: a closed box between the cheeks, under the drums. It stiffens the
-    column and is the sealed, vented housing for the turret electronics."""
-    top = lo.ped - lo.head_r - 6
+    """On a tall pedestal: a box between the cheeks, closed by them and the turret plate,
+    under everything that swings round the shoulder axis. It stiffens the column and houses
+    the turret electronics (the build adds a gasketed lid seam and a breather vent)."""
+    top = lo.box_top
     x = 2 * lo.head_r - 6
     outer = Pos(0, 0, 9.5) * Box(x, 2 * lo.cheek_in, top - 9.5, align=(Align.CENTER, Align.CENTER, Align.MIN))
     inner = Pos(0, 0, 9.5) * Box(x - 6, 2 * lo.cheek_in + 2, top - 12.5, align=(Align.CENTER, Align.CENTER, Align.MIN))
@@ -325,9 +371,16 @@ def spring_mast(lo: Layout) -> Part:
     """Pulley mast above the shoulder axis (shoulder spring) and a lug below it (elbow
     spring), both at y = 0 between the cheeks... carried by a bridge across the cheeks."""
     a = 50.0
-    bridge = Pos(-lo.head_r + 8, 0, lo.ped + a / 2) * Box(10, 2 * lo.cheek_in, a + 16)
-    pulley = cyl_y(9, -4, 4, -lo.head_r + 8, lo.ped + a)
+    x = -mast_x(lo)
+    bridge = Pos(x, 0, lo.ped + a / 2) * Box(10, 2 * lo.cheek_in, a + 16)
+    pulley = cyl_y(9, -4, 4, x, lo.ped + a)
     return bridge + pulley
+
+
+def mast_x(lo: Layout) -> float:
+    """How far behind the shoulder axis the spring mast stands: behind the head, and on a
+    parallelogram beyond the crank and rod end's sweep."""
+    return max(lo.head_r - 8, CRANK * 1000 + 16) if lo.para else lo.head_r - 8
 
 
 def upper_hub(lo: Layout) -> Part:
@@ -341,8 +394,8 @@ def upper_hub(lo: Layout) -> Part:
     part -= Pos(38, 10, 17) * Box(22, 2, 10)  # clamp slot
     if lo.sh_stage:
         st = lo.sh_stage
-        part += capstan_drum(st.ratio * st.pinion_r * 1000, rope_mm(st), 3, 17)
-        part -= cyl_y(5.1, 0, lo.cheek_in + 1)  # shaft into the cheek bearing
+        part += capstan_drum(st.ratio * st.pinion_r * 1000, rope_mm(st), *lo.drum_span(1))
+        part -= cyl_y(SHAFT_R + 0.1, 0, lo.cheek_in + 1)  # shaft into the cheek bearing
     return part
 
 
@@ -351,7 +404,7 @@ def elbow_housing(lo: Layout) -> Part:
     hub = cyl_y(19, 2, 18, x, 0)
     sock = cyl_x(17, x - 48, x - 10, 10)
     part = hub + sock + Pos(x - 14, 10, 0) * Box(16, 16, 30)
-    part -= cyl_y(12, 1, 19, x, 0)  # 6802 bearing seat
+    part -= cyl_y(BEARING_R, 1, 19, x, 0)  # 6800 bearing seats for the 10 mm elbow axle
     part -= cyl_x(TUBE_OD / 2 + 0.15, x - 50, x - 14, 10)
     if lo.spring:
         part += Pos(110, 10, 18) * Box(14, 10, 8)  # spring cable lug on the tube clamp
@@ -370,7 +423,7 @@ def crank(lo: Layout) -> Part:
     if lo.el_stage:
         # Drum beside the crank arm, in its own plane so the crank pin clears the pinion.
         st = lo.el_stage
-        part += capstan_drum(st.ratio * st.pinion_r * 1000, rope_mm(st), -lo.cheek_in + 0.5, -12.5)
+        part += capstan_drum(st.ratio * st.pinion_r * 1000, rope_mm(st), *lo.drum_span(-1))
     return part
 
 
@@ -542,7 +595,7 @@ def link_parts(design: ArmDesign, acts: ArmActuators, hx: Hexapod) -> dict[str, 
         yaw += [
             _c(pin, "steel", "yaw belt pinion (15T)"),
             _c(belt, "carbon", "yaw timing belt (3M, 9 mm)"),
-            _c(cyl_z(8, -30, 8), "steel", "turret post + bearing"),
+            _c(cyl_z(5.5, -30, 8), "steel", "turret post + bearing"),
         ]
     else:
         yaw = qdd_z(lo.yaw_dia, lo.yaw_len, 0.0)
@@ -552,18 +605,22 @@ def link_parts(design: ArmDesign, acts: ArmActuators, hx: Hexapod) -> dict[str, 
         _c(cheek(lo, 1), "printed", "turret cheek, shoulder side (printed)"),
         _c(cheek(lo, -1), "printed", "turret cheek, elbow side (printed)"),
     ]
-    if lo.ped - lo.head_r - 6 > 40:
+    if lo.box_top > 40:
         tur.append(_c(turret_box(lo), "printed", "turret box (printed)"))
-    tur += [Pos(lo.motor_x(1), 0, lo.ped) * p for p in qdd_y(lo.sh_dia, lo.sh_len, lo.cheek_out, -1)]
+    sx, sz = lo.motor_pos(1)
+    tur += [Pos(sx, 0, sz) * p for p in qdd_y(lo.sh_dia, lo.sh_len, lo.cheek_out, -1)]
     if lo.sh_stage:
         st = lo.sh_stage
-        pin = capstan_pinion(lo.motor_x(1), lo.ped, st.pinion_r * 1000, rope_mm(st), 3, lo.cheek_out)
+        ya, yb = lo.drum_span(1)
+        pin = capstan_pinion(sx, sz, st.pinion_r * 1000, rope_mm(st), ya + 1.5, yb - 1.5, lo.cheek_out)
         tur.append(_c(pin, "steel", f"shoulder capstan pinion ({st.rope})"))
     if lo.para:
-        tur += [Pos(lo.motor_x(-1), 0, lo.ped) * p for p in qdd_y(lo.el_dia, lo.el_len, -lo.cheek_out, 1)]
+        ex, ez = lo.motor_pos(-1)
+        tur += [Pos(ex, 0, ez) * p for p in qdd_y(lo.el_dia, lo.el_len, -lo.cheek_out, 1)]
         if lo.el_stage:
             st = lo.el_stage
-            pin = capstan_pinion(lo.motor_x(-1), lo.ped, st.pinion_r * 1000, rope_mm(st), -lo.cheek_out, -12.5)
+            ya, yb = lo.drum_span(-1)
+            pin = capstan_pinion(ex, ez, st.pinion_r * 1000, rope_mm(st), ya + 1.5, yb - 1.5, -lo.cheek_out)
             tur.append(_c(pin, "steel", f"elbow capstan pinion ({st.rope})"))
     if lo.yaw_stage:
         ring_r = lo.yaw_stage.ratio * BELT_PINION_R
@@ -638,6 +695,9 @@ def build(design: ArmDesign, acts: ArmActuators, hx: Hexapod) -> dict:
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "stl").mkdir(exist_ok=True)
     GLB.mkdir(parents=True, exist_ok=True)
+    # Only this design's files: parts and links of an earlier design must not linger.
+    for old in [*(OUT / "stl").glob("*.stl"), *GLB.glob("*.glb")]:
+        old.unlink()
     links = link_parts(design, acts, hx)
     report = {"links": {}, "printed": []}
     seen: dict[str, int] = {}
@@ -683,7 +743,12 @@ def assembly_at(
         out += [cr * p for p in links["crank"]]
         rod = cr * Pos(-CRANK * 1000, 0, 0) * Rot(0, -(th2 - th3), 0)
         out += [rod * p for p in links["rod"]]
-    wr = fore * Pos(l2, 0, 0) * Rot(0, -q4, 0)
+    if "froll" in links:
+        fr = fore * Pos(l2 - FROLL, 0, 0)
+        out += [fr * p for p in links["froll"]]
+        wr = fr * Pos(FROLL, 0, 0) * Rot(0, -q4, 0)
+    else:
+        wr = fore * Pos(l2, 0, 0) * Rot(0, -q4, 0)
     for k in ("wrist", "flange", "tool_gripper"):
         out += [wr * p for p in links[k]]
     gr = load_tools()["gripper"]

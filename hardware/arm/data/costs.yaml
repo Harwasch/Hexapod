@@ -17,7 +17,11 @@ usd:
   # Landed basis: China-shipped, duty-unpaid prices pay ~40.3% US duty on arrival (MFN 2.8%
   # + Section 301 25% + the 2026 forced-labor 301 tier 12.5%; de minimis is suspended).
   import_duty_pct: 40.3
-  default_shipping_usd: 15.0 # per unit, express from China at qty 10 (aifitlab 4PX $16, Steadywin $15; verified)
+  # Freight from China at qty 10, fitted to the verified per-unit quotes (aifitlab 4PX $9
+  # for a 0.24 kg EduLite and $16 for a 0.34 kg GWK8108, Steadywin $15 for a 0.26 kg
+  # GWK6010, Zennixtek $7-21 for 0.19-0.88 kg): base + per kg of the part.
+  freight_base_usd: 6.0
+  freight_per_kg_usd: 25.0
   # FTD-3 turret driver (docs/ELECTRONICS.md), JLCPCB-assembled, landed: about $133 a
   # board (verified range $121-145: parts, JLC feeder/X-ray fees, fuse, phase connectors,
   # brake chopper, sealed box, then ~35% US duty on PCB and SMT). Per axis: the power
