@@ -1,5 +1,5 @@
 import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
 
@@ -27,9 +27,15 @@ import { useUi } from "@/state/ui";
 
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
+import { approveLabel, useDressRehearsal } from "./dressRehearsal";
 import { ScoutExport } from "./ScoutExport";
 import { groundFromView, waitForGround } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
+
+/** The rehearsal's panel and styles load with its first "Rehearse", not with the app. */
+const RehearsalPanel = lazy(() =>
+  import("./Rehearsal").then((module) => ({ default: module.RehearsalPanel })),
+);
 
 const EXAMPLES = [
   "3D scan this field into a gaussian splat",
@@ -600,6 +606,9 @@ function DraftReview({
     return () => clearPlanOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw only when the scope changes
   }, [overlayKey, showPlanOnMap, clearPlanOverlay]);
+  // The dress rehearsal runs this draft's lanes; a change to what it drives stops it.
+  const rehearsalKey = `${overlayKey}|${(draft.coverage ?? []).map((c) => `${c.zoneId}:${c.machineClass}`).join(";")}`;
+  const rehearsal = useDressRehearsal(draft, project, rehearsalKey);
   const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
   const zoneName = (id: string | null | undefined) =>
     id ? (project.zones.find((z) => z.id === id)?.name ?? id) : null;
@@ -765,9 +774,28 @@ function DraftReview({
           </ul>
         </details>
       )}
+      {rehearsal.status !== "idle" && (
+        <Suspense fallback={null}>
+          <RehearsalPanel run={rehearsal} />
+        </Suspense>
+      )}
       <div className="mc-actions">
         <button type="button" className="mc-btn" onClick={() => showPlanOnMap(draft)}>
           Fit on map
+        </button>
+        <button
+          type="button"
+          className="mc-btn"
+          onClick={rehearsal.start}
+          disabled={!scene || drafting || rehearsal.status === "loading"}
+          data-testid="plan-rehearse"
+          title="Simulated machines drive the drawn lanes and raise a hand where a lane breaks a limit their class is assumed to keep"
+        >
+          {rehearsal.status === "loading"
+            ? "Reading the ground…"
+            : rehearsal.status === "ready"
+              ? "Rehearse again"
+              : "Rehearse"}
         </button>
         <button
           type="button"
@@ -776,7 +804,7 @@ function DraftReview({
           disabled={draft.zoneIds.length === 0 || approving || drafting}
           data-testid="plan-approve"
         >
-          {approving ? "Saving…" : conflicts.length ? "Approve despite conflicts" : "Approve plan"}
+          {approving ? "Saving…" : approveLabel(conflicts.length, rehearsal.raised)}
         </button>
       </div>
       <p className="mc-muted mc-review__hint">

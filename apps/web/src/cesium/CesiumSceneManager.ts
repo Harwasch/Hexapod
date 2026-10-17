@@ -28,6 +28,7 @@ import { LivingSurveyManager } from "./LivingSurveyManager";
 import { MeasurementManager } from "./MeasurementManager";
 import { MissionManager } from "./MissionManager";
 import { PerformanceManager } from "./PerformanceManager";
+import { RehearsalManager } from "./RehearsalManager";
 import { FallbackGeocoder, IonGeocoder, NominatimGeocoder } from "./providers/geocoder";
 import { ScaleMeasure } from "./ScaleMeasure";
 import { SelectionManager } from "./SelectionManager";
@@ -120,6 +121,8 @@ export class CesiumSceneManager {
   /** Two points on a scan, for the Set real size tool (features/inspector/RealSize.tsx). */
   readonly scaleMeasure: ScaleMeasure;
   readonly mission: MissionManager;
+  /** A draft plan's dress rehearsal: ghost machines on its lanes (RehearsalManager.ts). */
+  readonly rehearsal: RehearsalManager;
   readonly areas: AreaEditor;
   readonly explore: ExploreController;
   readonly keyboard: KeyboardNavigator;
@@ -280,6 +283,7 @@ export class CesiumSceneManager {
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.measurement.setCollider(this.collider);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
+    this.rehearsal = new RehearsalManager(this.viewer, this.mission);
     this.areas = new AreaEditor(this.viewer, this.events);
     // The map menu (right-click, Ctrl+click, a long press) waits while a tool owns the pointer:
     // measuring, exploring and picking ground switch selection off, an area's corners take the
@@ -590,6 +594,7 @@ export class CesiumSceneManager {
     this.explore.destroy();
     this.scaleMeasure.destroy();
     this.measurement.destroy();
+    this.rehearsal.destroy();
     this.mission.destroy();
     this.areas.destroy();
     this.selection.destroy();

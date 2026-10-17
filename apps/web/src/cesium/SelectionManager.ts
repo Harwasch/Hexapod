@@ -29,6 +29,7 @@ import type { CameraController } from "./CameraController";
 import type { LayerManager } from "./LayerManager";
 import { LongPress } from "./longPress";
 import { ZONE_ENTITY_PREFIX } from "./MissionManager";
+import { rehearsalPick } from "./RehearsalManager";
 import type { SiteManager } from "./SiteManager";
 import type { SceneEvents } from "./types";
 import type { SplatCollider } from "./SplatCollider";
@@ -305,11 +306,15 @@ export class SelectionManager {
       picked = await this.scene.pickAsync(position);
       // The active study boundary is context, not the inspected feature. Look
       // through its fill/outline so it cannot cover a creek, pole, or other data.
-      if (isEntityPick(picked) && picked.id.id.startsWith("land-boundary:")) {
+      // A dress rehearsal's lanes and creeks are a picture of the plan over the same ground:
+      // a click there is for the zone, machine or place beneath them.
+      const lookThrough = (candidate: unknown) =>
+        isEntityPick(candidate) &&
+        (candidate.id.id.startsWith("land-boundary:") ||
+          rehearsalPick(candidate.id.id) === "through");
+      if (lookThrough(picked)) {
         const beneath: unknown[] = this.scene.drillPick(position, 32);
-        picked = beneath.find(
-          (candidate) => !isEntityPick(candidate) || !candidate.id.id.startsWith("land-boundary:"),
-        );
+        picked = beneath.find((candidate) => !lookThrough(candidate));
       }
     } catch {
       picked = undefined;
@@ -343,6 +348,14 @@ export class SelectionManager {
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
       return;
+    // A rehearsal's raised hand opens in the plan card (features/mission/Rehearsal.tsx); the
+    // ghost of one of the project's machines is that machine.
+    const rehearsal = isEntityPick(picked) ? rehearsalPick(picked.id.id) : null;
+    if (rehearsal && rehearsal !== "through") {
+      if (rehearsal.kind === "hand") this.events.emit("rehearsal-hand", { id: rehearsal.handId });
+      else this.events.emit("mission-select", { kind: "machine", id: rehearsal.machineId });
+      return;
+    }
     // A ground layer taking taps answers for a mapped area of the Land on its own ground (an
     // inventory polygon such as the oak woodland covers much of a ranch): there it is ground,
     // as a zone's fill is below. Its lines and points, and areas off that ground, still select,

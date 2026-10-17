@@ -21,7 +21,10 @@ export interface GroundMachineClass {
   swathM: number;
   speedMps: number;
   turnS: number;
+  /** Steepest slope along or across a lane the class is assumed to work (the rehearsal's). */
   maxSlopePct: number;
+  /** How close to a mapped creek a lane is assumed to be allowed, metres (the rehearsal's). */
+  creekBufferM: number;
 }
 
 export interface DroneMachineClass {

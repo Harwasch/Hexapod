@@ -293,6 +293,35 @@ the assumptions. A dispatched plan's detail shows progress from the work log aga
 the schedule expects it today (`missions/progress.ts`) and offers "Replan from here", which
 reopens the composer with the drift written into the goal.
 
+**Dress rehearsal.** "Rehearse" (beside Approve) plays the draft before anyone approves it:
+ghost machines labelled "SIM" drive the lanes the map draws for each zone, at 300x or 600x, and
+a hand goes up at a lane's worst point when it breaks a limit its machine class is assumed to
+keep: grade along the lane or cross-slope across it over `maxSlopePct` (read every 5 m), or a
+lane inside `creekBufferM` of a mapped creek (measured exactly, lane piece against creek piece,
+so a lane that crosses a creek between samples reads "Crosses"). Both limits are in
+`machine_classes.json` and labelled assumed. Each hand names the value, the limit and the
+source; a click on it, on the map or in the card, flies there and offers "Leave this lane out"
+(not on a followed line such as a fence), which takes that lane out of the draft's preview
+only: the approved plan still drives it, so its hands still count on the approve button, which
+reads "Approve despite N hands". The end summary counts lanes per rule out of the lanes that
+rule could read ("2 of 26 checked lanes"), says the lanes are the preview's and how far apart,
+and names a rule clear only where it was read on every lane; lanes outside the elevation grid,
+beyond where creeks were fetched (100 m around a Land, or the demo ranch outline), or an NHD
+answer cut at its record limit are said as gaps, never as clear. Machines come from the zone's
+steps; their class from the model ("Ranger 2 · mower"), else the plan's class for the zone; a
+plan with no machines (a Land's own project) gets one assumed generic machine per class, each
+in its own colour after the project's; a drone's lanes are flown but not checked. Slope comes
+from the Land's USGS 3DEP raster (labelled with the cell size it was read at), else its
+Copernicus GLO-30 (a surface model with the canopy in it), else the globe's terrain sampled over
+the lanes; creeks from the Land's USGS NHD flowlines (ephemeral ones on request), or the demo
+ranch's supplied Figueroa Creek without a Land. A click on a ghost of a project machine selects
+that machine; lanes and creeks are looked through to the zone or place beneath. The clock is
+the time to drive the drawn lanes, not the plan's machine-hours; the ground between drawn lanes,
+turns and transits are not checked, and the card says so. The planner, ground reader and panel
+load on the first "Rehearse". Code: `missions/rehearsal.ts` (pure), `missions/rehearsalClock.ts`,
+`features/mission/rehearsalGround.ts`, `dressRehearsal.ts`, `Rehearsal.tsx`,
+`cesium/RehearsalManager.ts`.
+
 **Quality.** `apps/web/src/missions/planDraft.ts` converts between the API draft and the
 console's `Plan`; `apps/api/app/services/planner.py` holds both planners behind one `Planner`
 protocol (`tests/test_agent.py`). `apps/api/evals/planner_cases.json` is the planner

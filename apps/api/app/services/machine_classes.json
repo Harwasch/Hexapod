@@ -4,21 +4,24 @@
     "swathM": 2.0,
     "speedMps": 1.4,
     "turnS": 8,
-    "maxSlopePct": 25
+    "maxSlopePct": 25,
+    "creekBufferM": 15
   },
   "seeder": {
     "label": "Seed drill (assumed)",
     "swathM": 3.0,
     "speedMps": 1.2,
     "turnS": 12,
-    "maxSlopePct": 20
+    "maxSlopePct": 20,
+    "creekBufferM": 15
   },
   "survey": {
     "label": "Survey rover (assumed)",
     "swathM": 10,
     "speedMps": 1.5,
     "turnS": 5,
-    "maxSlopePct": 35
+    "maxSlopePct": 35,
+    "creekBufferM": 5
   },
   "drone": {
     "label": "Mapping drone, Mavic 3 Enterprise class (assumed)",

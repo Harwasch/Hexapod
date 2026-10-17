@@ -1520,6 +1520,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/rasters/{raster_id}/grid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Band Grid
+         * @description One band's values on a lon/lat grid (float32, NaN for no value), e.g. the elevation a
+         *     plan's dress rehearsal reads slope from.
+         */
+        get: operations["band_grid_api_v1_land_rasters__raster_id__grid_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/rasters/{raster_id}/sample": {
         parameters: {
             query?: never;
@@ -17021,6 +17042,68 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                     "image/tiff": string;
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    band_grid_api_v1_land_rasters__raster_id__grid_get: {
+        parameters: {
+            query?: {
+                band?: number;
+            };
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                raster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LonLatGrid"];
                 };
             };
             /** @description Missing or wrong write token */

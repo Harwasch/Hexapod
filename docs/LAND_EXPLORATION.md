@@ -2574,3 +2574,29 @@ the creek corridor and scattered oaks; protecting a 75-cell oak patch on the eas
 2-hour survey by the assumed mapping drone. Known limits: the display grid is the analysis grid
 resampled nearest onto lon/lat cells, so its tally is approximate; the signature is four dated
 scenes, so a field green in April only matches other April-green ground, whatever grows there.
+
+## Implemented increment: the Dress Rehearsal
+
+A draft plan on a Land can be rehearsed before it is approved (docs/MISSION_CONTROL.md,
+"Dress rehearsal"). The rehearsal reads the Land's own records through two workspace routes:
+`GET /api/v1/land/rasters/{id}/grid?band=N` sends one band of a stored raster as a `LonLatGrid`
+(float32, NaN for no value, about the raster's cell size, at most 512 cells a side; bilinear for
+measured bands, nearest for categorical ones; `Cache-Control: private, no-store`), and
+`GET /land/{id}/hydrography` gives the USGS NHD flowlines. The newest USGS 3DEP raster made for
+the current outline is preferred (bare earth, so trees and buildings do not read as slope),
+then Copernicus GLO-30, which the card labels a 30 m surface model including canopy; a Land
+with neither is checked against the globe's terrain sampled over the lanes, labelled as such,
+and, when the Land feature is on, the card suggests analyzing bare-earth terrain (inside the
+United States; elsewhere, GLO-30 if the Land has no elevation at all). A grid coarser than the
+raster (the route caps it at 512 cells a side) is labelled "resampled to N m", since slope over
+coarser cells reads lower. The raster has heights inside the outline only and the NHD answer
+reaches 100 m past it, so the rehearsal counts lanes it could not read on either and never calls
+them clear; a truncated NHD answer is said too. The raster heights are NAVD88 or EGM2008, so
+ghosts stand on them plus the median difference to the globe's terrain (or, without terrain, its
+3D tiles) at a few points; with no heights at all they stand on the 3D tiles sampled over the
+lanes. Slope is a difference of heights and does not need the datum. The limits are assumptions in
+`apps/api/app/services/machine_classes.json`: `maxSlopePct` (mower 25 %, seed drill 20 %,
+survey rover 35 %) and `creekBufferM` (15 m, 15 m and 5 m). Not done: hands are not stored with
+the plan or sent to the planner, lanes cannot be dragged, machine kinematics (headland turns,
+turning radius, battery), machine-to-machine conflicts and aerial rules (altitude, wind,
+airspace) are not simulated.

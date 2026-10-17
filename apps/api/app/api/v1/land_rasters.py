@@ -8,13 +8,14 @@ from sqlalchemy import select
 from app.api.deps import DbSession
 from app.api.workspace_deps import WorkspaceDep
 from app.models.land_raster import LandRaster
+from app.schemas.grids import LonLatGrid
 from app.schemas.land_rasters import LandRasterRead, RasterSample
 from app.schemas.land_similarity import (
     SignatureSimilarityRead,
     SignatureZonesRead,
     SignatureZonesRequest,
 )
-from app.services import land_rasters, land_similarity
+from app.services import land_raster_grids, land_rasters, land_similarity
 from app.services.land import get_land
 
 router = APIRouter(tags=["land rasters"])
@@ -84,6 +85,21 @@ def similar_zones(
     areas for a plan: the largest patches each, the rest together. Read-only computation."""
     response.headers["Cache-Control"] = "private, no-store"
     return land_similarity.zones(db, scope.id, raster_id, body)
+
+
+@router.get("/land/rasters/{raster_id}/grid", response_model=LonLatGrid)
+def band_grid(
+    raster_id: uuid.UUID,
+    db: DbSession,
+    scope: WorkspaceDep,
+    response: Response,
+    band: int = Query(1, ge=1, le=30),
+) -> LonLatGrid:
+    """One band's values on a lon/lat grid (float32, NaN for no value), e.g. the elevation a
+    plan's dress rehearsal reads slope from."""
+    # Values clipped to a private boundary: never let a shared cache keep them.
+    response.headers["Cache-Control"] = "private, no-store"
+    return land_raster_grids.band_grid(db, land_rasters.scoped(db, scope.id, raster_id), band)
 
 
 @router.get(
