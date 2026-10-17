@@ -1,15 +1,16 @@
-import { History } from "lucide-react";
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { ExternalLink, History } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { GlassButton, GlassPanel } from "@twin/ui";
 
 import type { LanternSource } from "@/cesium/lanternTypes";
+import { useScene } from "@/cesium/SceneContext";
 import { LANTERN_MAX_ALTITUDE_M, useLantern, type LanternKind } from "@/state/lantern";
 import { useViewer } from "@/state/viewer";
 
 import "./lantern.css";
-import { LANTERN_HINT, UNAVAILABLE } from "./lanternWords";
-import { kindOf, useDatedSources } from "./useDatedSources";
+import { LANTERN_HINT, providersLine, UNAVAILABLE } from "./lanternWords";
+import { kindOf, useDatedSources, type LanternAreaName } from "./useDatedSources";
 
 const KINDS: { kind: LanternKind; label: string }[] = [
   { kind: "aerial", label: "Aerial" },
@@ -20,27 +21,64 @@ const KINDS: { kind: LanternKind; label: string }[] = [
 const metres = (value: number) =>
   value >= 10 ? `${Math.round(value)} m` : `${value.toFixed(1).replace(/\.0$/, "")} m`;
 
-/** The rail's small line: what kind of record, and how fine. */
+/** The rail's small line: what kind of record, and how fine, when its records say. */
 function railMeta(source: LanternSource): string {
   if (source.mapScale) return `Map 1:${source.mapScale.toLocaleString("en-US")}`;
-  if (kindOf(source) === "satellite") return `Satellite · ${metres(source.resolutionM)}`;
-  return `Aerial · ${metres(source.resolutionM)}`;
+  const kind = kindOf(source) === "satellite" ? "Satellite" : "Aerial";
+  return source.resolutionM ? `${kind} · ${metres(source.resolutionM)}` : kind;
+}
+
+/** Where the list is for, as "Move over … to look back" says it. */
+function areaWords(area: LanternAreaName | null): string {
+  if (area?.kind === "land") return area.name;
+  if (area?.kind === "chosen") return "the place you chose";
+  return "the area around the view's centre";
+}
+
+/**
+ * What the lens shows that the strip should say beside it: whether the cursor's ground is outside
+ * the area listed, and the page of the record under the lens's centre. From `events.lantern`,
+ * rendered only when one of them changes, not every frame the lens moves.
+ */
+function useLensHere(): { outside: boolean; recordUrl: string | null } {
+  const scene = useScene();
+  const [here, setHere] = useState<{ outside: boolean; recordUrl: string | null }>({
+    outside: false,
+    recordUrl: null,
+  });
+  const last = useRef(here);
+  useEffect(() => {
+    if (!scene) return;
+    return scene.events.on("lantern", (frame) => {
+      const outside = frame.outside;
+      const recordUrl = frame.part?.recordUrl ?? null;
+      if (last.current.outside === outside && last.current.recordUrl === recordUrl) return;
+      last.current = { outside, recordUrl };
+      setHere(last.current);
+    });
+  }, [scene]);
+  return here;
 }
 
 /**
  * The Time Lantern in the strip: "Look back" opens the lens (cesium/TimeLantern.ts) and a rail
  * of every dated record found here, newest first, to step through with the arrows, [ and ], or
  * the wheel over the map. Kind chips filter it; satellite scenes start off (10 m is coarse at
- * ranch scale). Providers that could not answer are listed, so an empty rail is never read as
- * "nothing exists". Where the lens cannot show, the button says why.
+ * ranch scale). Under the rail, what the record's date means and every caveat the catalog gives
+ * (a datum shift, a trimmed sheet edge, cloud), with a link to the record. Providers that could
+ * not be reached are counted apart from those with nothing here, so an empty rail is never read
+ * as "nothing exists", and they can be asked again. Where the lens cannot show, the button says
+ * why.
  */
 export function TimeLanternControl() {
-  const altitude = useViewer((s) => s.camera.altitude);
+  const tooHigh = useViewer((s) => s.camera.altitude > LANTERN_MAX_ALTITUDE_M);
   const availability = useLantern((s) => s.availability);
   const mode = useLantern((s) => s.mode);
   const index = useLantern((s) => s.index);
   const kinds = useLantern((s) => s.kinds);
-  const { sources, providers, status, error } = useDatedSources();
+  const { sources, providers, status, error, area, incomplete, refreshing, retry, refreshIfStale } =
+    useDatedSources();
+  const here = useLensHere();
   const rail = useRef<HTMLDivElement>(null);
   const open = mode !== "off";
 
@@ -52,7 +90,12 @@ export function TimeLanternControl() {
     if (rail.current?.contains(document.activeElement)) item.focus();
   }, [index, sources]);
 
-  if (altitude > LANTERN_MAX_ALTITUDE_M) return null;
+  // Opening the lantern asks again for a list that has gone stale (an incomplete one after 30 s).
+  useEffect(() => {
+    if (open) refreshIfStale();
+  }, [open, refreshIfStale]);
+
+  if (tooHigh) return null;
   if (!availability.ok && (availability.reason === "orbit" || availability.reason === "altitude"))
     return null;
 
@@ -89,6 +132,20 @@ export function TimeLanternControl() {
     }
   };
   const missing = providers.filter((p) => p.status === "unavailable" || p.status === "empty");
+  // The record under the lens, else the source's only one: never one of many picked for it.
+  const recordUrl =
+    here.recordUrl ?? (current?.parts.length === 1 ? (current.parts[0]?.recordUrl ?? null) : null);
+  const tryAgain = (
+    <GlassButton
+      size="sm"
+      variant="glass"
+      onClick={retry}
+      disabled={refreshing}
+      data-testid="lantern-retry"
+    >
+      {refreshing ? "Asking again…" : "Try again"}
+    </GlassButton>
+  );
 
   return (
     <GlassPanel
@@ -135,16 +192,24 @@ export function TimeLanternControl() {
             </p>
           )}
           {status === "error" && (
-            <p className="lantern-control__note lantern-control__note--error" role="alert">
-              The dated imagery list could not be loaded{error ? ` (${error})` : ""}. Close the
-              lantern and open it again to retry.
-            </p>
+            <div className="lantern-control__row" role="alert">
+              <p className="lantern-control__note lantern-control__note--error">
+                The dated imagery list could not be loaded{error ? ` (${error})` : ""}.
+              </p>
+              {tryAgain}
+            </div>
           )}
           {status === "ready" && sources.length === 0 && (
-            <p className="lantern-control__note" data-testid="lantern-empty">
-              No dated imagery found for this area
-              {Object.values(kinds).some((on) => !on) ? " with these kinds" : ""}.
-            </p>
+            <div className="lantern-control__row" data-testid="lantern-empty">
+              <p className="lantern-control__note">
+                {incomplete
+                  ? "Some sources could not be reached, so this list may be incomplete."
+                  : `No dated imagery found for this area${
+                      Object.values(kinds).some((on) => !on) ? " with these kinds" : ""
+                    }.`}
+              </p>
+              {incomplete && tryAgain}
+            </div>
           )}
           {sources.length > 0 && (
             <div
@@ -176,19 +241,49 @@ export function TimeLanternControl() {
           <p className="lantern-control__live" aria-live="polite" data-testid="lantern-live">
             {current ? `${current.dateLabel} · ${current.title} · ${current.license}` : ""}
           </p>
+          {current && here.outside && (
+            <p className="lantern-control__note" data-testid="lantern-outside">
+              Dated imagery is listed for {areaWords(area)}. Move over it to look back.
+            </p>
+          )}
+          {current && (
+            <section
+              className="lantern-about"
+              aria-label="About this record"
+              data-testid="lantern-about"
+            >
+              <ul>
+                <li>{current.dateMeaning}</li>
+                {current.warnings.map((warning) => (
+                  <li key={warning} className="lantern-about__warning">
+                    {warning}
+                  </li>
+                ))}
+              </ul>
+              {recordUrl && (
+                <a
+                  className="lantern-about__link"
+                  href={recordUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid="lantern-record"
+                >
+                  Open the record
+                  <ExternalLink size={12} aria-hidden="true" />
+                </a>
+              )}
+            </section>
+          )}
           <p className="lantern-control__hint">{LANTERN_HINT}</p>
           {missing.length > 0 && (
             <details className="lantern-control__providers" data-testid="lantern-providers">
-              <summary>
-                {missing.length === 1
-                  ? "1 source has nothing to show here"
-                  : `${missing.length} sources have nothing to show here`}
-              </summary>
+              <summary>{providersLine(providers)}</summary>
               <ul>
                 {missing.map((provider) => (
                   <li key={provider.provider}>{provider.summary}</li>
                 ))}
               </ul>
+              {incomplete && sources.length > 0 && tryAgain}
             </details>
           )}
         </>

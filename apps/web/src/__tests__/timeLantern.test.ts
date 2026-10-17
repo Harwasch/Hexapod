@@ -84,7 +84,12 @@ function harness() {
   const canvas = document.createElement("canvas");
   Object.defineProperty(canvas, "clientWidth", { value: 1000 });
   Object.defineProperty(canvas, "clientHeight", { value: 800 });
-  document.body.appendChild(canvas);
+  // Cesium's credit box, on body as CesiumSceneManager puts it: a role="dialog" that is on the
+  // page whether shown or not.
+  const container = document.createElement("div");
+  container.innerHTML = `<div class="cesium-credit-lightbox-overlay" style="display: none"><div class="cesium-credit-lightbox" role="dialog" aria-modal="true"></div></div>`;
+  container.appendChild(canvas);
+  document.body.appendChild(container);
   const preRender = new Set<() => void>();
   const loading = new Set<() => void>();
   const imageryLayers = new Layers();
@@ -185,9 +190,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   current?.lantern.destroy();
-  current?.canvas.remove();
+  current?.canvas.parentElement?.remove();
   current = null;
-  useSceneSelect.setState({ mode: "select" } as never);
+  useSceneSelect.setState({ mode: "select", index: -1, candidates: [] } as never);
 });
 
 function h() {
@@ -282,6 +287,43 @@ describe("the wheel and the keys", () => {
     expect(frames.at(-1)?.mode).toBe("off");
   });
 
+  it("leaves Escape to a sheet or popover open over the map", () => {
+    const { lantern } = h();
+    lantern.setSources(SOURCES, AREA);
+    lantern.setMode("sticky");
+    const sheet = document.createElement("div");
+    sheet.setAttribute("role", "dialog");
+    document.body.appendChild(sheet);
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    window.dispatchEvent(escape);
+    // Not prevented: Radix closes the sheet on an Escape nobody else handled.
+    expect(escape.defaultPrevented).toBe(false);
+    expect(lantern.currentMode).toBe("sticky");
+    sheet.remove();
+    const popover = document.createElement("div");
+    popover.setAttribute("data-hud-popover", "");
+    document.body.appendChild(popover);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+    expect(lantern.currentMode).toBe("sticky");
+    popover.remove();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+    expect(lantern.currentMode).toBe("off");
+  });
+
+  it("leaves Alt to a scan object's candidates while they are cycled", () => {
+    const { lantern, canvas } = h();
+    lantern.setSources(SOURCES, AREA);
+    canvas.dispatchEvent(new PointerEvent("pointermove", { clientX: 400, clientY: 300 }));
+    useSceneSelect.setState({ index: 0, candidates: [4, 7] } as never);
+    const alt = new KeyboardEvent("keydown", { key: "Alt", cancelable: true });
+    window.dispatchEvent(alt);
+    expect(alt.defaultPrevented).toBe(false);
+    expect(lantern.currentMode).toBe("off");
+    useSceneSelect.setState({ index: -1, candidates: [] } as never);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", cancelable: true }));
+    expect(lantern.currentMode).toBe("peek");
+  });
+
   it("steps with [ and ] over the map while the lens shows", () => {
     const { lantern } = h();
     lantern.setSources(SOURCES, AREA);
@@ -327,6 +369,23 @@ describe("the lens", () => {
     tilesLoaded();
     frame();
     expect(clipping.setLanternWindow.mock.calls.length).toBe(swaps);
+  });
+});
+
+describe("away from the area listed", () => {
+  it("draws no lens, and says the cursor is outside the area", () => {
+    const { lantern, scene, frame, worldShader, frames } = h();
+    scene.globe.getHeight = () => 300;
+    lantern.setSources(SOURCES, { west: -121.06, south: 34.68, east: -121.02, north: 34.72 });
+    lantern.setMode("sticky");
+    frame();
+    expect(worldShader.setLantern).not.toHaveBeenCalledWith(expect.objectContaining({ x: 500 }));
+    expect(frames.at(-1)).toMatchObject({ lens: null, outside: true });
+    expect(frames.at(-1)?.ground?.longitude).toBeCloseTo(-120.04, 3);
+    lantern.setSources(SOURCES, AREA);
+    frame();
+    expect(frames.at(-1)).toMatchObject({ outside: false });
+    expect(frames.at(-1)?.lens).not.toBeNull();
   });
 });
 

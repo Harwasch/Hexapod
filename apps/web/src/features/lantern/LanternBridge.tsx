@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { useScene } from "@/cesium/SceneContext";
 import { useLand } from "@/state/land";
@@ -26,6 +26,8 @@ export function LanternBridge() {
   const index = useLantern((s) => s.index);
   const override = useLantern((s) => s.bboxOverride);
   const land = useLand((s) => s.active);
+  const landId = land?.id ?? null;
+  const shownLand = useRef(landId);
 
   useEffect(() => {
     if (!scene) return;
@@ -38,6 +40,15 @@ export function LanternBridge() {
       if (frame.index !== store.index) store.select(frame.index);
     });
   }, [scene]);
+
+  // A land selected after a descent chose an area is what the lantern looks back on now: the
+  // land just saved from "Outline this land", or another chosen elsewhere. An area a descent
+  // chooses while a land is selected still holds (it is the newer choice).
+  useEffect(() => {
+    if (shownLand.current === landId) return;
+    shownLand.current = landId;
+    if (landId && useLantern.getState().bboxOverride) useLantern.getState().setBbox(null);
+  }, [landId]);
 
   // Where the camera is, coarsely: a move of a few hundred metres asks whether the area still
   // holds the view.

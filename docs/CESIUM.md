@@ -481,10 +481,13 @@ tileset's `customShader`; anything else that shades the Google world adds its un
 The window's edge is found on the terrain the globe has loaded (`groundWindow` refines each ray
 against `globe.getHeight`), so it lands on the screen just outside the lens and the rim's glow
 covers the seam. While the lantern is open, `setLanternReach` widens the globe's limit rectangle
-so terrain and imagery load wherever the lens may go. Dated sources are imagery layers limited
-to that reach, the current one on top, its neighbours in time at alpha 0 so they prefetch, over
-a dark "no record" grid; all wait for a basemap first (Cesium stretches the bottom layer over
-the globe). The wheel over the map steps through dates while the lens shows (a capture listener
+so terrain and imagery in view load wherever the lens may go (the globe culls by the limit
+rectangle and the view; clipping polygons only skip a tile's draw). Dated sources are imagery
+layers limited to that reach, the current one on top, its neighbours in time at alpha 0 so they
+prefetch, over a dark "no record" grid; all wait for a basemap first (Cesium stretches the
+bottom layer over the globe). Their tiles come through `BusyAwareImageryProvider`
+(`busyTiles.ts`): a tile answered 503 or 429 is asked again after its Retry-After, a few times,
+where Cesium would mark it failed for the layer's life (its own error retry asks again at once). The wheel over the map steps through dates while the lens shows (a capture listener
 on window, attached only then), Alt held peeks, Esc closes. Offered only in the photorealistic
 world, below 20 km, with WebGL 2 clipping on.
 

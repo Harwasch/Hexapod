@@ -38,7 +38,6 @@ import {
   Rectangle,
   Resource,
   SceneTransforms,
-  UrlTemplateImageryProvider,
   WebMercatorTilingScheme,
   type CesiumWidget,
   type Scene,
@@ -55,6 +54,7 @@ import {
 } from "@/state/lantern";
 import { useSceneSelect } from "@/state/sceneSelect";
 
+import { BusyAwareImageryProvider } from "./busyTiles";
 import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
 import type { LayerManager } from "./LayerManager";
@@ -69,6 +69,7 @@ import {
   type WheelState,
 } from "./timeLanternMath";
 import type { SceneEvents } from "./types";
+import { POPOVER_SELECTOR } from "./uiActivity";
 import type { WorldShader } from "./worldShader";
 
 const log = createLogger("lantern");
@@ -100,8 +101,17 @@ const scratchCartographic = new Cartographic();
 const scratchSample = new Cartographic();
 const scratchWindow = new Cartesian2();
 
+/** What is open over the map and takes Escape before the lens: a sheet, dialog or popover. */
+const OPEN_LAYER = `[role="dialog"], ${POPOVER_SELECTOR}`;
+
 function same(a: LanternAvailability, b: LanternAvailability): boolean {
   return a.ok === b.ok && (a.ok || (!b.ok && a.reason === b.reason));
+}
+
+/** A scan object's candidates are being cycled with Alt+wheel (SceneSelectController). */
+function cyclingCandidates(): boolean {
+  const select = useSceneSelect.getState();
+  return select.index >= 0 && select.candidates.length > 1;
 }
 
 /** The area asked about, grown into the reach the lens may roam (degrees). */
@@ -350,6 +360,8 @@ export class TimeLantern {
     if (event.key === "Alt") {
       if (event.repeat || event.ctrlKey || event.metaKey || event.shiftKey) return;
       if (isTyping(event.target) || this.pointerOutside) return;
+      // Alt+wheel cycles a scan object's candidates (SceneSelectController): Alt is theirs.
+      if (cyclingCandidates()) return;
       // Firefox would open its menu bar on Alt; the key is the lantern's over the map.
       event.preventDefault();
       if (this.mode === "off") this.setMode("peek");
@@ -371,11 +383,28 @@ export class TimeLantern {
       return;
     }
     if (event.key === "Escape" && this.mode !== "off" && !isTyping(event.target)) {
+      // A sheet, dialog or popover open over the map takes Escape first: it closes on a key
+      // nothing else handled (Radix skips a prevented one), and one press does one thing.
+      if (this.layerOpen()) return;
       // Before the app's own Escape (GlobalHotkeys, which skips a handled key): one step back.
       event.preventDefault();
       this.setMode("off");
     }
   };
+
+  /**
+   * Whether one of the app's sheets, dialogs or popovers is open: one that is shown. Cesium's
+   * credit box is a dialog kept on the page (CesiumSceneManager puts it on body) whether shown
+   * or not, and closes on a click, so it never counts.
+   */
+  private layerOpen(): boolean {
+    for (const element of document.querySelectorAll<HTMLElement>(OPEN_LAYER)) {
+      if (element.closest(".cesium-credit-lightbox-overlay")) continue;
+      if (typeof element.checkVisibility === "function" && !element.checkVisibility()) continue;
+      return true;
+    }
+    return false;
+  }
 
   /** Whether a key went to the map rather than to a control: nothing focused, or the canvas. */
   private mapHasKeys(target: EventTarget | null): boolean {
@@ -407,8 +436,7 @@ export class TimeLantern {
     if (this.wheelOff) return;
     const listener = (event: WheelEvent): void => {
       if (event.target !== this.viewer.canvas || event.defaultPrevented) return;
-      const select = useSceneSelect.getState();
-      if (event.altKey && select.index >= 0 && select.candidates.length > 1) return;
+      if (event.altKey && cyclingCandidates()) return;
       event.preventDefault();
       event.stopPropagation();
       const { steps, state } = wheelSteps(
@@ -493,7 +521,7 @@ export class TimeLantern {
       latitude < reach.south ||
       latitude > reach.north
     ) {
-      this.hideLens(at);
+      this.hideLens(at, true);
       return;
     }
     const normal = Ellipsoid.WGS84.geodeticSurfaceNormal(ground, new Cartesian3());
@@ -542,7 +570,14 @@ export class TimeLantern {
     this.publish({
       lens: { x: cursor.x, y: cursor.y, r: radii.outer },
       ground: at,
-      part: part ? { dateLabel: part.dateLabel, accuracyLabel: part.accuracyLabel } : null,
+      outside: false,
+      part: part
+        ? {
+            dateLabel: part.dateLabel,
+            accuracyLabel: part.accuracyLabel,
+            recordUrl: part.recordUrl,
+          }
+        : null,
       covered: part !== null,
     });
   }
@@ -590,9 +625,9 @@ export class TimeLantern {
     return known ? hit : null;
   }
 
-  private hideLens(ground: { longitude: number; latitude: number } | null): void {
+  private hideLens(ground: { longitude: number; latitude: number } | null, outside = false): void {
     if (this.lensShown) this.clearLens();
-    this.publish({ lens: null, ground, part: null, covered: false });
+    this.publish({ lens: null, ground, outside, part: null, covered: false });
   }
 
   private clearLens(): void {
@@ -690,7 +725,9 @@ export class TimeLantern {
       maximumLevel,
       Math.max(minimumLevelFor(rectangle, geographic), geographic ? 0 : WEB_MERCATOR_MIN_LEVEL),
     );
-    const provider = new UrlTemplateImageryProvider({
+    // A tile its server calls busy (the USGS tiler's readers, a tiler's rate limit) is asked
+    // again when the server says, instead of failing for as long as the layer lives.
+    const provider = new BusyAwareImageryProvider({
       url: new Resource({ url: source.tiles.urlTemplate, headers: source.tiles.headers }),
       tilingScheme: geographic ? new GeographicTilingScheme() : new WebMercatorTilingScheme(),
       rectangle,
@@ -736,16 +773,19 @@ export class TimeLantern {
    * Tells the HUD what the lantern is doing: on every change of mode, source or availability,
    * and on every frame the lens moves (`lens`). Without `lens`, the last lens is repeated.
    */
-  private publish(lens?: Pick<LanternFrame, "lens" | "ground" | "part" | "covered">): void {
+  private publish(
+    lens?: Pick<LanternFrame, "lens" | "ground" | "outside" | "part" | "covered">,
+  ): void {
     const source = this.sources[this.index];
     const placed = lens ??
-      this.lastFrame ?? { lens: null, ground: null, part: null, covered: false };
+      this.lastFrame ?? { lens: null, ground: null, outside: false, part: null, covered: false };
     const frame: LanternFrame = {
       mode: this.mode,
       index: this.index,
       availability: this.availability,
       lens: this.mode === "off" ? null : placed.lens,
       ground: placed.ground,
+      outside: this.mode !== "off" && placed.outside,
       source: source
         ? {
             id: source.id,

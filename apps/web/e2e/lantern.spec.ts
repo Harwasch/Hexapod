@@ -110,7 +110,15 @@ const CATALOG = {
           },
         },
       ],
-      warnings: [],
+      datumShift: {
+        fromDatum: "NAD27",
+        operation: "NAD27 to WGS 84 (6)",
+        accuracyM: 7,
+        betterAvailable: true,
+      },
+      warnings: [
+        "Shifted from NAD27 to WGS 84 with “NAD27 to WGS 84 (6)”, stated accuracy about 7 m. A more accurate grid-based shift exists but is not installed on this server.",
+      ],
     },
   ],
   providers: [
@@ -191,7 +199,16 @@ test("shows dated imagery under the cursor, and steps back to the 1919 map", asy
   await expect(page.getByTestId("lantern-rim-bottom")).toContainText(
     "Predates the National Map Accuracy Standards",
   );
+  // The map's shift from NAD27 is labelled on the rim, and the strip quotes the catalog.
+  await expect(page.getByTestId("lantern-rim-bottom")).toContainText("datum shift ±7 m");
   await expect(page.getByTestId("lantern-live")).toContainText("USGS 1:62,500 Los Olivos");
+  const about = page.getByRole("region", { name: "About this record" });
+  await expect(about).toContainText("Catalog publication year");
+  await expect(about).toContainText("A more accurate grid-based shift exists");
+  await expect(about.getByRole("link", { name: "Open the record" })).toHaveAttribute(
+    "href",
+    "https://www.sciencebase.gov/catalog/item/x",
+  );
 
   await page.keyboard.press("Escape");
   await expect(rim).toHaveAttribute("data-visible", "false");

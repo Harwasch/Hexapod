@@ -29,7 +29,9 @@ Three engine pieces, all inside the scene (`apps/web/src/cesium`):
    around the lens, found by casting rays through a circle slightly larger than the lens and
    meeting them with the terrain the globe has loaded. It is swapped as the lens moves. A reach
    rectangle (`setLanternReach`) widens the globe's limit while the lantern is open, so terrain and
-   imagery anywhere the lens may go are loaded while still clipped away.
+   imagery in view anywhere the lens may go are loaded while still clipped away: the globe culls
+   tiles by its limit rectangle and the view, never by clipping polygons, which only skip a
+   tile's draw (`GlobeSurfaceTileProvider` `addDrawCommandsForTile`).
 3. **Dated imagery as globe imagery layers**, limited to the reach: the current source on top, its
    neighbours in time loading underneath at alpha 0, and a dark grid under those that reads as
    "no record".
@@ -74,3 +76,11 @@ tiles from their GeoTIFFs (`/api/v1/imagery/usgs-topo/tiles`).
 - Nothing is measured against the Google mesh. Positional accuracy is the source's own statement
   (NAIP's FGDC record, the 1947 National Map Accuracy Standards for later USGS sheets), or "not
   stated". A control-point check against the mesh is a possible follow-up.
+- USGS sheets are drawn on NAD27 and shifted to WGS 84 with the operation PROJ picks; the server
+  has no NADCON grid, so that is the ballpark "NAD27 to WGS 84 (6)" (stated accuracy about 7 m)
+  near the ranch. The rim adds "datum shift ±7 m" to the sheet's own accuracy, and the strip
+  quotes the catalog's sentence, including that a better grid-based shift exists. Bundling
+  `us_noaa_conus.tif` would replace both with the grid's own figure.
+- The tile route reads a sheet per tile, on four readers of its own with a short queue; a busy
+  answer (503, Retry-After) is waited out by the client. Sheet bytes are shared between tiles in
+  process, so a sweep over one sheet reads each block once.

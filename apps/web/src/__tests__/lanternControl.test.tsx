@@ -4,16 +4,29 @@
  * providers that could not answer, the keys, and the words every source carries.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DatedImageryCatalog, DatedImagerySource } from "@twin/contracts";
+import type { DatedImageryCatalog, DatedImagerySource, LandArea } from "@twin/contracts";
 
 import { api } from "@/api/client";
+import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
+import type { LanternFrame } from "@/cesium/lanternTypes";
+import { SceneContext, SceneRegistry } from "@/cesium/SceneContext";
+import type { SceneEvents } from "@/cesium/types";
+import { LanternBridge } from "@/features/lantern/LanternBridge";
+import { providersLine } from "@/features/lantern/lanternWords";
 import { TimeLanternControl } from "@/features/lantern/TimeLanternControl";
-import { accuracyLabel, roundBbox, toLanternSource } from "@/features/lantern/useDatedSources";
+import {
+  accuracyLabel,
+  formatDay,
+  roundBbox,
+  toLanternSource,
+} from "@/features/lantern/useDatedSources";
+import { Emitter } from "@/lib/emitter";
+import { useLand } from "@/state/land";
 import { useLantern } from "@/state/lantern";
 import { initialCamera, useViewer } from "@/state/viewer";
 
@@ -89,6 +102,16 @@ const CATALOG: DatedImageryCatalog = {
       title: "NAIP 2022 aerial photograph",
       dateLabel: "Flown 18 to 21 May 2022",
       sortDate: "2022-05-21",
+      // Two quarter quads, each with its own record.
+      parts: [
+        { ...source({}).parts[0]!, observedOn: "2022-05-21", observedYear: 2022 },
+        {
+          ...source({}).parts[0]!,
+          observedOn: "2022-05-18",
+          observedYear: 2022,
+          recordUrl: "https://planetarycomputer.microsoft.com/api/stac/v1/collections/naip/items/b",
+        },
+      ],
     }),
     source({}),
     source({
@@ -96,6 +119,8 @@ const CATALOG: DatedImageryCatalog = {
       kind: "historical-map",
       title: "USGS 1:62,500 Los Olivos",
       dateLabel: "Map dated 1919",
+      dateMeaning:
+        "Catalog publication year; surveying, revision and scanning may have different dates.",
       sortDate: "1919-01-01",
       resolutionM: 5.29,
       mapScale: 62_500,
@@ -106,6 +131,29 @@ const CATALOG: DatedImageryCatalog = {
         maximumLevel: 17,
         format: "png",
       },
+      parts: [
+        {
+          observedOn: null,
+          observedYear: 1919,
+          footprint: square,
+          recordUrl: "https://www.sciencebase.gov/catalog/item/5eb2",
+          accuracy: {
+            kind: "not-stated",
+            valueM: null,
+            basis: "Predates the National Map Accuracy Standards (1947); no accuracy is stated.",
+            citationUrl: null,
+          },
+        },
+      ],
+      datumShift: {
+        fromDatum: "NAD27",
+        operation: "NAD27 to WGS 84 (6)",
+        accuracyM: 7,
+        betterAvailable: true,
+      },
+      warnings: [
+        "Shifted from NAD27 to WGS 84 with “NAD27 to WGS 84 (6)”, stated accuracy about 7 m. A more accurate grid-based shift exists but is not installed on this server.",
+      ],
     }),
   ],
   providers: [
@@ -125,15 +173,62 @@ const CATALOG: DatedImageryCatalog = {
       provider: "usgs-historical-topo-sheets",
       name: "USGS maps",
       status: "unavailable",
-      summary:
-        "USGS historical topographic maps as map tiles could not be reached (HTTP 503). Try again in a few minutes.",
+      summary: "USGS historical topographic maps as map tiles could not be reached (HTTP 503).",
     },
   ],
 };
 
-function wrap(children: ReactNode) {
+/** The catalog as it reads when the two public tilers are down and USGS has nothing here. */
+const OUTAGE: DatedImageryCatalog = {
+  ...CATALOG,
+  sources: [],
+  providers: [
+    { provider: "naip-aerial", name: "NAIP", status: "unavailable", summary: "NAIP: HTTP 503." },
+    {
+      provider: "sentinel-2-true-colour",
+      name: "Sentinel-2",
+      status: "unavailable",
+      summary: "Sentinel-2: timed out.",
+    },
+    {
+      provider: "usgs-historical-topo-sheets",
+      name: "USGS maps",
+      status: "empty",
+      summary: "USGS maps: none found for this area.",
+    },
+  ],
+};
+
+function wrap(children: ReactNode, registry: SceneRegistry = new SceneRegistry()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  return (
+    <SceneContext.Provider value={registry}>
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    </SceneContext.Provider>
+  );
+}
+
+/** A scene with only its events, for the strip to hear the lens from. */
+function fakeScene() {
+  const events = new Emitter<SceneEvents>();
+  const registry = new SceneRegistry();
+  registry.set({ events } as unknown as CesiumSceneManager);
+  return { events, registry };
+}
+
+function frame(over: Partial<LanternFrame>): LanternFrame {
+  return {
+    mode: "sticky",
+    index: 0,
+    availability: { ok: true },
+    lens: null,
+    ground: null,
+    outside: false,
+    source: null,
+    part: null,
+    covered: false,
+    ...over,
+  };
 }
 
 beforeEach(() => {
@@ -209,12 +304,102 @@ describe("open", () => {
     ]);
   });
 
-  it("lists the providers that could not answer", async () => {
+  it("lists the providers that could not answer, apart from those with nothing here", async () => {
     render(wrap(<TimeLanternControl />));
     await userEvent.click(screen.getByRole("button", { name: /Look back/ }));
     const providers = await screen.findByTestId("lantern-providers");
-    expect(providers).toHaveTextContent("1 source has nothing to show here");
+    expect(providers).toHaveTextContent("1 source could not be reached");
+    expect(providers).not.toHaveTextContent("nothing");
     expect(providers).toHaveTextContent("could not be reached (HTTP 503)");
+    expect(providersLine(OUTAGE.providers)).toBe(
+      "2 sources could not be reached, 1 has nothing here",
+    );
+    expect(providersLine(OUTAGE.providers.slice(2))).toBe("1 source has nothing to show here");
+  });
+
+  it("never reads an outage as nothing found, and asks again", async () => {
+    const get = vi.mocked(api.GET);
+    get.mockResolvedValue({ data: OUTAGE, response: new Response() });
+    render(wrap(<TimeLanternControl />));
+    await userEvent.click(screen.getByRole("button", { name: /Look back/ }));
+    const empty = await screen.findByTestId("lantern-empty");
+    expect(empty).toHaveTextContent(
+      "Some sources could not be reached, so this list may be incomplete.",
+    );
+    expect(empty).not.toHaveTextContent("No dated imagery found");
+    expect(screen.getByTestId("lantern-providers")).toHaveTextContent(
+      "2 sources could not be reached, 1 has nothing here",
+    );
+    const asked = get.mock.calls.length;
+    get.mockResolvedValue({ data: CATALOG, response: new Response() });
+    await userEvent.click(within(empty).getByRole("button", { name: "Try again" }));
+    expect(get.mock.calls.length).toBe(asked + 1);
+    await screen.findByTestId("lantern-rail");
+  });
+
+  it("offers to try again when the list could not be loaded", async () => {
+    const get = vi.mocked(api.GET);
+    get.mockRejectedValue(new Error("HTTP 502"));
+    render(wrap(<TimeLanternControl />));
+    await userEvent.click(screen.getByRole("button", { name: /Look back/ }));
+    // After the one automatic retry.
+    const alert = await screen.findByRole("alert", undefined, { timeout: 4000 });
+    get.mockResolvedValue({ data: CATALOG, response: new Response() });
+    expect(alert).toHaveTextContent("The dated imagery list could not be loaded (HTTP 502).");
+    expect(alert).not.toHaveTextContent("Close the lantern");
+    await userEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+    await screen.findByTestId("lantern-rail");
+  });
+
+  it("says what a record's date means and every caveat the catalog gives", async () => {
+    render(wrap(<TimeLanternControl />));
+    await userEvent.click(screen.getByRole("button", { name: /Look back/ }));
+    await screen.findByTestId("lantern-rail");
+    expect(screen.getByTestId("lantern-about")).toHaveTextContent("Flight dates");
+    useLantern.getState().select(2);
+    const about = await screen.findByRole("region", { name: "About this record" });
+    await waitFor(() => expect(about).toHaveTextContent("Catalog publication year"));
+    expect(about).toHaveTextContent(
+      "Shifted from NAD27 to WGS 84 with “NAD27 to WGS 84 (6)”, stated accuracy about 7 m. A more accurate grid-based shift exists but is not installed on this server.",
+    );
+    // One record: its page. (Of a source's many, only the one under the lens is linked.)
+    expect(within(about).getByRole("link", { name: "Open the record" })).toHaveAttribute(
+      "href",
+      "https://www.sciencebase.gov/catalog/item/5eb2",
+    );
+  });
+
+  it("links the record under the lens, and says where to move when the lens is away", async () => {
+    const { events, registry } = fakeScene();
+    useLand.setState({ active: null });
+    render(wrap(<TimeLanternControl />, registry));
+    await userEvent.click(screen.getByRole("button", { name: /Look back/ }));
+    await screen.findByTestId("lantern-rail");
+    // NAIP 2022 has many quarter quads: none is linked until one is under the lens.
+    expect(screen.queryByTestId("lantern-record")).not.toBeInTheDocument();
+    act(() =>
+      events.emit(
+        "lantern",
+        frame({
+          part: {
+            dateLabel: "21 May 2022",
+            accuracyLabel: "x",
+            recordUrl:
+              "https://planetarycomputer.microsoft.com/api/stac/v1/collections/naip/items/q",
+          },
+          covered: true,
+        }),
+      ),
+    );
+    expect(screen.getByTestId("lantern-record")).toHaveAttribute(
+      "href",
+      "https://planetarycomputer.microsoft.com/api/stac/v1/collections/naip/items/q",
+    );
+    expect(screen.queryByTestId("lantern-outside")).not.toBeInTheDocument();
+    act(() => events.emit("lantern", frame({ outside: true })));
+    expect(screen.getByTestId("lantern-outside")).toHaveTextContent(
+      "Dated imagery is listed for the place you chose. Move over it to look back.",
+    );
   });
 
   it("steps older with the down arrow and ]", async () => {
@@ -273,10 +458,42 @@ describe("the words", () => {
     ).toMatch(/^fit RMS 3.4 m/);
   });
 
-  it("makes the API's own tiles absolute and keeps a part's own date", () => {
+  it("puts a map's datum shift beside its own accuracy, for the rim", () => {
+    const map = toLanternSource(CATALOG.sources[3]!);
+    expect(map.accuracyLabel).toBe(
+      "Predates the National Map Accuracy Standards (1947); no accuracy is stated · datum shift ±7 m · not checked against today's 3D world",
+    );
+    expect(
+      accuracyLabel(
+        { kind: "standard", valueM: 12.19, basis: "NMAS", citationUrl: null },
+        { fromDatum: "NAD27", operation: "x", accuracyM: null, betterAvailable: false },
+      ),
+    ).toBe(
+      "NMAS ±12 m (90%) if compliant · datum shift accuracy not stated · not checked against today's 3D world",
+    );
+  });
+
+  it("writes a day as the catalog does", () => {
+    expect(formatDay("2022-05-18")).toBe("18 May 2022");
+    expect(formatDay("2016-06-05T00:00:00Z")).toBe("5 June 2016");
+    expect(formatDay("not a day")).toBe("not a day");
+    expect(toLanternSource(source({})).parts[0]?.dateLabel).toBe("22 July 2018");
+  });
+
+  it("leaves a resolution nobody stated off the rail", async () => {
+    vi.spyOn(api, "GET").mockResolvedValue({
+      data: { ...CATALOG, sources: [source({ resolutionM: null })] },
+      response: new Response(),
+    });
+    render(wrap(<TimeLanternControl />));
+    await userEvent.click(screen.getByRole("button", { name: /Look back/ }));
+    const rail = await screen.findByTestId("lantern-rail");
+    expect(within(rail).getByRole("radio")).toHaveTextContent(/^2018Aerial$/);
+  });
+
+  it("makes the API's own tiles absolute", () => {
     const map = toLanternSource(CATALOG.sources[3]!);
     expect(map.tiles.urlTemplate).toMatch(/\/api\/v1\/imagery\/usgs-topo\/tiles\//);
-    expect(toLanternSource(source({})).parts[0]?.dateLabel).toMatch(/2018/);
   });
 
   it("rounds a saved land's area coarsely before it reaches the public catalog", () => {
@@ -287,5 +504,30 @@ describe("the words", () => {
     const big = roundBbox([-121, 34, -120, 35]);
     expect(big[2] - big[0]).toBeLessThanOrEqual(0.25);
     expect(big[3] - big[1]).toBeLessThanOrEqual(0.25);
+  });
+});
+
+describe("the area looked back on", () => {
+  const land = {
+    id: "land-1",
+    name: "Oak Bench Ranch",
+    boundary: square,
+  } as unknown as LandArea;
+
+  afterEach(() => useLand.setState({ active: null }));
+
+  it("is the land selected after a descent, not the descent's area", () => {
+    useLand.setState({ active: null });
+    render(wrap(<LanternBridge />));
+    expect(useLantern.getState().bboxOverride).not.toBeNull();
+    act(() => useLand.setState({ active: land }));
+    expect(useLantern.getState().bboxOverride).toBeNull();
+  });
+
+  it("is a descent's area chosen while a land is selected", () => {
+    useLand.setState({ active: land });
+    render(wrap(<LanternBridge />));
+    act(() => useLantern.getState().setBbox([-120.1, 34.6, -120.08, 34.62]));
+    expect(useLantern.getState().bboxOverride).toEqual([-120.1, 34.6, -120.08, 34.62]);
   });
 });

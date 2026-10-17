@@ -28,13 +28,17 @@ export interface LanternSource {
   dateMeaning: string;
   /** ISO date; the rail is ordered by it, newest first. */
   sortDate: string;
-  resolutionM: number;
+  /** Ground size of a pixel (m); null when the records do not say. */
+  resolutionM: number | null;
   /** A map's printed scale (24000 for 1:24,000), else null. */
   mapScale: number | null;
   license: string;
   licenseUrl: string | null;
   attribution: string;
-  /** "stated ±6 m by its record · not checked against today's 3D world". */
+  /**
+   * "stated ±6 m by its record · not checked against today's 3D world"; a map moved from NAD27
+   * also says how well that move is stated ("· datum shift ±7 m").
+   */
   accuracyLabel: string;
   /** West, south, east, north (degrees). */
   bounds: [number, number, number, number];
@@ -46,6 +50,7 @@ export interface LanternSource {
     maximumLevel: number;
     headers?: Record<string, string>;
   };
+  /** Caveats in the catalog's words (the datum shift, a trimmed sheet edge, clouds). */
   warnings: string[];
 }
 
@@ -71,12 +76,14 @@ export interface LanternFrame {
   lens: { x: number; y: number; r: number } | null;
   /** The ground under the lens's centre; null over the sky. */
   ground: { longitude: number; latitude: number } | null;
+  /** The cursor's ground is outside the area listed, so the lens is not drawn there. */
+  outside: boolean;
   source: Pick<
     LanternSource,
     "id" | "kind" | "title" | "dateLabel" | "license" | "accuracyLabel" | "sortDate"
   > | null;
-  /** The record under the lens's centre: its own date and accuracy, when it has one there. */
-  part: { dateLabel: string; accuracyLabel: string } | null;
+  /** The record under the lens's centre: its own date, accuracy and page, when it has one there. */
+  part: { dateLabel: string; accuracyLabel: string; recordUrl: string } | null;
   /** Whether the shown source has a record under the lens's centre. */
   covered: boolean;
 }
