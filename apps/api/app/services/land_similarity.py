@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 
 from app.analysis.lonlat_grid import encode, grid_for, inside_mask, reproject_band
 from app.analysis.similarity import (
-    INTERPRETATION,
     METHOD,
     NO_SCORE,
     Patch,
@@ -35,9 +34,13 @@ from app.analysis.similarity import (
     centres_in,
     cosine,
     footprint_mapping,
+    interpretation,
+    polygon_parts,
     protected_geometry,
     quantize,
     raw_threshold,
+    resolution_label,
+    snapped_outline,
 )
 from app.models.land import LandArea, LandBoundaryRevision
 from app.models.land_raster import LandRaster
@@ -167,6 +170,7 @@ def _seed(
     stack: Stack,
     boundary: BaseGeometry,
     scenes: list[SignatureScene],
+    resolution_m: float,
     longitude: float,
     latitude: float,
 ) -> tuple[int, SignatureSeed]:
@@ -183,8 +187,8 @@ def _seed(
     position = stack.index_of(row, column) if inside else None
     if position is None:
         raise InvalidInputError(
-            "That 10 m cell has no full signature: at least one season was cloudy, shadowed, "
-            "snowy or water there. Choose another place."
+            f"That {resolution_label(resolution_m)} cell has no full signature: at least one "
+            "season was cloudy, shadowed, snowy or water there. Choose another place."
         )
     center_x, center_y = stack.transform @ (column + 0.5, row + 0.5)
     cell_longitude, cell_latitude = to_geographic.transform(center_x, center_y)
@@ -213,7 +217,7 @@ def similar(
     stack = _stack(db, row, metadata)
     boundary = _boundary(db, row)
     scenes = _scenes(metadata, request)
-    position, seed = _seed(stack, boundary, scenes, longitude, latitude)
+    position, seed = _seed(stack, boundary, scenes, metadata.resolution_m, longitude, latitude)
     quantized = quantize(cosine(stack, position))
     try:
         spec = grid_for(boundary, metadata.resolution_m, max_cells=DISPLAY_MAX_CELLS)
@@ -247,37 +251,63 @@ def similar(
         boundary_cells=metadata.boundary_cells,
         scenes=scenes,
         method=METHOD,
-        interpretation=INTERPRETATION,
+        interpretation=interpretation(metadata.resolution_m),
         warnings=warnings,
         attribution=_attribution(metadata),
     )
 
 
-def _footprint(geometry: Polygon | MultiPolygon) -> PolygonModel | MultiPolygonModel | None:
-    """A shapely outline as a stored footprint; None for the rare sliver it cannot be."""
-    if geometry.is_empty:
+def _stored(geometry: BaseGeometry) -> PolygonModel | MultiPolygonModel | None:
+    parts = polygon_parts(geometry)
+    if not parts:
         return None
-    model = PolygonModel if isinstance(geometry, Polygon) else MultiPolygonModel
+    outline = parts[0] if len(parts) == 1 else MultiPolygon(parts)
+    model = PolygonModel if isinstance(outline, Polygon) else MultiPolygonModel
     try:
-        return model.model_validate(footprint_mapping(geometry))
+        return model.model_validate(footprint_mapping(outline))
     except ValueError:
         return None
 
 
-def _zone(patches: list[Patch]) -> SignatureZone | None:
-    polygons = [patch.footprint for patch in patches]
-    footprint = _footprint(polygons[0] if len(polygons) == 1 else MultiPolygon(polygons))
-    if footprint is None:
-        return None
-    cells = sum(patch.cells for patch in patches)
-    weighted = sum(patch.mean_similarity * patch.cells for patch in patches)
-    return SignatureZone(
-        footprint=footprint,
-        area_m2=sum(patch.area_m2 for patch in patches),
+def _footprint(geometry: BaseGeometry) -> PolygonModel | MultiPolygonModel | None:
+    """A shapely outline as a stored footprint. Rounded to the footprint's precision, a thin
+    patch can pinch or two parts can meet edge to edge; then the outline is snapped to that
+    precision with a valid result and tried once more. None for what is still not an area."""
+    stored = _stored(geometry)
+    if stored is None:
+        snapped = snapped_outline(geometry)
+        stored = _stored(snapped) if snapped is not None else None
+    return stored
+
+
+def _zone(patches: list[Patch]) -> tuple[SignatureZone | None, list[Patch]]:
+    """Patches as one area, and those left out of it: a patch no outline can be stored for (a
+    sliver narrower than the rounding) is counted, never dropped without a word, and never
+    counted in an area it is not drawn in."""
+    stored = [(patch, _footprint(patch.footprint)) for patch in patches]
+    outlined = [patch for patch, own in stored if own is not None]
+    outline: PolygonModel | MultiPolygonModel | None = None
+    if len(outlined) == 1:
+        outline = next(own for _, own in stored if own is not None)
+    elif outlined:
+        outline = _footprint(MultiPolygon([patch.footprint for patch in outlined]))
+    if outline is None:
+        return None, patches
+    kept = {id(patch) for patch in outlined}
+    cells = sum(patch.cells for patch in outlined)
+    weighted = sum(patch.mean_similarity * patch.cells for patch in outlined)
+    zone = SignatureZone(
+        footprint=outline,
+        area_m2=sum(patch.area_m2 for patch in outlined),
         cells=cells,
         mean_similarity=weighted / cells if cells else 0.0,
-        patches=len(patches),
+        patches=len(outlined),
     )
+    return zone, [patch for patch in patches if id(patch) not in kept]
+
+
+def _left_out(patches: list[Patch]) -> SignatureLeftOut:
+    return SignatureLeftOut(patches=len(patches), area_m2=sum(patch.area_m2 for patch in patches))
 
 
 def zones(
@@ -287,7 +317,9 @@ def zones(
     stack = _stack(db, row, metadata)
     boundary = _boundary(db, row)
     scenes = _scenes(metadata, request)
-    position, seed = _seed(stack, boundary, scenes, body.longitude, body.latitude)
+    position, seed = _seed(
+        stack, boundary, scenes, metadata.resolution_m, body.longitude, body.latitude
+    )
     scores = cosine(stack, position)
     quantized = quantize(scores)
     alike = (quantized != NO_SCORE) & (quantized >= raw_threshold(body.threshold))
@@ -308,8 +340,16 @@ def zones(
     )
     kept = [patch for patch in patches if patch.area_m2 >= body.min_patch_m2]
     small = [patch for patch in patches if patch.area_m2 < body.min_patch_m2]
-    own = [zone for patch in kept[: body.max_zones] if (zone := _zone([patch])) is not None]
+    own: list[SignatureZone] = []
+    unoutlined: list[Patch] = []
+    for patch in kept[: body.max_zones]:
+        zone, left = _zone([patch])
+        if zone is not None:
+            own.append(zone)
+        unoutlined.extend(left)
     rest = kept[body.max_zones :]
+    remainder, left = _zone(rest) if rest else (None, [])
+    unoutlined.extend(left)
     return SignatureZonesRead(
         raster_id=row.id,
         land_id=row.land_id,
@@ -318,13 +358,15 @@ def zones(
         threshold=body.threshold,
         seed=seed,
         zones=own,
-        remainder=_zone(rest) if rest else None,
-        dropped=SignatureLeftOut(patches=len(small), area_m2=sum(patch.area_m2 for patch in small)),
+        remainder=remainder,
+        dropped=_left_out(small),
+        unoutlined=_left_out(unoutlined),
         protected_cells=held,
         matched_cells=int(np.count_nonzero(alike)),
         cell_area_m2=metadata.resolution_m**2,
+        native_resolution_m=metadata.resolution_m,
         scenes=scenes,
         method=METHOD,
-        interpretation=INTERPRETATION,
+        interpretation=interpretation(metadata.resolution_m),
         attribution=_attribution(metadata),
     )

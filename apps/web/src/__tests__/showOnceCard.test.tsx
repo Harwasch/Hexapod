@@ -1,7 +1,8 @@
 /**
- * The Show once, everywhere card: it prepares the land's 10 m signatures when there are none
- * for this boundary, starts a session on the freshest ones, shows the tapped cell, the slider
- * and its tally with the honest caveat, and hands the lit ground to the job maker.
+ * The Show once, everywhere card: it prepares the land's signatures when there are none for
+ * this boundary (or tries other dates when none of their cells was clear in every season),
+ * starts a session on the freshest ones, shows the tapped cell, the slider and its tally with
+ * the honest caveat at the grid's real spacing, and hands the lit ground to the job maker.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -65,14 +66,31 @@ const status: ResearchStatus = {
   queue: { queued: 0, oldestQueuedAt: null, oldestQueuedSeconds: null, running: 0 },
 };
 
-function signatureRaster(revision = 2): LandRaster {
+const SEASONS_2025 = ["01", "04", "07", "10"].map((month) => ({
+  startDate: `2025-${month}-01`,
+  endDate: `2025-${month}-30`,
+}));
+
+function signatureRaster(
+  revision = 2,
+  {
+    id = "raster-1",
+    runId = "run-0",
+    commonCells = 54_436,
+    resolutionM = 10,
+    periods = SEASONS_2025,
+    warnings = [] as string[],
+  } = {},
+): LandRaster {
   return {
-    id: "raster-1",
-    runId: "run-0",
+    id,
+    runId,
     landId: land.id,
     boundaryRevision: revision,
-    request: { dataset: "sentinel-2-signature", resolutionM: 10, maxDimension: 512, periods: [] },
+    request: { dataset: "sentinel-2-signature", resolutionM: 10, maxDimension: 512, periods },
     metadata: {
+      resolutionM,
+      warnings,
       boundaryCells: 54_596,
       vegetation: {
         observations: [
@@ -82,15 +100,16 @@ function signatureRaster(revision = 2): LandRaster {
           { acquiredAt: "2025-10-17T18:54:50Z" },
         ],
       },
-      signature: { commonCells: 54_436 },
+      signature: { commonCells },
     },
     stale: revision !== land.revision,
   } as unknown as LandRaster;
 }
 
 let rasters: LandRaster[] = [];
+let runStatus = "running";
 
-function mount() {
+function mount(shown: LandArea = land) {
   vi.spyOn(api, "GET").mockImplementation(((path: string) =>
     Promise.resolve({
       data: path.endsWith("/rasters")
@@ -99,7 +118,7 @@ function mount() {
           ? status
           : {
               investigation: { id: "inv-1" },
-              runs: [{ id: "run-1", status: "running", question: "Prepare" }],
+              runs: [{ id: "run-1", status: runStatus, question: "Prepare" }],
               messages: [],
               findings: [],
               evidence: [],
@@ -119,7 +138,7 @@ function mount() {
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}
     >
-      <ShowOnceCard land={land} />
+      <ShowOnceCard land={shown} />
     </QueryClientProvider>,
   );
   return post;
@@ -131,6 +150,7 @@ beforeEach(() => {
   useUi.getState().setPanel("land");
   useShowOnce.getState().stop();
   rasters = [];
+  runStatus = "running";
   makeJob.mockReset();
 });
 
@@ -147,7 +167,7 @@ it("prepares four seasons of 10 m signatures when the land has none", async () =
   const post = mount();
   const button = await screen.findByRole("button", { name: /Prepare 10 m signatures/ });
   expect(screen.getByTestId("show-once-prepare").textContent).toContain(
-    "This land has no 10 m signatures yet",
+    "This land has no seasonal signatures yet",
   );
   fireEvent.click(button);
   const runs = () =>
@@ -165,7 +185,33 @@ it("prepares four seasons of 10 m signatures when the land has none", async () =
     },
   });
   expect(signaturePeriods()).toHaveLength(4);
-  await screen.findByText("Reading four seasonal Sentinel-2 scenes for 10 m signatures…");
+  await screen.findByText("Reading four seasonal Sentinel-2 scenes for the signatures…");
+});
+
+it("says before preparing that a large land's grid will be coarser than 10 m", async () => {
+  // 6 km across: make_grid keeps 506 cells of about 11.9 m.
+  const east = -120.1 + 6_000 / (111_320 * Math.cos((34.7 * Math.PI) / 180));
+  const wide: LandArea = {
+    ...land,
+    boundary: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [-120.1, 34.69],
+          [east, 34.69],
+          [east, 34.71],
+          [-120.1, 34.69],
+        ],
+      ],
+    },
+  };
+  useLand.getState().select(wide);
+  mount(wide);
+  await screen.findByRole("button", { name: "Prepare seasonal signatures" });
+  expect(screen.getByTestId("show-once-wide").textContent).toBe(
+    "Oak Bench Ranch is too wide for 10 m cells in one analysis, so the grid will be about 11.9 m.",
+  );
+  expect(screen.getByTestId("show-once-prepare").textContent).toContain("about 11.9 m grid");
 });
 
 it("says the signatures are for an earlier boundary", async () => {
@@ -173,6 +219,98 @@ it("says the signatures are for an earlier boundary", async () => {
   mount();
   await screen.findByText(/made for an earlier boundary/);
   expect(screen.queryByTestId("show-once-start")).toBeNull();
+});
+
+it("says when no cell was clear in every season, and tries the year before", async () => {
+  const cloudy =
+    "The 2025-01-01 to 2025-01-30 window has no clear land samples, so no cell has a full " +
+    "signature. Run again without this window or with other dates; gaps are never filled by " +
+    "interpolation.";
+  rasters = [signatureRaster(2, { commonCells: 0, warnings: ["Similar spectral…", cloudy] })];
+  const post = mount();
+  const unclear = await screen.findByTestId("show-once-unclear");
+  expect(unclear.textContent).toContain(
+    "No cell of Oak Bench Ranch was clear in every season on these dates (2025-01 · 2025-04 · " +
+      "2025-07 · 2025-10), so there is nothing to compare.",
+  );
+  expect(unclear.textContent).toContain(cloudy);
+  expect(unclear.textContent).not.toContain("Similar spectral");
+  expect(screen.queryByText(/made for an earlier boundary/)).toBeNull();
+  expect(screen.queryByTestId("show-once-start")).toBeNull();
+
+  // The same dates would read the same cloudy scenes: the year before is asked for.
+  runStatus = "succeeded";
+  fireEvent.click(screen.getByRole("button", { name: "Try 2024's seasons" }));
+  const runs = () =>
+    (post.mock.calls as unknown as [string, { body: Record<string, unknown> }][]).filter(([path]) =>
+      path.endsWith("/runs"),
+    );
+  await waitFor(() => expect(runs()).toHaveLength(1));
+  expect(runs()[0]?.[1].body).toMatchObject({
+    analysis: { periods: signaturePeriods("2025-06-01") },
+  });
+  expect(signaturePeriods("2025-06-01")[0]?.startDate).toBe("2024-01-01");
+  // That run left no clear cell either: once the list has its raster, the card says so and
+  // offers the year before that, never "Looking them up…" for good.
+  rasters = [
+    signatureRaster(2, {
+      id: "raster-2",
+      runId: "run-1",
+      commonCells: 0,
+      periods: signaturePeriods("2025-06-01"),
+      warnings: ["No cell is clear in every window, so no signatures can be compared."],
+    }),
+    ...rasters,
+  ];
+  await screen.findByRole("button", { name: "Try 2023's seasons" });
+  expect(screen.queryByTestId("show-once-prepare-status")).toBeNull();
+  expect(screen.getByTestId("show-once-unclear").textContent).toContain("2024-01 · 2024-04");
+});
+
+it("writes the grid's real spacing where a large land's was coarsened", async () => {
+  rasters = [
+    signatureRaster(2, {
+      resolutionM: 12,
+      warnings: ["The grid was coarsened to 12.0 m to fit the analysis dimensions."],
+    }),
+  ];
+  mount();
+  await screen.findByTestId("show-once-start");
+  expect(screen.getByTestId("show-once").textContent).toContain(
+    "Every 12 m cell of Oak Bench Ranch with a similar seasonal satellite signature",
+  );
+  expect(screen.getByTestId("show-once-scenes").textContent).toContain("12 m grid");
+  expect(screen.getByTestId("show-once-coarsened").textContent).toBe(
+    "The grid was coarsened to 12.0 m to fit the analysis dimensions. Oak Bench Ranch is too " +
+      "wide for 10 m cells in one analysis.",
+  );
+  expect(screen.getByTestId("show-once-caveat").textContent).toContain(
+    "Similar seasonal satellite signature at 12 m. Not a species ID.",
+  );
+  expect(screen.getByTestId("show-once").textContent).not.toMatch(/Every 10 m|at 10 m/);
+  fireEvent.click(screen.getByTestId("show-once-start"));
+  act(() =>
+    useShowOnce.getState().setResult({
+      read: {
+        seed: { cellLongitude: 0, cellLatitude: 0, windows: [] },
+        scenes: [],
+        comparedCells: 1,
+        nativeResolutionM: 12,
+      } as unknown as SignatureSimilarity,
+      grid: {
+        west: 0,
+        south: 0,
+        east: 1,
+        north: 1,
+        columns: 1,
+        rows: 1,
+        cellM: 12,
+        cellAreaM2: 144,
+        scores: Uint8Array.from([250]),
+      },
+    }),
+  );
+  await screen.findByText(/The job is measured on the 12 m analysis grid/);
 });
 
 it("starts on the freshest signatures and shows the tapped cell, the slider and its tally", async () => {

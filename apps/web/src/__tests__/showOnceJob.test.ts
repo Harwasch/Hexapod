@@ -52,7 +52,7 @@ const seed = {
   windows: [],
 };
 
-function zonesRead(): SignatureZones {
+function zonesRead(nativeResolutionM = 10): SignatureZones {
   return {
     rasterId: "raster-1",
     landId: land.id,
@@ -78,12 +78,14 @@ function zonesRead(): SignatureZones {
       patches: 21,
     },
     dropped: { patches: 262, areaM2: 99_530 },
+    unoutlined: { patches: 0, areaM2: 0 },
     protectedCells: 31,
     matchedCells: 3356,
-    cellAreaM2: 100,
+    cellAreaM2: nativeResolutionM ** 2,
+    nativeResolutionM,
     scenes,
     method: "cosine",
-    interpretation: "Similar seasonal satellite signature at 10 m. Not a species ID.",
+    interpretation: `Similar seasonal satellite signature at ${nativeResolutionM} m. Not a species ID.`,
     attribution: "Contains modified Copernicus Sentinel data; Element 84 Earth Search",
   };
 }
@@ -107,6 +109,7 @@ describe("like-here zones", () => {
         boundaryRevision: land.revision,
       });
       expect(zone.attribution?.startsWith(LIKE_HERE_ATTRIBUTION)).toBe(true);
+      expect(zone.attribution).toMatch(/^Similar Sentinel-2 signature at 10 m to the cell at /);
       expect(zone.attribution?.length).toBeLessThanOrEqual(300);
       expect(zone.attribution).toContain("34.69806, -120.04022");
       expect(zone.attribution).toContain("2025-01-15, 2025-04-05, 2025-07-24, 2025-10-17");
@@ -114,6 +117,15 @@ describe("like-here zones", () => {
       expect(isLikeHereZone(zone, land.id)).toBe(true);
     }
     expect(zones[2]?.footprint.type).toBe("MultiPolygon");
+  });
+
+  it("cite the grid's real spacing where a large land's was coarsened", () => {
+    const zones = likeHereZones(zonesRead(12), land, []);
+    for (const zone of zones) {
+      expect(zone.attribution).toMatch(/^Similar Sentinel-2 signature at 12 m to the cell at /);
+      expect(zone.attribution).not.toContain("10 m");
+      expect(isLikeHereZone(zone, land.id)).toBe(true);
+    }
   });
 });
 
@@ -191,6 +203,19 @@ describe("Make this the job", () => {
     await makeJob(land, null);
     const again = useMission.getState().project?.zones.filter((z) => isLikeHereZone(z, land.id));
     expect(again?.map((z) => z.id)).toEqual(["A-01", "A-02", "A-03"]);
+  });
+
+  it("says the grid's real spacing in the plan's ground, and counts patches it could not outline", async () => {
+    vi.spyOn(api, "POST").mockResolvedValue({
+      data: { ...zonesRead(12), unoutlined: { patches: 1, areaM2: 2_500 } },
+      response: new Response(),
+    });
+    const summary = await makeJob(land, null);
+    expect(summary.unoutlined).toEqual({ patches: 1, acres: 2_500 / 4046.8564224 });
+    const note = useMission.getState().composer?.ground?.note ?? "";
+    expect(note).toContain("a similar Sentinel-2 signature at 12 m to the place you tapped");
+    expect(note).toContain("1 patch too thin to outline (0.6 ac) left out");
+    expect(note).not.toContain("10 m");
   });
 
   it("says when nothing at this setting is big enough, and changes nothing", async () => {

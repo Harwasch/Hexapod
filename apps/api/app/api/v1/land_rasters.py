@@ -66,7 +66,7 @@ def similar(
     longitude: float = Query(ge=-180, le=180),
     latitude: float = Query(ge=-90, le=90),
 ) -> SignatureSimilarityRead:
-    """How alike every cell of the land is to the tapped one, by seasonal 10 m signature
+    """How alike every cell of the land is to the tapped one, by seasonal Sentinel-2 signature
     (a `sentinel-2-signature` raster; 409 for any other). Computed on request, never saved."""
     response.headers["Cache-Control"] = "private, no-store"
     return land_similarity.similar(db, scope.id, raster_id, longitude, latitude)

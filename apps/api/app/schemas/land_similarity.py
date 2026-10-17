@@ -1,10 +1,10 @@
 """Show once, everywhere: one tapped cell of a Land against every other, by seasonal signature.
 
-A `sentinel-2-signature` raster (`app.analysis.signature`) holds each 10 m cell's reflectance
-and NDVI in dated windows; `app.analysis.similarity` compares them. Scores travel as a
-`LonLatGrid` the console drapes over the ground, and the alike cells come back as areas for a
-plan. A similar signature is similar reflectance on these dates, never a species, cover or
-habitat identification.
+A `sentinel-2-signature` raster (`app.analysis.signature`) holds each cell's reflectance and
+NDVI in dated windows (10 m cells, coarser on a land too large for 506 of them across);
+`app.analysis.similarity` compares them. Scores travel as a `LonLatGrid` the console drapes
+over the ground, and the alike cells come back as areas for a plan. A similar signature is
+similar reflectance on these dates, never a species, cover or habitat identification.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class SignatureSeed(CamelModel):
     #: Where the tap landed.
     longitude: Finite
     latitude: Finite
-    #: The centre of the 10 m analysis cell it fell in, which is what was compared.
+    #: The centre of the analysis cell it fell in, which is what was compared.
     cell_longitude: Finite
     cell_latitude: Finite
     windows: list[SignatureSeedWindow]
@@ -126,11 +126,16 @@ class SignatureZonesRead(CamelModel):
     remainder: SignatureZone | None
     #: Patches under `min_patch_m2`, left out of the job.
     dropped: SignatureLeftOut
+    #: Patches big enough but too thin to store as an outline at the footprint's rounding
+    #: (rare), also left out of the job.
+    unoutlined: SignatureLeftOut
     #: Analysis cells alike enough but protected, and so left out.
     protected_cells: int = Field(ge=0)
     #: Analysis cells alike enough and not protected, whatever patch they fell in.
     matched_cells: int = Field(ge=0)
     cell_area_m2: Finite
+    #: The analysis grid's spacing the areas were outlined on (10 m, or coarser on a large land).
+    native_resolution_m: Finite
     scenes: list[SignatureScene]
     method: str
     interpretation: str

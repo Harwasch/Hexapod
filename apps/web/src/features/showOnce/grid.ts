@@ -10,7 +10,8 @@
  * lit, the tally and the areas a job gets agree.
  */
 
-import type { SignatureSimilarity } from "@twin/contracts";
+import type { LandArea, SignatureSimilarity } from "@twin/contracts";
+import { boundsOf } from "@twin/geo";
 
 import type { GridImage } from "@/cesium/GroundGridLayer";
 import { rawValues } from "@/features/knowledge/grid";
@@ -34,6 +35,35 @@ export interface ScoreGrid {
   cellAreaM2: number;
   /** Quantized cosine per cell, row-major from the north-west; 255 for none. */
   scores: Uint8Array;
+}
+
+/**
+ * A grid spacing as the card and the job's provenance write it: "10 m", or "11.9 m" where a
+ * large land's grid was coarsened (`resolution_label` in apps/api/app/analysis/similarity.py).
+ */
+export function spacingLabel(metres: number): string {
+  const rounded = Math.round(metres * 10) / 10;
+  return Number.isInteger(rounded) ? `${rounded} m` : `${rounded.toFixed(1)} m`;
+}
+
+/**
+ * The spacing a signature run will have on a boundary before it is made: the request's, or
+ * coarser where the land is more than `maxDimension - 6` cells across (`make_grid` in
+ * apps/api/app/analysis/raster_grid.py). Estimated from the outline's extent; the server
+ * measures it in a local projection, so a land right at the limit may differ by a hair.
+ */
+export function expectedSpacingM(
+  boundary: LandArea["boundary"],
+  request: { resolutionM: number; maxDimension: number },
+): number {
+  const { west, south, east, north } = boundsOf(boundary);
+  const latitude = ((south + north) / 2) * (Math.PI / 180);
+  const width = (east - west) * 111_320 * Math.cos(latitude);
+  const height = (north - south) * 110_574;
+  const span = Math.max(width, height);
+  return Number.isFinite(span)
+    ? Math.max(request.resolutionM, span / (request.maxDimension - 6))
+    : request.resolutionM;
 }
 
 export function decodeScores(read: Pick<SignatureSimilarity, "grid" | "cellAreaM2">): ScoreGrid {

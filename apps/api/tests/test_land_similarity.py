@@ -15,12 +15,20 @@ from fastapi.testclient import TestClient
 from pyproj import Transformer
 from rasterio.io import MemoryFile
 from shapely.geometry import Point, shape
+from shapely.geometry import Polygon as ShapelyPolygon
 from sqlalchemy.orm import Session
 
 from app.analysis.lonlat_grid import decode
 from app.analysis.raster_grid import AnalysisGrid, make_grid
 from app.analysis.signature import FeatureKey
-from app.analysis.similarity import build_stack, quantize, raw_threshold
+from app.analysis.similarity import (
+    Patch,
+    build_stack,
+    quantize,
+    raw_threshold,
+    resolution_label,
+    shares,
+)
 from app.analysis.terrain import band_statistics
 from app.models.land_raster import LandRaster, LandRasterBlob
 from app.schemas.geojson import Polygon
@@ -34,6 +42,7 @@ from app.schemas.land_rasters import (
     VegetationPeriod,
     VegetationTimeline,
 )
+from app.services.land_similarity import _zone
 from tests.test_land import BODY, polygon
 from tests.test_land_knowledge import research_run
 from tests.test_workspaces import IdentityClient, headers
@@ -59,8 +68,12 @@ SPECK = (slice(100, 101), slice(10, 12))
 CLOUD = (slice(58, 64), slice(5, 15))
 
 
-def grid() -> AnalysisGrid:
-    return make_grid(Polygon.model_validate(polygon()), REQUEST)
+def request_at(resolution_m: float) -> RasterRequest:
+    return REQUEST.model_copy(update={"resolution_m": resolution_m})
+
+
+def grid(resolution_m: float = 10) -> AnalysisGrid:
+    return make_grid(Polygon.model_validate(polygon()), request_at(resolution_m))
 
 
 def lonlat(analysis: AnalysisGrid, row: float, column: float) -> tuple[float, float]:
@@ -109,10 +122,12 @@ def signature_bytes(analysis: AnalysisGrid) -> tuple[bytes, list[np.ndarray]]:
         return memory.read(), arrays
 
 
-def signature_raster(db: Session, land_id: str, *, terrain: bool = False) -> LandRaster:
+def signature_raster(
+    db: Session, land_id: str, *, terrain: bool = False, resolution_m: float = 10
+) -> LandRaster:
     """A stored signature raster of the grid's two kinds of ground (or, with `terrain`, the
-    same bytes filed as a terrain raster)."""
-    analysis = grid()
+    same bytes filed as a terrain raster), on a 10 m grid or a coarser one."""
+    analysis = grid(resolution_m)
     data, arrays = signature_bytes(analysis)
     common = analysis.inside & np.logical_and.reduce([np.isfinite(a) for a in arrays])
     bands = []
@@ -183,9 +198,9 @@ def signature_raster(db: Session, land_id: str, *, terrain: bool = False) -> Lan
             similarity="cosine of standardized vectors",
         ),
     )
-    request = (RasterRequest(dataset="cop-dem-glo-30") if terrain else REQUEST).model_dump(
-        mode="json"
-    )
+    request = (
+        RasterRequest(dataset="cop-dem-glo-30") if terrain else request_at(resolution_m)
+    ).model_dump(mode="json")
     run = research_run(db, land_id, "raster")
     row = LandRaster(
         land_id=uuid.UUID(land_id),
@@ -283,12 +298,15 @@ def test_similar_lights_the_alike_ground(client: TestClient, db: Session) -> Non
     assert windows[1]["swir16"] == pytest.approx(0.31, abs=0.01)
     assert [scene["sceneId"] for scene in read["scenes"]] == ["S2B_TEST_0", "S2B_TEST_1"]
     assert "Not a species ID" in read["interpretation"]
+    assert read["interpretation"].startswith("Similar seasonal satellite signature at 10 m.")
+    assert read["nativeResolutionM"] == pytest.approx(10)
 
     outside = client.get(path, params={"longitude": -122.15, "latitude": 47.645})
     assert outside.status_code == 422 and "outside" in outside.json()["detail"]
     cloud = lonlat(analysis, *center(CLOUD))
     cloudy = client.get(path, params={"longitude": cloud[0], "latitude": cloud[1]})
-    assert cloudy.status_code == 422 and "no full signature" in cloudy.json()["detail"]
+    assert cloudy.status_code == 422
+    assert cloudy.json()["detail"].startswith("That 10 m cell has no full signature")
 
     revised = client.put(
         f"/api/v1/land/{land['id']}",
@@ -297,6 +315,30 @@ def test_similar_lights_the_alike_ground(client: TestClient, db: Session) -> Non
     assert revised.status_code == 200, revised.text
     stale = client.get(path, params={"longitude": seed[0], "latitude": seed[1]}).json()
     assert stale["stale"] is True and "boundary changed" in stale["warnings"][0]
+
+
+def test_a_coarsened_grid_is_named_at_its_spacing(client: TestClient, db: Session) -> None:
+    """A land too wide for 506 cells of 10 m is analysed on a coarser grid (`make_grid`):
+    the interpretation, the errors and the areas say that spacing, never 10 m."""
+    land = make_land(client)
+    raster = signature_raster(db, land["id"], resolution_m=12)
+    analysis = grid(12)
+    seed = lonlat(analysis, *center(A_BIG))
+    path = f"/api/v1/land/rasters/{raster.id}/similar"
+    read = client.get(path, params={"longitude": seed[0], "latitude": seed[1]}).json()
+    assert read["nativeResolutionM"] == pytest.approx(12)
+    assert read["interpretation"].startswith("Similar seasonal satellite signature at 12 m.")
+    cloud = lonlat(analysis, *center(CLOUD))
+    cloudy = client.get(path, params={"longitude": cloud[0], "latitude": cloud[1]})
+    assert cloudy.status_code == 422
+    assert cloudy.json()["detail"].startswith("That 12 m cell has no full signature")
+    zones = client.post(
+        f"{path}/zones", json={"longitude": seed[0], "latitude": seed[1], "threshold": 0.9}
+    ).json()
+    assert zones["nativeResolutionM"] == pytest.approx(12)
+    assert zones["cellAreaM2"] == pytest.approx(144)
+    assert "12 m" in zones["interpretation"] and "10 m" not in zones["interpretation"]
+    assert resolution_label(11.857) == "11.9 m" and resolution_label(10.0) == "10 m"
 
 
 def test_only_signature_rasters_compare(client: TestClient, db: Session) -> None:
@@ -406,3 +448,54 @@ def test_similarity_is_scoped_to_the_workspace(
     bob = headers(token("bob"), other)
     assert client.get(path, params=query, headers=bob).status_code == 404
     assert client.post(path + "/zones", json=query, headers=bob).status_code == 404
+
+
+def _patch(footprint: ShapelyPolygon, cells: int = 10) -> Patch:
+    return Patch(footprint=footprint, area_m2=footprint.area, cells=cells, mean_similarity=0.9)
+
+
+def test_patches_that_rounding_breaks_are_repaired_or_counted() -> None:
+    """Footprints are stored to 8 decimals. A patch whose rounding pinches its ring is snapped
+    to that precision and kept; one narrower than the rounding cannot be an area, and is
+    counted as left out rather than dropped without a word."""
+    # A notch from the north edge reaching 3e-9 degrees from the south edge's middle vertex:
+    # valid as computed, a self-touching ring once rounded to 8 decimals.
+    pinched = ShapelyPolygon(
+        [
+            (0, 0),
+            (5e-6, 0),
+            (1e-5, 0),
+            (1e-5, 1e-5),
+            (6e-6, 1e-5),
+            (5e-6, 3e-9),
+            (4e-6, 1e-5),
+            (0, 1e-5),
+        ]
+    )
+    assert pinched.is_valid
+    zone, left = _zone([_patch(pinched)])
+    assert zone is not None and left == []
+    assert shape(zone.footprint.model_dump()).is_valid
+    assert zone.cells == 10 and zone.patches == 1
+
+    sliver = ShapelyPolygon([(0, 0), (3e-9, 0), (3e-9, 3e-9), (0, 3e-9)])
+    assert sliver.is_valid and sliver.area > 0
+    lost = _patch(sliver, cells=1)
+    zone, left = _zone([lost])
+    assert zone is None and left == [lost]
+
+    # In a remainder, the sliver is left out and counted; the rest is still one area.
+    square = ShapelyPolygon([(1e-4, 0), (2e-4, 0), (2e-4, 1e-4), (1e-4, 1e-4)])
+    kept = _patch(square, cells=40)
+    remainder, left = _zone([kept, lost])
+    assert remainder is not None and left == [lost]
+    assert remainder.patches == 1 and remainder.cells == 40
+    assert remainder.area_m2 == pytest.approx(square.area)
+
+
+def test_a_split_part_shares_its_cells() -> None:
+    assert shares(10, [3.0, 1.0]) == [8, 2]
+    assert shares(7, [1.0, 1.0, 1.0]) == [3, 2, 2]
+    assert sum(shares(101, [0.4, 0.35, 0.25])) == 101
+    assert shares(5, [0.0, 0.0]) == [5, 0]
+    assert shares(0, []) == []

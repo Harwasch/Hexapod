@@ -16,7 +16,7 @@ import type {
 import { api, unwrap } from "@/api/client";
 import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
 
-type LandRaster = components["schemas"]["LandRasterRead"];
+export type LandRaster = components["schemas"]["LandRasterRead"];
 
 /**
  * The Land's saved rasters, newest first. Under "land-rasters", so a finished research run
@@ -56,15 +56,26 @@ export function freshSignature(
   );
 }
 
-/** Whether signatures exist only for an earlier boundary (the card says to prepare them again). */
-export function onlyStaleSignatures(
+/**
+ * Why there is nothing to compare yet, when `freshSignature` finds nothing: signatures made for
+ * the current boundary in which no cell was clear in every season (the newest such raster, whose
+ * warnings say which window), signatures made only for an earlier boundary, or none at all.
+ */
+export type SignatureGap =
+  { kind: "none" } | { kind: "earlier" } | { kind: "unclear"; raster: LandRaster };
+
+export function signatureGap(
   rasters: readonly LandRaster[] | undefined,
   land: Pick<LandArea, "revision">,
-): boolean {
-  return (
-    !freshSignature(rasters, land) &&
-    (rasters?.some((raster) => raster.request.dataset === "sentinel-2-signature") ?? false)
+): SignatureGap | null {
+  if (freshSignature(rasters, land)) return null;
+  const signatures =
+    rasters?.filter((raster) => raster.request.dataset === "sentinel-2-signature") ?? [];
+  const unclear = signatures.find(
+    (raster) => !raster.stale && raster.boundaryRevision === land.revision,
   );
+  if (unclear) return { kind: "unclear", raster: unclear };
+  return signatures.length > 0 ? { kind: "earlier" } : { kind: "none" };
 }
 
 export function fetchSimilar(

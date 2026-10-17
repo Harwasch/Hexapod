@@ -1,7 +1,7 @@
 /**
  * Show once, everywhere's grid on the client: the slider's rule (the same quantized compare
  * as the server's areas and the drape's uniform), the tally, the patch a protect tap takes,
- * and the rectangles that carry protected ground to the server.
+ * the rectangles that carry protected ground to the server, and the grid spacing the copy says.
  */
 
 import { expect, it } from "vitest";
@@ -10,6 +10,7 @@ import type { SignatureSimilarity } from "@twin/contracts";
 
 import {
   decodeScores,
+  expectedSpacingM,
   formatAcres,
   isLit,
   litStats,
@@ -19,6 +20,7 @@ import {
   rampImage,
   rampThreshold,
   rawThreshold,
+  spacingLabel,
   toggleProtected,
   type ScoreGrid,
 } from "@/features/showOnce/grid";
@@ -161,4 +163,32 @@ it("says acres plainly", () => {
   expect(formatAcres(6.24)).toBe("6.2");
   expect(formatAcres(78.8)).toBe("79");
   expect(formatAcres(1349.4)).toBe("1,349");
+});
+
+it("writes the grid's spacing as the server does, and foresees a large land's coarser grid", () => {
+  expect(spacingLabel(10)).toBe("10 m");
+  expect(spacingLabel(12)).toBe("12 m");
+  expect(spacingLabel(11.857)).toBe("11.9 m");
+  const request = { resolutionM: 10, maxDimension: 512 };
+  const box = (west: number, east: number, south: number, north: number) => ({
+    type: "Polygon" as const,
+    coordinates: [
+      [
+        [west, south],
+        [east, south],
+        [east, north],
+        [west, north],
+        [west, south],
+      ],
+    ],
+  });
+  // Oak Bench Ranch's size (about 2.5 km across): 10 m.
+  expect(expectedSpacingM(box(-120.06, -120.033, 34.69, 34.71), request)).toBe(10);
+  // 6 km across: 506 cells of about 11.9 m (make_grid's rule).
+  const wide = expectedSpacingM(
+    box(-120.1, -120.1 + 6_000 / (111_320 * Math.cos((34.7 * Math.PI) / 180)), 34.69, 34.71),
+    request,
+  );
+  expect(wide).toBeCloseTo(6_000 / 506, 1);
+  expect(spacingLabel(wide)).toBe("11.9 m");
 });

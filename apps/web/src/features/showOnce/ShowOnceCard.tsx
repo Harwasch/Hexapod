@@ -18,14 +18,27 @@ import { invalidateLandDerived } from "../land/landDerived";
 import { RASTER_RUNS, rasterRequest, signaturePeriods } from "../land/rasterRuns";
 import { beginInvestigation, useInvestigation, useResearchStatus } from "../land/researchApi";
 import { workerIdleNote, workerLine } from "../land/researchAvailability";
-import { freshSignature, onlyStaleSignatures, useLandRasters } from "./api";
-import { ALIKE_MAX, ALIKE_MIN, formatAcres, litStats } from "./grid";
+import { freshSignature, signatureGap, useLandRasters, type LandRaster } from "./api";
+import {
+  ALIKE_MAX,
+  ALIKE_MIN,
+  expectedSpacingM,
+  formatAcres,
+  litStats,
+  spacingLabel,
+} from "./grid";
 import { makeJob, type JobSummary } from "./makeJob";
 import { dropPendingTaps } from "./session";
 
 import "./showOnce.css";
 
 const SETTLED = ["succeeded", "partial", "failed", "cancelled"];
+/** The grid a signature run asks for: 10 m, at most 512 cells across (the server's default). */
+const SIGNATURE_REQUEST = {
+  resolutionM: RASTER_RUNS["sentinel-2-signature"].resolutionM,
+  maxDimension: rasterRequest("sentinel-2-signature").maxDimension ?? 512,
+};
+type Period = ReturnType<typeof signaturePeriods>[number];
 
 function sceneDay(iso: string | null | undefined): string | null {
   if (!iso) return null;
@@ -39,22 +52,25 @@ function sceneDay(iso: string | null | undefined): string | null {
 /**
  * Starts the land's seasonal signatures through the research worker (the raster run Explore
  * this land's "Prepare 10 m signatures" starts: `rasterRuns.ts`), and watches it: when it
- * settles, everything computed from the land's records is asked again, the raster list too.
+ * settles, everything computed from the land's records is asked again, the raster list too,
+ * and `looked` says that answer is in.
  */
 function usePrepareSignatures(land: LandArea) {
   const client = useQueryClient();
   const [pending, setPending] = useState<{ investigationId: string; runId: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [looked, setLooked] = useState<string | null>(null);
   const investigation = useInvestigation(pending?.investigationId ?? null);
   const run = investigation.data?.runs.find((item) => item.id === pending?.runId);
   const settled = useRef<string | null>(null);
   useEffect(() => {
     if (!run || settled.current === run.id || !SETTLED.includes(run.status)) return;
     settled.current = run.id;
-    void invalidateLandDerived(client, land.id);
+    const id = run.id;
+    void invalidateLandDerived(client, land.id).finally(() => setLooked(id));
   }, [run, client, land.id]);
-  const start = async () => {
+  const start = async (periods: Period[]) => {
     const { title, question, maxSeconds } = RASTER_RUNS["sentinel-2-signature"];
     setBusy(true);
     setError(null);
@@ -67,7 +83,7 @@ function usePrepareSignatures(land: LandArea) {
             kind: "raster",
             question,
             requestKey: crypto.randomUUID(),
-            analysis: rasterRequest("sentinel-2-signature", signaturePeriods()),
+            analysis: rasterRequest("sentinel-2-signature", periods),
             budget: { maxSeconds },
           },
         }),
@@ -79,7 +95,41 @@ function usePrepareSignatures(land: LandArea) {
       setBusy(false);
     }
   };
-  return { start, busy, error, run };
+  return { start, busy, error, run, looked: looked !== null && looked === run?.id };
+}
+
+/** "2025-01 · 2025-04 · 2025-07 · 2025-10": the months a signature's windows start in. */
+function monthLine(periods: readonly Period[]): string {
+  return periods.map((period) => period.startDate.slice(0, 7)).join(" · ");
+}
+
+/**
+ * The seasons to prepare: the latest complete year's, or after signatures for this boundary in
+ * which no cell was clear in every season, the year before the earliest year tried (the same
+ * dates again would read the same cloudy scenes).
+ */
+function nextPeriods(rasters: readonly LandRaster[] | undefined, land: LandArea): Period[] {
+  const tried = (rasters ?? [])
+    .filter(
+      (raster) =>
+        raster.request.dataset === "sentinel-2-signature" &&
+        !raster.stale &&
+        raster.boundaryRevision === land.revision &&
+        (raster.metadata.signature?.commonCells ?? 0) === 0,
+    )
+    .map((raster) => Number(raster.request.periods?.[0]?.startDate.slice(0, 4)))
+    .filter((year) => Number.isFinite(year));
+  if (tried.length === 0) return signaturePeriods();
+  // signaturePeriods(day) reads the year before `day`'s.
+  return signaturePeriods(`${Math.min(...tried)}-06-01`);
+}
+
+/** What the raster says about the windows that left no cell clear in every season. */
+function unclearReasons(raster: LandRaster): string[] {
+  return raster.metadata.warnings.filter(
+    (warning) =>
+      warning.includes("no clear land samples") || warning.startsWith("No cell is clear"),
+  );
 }
 
 /** The tapped cell's NDVI through the seasons: words for every reader, a line for the eye. */
@@ -141,7 +191,7 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
   const visible = ready && section === "ecology" && panel === "land";
   const rasters = useLandRasters(land, visible);
   const raster = freshSignature(rasters.data, land);
-  const stale = onlyStaleSignatures(rasters.data, land);
+  const gap = signatureGap(rasters.data, land);
   const prepare = usePrepareSignatures(land);
   const status = useResearchStatus(prepare.run?.status === "queued");
   const touch = useMediaQuery(TOUCH_MEDIA);
@@ -216,6 +266,18 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
   };
 
   const signature = raster?.metadata.signature;
+  // The grid's spacing as made: 10 m, or coarser on a land too wide for 506 cells across.
+  const spacing = raster ? spacingLabel(raster.metadata.resolutionM) : null;
+  const coarsened =
+    raster && raster.metadata.resolutionM > SIGNATURE_REQUEST.resolutionM * 1.001
+      ? (raster.metadata.warnings.find((warning) => warning.includes("coarsened")) ??
+        `The grid was coarsened to ${spacing} to fit the analysis dimensions.`)
+      : null;
+  // Before any are made: the spacing this land's extent will give.
+  const expected = expectedSpacingM(land.boundary, SIGNATURE_REQUEST);
+  const wide = expected > SIGNATURE_REQUEST.resolutionM * 1.001;
+  const periods = nextPeriods(rasters.data, land);
+  const made = prepare.run && rasters.data?.some((item) => item.runId === prepare.run?.id);
   const scenes = raster?.metadata.vegetation?.observations ?? [];
   const sceneLine = scenes
     .map((o) => sceneDay(o.acquiredAt))
@@ -231,8 +293,8 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
         Show once, everywhere
       </span>
       <p className="show-once__lead">
-        {tap} one place on the map. Every 10 m cell of {land.name} with a similar seasonal satellite
-        signature lights up, and the lit ground can become the job.
+        {tap} one place on the map. Every {spacing ? `${spacing} ` : ""}cell of {land.name} with a
+        similar seasonal satellite signature lights up, and the lit ground can become the job.
       </p>
       <p className="show-once__chips">
         <span className="show-once__chip show-once__chip--measured">
@@ -243,7 +305,7 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
 
       {!raster && rasters.isLoading && (
         <p className="land-footnote" role="status">
-          Looking for this land&apos;s 10 m signatures…
+          Looking for this land&apos;s seasonal signatures…
         </p>
       )}
       {rasters.isError && (
@@ -251,18 +313,36 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
           Could not list this land&apos;s rasters: {describeError(rasters.error)}
         </p>
       )}
-      {!raster && !rasters.isLoading && !rasters.isError && (
+      {!raster && gap && !rasters.isLoading && !rasters.isError && (
         <div className="show-once__prepare" data-testid="show-once-prepare">
+          {gap.kind === "unclear" ? (
+            <div data-testid="show-once-unclear">
+              <p className="land-footnote">
+                No cell of {land.name} was clear in every season on these dates (
+                {monthLine(gap.raster.request.periods ?? [])}), so there is nothing to compare.
+              </p>
+              {unclearReasons(gap.raster).map((reason) => (
+                <p key={reason} className="land-footnote">
+                  {reason}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="land-footnote">
+              {gap.kind === "earlier"
+                ? "The seasonal signatures were made for an earlier boundary. Prepare them again for this one."
+                : "This land has no seasonal signatures yet. Preparing them reads four Sentinel-2 scenes, one per season, and takes a minute or two."}
+            </p>
+          )}
+          {wide && (
+            <p className="land-footnote" data-testid="show-once-wide">
+              {land.name} is too wide for {spacingLabel(SIGNATURE_REQUEST.resolutionM)} cells in one
+              analysis, so the grid will be about {spacingLabel(expected)}.
+            </p>
+          )}
           <p className="land-footnote">
-            {stale
-              ? "The 10 m signatures were made for an earlier boundary. Prepare them again for this one."
-              : "This land has no 10 m signatures yet. Preparing them reads four Sentinel-2 scenes, one per season, and takes a minute or two."}
-          </p>
-          <p className="land-footnote">
-            {signaturePeriods()
-              .map((period) => period.startDate.slice(0, 7))
-              .join(" · ")}{" "}
-            · 10 m grid
+            {monthLine(periods)} · {wide ? "about " : ""}
+            {spacingLabel(expected)} grid
           </p>
           <div className="land-actions">
             <button
@@ -270,10 +350,18 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
               className="land-primary"
               data-testid="show-once-prepare-start"
               disabled={!ready || !canEdit || prepare.busy || running}
-              onClick={() => void prepare.start()}
+              onClick={() => void prepare.start(periods)}
             >
               <Sparkles size={14} aria-hidden="true" />
-              {prepare.busy ? "Starting…" : running ? "Preparing…" : "Prepare 10 m signatures"}
+              {prepare.busy
+                ? "Starting…"
+                : running
+                  ? "Preparing…"
+                  : gap.kind === "unclear"
+                    ? `Try ${periods[0]?.startDate.slice(0, 4) ?? "earlier"}'s seasons`
+                    : wide
+                      ? "Prepare seasonal signatures"
+                      : `Prepare ${spacingLabel(expected)} signatures`}
             </button>
           </div>
           {!canEdit && ready && (
@@ -281,17 +369,19 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
               Your workspace role can view this land but not start analyses.
             </p>
           )}
-          {prepare.run && (
+          {prepare.run && !made && (
             <p className="land-footnote" role="status" data-testid="show-once-prepare-status">
               {prepare.run.status === "queued"
                 ? (workerLine(status.data, prepare.run) ?? "Waiting for the research worker…")
                 : prepare.run.status === "running"
-                  ? "Reading four seasonal Sentinel-2 scenes for 10 m signatures…"
+                  ? "Reading four seasonal Sentinel-2 scenes for the signatures…"
                   : prepare.run.status === "failed"
                     ? `Preparing the signatures failed: ${prepare.run.error ?? "no reason given"}. Try again.`
                     : prepare.run.status === "cancelled"
                       ? "Preparing the signatures was stopped."
-                      : "Signatures ready. Looking them up…"}
+                      : prepare.looked
+                        ? "The run finished without saving signatures. Try again."
+                        : "Signatures ready. Looking them up…"}
             </p>
           )}
           {!prepare.run && workerIdleNote(status.data) && (
@@ -308,8 +398,15 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
       {raster && signature && (
         <p className="land-footnote" data-testid="show-once-scenes">
           Scenes {sceneLine}
-          {year ? ` ${year}` : ""} · Sentinel-2 L2A · {signature.commonCells.toLocaleString()} of{" "}
+          {year ? ` ${year}` : ""} · Sentinel-2 L2A · {spacing} grid ·{" "}
+          {signature.commonCells.toLocaleString()} of{" "}
           {raster.metadata.boundaryCells.toLocaleString()} cells clear in every season
+        </p>
+      )}
+      {coarsened && (
+        <p className="land-footnote" data-testid="show-once-coarsened">
+          {coarsened} {land.name} is too wide for {spacingLabel(SIGNATURE_REQUEST.resolutionM)}{" "}
+          cells in one analysis.
         </p>
       )}
 
@@ -421,8 +518,8 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
                 </p>
               )}
               <p className="land-footnote">
-                Counted on the map&apos;s grid, so ≈. The job is measured on the 10 m analysis grid,
-                and patches under half an acre are left out of it.
+                Counted on the map&apos;s grid, so ≈. The job is measured on the {spacing} analysis
+                grid, and patches under half an acre are left out of it.
               </p>
             </>
           )}
@@ -451,8 +548,9 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
       )}
 
       <p className="land-footnote show-once__caveat" data-testid="show-once-caveat">
-        <strong>Inferred</strong> · Similar seasonal satellite signature at 10 m. Not a species ID.
-        Alike is relative to the variety on this land.
+        <strong>Inferred</strong> · Similar seasonal satellite signature
+        {spacing ? ` at ${spacing}` : ""}. Not a species ID. Alike is relative to the variety on
+        this land.
       </p>
     </section>
   );

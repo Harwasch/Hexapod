@@ -2,8 +2,9 @@
  * "Make this the job": the lit ground, protected patches left out, becomes the areas of a new
  * plan on the saved Land.
  *
- * The API outlines the alike cells on the 10 m analysis grid (`POST /similar/zones`): the
- * largest patches each, the rest as one area, specks under half an acre left out and counted.
+ * The API outlines the alike cells on the signature's analysis grid (`POST /similar/zones`; 10 m,
+ * coarser on a large land): the largest patches each, the rest as one area, specks under half an
+ * acre (and the rare patch too thin to store as an outline) left out and counted.
  * Each becomes an area zone that is private and marked as derived from the Land, so the plan
  * goes to the workspace and never to browser storage, with its provenance as the zone's
  * attribution. A fresh plan composer takes them (`adoptAreas`) and the bar asks what should
@@ -21,11 +22,14 @@ import { useShowOnce } from "@/state/showOnce";
 import { adoptAreas } from "../mission/planFlow";
 import { engageLand } from "../mission/landPlanning";
 import { requestSignatureZones } from "./api";
-import { formatAcres, protectedRectangles } from "./grid";
+import { formatAcres, protectedRectangles, spacingLabel } from "./grid";
 
 export const LIKE_HERE_SHORT = "like here";
-/** Every like-here area's attribution starts so; how an earlier job's areas are found again. */
-export const LIKE_HERE_ATTRIBUTION = "Similar 10 m Sentinel-2 signature";
+/**
+ * Every like-here area's attribution starts so, whatever the grid's spacing (which follows it):
+ * how an earlier job's areas are found again.
+ */
+export const LIKE_HERE_ATTRIBUTION = "Similar Sentinel-2 signature";
 const ACRE_M2 = 4046.8564224;
 const MAX_RECTANGLES = 5000;
 
@@ -34,6 +38,8 @@ export interface JobSummary {
   acres: number;
   protectedAcres: number;
   dropped: { patches: number; acres: number };
+  /** Patches big enough but too thin to store as an outline (rare), left out too. */
+  unoutlined: { patches: number; acres: number };
 }
 
 function day(scene: SignatureScene): string {
@@ -58,8 +64,9 @@ export function likeHereZones(
   const { cellLatitude, cellLongitude } = read.seed;
   const where = `${cellLatitude.toFixed(5)}, ${cellLongitude.toFixed(5)}`;
   const attribution =
-    `${LIKE_HERE_ATTRIBUTION} to the cell at ${where}, at least ${pct}% alike; scenes ` +
-    `${read.scenes.map(day).join(", ")} · ${read.attribution}`;
+    `${LIKE_HERE_ATTRIBUTION} at ${spacingLabel(read.nativeResolutionM)} to the cell at ` +
+    `${where}, at least ${pct}% alike; scenes ${read.scenes.map(day).join(", ")} · ` +
+    read.attribution;
   const zones: Zone[] = [];
   const add = (area: SignatureZone, name: string) => {
     const id = nextAreaId([...existing, ...zones]);
@@ -116,6 +123,7 @@ export async function makeJob(
       ACRE_M2,
     protectedAcres: (read.protectedCells * read.cellAreaM2) / ACRE_M2,
     dropped: { patches: read.dropped.patches, acres: read.dropped.areaM2 / ACRE_M2 },
+    unoutlined: { patches: read.unoutlined.patches, acres: read.unoutlined.areaM2 / ACRE_M2 },
   };
   if (summary.areas === 0) return summary;
   if (missionLandId() !== land.id) {
@@ -135,8 +143,8 @@ export async function makeJob(
   const pct = Math.round(threshold * 100);
   const parts = [
     `${zones.length} like-here area${zones.length === 1 ? "" : "s"} on ${land.name}, ` +
-      `${formatAcres(summary.acres)} ac: a similar 10 m Sentinel-2 signature to the place you ` +
-      `tapped, at least ${pct}% alike`,
+      `${formatAcres(summary.acres)} ac: a similar Sentinel-2 signature at ` +
+      `${spacingLabel(read.nativeResolutionM)} to the place you tapped, at least ${pct}% alike`,
   ];
   if (summary.protectedAcres > 0)
     parts.push(`${formatAcres(summary.protectedAcres)} ac you protected left out`);
@@ -144,6 +152,11 @@ export async function makeJob(
     parts.push(
       `${summary.dropped.patches} speck${summary.dropped.patches === 1 ? "" : "s"} under half an ` +
         `acre (${formatAcres(summary.dropped.acres)} ac) left out`,
+    );
+  if (summary.unoutlined.patches > 0)
+    parts.push(
+      `${summary.unoutlined.patches} patch${summary.unoutlined.patches === 1 ? "" : "es"} too ` +
+        `thin to outline (${formatAcres(summary.unoutlined.acres)} ac) left out`,
     );
   const note = `${parts.join("; ")}.`;
   // A new plan, from a fresh composer, as "Plan work on this land" starts one.

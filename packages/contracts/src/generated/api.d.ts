@@ -1546,7 +1546,7 @@ export interface paths {
         };
         /**
          * Similar
-         * @description How alike every cell of the land is to the tapped one, by seasonal 10 m signature
+         * @description How alike every cell of the land is to the tapped one, by seasonal Sentinel-2 signature
          *     (a `sentinel-2-signature` raster; 409 for any other). Computed on request, never saved.
          */
         get: operations["similar_api_v1_land_rasters__raster_id__similar_get"];
@@ -8688,6 +8688,8 @@ export interface components {
             matchedCells: number;
             /** Method */
             method: string;
+            /** Nativeresolutionm */
+            nativeResolutionM: number;
             /** Protectedcells */
             protectedCells: number;
             /**
@@ -8703,6 +8705,7 @@ export interface components {
             stale: boolean;
             /** Threshold */
             threshold: number;
+            unoutlined: components["schemas"]["SignatureLeftOut"];
             /** Zones */
             zones: components["schemas"]["SignatureZone"][];
         };

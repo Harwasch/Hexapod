@@ -17660,6 +17660,10 @@
             "title": "Method",
             "type": "string"
           },
+          "nativeResolutionM": {
+            "title": "Nativeresolutionm",
+            "type": "number"
+          },
           "protectedCells": {
             "minimum": 0.0,
             "title": "Protectedcells",
@@ -17698,6 +17702,9 @@
             "title": "Threshold",
             "type": "number"
           },
+          "unoutlined": {
+            "$ref": "#/components/schemas/SignatureLeftOut"
+          },
           "zones": {
             "items": {
               "$ref": "#/components/schemas/SignatureZone"
@@ -17716,9 +17723,11 @@
           "zones",
           "remainder",
           "dropped",
+          "unoutlined",
           "protectedCells",
           "matchedCells",
           "cellAreaM2",
+          "nativeResolutionM",
           "scenes",
           "method",
           "interpretation",
@@ -24901,7 +24910,7 @@
     },
     "/api/v1/land/rasters/{raster_id}/similar": {
       "get": {
-        "description": "How alike every cell of the land is to the tapped one, by seasonal 10 m signature\n(a `sentinel-2-signature` raster; 409 for any other). Computed on request, never saved.",
+        "description": "How alike every cell of the land is to the tapped one, by seasonal Sentinel-2 signature\n(a `sentinel-2-signature` raster; 409 for any other). Computed on request, never saved.",
         "operationId": "similar_api_v1_land_rasters__raster_id__similar_get",
         "parameters": [
           {

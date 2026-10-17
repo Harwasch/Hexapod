@@ -31,6 +31,8 @@ from affine import Affine
 from numpy.typing import NDArray
 from pyproj import Geod
 from rasterio.features import geometry_mask, rasterize, shapes
+from shapely import set_precision
+from shapely.errors import GEOSException
 from shapely.geometry import MultiPolygon, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.geometry.polygon import orient
@@ -49,11 +51,24 @@ METHOD = (
     "standard deviation); unit-length vectors; cosine against the tapped cell; quantized as "
     "round(max(0, cosine) x 250)."
 )
-INTERPRETATION = (
-    "Similar seasonal satellite signature at 10 m. Not a species ID, cover estimate or habitat "
-    "assessment: cells alike here reflected light alike on these dates."
-)
 GEOD = Geod(ellps="WGS84")
+#: Footprints are stored to 8 decimal degrees (about a millimetre).
+FOOTPRINT_DECIMALS = 8
+
+
+def resolution_label(resolution_m: float) -> str:
+    """The grid's spacing as the console writes it: "10 m", or "11.9 m" for a grid coarsened
+    to fit a large land (`make_grid` keeps at most 506 cells across)."""
+    rounded = round(resolution_m, 1)
+    return f"{rounded:.0f} m" if rounded.is_integer() else f"{rounded:.1f} m"
+
+
+def interpretation(resolution_m: float) -> str:
+    return (
+        f"Similar seasonal satellite signature at {resolution_label(resolution_m)}. Not a "
+        "species ID, cover estimate or habitat assessment: cells alike here reflected light "
+        "alike on these dates."
+    )
 
 
 def raw_threshold(threshold: float) -> int:
@@ -162,17 +177,20 @@ def quantize(scores: NDArray[np.float32]) -> NDArray[np.uint8]:
     return quantized
 
 
-def _polygons(geometry: BaseGeometry) -> list[Polygon]:
+def polygon_parts(geometry: BaseGeometry) -> list[Polygon]:
+    """The polygons of any geometry (a collection's lines and points are not area)."""
     if isinstance(geometry, Polygon):
         return [] if geometry.is_empty else [geometry]
     if hasattr(geometry, "geoms"):
-        return [polygon for part in geometry.geoms for polygon in _polygons(part)]
+        return [polygon for part in geometry.geoms for polygon in polygon_parts(part)]
     return []
 
 
 def geodesic_area_m2(geometry: BaseGeometry) -> float:
     """Area on the ellipsoid of a lon/lat geometry."""
-    return sum(abs(GEOD.geometry_area_perimeter(orient(part))[0]) for part in _polygons(geometry))
+    return sum(
+        abs(GEOD.geometry_area_perimeter(orient(part))[0]) for part in polygon_parts(geometry)
+    )
 
 
 def protected_geometry(rectangles: Sequence[Sequence[float]]) -> BaseGeometry:
@@ -236,7 +254,7 @@ def alike_patches(
     if not protected.is_empty:
         cut = make_valid(cut.difference(protected))
     cut = make_valid(cut.intersection(boundary))
-    parts = [part for part in _polygons(cut) if part.area > 0]
+    parts = [part for part in polygon_parts(cut) if part.area > 0]
     if not parts:
         return []
     labels = rasterize(
@@ -251,25 +269,43 @@ def alike_patches(
     sums = np.bincount(counted, weights=scores[alike].astype(np.float64), minlength=len(parts) + 1)
     patches: list[Patch] = []
     for index, part in enumerate(parts):
-        geographic = make_valid(transform_geometry(to_geographic, part))
-        for polygon in _polygons(geographic):
-            count = int(cells[index + 1])
+        count = int(cells[index + 1])
+        mean = float(sums[index + 1] / count) if count else 0.0
+        # Reprojected, a part pinched to a point comes back as two polygons: its cells are
+        # shared between them by area, never counted again for each.
+        pieces = polygon_parts(make_valid(transform_geometry(to_geographic, part)))
+        areas = [geodesic_area_m2(piece) for piece in pieces]
+        for piece, area, share in zip(pieces, areas, shares(count, areas), strict=True):
             patches.append(
-                Patch(
-                    footprint=orient(polygon),
-                    area_m2=geodesic_area_m2(polygon),
-                    cells=count,
-                    mean_similarity=float(sums[index + 1] / count) if count else 0.0,
-                )
+                Patch(footprint=orient(piece), area_m2=area, cells=share, mean_similarity=mean)
             )
     return sorted(patches, key=lambda patch: patch.area_m2, reverse=True)
 
 
+def shares(total: int, weights: Sequence[float]) -> list[int]:
+    """`total` split in proportion to `weights`, in whole numbers that add up to it (the
+    largest remainders round up)."""
+    if not weights:
+        return []
+    whole = sum(weights)
+    if whole <= 0:
+        return [total, *[0] * (len(weights) - 1)]
+    exact = [total * weight / whole for weight in weights]
+    split = [math.floor(value) for value in exact]
+    by_remainder = sorted(range(len(split)), key=lambda i: exact[i] - split[i], reverse=True)
+    for i in by_remainder[: total - sum(split)]:
+        split[i] += 1
+    return split
+
+
 def footprint_mapping(geometry: Polygon | MultiPolygon) -> dict[str, Any]:
-    """GeoJSON for a Footprint: two dimensions, rings closed, metres-scale rounding."""
+    """GeoJSON for a Footprint: two dimensions, rings closed, millimetre-scale rounding."""
 
     def ring(coordinates: Any) -> list[list[float]]:
-        points = [[round(point[0], 8), round(point[1], 8)] for point in coordinates]
+        points = [
+            [round(point[0], FOOTPRINT_DECIMALS), round(point[1], FOOTPRINT_DECIMALS)]
+            for point in coordinates
+        ]
         if points[0] != points[-1]:
             points.append(points[0])
         return points
@@ -280,3 +316,17 @@ def footprint_mapping(geometry: Polygon | MultiPolygon) -> dict[str, Any]:
     if isinstance(geometry, Polygon):
         return {"type": "Polygon", "coordinates": polygon(geometry)}
     return {"type": "MultiPolygon", "coordinates": [polygon(part) for part in geometry.geoms]}
+
+
+def snapped_outline(geometry: BaseGeometry) -> Polygon | MultiPolygon | None:
+    """An outline snapped to the footprint's rounding with a valid result, for one that rounding
+    alone breaks (a thin neck pinched shut, two parts laid edge to edge): parts that touch
+    merge, and what is narrower than the rounding goes. None when no area is left."""
+    try:
+        snapped = make_valid(set_precision(make_valid(geometry), 10.0**-FOOTPRINT_DECIMALS))
+    except GEOSException:
+        return None
+    parts = [part for part in polygon_parts(snapped) if part.area > 0]
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else MultiPolygon(parts)
