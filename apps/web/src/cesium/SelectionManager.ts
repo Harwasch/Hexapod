@@ -330,6 +330,10 @@ export class SelectionManager {
   private async select(window: Cartesian2, mode: SelectMode): Promise<void> {
     const { picked, current } = await this.pickObject(window);
     if (!current) return;
+    // A ground tap may wait a frame for its position (`groundTapPosition`): a click made
+    // meanwhile is the latest, and this one then says nothing.
+    const ticket = this.pickTicket;
+    const superseded = () => ticket !== this.pickTicket || this.scene.isDestroyed();
     // Area handles and candidate outlines belong to the area editor, not to selection.
     if (
       isEntityPick(picked) &&
@@ -351,6 +355,7 @@ export class SelectionManager {
       (isLandAreaPick(picked) || (overFeatures && isLandFeaturePick(picked)))
     ) {
       tapped = await this.groundTapPosition(window, picked);
+      if (superseded()) return;
       if (tapped && this.emitClaimedTap(tapped, window)) return;
     }
     if (isEntityPick(picked) && picked.id.id.startsWith("land-context:")) {
@@ -387,6 +392,7 @@ export class SelectionManager {
         picked.id.id.startsWith(ZONE_ENTITY_PREFIX);
       if (onGround || onZoneFill) {
         tapped = await this.groundTapPosition(window, picked);
+        if (superseded()) return;
         if (tapped && this.emitClaimedTap(tapped, window, onGround)) return;
       }
     }
