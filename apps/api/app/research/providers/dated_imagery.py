@@ -656,12 +656,15 @@ def _sheet_of(url: str) -> str | None:
 
 def _topo_accuracy(year: int, scale: int) -> StatedAccuracy:
     if year >= 1947:
+        # NMAS sets 1/30 inch at publication scales larger than 1:20,000 (a 1:12,000 sheet)
+        # and 1/50 inch at 1:20,000 or smaller (the 1:24,000 quads).
         return StatedAccuracy(
             kind="standard",
-            value_m=round(scale * 0.0254 / 50, 2),
+            value_m=round(scale * 0.0254 / (30 if scale < 20_000 else 50), 2),
             basis=(
                 "National Map Accuracy Standards (1947): 90% of well-defined points within "
-                "1/50 inch at map scale, if the sheet states compliance"
+                "1/30 inch on the map at scales larger than 1:20,000 and 1/50 inch at "
+                "1:20,000 and smaller, if the sheet states compliance"
             ),
             citation_url=HttpUrl(NMAS_URL),
         )
