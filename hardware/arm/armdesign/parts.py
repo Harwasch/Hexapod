@@ -95,7 +95,7 @@ def load_stages() -> tuple[Stage, ...]:
                             ratio=float(n),
                             mass=s["mass_kg"]["base"] + s["mass_kg"]["per_r2"] * reff**2,
                             cost=cost,
-                            max_torque=s["torque_fraction_of_mbl"] * r["mbl_n"] * reff,
+                            max_torque=s["torque_fraction_of_mbl"] * s["bend_strength"] * r["mbl_n"] * reff,
                             drum_r=reff + (r["d_mm"] / 2 + s["flange_mm"]) / 1000,
                             pinion_r=rp,
                             rope=str(r["name"]),

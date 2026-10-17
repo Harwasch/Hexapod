@@ -1127,6 +1127,7 @@
     "turret",
     "upper",
     "fore",
+    "froll",
     "crank",
     "rod",
     "wrist",
@@ -1314,6 +1315,8 @@
     "turret",
     "upper",
     "fore",
+    "froll",
+    "wrist_mount",
     "crank",
     "rod",
     "wrist",
@@ -1350,10 +1353,19 @@
       .clone()
       .multiply(tr(D.l1, 0, 0))
       .multiply(ry(p.th3 - p.th2));
-    const wr = fo
-      .clone()
-      .multiply(tr(D.l2, 0, 0))
-      .multiply(ry(p.q4));
+    // A 6-axis arm rolls the wrist about the forearm, FROLL behind the wrist pitch axis.
+    const FROLL = 0.07;
+    const fr =
+      D.dof === 6
+        ? fo
+            .clone()
+            .multiply(tr(D.l2 - FROLL, 0, 0))
+            .multiply(rx(p.froll || 0))
+        : null;
+    const wr = (
+      fr ? fr.clone().multiply(tr(FROLL, 0, 0)) : fo.clone().multiply(tr(D.l2, 0, 0))
+    ).multiply(ry(p.q4));
+    if (fr) setFromMatrix("froll", fr);
     const fl = wr.clone().multiply(rx(p.roll));
     setFromMatrix("turret", tur);
     setFromMatrix("upper", up);
@@ -1656,6 +1668,7 @@
       ${sl("s-yaw", "Yaw", Math.round(deg(p.yaw)), -200, 200)}
       ${sl("s-th2", "Upper arm", Math.round(deg(p.th2)), -35, 150)}
       ${sl("s-th3", "Forearm", Math.round(deg(p.th3)), -150, 120)}
+      ${D.dof === 6 ? sl("s-froll", "Forearm roll", Math.round(deg(p.froll || 0)), -180, 180) : ""}
       ${sl("s-q4", "Wrist", Math.round(deg(p.q4)), -125, 125)}
       ${sl("s-roll", "Tool roll", Math.round(deg(p.roll)), -180, 180)}
       ${sl("s-grip", "Gripper", Math.round(p.grip * 2000), 0, 120, " mm")}
@@ -1676,6 +1689,7 @@
     bind("s-yaw", "yaw", rad);
     bind("s-th2", "th2", rad);
     bind("s-th3", "th3", rad);
+    if (D.dof === 6) bind("s-froll", "froll", rad);
     bind("s-q4", "q4", rad);
     bind("s-roll", "roll", rad);
     bind("s-grip", "grip", (v) => v / 2000);

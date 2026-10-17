@@ -9,7 +9,7 @@ usd:
   gripper: 24.0 # STS3215 bus servo, TPU fin-ray fingers, printed body
   wrist_sensing: 43.0 # 12 MP wide camera module + 8x8 multizone ToF
   harness: 18.0 # silicone wire, JST-GH, XT30, cable glands, sleeving
-  seals: 41.0 # field kit (docs/research/rugged.md): V-rings + labyrinths, drip skirt, vents, servo pods, heat plate, sun shield
+  seals: 57.0 # field kit (docs/research/rugged.md, verified $50-65): V-rings + labyrinths, drip skirt, vents, servo pods with metal pins, heat plate, sun shield
   parallelogram_rod: 8.0 # carbon rod + two M6 rod-end bearings
   spring_each: 7.0 # extension spring, Dyneema line, pulley
   servo_bus_adapter: 10.0 # TTL/RS-485 bus adapter for the servos on the arm

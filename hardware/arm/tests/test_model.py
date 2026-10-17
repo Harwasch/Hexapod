@@ -188,20 +188,14 @@ def test_capstan_drum_must_clear_the_deck() -> None:
     caps = [s for s in load_stages() if s.kind == "capstan"]
     for s in caps:
         # drum radius = ratio x rope-centre pinion radius, plus half a rope and a flange
-        assert s.drum_r == pytest.approx(
-            s.ratio * s.pinion_r + 0.00275 if "1.5" in s.rope else s.ratio * s.pinion_r + 0.003
-        )
-        assert s.max_torque == pytest.approx(0.2 * (2256 if "1.5" in s.rope else 4000) * s.ratio * s.pinion_r)
+        assert s.drum_r == pytest.approx(s.ratio * s.pinion_r + 0.003)
+        assert s.max_torque == pytest.approx(0.2 * 0.85 * 4000 * s.ratio * s.pinion_r)
         assert stage_fits(s, "shoulder", "parallelogram", 0.05) == (s.drum_r <= 0.05)
         assert not stage_fits(s, "yaw", "parallelogram", 1.0)
         assert not stage_fits(s, "elbow", "direct", 1.0)
-    # FA-1's 5 cm shoulder takes a 1.5 mm rope up to 7.5:1 (about 20 Nm), or a 2 mm rope
-    # on the thicker pinion up to 5:1 (36 Nm)
-    fits = [s for s in caps if stage_fits(s, "shoulder", "parallelogram", 0.05)]
-    thin = max((s for s in fits if "1.5" in s.rope), key=lambda s: s.ratio)
-    thick = max((s for s in fits if "2 mm" in s.rope), key=lambda s: s.ratio)
-    assert thin.ratio == 7.5 and 19 < thin.max_torque < 21
-    assert thick.ratio == 5 and thick.max_torque == pytest.approx(36)
+    # FA-1's 5 cm shoulder takes the 2 mm rope up to 5:1 (about 31 Nm)
+    best = max((s for s in caps if stage_fits(s, "shoulder", "parallelogram", 0.05)), key=lambda s: s.ratio)
+    assert best.ratio == 5 and best.max_torque == pytest.approx(30.6)
 
 
 def test_pruning_never_drops_a_needed_option() -> None:
