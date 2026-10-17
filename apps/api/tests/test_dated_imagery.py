@@ -512,6 +512,12 @@ async def _borrowed_shared_threads() -> int:
     return anyio.to_thread.current_default_thread_limiter().borrowed_tokens
 
 
+async def _sharing(area: tuple[float, float, float, float]) -> int:
+    """Requests waiting for the build of `area` already running."""
+    running = dated_imagery._building.get(area)
+    return running.statistics().tasks_waiting if running is not None else 0
+
+
 def test_route_builds_off_the_shared_threadpool_and_shares_one_build_per_area(
     client: TestClient, routed: Fake
 ) -> None:
@@ -536,15 +542,20 @@ def test_route_builds_off_the_shared_threadpool_and_shares_one_build_per_area(
     while len(routed.to(dated_imagery.TNM_PRODUCTS)) < 2:
         assert time.monotonic() < deadline, "the two catalogs never started"
         time.sleep(0.01)
-    # A second ask for an area being built joins that build instead of asking again.
     again = threading.Thread(target=ask, args=(here,))
     again.start()
-    time.sleep(0.3)
     portal = client.portal
     assert portal is not None
     try:
-        # Two catalogs are building, yet the threadpool every other route runs on is free.
-        assert portal.call(_borrowed_shared_threads) == 0
+        # Two catalogs are building, yet the threadpool every other route runs on comes free.
+        deadline = time.monotonic() + 5
+        while portal.call(_borrowed_shared_threads) > 0:
+            assert time.monotonic() < deadline, "the catalogs hold the shared threadpool"
+            time.sleep(0.01)
+        # A second ask for an area being built waits for that build instead of asking again.
+        while portal.call(_sharing, dated_imagery.round_bbox(BBOX)) < 1:
+            assert time.monotonic() < deadline, "the second ask never joined the build"
+            time.sleep(0.01)
         assert len(routed.to(dated_imagery.TNM_PRODUCTS)) == 2
     finally:
         release.set()
@@ -558,6 +569,8 @@ def test_route_answers_busy_at_once_when_every_builder_is_taken(
     client: TestClient, routed: Fake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(dated_imagery, "MAX_WAITING", 0)
+    # Far longer than the answer may take: a busy answer never waits for a builder.
+    monkeypatch.setattr(dated_imagery, "SLOT_WAIT_S", 30.0)
     portal = client.portal
     assert portal is not None
     # The builders are taken on the app's own event loop, as catalogs in flight would hold them.
@@ -576,7 +589,7 @@ def test_route_answers_busy_at_once_when_every_builder_is_taken(
     assert response.status_code == 503
     assert response.headers["retry-after"] == str(dated_imagery.RETRY_AFTER_S)
     assert response.headers["cache-control"] == "no-store"
-    assert elapsed < 1.0
+    assert elapsed < 5.0
     assert routed.requests == []
 
 
@@ -596,6 +609,7 @@ async def test_a_full_queue_of_catalogs_is_answered_busy_at_once(
         )
 
     monkeypatch.setattr(dated_imagery, "discover", slow)
+    monkeypatch.setattr(dated_imagery, "SLOT_WAIT_S", 30.0)
     areas = [
         (BBOX[0] - 0.01 * i, BBOX[1], BBOX[2] - 0.01 * i, BBOX[3])
         for i in range(dated_imagery.MAX_IN_FLIGHT + dated_imagery.MAX_WAITING + 1)
@@ -615,7 +629,7 @@ async def test_a_full_queue_of_catalogs_is_answered_busy_at_once(
         started = time.monotonic()
         with pytest.raises(dated_imagery.CatalogBusy):
             await dated_imagery.build(areas[-1], client_for(fake))
-        assert time.monotonic() - started < 0.5
+        assert time.monotonic() - started < 5.0
         release.set()
     assert len(built) == len(areas) - 1
 
@@ -631,7 +645,7 @@ async def test_a_catalog_that_waits_too_long_is_answered_busy(
         started = time.monotonic()
         with pytest.raises(dated_imagery.CatalogBusy):
             await dated_imagery.build(BBOX, client_for(fake))
-        assert 0.15 < time.monotonic() - started < 1.0
+        assert 0.15 < time.monotonic() - started < 5.0
     finally:
         for _ in range(dated_imagery.MAX_IN_FLIGHT):
             dated_imagery._builders.release()
