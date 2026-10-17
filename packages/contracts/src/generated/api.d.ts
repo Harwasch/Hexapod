@@ -1016,6 +1016,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/land/{land_id}/hydrography": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Area Hydrography
+         * @description USGS NHD streams and ditches within 100 m of the land, read live and cited.
+         */
+        get: operations["area_hydrography_api_v1_land__land_id__hydrography_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/land/{land_id}/investigations": {
         parameters: {
             query?: never;
@@ -4374,6 +4394,27 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** HydrographyFeature */
+        HydrographyFeature: {
+            /** Description */
+            description: string;
+            /** Fcode */
+            fcode: number;
+            geometry: components["schemas"]["LineString"];
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "perennial" | "intermittent" | "ephemeral" | "other";
+            /** Lengthm */
+            lengthM: number;
+            /** Name */
+            name: string | null;
+            /** Permanentidentifier */
+            permanentIdentifier: string;
+        };
         /** IdentityRead */
         IdentityRead: {
             /**
@@ -5440,6 +5481,35 @@ export interface components {
             status: string | null;
             /** Zoneid */
             zoneId: string;
+        };
+        /** LandHydrography */
+        LandHydrography: {
+            /** Boundaryrevision */
+            boundaryRevision: number;
+            /** Bufferm */
+            bufferM: number;
+            /** Features */
+            features: components["schemas"]["HydrographyFeature"][];
+            /**
+             * Landid
+             * Format: uuid
+             */
+            landId: string;
+            /** Message */
+            message: string;
+            /**
+             * Retrievedat
+             * Format: date-time
+             */
+            retrievedAt: string;
+            source: components["schemas"]["PlaceFactSource"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "empty" | "uncovered" | "unavailable";
+            /** Truncated */
+            truncated: boolean;
         };
         /** LandRasterRead */
         LandRasterRead: {
@@ -7024,6 +7094,7 @@ export interface components {
             resolutionM: number;
             /** Sampledaream2 */
             sampledAreaM2: number;
+            signature?: components["schemas"]["SignatureInfo"] | null;
             /** Sources */
             sources: components["schemas"]["RasterSource"][];
             /** Validcells */
@@ -7054,7 +7125,7 @@ export interface components {
              * @default cop-dem-glo-30
              * @enum {string}
              */
-            dataset?: "cop-dem-glo-30" | "esa-worldcover-2021" | "sentinel-2-ndvi";
+            dataset?: "cop-dem-glo-30" | "esa-worldcover-2021" | "sentinel-2-ndvi" | "sentinel-2-signature" | "usgs-3dep-13";
             /**
              * Maxdimension
              * @default 512
@@ -7871,6 +7942,40 @@ export interface components {
             kind: string;
             /** Reason */
             reason: string;
+        };
+        /**
+         * SignatureFeature
+         * @description One band of a seasonal Sentinel-2 signature: which window and which measurement.
+         */
+        SignatureFeature: {
+            /** Band */
+            band: number;
+            /** Commonmean */
+            commonMean: number | null;
+            /** Commonstandarddeviation */
+            commonStandardDeviation: number | null;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "green" | "red" | "nir" | "swir16" | "ndvi";
+            /** Name */
+            name: string;
+            /** Window */
+            window: number;
+        };
+        /** SignatureInfo */
+        SignatureInfo: {
+            /** Commoncells */
+            commonCells: number;
+            /** Commoncoveragefraction */
+            commonCoverageFraction: number | null;
+            /** Features */
+            features: components["schemas"]["SignatureFeature"][];
+            /** Similarity */
+            similarity: string;
+            /** Standardization */
+            standardization: string;
         };
         /** SiteCreate */
         SiteCreate: {
@@ -9105,6 +9210,7 @@ export type SchemaGeorefMethod = components['schemas']['GeorefMethod'];
 export type SchemaGooglePhotorealisticSource = components['schemas']['GooglePhotorealisticSource'];
 export type SchemaGroundSample = components['schemas']['GroundSample'];
 export type SchemaHealthStatus = components['schemas']['HealthStatus'];
+export type SchemaHydrographyFeature = components['schemas']['HydrographyFeature'];
 export type SchemaIdentityRead = components['schemas']['IdentityRead'];
 export type SchemaImageControlPoint = components['schemas']['ImageControlPoint'];
 export type SchemaImageRegistrationCreate = components['schemas']['ImageRegistrationCreate'];
@@ -9144,6 +9250,7 @@ export type SchemaLandFeatureRevise = components['schemas']['LandFeatureRevise']
 export type SchemaLandFeatureRevisionRead = components['schemas']['LandFeatureRevisionRead'];
 export type SchemaLandGround = components['schemas']['LandGround'];
 export type SchemaLandGroundItem = components['schemas']['LandGroundItem'];
+export type SchemaLandHydrography = components['schemas']['LandHydrography'];
 export type SchemaLandRasterRead = components['schemas']['LandRasterRead'];
 export type SchemaLandRead = components['schemas']['LandRead'];
 export type SchemaLandRevise = components['schemas']['LandRevise'];
@@ -9260,6 +9367,8 @@ export type SchemaSelectionInterpretation = components['schemas']['SelectionInte
 export type SchemaSidecarAttach = components['schemas']['SidecarAttach'];
 export type SchemaSidecarAttachment = components['schemas']['SidecarAttachment'];
 export type SchemaSidecarFlag = components['schemas']['SidecarFlag'];
+export type SchemaSignatureFeature = components['schemas']['SignatureFeature'];
+export type SchemaSignatureInfo = components['schemas']['SignatureInfo'];
 export type SchemaSiteCreate = components['schemas']['SiteCreate'];
 export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
@@ -13883,6 +13992,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LandGround"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    area_hydrography_api_v1_land__land_id__hydrography_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                land_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LandHydrography"];
                 };
             };
             /** @description Missing or wrong write token */

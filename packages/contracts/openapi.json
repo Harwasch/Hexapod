@@ -5614,6 +5614,69 @@
         "title": "HealthStatus",
         "type": "object"
       },
+      "HydrographyFeature": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "fcode": {
+            "title": "Fcode",
+            "type": "integer"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/LineString"
+          },
+          "id": {
+            "maxLength": 80,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "perennial",
+              "intermittent",
+              "ephemeral",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "lengthM": {
+            "title": "Lengthm",
+            "type": "number"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "permanentIdentifier": {
+            "maxLength": 60,
+            "title": "Permanentidentifier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "permanentIdentifier",
+          "name",
+          "fcode",
+          "kind",
+          "description",
+          "geometry",
+          "lengthM"
+        ],
+        "title": "HydrographyFeature",
+        "type": "object"
+      },
       "IdentityRead": {
         "additionalProperties": false,
         "properties": {
@@ -8628,6 +8691,70 @@
           "source"
         ],
         "title": "LandGroundItem",
+        "type": "object"
+      },
+      "LandHydrography": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "bufferM": {
+            "title": "Bufferm",
+            "type": "number"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/HydrographyFeature"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PlaceFactSource"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "landId",
+          "boundaryRevision",
+          "status",
+          "message",
+          "bufferM",
+          "features",
+          "truncated",
+          "source",
+          "retrievedAt"
+        ],
+        "title": "LandHydrography",
         "type": "object"
       },
       "LandRasterRead": {
@@ -13068,7 +13195,7 @@
             "type": "array"
           },
           "index": {
-            "maximum": 16.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Index",
             "type": "integer"
@@ -13229,7 +13356,7 @@
             "items": {
               "$ref": "#/components/schemas/RasterBand"
             },
-            "maxItems": 16,
+            "maxItems": 30,
             "minItems": 1,
             "title": "Bands",
             "type": "array"
@@ -13290,11 +13417,21 @@
             "title": "Sampledaream2",
             "type": "number"
           },
+          "signature": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignatureInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sources": {
             "items": {
               "$ref": "#/components/schemas/RasterSource"
             },
-            "maxItems": 40,
+            "maxItems": 64,
             "title": "Sources",
             "type": "array"
           },
@@ -13376,7 +13513,9 @@
             "enum": [
               "cop-dem-glo-30",
               "esa-worldcover-2021",
-              "sentinel-2-ndvi"
+              "sentinel-2-ndvi",
+              "sentinel-2-signature",
+              "usgs-3dep-13"
             ],
             "title": "Dataset",
             "type": "string"
@@ -15806,6 +15945,120 @@
           "flaggedAt"
         ],
         "title": "SidecarFlag",
+        "type": "object"
+      },
+      "SignatureFeature": {
+        "additionalProperties": false,
+        "description": "One band of a seasonal Sentinel-2 signature: which window and which measurement.",
+        "properties": {
+          "band": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Band",
+            "type": "integer"
+          },
+          "commonMean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commonmean"
+          },
+          "commonStandardDeviation": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commonstandarddeviation"
+          },
+          "key": {
+            "enum": [
+              "green",
+              "red",
+              "nir",
+              "swir16",
+              "ndvi"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "window": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "band",
+          "window",
+          "key",
+          "name",
+          "commonMean",
+          "commonStandardDeviation"
+        ],
+        "title": "SignatureFeature",
+        "type": "object"
+      },
+      "SignatureInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "commonCells": {
+            "minimum": 0.0,
+            "title": "Commoncells",
+            "type": "integer"
+          },
+          "commonCoverageFraction": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commoncoveragefraction"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureFeature"
+            },
+            "maxItems": 30,
+            "minItems": 10,
+            "title": "Features",
+            "type": "array"
+          },
+          "similarity": {
+            "title": "Similarity",
+            "type": "string"
+          },
+          "standardization": {
+            "title": "Standardization",
+            "type": "string"
+          }
+        },
+        "required": [
+          "features",
+          "commonCells",
+          "commonCoverageFraction",
+          "standardization",
+          "similarity"
+        ],
+        "title": "SignatureInfo",
         "type": "object"
       },
       "SiteCreate": {
@@ -18404,7 +18657,7 @@
             "title": "Acquiredat"
           },
           "band": {
-            "maximum": 6.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Band",
             "type": "integer"
@@ -27814,6 +28067,102 @@
           }
         ],
         "summary": "Area Ground",
+        "tags": [
+          "land"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/hydrography": {
+      "get": {
+        "description": "USGS NHD streams and ditches within 100 m of the land, read live and cited.",
+        "operationId": "area_hydrography_api_v1_land__land_id__hydrography_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandHydrography"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Area Hydrography",
         "tags": [
           "land"
         ]

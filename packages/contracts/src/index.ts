@@ -185,3 +185,10 @@ export type LandGroundItem = Schemas["LandGroundItem"];
 export type ZoneCoverage = Schemas["ZoneCoverage"];
 export type MachineClassId = ZoneCoverage["machineClass"];
 export type WorkspaceMissionCreate = Schemas["WorkspaceMissionCreate"];
+/** Land-scale data (stream showdata): seasonal Sentinel-2 signatures, USGS 3DEP bare-earth
+ * rasters and USGS NHD flowlines around a saved Land. */
+export type RasterDataset = NonNullable<Schemas["RasterRequest"]["dataset"]>;
+export type SignatureInfo = Schemas["SignatureInfo"];
+export type SignatureFeature = Schemas["SignatureFeature"];
+export type LandHydrography = Schemas["LandHydrography"];
+export type HydrographyFeature = Schemas["HydrographyFeature"];
