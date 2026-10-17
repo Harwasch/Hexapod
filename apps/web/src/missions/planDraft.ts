@@ -15,7 +15,7 @@ import type {
 
 import { isAreaZone, zoneFromFootprint } from "./areas";
 import { bookedWindows } from "./conflicts";
-import { isLandZone } from "./landGround";
+import { isLandZone, landIdOfProject } from "./landGround";
 import { learnedRates, type LearnedRate } from "./rates";
 import { SCOUT_SHORT } from "./scout";
 import type { Plan, PlanOverlay, Project, Zone } from "./types";
@@ -62,8 +62,20 @@ function measuredRates(project: Project): LearnedRate[] {
   return project.simulated ? [] : learnedRates(project.workLog);
 }
 
+/**
+ * What the planner is told a private workspace mission is called when the draft may be saved
+ * as a public plan. The planner quotes plan titles in its risks ("TR-04 is already booked by
+ * “…”"), and a public plan stores its risks where anyone listing the project's plans reads
+ * them; a private mission's title is private Land data. Its windows and zones still go, so
+ * the clash is still found.
+ */
+export const PRIVATE_PLAN_TITLE = "A private workspace mission";
+
 /** The context the planner needs: the goal plus the project's zones, machines and plans. */
 export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftRequest {
+  // On a Land's own project every plan is approved privately (planIsPrivate), so private
+  // titles may be quoted there; anywhere else the draft may go to the public plan routes.
+  const onlyPrivate = landIdOfProject(project.id) !== null;
   const request: PlanDraftRequest = {
     goal: seed.goal.trim(),
     projectName: project.name,
@@ -94,7 +106,7 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
         const booked = bookedWindows([p]).find((b) => b.plan.id === p.id);
         return {
           id: p.id,
-          title: p.title,
+          title: p.scope === "workspace" && !onlyPrivate ? PRIVATE_PLAN_TITLE : p.title,
           zoneIds: p.zoneIds,
           status: p.state === "Done" ? "done" : p.state === "Cancelled" ? "cancelled" : "scheduled",
           busy: booked?.busy ?? [],

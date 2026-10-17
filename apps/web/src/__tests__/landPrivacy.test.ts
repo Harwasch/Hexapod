@@ -5,9 +5,10 @@ import type { PlanDraft, PlanRecord } from "@twin/contracts";
 import type * as Queries from "@/api/queries";
 
 import { anywhereProject } from "@/missions/anywhere";
+import { bookedWindows } from "@/missions/conflicts";
 import { demoRanchProject } from "@/missions/demo";
 import { landProject, landZones } from "@/missions/landGround";
-import { planFromRecord } from "@/missions/planDraft";
+import { buildDraftRequest, planFromRecord, PRIVATE_PLAN_TITLE } from "@/missions/planDraft";
 import { useLand } from "@/state/land";
 import { migrateMissionStorage, missionLandId, persistable, useMission } from "@/state/mission";
 
@@ -143,6 +144,52 @@ describe("plans on a saved land stay private", () => {
     });
     await approveDraft(draft([demo.zones[0]!.id]), "mow it");
     expect(api.publicCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("never lets a private mission's title reach a public plan through the planner's risks", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    const z14 = demo.zones[0]!.id;
+    const secret = "Mow thistle along Smith's north spring at 12 Oak Rd";
+    const privatePlan = planFromRecord(
+      record({
+        ...draft(["L-aaaa0001", z14]),
+        title: secret,
+        machineIds: [demo.machines[0]!.id],
+        goal: "g",
+        projectId: demo.id,
+        areas: [],
+      }),
+      useMission.getState().project!,
+    );
+    expect(privatePlan.scope).toBe("workspace");
+    expect(bookedWindows([privatePlan])[0]?.busy.length).toBeGreaterThan(0);
+    useMission.getState().setRemotePlans(demo.id, [privatePlan]);
+    const request = buildDraftRequest(useMission.getState().project!, { goal: "Mow Z-14" });
+    expect(JSON.stringify(request)).not.toContain(secret);
+    // The clash is still found: the mission's zones and booked windows still go.
+    expect(request.existingPlans?.find((p) => p.id === privatePlan.id)).toMatchObject({
+      title: PRIVATE_PLAN_TITLE,
+      zoneIds: ["L-aaaa0001", z14],
+      busy: bookedWindows([privatePlan])[0]?.busy ?? [],
+    });
+    // What the rules planner writes from that context (planner.py): the titles it was sent.
+    const risks = (request.existingPlans ?? []).map((p) => `“${p.title}” already covers ${z14}.`);
+    api.publicCreate.mockImplementation((body: Record<string, unknown>) =>
+      Promise.resolve(record(body, { private: false, landId: null, boundaryRevision: null })),
+    );
+    await approveDraft({ ...draft([z14]), risks }, "Mow Z-14");
+    expect(api.publicCreate).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(api.publicCreate.mock.calls[0]?.[0])).not.toContain(secret);
+    // On a Land's own project every plan is approved privately, so its titles still go.
+    const own = landProject(land, ground);
+    const mine = planFromRecord(
+      record({ ...draft(["L-aaaa0001"]), title: secret, goal: "g", projectId: own.id, areas: [] }),
+      own,
+    );
+    const onLand = buildDraftRequest({ ...own, plans: [mine] }, { goal: "monitor the fence" });
+    expect(onLand.existingPlans?.[0]?.title).toBe(secret);
   });
 
   it("never keeps a private plan in the browser when the API is offline", async () => {
