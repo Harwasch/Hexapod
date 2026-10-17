@@ -234,6 +234,17 @@ it("moves only the uniform with the slider, and swaps the texture to protect", a
   expect(useShowOnce.getState().message).toMatch(/not lit/);
 });
 
+it("takes the ground from the fog as the session starts, and gives it back when it ends", () => {
+  useShowOnce.getState().stop();
+  useGridDrape.getState().claim("fog");
+  render(<ShowOnceBridge />);
+  expect(useGridDrape.getState().owner).toBe("fog");
+  act(() => useShowOnce.getState().start({ landId: LAND.id, revision: 1, rasterId: "raster-1" }));
+  expect(useGridDrape.getState().owner).toBe("signature");
+  act(() => useShowOnce.getState().stop());
+  expect(useGridDrape.getState().owner).toBeNull();
+});
+
 it("says when a tap is off the land", async () => {
   render(<ShowOnceBridge />);
   await tap(-120.2, 34.695);

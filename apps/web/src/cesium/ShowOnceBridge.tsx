@@ -5,6 +5,7 @@ import { footprintContains } from "@twin/geo";
 import { cellAt, cellRing } from "@/features/knowledge/grid";
 import { NO_SCORE, rampImage, rampThreshold } from "@/features/showOnce/grid";
 import { compareAt, dropPendingTaps, protectAt } from "@/features/showOnce/session";
+import { useGridDrape } from "@/state/gridDrape";
 import { useLand } from "@/state/land";
 import { useShowOnce } from "@/state/showOnce";
 
@@ -19,8 +20,9 @@ import { useScene } from "./SceneContext";
  * that place, or in Protect mode protects the lit patch there; elsewhere taps go on as before.
  * The answer drapes as lit cells above the slider's threshold, which is the drape's uniform:
  * sliding renders a frame and uploads nothing. Protecting swaps the texture on the same
- * rectangle. The tapped cell is outlined. Escape ends the session, as does the fog taking the
- * ground (one drape at a time, `state/gridDrape.ts`). Hiding the card only lifts the drape and
+ * rectangle. The tapped cell is outlined. A session takes the ground from the fog as it starts;
+ * Escape ends it, as does the fog taking the ground back (one drape at a time,
+ * `state/gridDrape.ts`). Hiding the card only lifts the drape and
  * the taps; its answer waits for the card to come back.
  */
 /** The map's cursor while it takes taps (the area editor's pick uses the same crosshair). */
@@ -67,6 +69,9 @@ export function ShowOnceBridge() {
     if (!layer) return;
     if (!active || !result) {
       layer.hide();
+      // A session takes the ground before its first answer, so the fog is not answering the
+      // same taps underneath.
+      if (active) useGridDrape.getState().claim("signature");
       return;
     }
     const { grid } = result;
