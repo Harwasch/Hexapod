@@ -51,10 +51,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The formula and the class table outgrow a short screen: the panel scrolls (as the compare
+   popover does), never past the room above the strip. */
 .glass-popover.knowledge-popover {
   max-width: min(25rem, calc(100vw - 2rem));
-  max-height: min(70vh, 36rem);
+  max-height: min(var(--radix-popover-content-available-height, 70vh), 70vh, 36rem);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .knowledge-legend {

@@ -2210,7 +2210,7 @@ console's map preview of passes still uses its own preview spacing, not the mach
 
 ## Implemented increment: the Fog of Knowing (fog-v1)
 
-A saved land can show how fine and how fresh the knowledge this workspace has *stored* about
+A saved land can show how fine and how fresh the knowledge this workspace has _stored_ about
 each patch of it is: soft fog over the map that is thick where nothing is stored, or only old or
 coarse records, and thin where there is recent, fine evidence. It is computed, never measured,
 and it lifts only when new evidence is stored; computing it again changes nothing.
@@ -2221,13 +2221,13 @@ centre is (holes stay out).
 
     density = 1 - max over records r covering the cell of Q(class r) x 0.5^(age r / H(class r))
 
-| Class | Q | Half-life | Example |
-| --- | --- | --- | --- |
-| Centimetre capture (5 cm or finer) | 1.00 | 180 d | a drone or phone capture |
-| Field inspection | 0.85 | 120 d | a person's dated inspection of a mapped feature |
-| Aerial imagery (5 cm to 1 m) | 0.70 | 365 d | an aligned air photo or historical map |
-| Satellite (1 to 20 m) | 0.45 | 90 d | a cloud-masked Sentinel-2 scene |
-| Regional or unlocated | 0.20 | 5 y | a soil map, a 30 m elevation model, a document |
+| Class                              | Q    | Half-life | Example                                         |
+| ---------------------------------- | ---- | --------- | ----------------------------------------------- |
+| Centimetre capture (5 cm or finer) | 1.00 | 180 d     | a drone or phone capture                        |
+| Field inspection                   | 0.85 | 120 d     | a person's dated inspection of a mapped feature |
+| Aerial imagery (5 cm to 1 m)       | 0.70 | 365 d     | an aligned air photo or historical map          |
+| Satellite (1 to 20 m)              | 0.45 | 90 d      | a cloud-masked Sentinel-2 scene                 |
+| Regional or unlocated              | 0.20 | 5 y       | a soil map, a 30 m elevation model, a document  |
 
 - An undated record counts at Q x 0.25, as if two half-lives old. The age is from the
   observation (or publication) date, never the retrieval date.
