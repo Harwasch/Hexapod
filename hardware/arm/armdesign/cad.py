@@ -642,10 +642,7 @@ def link_parts(design: ArmDesign, acts: ArmActuators, hx: Hexapod) -> dict[str, 
         links["crank"] = [_c(crank(lo), "accent", "crank (printed)")]
         links["rod"] = rod_parts(lo)
     hub = _c(fore_hub(lo), "accent" if lo.para else "printed", "forearm hub and rear lever (printed)")
-    if lo.wp_servo:
-        wrist_motor = servo_box((0, 0, 0), "y")
-    else:
-        wrist_motor = qdd_y(lo.wp_dia, lo.wp_len, lo.wp_len / 2, 1)
+    wrist_motor = servo_box((0, 0, 0), "y") if lo.wp_servo else qdd_y(lo.wp_dia, lo.wp_len, lo.wp_len / 2, 1)
     fr = acts.forearm_roll if design.dof == 6 else None
     if fr is not None:
         # The forearm-roll servo ends the forearm; the roll yoke carries the wrist motor.
