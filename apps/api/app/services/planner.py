@@ -31,6 +31,7 @@ from app.schemas.agent import (
     PlanDraftBody,
     PlanDraftRequest,
     PlanEstimates,
+    PlannerMachine,
     PlannerStatus,
     PlannerZone,
     PlanStep,
@@ -92,11 +93,14 @@ def _today(request: PlanDraftRequest) -> date:
 
 
 def _mentioned(text: str, candidates: list[tuple[str, str]]) -> list[str]:
-    """Ids whose id or name appears in the text (word-bounded, case-insensitive)."""
+    """Ids whose id or name appears in the text (word-bounded, case-insensitive). A name that
+    leads with its id ("Z-14 West grassland", "TR-04 Kestrel") also answers to the rest of it,
+    which is how people say it: "mow the west grassland", "send Kestrel"."""
     lower = text.lower()
     found: list[str] = []
     for identifier, name in candidates:
-        for needle in (identifier, name):
+        rest = name[len(identifier) :].strip() if name.startswith(f"{identifier} ") else ""
+        for needle in (identifier, name, rest if len(rest) >= 4 else ""):
             if needle and re.search(rf"(?<![\w-]){re.escape(needle.lower())}(?![\w-])", lower):
                 if identifier not in found:
                     found.append(identifier)
@@ -297,6 +301,28 @@ def _machine_class(kind: TaskKind, text: str) -> MachineClassId:
     if kind == "survey" and GROUND_SURVEY_WORDS.search(lower):
         return "survey"
     return "drone"
+
+
+# What a machine's model or name says it is, for the class of work a draft is sized for: a
+# draft that mows should take the mowers, not whichever machines happen to be idle. A survey
+# sized as a drone flight takes drones first, then the fleet's survey scouts.
+CLASS_FIT: dict[MachineClassId, tuple[re.Pattern[str], ...]] = {
+    "mower": (re.compile(r"\b(mow|mower|brush ?cutter)", re.I),),
+    "seeder": (re.compile(r"\b(seed|seeder|drill)", re.I),),
+    "survey": (re.compile(r"\b(survey|scout|rover)", re.I),),
+    "drone": (
+        re.compile(r"\b(drone|uav|mavic|quadcopter)", re.I),
+        re.compile(r"\b(survey|scout)", re.I),
+    ),
+}
+
+
+def _fit(machine: PlannerMachine, machine_class: MachineClassId) -> int:
+    """How well a machine suits the class: 0 for the first pattern it matches, 1 for the next,
+    and one past the last for none, so it sorts the best fits first."""
+    described = f"{machine.model} {machine.name}"
+    patterns = CLASS_FIT[machine_class]
+    return next((i for i, p in enumerate(patterns) if p.search(described)), len(patterns))
 
 
 def _distance(metres: float) -> str:
@@ -1010,6 +1036,7 @@ class RulesPlanner:
         nouns = "machines?|mowers?|robots?|tractors?|units?|drones?"
         # A count in the refinement ("use three machines") overrides one in the goal.
         wanted = _requested_count(request.refinement or "", nouns) or _requested_count(text, nouns)
+        asked = wanted is not None
         crew = _answer_text(request.answers, "crew")
         if crew == "all":
             wanted = len(request.machines)
@@ -1023,15 +1050,30 @@ class RulesPlanner:
         ]
         if chosen and (wanted is None or len(chosen) >= wanted):
             return chosen
+        asked = asked or crew is not None
         wanted = wanted or min(2, len(request.machines))
         order = {"idle": 0, "working": 1, "attention": 2}
         today = _today(request)
         # A rough window: nothing is scheduled yet, so "busy in the next two weeks" is the test.
         booked = _busy_machines(request, today, today + timedelta(days=14))
+        # Machines that suit the work first (mowers to mow), then free, idle and charged ones.
+        machine_class = _machine_class(_task_kind(text), text)
         ranked = sorted(
             request.machines,
-            key=lambda m: (m.id in booked, order.get(m.status, 1), -m.battery_pct),
+            key=lambda m: (
+                _fit(m, machine_class),
+                m.id in booked,
+                order.get(m.status, 1),
+                -m.battery_pct,
+            ),
         )
+        # With no count asked for, the default crew is the machines that suit the work best
+        # (the one seed drill drills alone rather than with a scout beside it).
+        free = [m for m in ranked if m.id not in excluded]
+        best = min((_fit(m, machine_class) for m in free), default=0)
+        suited = sum(1 for m in free if _fit(m, machine_class) == best)
+        if not asked and best < len(CLASS_FIT[machine_class]):
+            wanted = min(wanted, suited)
         for machine in ranked:
             if len(chosen) >= wanted:
                 break

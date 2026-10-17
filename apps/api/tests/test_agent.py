@@ -695,3 +695,124 @@ def test_the_fog_goal_drafts_a_survey_flown_at_the_scout_capture() -> None:
         .coverage[0]
     )
     assert doubled.hours == pytest.approx(2 * c.hours, rel=0.01)
+
+
+def test_a_name_that_leads_with_its_id_answers_to_the_rest_of_it() -> None:
+    """People say "the west grassland", not "Z-14 West grassland", and "Kestrel", not "TR-04
+    Kestrel": the rest of a name that leads with its id is matched too, and excluded too."""
+    zones = [
+        PlannerZone(id="Z-14", name="Z-14 West grassland", acres=414, task="Mow thistle"),
+        PlannerZone(id="Z-21", name="Z-21 Fence line", acres=34, task="Mow"),
+    ]
+    fleet = [
+        PlannerMachine(id="TR-04", name="TR-04 Kestrel", model="mower", status="working"),
+        PlannerMachine(id="TR-12", name="TR-12 Pipit", model="mower", status="idle"),
+    ]
+    draft = RulesPlanner().draft(
+        request("Mow the west grassland with Kestrel", zones=zones, machines=fleet)
+    )
+    assert draft.zone_ids == ["Z-14"]
+    assert draft.machine_ids == ["TR-04"]
+    skipped = RulesPlanner().draft(
+        request("Mow everything but skip the fence line", zones=zones, machines=fleet)
+    )
+    assert skipped.zone_ids == ["Z-14"]
+    # A short remainder is not a name: "Z-1 N" does not answer to every "n".
+    from app.services.planner import _mentioned
+
+    assert _mentioned("north and south", [("Z-1", "Z-1 N")]) == []
+
+
+def test_the_default_crew_is_the_machines_that_suit_the_work() -> None:
+    """With no count asked for, mowing takes the mowers and drilling the one seed drill, not
+    whichever machines happen to be idle; a survey sized as a drone flight takes drones
+    first, then survey scouts. A count asked for still fills up from the rest."""
+    fleet = [
+        PlannerMachine(
+            id="TR-04", name="TR-04 Kestrel", model="Ranger 2 · mower", status="working"
+        ),
+        PlannerMachine(id="TR-12", name="TR-12 Pipit", model="Ranger 2 · mower", status="working"),
+        PlannerMachine(id="TR-11", name="TR-11 Vireo", model="Scout 1 · survey", status="idle"),
+        PlannerMachine(id="TR-15", name="TR-15 Towhee", model="Drill 1 · seeder", status="idle"),
+    ]
+    zone = [PlannerZone(id="Z-14", name="Z-14 West grassland", acres=414, task="Mow thistle")]
+
+    def crew(goal: str) -> list[str]:
+        return RulesPlanner().draft(request(goal, zones=zone, machines=fleet)).machine_ids
+
+    assert crew("Mow the west grassland") == ["TR-04", "TR-12"]
+    assert crew("Drill native seed on the west grassland") == ["TR-15"]
+    assert crew("Survey the west grassland every month") == ["TR-11"]
+    assert crew("Drill seed on the west grassland with two machines") == ["TR-15", "TR-11"]
+
+
+def test_the_demo_ranch_drafts_from_its_outlines_with_the_assumptions_shown() -> None:
+    """The simulated demo's zones now send their outlines (their acres are the footprints'
+    measured acres), so its drafts are sized from path length under the assumed machine
+    classes, and say so. The numbers stay in a field's range: a 2 m mower at 1.4 m/s does
+    about 2.4 acres an hour, a 3 m drill at 1.2 m/s about 3, a mapping drone far more."""
+    import json
+    from pathlib import Path
+
+    ranch = json.loads((Path(__file__).parents[1] / "app" / "seed" / "demo_ranch.json").read_text())
+    derived = ranch["derived"]["zones"]
+    names = {"Z-14": "Z-14 West grassland", "Z-21": "Z-21 Fence line", "Z-08": "Z-08 Creek draw"}
+    tasks = {"Z-14": "Mow yellow star thistle", "Z-21": "Buffer + mow queued", "Z-08": "Survey"}
+    zones = [
+        PlannerZone(
+            id=zid,
+            name=name,
+            acres=round(derived[zid]["areaM2"] / 4046.8564224),
+            task=tasks[zid],
+            treated=zid == "Z-14",
+            geometry=derived[zid]["footprint"],
+        )
+        for zid, name in names.items()
+    ]
+    fleet = [
+        PlannerMachine(
+            id="TR-04", name="TR-04 Kestrel", model="Ranger 2 · mower", status="working"
+        ),
+        PlannerMachine(id="TR-12", name="TR-12 Pipit", model="Ranger 2 · mower", status="working"),
+        PlannerMachine(
+            id="TR-07", name="TR-07 Harrier", model="Ranger 2 · mower", status="attention"
+        ),
+        PlannerMachine(
+            id="TR-18", name="TR-18 Shrike", model="Scout 1 · survey", status="attention"
+        ),
+        PlannerMachine(id="TR-11", name="TR-11 Vireo", model="Scout 1 · survey", status="idle"),
+        PlannerMachine(id="TR-15", name="TR-15 Towhee", model="Drill 1 · seeder", status="idle"),
+    ]
+
+    def draft(goal: str) -> Any:
+        return RulesPlanner().draft(
+            request(goal, zones=zones, machines=fleet, project_name="Oak Bench Ranch")
+        )
+
+    mow = draft("Mow the star thistle on the west grassland by Friday")
+    assert mow.zone_ids == ["Z-14"] and mow.machine_ids == ["TR-04", "TR-12"]
+    [c] = mow.coverage
+    assert c.machine_class == "mower" and c.area_m2 == pytest.approx(derived["Z-14"]["areaM2"])
+    assert mow.estimates.acres == pytest.approx(derived["Z-14"]["areaM2"] / 4046.8564224, abs=0.1)
+    assert 2.0 < mow.estimates.acres / mow.estimates.machine_hours < 2.6
+    assert "Robotic brush mower (assumed)" in c.basis and "not a field-ready route" in c.basis
+    assert any(a.startswith("Path from the outline: Z-14 West grassland") for a in mow.assumptions)
+    assert not any("logged run" in a for a in mow.assumptions), "nothing measured is claimed"
+
+    # The 30 m strip inside the fence turns far more often than the open grassland, so its
+    # rate is a little lower.
+    fence = draft("Mow the fence line")
+    assert fence.zone_ids == ["Z-21"] and fence.coverage[0].machine_class == "mower"
+    assert 1.7 < fence.estimates.acres / fence.estimates.machine_hours < 2.6
+
+    seed = draft("Drill native seed on the west grassland")
+    assert seed.machine_ids == ["TR-15"] and seed.coverage[0].machine_class == "seeder"
+    assert 2.5 < seed.estimates.acres / seed.estimates.machine_hours < 3.2
+    assert "Seed drill (assumed)" in seed.coverage[0].basis
+
+    survey = draft("Survey the creek draw for blackberry every month")
+    assert survey.zone_ids == ["Z-08"] and survey.machine_ids == ["TR-11", "TR-18"]
+    assert survey.cadence == "monthly"
+    flight = survey.coverage[0]
+    assert flight.machine_class == "drone" and "(assumed)" in flight.basis
+    assert 20 < survey.estimates.acres / survey.estimates.machine_hours < 400

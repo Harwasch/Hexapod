@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PlanDraft } from "@twin/contracts";
+import { footprintAreaM2, toAcres } from "@twin/geo";
 
 import { anywhereProject } from "@/missions/anywhere";
 import { viewAreaZone } from "@/missions/areas";
@@ -275,7 +276,7 @@ describe("plans on a saved land", () => {
     estimates: { acres: 0, machineHours: 0.03, calendarDays: 2, pathM: 1000 },
   };
 
-  it("sends outlines for drawn and land zones (a fence as its line), never for simulated ones", () => {
+  it("sends every zone's outline: drawn, land (a fence as its line) and the simulated demo's", () => {
     const request = buildDraftRequest(onLand, { goal: "monitor the fence" });
     const byId = new Map(request.zones?.map((z) => [z.id, z]));
     expect(byId.get("L-aaaa0001")?.geometry?.type).toBe("LineString");
@@ -292,8 +293,17 @@ describe("plans on a saved land", () => {
     });
     const drawn = buildDraftRequest({ ...anywhere, zones: [area] }, { goal: "mow it" });
     expect(drawn.zones?.[0]?.geometry?.type).toBe("Polygon");
+    // The demo's acres are its outlines' measured acres, so its drafts are sized from them too:
+    // each zone sends its own footprint, and its stated acres agree with that footprint.
     const demo = buildDraftRequest(project, { goal: "mow" });
-    expect(demo.zones?.every((z) => z.geometry === undefined)).toBe(true);
+    expect(demo.zones?.map((z) => z.id)).toEqual(["Z-14", "Z-21", "Z-08"]);
+    for (const zone of project.zones) {
+      const sent = demo.zones?.find((z) => z.id === zone.id);
+      expect(sent?.geometry).toEqual(zone.footprint);
+      expect(sent?.acres).toBe(Math.round(toAcres(footprintAreaM2(zone.footprint))));
+    }
+    // A simulated log measured nothing: no rate from it outranks the path estimate.
+    expect(demo.rates).toEqual([]);
   });
 
   it("stores land zones with their provenance and reads them back private", () => {
