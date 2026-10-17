@@ -292,3 +292,42 @@ it("ends when the fog takes the ground, on Escape, and with another land", async
   act(() => useLand.getState().select({ ...LAND, id: "land-b" }));
   expect(useShowOnce.getState().session).toBeNull();
 });
+
+it("leaves Escape to a field being typed in, an open dialog, or what already took it", () => {
+  render(<ShowOnceBridge />);
+  const field = document.createElement("input");
+  document.body.append(field);
+  const typed = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
+  act(() => {
+    field.dispatchEvent(typed);
+  });
+  // The command bar or a survey field closes or clears; the session goes on.
+  expect(typed.defaultPrevented).toBe(false);
+  expect(useShowOnce.getState().session).not.toBeNull();
+  field.remove();
+
+  const dialog = document.createElement("div");
+  dialog.setAttribute("role", "dialog");
+  document.body.append(dialog);
+  const over = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+  act(() => {
+    window.dispatchEvent(over);
+  });
+  expect(over.defaultPrevented).toBe(false);
+  expect(useShowOnce.getState().session).not.toBeNull();
+  dialog.remove();
+
+  const handled = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+  handled.preventDefault();
+  act(() => {
+    window.dispatchEvent(handled);
+  });
+  expect(useShowOnce.getState().session).not.toBeNull();
+
+  // On the map, with nothing over it: the session ends.
+  const plain = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+  act(() => {
+    window.dispatchEvent(plain);
+  });
+  expect(useShowOnce.getState().session).toBeNull();
+});

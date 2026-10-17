@@ -5,12 +5,14 @@ import { footprintContains } from "@twin/geo";
 import { cellAt, cellRing } from "@/features/knowledge/grid";
 import { NO_SCORE, rampImage, rampThreshold } from "@/features/showOnce/grid";
 import { compareAt, dropPendingTaps, protectAt } from "@/features/showOnce/session";
+import { isTyping } from "@/lib/hotkeys";
 import { useGridDrape } from "@/state/gridDrape";
 import { useLand } from "@/state/land";
 import { useShowOnce } from "@/state/showOnce";
 
 import { GroundGridLayer } from "./GroundGridLayer";
 import { useScene } from "./SceneContext";
+import { POPOVER_SELECTOR } from "./uiActivity";
 
 /**
  * Show once, everywhere on the map (`GroundGridLayer`, material "ramp", owner "signature"),
@@ -21,13 +23,29 @@ import { useScene } from "./SceneContext";
  * The answer drapes as lit cells above the slider's threshold, which is the drape's uniform:
  * sliding renders a frame and uploads nothing. Protecting swaps the texture on the same
  * rectangle. The tapped cell is outlined. A session takes the ground from the fog as it starts;
- * Escape ends it, as does the fog taking the ground back (one drape at a time,
- * `state/gridDrape.ts`). Hiding the card only lifts the drape and
- * the taps; its answer waits for the card to come back.
+ * Escape ends it (unless it is typed into a field, or a sheet, dialog or popover is open to take
+ * it first), as does the fog taking the ground back (one drape at a time, `state/gridDrape.ts`).
+ * Hiding the card only lifts the drape and the taps; its answer waits for the card to come back.
  */
 /** The map's cursor while it takes taps (the area editor's pick uses the same crosshair). */
 function setCursor(canvas: HTMLCanvasElement, cursor: string): void {
   canvas.style.cursor = cursor;
+}
+
+/** What is open over the map and takes Escape before a session: a sheet, dialog or popover. */
+const OPEN_LAYER = `[role="dialog"], ${POPOVER_SELECTOR}`;
+
+/**
+ * Whether one of the app's sheets, dialogs or popovers is shown (the Time Lantern's rule,
+ * `TimeLantern.layerOpen`): Cesium's credit box is a dialog kept on the page, never counted.
+ */
+function layerOpen(): boolean {
+  for (const element of document.querySelectorAll<HTMLElement>(OPEN_LAYER)) {
+    if (element.closest(".cesium-credit-lightbox-overlay")) continue;
+    if (typeof element.checkVisibility === "function" && !element.checkVisibility()) continue;
+    return true;
+  }
+  return false;
 }
 
 export function ShowOnceBridge() {
@@ -112,10 +130,13 @@ export function ShowOnceBridge() {
     const canvas = host.viewer.canvas;
     setCursor(canvas, "crosshair");
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      // Consumed before the shell takes Escape as closing the panel.
+      // Escape in a field (the command bar, a survey form) is the field's; an open sheet,
+      // dialog or popover closes on it first (Radix skips a prevented key). One press, one step.
+      if (event.key !== "Escape" || event.defaultPrevented || isTyping(event.target)) return;
+      if (layerOpen()) return;
+      // Captured, and marked handled, before the shell's Escape (`useHotkey` skips a handled
+      // key) takes it as closing the panel.
       event.preventDefault();
-      event.stopPropagation();
       dropPendingTaps();
       useShowOnce.getState().stop();
     };
