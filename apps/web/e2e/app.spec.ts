@@ -458,6 +458,28 @@ test.describe("interaction", () => {
     await expect(app.getByTestId("measure-active")).toHaveCount(0);
   });
 
+  test("a double-click that ends a distance adds one measurement, not a second one of 0 mm", async ({
+    app,
+  }) => {
+    test.setTimeout(150_000);
+    await app.getByTestId("onboarding-explore").click();
+    await overFarmland(app);
+    await app.getByTestId("tool-measure").click();
+    await app.getByTestId("measure-distance").click();
+    await app.mouse.click(600, 450);
+    await app.mouse.dblclick(820, 450);
+    const list = app.getByRole("list", { name: "Measurements" });
+    await expect(list.getByRole("listitem")).toHaveCount(1, { timeout: 15_000 });
+    // Nothing half-started on the end point: a click away from it starts the next distance,
+    // and only the click after that ends it.
+    await app.mouse.click(700, 520);
+    await app.waitForTimeout(400);
+    await expect(list.getByRole("listitem")).toHaveCount(1);
+    await app.mouse.click(860, 520);
+    await expect(list.getByRole("listitem")).toHaveCount(2, { timeout: 15_000 });
+    await expect(list).not.toContainText(/\b0 (mm|cm|m)\b/);
+  });
+
   test("measurement tool can be entered and exited", async ({ app }) => {
     await app.getByTestId("tool-measure").click();
     await expect(app.getByTestId("measure-panel")).toBeVisible();
