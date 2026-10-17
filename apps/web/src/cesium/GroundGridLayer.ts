@@ -99,7 +99,15 @@ czm_material czm_getMaterial(czm_materialInput materialInput) {
   float n = knowledgeFogFbm(st * cells * 0.25 + drift);
   float burn = smoothstep(n - 0.08, n + 0.08, lift);
   float density = mix(from.r, to.r, burn);
-  float inside = mix(from.g, to.g, burn);
+  // The land's edge, softened over a cell so the 20 m staircase does not show.
+  vec2 texel = 1.0 / cells;
+  vec2 dx = vec2(texel.x, 0.0);
+  vec2 dy = vec2(0.0, texel.y);
+  float insideFrom = (from.g + texture(densityFrom, st + dx).g + texture(densityFrom, st - dx).g
+    + texture(densityFrom, st + dy).g + texture(densityFrom, st - dy).g) / 5.0;
+  float insideTo = (to.g + texture(densityTo, st + dx).g + texture(densityTo, st - dx).g
+    + texture(densityTo, st + dy).g + texture(densityTo, st - dy).g) / 5.0;
+  float inside = smoothstep(0.15, 0.85, mix(insideFrom, insideTo, burn));
   float billow = knowledgeFogFbm(st * cells * 0.08 + drift * 0.3);
   float wisp = knowledgeFogFbm(st * cells * 0.6 + drift * 0.5);
   float body = mix(0.42, 1.0, smoothstep(0.25, 0.75, billow)) * (0.82 + 0.36 * wisp);

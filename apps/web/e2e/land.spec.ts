@@ -367,6 +367,240 @@ test("plan work on a saved land: the land is the ground, and the plan stays priv
   expect(stored).not.toContain(records.saved[0]?.id ?? "missing");
 });
 
+/** The Fog of Knowing over the saved land: full fog but one inspected cell, from fixtures. */
+async function knowledgeApi(page: Page, land: () => LandArea | undefined) {
+  const scouted: Record<string, unknown>[] = [];
+  const frame = () => {
+    const ring = (land()?.boundary as { coordinates: number[][][] }).coordinates[0] ?? [];
+    const lons = ring.map((p) => p[0] ?? 0);
+    const lats = ring.map((p) => p[1] ?? 0);
+    return {
+      west: Math.min(...lons),
+      south: Math.min(...lats),
+      east: Math.max(...lons),
+      north: Math.max(...lats),
+      columns: 4,
+      rows: 4,
+      cellM: 20,
+    };
+  };
+  const record = {
+    key: "inspection:1",
+    kind: "inspection",
+    title: "Inspection: North trough, good",
+    classId: "field",
+    countedClassId: "field",
+    classNote: null,
+    resolutionM: null,
+    observedAt: "2026-10-15T00:00:00Z",
+    observedLabel: "inspected 2026-10-15",
+    recordedAt: "2026-10-15T00:00:00Z",
+    ageDays: 1,
+    peakCredit: 0.845,
+    arithmetic: "0.85 x 0.5^(1/120) = 0.84",
+    located: true,
+    positionalUncertaintyM: null,
+    cells: 1,
+    provenance: {
+      provider: "field inspection",
+      license: "Workspace record",
+      attribution: "Recorded in this workspace's inventory",
+      url: null,
+    },
+    link: { kind: "inventory", id: "feature-1", detail: {} },
+  };
+  const policy = {
+    version: "fog-v1",
+    classes: [
+      {
+        id: "field",
+        label: "Field inspection",
+        quality: 0.85,
+        halfLifeDays: 120,
+        maxResolutionM: null,
+        example: "A person's dated inspection of a mapped feature",
+      },
+    ],
+    undatedFactor: 0.25,
+    fieldReachM: { Point: 15, LineString: 5 },
+    foggyThreshold: 0.5,
+    formula: "Fog density = 1 - the best credit among the records that cover a cell.",
+  };
+  const notCounted = [
+    { title: "Google Photorealistic 3D Tiles (the basemap)", reason: "No capture date." },
+  ];
+  await page.route("**/api/v1/land/*/knowledge*", async (route) => {
+    const density = new Uint8Array(16).fill(250);
+    density[5] = 39;
+    const best = new Uint8Array(32).fill(255);
+    best[10] = 0;
+    best[11] = 0;
+    const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
+    await route.fulfill({
+      json: {
+        landId: land()?.id,
+        boundaryRevision: 1,
+        asOf: "2026-10-16T00:00:00Z",
+        density: {
+          ...frame(),
+          encoding: "u8",
+          scale: 0.004,
+          offset: 0,
+          nodata: 255,
+          data: base64(density),
+        },
+        best: {
+          ...frame(),
+          encoding: "u16",
+          scale: 1,
+          offset: 0,
+          nodata: 65535,
+          data: base64(best),
+        },
+        records: [record],
+        summary: {
+          insideCells: 16,
+          byBestClass: { field: 1 / 16, none: 15 / 16 },
+          foggyFraction: 15 / 16,
+          medianDensity: 1,
+        },
+        policy,
+        notCounted,
+      },
+    });
+  });
+  await page.route("**/api/v1/land/*/knowledge/cell*", async (route) => {
+    const url = new URL(route.request().url());
+    await route.fulfill({
+      json: {
+        longitude: Number(url.searchParams.get("longitude")),
+        latitude: Number(url.searchParams.get("latitude")),
+        column: 1,
+        row: 1,
+        inside: true,
+        density: 0.156,
+        cellM: 20,
+        bounds: null,
+        records: [{ record, credit: 0.845, best: true, arithmetic: record.arithmetic }],
+        notCounted,
+        policyVersion: "fog-v1",
+      },
+    });
+  });
+  await page.route("**/api/v1/land/*/knowledge/scout-areas", async (route) => {
+    scouted.push(route.request().postDataJSON() as Record<string, unknown>);
+    const f = frame();
+    const w = f.west + (f.east - f.west) * 0.1;
+    const e = f.west + (f.east - f.west) * 0.6;
+    const s = f.south + (f.north - f.south) * 0.1;
+    const n = f.south + (f.north - f.south) * 0.6;
+    await route.fulfill({
+      json: {
+        areas: [
+          {
+            footprint: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [w, s],
+                  [e, s],
+                  [e, n],
+                  [w, n],
+                  [w, s],
+                ],
+              ],
+            },
+            areaM2: 25000,
+            cells: 60,
+            meanDensity: 1,
+            bestClassCounts: { none: 60 },
+            reason:
+              "Foggiest 6 ac within one battery, nearest your view; no stored evidence covers it.",
+          },
+        ],
+        threshold: 0.5,
+        budgetM2: 259000,
+        truncatedByBudget: true,
+        forecast:
+          "Forecast, not evidence: flown at 5 cm per pixel or finer and processed into a capture, these cells would read as centimetre evidence.",
+        policyVersion: "fog-v1",
+      },
+    });
+  });
+  return scouted;
+}
+
+test("show the fog of knowing, read a cell, and draft a scout flight with its DJI route", async ({
+  app,
+}) => {
+  const records = await landApi(app);
+  const scouted = await knowledgeApi(app, () => records.saved[0]);
+  await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
+  await app.getByTestId("tool-land").click();
+  await app.evaluate(() => {
+    const twin = (
+      window as unknown as {
+        __twin: {
+          camera: {
+            cancelFlight(): void;
+            setView(lon: number, lat: number, height: number, heading: number, pitch: number): void;
+          };
+        };
+      }
+    ).__twin;
+    twin.camera.cancelFlight();
+    twin.camera.setView(-119.9, 36.6, 1500, 0, -90);
+  });
+  await app.getByRole("button", { name: /Draw a boundary/ }).click();
+  for (const [x, y] of [
+    [650, 300],
+    [1000, 300],
+    [1000, 550],
+    [650, 550],
+  ]) {
+    await app.mouse.click(x!, y!);
+  }
+  await app.getByRole("button", { name: "Review boundary", exact: true }).click();
+  await app.getByLabel("Name this land").fill("West field");
+  await app.getByRole("button", { name: "Save this land", exact: true }).click();
+  await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
+  await app.getByTestId("tool-land").click();
+  const legend = app.getByTestId("knowledge-legend");
+  await legend.getByLabel("Show the fog of knowing").click();
+  await expect(app.getByTestId("knowledge-foggy")).toHaveText("94% foggy");
+  await legend.getByTestId("knowledge-details").click();
+  const details = app.getByTestId("knowledge-legend-details");
+  await expect(details).toContainText("Fog density = 1 - the best credit");
+  await expect(details).toContainText("computed from 1 cited record · fog-v1");
+  await expect(details).toContainText("Not counted (1)");
+  await legend.getByTestId("knowledge-details").click();
+  await expect(details).toHaveCount(0);
+  // The map menu asks about a point inside the land.
+  await app.mouse.click(800, 425, { button: "right" });
+  await expect(app.getByRole("menu")).toBeVisible();
+  await app.getByRole("menuitem", { name: "What do we know here" }).click();
+  const card = app.getByTestId("knowledge-cell");
+  await expect(card).toContainText("Inspection: North trough, good");
+  await expect(card).toContainText("0.85 x 0.5^(1/120) = 0.84");
+  await expect(card).toContainText("Sets this cell");
+  await card.getByLabel("Close panel").click();
+  // Lift the fog: a scout plan over the foggiest ground, with its DJI route.
+  await legend.getByTestId("knowledge-details").click();
+  await app.getByTestId("knowledge-lift").click();
+  const plans = app.getByTestId("plans-panel");
+  await expect(plans.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+  await expect(plans.getByTestId("plan-ground")).toContainText("Fog patch 1");
+  const scout = plans.getByTestId("scout-export");
+  await expect(scout).toContainText("DJI Mavic 3 Enterprise wide camera (assumed)");
+  await expect(scout).toContainText("Draft, not flight-tested");
+  expect(scouted[0]).toMatchObject({ threshold: 0.5, maxAreas: 3, cellM: 20 });
+  const [download] = await Promise.all([
+    app.waitForEvent("download"),
+    scout.getByTestId("scout-download").click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^scout-west-field-\d{4}-\d{2}-\d{2}\.kmz$/);
+});
+
 test("import with an exclusion and preserve the map on a phone", async ({ app }) => {
   const records = await landApi(app);
   await app.setViewportSize({ width: 390, height: 844 });

@@ -7,12 +7,14 @@ import {
   ColorMaterialProperty,
   ConstantProperty,
   type Entity,
+  HorizontalOrigin,
   PolygonHierarchy,
   PolylineDashMaterialProperty,
   SceneTransforms,
   sampleTerrainMostDetailed,
   type Scene,
   type CesiumWidget,
+  VerticalOrigin,
 } from "cesium";
 
 import {
@@ -321,7 +323,9 @@ export class MissionManager {
         if (stroke.length < 2) return;
         this.planEntities.push(
           this.viewer.entities.add({
-            id: `${PLAN_ENTITY_PREFIX}passes:${zone.id}:${strokeIndex}`,
+            // The first stroke keeps the zone's plain id; one split by a hole or a notch
+            // adds numbered ones.
+            id: `${PLAN_ENTITY_PREFIX}passes:${zone.id}${strokeIndex ? `:${strokeIndex}` : ""}`,
             polyline: {
               positions: Cartesian3.fromDegreesArray(
                 stroke.flatMap((p) => [p.longitude, p.latitude]),
@@ -361,6 +365,10 @@ export class MissionManager {
             showBackground: true,
             backgroundColor: color,
             backgroundPadding: new Cartesian2(7, 4),
+            // Above the zone's chip, which starts at the same point and runs right.
+            horizontalOrigin: HorizontalOrigin.LEFT,
+            verticalOrigin: VerticalOrigin.BOTTOM,
+            pixelOffset: new Cartesian2(0, -16),
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         }),
@@ -378,7 +386,10 @@ export class MissionManager {
               showBackground: true,
               backgroundColor: FOG_LIFT.withAlpha(0.92),
               backgroundPadding: new Cartesian2(7, 4),
-              pixelOffset: new Cartesian2(0, 26),
+              // Below the zone's chip.
+              horizontalOrigin: HorizontalOrigin.LEFT,
+              verticalOrigin: VerticalOrigin.TOP,
+              pixelOffset: new Cartesian2(0, 16),
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
           }),
