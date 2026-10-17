@@ -288,8 +288,42 @@ export function coverageLanes(polygon: Position[][], options: CoverageOptions): 
 }
 
 /**
+ * The spacing a capped sweep of the whole footprint uses: `swathM`, widened so its passes
+ * across every part together fit `maxPasses` (the API's `coverage.measure` caps the same way).
+ */
+function footprintSwath(
+  footprint: Footprint,
+  headingDeg: number,
+  options: CoverageOptions,
+): number {
+  const maxPasses = options.maxPasses;
+  if (maxPasses === undefined || !(options.swathM > 0)) return options.swathM;
+  const bounds = boundsOf(footprint);
+  const origin = {
+    longitude: (bounds.west + bounds.east) / 2,
+    latitude: (bounds.south + bounds.north) / 2,
+  };
+  const angle = (headingDeg - 90) * DEG_TO_RAD;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const polygon of polygonsOf(footprint))
+    for (const p of project(openRing(polygon[0] ?? []), origin)) {
+      const y = rotate(p, angle).y;
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  const extent = maxY - minY;
+  return extent > 0 && Math.ceil(extent / options.swathM) > maxPasses
+    ? extent / maxPasses
+    : options.swathM;
+}
+
+/**
  * Lanes over every polygon of a footprint, in one heading (the whole footprint's long axis
- * unless given); passes are numbered on across the parts and the serpentine carries on.
+ * unless given); passes are numbered on across the parts and the serpentine carries on. A cap
+ * on passes is the whole footprint's: a footprint of many parts (workable ground, a remainder
+ * of patches) is drawn at one spacing, as wide as the cap needs across all of them, not at the
+ * fine spacing each small part would allow on its own. One polygon sweeps as before.
  */
 export function footprintLanes(footprint: Footprint, options: CoverageOptions): CoverageLanes {
   const bounds = boundsOf(footprint);
@@ -301,12 +335,17 @@ export function footprintLanes(footprint: Footprint, options: CoverageOptions): 
       [bounds.east, bounds.north],
       [bounds.west, bounds.north],
     ]);
+  const polygons = polygonsOf(footprint);
+  const shared =
+    polygons.length > 1
+      ? { swathM: footprintSwath(footprint, headingDeg, options), headingDeg }
+      : options;
   const lanes: CoverageLane[] = [];
   let passes = 0;
   let workingLengthM = 0;
   let swathM = options.swathM;
-  for (const polygon of polygonsOf(footprint)) {
-    const part = sweep(polygon, headingDeg, options, passes, passes % 2 === 0);
+  for (const polygon of polygons) {
+    const part = sweep(polygon, headingDeg, shared, passes, passes % 2 === 0);
     lanes.push(...part.lanes);
     passes += part.passes;
     workingLengthM += part.workingLengthM;

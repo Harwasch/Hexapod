@@ -16,6 +16,7 @@ import {
   type CesiumWidget,
   VerticalOrigin,
 } from "cesium";
+import type { Position } from "geojson";
 
 import {
   boundingRadiusM,
@@ -39,6 +40,14 @@ import type { CameraController } from "./CameraController";
 import type { SceneEvents } from "./types";
 
 export const ZONE_ENTITY_PREFIX = "mission:zone:";
+/** A zone of several parts draws one entity per part: `mission:zone:A-03`, then `…#1`, `…#2`. */
+const ZONE_PART_SEPARATOR = "#";
+
+/** The zone a zone entity (any of its parts) draws; null for any other entity. */
+export function zoneIdOfEntity(id: string): string | null {
+  if (!id.startsWith(ZONE_ENTITY_PREFIX)) return null;
+  return id.slice(ZONE_ENTITY_PREFIX.length).split(ZONE_PART_SEPARATOR)[0] ?? null;
+}
 export const PLAN_ENTITY_PREFIX = "mission:plan:";
 /** One colour per machine so passes read as "who drives where". */
 const MACHINE_PALETTE = ["#7fd8c0", "#f0b254", "#9db8f0", "#e79ac8", "#c6e07a", "#c3a6f0"].map(
@@ -189,39 +198,13 @@ export class MissionManager {
       );
     const drawn = new Set<string>();
     for (const zone of project.zones) {
-      const [ring, ...holes] = polygonsOf(zone.footprint)[0] ?? [];
       // One entity per id: a second zone with an id already drawn would throw in Cesium.
-      if (!ring || this.hiddenZoneIds.has(zone.id) || drawn.has(zone.id)) continue;
+      if (this.hiddenZoneIds.has(zone.id) || drawn.has(zone.id)) continue;
       drawn.add(zone.id);
-      const positions = Cartesian3.fromDegreesArray(flattenRing(ring));
-      const first = positions[0];
-      if (!first) continue;
-      const tone = TONE[zone.tone];
-      this.zoneEntities.push(
-        this.viewer.entities.add({
-          id: `${ZONE_ENTITY_PREFIX}${zone.id}`,
-          show: this.zonesVisible,
-          polygon: {
-            // Holes stay open: the woods and the homestead inside a grassland zone are not in it.
-            hierarchy: new PolygonHierarchy(
-              positions,
-              holes.map(
-                (hole) => new PolygonHierarchy(Cartesian3.fromDegreesArray(flattenRing(hole))),
-              ),
-            ),
-            material: tone.withAlpha(zone.treated ? 0.22 : 0.14),
-            classificationType: undefined,
-          },
-          polyline: {
-            positions: [...positions, first],
-            width: zone.treated ? 2.4 : 1.8,
-            material: zone.treated
-              ? tone
-              : new PolylineDashMaterialProperty({ color: tone, dashLength: 14 }),
-            clampToGround: true,
-          },
-        }),
-      );
+      // Every part of a MultiPolygon (workable ground left in pieces, a remainder of patches).
+      polygonsOf(zone.footprint).forEach(([ring, ...holes], part) => {
+        if (ring) this.drawZonePart(zone, part, ring, holes);
+      });
     }
     for (const machine of project.machines) {
       if (!machine.track || machine.track.length < 2) continue;
@@ -253,6 +236,39 @@ export class MissionManager {
     this.scene.requestRender();
   }
 
+  /** One polygon of a zone: its fill (holes open) and its outline. */
+  private drawZonePart(zone: Zone, part: number, ring: Position[], holes: Position[][]): void {
+    const positions = Cartesian3.fromDegreesArray(flattenRing(ring));
+    const first = positions[0];
+    if (!first) return;
+    const tone = TONE[zone.tone];
+    this.zoneEntities.push(
+      this.viewer.entities.add({
+        id: `${ZONE_ENTITY_PREFIX}${zone.id}${part ? `${ZONE_PART_SEPARATOR}${part}` : ""}`,
+        show: this.zonesVisible,
+        polygon: {
+          // Holes stay open: the woods and the homestead inside a grassland zone are not in it.
+          hierarchy: new PolygonHierarchy(
+            positions,
+            holes.map(
+              (hole) => new PolygonHierarchy(Cartesian3.fromDegreesArray(flattenRing(hole))),
+            ),
+          ),
+          material: tone.withAlpha(zone.treated ? 0.22 : 0.14),
+          classificationType: undefined,
+        },
+        polyline: {
+          positions: [...positions, first],
+          width: zone.treated ? 2.4 : 1.8,
+          material: zone.treated
+            ? tone
+            : new PolylineDashMaterialProperty({ color: tone, dashLength: 14 }),
+          clampToGround: true,
+        },
+      }),
+    );
+  }
+
   setLayer(key: "zones" | "tracks", visible: boolean): void {
     if (key === "zones") {
       this.zonesVisible = visible;
@@ -267,7 +283,8 @@ export class MissionManager {
   /** Highlights the selected zone outline. */
   setSelectedZone(zoneId: string | null): void {
     for (const entity of this.zoneEntities) {
-      const zone = this.project?.zones.find((z) => `${ZONE_ENTITY_PREFIX}${z.id}` === entity.id);
+      const id = typeof entity.id === "string" ? zoneIdOfEntity(entity.id) : null;
+      const zone = this.project?.zones.find((z) => z.id === id);
       if (!zone || !entity.polyline) continue;
       const selected = zone.id === zoneId;
       entity.polyline.width = new ConstantProperty(selected ? 3 : zone.treated ? 2.4 : 1.8);
@@ -378,8 +395,8 @@ export class MissionManager {
           }),
         );
       });
-      const outline = this.zoneEntities.find((e) => e.id === `${ZONE_ENTITY_PREFIX}${zone.id}`);
-      if (outline?.polyline) {
+      for (const outline of this.zoneEntities) {
+        if (!outline.polyline || zoneIdOfEntity(outline.id) !== zone.id) continue;
         outline.polyline.width = new ConstantProperty(3.2);
         outline.polyline.material = new ColorMaterialProperty(scout ? FOG_LIFT : color);
       }

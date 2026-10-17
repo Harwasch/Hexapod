@@ -28,7 +28,7 @@ import { AREA_CANDIDATE_PREFIX, AREA_HANDLE_PREFIX } from "./AreaEditor";
 import type { CameraController } from "./CameraController";
 import type { LayerManager } from "./LayerManager";
 import { LongPress } from "./longPress";
-import { ZONE_ENTITY_PREFIX } from "./MissionManager";
+import { ZONE_ENTITY_PREFIX, zoneIdOfEntity } from "./MissionManager";
 import { rehearsalPick } from "./RehearsalManager";
 import type { SiteManager } from "./SiteManager";
 import type { SceneEvents } from "./types";
@@ -437,7 +437,8 @@ export class SelectionManager {
     ) {
       this.events.emit("mission-select", {
         kind: "zone",
-        id: picked.id.id.slice(ZONE_ENTITY_PREFIX.length),
+        // Any part of a zone of several parts selects the zone.
+        id: zoneIdOfEntity(picked.id.id) ?? picked.id.id.slice(ZONE_ENTITY_PREFIX.length),
       });
       return;
     }
