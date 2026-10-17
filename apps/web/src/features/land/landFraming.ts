@@ -45,16 +45,33 @@ function openView(scene: CesiumSceneManager): {
   };
 }
 
+/** Heights outside this band are a coarse tile or a miss, not the ground (CameraController). */
+const PLAUSIBLE_M: readonly [number, number] = [-500, 9000];
+
+/** Above this the world under a land is drawn too coarsely to read the ground from. */
+const SAMPLE_BELOW_M = 50_000;
+
+function plausible(height: number | undefined): height is number {
+  return (
+    height !== undefined &&
+    Number.isFinite(height) &&
+    height >= PLAUSIBLE_M[0] &&
+    height <= PLAUSIBLE_M[1]
+  );
+}
+
 /**
  * The ground's height at a point as the map has it drawn now: the 3D world or the terrain under
- * it, or undefined where neither is loaded yet.
+ * it. Undefined where neither is loaded, or the camera is too high for either to be detailed
+ * there (from orbit a sample of the 3D world's coarsest tiles came back 40 km underground).
  */
 function groundNow(scene: CesiumSceneManager, longitude: number, latitude: number) {
+  if (scene.viewer.camera.positionCartographic.height > SAMPLE_BELOW_M) return undefined;
   const at = Cartographic.fromDegrees(longitude, latitude);
   const sampled = scene.scene.sampleHeightSupported ? scene.scene.sampleHeight(at) : undefined;
-  if (sampled !== undefined && Number.isFinite(sampled)) return sampled;
+  if (plausible(sampled)) return sampled;
   const terrain = scene.scene.globe.getHeight(at);
-  return terrain !== undefined && Number.isFinite(terrain) ? terrain : undefined;
+  return plausible(terrain) ? terrain : undefined;
 }
 
 /** Vertical field of view of the camera, radians (a perspective camera's; 60 degrees else). */

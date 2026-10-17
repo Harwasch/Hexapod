@@ -12,6 +12,7 @@ import type { LandArea } from "@twin/contracts";
 import { GlassTooltipProvider } from "@twin/ui";
 
 import { api } from "@/api/client";
+import { frameLand } from "@/features/land/landFraming";
 import { LandPanel } from "@/features/land/LandPanel";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
@@ -30,11 +31,11 @@ const scene = vi.hoisted(() => ({
   isDestroyed: false,
   viewer: {
     canvas: null as unknown as HTMLCanvasElement,
-    camera: { frustum: { fovy: 1 } },
+    camera: { frustum: { fovy: 1 }, positionCartographic: { height: 2000 } },
   },
   scene: {
     sampleHeightSupported: false,
-    sampleHeight: () => undefined,
+    sampleHeight: (): number | undefined => undefined,
     globe: { getHeight: () => 250 },
     cartesianToCanvasCoordinates: (position: Cartesian3) => {
       const at = Cartographic.fromCartesian(position);
@@ -227,4 +228,24 @@ it("opens a saved land at its overview, framed above the sheet", async () => {
   const { south, north } = seen(scene.camera.flyTo.mock.calls.at(-1)!);
   // The land's centre is above the screen's centre: the sheet covers the lower part.
   expect((south + north) / 2).toBeLessThan(34.63);
+});
+
+it("measures the flight from the ground only where the ground reads true", async () => {
+  // Close to the land, a sample of the drawn world 40 km underground is a coarse tile, not the
+  // ground: the terrain (250 m here) is used instead.
+  scene.scene.sampleHeightSupported = true;
+  scene.scene.sampleHeight = () => -42_000;
+  frameLand(scene as never, LOW);
+  const [, , closeHeight] = scene.camera.flyTo.mock.calls.at(-1) as [number, number, number];
+  expect(closeHeight).toBeGreaterThan(250);
+  // From orbit nothing under the land is detailed: the terrain is asked, and the flight waits.
+  scene.viewer.camera.positionCartographic.height = 18_000_000;
+  scene.camera.flyTo.mockClear();
+  frameLand(scene as never, LOW);
+  expect(scene.camera.flyTo).not.toHaveBeenCalled();
+  await waitFor(() => expect(scene.camera.flyTo).toHaveBeenCalledTimes(1));
+  const [, , farHeight] = scene.camera.flyTo.mock.calls[0] as [number, number, number];
+  expect(farHeight).toBeCloseTo(closeHeight - 250, 0);
+  scene.viewer.camera.positionCartographic.height = 2000;
+  scene.scene.sampleHeightSupported = false;
 });
