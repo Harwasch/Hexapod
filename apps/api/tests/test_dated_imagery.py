@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Callable, Iterator
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import anyio
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +21,7 @@ from app.api.v1 import imagery
 from app.research.providers import dated_imagery
 from app.research.providers.base import SourceContext
 from app.research.providers.open_data import ADAPTERS, OVERVIEW_SOURCES, SOURCES, retrieve
+from app.schemas.dated_imagery import DatedImageryCatalog
 from app.schemas.geojson import Polygon
 from app.services import usgs_topo_tiles
 
@@ -495,3 +498,142 @@ def dated_imagery_limit(client: TestClient) -> int:
     from app.services.ratelimit import IMAGERY_CATALOG
 
     return IMAGERY_CATALOG.burst
+
+
+# ---- Bounded builds -------------------------------------------------------------------------
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+async def _borrowed_shared_threads() -> int:
+    return anyio.to_thread.current_default_thread_limiter().borrowed_tokens
+
+
+def test_route_builds_off_the_shared_threadpool_and_shares_one_build_per_area(
+    client: TestClient, routed: Fake
+) -> None:
+    release = threading.Event()
+
+    def slow_topo(_: httpx.Request) -> httpx.Response:
+        release.wait(10)
+        return httpx.Response(200, json={"items": TOPO_RECORDS, "total": len(TOPO_RECORDS)})
+
+    routed.topo = slow_topo
+    here = {"west": BBOX[0], "south": BBOX[1], "east": BBOX[2], "north": BBOX[3]}
+    there = {**here, "west": BBOX[0] - 0.05, "east": BBOX[2] - 0.05}
+    statuses: list[int] = []
+
+    def ask(params: dict[str, float]) -> None:
+        statuses.append(client.get("/api/v1/imagery/dated", params=params).status_code)
+
+    first = [threading.Thread(target=ask, args=(p,)) for p in (here, there)]
+    for thread in first:
+        thread.start()
+    deadline = time.monotonic() + 5
+    while len(routed.to(dated_imagery.TNM_PRODUCTS)) < 2:
+        assert time.monotonic() < deadline, "the two catalogs never started"
+        time.sleep(0.01)
+    # A second ask for an area being built joins that build instead of asking again.
+    again = threading.Thread(target=ask, args=(here,))
+    again.start()
+    time.sleep(0.3)
+    portal = client.portal
+    assert portal is not None
+    try:
+        # Two catalogs are building, yet the threadpool every other route runs on is free.
+        assert portal.call(_borrowed_shared_threads) == 0
+        assert len(routed.to(dated_imagery.TNM_PRODUCTS)) == 2
+    finally:
+        release.set()
+        for thread in [*first, again]:
+            thread.join(10)
+    assert statuses == [200, 200, 200]
+    assert len(routed.to(dated_imagery.TNM_PRODUCTS)) == 2
+
+
+def test_route_answers_busy_at_once_when_every_builder_is_taken(
+    client: TestClient, routed: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dated_imagery, "MAX_WAITING", 0)
+    portal = client.portal
+    assert portal is not None
+    # The builders are taken on the app's own event loop, as catalogs in flight would hold them.
+    for _ in range(dated_imagery.MAX_IN_FLIGHT):
+        portal.call(dated_imagery._builders.acquire)
+    try:
+        started = time.monotonic()
+        response = client.get(
+            "/api/v1/imagery/dated",
+            params={"west": BBOX[0], "south": BBOX[1], "east": BBOX[2], "north": BBOX[3]},
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        for _ in range(dated_imagery.MAX_IN_FLIGHT):
+            portal.call(dated_imagery._builders.release)
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == str(dated_imagery.RETRY_AFTER_S)
+    assert response.headers["cache-control"] == "no-store"
+    assert elapsed < 1.0
+    assert routed.requests == []
+
+
+@pytest.mark.anyio
+async def test_a_full_queue_of_catalogs_is_answered_busy_at_once(
+    fake: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = threading.Event()
+
+    def slow(bbox: tuple[float, float, float, float], _: httpx.Client) -> DatedImageryCatalog:
+        release.wait(10)
+        return DatedImageryCatalog(
+            bounds=list(dated_imagery.round_bbox(bbox)),
+            retrieved_at=datetime.now(UTC),
+            sources=[],
+            providers=[],
+        )
+
+    monkeypatch.setattr(dated_imagery, "discover", slow)
+    areas = [
+        (BBOX[0] - 0.01 * i, BBOX[1], BBOX[2] - 0.01 * i, BBOX[3])
+        for i in range(dated_imagery.MAX_IN_FLIGHT + dated_imagery.MAX_WAITING + 1)
+    ]
+    built: list[DatedImageryCatalog] = []
+
+    async def ask(area: tuple[float, float, float, float]) -> None:
+        built.append(await dated_imagery.build(area, client_for(fake)))
+
+    async with anyio.create_task_group() as group:
+        for area in areas[:-1]:
+            group.start_soon(ask, area)
+        with anyio.fail_after(5):
+            while dated_imagery._builders.statistics().tasks_waiting < dated_imagery.MAX_WAITING:
+                await anyio.sleep(0.01)
+        assert await _borrowed_shared_threads() == 0
+        started = time.monotonic()
+        with pytest.raises(dated_imagery.CatalogBusy):
+            await dated_imagery.build(areas[-1], client_for(fake))
+        assert time.monotonic() - started < 0.5
+        release.set()
+    assert len(built) == len(areas) - 1
+
+
+@pytest.mark.anyio
+async def test_a_catalog_that_waits_too_long_is_answered_busy(
+    fake: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dated_imagery, "SLOT_WAIT_S", 0.2)
+    for _ in range(dated_imagery.MAX_IN_FLIGHT):
+        await dated_imagery._builders.acquire()
+    try:
+        started = time.monotonic()
+        with pytest.raises(dated_imagery.CatalogBusy):
+            await dated_imagery.build(BBOX, client_for(fake))
+        assert 0.15 < time.monotonic() - started < 1.0
+    finally:
+        for _ in range(dated_imagery.MAX_IN_FLIGHT):
+            dated_imagery._builders.release()
+    assert fake.requests == []
+    assert dated_imagery._building == {}

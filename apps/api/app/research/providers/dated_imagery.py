@@ -24,6 +24,11 @@ process for 6 h per area rounded to 0.01°, mosaic registrations for 24 h; a pro
 is asked again by the next catalog after FAILURE_TTL_S, and only it. The three SourceSpecs join
 the research registry (open_data.SOURCES) so /research/sources lists them; the overview does not
 run them.
+
+The route builds catalogs with `build`: MAX_IN_FLIGHT at once across every client, each on a
+thread of its own, never on the request threadpool every other route shares. Requests for an
+area whose catalog is being built share that build. A catalog waiting for a builder holds no
+thread; past MAX_WAITING or SLOT_WAIT_S it is answered busy (503, Retry-After).
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from datetime import UTC, date, datetime
 from typing import Any, NamedTuple
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
+import anyio
 import httpx
 from pydantic import HttpUrl, ValidationError
 from shapely.geometry import shape
@@ -144,6 +150,15 @@ TOPO_MAX_RECORDS = 50
 TOPO_MAX_SHEETS = 16
 METADATA_MAX_BYTES = 64 * 1024
 TIMEOUT_S = 25
+#: Catalogs built at once, across every client (`build`). A catalog is some 25 to 30 calls to
+#: Planetary Computer and The National Map: seconds when they answer quickly, minutes when not.
+MAX_IN_FLIGHT = 3
+#: Catalogs that may wait for a builder; the next is answered busy at once.
+MAX_WAITING = 6
+#: How long a catalog waits for a builder before it is answered busy (s).
+SLOT_WAIT_S = 5.0
+#: The Retry-After a busy catalog is answered with (s).
+RETRY_AFTER_S = 10
 
 NAIP_DATE_MEANING = (
     "Flight dates of the photographs in this area; a year's quarter quads may have been flown "
@@ -904,6 +919,54 @@ def discover(bbox: tuple[float, float, float, float], client: httpx.Client) -> D
     )
     _catalogs.put(area, catalog, FAILURE_TTL_S if failed or incomplete(catalog) else CATALOG_TTL_S)
     return catalog
+
+
+class CatalogBusy(Exception):  # noqa: N818 - a condition, answered 503
+    """Every builder is busy and the queue is full, or the wait ran out: the catalog is not
+    built now, and the answer says when to ask again."""
+
+
+#: Who may build a catalog now (`build`): MAX_IN_FLIGHT at once, the rest wait here.
+_builders = anyio.Semaphore(MAX_IN_FLIGHT)
+#: The builders' threads, apart from the threadpool every other route's work runs on.
+_builder_threads = anyio.CapacityLimiter(MAX_IN_FLIGHT)
+#: Areas (rounded) whose catalog is being built now, set when the build ends.
+_building: dict[tuple[float, float, float, float], anyio.Event] = {}
+
+
+async def build(
+    bbox: tuple[float, float, float, float], client: httpx.Client
+) -> DatedImageryCatalog:
+    """A catalog for the route: from the cache at once, else built (`discover`) on a builder's
+    thread once one is free. A request for an area already being built waits for that build
+    and shares it. CatalogBusy when MAX_WAITING catalogs already wait, after SLOT_WAIT_S, or
+    when the build it waited for ended without a catalog."""
+    area = round_bbox(check_bbox(bbox))
+    hit = cached(area)
+    if hit is not None:
+        return hit
+    running = _building.get(area)
+    if running is not None:
+        await running.wait()
+        shared = cached(area)
+        if shared is None:
+            raise CatalogBusy
+        return shared
+    if _builders.value == 0 and _builders.statistics().tasks_waiting >= MAX_WAITING:
+        raise CatalogBusy
+    done = _building[area] = anyio.Event()
+    try:
+        with anyio.move_on_after(SLOT_WAIT_S) as waited:
+            await _builders.acquire()
+        if waited.cancelled_caught:
+            raise CatalogBusy
+        try:
+            return await anyio.to_thread.run_sync(discover, bbox, client, limiter=_builder_threads)
+        finally:
+            _builders.release()
+    finally:
+        del _building[area]
+        done.set()
 
 
 # ---- As research sources ------------------------------------------------------------------

@@ -23543,7 +23543,7 @@
     },
     "/api/v1/imagery/dated": {
       "get": {
-        "description": "NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area\n(each side at most 0.25\u00b0), newest first, each with its date's meaning, its licence and its\nstated positional accuracy. A provider that fails is listed as unavailable; the others\nstill answer. Cached on this server for 6 h per area rounded to 0.01\u00b0; a catalog missing\nsomething that may answer if asked again is cached for seconds, and not by browsers.",
+        "description": "NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area\n(each side at most 0.25\u00b0), newest first, each with its date's meaning, its licence and its\nstated positional accuracy. A provider that fails is listed as unavailable; the others\nstill answer. Cached on this server for 6 h per area rounded to 0.01\u00b0; a catalog missing\nsomething that may answer if asked again is cached for seconds, and not by browsers.\n\nAn `async def`, so a catalog waiting for one of the few catalog builders waits on the event\nloop and holds none of the threads every other route runs on; the build runs on the\nbuilders' own threads (dated_imagery.build). Past them it is answered busy (503).",
         "operationId": "dated_api_v1_imagery_dated_get",
         "parameters": [
           {
@@ -23641,6 +23641,9 @@
               }
             },
             "description": "Validation error"
+          },
+          "503": {
+            "description": "Every catalog builder is busy: ask again after Retry-After seconds."
           }
         },
         "summary": "Dated public imagery for an area",
