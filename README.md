@@ -67,8 +67,9 @@ pnpm dev:research                         # the Land research worker           (
 
 Open <http://localhost:5173>, click **Open the demo ranch**. The Land workspace (saved land,
 its research, the fog of knowing, plans on your own ground) is behind a flag: set
-`VITE_ENABLE_LAND_EXPLORATION=true` in `.env` before `pnpm dev` to see it, with **Land** in
-the tool rail (`Shift+L`). The last two commands only matter with it on: the saved demo Land and
+`VITE_ENABLE_LAND_EXPLORATION=true` in `apps/web/.env` (Vite reads the web app's own folder, not
+the repository root) or in the shell (`VITE_ENABLE_LAND_EXPLORATION=true pnpm dev`) to see it,
+with **Land** in the tool rail (`Shift+L`). The last two commands only matter with it on: the saved demo Land and
 the worker that runs its research.
 
 Four pages are served, not one. `/` is the globe; `/view.html` is the scan gallery, each scan
@@ -93,7 +94,9 @@ and real research runs ([docs/LAND_EXPLORATION.md](docs/LAND_EXPLORATION.md)).
 
 ### Environment variables
 
-See [`.env.example`](.env.example) for every variable with comments. The important ones:
+See [`.env.example`](.env.example) for every variable with comments. The API reads the
+repository root's `.env`; Vite reads `web` variables from `apps/web/.env` or the shell. The
+important ones:
 
 | Variable                       | Where | Purpose                                                                                 |
 | ------------------------------ | ----- | --------------------------------------------------------------------------------------- |
@@ -101,7 +104,7 @@ See [`.env.example`](.env.example) for every variable with comments. The importa
 | `VITE_DEFAULT_*_ASSET_ID`      | web   | Your own splat / mesh / point-cloud ion assets for the built-in site (any subset).      |
 | `VITE_ENABLE_PHOTOREALISTIC`   | web   | Google Photorealistic 3D Tiles world, on by default; `false` switches it off.           |
 | `VITE_SPLAT_GPU_MOTION`        | web   | Living Survey motion in the splat shader, on by default; `false` forces the CPU path.   |
-| `VITE_ENABLE_LAND_EXPLORATION` | web   | The Land workspace, off by default; `true` shows it. Off, the build ships none of it.   |
+| `VITE_ENABLE_LAND_EXPLORATION` | web   | The Land workspace, off by default; `true` shows it. Off, no page loads any of it.      |
 | `TILE_PROXY_HOST`              | web   | Dev server: serve this public tile bucket under `/r2/`, as Pages does in production.    |
 | `DATABASE_URL`                 | api   | PostgreSQL + PostGIS connection.                                                        |
 | `API_CORS_ORIGINS`             | api   | Allowed browser origins.                                                                |

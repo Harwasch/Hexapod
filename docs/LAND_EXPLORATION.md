@@ -64,8 +64,9 @@ legal, or financial findings are shown in place of missing integrations.
 Apply migrations through the current Alembic head to an isolated development/preview database and run the API normally.
 Set `VITE_ENABLE_LAND_EXPLORATION=true` on the web development server or build. It defaults
 to false, including in development, so current production flows remain unchanged until a
-deployer explicitly enables it. A build with it off ships none of the Land code: the shell loads
-the panel, its bridges and the workspace sign-in on demand (see "Polish" below). Set `VITE_API_BASE_URL` to the preview API when using a
+deployer explicitly enables it. A build with it off never loads any of the Land code: the shell
+loads the panel, its bridges and the workspace sign-in on demand (see "Polish" below), so their
+chunks are built and deployed but never requested. Set `VITE_API_BASE_URL` to the preview API when using a
 separate port; `API_CORS_ORIGINS` is a comma-separated list, not JSON.
 
 The desktop rail exposes **Land**, also available with Shift+L. On phones it is under
@@ -2492,16 +2493,21 @@ The audit's remaining Land items, each tested:
 - **On demand.** `AppShell` loads the Land panel, the land bridges (`LandIdentityBridge`,
   `LandBridge`, `LandContextBridge`, `LandRasterBridge`, `KnowledgeFogBridge`,
   `LandMissionBridge`), the fog of knowing's card and legend, and with them oidc-client-ts, with
-  `React.lazy`, and renders them only with the flag on. The globe's entry chunk went from 383 kB
-  to 179 kB gzipped. `apps/web/scripts/check-bundle.mjs` fails a build whose globe page reaches
-  the Land code before its first frame, and holds the entry to a gzip budget
-  (`INDEX_ENTRY_GZIP_BUDGET`).
+  `React.lazy`, and renders them only with the flag on. With it off their chunks are still
+  built, but nothing requests them. The globe's entry chunk went from 383 kB to 179 kB gzipped.
+  `apps/web/scripts/check-bundle.mjs` fails a build whose globe page reaches the Land code
+  before its first frame, and holds the entry to a gzip budget (`INDEX_ENTRY_GZIP_BUDGET`). A
+  chunk that fails to load (a flaky network, a tab left open across a deploy) fails alone: the
+  bridges and the settings sheet mount under a quiet error boundary (`OnDemand` in `AppShell`)
+  and the panel, card and legend under their inline ones, so the HUD keeps running.
 - **On a phone.** The review sheet covers the lower half of the map, so a boundary going to
   review is framed above it when anything hides it (`features/land/landFraming.ts`, arithmetic in
   `lib/viewFraming.ts`); opening a saved land frames it beside the panel on a desktop and above
   the sheet on a phone. Opening a saved land, from the panel's list, the command box or the map,
   scrolls the panel to the land's overview. On a touch screen (`(pointer: coarse)`) the Land
-  tool and the plan composer say "Tap the map", not "Click the map" (`lib/pointer.ts`).
+  tool and the plan composer say "Tap the map", not "Click the map" (`lib/pointer.ts`), and a
+  wait for a point on the map never says "Escape": it names the button that cancels it (the
+  plan card's **Cancel**, the map alignment's **Cancel map pick**).
 - **In the command box.** With the flag on, the Actions include "Open Land" (`Shift+L`) and
   "Outline land" ("Return to your unsaved outline" while one is open), and saved land is
   listed by name under "Saved land": choosing one opens it and frames it.
@@ -2509,6 +2515,7 @@ The audit's remaining Land items, each tested:
   dated imagery, then how old what you know is.
 
 Tests: `landPanelPhone.test.tsx` (tap copy, review framing above the sheet, overview on
-reopening), `viewFraming.test.ts`, `commandBox.test.tsx` ("the Land tool in the command box"),
-`checkBundle.test.ts`, and in `e2e/land.spec.ts` "on a touch phone" and the strip order in the
-fog test.
+reopening), `touchPickCancel.test.tsx` and `landImageAlignment.test.tsx` (no Escape on a phone,
+a Cancel that ends the wait), `errorBoundaryQuiet.test.tsx`, `viewFraming.test.ts`,
+`commandBox.test.tsx` ("the Land tool in the command box"), `checkBundle.test.ts`, and in
+`e2e/land.spec.ts` "on a touch phone" and the strip order in the fog test.

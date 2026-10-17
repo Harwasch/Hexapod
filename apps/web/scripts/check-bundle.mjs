@@ -25,7 +25,8 @@
 // index.html names) has a gzip budget, `INDEX_ENTRY_GZIP_BUDGET`, so growth is a decision
 // rather than a drift. And it must not reach the Land feature before its first frame: AppShell
 // loads the Land panel, its bridges and the workspace sign-in (oidc-client-ts) on demand, so a
-// build with VITE_ENABLE_LAND_EXPLORATION off ships none of it to a visitor. One static import
+// build with VITE_ENABLE_LAND_EXPLORATION off never sends any of it to a visitor (the chunks are
+// built, and nothing requests them). One static import
 // would quietly undo that, so the page fails if anything it loads carries `LAND_MARKERS`.
 //
 // Exit status: 0 when every Cesium-free page is Cesium-free and the globe page keeps its two
