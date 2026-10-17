@@ -10,6 +10,12 @@ interface Props {
   children: ReactNode;
   /** Compact fallback for a single panel instead of the whole app. */
   inline?: boolean;
+  /**
+   * No fallback at all, only the log line: for what has no panel of its own to put one in (a
+   * bridge that draws on the globe, a sheet loaded on demand), so a chunk that fails to load
+   * leaves the rest of the HUD running.
+   */
+  quiet?: boolean;
   label?: string;
 }
 
@@ -38,6 +44,7 @@ export class ErrorBoundary extends Component<Props, State> {
   override render(): ReactNode {
     const { error } = this.state;
     if (!error) return this.props.children;
+    if (this.props.quiet) return null;
     if (this.props.inline) {
       return (
         <GlassPanel padding="sm" compact role="alert">

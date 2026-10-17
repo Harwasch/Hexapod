@@ -1,4 +1,11 @@
-import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  type ComponentType,
+  type LazyExoticComponent,
+  type ReactNode,
+} from "react";
 
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { env } from "@/app/env";
@@ -67,9 +74,11 @@ function lazyNamed<K extends string, M extends Record<K, ComponentType>>(
 // The Land feature (VITE_ENABLE_LAND_EXPLORATION): its panel, the bridges that draw and sync it
 // on the globe, the fog of knowing, and the workspace sign-in behind them (oidc-client-ts, which
 // only the identity bridge and the panel reach). Each is loaded on demand like SettingsSheet,
-// and only rendered with the flag on, so a build with the flag off never requests any of it and
-// the globe's first load carries none of it (`scripts/check-bundle.mjs` holds that line). With
-// the flag on they load as the shell mounts and behave as before.
+// and only rendered with the flag on, so a build with the flag off never requests any of it
+// (its chunks are still built) and the globe's first load carries none of it
+// (`scripts/check-bundle.mjs` holds that line). With the flag on they load as the shell mounts
+// and behave as before; a chunk that fails to load fails alone (`OnDemand` for the bridges, the
+// inline boundaries for the panel, card and legend).
 const LandIdentityBridge = lazyNamed(
   () => import("../land/WorkspaceIdentity"),
   "LandIdentityBridge",
@@ -166,9 +175,22 @@ function SettingsSheetLazy() {
   const open = useUi((s) => s.settingsOpen);
   if (!open) return null;
   return (
-    <Suspense fallback={null}>
+    <OnDemand label="Settings">
       <SettingsSheet />
-    </Suspense>
+    </OnDemand>
+  );
+}
+
+/**
+ * Where a component loaded on demand mounts: nothing while its chunk loads, and nothing (with a
+ * log line) if the chunk fails to load, from a flaky network or a tab left open across a deploy,
+ * so the failure stays its own rather than replacing the whole HUD.
+ */
+function OnDemand({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <ErrorBoundary quiet label={label}>
+      <Suspense fallback={null}>{children}</Suspense>
+    </ErrorBoundary>
   );
 }
 
@@ -209,14 +231,14 @@ export function AppShell() {
     <>
       <GlobalHotkeys />
       {env.landExplorationEnabled && (
-        <Suspense fallback={null}>
+        <OnDemand label="Land bridges">
           <LandIdentityBridge />
           <LandBridge />
           <LandContextBridge />
           <LandRasterBridge />
           <KnowledgeFogBridge />
           <LandMissionBridge />
-        </Suspense>
+        </OnDemand>
       )}
       <LanternBridge />
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">
