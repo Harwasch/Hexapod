@@ -9,16 +9,16 @@ in the model.
 
 ## Sourcing
 
-| Finding                                                                                                                                                     | Applied in                                              |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| The 40.3% duty stack on Chinese motors is confirmed (MFN 2.8% + Section 301 25% + the July 2026 forced-labour tier 12.5%).                                  | `costs.yaml: import_duty_pct`                           |
-| Every price is compared landed, because the "retail" stores ship from China with duty unpaid.                                                               | `parts.landed`, `actuators.yaml: landed_usd`            |
-| Zennixtek's real shipping at qty 10 is $7–21 per unit, not $5–15.                                                                                           | `price_alt_usd` for every Zennixtek part                |
-| Hiwonder offers USPS duty-paid shipping: HX-35HM lands at about $39, not $52, and HX-65HM at about $54, not $73.                                            | `landed_usd`                                            |
-| Taobao-agent and AliExpress prices could not be verified. Only verified prices are used, for example EduLite 05 at $82 from OpenELAB rather than about $71. | `price_alt_*`; the unverified figures stay in the notes |
-| Steadywin's $70.36 "GWK8108-8" is a GIM8108-8 core (5 in stock). The 10.2 / 24.8 Nm table belongs to the WGG8108-8.                                         | `bare_units.yaml`                                       |
-| OpenELAB sells a housed, driverless GIM8108-8 at $113.99 duty-paid.                                                                                         | `bare_gim8108_8: price_alt_usd`                         |
-| Express shipping from China at qty 10 is about $15–16 per unit.                                                                                             | `costs.yaml: default_shipping_usd`                      |
+| Finding                                                                                                                                                                                      | Applied in                                              |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| The 40.3% duty stack on Chinese motors is confirmed (MFN 2.8% + Section 301 25% + the July 2026 forced-labour tier 12.5%).                                                                   | `costs.yaml: import_duty_pct`                           |
+| Every price is compared landed, because the "retail" stores ship from China with duty unpaid.                                                                                                | `parts.landed`, `actuators.yaml: landed_usd`            |
+| Zennixtek's real shipping at qty 10 is $7–21 per unit, not $5–15.                                                                                                                            | `price_alt_usd` for every Zennixtek part                |
+| Hiwonder offers USPS duty-paid shipping: HX-35HM lands at about $39, not $52, and HX-65HM at about $54, not $73.                                                                             | `landed_usd`                                            |
+| Taobao-agent and AliExpress prices could not be verified. Only verified prices are used, for example EduLite 05 at $82 from OpenELAB rather than about $71.                                  | `price_alt_*`; the unverified figures stay in the notes |
+| Steadywin's $70.36 "GWK8108-8" is a GIM8108-8 core (5 in stock). The 10.2 / 24.8 Nm table belongs to the WGG8108-8.                                                                          | `bare_units.yaml`                                       |
+| OpenELAB sells a housed, driverless GIM8108-8 at $113.99 duty-paid.                                                                                                                          | `bare_gim8108_8: price_alt_usd`                         |
+| Express shipping from China at qty 10 runs $7–21 per unit, rising with mass. One fit, $6 + $25/kg, now prices every duty-unpaid part; the researched per-part estimates ($2–9) were dropped. | `costs.yaml: freight_*`, `parts.landed`                 |
 
 ## Custom electronics
 

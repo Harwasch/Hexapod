@@ -10,7 +10,7 @@
 # carry +$8 / +80 g for a printed one and two bearings; the GB gimbal motors are housed.
 # speed_rpm is a loaded estimate at 48 V.
 # price_usd is the ex-duty list price (Steadywin direct or aifitlab, both ship from China
-# duty unpaid); the landed price adds US duty and freight from costs.yaml.
+# duty unpaid); the landed price adds US duty and freight by mass from costs.yaml.
 units:
   - id: bare_gim4315_8
     name: Steadywin GIM4315-8 (bare)
@@ -40,8 +40,8 @@ units:
     speed_rpm: 300
     price_usd: 60
     price_alt_usd: 81
-    price_alt_source: Steadywin direct $46.82 + 40.3% duty + $15 shipping
-    price_alt_confidence: med
+    price_alt_source: Steadywin direct $46.82 + 40.3% duty + $15 shipping (its GIM6010-8 core; unconfirmed for this part)
+    price_alt_confidence: low
     dia_mm: 67.5
     len_mm: 30.5
     backlash_deg: 0.25

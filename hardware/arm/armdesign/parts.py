@@ -146,11 +146,12 @@ def rotor_inertia(kind: str, mass: float, dia: float) -> float:
 
 
 def landed(a: dict, costs: dict[str, float]) -> float:
-    """What the listed order costs delivered: the researched figure, else list price plus
-    US duty and freight."""
+    """What the listed order costs delivered: list price plus US duty and freight by mass,
+    or the stated delivered price where the seller ships duty-paid."""
     if "landed_usd" in a:
         return float(a["landed_usd"])
-    return float(a["price_usd"]) * (1 + costs["import_duty_pct"] / 100) + costs["default_shipping_usd"]
+    freight = costs["freight_base_usd"] + costs["freight_per_kg_usd"] * float(a["mass_kg"])
+    return float(a["price_usd"]) * (1 + costs["import_duty_pct"] / 100) + freight
 
 
 def landed_alt(a: dict) -> float | None:
