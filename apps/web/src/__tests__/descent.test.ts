@@ -25,6 +25,7 @@ import {
 import type { OsmCandidate } from "@/missions/osm";
 import { useDescent } from "@/state/descent";
 import { useLandContext } from "@/state/landContext";
+import { useLantern } from "@/state/lantern";
 import { useSettings } from "@/state/settings";
 
 const osm = vi.hoisted(() => ({
@@ -312,6 +313,19 @@ describe("the flight", () => {
     expect(flights[0]?.options.durationS).toBeLessThanOrEqual(0.01);
     flights[0]?.options.onComplete?.();
     expect(useDescent.getState().phase).toBe("arrived");
+  });
+
+  it("fetches the dated imagery list on arrival, where the lantern can open", () => {
+    useLantern.setState({ availability: { ok: true }, requested: false, bboxOverride: null });
+    const { scene, flights } = fakeScene();
+    descend(scene, target);
+    expect(useLantern.getState().requested).toBe(false);
+    flights[0]?.options.onComplete?.();
+    expect(useLantern.getState().requested).toBe(true);
+    const bbox = useLantern.getState().bboxOverride;
+    expect(bbox?.[0]).toBeLessThan(target.longitude);
+    expect(bbox?.[2]).toBeGreaterThan(target.longitude);
+    useLantern.setState({ availability: { ok: false, reason: "open-world" }, bboxOverride: null });
   });
 
   it("says when OpenStreetMap could not be reached, and never throws", async () => {

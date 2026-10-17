@@ -2207,3 +2207,39 @@ or workspace switch forgets them.
 Known limits: a land's own project has no machines, so its plans draft unassigned. The planner
 receives land outlines briefly through the write-gated, stateless plan-draft endpoint. The
 console's map preview of passes still uses its own preview spacing, not the machine classes.
+
+## Implemented increment: the Descent and the Time Lantern
+
+The welcome card asks "Where is your land?" (with the Land flag off, "Where do you want to
+go?"). An address or place is geocoded once, on submit, never per keystroke (Nominatim, the
+fallback geocoder, forbids autocomplete); coordinates ("34.698, -120.04", with or without ° and
+N/S/E/W) skip the geocoder. One place flies there at once, several are offered as choices, none
+says so in place. The flight is one glide (`features/descent/descent.ts`, CameraController.glide)
+from wherever the camera is to a 700 m square around the point, re-pointed on the way by the
+terrain sampled at full detail and by the OpenStreetMap area containing the point, which is drawn
+as "Mapped area from OpenStreetMap, not a legal parcel". A geocoder box more than 8 km across is
+a town or a region: a plain flight to its box, no lookup. Overpass is never waited for; its
+failure is a line on the arrival card. The arrival card offers "Outline this land", which goes
+through `landEntry` (`proposeOutline` for the mapped area, a new `drawOutline` otherwise) so a
+selected land is never revised by it, and "Look back in time", which opens the Time Lantern over
+the place.
+
+The Time Lantern (Y, or Look back in the strip; ADR 0010) shows dated public imagery under the
+cursor through the photorealistic world: each year NAIP was flown (Planetary Computer mosaics,
+U.S. public domain), the clearest June to September Sentinel-2 scene of each year since 2016
+(off by default: 10 m), and each edition of the USGS topographic sheets covering the place, which
+this API tiles from USGS's own GeoTIFFs (`/api/v1/imagery/usgs-topo/tiles`, through the raster
+allowlist, the collar cut at the neatline). The wheel over the map steps through real
+acquisitions only, Alt peeks, Esc closes. The rim names the source, its date (the record's under
+the cursor), its licence and its positional accuracy on whose word: the NAIP record's own
+sentence where it has one ("+/- 6 meters to ground specification"), "not stated" where it has
+none, the 1947 National Map Accuracy Standards for sheets made after them, "predates the
+standards" before; and every source says "not checked against today's 3D world".
+
+`GET /api/v1/imagery/dated` is a public, rate-limited read (each side at most 0.25°; cached 6 h
+per area rounded to 0.01°, and a cached answer spends no token). A saved land's bounds are
+rounded outward to 0.05° before they reach it. The three sources are registered with the
+research sources (`/research/sources`) and list what exists without storing evidence; the
+overview does not run them. Not done: Esri Wayback and the Esri-hosted topo service (not openly
+licensed), image registrations and NDVI rasters in the lens (they need workspace auth on the
+tiles), and any check of alignment against the Google mesh.

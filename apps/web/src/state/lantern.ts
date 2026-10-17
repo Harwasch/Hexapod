@@ -14,6 +14,9 @@ export type LanternUnavailable =
 
 export type LanternAvailability = { ok: true } | { ok: false; reason: LanternUnavailable };
 
+/** Above this altitude (m) the lens is not offered: a NAIP pixel is less than a screen pixel. */
+export const LANTERN_MAX_ALTITUDE_M = 20_000;
+
 /** West, south, east, north (degrees). */
 export type LanternBbox = [number, number, number, number];
 
@@ -24,6 +27,11 @@ interface LanternState {
   kinds: Record<LanternKind, boolean>;
   /** The area to list dated imagery for, when something chose one (the Descent's arrival). */
   bboxOverride: LanternBbox | null;
+  /**
+   * Around the view's centre when the lantern opened with no area chosen and no land selected
+   * (LanternBridge sets it): the lens then looks back where the person was looking.
+   */
+  autoBbox: LanternBbox | null;
   /** Whether the scene can show the lens now (cesium/TimeLantern.ts, mirrored by the bridge). */
   availability: LanternAvailability;
   /** Set once the lens has been asked for, or a descent has arrived: the catalog may load. */
@@ -36,6 +44,7 @@ interface LanternState {
   step: (delta: number, count: number) => void;
   toggleKind: (kind: LanternKind) => void;
   setBbox: (bbox: LanternBbox | null) => void;
+  setAutoBbox: (bbox: LanternBbox | null) => void;
   setAvailability: (availability: LanternAvailability) => void;
   request: () => void;
 }
@@ -50,6 +59,7 @@ export const useLantern = create<LanternState>()((set) => ({
   index: 0,
   kinds: { aerial: true, maps: true, satellite: false },
   bboxOverride: null,
+  autoBbox: null,
   availability: { ok: false, reason: "open-world" },
   requested: false,
   setMode: (mode) =>
@@ -64,6 +74,7 @@ export const useLantern = create<LanternState>()((set) => ({
     }),
   toggleKind: (kind) => set((s) => ({ kinds: { ...s.kinds, [kind]: !s.kinds[kind] }, index: 0 })),
   setBbox: (bboxOverride) => set({ bboxOverride, index: 0 }),
+  setAutoBbox: (autoBbox) => set({ autoBbox, index: 0 }),
   setAvailability: (availability) =>
     set((s) =>
       s.availability.ok === availability.ok &&

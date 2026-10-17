@@ -240,7 +240,7 @@ describe("the arrival card", () => {
       render(wrap(<DescentArrival />));
       act(() => arrive(null));
       expect(screen.getByTestId("descent-mapped")).toHaveTextContent(
-        "No mapped boundary here; you can draw one.",
+        "No mapped boundary here. You can draw one.",
       );
       await userEvent.click(screen.getByRole("button", { name: "Outline this land" }));
       expect(useLand.getState().mode).toBe("draw");
@@ -257,13 +257,19 @@ describe("the arrival card", () => {
     render(wrap(<DescentArrival />));
     act(() => arrive(null));
     expect(screen.queryByRole("button", { name: "Outline this land" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("descent-mapped")).toHaveTextContent("No mapped boundary here.");
+    expect(screen.getByTestId("descent-mapped")).not.toHaveTextContent("draw");
     await userEvent.click(screen.getByRole("button", { name: "Look back in time" }));
     expect(useLantern.getState().mode).toBe("sticky");
     const bbox = useLantern.getState().bboxOverride;
     expect(bbox?.[0]).toBeLessThan(-120.04);
     expect(bbox?.[2]).toBeGreaterThan(-120.04);
+    // The lantern's strip takes over from the card, which would cover the lens.
+    expect(screen.queryByTestId("descent-arrival")).not.toBeInTheDocument();
     useLantern.getState().setMode("off");
     useLantern.getState().setAvailability({ ok: false, reason: "open-world" });
+    act(() => arrive(null));
+    expect(screen.queryByRole("button", { name: "Look back in time" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByTestId("descent-arrival")).not.toBeInTheDocument();
   });

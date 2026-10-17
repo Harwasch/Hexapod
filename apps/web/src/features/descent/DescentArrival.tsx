@@ -6,34 +6,34 @@ import { GlassButton, GlassPanel } from "@twin/ui";
 import { env } from "@/app/env";
 import { useScene } from "@/cesium/SceneContext";
 import { useDescent } from "@/state/descent";
-import { useLantern, type LanternBbox } from "@/state/lantern";
+import { useLantern } from "@/state/lantern";
 
 import { drawOutline, proposeOutline } from "../land/landEntry";
 import { mappedFeatureDraft } from "../land/mappedFeature";
-import { boxAround, removeMappedPreview, stopDescent } from "./descent";
+import { lookBackArea, removeMappedPreview, stopDescent } from "./descent";
 import "./descent.css";
-
-/** "Look back in time" lists dated imagery this far around the place reached (m, each way). */
-const LOOK_BACK_HALF_M = 1_200;
 
 const acres = (value: number) =>
   value.toLocaleString(undefined, { maximumFractionDigits: value < 10 ? 1 : 0 });
 
-/** What was found around the place, in one line. */
-function mappedLine(state: ReturnType<typeof useDescent.getState>): string {
+/** What was found around the place, in one line. "You can draw one" only where one can. */
+function mappedLine(state: ReturnType<typeof useDescent.getState>, canDraw: boolean): string {
+  const draw = canDraw ? " You can draw one." : "";
   switch (state.mappedStatus) {
     case "found":
       return state.mapped
         ? `Mapped area: ${state.mapped.name} · ${acres(state.mapped.acres)} acres, from OpenStreetMap. Not a legal parcel.`
-        : "No mapped boundary here; you can draw one.";
+        : `No mapped boundary here.${draw}`;
     case "pending":
       return "Looking for a mapped boundary…";
     case "error":
-      return "OpenStreetMap could not be reached, so no mapped boundary is shown. You can draw one.";
+      return `OpenStreetMap could not be reached, so no mapped boundary is shown.${draw}`;
     case "skipped":
-      return "This is a large area. Zoom in on your land to outline it.";
+      return canDraw
+        ? "This is a large area. Zoom in on your land to outline it."
+        : "This is a large area. Zoom in to see the ground.";
     case "none":
-      return "No mapped boundary here; you can draw one.";
+      return `No mapped boundary here.${draw}`;
   }
 }
 
@@ -65,11 +65,12 @@ export function DescentArrival() {
     useDescent.getState().clear();
   };
   const lookBack = () => {
-    const box = boxAround(target.longitude, target.latitude, LOOK_BACK_HALF_M * 2);
-    const bbox: LanternBbox = [box.west, box.south, box.east, box.north];
     const lantern = useLantern.getState();
-    lantern.setBbox(bbox);
+    lantern.setBbox(lookBackArea(target));
     lantern.setMode("sticky");
+    // The lantern's strip takes over; the card would cover the lens.
+    removeMappedPreview();
+    useDescent.getState().clear();
   };
 
   return (
@@ -95,7 +96,7 @@ export function DescentArrival() {
         </GlassButton>
       </div>
       <p className="descent-arrival__mapped" aria-live="polite" data-testid="descent-mapped">
-        {mappedLine(state)}
+        {mappedLine(state, env.landExplorationEnabled)}
       </p>
       <p className="descent-arrival__credit">{target.attribution}</p>
       <div className="descent-arrival__actions">

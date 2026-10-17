@@ -27,6 +27,7 @@ import { describeError } from "@/lib/log";
 import { fetchOsmContaining, type OsmCandidate } from "@/missions/osm";
 import { useDescent, type DescentTarget } from "@/state/descent";
 import { useLandContext } from "@/state/landContext";
+import { useLantern, type LanternBbox } from "@/state/lantern";
 import { useSettings } from "@/state/settings";
 
 /** The land context layer the mapped outline is drawn in until it is adopted or closed. */
@@ -133,6 +134,15 @@ export function boxAround(
   };
 }
 
+/** "Look back in time" lists dated imagery this far around the place reached (m, each way). */
+const LOOK_BACK_HALF_M = 1_200;
+
+/** The area the Time Lantern looks back over from a place reached. */
+export function lookBackArea(target: Pick<DescentTarget, "longitude" | "latitude">): LanternBbox {
+  const box = boxAround(target.longitude, target.latitude, LOOK_BACK_HALF_M * 2);
+  return [box.west, box.south, box.east, box.north];
+}
+
 /** The descent under way: a new one, or the app closing, stops its lookups and corrections. */
 let current: AbortController | null = null;
 
@@ -173,7 +183,14 @@ export function descend(
   // The welcome card has done its job; the map is the place now.
   useSettings.getState().set({ onboardingDismissed: true });
   const arrive = () => {
-    if (!signal.aborted) useDescent.getState().arrive();
+    if (signal.aborted) return;
+    useDescent.getState().arrive();
+    // "Look back in time" is one click away: its list is fetched now, while the card is read.
+    const lantern = useLantern.getState();
+    if (lantern.availability.ok && lantern.mode === "off") {
+      lantern.setBbox(lookBackArea(target));
+      lantern.request();
+    }
   };
   const cancel = () => {
     if (!signal.aborted) useDescent.getState().cancel();

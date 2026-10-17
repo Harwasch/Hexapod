@@ -32,6 +32,7 @@ import { createTerrain, isTerrainSource } from "./providers/terrain";
 import { createLayerTileset, is3DSource, tileCacheBudget } from "./providers/tiles";
 import { createDataSource, isVectorSource } from "./providers/vector";
 import type { SceneEvents } from "./types";
+import type { WorldShader } from "./worldShader";
 
 const log = createLogger("layers");
 /** How often a resting camera inside a scan checks whether the world has finished loading. */
@@ -88,6 +89,14 @@ export class LayerManager {
   private handoverTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAltitude = Number.POSITIVE_INFINITY;
   private performance: PerformanceManager | null = null;
+  /** The world tileset's one custom shader (worldShader.ts): bound to the tileset as it loads. */
+  private worldShader: WorldShader | null = null;
+
+  /** Hands the world tileset to its shader owner, now and whenever it is replaced. */
+  bindWorldShader(shader: WorldShader): void {
+    this.worldShader = shader;
+    shader.setTileset(this.worldTileset);
+  }
 
   /** Lets the world tileset report its loading and memory to the adaptive quality policy. */
   bindPerformance(performance: PerformanceManager): void {
@@ -487,6 +496,7 @@ export class LayerManager {
         created.debugFreezeFrame = this.worldFrozen;
         created.preloadWhenHidden = this.lastAltitude < ORBIT_PRELOAD_BELOW_M;
         this.clipping.setWorldTileset(created);
+        this.worldShader?.setTileset(created);
         this.applyWorldScreenSpaceError(this.worldSse, this.worldPixelRatio);
         // The idle refinement waits for the world's tiles too, and its memory counts.
         created.loadProgress.addEventListener((pending: number, processing: number) =>
@@ -591,6 +601,7 @@ export class LayerManager {
       case "tileset":
         if (this.clipping && this.worldTileset === handle.tileset) {
           this.clipping.setWorldTileset(null);
+          this.worldShader?.setTileset(null);
           this.worldTilesetId = null;
           this.worldTilesetRef = null;
           this.applyWorldMode(false);

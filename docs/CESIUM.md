@@ -469,6 +469,25 @@ Clamped objects (the sample rock and plant) rest on the drawn surface
 (`scene.sampleHeightMostDetailed`, excluding themselves) when it is within 60 m of the
 terrain, so they sit on Google's ground rather than floating over or sinking into it.
 
+### The Time Lantern: dated imagery through the world
+
+The Time Lantern (`cesium/TimeLantern.ts`, ADR 0010) opens a lens under the cursor in which
+dated public imagery shows instead of the Google mesh. The mesh is cut in screen space by the
+world tileset's one custom shader (`cesium/worldShader.ts`: discard with a stippled feather,
+never alpha), and the globe is kept under the lens by a globe-only clipping polygon
+(`ClippingManager.setLanternWindow`) swapped as the lens moves. Never a polygon on the Google
+tileset: each change there rebakes every tile model. `WorldShader` is the only writer of the
+tileset's `customShader`; anything else that shades the Google world adds its uniforms there.
+The window's edge is found on the terrain the globe has loaded (`groundWindow` refines each ray
+against `globe.getHeight`), so it lands on the screen just outside the lens and the rim's glow
+covers the seam. While the lantern is open, `setLanternReach` widens the globe's limit rectangle
+so terrain and imagery load wherever the lens may go. Dated sources are imagery layers limited
+to that reach, the current one on top, its neighbours in time at alpha 0 so they prefetch, over
+a dark "no record" grid; all wait for a basemap first (Cesium stretches the bottom layer over
+the globe). The wheel over the map steps through dates while the lens shows (a capture listener
+on window, attached only then), Alt held peeks, Esc closes. Offered only in the photorealistic
+world, below 20 km, with WebGL 2 clipping on.
+
 ## Gaussian splats, and moving them
 
 Splats are a separate subsystem from everything else Cesium draws, and the differences matter

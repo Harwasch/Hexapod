@@ -15,6 +15,8 @@ import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useSkinPoke } from "@/state/skinPoke";
+import { useLantern } from "@/state/lantern";
+import { useToasts } from "@/state/toasts";
 import { useUi } from "@/state/ui";
 
 import { AddPanel } from "../add-data/AddPanel";
@@ -25,6 +27,10 @@ import { DescentArrival } from "../descent/DescentArrival";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
+import { LanternBridge } from "../lantern/LanternBridge";
+import { LanternRim } from "../lantern/LanternRim";
+import { UNAVAILABLE } from "../lantern/lanternWords";
+import { TimeLanternControl } from "../lantern/TimeLanternControl";
 import { LayerAboutSheet } from "../layers/LayerAboutSheet";
 import { LayersPanel } from "../layers/LayersPanel";
 import { PokeBadge } from "../living/PokeBadge";
@@ -88,6 +94,18 @@ function GlobalHotkeys() {
   });
   // Poke and drag objects that move by skins (cesium/skinPoke.ts).
   useHotkey(HOTKEYS.poke.combo, () => useSkinPoke.getState().toggle());
+  // The Time Lantern (cesium/TimeLantern.ts): Look back, or close it.
+  useHotkey(HOTKEYS.lantern.combo, () => {
+    const lantern = useLantern.getState();
+    if (lantern.mode === "off" && !lantern.availability.ok) {
+      const reason = UNAVAILABLE[lantern.availability.reason];
+      useToasts
+        .getState()
+        .push({ tone: "info", title: "The Time Lantern is not available here", body: reason });
+      return;
+    }
+    lantern.toggle();
+  });
   useHotkey(HOTKEYS.resetNorth.combo, () => scene?.camera.resetNorth());
   useHotkey(HOTKEYS.topDown.combo, () => scene?.camera.topDown());
   useHotkey(HOTKEYS.home.combo, () => scene?.camera.flyHome());
@@ -169,11 +187,13 @@ export function AppShell() {
           <LandMissionBridge />
         </>
       )}
+      <LanternBridge />
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">
         <ErrorBoundary inline label="Fleet overlay">
           <MissionOverlays />
         </ErrorBoundary>
         <CompareSplit />
+        <LanternRim />
         <header className="hud-region hud-top">
           <ErrorBoundary inline label="Site">
             <ProjectCard />
@@ -228,6 +248,9 @@ export function AppShell() {
         <div className="hud-region hud-strip">
           <ExploreHud />
           <TimelineControl />
+          <ErrorBoundary inline label="Time Lantern">
+            <TimeLanternControl />
+          </ErrorBoundary>
           <RepresentationSwitcher />
           <SiteLoadStatus />
         </div>

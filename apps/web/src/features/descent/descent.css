@@ -12,10 +12,12 @@
 .descent-form__row .glass-input {
   flex: 1 1 auto;
   min-width: 0;
+  padding-inline: 0.6rem;
 }
 
 .descent-form__row .glass-button {
   flex: 0 0 auto;
+  padding: 0 0.7rem;
 }
 
 .descent-form__choices {
