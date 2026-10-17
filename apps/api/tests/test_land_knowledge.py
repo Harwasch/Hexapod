@@ -324,11 +324,10 @@ def test_sentinel_cloud_cells_stay_foggy(client: TestClient, db: Session) -> Non
     [record] = read["records"]
     assert record["kind"] == "raster-observation" and record["classId"] == "satellite"
     assert record["observedAt"] is not None and "acquired" in record["observedLabel"]
-    assert record["link"] == {
-        "kind": "raster",
-        "id": record["link"]["id"],
-        "detail": {"band": 1, "dataset": "sentinel-2-ndvi"},
-    }
+    assert record["link"]["kind"] == "raster"
+    assert record["link"]["detail"]["band"] == 1
+    assert record["link"]["detail"]["dataset"] == "sentinel-2-ndvi"
+    assert record["link"]["detail"]["investigationId"]
     age = (datetime.fromisoformat(read["asOf"]) - acquired).total_seconds() / 86_400
     clear = round((1 - 0.45 * 0.5 ** (age / 90)) * 250)
     west = cell(read, -122.1385, 47.645)

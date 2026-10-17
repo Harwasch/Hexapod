@@ -576,14 +576,15 @@ def _raster_sources(
 
 
 def _rasters(db: Session, land_id: uuid.UUID, grid: FogGrid) -> list[KnowledgeSource]:
-    rows = list(
-        db.scalars(
-            select(LandRaster)
-            .where(LandRaster.land_id == land_id)
-            .order_by(LandRaster.created_at.desc(), LandRaster.id)
-            .limit(RASTER_LIMIT)
-        )
-    )
+    found = db.execute(
+        select(LandRaster, ResearchRun.investigation_id)
+        .join(ResearchRun, ResearchRun.id == LandRaster.run_id)
+        .where(LandRaster.land_id == land_id)
+        .order_by(LandRaster.created_at.desc(), LandRaster.id)
+        .limit(RASTER_LIMIT)
+    ).all()
+    investigations = {row.id: investigation for row, investigation in found}
+    rows = [row for row, _ in found]
     planned: list[tuple[LandRaster, list[_Observation], list[int | None]]] = []
     for row in rows:
         dataset = str(row.request.get("dataset", ""))
@@ -606,7 +607,9 @@ def _rasters(db: Session, land_id: uuid.UUID, grid: FogGrid) -> list[KnowledgeSo
     sources: list[KnowledgeSource] = []
     for row, observations, bands in planned:
         masks = _raster_masks(grid, row, bands, blobs.get(row.id))
-        sources.extend(_raster_sources(grid, row, observations, masks))
+        for source in _raster_sources(grid, row, observations, masks):
+            source.link["detail"]["investigationId"] = str(investigations[row.id])
+            sources.append(source)
     return sources
 
 
@@ -642,7 +645,7 @@ def _evidence_date(content: dict[str, Any]) -> tuple[datetime | None, str]:
 
 def _registrations(db: Session, land_id: uuid.UUID) -> tuple[list[KnowledgeSource], set[uuid.UUID]]:
     rows = db.execute(
-        select(LandImageRegistration, Evidence.content)
+        select(LandImageRegistration, Evidence.content, Investigation.id)
         .join(LandArchiveImage, LandArchiveImage.evidence_id == LandImageRegistration.evidence_id)
         .join(Evidence, Evidence.id == LandArchiveImage.evidence_id)
         .join(ResearchRun, ResearchRun.id == Evidence.run_id)
@@ -654,7 +657,7 @@ def _registrations(db: Session, land_id: uuid.UUID) -> tuple[list[KnowledgeSourc
     ).all()
     sources: list[KnowledgeSource] = []
     aligned: set[uuid.UUID] = set()
-    for registration, content in rows:
+    for registration, content, investigation_id in rows:
         result = registration.result or {}
         footprint = result.get("footprint")
         if not isinstance(footprint, dict):
@@ -686,7 +689,10 @@ def _registrations(db: Session, land_id: uuid.UUID) -> tuple[list[KnowledgeSourc
                 link={
                     "kind": "registration",
                     "id": str(registration.id),
-                    "detail": {"evidenceId": str(registration.evidence_id)},
+                    "detail": {
+                        "evidenceId": str(registration.evidence_id),
+                        "investigationId": str(investigation_id),
+                    },
                 },
                 geometry=shape(footprint),
             )
@@ -704,7 +710,7 @@ def _land_wide(
     not_counted: list[NotCountedRead],
 ) -> list[KnowledgeSource]:
     rows = db.execute(
-        select(Evidence.id, Evidence.content, Evidence.created_at, ResearchRun.id)
+        select(Evidence.id, Evidence.content, Evidence.created_at, ResearchRun.id, Investigation.id)
         .join(ResearchRun, ResearchRun.id == Evidence.run_id)
         .join(Investigation, Investigation.id == ResearchRun.investigation_id)
         .where(Investigation.land_id == land_id)
@@ -714,7 +720,7 @@ def _land_wide(
     sources: list[KnowledgeSource] = []
     seen: set[tuple[str, str, str]] = set()
     skipped: dict[str, list[str]] = {}
-    for evidence_id, content, created_at, run_id in rows:
+    for evidence_id, content, created_at, run_id, investigation_id in rows:
         provider = str(content.get("provider", ""))
         title = _text(content.get("title"), "Research record", 300)
         if (
@@ -769,7 +775,11 @@ def _land_wide(
                     content.get("attribution"),
                     content.get("url"),
                 ),
-                link={"kind": "evidence", "id": str(evidence_id), "detail": {"runId": str(run_id)}},
+                link={
+                    "kind": "evidence",
+                    "id": str(evidence_id),
+                    "detail": {"runId": str(run_id), "investigationId": str(investigation_id)},
+                },
                 class_note=f"{where}: counts for the whole land.",
             )
         )
