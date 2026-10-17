@@ -588,19 +588,54 @@ function useWorkableOffer(input: {
       ].join(" "),
     };
   const totals = workableTotals(usable.map((a) => a.result));
-  // Every cell within the limits: the hands come from lanes read between cells, and there is
-  // no ground to leave out. Say so rather than offer a redraft onto the same ground.
-  if (totals.footprintM2 - totals.workableM2 < 0.05 * 4046.8564224)
+  // Next to no ground outside the limits: there is nothing to leave out. Say why the hands
+  // went up rather than offer a redraft onto the same ground.
+  if (totals.footprintM2 - totals.workableM2 < 0.05 * 4046.8564224) {
+    const names = usable.map((a) => a.target.label).join(" and ");
+    const raised = rehearsal.hands.filter((h) => usable.some((a) => a.target.zoneId === h.zoneId));
+    const creekHands = raised.filter((h) => h.kind === "creek-buffer").length;
+    const slopeHands = raised.length - creekHands;
+    const hands = (n: number) => `${n} hand${n === 1 ? "" : "s"}`;
+    const unread = usable.filter((a) => !creeksRead(a.result));
+    // The creeks were not read, so the buffer was not applied: that is not "nothing to cut".
+    if (creekHands > 0 && unread.length > 0)
+      return {
+        ...base,
+        state: "error",
+        message: [
+          `The creek limit was not checked on ${unread.map((a) => a.target.label).join(" and ")} (USGS NHD was not read), so the ${hands(creekHands)} inside a creek buffer cannot be worked around yet.`,
+          ...warnings,
+          whole,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        retry: () => {
+          setFailure(null);
+          for (const query of queries)
+            if (query.isError || (query.data && !creeksRead(query.data))) void query.refetch();
+        },
+      };
+    const elevation = usable[0]?.result.elevation.label ?? "the Land's terrain";
+    const buffer = usable[0]?.result.limits.creekBufferM;
     return {
       ...base,
       state: "nothing",
       message: [
-        `On ${usable[0]?.result.elevation.label ?? "the Land's terrain"} every cell of ${usable.map((a) => a.target.label).join(" and ")} is within its machines' assumed limits, so there is no ground to leave out: these hands are read between cells, where a lane's samples take in a steeper neighbour.`,
+        creekHands === 0
+          ? `On ${elevation} every cell of ${names} is within its machines' assumed limits, so there is no ground to leave out: these hands are read between cells, where a lane's samples take in a steeper neighbour.`
+          : `On ${elevation} and USGS NHD creeks, less than 0.05 ac of ${names} is outside its machines' assumed limits, so there is no ground to leave out.`,
+        creekHands > 0 &&
+          slopeHands > 0 &&
+          `The ${hands(slopeHands)} on slope are read between cells, where a lane's samples take in a steeper neighbour.`,
+        creekHands > 0 &&
+          `The ${hands(creekHands)} inside a creek buffer are on lanes that reach the assumed ${buffer ?? 0} m buffer where it covers less than 0.05 ac of the ground.`,
+        ...warnings,
         whole,
       ]
         .filter(Boolean)
         .join(" "),
     };
+  }
   return {
     ...base,
     state: "ready",

@@ -570,6 +570,61 @@ describe("work only the ground it can", () => {
     expect(result.current.workable.text).toBeNull();
   });
 
+  // Every cell within the slope limit, nothing cut: the creek hands are all there is.
+  const uncut = {
+    ...answer,
+    workableM2: answer.footprintM2,
+    removed: { ...answer.removed, steepM2: 0, creekBufferM2: 0 },
+    leftOut: [],
+  } as WorkableGround;
+
+  it("says the creek limit was not checked when NHD did not answer, and asks again", async () => {
+    grounded("raster-1");
+    composing();
+    vi.mocked(requestWorkableGround).mockResolvedValue({
+      ...uncut,
+      creeks: { ...answer.creeks, status: "unavailable", counted: 0, message: "No answer" },
+      warnings: ["Creek buffer not applied: USGS NHD did not answer."],
+    });
+    const { result } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.workable.state).toBe("error"));
+    const creekHands = result.current.rehearsal?.hands.filter((h) => h.kind === "creek-buffer");
+    expect(creekHands?.length).toBeGreaterThan(0);
+    const message = result.current.workable.message ?? "";
+    expect(message).toContain("The creek limit was not checked on Z-14 (USGS NHD was not read)");
+    expect(message).toContain("Creek buffer not applied: USGS NHD did not answer.");
+    expect(message).not.toContain("between cells");
+    // Try again asks for the answer that left the creeks out.
+    vi.mocked(requestWorkableGround).mockResolvedValue(uncut);
+    act(() => result.current.workable.retry());
+    await waitFor(() => expect(requestWorkableGround).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.workable.state).toBe("nothing"));
+  });
+
+  it("puts creek hands on the creek buffer, not between cells, when it cuts next to nothing", async () => {
+    grounded("raster-1");
+    composing();
+    vi.mocked(requestWorkableGround).mockResolvedValue({
+      ...uncut,
+      workableM2: answer.footprintM2 - 100,
+      removed: { ...uncut.removed, creekBufferM2: 100 },
+      warnings: ["2 ephemeral channels were left out."],
+    });
+    const { result } = renderHook(() => useDressRehearsal(draft, onRanch, "a"), { wrapper });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.workable.state).toBe("nothing"));
+    const message = result.current.workable.message ?? "";
+    expect(message).toContain(
+      "On USGS 3DEP 1/3″ bare-earth DEM, 10 m and USGS NHD creeks, less than 0.05 ac of Z-14 is outside its machines' assumed limits",
+    );
+    expect(message).toContain(
+      "inside a creek buffer are on lanes that reach the assumed 15 m buffer",
+    );
+    expect(message).not.toContain("every cell");
+    expect(message).toContain("2 ephemeral channels were left out.");
+  });
+
   it("offers the cut with its acres, redrafts on what is left, and rehearses that again", async () => {
     grounded("raster-1");
     useMission.setState({
