@@ -1,4 +1,5 @@
 import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan, X } from "lucide-react";
+import { useIsPresent } from "motion/react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
@@ -604,11 +605,16 @@ function DraftReview({
     },
     project.plans,
   );
+  // The drawer animates out when the view changes (another tab, a tool panel), and the card
+  // unmounts only when that ends, which a busy main thread (software GL, a slow phone) can hold
+  // off for seconds. The draft and its rehearsal leave the map as the card starts to go.
+  const present = useIsPresent();
   // The draft is on the map as soon as it exists; the camera fits the ground when it changes.
   const zoneKey = draft.zoneIds.join(",");
   const overlayKey = `${zoneKey}|${(draft.steps ?? []).map((s) => `${s.zoneId}:${s.machineIds.join("+")}`).join(";")}`;
   const flownFor = useRef<string | null>(null);
   useEffect(() => {
+    if (!present) return;
     if (flownFor.current === zoneKey) {
       scene?.mission.showPlan(
         overlayFor({ zoneIds: draft.zoneIds, machineIds: draft.machineIds, steps: draft.steps }),
@@ -619,10 +625,14 @@ function DraftReview({
     }
     return () => clearPlanOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw only when the scope changes
-  }, [overlayKey, showPlanOnMap, clearPlanOverlay]);
+  }, [overlayKey, present, showPlanOnMap, clearPlanOverlay]);
   // The dress rehearsal runs this draft's lanes; a change to what it drives stops it.
   const rehearsalKey = `${overlayKey}|${(draft.coverage ?? []).map((c) => `${c.zoneId}:${c.machineClass}`).join(";")}`;
   const rehearsal = useDressRehearsal(draft, project, rehearsalKey);
+  const stopRehearsal = rehearsal.stop;
+  useEffect(() => {
+    if (!present) stopRehearsal();
+  }, [present, stopRehearsal]);
   const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
   const zoneName = (id: string | null | undefined) =>
     id ? (project.zones.find((z) => z.id === id)?.name ?? id) : null;

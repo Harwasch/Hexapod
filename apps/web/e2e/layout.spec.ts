@@ -322,6 +322,10 @@ for (const viewport of VIEWPORTS) {
         return els.filter((el) => el.getBoundingClientRect().bottom <= bottom + 1).length;
       });
       expect(rows).toBeGreaterThanOrEqual(viewport.name === "phone" ? 3 : 5);
+      // What is scheduled follows the table in the same scrolling body, never above it.
+      await expect(
+        page.locator(".hud-drawer .mc-window__body [data-testid='fleet-scheduled']"),
+      ).toContainText("Mow yellow star thistle");
       // A machine picked from the table: its card opens beside the drawer, which stays.
       await page.getByTestId("fleet-row-TR-04").click();
       await expect(page.getByTestId("selection-card")).toContainText("TR-04 Kestrel");

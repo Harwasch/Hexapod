@@ -9,7 +9,7 @@ import type {
   LandRevise,
 } from "@twin/contracts";
 
-import { expect, test } from "./fixtures";
+import { expect, RANCH_NAME, RANCH_SLUG, test } from "./fixtures";
 
 test.skip(process.env.VITE_ENABLE_LAND_EXPLORATION !== "true", "Land preview is opt-in.");
 
@@ -797,11 +797,8 @@ async function tapGround(page: Page, longitude: number, latitude: number) {
   await page.mouse.click((box?.x ?? 0) + at.x, (box?.y ?? 0) + at.y);
 }
 
-test("show once: tap a place, slide how alike, protect a patch and make it the job", async ({
-  app,
-}) => {
-  const records = await landApi(app);
-  const { asked, frame } = await signatureApi(app, () => records.saved[0]);
+/** Saves a drawn land "West field" from the open world and opens its Ecology section. */
+async function openEcologyOnNewLand(app: Page) {
   await app.getByRole("button", { name: "Explore Earth", exact: true }).click();
   await app.getByTestId("tool-land").click();
   await app.evaluate(() => {
@@ -832,6 +829,30 @@ test("show once: tap a place, slide how alike, protect a patch and make it the j
   await app.getByRole("button", { name: "Save this land", exact: true }).click();
   await expect(app.getByRole("heading", { name: "West field", exact: true })).toBeVisible();
   await app.getByRole("tab", { name: "Ecology" }).click();
+}
+
+/** Whether Show once's drape is on the map: the tapped cell's outline, and the tap cursor. */
+function signatureDrape(app: Page): Promise<{ outline: boolean; cursor: string }> {
+  return app.evaluate(() => {
+    const twin = (
+      window as unknown as {
+        __twin: { viewer: { entities: { getById(id: string): unknown } } };
+      }
+    ).__twin;
+    const canvas = document.querySelector<HTMLElement>(".cesium-widget canvas");
+    return {
+      outline: twin.viewer.entities.getById("grid-outline:signature") !== undefined,
+      cursor: canvas?.style.cursor ?? "",
+    };
+  });
+}
+
+test("show once: tap a place, slide how alike, protect a patch and make it the job", async ({
+  app,
+}) => {
+  const records = await landApi(app);
+  const { asked, frame } = await signatureApi(app, () => records.saved[0]);
+  await openEcologyOnNewLand(app);
   const card = app.getByTestId("show-once");
   await expect(card).toContainText("Not a species ID");
   await expect(app.getByTestId("show-once-scenes")).toContainText(
@@ -871,12 +892,32 @@ test("show once: tap a place, slide how alike, protect a patch and make it the j
   const plans = app.getByTestId("plans-panel");
   await expect(plans.getByTestId("plan-ground")).toContainText("Like-here patch 1");
   await expect(app.getByTestId("show-once-done")).toContainText("Drafted as a job: 1 area");
+  // The session is over: its drape and taps leave the map to the plan card.
+  await expect.poll(() => signatureDrape(app)).toEqual({ outline: false, cursor: "" });
   expect(asked.zones[0]).toMatchObject({ threshold: 0.8 });
   // The protected patch travels as one row run: row 3, columns 2 and 3.
   const [run] = asked.zones[0]?.protected as number[][];
   expect(asked.zones[0]?.protected).toHaveLength(1);
   expect(run?.[0]).toBeCloseTo(f.west + ((f.east - f.west) * 2) / 4, 9);
   expect(run?.[3]).toBeCloseTo(f.south + (f.north - f.south) / 4, 9);
+});
+
+test("show once ends with a switch of site: the drape and the taps go with it", async ({ app }) => {
+  const records = await landApi(app);
+  const { frame } = await signatureApi(app, () => records.saved[0]);
+  await openEcologyOnNewLand(app);
+  await app.getByTestId("show-once-start").click();
+  const f = frame();
+  await tapGround(app, f.west + (f.east - f.west) / 8, f.north - (f.north - f.south) / 8);
+  await expect(app.getByTestId("show-once-tally")).toContainText("6 cells");
+  await expect.poll(() => signatureDrape(app)).toEqual({ outline: true, cursor: "crosshair" });
+  await app.getByRole("button", { name: /switch site/ }).click();
+  await app.getByTestId(`site-row-${RANCH_SLUG}`).click();
+  await expect(app.getByTestId("project-card")).toContainText(RANCH_NAME, { timeout: 30_000 });
+  // The land stays selected, its card offering to start again; nothing of it is left lit.
+  await expect(app.getByTestId("show-once-start")).toBeVisible();
+  await expect(app.getByTestId("show-once-tally")).toHaveCount(0);
+  await expect.poll(() => signatureDrape(app)).toEqual({ outline: false, cursor: "" });
 });
 
 test("import with an exclusion and preserve the map on a phone", async ({ app }) => {

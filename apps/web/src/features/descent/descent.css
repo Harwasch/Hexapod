@@ -57,9 +57,13 @@
   white-space: nowrap;
 }
 
+/* At the foot of the map, lifted clear of the strip below it: the strip's controls ("Look back"
+   among them) sit right under the card, and at the HUD's gap the card's shadow (--glass-shadow,
+   12 px down with a 32 px blur) lay over them. */
 .descent-arrival {
   width: min(26rem, 100%);
   padding: 1rem 1.1rem 1rem;
+  margin-bottom: 2.5rem;
 }
 
 .descent-arrival__head {

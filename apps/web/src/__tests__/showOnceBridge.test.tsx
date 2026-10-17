@@ -1,7 +1,8 @@
 /**
  * Show once, everywhere on the map: a tap on the Land compares that place and drapes the
  * answer; the slider moves only the drape's uniform; a protect tap swaps the texture; hiding
- * the card lifts the drape and the taps; the fog taking the ground or Escape ends it.
+ * the card lifts the drape and the taps; the fog taking the ground, Escape or a switch to another
+ * project ends it.
  */
 
 import { act, cleanup, render } from "@testing-library/react";
@@ -15,6 +16,7 @@ import { ShowOnceBridge } from "@/cesium/ShowOnceBridge";
 import { rampThreshold } from "@/features/showOnce/grid";
 import { useGridDrape } from "@/state/gridDrape";
 import { useLand } from "@/state/land";
+import { useMission } from "@/state/mission";
 import { useShowOnce } from "@/state/showOnce";
 
 const fixture = vi.hoisted(() => ({
@@ -188,6 +190,7 @@ afterEach(() => {
   useShowOnce.getState().stop();
   useShowOnce.getState().setShown(false);
   useLand.getState().clear();
+  useMission.setState({ project: null, landGround: null });
   useGridDrape.setState({ owner: null });
   fixture.primitives.length = 0;
   fixture.removed.length = 0;
@@ -291,6 +294,37 @@ it("ends when the fog takes the ground, on Escape, and with another land", async
   act(() => useShowOnce.getState().start({ landId: LAND.id, revision: 1, rasterId: "raster-1" }));
   act(() => useLand.getState().select({ ...LAND, id: "land-b" }));
   expect(useShowOnce.getState().session).toBeNull();
+});
+
+it("ends with a switch to another project, but not when the Land's own ground is engaged", async () => {
+  const project = (id: string) => ({ id, name: id, zones: [], plans: [] }) as never;
+  const switchTo = (state: Partial<ReturnType<typeof useMission.getState>>) =>
+    act(() => {
+      void useMission.setState(state);
+    });
+  switchTo({ project: project("demo-ranch"), landGround: null });
+  render(<ShowOnceBridge />);
+  await tap(-120.045, 34.698);
+  expect(fixture.primitives).toHaveLength(1);
+  // "Make this the job" (or selecting the Land) opens the Land as its own project: the session
+  // is on that ground, so it goes on.
+  switchTo({ project: project(`land:${LAND.id}`) });
+  expect(useShowOnce.getState().session).not.toBeNull();
+  // Layered onto a fleet's project that works the Land: the same ground, the same session.
+  switchTo({
+    project: project("demo-ranch"),
+    landGround: { landId: LAND.id, projectId: "demo-ranch", zones: [] },
+  });
+  expect(useShowOnce.getState().session).not.toBeNull();
+  expect(fixture.removed).toHaveLength(0);
+  // Another site from the switcher: the drape, its outline and the taps go with the session.
+  switchTo({ project: project("redmond") });
+  expect(useShowOnce.getState().session).toBeNull();
+  expect(fixture.removed).toHaveLength(1);
+  expect(fixture.entities?.getById("grid-outline:signature")).toBeUndefined();
+  expect(useGridDrape.getState().owner).toBeNull();
+  expect(fixture.released).toBe(1);
+  expect(fixture.canvas.style.cursor).toBe("");
 });
 
 it("leaves Escape to a field being typed in, an open dialog, or what already took it", () => {

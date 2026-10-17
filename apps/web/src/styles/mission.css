@@ -2048,11 +2048,8 @@ a.mc-link {
   flex: none;
 }
 
-/* Fleet: what is on the books, above the machines. */
-.mc-scheduled {
-  padding: 0 1rem 0.6rem;
-}
-
+/* Fleet: what is on the books, after the machines in the drawer's scrolling body (which
+   scrolls it, so the list has no scroller of its own). */
 .mc-scheduled__list {
   list-style: none;
   margin: 0.35rem 0 0;
@@ -2060,8 +2057,6 @@ a.mc-link {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
-  max-height: 9.5rem;
-  overflow-y: auto;
 }
 
 .mc-scheduled__row {
