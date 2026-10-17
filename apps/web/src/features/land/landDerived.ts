@@ -16,7 +16,11 @@ export const LAND_DERIVED_KEYS = [
 /**
  * Marks everything derived from a Land's records as stale after one of them changed: an
  * inspection saved, an inventory feature added or revised, a research run finished. With
- * `landId` null (a run whose land is not at hand) every land's derived answers are.
+ * `landId` null (a run whose land is not at hand) every land's derived answers are, except
+ * workable ground: its key names everything it is read from (the outline, the machine class,
+ * the elevation raster, the creek rule), so a run finishing cannot change it, and each answer
+ * asked again is a slope and creek computation on the API. It is asked again only when its own
+ * land's records change (a revised boundary).
  * Rasters are keyed by raster id, so all of them are refreshed; they are few and small.
  */
 export function invalidateLandDerived(
@@ -27,6 +31,7 @@ export function invalidateLandDerived(
     predicate: (query) => {
       const [name, ...rest] = query.queryKey;
       if (!LAND_DERIVED_KEYS.includes(name as (typeof LAND_DERIVED_KEYS)[number])) return false;
+      if (name === "land-workable") return landId !== null && rest.includes(landId);
       return name === "land-rasters" || landId === null || rest.includes(landId);
     },
   });
