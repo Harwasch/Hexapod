@@ -25,6 +25,7 @@ import {
   resolveVariantUrl,
   skinRefFor,
   todayOf,
+  TODAY_PICK,
   variantsOf,
 } from "@/lib/variants";
 import { useInstances } from "@/state/instances";
@@ -176,7 +177,10 @@ describe("extras.variants", () => {
   it("counts as objects and motion for the renderers that cannot draw them", () => {
     expect(declaresInstances({ variants: { objects: DECLARED.objects } })).toBe(true);
     expect(declaresMotion({ variants: { skins: DECLARED.skins } })).toBe(true);
-    expect(declaresObjectsOrMotion({ variants: { fill: DECLARED.fill } })).toBe(false);
+    // A fill's layers are drawn with the scan, their look a GLSL modifier (scanView/layerLook.ts):
+    // the WebGPU trial draws them with WebGL2. They carry no object ids.
+    expect(declaresObjectsOrMotion({ variants: { fill: DECLARED.fill } })).toBe(true);
+    expect(declaresInstances({ variants: { fill: DECLARED.fill } })).toBe(false);
     expect(declaresObjectsOrMotion({})).toBe(false);
   });
 });
@@ -203,7 +207,7 @@ describe("the variants store", () => {
     expect(useVariants.getState().offered).toEqual({});
   });
 
-  it("keeps a pick per scan and per system, and Today is no pick", () => {
+  it("keeps a pick per scan and per system; Today over a default is kept as Today", () => {
     const { pick } = useVariants.getState();
     pick("a", "objects", "ground-first");
     pick("a", "fill", "vace-14b");
@@ -213,8 +217,33 @@ describe("the variants store", () => {
       b: { objects: "other" },
     });
     pick("a", "objects", null);
+    pick("a", "fill", null);
     pick("b", "objects", null);
-    expect(useVariants.getState().picks).toEqual({ a: { fill: "vace-14b" } });
+    // Objects has a default (concept-first stand-in), so Today must be remembered; fill has none.
+    expect(useVariants.getState().picks).toEqual({
+      a: { objects: TODAY_PICK },
+      b: { objects: TODAY_PICK },
+    });
+  });
+
+  it("draws the default objects variant when nothing is picked, and hides SAM 3's", () => {
+    const variants = variantsOf({
+      variants: {
+        objects: [
+          { name: "concept-first", instances: "variants/objects/concept-first/instances.json" },
+          {
+            name: "concept-first-standin",
+            instances: "variants/objects/concept-first-standin/instances.json",
+          },
+        ],
+      },
+    });
+    expect(variants.objects.map((v) => v.name)).toEqual(["concept-first-standin"]);
+    expect(pickedVariant("a", "objects", variants)?.name).toBe("concept-first-standin");
+    useVariants.getState().pick("a", "objects", null);
+    expect(pickedVariant("a", "objects", variants)).toBeNull();
+    // A scan without the default draws Today.
+    expect(pickedVariant("b", "objects", variantsOf({ variants: DECLARED }))).toBeNull();
   });
 
   it("keeps the picks for the session", () => {

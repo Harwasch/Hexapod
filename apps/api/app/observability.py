@@ -39,13 +39,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
 from collections.abc import Iterable
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, TextIO
 from urllib.parse import urlsplit
 
+from pydantic_settings import SettingsError
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
@@ -97,6 +100,7 @@ class Redactor:
                 settings.anthropic_api_key,
                 settings.cesium_ion_server_token,
                 settings.sentry_dsn,
+                *_worlds_secrets(),
                 *_token_parts(settings.fly_api_token),
                 *_database_password(settings.database_url),
                 *_url_secrets(settings.worker_heartbeat_url),
@@ -112,6 +116,38 @@ class Redactor:
         text = _HANDOFF.sub(f"h1.{REDACTED}", text)
         text = _PBKDF2.sub(f"pbkdf2_sha256${REDACTED}", text)
         return _URL_WITH_QUERY.sub(_strip_signed_query, text)
+
+
+def _worlds_secrets() -> list[str | None]:
+    """Read the same effective credential settings as Worlds, including dotenv files.
+
+    An optional product's invalid settings must neither break Earth's logging setup
+    nor print configuration exceptions, which can themselves contain credentials.
+    Each loader is isolated so one invalid configuration cannot hide the other keys.
+    Environment values remain covered even when a configuration cannot be loaded.
+    """
+    values = [
+        os.getenv("WORLD_GATEWAY_TOKEN"),
+        os.getenv("WORLD_RUNPOD_API_KEY"),
+        os.getenv("WORLDS_LLM_API_KEY"),
+        os.getenv("WORLD_RECONSTRUCTION_GATEWAY_TOKEN"),
+    ]
+    with suppress(ImportError, OSError, ValueError, SettingsError):
+        from app.worlds.config import WorldsSettings
+
+        worlds = WorldsSettings.load()
+        values.extend(
+            secret.get_secret_value()
+            for secret in (worlds.gateway_token, worlds.runpod_api_key)
+            if secret is not None
+        )
+    with suppress(ImportError, OSError, ValueError, SettingsError):
+        from app.worlds.reconstruction import ReconstructionSettings
+
+        reconstruction = ReconstructionSettings.load()
+        if reconstruction.gateway_token is not None:
+            values.append(reconstruction.gateway_token.get_secret_value())
+    return values
 
 
 def _token_parts(token: str | None) -> list[str]:

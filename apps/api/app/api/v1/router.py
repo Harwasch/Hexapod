@@ -37,6 +37,10 @@ from app.api.v1 import (
     workspaces,
 )
 from app.schemas.common import Problem
+from app.worlds.customization import router as worlds_customization_router
+from app.worlds.intelligence import router as worlds_intelligence_router
+from app.worlds.reconstruction import router as worlds_reconstruction_router
+from app.worlds.router import router as worlds_router
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     # 401 is documented API-wide rather than per route: it is the shared write token's
@@ -62,6 +66,10 @@ api_v1.include_router(live.router)
 api_v1.include_router(artifacts.router)
 api_v1.include_router(recipes.router)
 api_v1.include_router(storage.router)
+api_v1.include_router(worlds_router)
+api_v1.include_router(worlds_intelligence_router)
+api_v1.include_router(worlds_reconstruction_router)
+api_v1.include_router(worlds_customization_router)
 api_v1.include_router(land.router)
 api_v1.include_router(land_rasters.router)
 api_v1.include_router(land_knowledge.router)

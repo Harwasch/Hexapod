@@ -95,6 +95,30 @@ export const INFERRED_HIGHLIGHT = {
   opacity: 0.8,
 };
 
+/**
+ * What Highlight does to one inferred splat's colour (straight alpha) at `position` (metres, in
+ * its layer's frame): the reference every renderer's shader follows (`INFERRED_COLOR_GLSL`, the
+ * overlay's `LAYER_LOOK_GLSL`), for tests. As painted when `highlight` is off.
+ */
+export function inferredHighlightColor(
+  color: readonly [number, number, number, number],
+  position: readonly [number, number, number],
+  highlight: boolean,
+): [number, number, number, number] {
+  if (!highlight) return [color[0], color[1], color[2], color[3]];
+  const { tint, stripeM, stripeDark, opacity } = INFERRED_HIGHLIGHT;
+  const along = (position[0] + position[1] + position[2]) * 0.57735027;
+  const band = along / stripeM - Math.floor(along / stripeM);
+  const shade = band < 0.5 ? 1 : stripeDark;
+  const mix = (c: number, t: number): number => (c + (t - c) * tint[3]) * shade;
+  return [
+    mix(color[0], tint[0]),
+    mix(color[1], tint[1]),
+    mix(color[2], tint[2]),
+    color[3] * opacity,
+  ];
+}
+
 /** One line for a reader: what painted it and from how much. */
 export function describeEvidence(e: InferredEvidence): string {
   const confidence = Math.round(e.meanConfidence * 100);

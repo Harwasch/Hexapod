@@ -1,0 +1,33 @@
+{
+  "id": "matrix-game-3",
+  "prefix": "MATRIX_GAME",
+  "repository": "SkyworkAI/Matrix-Game",
+  "commit": "756776d516233027631008761d4d40ddaea3e23a",
+  "sourceSubdirectory": "Matrix-Game-3",
+  "checkpoint": "Skywork/Matrix-Game-3.0",
+  "checkpointRevision": "382aa382a03cec057360755aa72c7735025770bb",
+  "resolution": "1280x704",
+  "fps": 17,
+  "text": true,
+  "sourceFiles": ["pipeline/inference_pipeline.py", "wan/configs/config.py"],
+  "weightFiles": [
+    "base_distilled_model/config.json",
+    "base_distilled_model/diffusion_pytorch_model.safetensors",
+    "Wan2.2_VAE.pth",
+    "models_t5_umt5-xxl-enc-bf16.pth",
+    "google/umt5-xxl/tokenizer.json"
+  ],
+  "downloads": [
+    {
+      "repository": "Skywork/Matrix-Game-3.0",
+      "revision": "382aa382a03cec057360755aa72c7735025770bb",
+      "patterns": [
+        "base_distilled_model/*",
+        "Wan2.2_VAE.pth",
+        "models_t5_umt5-xxl-enc-bf16.pth",
+        "google/umt5-xxl/*"
+      ],
+      "destination": "."
+    }
+  ]
+}

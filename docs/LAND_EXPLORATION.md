@@ -256,8 +256,8 @@ Run browser checks with the preview flag enabled:
 VITE_ENABLE_LAND_EXPLORATION=true pnpm --filter @twin/web exec playwright test e2e/land.spec.ts --project=chromium
 ```
 
-CI runs exactly that in its own job, "Web · Playwright (Land)" (`.github/workflows/ci.yml`),
-whenever the web app changes; every other spec keeps the flag off, as production does.
+CI's Playwright shards serve the app with the flag on (`.github/workflows/ci.yml`), so these
+specs run with every other one whenever the web app changes. Production stays opt-in.
 
 These drive the real map for drawing, saving, inspecting underlying ground, revising,
 reloading, importing exclusions, and phone layout. Their API fixture is deterministic.

@@ -41,6 +41,12 @@
  * comes to rest; a skin's sway is sorted at rest, as CesiumJS sorts it. A split object is its
  * own entity, sorted where it is placed.
  *
+ * An inferred layer's tile (`loadLayer`, scanLayers.ts) is an entity like any other, sorted
+ * with the scan's, but bound to none of its ids, skins or picks: its own modifier draws its
+ * look (`PLAYCANVAS_LAYER_MODIFIER`, layerLook.ts), and as the eye moves past its view cones'
+ * step (`eyeMoved`) a uniform is set again, which has PlayCanvas copy it -- a few thousand
+ * splats -- into the work buffer again in that frame.
+ *
  * Selecting in the scene (cesium/sceneSelect) reads the tiles drawn now in each tile's own
  * order (`pickTiles`): the Morton order put back, so a pick's index is the index the tile's
  * ids in `instances.json` are listed by. The copies are made only when a pick first asks for
@@ -68,6 +74,14 @@ import type { PickTile } from "@/lib/splatPick";
 import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
+import {
+  coneEye,
+  eyeMoved,
+  LAYER_LOOK_GLSL,
+  layerUniforms,
+  type LayerCones,
+  type LayerLook,
+} from "./layerLook";
 import { splatMinPixelSize } from "./quality";
 import {
   idsInResourceOrder,
@@ -212,6 +226,35 @@ export function playcanvasModifier(ids: boolean, skin: boolean, wide = false): W
   }
   return modifier;
 }
+
+/**
+ * The work-buffer modifier of an inferred layer's tile (scanLayers.ts): its look on the colour
+ * -- Highlight and the fade of its view cones (layerLook.ts) -- and nothing else. GLSL only, as
+ * the motion: the WebGPU trial draws a scan with inferred layers with WebGL2.
+ */
+export const PLAYCANVAS_LAYER_MODIFIER: WorkBufferModifier = {
+  glsl: `
+uniform mat4 uLayerFrame;
+uniform vec4 uLayerTint;
+uniform vec4 uLayerPattern;
+uniform highp sampler2D uLayerCones;
+uniform vec4 uLayerConeGrid;
+uniform vec4 uLayerConeDims;
+uniform vec4 uLayerConeEye;
+uniform vec4 uInstanceParams;
+uniform vec4 uInstanceDim;
+${LAYER_LOOK_GLSL}
+void modifySplatCenter(inout vec3 center) {
+}
+void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
+}
+void modifySplatColor(vec3 center, inout vec4 color) {
+    color = hexapodLayerColor(center, color, uLayerFrame, uLayerTint, uLayerPattern, uLayerCones,
+                              uLayerConeGrid, uLayerConeDims, uLayerConeEye,
+                              hexapodLayerDim(uInstanceParams, uInstanceDim));
+}
+`,
+};
 
 /** The decoded columns a pick copy is made from (lib/splatLayout.ts names). */
 type PickColumns = Readonly<Record<string, Float32Array>>;
@@ -717,6 +760,11 @@ function assemble(
       params[0] = 0;
     }
     for (const [entity, tile] of tiles) bind(entity, tile);
+    // A layer's tiles are dimmed with the rest while an object is highlighted.
+    for (const entity of layers.keys()) {
+      entity.gsplat?.setParameter("uInstanceDim", dim);
+      entity.gsplat?.setParameter("uInstanceParams", params);
+    }
   };
 
   /** Uploads `data` into `texture`, or into a new texture when its size changed. */
@@ -839,8 +887,46 @@ function assemble(
   let placing: { matrix: pc.Mat4; position: pc.Vec3; rotation: pc.Quat } | null = null;
   let size = { width: 0, height: 0, pixelRatio: 0 };
 
+  /**
+   * The tiles of inferred layers (scanLayers.ts): bound to none of the scan's objects, each
+   * with its layer's look and the eye it was last worked out from.
+   */
+  const layers = new Map<
+    pc.Entity,
+    { look: LayerLook; eye: Float32Array<ArrayBuffer>; lastEye: number[] | null; centre: number[] }
+  >();
+  /** Each layer's view cones, uploaded once whatever number of its tiles are drawn. */
+  const coneTextures = new Map<LayerCones, pc.Texture>();
+  /** The eye of the last frame drawn (the scan's frame): a layer added later starts from it. */
+  let lastPoseEye: [number, number, number] | null = null;
+
+  /** The cones' texture, made on first need; a stand-in for a layer without cones. */
+  const coneTexture = (cones: LayerCones | null): pc.Texture => {
+    if (!cones) return stand().state;
+    let texture = coneTextures.get(cones);
+    if (!texture) {
+      texture = dataTexture(
+        "hexapodLayerCones",
+        cones.data.length / 4 / cones.height,
+        cones.height,
+        pc.PIXELFORMAT_RGBA8,
+        cones.data,
+      );
+      coneTextures.set(cones, texture);
+    }
+    return texture;
+  };
+
+  /** Frees the cones' texture once no layer tile draws with it. */
+  const releaseCones = (cones: LayerCones | null): void => {
+    if (!cones) return;
+    for (const state of layers.values()) if (state.look.cones === cones) return;
+    coneTextures.get(cones)?.destroy();
+    coneTextures.delete(cones);
+  };
+
   /** A decoded tile made into PlayCanvas's resource and entity: main-thread work. */
-  const build = (tile: TileNode, decoded: Decoded): pc.Entity => {
+  const build = (tile: TileNode, decoded: Decoded, layer = false): pc.Entity => {
     const { properties, count, order } = decoded;
     if (!properties || count === undefined || !order) {
       throw new Error(decoded.error ?? "The tile could not be decoded.");
@@ -867,7 +953,8 @@ function assemble(
     origins.set(entity, origin);
     entity.addComponent("gsplat", { resource });
     resources.set(entity, resource);
-    if (decoded.checksum !== undefined) {
+    // A layer's tile carries none of the scan's ids, skins or picks: its look is its own.
+    if (decoded.checksum !== undefined && !layer) {
       const binding: TileBinding = {
         checksum: decoded.checksum,
         order,
@@ -913,6 +1000,44 @@ function assemble(
       });
       return entity;
     },
+    loadLayer: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
+      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+      signal?.throwIfAborted();
+      return hooks.work.run(() => {
+        signal?.throwIfAborted();
+        return build(tile, decoded, true);
+      });
+    },
+    setLayerLook: (entity, look) => {
+      const component = entity.gsplat;
+      if (!component) return;
+      const before = layers.get(entity);
+      const origin = origins.get(entity) ?? [0, 0, 0];
+      const state = before ?? {
+        look,
+        eye: new Float32Array(4),
+        lastEye: null,
+        centre: [...origin],
+      };
+      const previous = before?.look.cones ?? null;
+      state.look = look;
+      layers.set(entity, state);
+      if (!before) component.setWorkBufferModifier(PLAYCANVAS_LAYER_MODIFIER);
+      const values = layerUniforms(look);
+      component.setParameter("uLayerFrame", values.frame);
+      component.setParameter("uLayerTint", values.tint);
+      component.setParameter("uLayerPattern", values.pattern);
+      component.setParameter("uLayerCones", coneTexture(look.cones));
+      component.setParameter("uLayerConeGrid", values.grid);
+      component.setParameter("uLayerConeDims", values.dims);
+      // The objects' dim while one is highlighted: a layer belongs to none (layerLook.ts).
+      component.setParameter("uInstanceDim", dim);
+      component.setParameter("uInstanceParams", params);
+      // Last: setting a parameter has the tile copied into the work buffer again.
+      state.lastEye = lastPoseEye ? [...lastPoseEye] : null;
+      component.setParameter("uLayerConeEye", coneEye(look, lastPoseEye ?? [0, 0, 0], state.eye));
+      if (previous !== look.cones) releaseCones(previous);
+    },
     add: (entity) => {
       app.root.addChild(entity);
       shown.add(entity);
@@ -939,6 +1064,11 @@ function assemble(
       shown.delete(entity);
       tiles.delete(entity);
       sortDirty.delete(entity);
+      const layer = layers.get(entity);
+      if (layer) {
+        layers.delete(entity);
+        releaseCones(layer.look.cones);
+      }
       const resource = resources.get(entity);
       entity.destroy();
       if (resource) {
@@ -1005,6 +1135,14 @@ function assemble(
       );
       camera.lookAt(target, up.set(...pose.up));
       refreshSort(performance.now());
+      // A layer's fade follows the eye: its tiles are copied into the work buffer again, in
+      // this frame, once the eye has moved enough to show (layerLook.ts `eyeMoved`).
+      lastPoseEye = pose.eye;
+      for (const [entity, layer] of layers) {
+        if (!layer.look.cones || !eyeMoved(layer.lastEye, pose.eye, layer.centre)) continue;
+        layer.lastEye = [...pose.eye];
+        entity.gsplat?.setParameter("uLayerConeEye", coneEye(layer.look, pose.eye, layer.eye));
+      }
       framesDrawn += 1;
       app.render();
       while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
@@ -1095,6 +1233,9 @@ function assemble(
       tiles.clear();
       shown.clear();
       sortDirty.clear();
+      layers.clear();
+      for (const texture of coneTextures.values()) texture.destroy();
+      coneTextures.clear();
       for (const texture of [
         stateTexture,
         handlesTexture,

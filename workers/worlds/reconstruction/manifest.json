@@ -1,0 +1,17 @@
+{
+  "engine": "hunyuanworld-mirror",
+  "repository": "https://github.com/Tencent-Hunyuan/HunyuanWorld-Mirror",
+  "sourceRevision": "c61300e47ce06db2f02c8e2551aae68be7ae3a0b",
+  "checkpoint": "tencent/HunyuanWorld-Mirror",
+  "checkpointRevision": "5574b7b0d5ac9d80e8a92976222370a0d20a57a0",
+  "license": "Tencent HunyuanWorld-Mirror Community License",
+  "licenseUrl": "https://huggingface.co/tencent/HunyuanWorld-Mirror/blob/5574b7b0d5ac9d80e8a92976222370a0d20a57a0/License.txt",
+  "licenseNotes": "Restricted research candidate enabled by default. Custom community terms include territorial and other restrictions; not an unrestricted commercial license.",
+  "input": { "images": true, "video": true, "maximumFrames": 24, "targetSize": 518 },
+  "output": ["gaussian-ply", "point-cloud-ply", "depth-mesh-glb"],
+  "verification": {
+    "sourceAPI": "reviewed",
+    "gpuInference": "not-run",
+    "qualityBenchmark": "not-run"
+  }
+}

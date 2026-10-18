@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ResearchEvent } from "@twin/contracts";
 import { ApiError, api, unwrap } from "@/api/client";
 import {
@@ -52,13 +52,10 @@ export function useResearchProgress(runId: string | undefined, running: boolean)
     message?: string;
   } | null>(null);
   const [attempt, retry] = useState(0);
-  // The stream below writes this cache entry; a broad invalidation must not try to fetch it,
-  // so its query function only hands back what the stream already merged.
+  // The authenticated stream/polling loop below owns fetching; this only observes its cache.
   const query = useQuery<ResearchEvent[]>({
     queryKey: eventKey,
-    queryFn: () => cache.getQueryData<ResearchEvent[]>(eventKey) ?? [],
-    enabled: false,
-    staleTime: Infinity,
+    queryFn: skipToken,
     initialData: [],
   });
   useEffect(() => {

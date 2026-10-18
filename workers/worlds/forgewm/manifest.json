@@ -1,0 +1,39 @@
+{
+  "id": "forge-wm",
+  "prefix": "FORGEWM",
+  "repository": "asdfo123/ForgeWM",
+  "commit": "a922c6b42d2e1dcfdc367a27a07c0148cb8ed6d8",
+  "checkpoint": "ForgeWM/ForgeWM",
+  "checkpointRevision": "604011fe62d2f2ec1098ef7749c8306c937afa85",
+  "resolution": "640x352",
+  "fps": 12,
+  "text": false,
+  "sourceFiles": ["inference.py", "configs/stage3_dmd.yaml", "utils/wan_wrapper.py"],
+  "weightFiles": [
+    "stage3/model.pt",
+    "MG2-base/base_config.json",
+    "MG2-base/diffusion_pytorch_model.safetensors",
+    "MG2-base/Wan2.1_VAE.pth",
+    "MG2-base/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
+    "MG2-base/xlm-roberta-large/tokenizer.json"
+  ],
+  "downloads": [
+    {
+      "repository": "ForgeWM/ForgeWM",
+      "revision": "604011fe62d2f2ec1098ef7749c8306c937afa85",
+      "patterns": ["stage3/model.pt"],
+      "destination": "."
+    },
+    {
+      "repository": "Skywork/Matrix-Game-2.0",
+      "revision": "08c42d1a99e57e79df60a964bb815618cdf460f8",
+      "patterns": [
+        "base_model/*",
+        "Wan2.1_VAE.pth",
+        "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
+        "xlm-roberta-large/*"
+      ],
+      "destination": "MG2-base"
+    }
+  ]
+}

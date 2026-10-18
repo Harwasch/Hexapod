@@ -282,10 +282,58 @@ refine pass's box masks, the names) so a run can be re-assembled on a CPU. publi
 publishes a run's artifact as a variant with `variant=<name>` (dispatch input, or
 `[instances|run=<id>|scans=spool,pumpkin|variant=ground-first|publish]` on a `bakeoff-*`
 push): the files go to `variants/objects/<name>/`, and `extras.variants.objects` gets
-`{name, label, about, instances}`. The API replaces an extras key whole, so
+`{name, label, about, instances}`: label and about from the run's `variant` block, or from
+`tools/captures/data/object_variants.json` when it describes the variant (a description
+fixed after the run, with `look`, what to watch, per scan; the published `instances.json`
+says the same). The API replaces an extras key whole, so
 `attach_sidecars.attach` re-reads the asset's current `extras.variants` just before its
 request and merges the entry in by name (`with_variant`), every other system and variant
 kept. Today's `extras.instances` stays the default.
+
+**Candidate C, concept first** (`tools/captures/concept_scene.py`, models in
+`concept_models.py`; research §1.5) turns steps 2-4 of §3 round: it asks first what is in
+the scene and then looks for each named thing, so objects are born with names.
+
+1. **Vocabulary.** Qwen3-VL 4B Instruct (Apache-2.0) reads 12 overview renders and lists at
+   most 12 _things_ ("cable spool", "pumpkin"), each with one of the categories of §3 step
+   7, and which of `data/ground_cover.json`'s classes the ground shows.
+2. **Ground**: the shared pass; cells split at the ground (and at its `unknown` splats). A
+   ground cell that the views keep seeing inside a thing's mask is the thing's (60% of its
+   visible weight in two views; 35% in one where the pass saw no ground near it): the
+   spool's bottom flange, the bottom of a pumpkin in the hay.
+3. **Concepts in every view.** SAM 3 (the method; its weights are gated) finds every
+   instance of each thing, every thing's name a prompt in one video session per camera
+   path, and its semantic head gives the ground's cover per pixel. SAM 3 needs transformers
+   5 and so torch >= 2.5, for which gsplat has no prebuilt wheel: its run
+   (`concept-first`) has an image of its own and is **seeded** with the stand-in run's
+   cache (`[segment|names=spool,pumpkin|variant=concept-first|seed=<run id>]`): the same
+   gsplat views, class-free masks and vocabulary, so the two differ only in the segmenter
+   (the instances' portraits are drawn on the CPU). A CPU check runs first: the Modal
+   secret's token must read `facebook/sam3`, and SAM 3's calls work on two views, before
+   any GPU starts. The **stand-in**: Grounding DINO boxes each thing, SAM 2.1 cuts its
+   mask, and SigLIP 2 classifies each class-free mask over the ground against the chosen
+   cover classes' prompts. A stand-in run is its own variant (`concept-first-standin`,
+   `concepts.standIn` in the file), never published as C.
+   **Chosen (9 Oct 2026):** the stand-in won the bake-off and is the viewer's default objects
+   method where a scan offers it (`DEFAULT_VARIANTS`, apps/web/src/lib/variants.ts). SAM 3's
+   masks came out splotchy, so its variant is hidden (`RETIRED_VARIANTS`) and its seeded
+   runner was taken out of infra/modal/segment.py; `concept_models.Sam3Concepts` stays.
+4. **Lift** by §3's voting: a cell is a thing's when that thing's masks hold it in at
+   least half the views where the detector found that thing at all (a view where it missed
+   the spool says nothing); thing masks join cells into objects, each named by the concept
+   most of its votes carry (`nameSource: "vlm"`). One track spanning two objects makes them
+   one, and so do two touching objects of one concept that one mask holds together in 80%
+   of the views where both are masked (every mask counts, not only the one each cell is
+   voted to: a box around the spool's top must not cut it from its flange). Ground cells take the cover class most views gave them, smoothed over the cell
+   graph and cut into connected regions (the §3b schema). **Leftovers**: what is neither
+   ground nor named is lifted from SAM 2's class-free masks, so nothing goes unsegmented
+   for want of a name; the same masks give every object its parts.
+
+On the synthetic yard with oracle masks (`tests/test_concept_scene.py`) every tree, shrub,
+snag and the house is a named object (IoU >= 0.8), the house's slab (ground to geometry) is
+the house's, the lawn and path are Grass and Trail (> 90% of their splats), and with "shrub"
+left out of the vocabulary the shrubs still become (unnamed) objects. It runs as a
+segment.yml variant (`[segment|names=spool,pumpkin|variant=concept-first-standin|views=64]`).
 
 ## 4. Data contract (v1)
 
@@ -337,6 +385,12 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
   coverage rounds; now 12% of the rim and 1.7% of the camp.)
 - `instances.emb`: `float16`, `count × dim`, row `k` is instance id `k + 1`, L2-normalised; an
   instance that was not described (no `tags`) has a zero row.
+- Optional per instance (the bake-off's candidates write them, §3b; readers that do not
+  know them ignore them): `kind` (`thing` | `ground`), `name` (what the viewer calls it,
+  before its tags), `nameSource` (`vlm` | `ground-cover`), `cover` (a ground instance's
+  `data/ground_cover.json` class), `scaleM`; candidate C adds `concept` (the concept an
+  object and its parts were found as). At the root: `variant` and `ground` (§3b), and C's
+  `concepts` (`{vocabularyModel, segmenter, standIn, things, cover}`).
 
 ### Root extras
 
@@ -1263,8 +1317,8 @@ in place, with no reload and the camera where it is, under every renderer:
   (`lib/customSets.ts`, keyed by splat) drawn over the new file. The objects panel lists the
   new file's categories; PlayCanvas and Spark rebind their tiles' ids through the store
   (`scanView/scanInstances.ts`).
-- **Fill** (`cesium/inferredLayers.ts`): the drawn layers are unloaded and the variant's
-  loaded. Inferred layers are CesiumJS's under every renderer (below).
+- **Fill** (`cesium/inferredLayers.ts`, `scanView/scanLayers.ts`): the drawn layers are
+  unloaded and the variant's loaded, by whichever renderer draws the scan (below).
   - A fill entry may also name **`supersedes`**: a path to the measured splats its layer
     replaces (swap, don't stack). For example, a thin, see-through patch of the scan with an
     opaque surface rebuilt over it.
@@ -1290,13 +1344,39 @@ scan with objects or motion: the WebGPU trial draws it with WebGL2, and the over
 **Inferred style.** How inferred layers are drawn is a viewer's setting
 (`inferredStyle`, kept on the device; hidden until chosen), beside the switcher as
 **Show · Highlight · Hide**, with the one-line legend "Inferred: generated where no camera
-saw. Not measured." while they are drawn. Highlight is the engine patch's colour hook on each
-layer's own splat primitive (never the measured scan's): pulled toward purple
-(`INFERRED_PURPLE`), hatched in 0.35 m bands across the layer, and a little see-through
-(`INFERRED_HIGHLIGHT`). Inferred layers are drawn by CesiumJS whichever renderer draws the
-measured splats: under PlayCanvas or Spark the scan's own tileset is hidden and drawn on the
-overlay, while its layers stay on the globe's canvas under it, so where both cover a pixel the
-measured splats are in front. Picking a fill while the style is Hide switches it to Show.
+saw. Not measured." while they are drawn. Highlight pulls the layer's splats (never a measured
+one) toward purple (`INFERRED_PURPLE`), hatches them in 0.35 m bands, and makes them a little
+see-through (`INFERRED_HIGHLIGHT`). Picking a fill while the style is Hide switches it to Show.
+
+**One sort.** Splats write no depth in any renderer, so which of two splats is in front is the
+order they are blended in, and only one renderer's sort can order a layer and its scan. A
+layer is therefore drawn by the renderer that draws the scan, sorted with its splats:
+
+- _CesiumJS_ (`cesium/inferredLayers.ts`): the scan's own splat primitive draws the layer's
+  tiles in its one texture and sort (the engine patch's `companions`); the layer's primitive
+  draws nothing (`drawnBy`). Highlight and the layer's view cones act on the layer's slots of
+  the scan's primitive (`CompanionHighlight`, `CompanionViewCones`), through colour and
+  visibility chains shared with the objects' hooks (`splatColor.ts`, `splatVisibility.ts`).
+  A scan primitive that is not in incremental mode (a CPU deformer's) has its layers draw
+  themselves, as two primitives.
+- _PlayCanvas and Spark_ (`scanView/scanLayers.ts`): the layer's tiles are streamed into the
+  overlay's renderer beside the scan's, under `S⁻¹·O` (identity for a layer whose root is the
+  scan's), with Highlight and the view-cone fade as a modifier of their own
+  (`scanView/layerLook.ts`); CesiumJS's copy stays hidden. The WebGPU trial draws a scan with
+  inferred layers with WebGL2 (the modifier is GLSL only). A layer then looks as that renderer
+  draws splats: the Camp's Today layer (an image model's flat discs, each facing the virtual
+  camera it was lifted from) is faint under Spark from where its discs are seen edge on, as it
+  is when Spark draws that layer alone, and plain under PlayCanvas and CesiumJS.
+
+Before, CesiumJS drew the layers under every renderer. On the overlay's canvas they were under
+the scan: every measured splat behind the Spool's rebuilt top (anchor-refs) -- drum, bottom
+flange, ground -- was painted over it, and 72% of the top's pixels changed when the measured
+splats were hidden (mean of 17 headings 40° off vertical). Under CesiumJS a layer was a
+primitive of its own, and CesiumJS orders splat primitives back to front by the centres of
+their bounding volumes: from 8 of the 17 headings the scan was drawn over the top (62--71%
+changed), from the others the top over the drum in front of it, seen from low on the side.
+Now 0.2--0.3% change from every heading under each renderer. A layer's tiles are left out of
+picking, collision and the objects' ids in every renderer, as before.
 
 **Fixture and checks.** The synthetic yard has two variants per system
 (`data/tiles/synthetic-yard/variants/`, written by `tools/captures/yard_variants.py`, declared
@@ -1308,10 +1388,14 @@ shrubs). `e2e/variants.spec.ts` (`src/dev/variantsHarness.ts`, the app's panels 
 the scan) runs under PlayCanvas, Spark and CesiumJS and checks that picking an objects variant
 changes what the objects panel lists, picking a fill draws its layer and not the other's,
 Highlight turns the layer's pixels purple and changes no other pixel, Hide leaves the frame
-the scan's own, and a skins pick replaces the skin; and that the panel fits a 400 px phone and
-works from the keyboard, with the yard's names and with the spool's long ones (four methods a
-system, listed one a row, no native select). Unit tests: `__tests__/variants.test.ts` (the parser, the store, the
-swaps), `__tests__/inferred.test.ts`, `__tests__/compareMethods.test.tsx`.
+the scan's own, and a skins pick replaces the skin; that the mound, moved onto the measured
+lawn behind the shed, is sorted with them -- hiding the measured scan leaves the mound's top as
+it was from above (about half its pixels changed before, under every renderer), and from the
+side the shed is in front of the mound pixel by pixel (against a fill drawn over its scan);
+and that the panel fits a 400 px phone and works from the keyboard, with the yard's names and
+with the spool's long ones (four methods a system, listed one a row, no native select). Unit
+tests: `__tests__/variants.test.ts` (the parser, the store, the swaps),
+`__tests__/inferred.test.ts`, `__tests__/scanLayers.test.ts`, `__tests__/compareMethods.test.tsx`.
 
 ## 5. Storage by behaviour
 

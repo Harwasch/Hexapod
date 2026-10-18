@@ -498,7 +498,7 @@ function AdvancedSection() {
         <Row
           id="splat-renderer-label"
           label="Splat renderer"
-          hint="Who draws Gaussian splats, for comparison; the globe, navigation and tools stay CesiumJS. WebGPU is PlayCanvas on WebGPU, in beta: WebGL2 where a device has none, and WebGL2 for scans with objects or motion"
+          hint="Who draws Gaussian splats, for comparison; the globe, navigation and tools stay CesiumJS. WebGPU is PlayCanvas on WebGPU, in beta: WebGL2 where a device has none, and WebGL2 for scans with objects, motion or inferred fill"
           control={
             <GlassSegmentedControl
               aria-label="Splat renderer"

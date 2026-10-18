@@ -16,6 +16,8 @@ import {
   type InstancePrimitive,
   type SplatVertexColor,
 } from "@/cesium/splatInstances";
+import { colorChainOf } from "@/cesium/splatColor";
+import { snapshotTiles } from "@/cesium/splatTiles";
 import { SplatViewCones, type ViewConeGpu } from "@/cesium/splatViewCones";
 import {
   addVisibilityPart,
@@ -593,15 +595,16 @@ describe("the GPU state", () => {
 });
 
 describe("the hooks", () => {
-  it("declares the hide function for the chain, and the colour function for vertexColor", () => {
+  it("declares the hide function for the chain, and the colour function for the colour chain", () => {
     const { tileset } = fakeScene([], 1);
     const hook = new SplatInstances(doc(), fakeGpu(), tileset);
     const vis = build(hook);
     expect(vis.lines).toContain("float splatInstanceVisibility(uint splatIndex, vec3 position)");
-    expect(vis.lines).not.toContain("splatVertexColor");
+    expect(vis.lines).not.toContain("splatInstanceColor");
     const col = build(hook.colorHook);
+    expect(hook.colorHook.colorFunction).toBe("splatInstanceColor");
     expect(col.lines).toContain(
-      "vec4 splatVertexColor(uint splatIndex, vec3 position, vec4 color)",
+      "vec4 splatInstanceColor(uint splatIndex, vec3 position, vec4 color)",
     );
     expect(col.lines).not.toContain("splatInstanceVisibility");
     // Shared helpers are guarded, so both hooks in one shader declare them once.
@@ -631,7 +634,7 @@ describe("the hooks", () => {
     expect(hook.install(primitive)).toBe(true);
     expect(hook.installed).toBe(true);
     expect(visibilityChainOf(primitive)?.parts).toEqual([hook]);
-    expect(primitive.vertexColor).toBe(hook.colorHook);
+    expect(colorChainOf(primitive)?.parts).toEqual([hook.colorHook]);
     const { uniforms } = build(primitive.vertexVisibility ?? hook);
 
     const result = hook.sync();
@@ -684,6 +687,26 @@ describe("the hooks", () => {
     scene.primitive._snapshot = { generation: 2 };
     hook.sync();
     expect(Array.from({ length: 6 }, (_, i) => hook.idAt(i))).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+
+  it("leaves a companion's tiles (an inferred layer sorted with the scan) out of the scan's", () => {
+    const scene = fakeScene([{ positions: TILE_A.positions, start: 0 }], 9);
+    const [own] = scene.primitive._tileSlots.keys();
+    (own as { tileset?: unknown }).tileset = scene.tileset;
+    // A layer's tile in the scan's slots: its tileset is another.
+    const fill = tilePositions(3, 900);
+    scene.primitive._positions.set(fill.positions, 6 * 3);
+    scene.primitive._tileSlots.set(
+      { tileset: {}, content: { _lastSplatTransform: IDENTITY, positions: fill.positions } },
+      { start: 6, count: 3 },
+    );
+    expect(
+      snapshotTiles(scene.tileset, scene.primitive, scene.primitive._positions, 9),
+    ).toMatchObject({ kind: "tiles", tiles: [{ start: 0, count: 6 }] });
+    const hook = new SplatInstances(doc(), fakeGpu(), scene.tileset);
+    build(hook);
+    expect(hook.sync()).toEqual({ changed: true, tiles: 1, matched: 1 });
+    expect(Array.from({ length: 9 }, (_, i) => hook.idAt(i))).toEqual([1, 1, 0, 3, 3, 3, 0, 0, 0]);
   });
 
   it("hiding composes with the view cones in one visibility chain", () => {

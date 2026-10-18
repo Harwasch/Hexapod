@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ScanRendererHost,
   WEBGL2_FOR_OBJECTS_NOTICE,
+  declaresInferred,
   declaresObjectsOrMotion,
   type BackendModule,
 } from "@/cesium/scanView/ScanRendererHost";
@@ -250,12 +251,18 @@ describe("the PlayCanvas WebGPU trial", () => {
     r.host.destroy();
   });
 
-  it("knows a scan with objects or motion by its root's extras", () => {
+  it("knows a scan with objects, motion or inferred layers by its root's extras", () => {
     expect(declaresObjectsOrMotion({ instances: { uri: "instances.json", count: 3 } })).toBe(true);
     expect(declaresObjectsOrMotion({ skin: { uri: "skin.json", count: 1 } })).toBe(true);
     expect(declaresObjectsOrMotion({ telemetry: { uri: "t.json", count: 1 } })).toBe(true);
     const split = { uri: "objects/7/tileset.json", instance: 7, origin: [1, 2, 0] };
     expect(declaresObjectsOrMotion({ objects: [split] })).toBe(true);
+    // An inferred layer's look (Highlight, its view cones) is a GLSL modifier too.
+    const evidence = { kind: "inferred", filler: "f", views: 1, gaussians: 1 };
+    expect(declaresInferred({ inferredLayers: [{ uri: "i/tileset.json", evidence }] })).toBe(true);
+    const fill = { name: "top", inferredLayers: [{ uri: "f/tileset.json", evidence }] };
+    expect(declaresObjectsOrMotion({ variants: { fill: [fill] } })).toBe(true);
+    expect(declaresInferred({ gaussians: 9 })).toBe(false);
     expect(declaresObjectsOrMotion({ nativeLod: "sog/lod-meta.json", gaussians: 9 })).toBe(false);
     expect(declaresObjectsOrMotion(undefined)).toBe(false);
   });

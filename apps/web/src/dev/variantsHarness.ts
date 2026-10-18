@@ -3,9 +3,11 @@
  * does, with the app's own controls beside it -- the driver for e2e/variants.spec.ts.
  *
  * The tileset is attached exactly as `SiteManager.attachTileset` attaches a splat scan:
- * `attachVariants`, `attachInstances`, `attachInferredLayers` (drawn while the scan is, by
- * CesiumJS or the overlay) and `attachSkin`; with a dedicated renderer the scan is drawn by the
- * overlay (cesium/scanView) over CesiumJS's hidden tileset, as the app's default. The panel
+ * `attachVariants`, `attachInstances`, `attachInferredLayers` (drawn by whichever renderer draws
+ * the scan, in its sort) and `attachSkin`; with a dedicated renderer the scan and its layers are
+ * drawn by the overlay (cesium/scanView) over CesiumJS's hidden tileset, as the app's default.
+ * It can also put the scan at a runtime scale and lift (`placement`), and measure the frame
+ * inside a polygon of the screen (`changedIn`) with every measured object hidden or not. The panel
  * holds the app's "Compare methods" rows, the inferred Show · Highlight · Hide control and the
  * objects panel, wired to this scan, so the spec drives them as a person would.
  *
@@ -33,8 +35,9 @@ import { ScanRendererHost, type ScanRendererStatus } from "@/cesium/scanView/Sca
 import type { SplatRendererKind } from "@/cesium/scanView/types";
 import { attachVariants } from "@/cesium/scanVariants";
 import { attachInstances } from "@/cesium/splatInstances";
-import { incrementalSplats, keepOffscreenSplats } from "@/cesium/splatInternals";
+import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { attachSkin, skinningOf } from "@/cesium/splatSkin";
+import { placedMatrix, placementFrame } from "@/cesium/tilesetScale";
 import { evidenceOf, type InferredStyle } from "@/lib/inferred";
 import type { VariantSystem } from "@/lib/variants";
 import { useInferred } from "@/state/inferred";
@@ -64,6 +67,13 @@ export interface Measure {
 export interface VariantsHarness {
   /** Points the camera and waits for the scan, its objects and its inferred layers to settle. */
   view(headingDeg: number, pitchDeg: number, rangeM: number): Promise<void>;
+  /** As `view`, looking at a point of the scan's own frame (local ENU metres). */
+  viewAt(
+    local: readonly number[],
+    headingDeg: number,
+    pitchDeg: number,
+    rangeM: number,
+  ): Promise<void>;
   /** Waits until what the picks load is in and drawn. */
   settle(): Promise<void>;
   /** Picks through the store, as the panel does, then settles. */
@@ -72,6 +82,8 @@ export interface VariantsHarness {
   style(style: InferredStyle): Promise<void>;
   /** Where a box of the scan's own frame (local ENU metres) is on screen. */
   rectOfLocal(min: readonly number[], max: readonly number[]): Rect | null;
+  /** Where points of the scan's own frame are on screen (canvas pixels), null behind the eye. */
+  screenOfLocal(points: readonly (readonly number[])[]): ([number, number] | null)[];
   measure(rect?: Rect): Measure;
   /** Keeps the frame drawn now under `slot`, for `changed`. */
   remember(slot?: string): void;
@@ -80,6 +92,39 @@ export interface VariantsHarness {
    * frame kept under `slot`.
    */
   changed(rect?: Rect, outside?: boolean, slot?: string): number;
+  /** As `changed`, over the pixels inside a polygon of canvas pixels. */
+  changedIn(polygon: readonly (readonly [number, number])[], slot?: string): number;
+  /**
+   * Which is in front, the fill or the measured scan, in `rect`: from three frames kept --
+   * both drawn (`both`), the measured scan alone (`measured`: the fill hidden), the fill alone
+   * (`fill`: every measured object hidden) -- the pixels where the two alone differ, and the
+   * share of them where the frame with both is nearer the measured scan's. Near 1 where the
+   * measured splats are in front of the fill, near 0 where the fill is in front of them.
+   */
+  nearerMeasured(
+    rect: Rect,
+    slots: { both: string; measured: string; fill: string },
+  ): { pixels: number; share: number };
+  /**
+   * Hides every measured object of the scan (each instance id, as the objects panel's Hide
+   * does), or shows them again: what is left is the inferred layer and the few splats no
+   * object holds.
+   */
+  hideMeasured(hidden: boolean): Promise<void>;
+  /**
+   * Where the scan and each inferred layer CesiumJS loaded are put on the globe: model matrix
+   * and root transform (column-major), so a test can check a layer is drawn where the scan is.
+   */
+  frames(): {
+    scan: { model: number[]; root: number[] };
+    layers: { model: number[]; root: number[] }[];
+  };
+  /**
+   * Under CesiumJS: how many layers the scan's own primitive draws in its sort (the engine
+   * patch's `companions`), and, per layer loaded, whether that primitive draws it (`drawnBy`).
+   * Null before the scan's primitive exists.
+   */
+  companions(): { companions: number; drawnBy: boolean[] } | null;
   /** The objects panel's categories, as its store has them. */
   categories(): { name: string; objects: number }[];
   /** How many objects the table lists. */
@@ -182,6 +227,11 @@ export async function startVariantsHarness(options: {
   renderer?: SplatRendererKind;
   /** Where to mount the app's controls for the scan. */
   panel?: HTMLElement;
+  /**
+   * Draws the scan at a runtime scale, raised by a lift (metres), as SiteManager places an
+   * asset (`placedMatrix`): its inferred layers must follow it there.
+   */
+  placement?: { scale: number; liftM: number };
 }): Promise<VariantsHarness> {
   const dedicated = options.renderer !== undefined && options.renderer !== "cesium";
   if (dedicated) {
@@ -218,18 +268,17 @@ export async function startVariantsHarness(options: {
   });
   keepOffscreenSplats(tileset);
   incrementalSplats(tileset, 0);
+  if (options.placement) {
+    const { scale, liftM } = options.placement;
+    tileset.modelMatrix = placedMatrix(placementFrame(tileset, undefined), scale, liftM);
+  }
   scene.primitives.add(tileset);
   let host: ScanRendererHost | undefined;
   // As SiteManager.attachTileset: the scan's variants, objects, inferred layers and skin.
   attachVariants(tileset, ASSET);
   attachInstances(tileset, scene, ASSET);
-  attachInferredLayers(
-    tileset,
-    scene,
-    ASSET,
-    undefined,
-    () => tileset.show || host?.status().active === true,
-  );
+  // Drawn by CesiumJS while it draws the scan, by the overlay otherwise (scanView/scanLayers.ts).
+  attachInferredLayers(tileset, scene, ASSET);
   attachSkin(tileset, scene, ASSET);
   if (options.panel) await mountPanel(options.panel, scene);
   if (dedicated && options.renderer) {
@@ -267,8 +316,13 @@ export async function startVariantsHarness(options: {
         ? status !== undefined && status.frames > 5 && status.tiles > 0 && status.loading === 0
         : tileset.tilesLoaded;
       const shown = layers().filter((l) => l.show);
-      const layersReady = shown.every((l) => l.tilesLoaded);
-      const tiles = (status?.tiles ?? 0) + shown.length;
+      // The overlay's own layers (scanView/scanLayers.ts): every one wanted is in, or failed.
+      const overlay = status?.layers;
+      const layersReady =
+        shown.every((l) => l.tilesLoaded) &&
+        (!overlay || (overlay.loading === 0 && overlay.drawn + overlay.failed >= overlay.wanted)) &&
+        (status?.settled ?? true);
+      const tiles = (status?.tiles ?? 0) + shown.length + (overlay?.tiles ?? 0);
       calm = scanReady && layersReady && !loading() && tiles === lastTiles ? calm + 1 : 0;
       lastTiles = tiles;
     }
@@ -302,19 +356,41 @@ export async function startVariantsHarness(options: {
   const bg = Color.fromCssColorString(BACKGROUND);
   const [br, bgG, bb] = [bg.red * 255, bg.green * 255, bg.blue * 255];
 
+  const lookFrom = async (
+    target: Cartesian3,
+    headingDeg: number,
+    pitchDeg: number,
+    rangeM: number,
+  ): Promise<void> => {
+    scene.camera.lookAt(
+      target,
+      new HeadingPitchRange(
+        CesiumMath.toRadians(headingDeg),
+        CesiumMath.toRadians(pitchDeg),
+        rangeM,
+      ),
+    );
+    scene.camera.lookAtTransform(Matrix4.IDENTITY);
+    await settle();
+  };
+
+  /** Canvas pixels per CSS pixel. */
+  const pixelRatio = (): number => scene.canvas.width / Math.max(1, scene.canvas.clientWidth);
+
   return {
-    async view(headingDeg, pitchDeg, rangeM) {
-      scene.camera.lookAt(
-        tileset.boundingSphere.center,
-        new HeadingPitchRange(
-          CesiumMath.toRadians(headingDeg),
-          CesiumMath.toRadians(pitchDeg),
-          rangeM,
+    view: (headingDeg, pitchDeg, rangeM) =>
+      lookFrom(tileset.boundingSphere.center, headingDeg, pitchDeg, rangeM),
+    viewAt: (local, headingDeg, pitchDeg, rangeM) =>
+      lookFrom(
+        Matrix4.multiplyByPoint(
+          tileset.root.computedTransform,
+          new Cartesian3(local[0] ?? 0, local[1] ?? 0, local[2] ?? 0),
+          new Cartesian3(),
         ),
-      );
-      scene.camera.lookAtTransform(Matrix4.IDENTITY);
-      await settle();
-    },
+        headingDeg,
+        pitchDeg,
+        rangeM,
+      ),
     settle,
     async pick(system, name) {
       useVariants.getState().pick(ASSET, system, name);
@@ -347,6 +423,19 @@ export async function startVariantsHarness(options: {
             y1 = Math.max(y1, at.y);
           }
       return { x: x0 * ratio, y: y0 * ratio, width: (x1 - x0) * ratio, height: (y1 - y0) * ratio };
+    },
+    screenOfLocal(points) {
+      const toWorld = tileset.root.computedTransform;
+      const ratio = pixelRatio();
+      return points.map((p) => {
+        const world = Matrix4.multiplyByPoint(
+          toWorld,
+          new Cartesian3(p[0] ?? 0, p[1] ?? 0, p[2] ?? 0),
+          new Cartesian3(),
+        );
+        const at = SceneTransforms.worldToWindowCoordinates(scene, world, new Cartesian2());
+        return at ? [at.x * ratio, at.y * ratio] : null;
+      });
     },
     measure(rect) {
       const context = composite();
@@ -398,6 +487,97 @@ export async function startVariantsHarness(options: {
         }
       return counted ? moved / counted : 0;
     },
+    changedIn(polygon, slot = "frame") {
+      const context = composite();
+      const before = remembered.get(slot);
+      if (!context || !before || polygon.length < 3) return 0;
+      const { width, height } = context.canvas;
+      const now = context.getImageData(0, 0, width, height).data;
+      if (now.length !== before.length) return 1;
+      const xs = polygon.map((p) => p[0]);
+      const ys = polygon.map((p) => p[1]);
+      const { x0, y0, x1, y1 } = bounds(
+        {
+          x: Math.min(...xs),
+          y: Math.min(...ys),
+          width: Math.max(...xs) - Math.min(...xs),
+          height: Math.max(...ys) - Math.min(...ys),
+        },
+        width,
+        height,
+      );
+      /** Even-odd rule at the pixel's centre. */
+      const inside = (x: number, y: number): boolean => {
+        let hit = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+          const [xi, yi] = polygon[i] ?? [0, 0];
+          const [xj, yj] = polygon[j] ?? [0, 0];
+          if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+        }
+        return hit;
+      };
+      let moved = 0;
+      let counted = 0;
+      for (let y = y0; y < y1; y += 1)
+        for (let x = x0; x < x1; x += 1) {
+          if (!inside(x + 0.5, y + 0.5)) continue;
+          counted += 1;
+          const i = (y * width + x) * 4;
+          const d =
+            Math.abs((now[i] ?? 0) - (before[i] ?? 0)) +
+            Math.abs((now[i + 1] ?? 0) - (before[i + 1] ?? 0)) +
+            Math.abs((now[i + 2] ?? 0) - (before[i + 2] ?? 0));
+          if (d > 48) moved += 1;
+        }
+      return counted ? moved / counted : 0;
+    },
+    nearerMeasured(rect, slots) {
+      const both = remembered.get(slots.both);
+      const measured = remembered.get(slots.measured);
+      const fill = remembered.get(slots.fill);
+      const width = scene.canvas.width;
+      if (!both || !measured || !fill) return { pixels: 0, share: 0 };
+      const { x0, y0, x1, y1 } = bounds(rect, width, scene.canvas.height);
+      const distance = (a: Uint8ClampedArray, b: Uint8ClampedArray, i: number): number =>
+        Math.abs((a[i] ?? 0) - (b[i] ?? 0)) +
+        Math.abs((a[i + 1] ?? 0) - (b[i + 1] ?? 0)) +
+        Math.abs((a[i + 2] ?? 0) - (b[i + 2] ?? 0));
+      let pixels = 0;
+      let nearer = 0;
+      for (let y = y0; y < y1; y += 1)
+        for (let x = x0; x < x1; x += 1) {
+          const i = (y * width + x) * 4;
+          // Only where the fill alone and the measured scan alone tell apart.
+          if (distance(measured, fill, i) <= 48) continue;
+          pixels += 1;
+          if (distance(both, measured, i) < distance(both, fill, i)) nearer += 1;
+        }
+      return { pixels, share: pixels ? nearer / pixels : 0 };
+    },
+    frames() {
+      const frame = (t: Cesium3DTileset) => ({
+        model: Matrix4.toArray(t.modelMatrix),
+        root: Matrix4.toArray(
+          (t.root as { transform?: Matrix4 } | undefined)?.transform ?? Matrix4.IDENTITY,
+        ),
+      });
+      return { scan: frame(tileset), layers: layers().map(frame) };
+    },
+    companions() {
+      const primitive = splatTilesetOf(tileset).gaussianSplatPrimitive;
+      if (!primitive) return null;
+      return {
+        companions: primitive.companions?.length ?? 0,
+        drawnBy: layers().map(
+          (l) => splatTilesetOf(l).gaussianSplatPrimitive?.drawnBy === primitive,
+        ),
+      };
+    },
+    async hideMeasured(hidden) {
+      const ids = (useInstances.getState().assets[ASSET]?.instances ?? []).map((i) => i.id);
+      useInstances.getState().setHidden(ASSET, ids, hidden);
+      await settle();
+    },
     categories: () =>
       (useInstances.getState().assets[ASSET]?.index.groups ?? []).map((g) => ({
         name: g.category.name,
@@ -410,7 +590,8 @@ export async function startVariantsHarness(options: {
     }),
     inferred: () => ({
       fillers: (useInferred.getState().layers[ASSET] ?? []).map((e) => e.filler),
-      shown: layers().filter((l) => l.show).length,
+      // CesiumJS's copies drawn, and the overlay's (which hides CesiumJS's while it draws).
+      shown: layers().filter((l) => l.show).length + (host?.status().layers?.drawn ?? 0),
     }),
     skins: () => skinningOf(ASSET)?.doc.skins.map((s) => s.instance) ?? null,
     scan: () => host?.status() ?? null,

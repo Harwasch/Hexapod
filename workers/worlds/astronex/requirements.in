@@ -1,0 +1,19 @@
+# Inference-only import closure, pinned to the reviewed upstream environment.
+# torchvision + imageio retain the documented diagnostic CLI fallback.
+torch==2.9.1
+torchvision==0.24.1
+diffusers==0.35.0
+transformers==4.56.0
+accelerate==1.13.0
+huggingface-hub==0.34.0
+safetensors==0.4.5
+omegaconf==2.3.0
+einops==0.8.0
+numpy==2.2.6
+scipy==1.15.3
+pillow==11.3.0
+sentencepiece==0.2.1
+ftfy==6.3.1
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+tqdm==4.67.1

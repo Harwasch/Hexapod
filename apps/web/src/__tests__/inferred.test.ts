@@ -5,9 +5,18 @@ import type { Cesium3DTileset, Scene } from "cesium";
 
 import {
   attachInferredLayers,
+  COMPANION_COLOR_GLSL,
+  CompanionHighlight,
+  drawsCompanions,
   evaluateInferredColor,
   InferredHighlight,
 } from "@/cesium/inferredLayers";
+import {
+  colorChainOf,
+  composeColorGlsl,
+  SplatColorChain,
+  type SplatVertexColor,
+} from "@/cesium/splatColor";
 import {
   describeEvidence,
   evidenceOf,
@@ -83,6 +92,7 @@ describe("inferred layers", () => {
       root: { extras: { evidence: { ...EVIDENCE, views: 6 } } },
       show: false,
       modelMatrix: Matrix4.clone(Matrix4.IDENTITY),
+      tileLoad: new Event(),
       destroy: () => undefined,
     } as unknown as Cesium3DTileset;
     const added: unknown[] = [];
@@ -122,35 +132,31 @@ describe("inferred layers", () => {
     useSettings.getState().set({ inferredStyle: "hide" });
   });
 
-  it("is drawn while another renderer draws the scan, CesiumJS's copy hidden", async () => {
+  it("leaves the layer to the renderer that draws the scan: CesiumJS's copy only with its scan", async () => {
     const { parent, child, scene, preUpdate } = fixture();
+    // Another renderer draws the scan (its tileset hidden): it draws the layer too
+    // (scanView/scanLayers.ts), so CesiumJS's copy stays hidden, Show or not.
     (parent as { show: boolean }).show = false;
-    let elsewhere = true;
-    const dispose = attachInferredLayers(
-      parent,
-      scene,
-      "asset-2",
-      () => Promise.resolve(child),
-      () => elsewhere,
-    );
+    const dispose = attachInferredLayers(parent, scene, "asset-2", () => Promise.resolve(child));
     await settle();
     useSettings.getState().set({ inferredStyle: "show" });
     preUpdate.raiseEvent();
-    expect(child.show).toBe(true);
-    elsewhere = false;
-    preUpdate.raiseEvent();
     expect(child.show).toBe(false);
+    expect(useInferred.getState().layers["asset-2"]).toHaveLength(1);
+    (parent as { show: boolean }).show = true;
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(true);
     dispose();
     useSettings.getState().set({ inferredStyle: "hide" });
   });
 
-  it("highlights through its own primitive's colour hook, switched by a uniform", async () => {
+  it("highlights through its own primitive's colour chain, switched by a uniform", async () => {
     const { parent, child, scene, preUpdate, primitive } = fixture();
     const dispose = attachInferredLayers(parent, scene, "asset-3", () => Promise.resolve(child));
     await settle();
     useSettings.getState().set({ inferredStyle: "show" });
     preUpdate.raiseEvent();
-    const hook = primitive.vertexColor as InferredHighlight | undefined;
+    const hook = colorChainOf(primitive as never)?.parts[0] as InferredHighlight | undefined;
     expect(hook).toBeInstanceOf(InferredHighlight);
     expect(hook?.on).toBe(false);
     useSettings.getState().set({ inferredStyle: "highlight" });
@@ -159,11 +165,13 @@ describe("inferred layers", () => {
     // The uniform carries it: no new shader for a switch.
     const lines: string[] = [];
     const uniforms: Record<string, () => unknown> = {};
-    hook?.addToShader(
-      { addUniform: () => undefined, addVertexLines: (l) => void lines.push(String(l)) },
-      uniforms,
-    );
-    expect(lines.join("\n")).toContain("splatVertexColor");
+    const builder = {
+      addUniform: () => undefined,
+      addVertexLines: (l: string | readonly string[]) => void lines.push(String(l)),
+    };
+    (primitive.vertexColor as SplatColorChain | undefined)?.addToShader(builder, uniforms, {});
+    expect(lines.join("\n")).toContain("vec4 splatInferredColor(");
+    expect(lines.join("\n")).toContain("color = splatInferredColor(splatIndex, position, color);");
     expect((uniforms.u_inferredPattern?.() as { w: number }).w).toBe(1);
     useSettings.getState().set({ inferredStyle: "show" });
     preUpdate.raiseEvent();
@@ -171,6 +179,78 @@ describe("inferred layers", () => {
     dispose();
     expect(primitive.vertexColor).toBeUndefined();
     useSettings.getState().set({ inferredStyle: "hide" });
+  });
+
+  it("is drawn by the scan's own primitive, in its sort, while CesiumJS draws the scan", async () => {
+    const { parent, child, scene, preUpdate, primitive } = fixture();
+    const host = hostPrimitive();
+    (parent as unknown as { gaussianSplatPrimitive: unknown }).gaussianSplatPrimitive = host;
+    const dispose = attachInferredLayers(parent, scene, "asset-6", () => Promise.resolve(child));
+    await settle();
+    preUpdate.raiseEvent();
+    // Hidden: nothing drawn, by either.
+    expect(host.companions).toEqual([]);
+    useSettings.getState().set({ inferredStyle: "show" });
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(true);
+    expect(host.companions).toEqual([child]);
+    expect((primitive as { drawnBy?: unknown }).drawnBy).toBe(host);
+    // Highlight acts on the layer's slots of the scan's primitive, not on a measured splat.
+    const companion = colorChainOf(host)?.parts.find((p) => p instanceof CompanionHighlight);
+    expect(companion).toBeDefined();
+    host._tileSlots = new Map([
+      [{ tileset: parent }, { start: 0, count: 100 }],
+      [{ tileset: child }, { start: 100, count: 20 }],
+      [{ tileset: child }, { start: 120, count: 5 }],
+    ]);
+    expect(companion?.slots().map((v) => [v.x, v.y, v.z, v.w])[0]).toEqual([100, 125, 0, 0]);
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    preUpdate.raiseEvent();
+    expect(companion?.on).toBe(true);
+    // Hide: the scan's primitive lets the layer go; the layer's own draws nothing either.
+    useSettings.getState().set({ inferredStyle: "hide" });
+    preUpdate.raiseEvent();
+    expect(host.companions).toEqual([]);
+    expect(child.show).toBe(false);
+    expect((primitive as { drawnBy?: unknown }).drawnBy).toBeUndefined();
+    expect(colorChainOf(host)).toBeUndefined();
+    dispose();
+  });
+
+  it("draws itself, as before, beside a scan whose primitive cannot sort it in", async () => {
+    const { parent, child, scene, preUpdate, primitive } = fixture();
+    const host = hostPrimitive();
+    host.incremental = false;
+    (parent as unknown as { gaussianSplatPrimitive: unknown }).gaussianSplatPrimitive = host;
+    const dispose = attachInferredLayers(parent, scene, "asset-7", () => Promise.resolve(child));
+    await settle();
+    useSettings.getState().set({ inferredStyle: "show" });
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(true);
+    expect(host.companions).toEqual([]);
+    expect((primitive as { drawnBy?: unknown }).drawnBy).toBeUndefined();
+    dispose();
+    useSettings.getState().set({ inferredStyle: "hide" });
+  });
+
+  it("composes Highlight after the objects' highlight in one colour slot", () => {
+    const chain = new SplatColorChain();
+    const objects = {
+      colorFunction: "splatInstanceColor",
+      colorOrder: 0,
+      addToShader: () => undefined,
+    };
+    chain.add(new CompanionHighlight());
+    chain.add(objects);
+    expect(chain.parts.map((p) => p.colorFunction)).toEqual([
+      "splatInstanceColor",
+      "splatCompanionColor",
+    ]);
+    expect(composeColorGlsl(chain.parts.map((p) => p.colorFunction))).toContain(
+      "    color = splatInstanceColor(splatIndex, position, color);\n    color = splatCompanionColor(splatIndex, position, color);",
+    );
+    expect(COMPANION_COLOR_GLSL).toContain("uniform ivec4 u_companionSlots[4];");
+    expect(drawsCompanions(undefined)).toBe(false);
   });
 
   it("turns an inferred splat purple and hatched, and leaves it as painted otherwise", () => {
@@ -295,8 +375,22 @@ function layer(url = "x") {
     show: false,
     modelMatrix: Matrix4.clone(Matrix4.IDENTITY),
     gaussianSplatPrimitive: primitive,
+    tileLoad: new Event(),
     destroy: () => undefined,
   } as unknown as Cesium3DTileset & { gaussianSplatPrimitive: { vertexColor?: unknown } };
+}
+
+/** The scan's own primitive on the patched engine, in incremental mode. */
+function hostPrimitive() {
+  return {
+    incremental: true,
+    companions: [] as Cesium3DTileset[],
+    vertexColor: undefined as SplatVertexColor | undefined,
+    vertexVisibility: undefined as unknown,
+    _tileSlots: undefined as
+      Map<{ tileset: unknown }, { start: number; count: number }> | undefined,
+    isDestroyed: () => false,
+  };
 }
 
 function fixture() {

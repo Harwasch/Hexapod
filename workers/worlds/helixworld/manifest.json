@@ -1,0 +1,18 @@
+{
+  "id": "helix-world",
+  "repository": "https://github.com/NoizAI/HelixWorld",
+  "commit": "5bc3e0e219aadac6c153748347ccfd6c4bf0e777",
+  "checkpoint": "NoizAI/HelixWorld-preview",
+  "checkpointRevision": "0f6aa9f329a118fcf0e16e0d315da026455ad8da",
+  "checkpointBytes": 47786572158,
+  "checkpointSha256": "23f91eaea3af6857d934d8eae9799e49a735972c9a096eea86010bc9ed79b450",
+  "textEncoder": "google/gemma-3-12b-it-qat-q4_0-unquantized",
+  "textEncoderRevision": "68f7ee4fbd59087436ada77ed2d62f373fdd4482",
+  "resolution": "768x512",
+  "frames": 121,
+  "fps": 24,
+  "license": "Apache-2.0; text encoder subject to Google Gemma terms",
+  "servingMode": "offline-clips",
+  "gpuInferenceVerified": false,
+  "nativeKVContinuity": false
+}

@@ -1,0 +1,14 @@
+# CPython 3.10+ Linux. Install Torch CUDA build from the official index first.
+torch==2.4.0
+gsplat==1.5.3
+numpy==1.26.4
+einops==0.8.1
+huggingface-hub==0.35.3
+safetensors==0.6.2
+lightning-utilities==0.15.2
+Pillow==11.3.0
+opencv-python-headless==4.11.0.86
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.35.0
+python-multipart==0.0.20

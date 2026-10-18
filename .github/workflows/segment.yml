@@ -26,6 +26,8 @@ on:
       - tools/captures/segment_scene.py
       - tools/captures/segment_models.py
       - tools/captures/segment_ground_first.py
+      - tools/captures/concept_scene.py
+      - tools/captures/concept_models.py
       - tools/captures/ground_pass.py
       - tools/captures/data/ground_cover.json
       - tools/captures/instances_report.py

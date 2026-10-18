@@ -1,0 +1,355 @@
+{
+  "astronex-world": {
+    "input": {
+      "text": true,
+      "image": true,
+      "multiImage": false,
+      "video": false,
+      "audio": false
+    },
+    "control": {
+      "wasd": true,
+      "mouseLook": true,
+      "camera6DoF": false,
+      "gamepad": true,
+      "discreteActions": true,
+      "continuousActions": true,
+      "semanticActions": false,
+      "promptDuringRollout": false,
+      "promptSwitching": true,
+      "timedEvents": false,
+      "characterReference": false
+    },
+    "output": {
+      "video": true,
+      "audio": false,
+      "depth": false,
+      "cameraPose": false
+    },
+    "runtime": {
+      "resolutionOptions": ["832x480"],
+      "realtime": false,
+      "interactionMode": "next-clip"
+    },
+    "persistence": {
+      "nativeMemory": false,
+      "snapshotRestore": false,
+      "deterministicSeed": true
+    },
+    "customization": {
+      "lora": false,
+      "fineTune": false,
+      "adapters": false
+    },
+    "nativeActions": [
+      "forward",
+      "backward",
+      "right",
+      "left",
+      "up",
+      "down",
+      "look_left",
+      "look_right",
+      "look_up",
+      "look_down",
+      "stop",
+      "look",
+      "analog",
+      "move"
+    ],
+    "resumeKind": "visual-checkpoint"
+  },
+  "forge-wm": {
+    "input": {
+      "text": false,
+      "image": true,
+      "requiredImage": true,
+      "multiImage": false,
+      "video": false,
+      "audio": false
+    },
+    "control": {
+      "wasd": true,
+      "mouseLook": false,
+      "camera6DoF": false,
+      "gamepad": false,
+      "discreteActions": true,
+      "continuousActions": false,
+      "semanticActions": false,
+      "promptDuringRollout": false,
+      "promptSwitching": false,
+      "timedEvents": false,
+      "characterReference": false
+    },
+    "output": {
+      "video": true,
+      "audio": false,
+      "depth": false,
+      "cameraPose": false
+    },
+    "runtime": {
+      "resolutionOptions": ["640x352"],
+      "qualityOptions": ["balanced"],
+      "realtime": false,
+      "interactionMode": "next-clip"
+    },
+    "persistence": {
+      "nativeMemory": false,
+      "snapshotRestore": false,
+      "deterministicSeed": true
+    },
+    "customization": {
+      "lora": false,
+      "fineTune": false,
+      "adapters": false
+    },
+    "nativeActions": [
+      "forward",
+      "backward",
+      "left",
+      "right",
+      "look_left",
+      "look_right",
+      "look_up",
+      "look_down",
+      "stop"
+    ],
+    "resumeKind": "visual-checkpoint"
+  },
+  "matrix-game-3": {
+    "input": {
+      "text": true,
+      "image": true,
+      "requiredImage": true,
+      "multiImage": false,
+      "video": false,
+      "audio": false
+    },
+    "control": {
+      "wasd": true,
+      "mouseLook": false,
+      "camera6DoF": false,
+      "gamepad": false,
+      "discreteActions": true,
+      "continuousActions": false,
+      "semanticActions": false,
+      "promptDuringRollout": false,
+      "promptSwitching": true,
+      "timedEvents": false,
+      "characterReference": false
+    },
+    "output": {
+      "video": true,
+      "audio": false,
+      "depth": false,
+      "cameraPose": false
+    },
+    "runtime": {
+      "resolutionOptions": ["1280x704"],
+      "qualityOptions": ["balanced"],
+      "realtime": false,
+      "interactionMode": "next-clip"
+    },
+    "persistence": {
+      "nativeMemory": false,
+      "snapshotRestore": false,
+      "deterministicSeed": true
+    },
+    "customization": {
+      "lora": false,
+      "fineTune": false,
+      "adapters": false
+    },
+    "nativeActions": [
+      "forward",
+      "backward",
+      "left",
+      "right",
+      "look_left",
+      "look_right",
+      "look_up",
+      "look_down",
+      "stop"
+    ],
+    "resumeKind": "visual-checkpoint"
+  },
+  "sana-wm": {
+    "input": {
+      "text": true,
+      "image": true,
+      "requiredImage": true,
+      "multiImage": false,
+      "video": false,
+      "audio": false
+    },
+    "control": {
+      "wasd": true,
+      "mouseLook": false,
+      "camera6DoF": false,
+      "gamepad": false,
+      "discreteActions": true,
+      "continuousActions": false,
+      "semanticActions": false,
+      "promptDuringRollout": false,
+      "promptSwitching": true,
+      "timedEvents": false,
+      "characterReference": false
+    },
+    "output": {
+      "video": true,
+      "audio": false,
+      "depth": false,
+      "cameraPose": false
+    },
+    "runtime": {
+      "resolutionOptions": ["1280x704"],
+      "qualityOptions": ["balanced"],
+      "realtime": false,
+      "interactionMode": "next-clip"
+    },
+    "persistence": {
+      "nativeMemory": false,
+      "snapshotRestore": false,
+      "deterministicSeed": true
+    },
+    "customization": {
+      "lora": false,
+      "fineTune": false,
+      "adapters": false
+    },
+    "nativeActions": [
+      "forward",
+      "backward",
+      "left",
+      "right",
+      "look_left",
+      "look_right",
+      "look_up",
+      "look_down",
+      "stop"
+    ],
+    "resumeKind": "visual-checkpoint"
+  },
+  "helix-world": {
+    "input": {
+      "text": true,
+      "image": true,
+      "requiredImage": true,
+      "multiImage": false,
+      "video": false,
+      "audio": false
+    },
+    "control": {
+      "wasd": true,
+      "mouseLook": false,
+      "camera6DoF": false,
+      "gamepad": false,
+      "discreteActions": true,
+      "continuousActions": false,
+      "semanticActions": false,
+      "promptDuringRollout": false,
+      "promptSwitching": true,
+      "timedEvents": false,
+      "characterReference": false
+    },
+    "output": {
+      "video": true,
+      "audio": true,
+      "depth": false,
+      "cameraPose": false
+    },
+    "runtime": {
+      "resolutionOptions": ["768x512"],
+      "qualityOptions": ["balanced"],
+      "realtime": false,
+      "interactionMode": "offline-clip"
+    },
+    "persistence": {
+      "nativeMemory": false,
+      "snapshotRestore": false,
+      "deterministicSeed": true
+    },
+    "customization": {
+      "lora": false,
+      "fineTune": false,
+      "adapters": false
+    },
+    "nativeActions": [
+      "forward",
+      "backward",
+      "left",
+      "right",
+      "look_left",
+      "look_right",
+      "look_up",
+      "look_down",
+      "stop"
+    ],
+    "resumeKind": "visual-checkpoint"
+  },
+  "ltx-2.5": {
+    "input": {
+      "text": true,
+      "image": true,
+      "requiredImage": false,
+      "multiImage": false,
+      "video": false,
+      "audio": false
+    },
+    "control": {
+      "wasd": true,
+      "mouseLook": true,
+      "camera6DoF": false,
+      "gamepad": true,
+      "discreteActions": true,
+      "continuousActions": true,
+      "semanticActions": false,
+      "promptDuringRollout": false,
+      "promptSwitching": true,
+      "timedEvents": false,
+      "characterReference": false,
+      "controlMode": "prompt-adapted"
+    },
+    "output": {
+      "video": true,
+      "audio": true,
+      "depth": false,
+      "cameraPose": false
+    },
+    "runtime": {
+      "resolutionOptions": ["768x448"],
+      "qualityOptions": ["low-latency", "balanced", "quality"],
+      "realtime": false,
+      "interactionMode": "continuous-chunks",
+      "controlMode": "prompt-adapted"
+    },
+    "persistence": {
+      "nativeMemory": false,
+      "snapshotRestore": false,
+      "deterministicSeed": true
+    },
+    "customization": {
+      "lora": false,
+      "fineTune": false,
+      "adapters": false
+    },
+    "nativeActions": [
+      "forward",
+      "backward",
+      "right",
+      "left",
+      "up",
+      "down",
+      "look_left",
+      "look_right",
+      "look_up",
+      "look_down",
+      "stop",
+      "look",
+      "analog",
+      "move",
+      "exploration"
+    ],
+    "resumeKind": "visual-checkpoint"
+  }
+}

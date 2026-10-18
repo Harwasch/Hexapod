@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+# Operator-only build: --build-arg MODEL=forge-wm|matrix-game-3|sana-wm
+# GPU inference, image build and FlashAttention compilation remain unvalidated.
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04@sha256:520292dbb4f755fd360766059e62956e9379485d9e073bbd2f6e3c20c270ed66 AS build
+ARG MODEL=forge-wm
+ARG INCLUDE_TRAINING=0
+ENV DEBIAN_FRONTEND=noninteractive HF_HUB_DISABLE_TELEMETRY=1 WANDB_MODE=disabled
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv python3-dev git ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/worlds
+COPY workers/worlds /opt/worlds
+RUN python3 -m venv /opt/inference && python3 -m venv /opt/gateway \
+    && /opt/inference/bin/pip install --no-cache-dir uv==0.12.19
+RUN --mount=type=secret,id=build_ca \
+    if [ -f /run/secrets/build_ca ]; then export SSL_CERT_FILE=/run/secrets/build_ca GIT_SSL_CAINFO=/run/secrets/build_ca; fi; \
+    case "$MODEL" in forge-wm) package=forgewm;; matrix-game-3) package=matrix_game;; sana-wm) package=sana_wm;; *) exit 1;; esac; \
+    requirements="$package/requirements.lock"; \
+    if [ "$INCLUDE_TRAINING" = 1 ]; then requirements="$package/requirements-training.lock"; test -f "$requirements" || exit 1; fi; \
+    /opt/inference/bin/python model_bootstrap.py "$MODEL" --source /opt/upstream \
+    && /opt/inference/bin/uv --no-cache pip install --python /opt/gateway/bin/python -r requirements-streaming.lock \
+    && /opt/inference/bin/uv --no-cache pip install --python /opt/inference/bin/python --require-hashes \
+       --build-constraints sana_wm/build-constraints.txt -r "$requirements" \
+    && if [ "$MODEL" = forge-wm ] || [ "$MODEL" = matrix-game-3 ]; then MAX_JOBS=4 /opt/inference/bin/pip install --no-cache-dir --no-build-isolation flash-attn==2.8.3; fi \
+    && /opt/inference/bin/pip check && /opt/gateway/bin/pip check \
+    && rm -rf /opt/upstream/.git
+# CUDA libraries come from pinned Torch wheels; retain gcc for Triton JIT helpers.
+FROM nvidia/cuda:12.8.1-base-ubuntu24.04@sha256:133c78a0575303be34164d0b90137a042172bdf60696af01a3c424ab402d86e2
+ARG MODEL=forge-wm
+ENV DEBIAN_FRONTEND=noninteractive WORLD_MODEL_ID=$MODEL WORLD_BIND=0.0.0.0 PORT=8789 \
+    INFERENCE_PYTHON=/opt/inference/bin/python HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
+    HF_HUB_DISABLE_TELEMETRY=1 WANDB_MODE=disabled \
+    FORGEWM_SOURCE=/opt/upstream MATRIX_GAME_SOURCE=/opt/upstream/Matrix-Game-3 SANA_WM_SOURCE=/opt/upstream
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv python3-dev gcc ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/* && useradd --create-home --uid 10001 worker
+COPY --from=build /opt/inference /opt/inference
+COPY --from=build /opt/gateway /opt/gateway
+COPY --from=build /opt/upstream /opt/upstream
+COPY --from=build /opt/worlds /opt/worlds
+RUN mkdir -p /models && chown worker:worker /models && chmod -R a+rX /opt/upstream /opt/worlds
+WORKDIR /opt/worlds
+USER worker
+EXPOSE 8789
+HEALTHCHECK --interval=30s --timeout=5s CMD /opt/gateway/bin/python healthcheck.py
+CMD ["/opt/gateway/bin/python", "gateway.py"]

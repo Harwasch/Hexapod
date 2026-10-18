@@ -36,6 +36,31 @@ export const SYSTEM_LABELS: Record<VariantSystem, string> = {
   skins: "Motion",
 };
 
+/**
+ * Bake-off losers the viewer no longer lists, though older scans still declare them: SAM 3's
+ * concept-first came out splotchy beside its Grounding DINO + SAM 2 stand-in.
+ */
+export const RETIRED_VARIANTS: Partial<Record<VariantSystem, readonly string[]>> = {
+  objects: ["concept-first"],
+};
+
+/**
+ * The variant drawn where the viewer has picked nothing, when the scan offers it: the
+ * bake-off's choice. A scan without it draws Today, as before.
+ */
+export const DEFAULT_VARIANTS: Partial<Record<VariantSystem, string>> = {
+  objects: "concept-first-standin",
+};
+
+/** How a pick of Today is kept for a system with a default (no variant has this name). */
+export const TODAY_PICK = ":today";
+
+/** The name to draw for a stored pick: the default when there is none, null for Today. */
+export function resolvePick(system: VariantSystem, picked: string | undefined): string | null {
+  if (picked === undefined) return DEFAULT_VARIANTS[system] ?? null;
+  return picked === TODAY_PICK ? null : picked;
+}
+
 /** What every variant carries. */
 interface VariantBase {
   /** Unique within its system; the folder name (`variants/<system>/<name>/`). */
@@ -151,6 +176,7 @@ export function variantsOf(extras: unknown): ScanVariants {
   const v = (extras as { variants?: Record<string, unknown> } | null | undefined)?.variants;
   if (typeof v !== "object" || v === null || Array.isArray(v)) return NO_VARIANTS;
   const objects = listOf<ObjectsVariant>(v.objects, (e, base) => {
+    if (RETIRED_VARIANTS.objects?.includes(base.name)) return null;
     const instances = pathOf(e.instances);
     return instances === null ? null : { ...base, instances };
   });

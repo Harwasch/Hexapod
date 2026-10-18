@@ -28,7 +28,12 @@ on:
           - everything
           - api
           - web
+          - preflight
         default: everything
+      enable_land:
+        description: Enable Land in the web build and back up/rehearse the database before an API release
+        type: boolean
+        default: false
       api_base_url:
         description: The API's public origin (blank = VITE_API_BASE_URL, else the Fly app in fly.toml)
         type: string
@@ -60,6 +65,10 @@ on:
         description: What to deploy
         type: string
         default: everything
+      enable_land:
+        description: Enable Land and require the private database backup/migration rehearsal
+        type: boolean
+        default: false
       api_base_url:
         description: The API's public origin, overriding the VITE_API_BASE_URL variable
         type: string
@@ -76,13 +85,14 @@ on:
 concurrency:
   # One deploy at a time. Not `cancel-in-progress`: a half-applied `fly deploy` is worse
   # than a queued one, and the release command runs migrations.
-  group: deploy-${{ github.ref }}
+  # Every branch targets the same production app and Pages project.
+  group: deploy-production
   cancel-in-progress: false
 
 jobs:
   api:
     name: API and worker · Fly.io
-    if: inputs.target == 'everything' || inputs.target == 'api'
+    if: inputs.target == 'everything' || inputs.target == 'api' || inputs.target == 'preflight'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -103,6 +113,42 @@ jobs:
         run: |
           curl -L https://fly.io/install.sh | sh
           echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install backup and migration rehearsal tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+          uv sync --frozen --project apps/api
+      - name: Private database backup and restore/migration rehearsal
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_NAME: ${{ vars.NEON_PROJECT_NAME }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET }}
+        run: apps/api/.venv/bin/python scripts/prepare-worlds-land-release.py
+      - name: Ensure the single API ledger volume exists
+        if: inputs.target != 'preflight'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          app=$(sed -n 's/^app *= *"\(.*\)"/\1/p' fly.toml | head -1)
+          region=$(sed -n 's/^primary_region *= *"\(.*\)"/\1/p' fly.toml | head -1)
+          count=$(flyctl volumes list --app "$app" --json | jq '[.[] | select(.name == "twin_worlds_data")] | length')
+          if [ "$count" = 0 ]; then
+            flyctl volumes create twin_worlds_data --app "$app" --region "$region" --size 1 --yes
+          elif [ "$count" != 1 ]; then
+            echo "::error::Multiple Worlds volumes found; refusing independent API ledgers."
+            exit 1
+          fi
+      - name: Consolidate the verified shared-database API before attaching the ledger
+        if: inputs.target != 'preflight'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl scale count app=1 --yes
       # `--remote-only` builds on Fly's builder, so the 500 MB+ image is never pulled
       # through the runner. The build context is the repository root because that is
       # where fly.toml is: infra/api.Dockerfile copies tools/pipeline and tools/captures
@@ -112,9 +158,26 @@ jobs:
       # any machine is replaced. A migration that fails aborts the deploy with the old
       # version still serving.
       - name: fly deploy
+        if: inputs.target != 'preflight'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy --remote-only --wait-timeout 10m
+        run: flyctl deploy --remote-only --ha=false --wait-timeout 10m
+      - name: Verify API ledger ownership and single-replica placement
+        if: inputs.target != 'preflight'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          machines=$(flyctl machines list --json)
+          count=$(printf '%s' "$machines" | jq '[.[] | select(.config.metadata.fly_process_group == "app")] | length')
+          [ "$count" = 1 ] || { echo "::error::Expected exactly one API ledger owner"; exit 1; }
+          machine=$(printf '%s' "$machines" | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .id')
+          volume=$(flyctl volumes list --json | jq -r '.[] | select(.name == "twin_worlds_data") | .id')
+          mounted=$(printf '%s' "$machines" | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .config.mounts[]? | select(.path == "/worlds-data") | .volume')
+          [ -n "$volume" ] && [ "$mounted" = "$volume" ] || { echo "::error::Worlds ledger is not on its expected persistent volume"; exit 1; }
+          flyctl ssh console --machine "$machine" --user root --command "chown 1000:1000 /worlds-data"
+          flyctl ssh console --machine "$machine" --user root --command "chmod 700 /worlds-data"
+          flyctl ssh console --machine "$machine" --user api --command "/app/.venv/bin/python -c 'from pathlib import Path; p=Path(\"/worlds-data/.release-write-check\"); p.write_text(\"ok\"); p.unlink()'"
       # `fly deploy` restores every machine to the state it found it in, so a worker that
       # was stopped before the deploy is stopped after it -- and flyctl reports that as "a
       # good state". The app process is behind Fly's proxy, which starts it on the next
@@ -125,13 +188,14 @@ jobs:
       # Starting it here makes a deploy mean "the worker is running on this version",
       # whatever stopped it: a trial limit, a host migration, a crash that exhausted its
       # restarts. If the process then dies on start, verify's worker check is what says so.
-      - name: The worker is started, not just updated
+      - name: The background workers are started, not just updated
+        if: inputs.target != 'preflight'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
           stopped="$(flyctl machines list --json | jq -r \
-            '.[] | select(.config.metadata.fly_process_group == "worker" and .state != "started") | .id')"
+            '.[] | select((.config.metadata.fly_process_group == "worker" or .config.metadata.fly_process_group == "research") and .state != "started") | .id')"
           if [ -z "$stopped" ]; then
             echo "every worker machine is already running."
             exit 0
@@ -153,9 +217,52 @@ jobs:
           fi
           curl -fsS --retry 5 --retry-all-errors "${API_BASE_URL}/api/v1/health"
 
+      - name: Land and Worlds API smoke checks (no generation or writes)
+        if: inputs.enable_land && inputs.target != 'preflight'
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+        run: |
+          python3 - <<'PYSMOKE'
+          import json
+          import os
+          import time
+          import tomllib
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          app = tomllib.load(open("fly.toml", "rb"))["app"]
+          base = (os.environ.get("API_BASE_URL") or f"https://{app}.fly.dev").rstrip("/")
+          token = os.environ["API_WRITE_TOKEN"]
+          assert token, "API_WRITE_TOKEN is required for authenticated smoke checks"
+          for path in ("/api/v1/health", "/api/v1/land", "/api/v1/worlds/catalog", "/api/v1/worlds/workers", "/api/v1/worlds/readiness"):
+              for attempt in range(6):
+                  try:
+                      with urlopen(Request(base + path, headers={"Authorization": "Bearer " + token}), timeout=30) as response:
+                          data = json.load(response)
+                      if path.endswith("/health"):
+                          assert data["database"] is True
+                      if path.endswith("/readiness"):
+                          assert data["provisioningEnabled"] is False, "Paid provisioning must remain disabled"
+                      print(path, "OK")
+                      break
+                  except Exception:
+                      if attempt == 5:
+                          raise SystemExit(f"Smoke check failed for {path}; response body withheld")
+                      time.sleep(3)
+          try:
+              urlopen(base + "/api/v1/worlds/workers", timeout=30)
+          except HTTPError as error:
+              assert error.code == 401, "Expected authentication requirement"
+          else:
+              raise SystemExit("Worlds private reads unexpectedly allowed without authentication")
+          print("Worlds private reads require authentication")
+          PYSMOKE
+
   web:
     name: Web · Cloudflare Pages
-    if: inputs.target == 'everything' || inputs.target == 'web'
+    needs: api
+    if: always() && !cancelled() && (inputs.target == 'web' || (inputs.target == 'everything' && needs.api.result == 'success'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -192,6 +299,7 @@ jobs:
           GIVEN_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
           VITE_OFFLINE_CATALOG_URL: ${{ inputs.offline_catalog_url || vars.VITE_OFFLINE_CATALOG_URL }}
           VITE_ENABLE_PHOTOREALISTIC: ${{ vars.VITE_ENABLE_PHOTOREALISTIC }}
+          VITE_ENABLE_LAND_EXPLORATION: ${{ inputs.enable_land }}
         run: |
           api="${GIVEN_API_BASE_URL%/}"
           if [ -z "$api" ]; then

@@ -1,6 +1,7 @@
 import type { PickTile } from "@/lib/splatPick";
 import type { TileNode } from "@/view/tiles";
 
+import type { LayerLook } from "./layerLook";
 import type { InstanceStyle } from "./scanInstances";
 import type { ScanMotion } from "./scanMotion";
 import type { TileWork } from "./tileWork";
@@ -131,10 +132,20 @@ export interface ScanBackend<M> {
   /** Tiles loaded now that carry skin weights, and those redrawn for motion so far. */
   motionTiles?(): { skinned: number; redrawn: number };
   /**
-   * Draws `mesh` -- a split object's tile -- under `matrix` (column-major 4x4, the scan's
-   * frame; a rigid motion), or where it was decoded with null.
+   * Draws `mesh` -- a split object's tile, or an inferred layer's -- under `matrix`
+   * (column-major 4x4, the scan's frame; a rigid motion), or where it was decoded with null.
    */
   place?(mesh: M, matrix: readonly number[] | null): void;
+  /**
+   * Fetches and decodes a tile of one of the scan's inferred layers (scanLayers.ts): as `load`,
+   * but bound to none of the scan's objects or motion and left out of `pickTiles` (a click
+   * selects the measured scan's objects, as under CesiumJS), and drawn as `setLayerLook` says.
+   * Added like any tile, it is sorted with the scan's own splats: in front of what it is in
+   * front of, behind what it is behind. Absent when the renderer cannot draw layers.
+   */
+  loadLayer?(tilesetUrl: string, tile: TileNode, signal?: AbortSignal): Promise<M>;
+  /** How a layer's tile is drawn: Highlight, and its layer's view cones (layerLook.ts). */
+  setLayerLook?(mesh: M, look: LayerLook): void;
   /**
    * A time (`performance.now()` ms) by which the renderer wants another frame for work it held
    * back -- a moving object's re-sort, throttled while it moves -- or null. The host draws one
