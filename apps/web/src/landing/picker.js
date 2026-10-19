@@ -666,7 +666,8 @@ function startPicker(Wd, { features = {} } = {}) {
         b.querySelector("em").textContent = `${p.name} · ${fmt(area(p.ring))} ac`;
         b.addEventListener("click", () => {
           touch();
-          sel = new Set([p.id]);
+          // adds to the selection, as a click on the map does
+          sel.add(p.id);
           q.value = p.addr;
           res.hidden = true;
           setMode("select");
