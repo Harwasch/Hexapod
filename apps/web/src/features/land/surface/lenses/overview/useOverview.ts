@@ -14,8 +14,10 @@ import { useLandAnalysis } from "../../useLandAnalysis";
 import {
   bandOf,
   defaultVegetationBand,
+  mapBands,
   OVERVIEW_SPECS,
   pickRaster,
+  terrainOf,
   type OverviewData,
   type Raster,
   type RasterClass,
@@ -25,11 +27,11 @@ type Detail = components["schemas"]["InvestigationDetail"];
 type Sample = components["schemas"]["RasterSample"];
 
 /** What the map can show for the Overview, one at a time. */
-export type OverviewLayer = "elevation" | "slope" | "cover" | "vegetation";
+export type OverviewLayer = "elevation" | "slope" | "cover" | "vegetation" | "signature";
 
 export interface OverviewView {
   layer: OverviewLayer;
-  /** A particular band (a vegetation month); the layer's usual band otherwise. */
+  /** A particular band (a vegetation month, a season's NDVI); the layer's usual band otherwise. */
   band?: number;
 }
 
@@ -62,8 +64,9 @@ function rasterIdOf(detail: Detail | null): string | null {
 }
 
 /**
- * The three analyses behind the Overview (terrain, land cover, greenness) and the newest saved
- * raster of each. Nothing here starts an analysis.
+ * The analyses behind the Overview (terrain, land cover, greenness, and on demand bare-earth
+ * terrain and seasonal signatures) and the newest saved raster of each. Nothing here starts an
+ * analysis.
  */
 export function useOverview(land: LandArea) {
   const scope = useLandScope();
@@ -71,6 +74,8 @@ export function useOverview(land: LandArea) {
   const terrain = useLandAnalysis(land, OVERVIEW_SPECS.terrain.title);
   const cover = useLandAnalysis(land, OVERVIEW_SPECS.cover.title);
   const vegetation = useLandAnalysis(land, OVERVIEW_SPECS.vegetation.title);
+  const bareEarth = useLandAnalysis(land, OVERVIEW_SPECS.bareEarth.title);
+  const signature = useLandAnalysis(land, OVERVIEW_SPECS.signature.title);
   const list = useQuery({
     queryKey: ["land-rasters", scope, "list", land.id],
     queryFn: () =>
@@ -83,18 +88,25 @@ export function useOverview(land: LandArea) {
     retry: false,
   });
   const rows = useMemo(() => (Array.isArray(list.data) ? list.data : []), [list.data]);
+  const analyses = { terrain, cover, vegetation, bareEarth, signature };
   const ids = {
     terrain: rasterIdOf(terrain.detail),
     cover: rasterIdOf(cover.detail),
     vegetation: rasterIdOf(vegetation.detail),
+    bareEarth: rasterIdOf(bareEarth.detail),
+    signature: rasterIdOf(signature.detail),
   };
+  const pick = (key: keyof typeof ids) =>
+    pickRaster(rows, OVERVIEW_SPECS[key].dataset, ids[key], land.revision);
   const data: OverviewData = {
-    terrain: pickRaster(rows, OVERVIEW_SPECS.terrain.dataset, ids.terrain, land.revision),
-    cover: pickRaster(rows, OVERVIEW_SPECS.cover.dataset, ids.cover, land.revision),
-    vegetation: pickRaster(rows, OVERVIEW_SPECS.vegetation.dataset, ids.vegetation, land.revision),
+    terrain: pick("terrain"),
+    cover: pick("cover"),
+    vegetation: pick("vegetation"),
+    bareEarth: pick("bareEarth"),
+    signature: pick("signature"),
   };
   // A run that just finished names a raster the list has not seen yet: fetch the list again.
-  const missing = [ids.terrain, ids.cover, ids.vegetation]
+  const missing = Object.values(ids)
     .filter((id): id is string => Boolean(id) && !rows.some((row) => row.id === id))
     .join(",");
   const listed = list.isSuccess;
@@ -103,10 +115,12 @@ export function useOverview(land: LandArea) {
     if (missing && listed) void refetch();
   }, [missing, listed, refetch]);
   return {
-    analyses: { terrain, cover, vegetation },
+    analyses,
     data,
     loading:
-      terrain.loading || cover.loading || vegetation.loading || (ready && list.isPending) || !ready,
+      Object.values(analyses).some((analysis) => analysis.loading) ||
+      (ready && list.isPending) ||
+      !ready,
     /** A run just finished and its raster is still on its way. */
     settling: Boolean(missing) && !list.isError,
     error: terrain.error ?? list.error ?? null,
@@ -121,7 +135,7 @@ function hasSamples(raster: Raster | null, band: number): boolean {
 }
 
 function defaultView(data: OverviewData): OverviewView | null {
-  if (hasSamples(data.terrain, 1)) return { layer: "elevation" };
+  if (hasSamples(terrainOf(data), 1)) return { layer: "elevation" };
   if (data.cover && hasSamples(data.cover, 1)) return { layer: "cover" };
   if (data.vegetation) return { layer: "vegetation" };
   return null;
@@ -130,10 +144,19 @@ function defaultView(data: OverviewData): OverviewView | null {
 /** The raster and band a view stands for, if this land has it. */
 export function layerOf(view: OverviewView, data: OverviewData): ShownLayer | null {
   if (view.layer === "elevation" || view.layer === "slope") {
-    if (!data.terrain) return null;
-    return { view, raster: data.terrain, band: view.layer === "elevation" ? 1 : 2 };
+    const ground = terrainOf(data);
+    if (!ground) return null;
+    return { view, raster: ground, band: view.layer === "elevation" ? 1 : 2 };
   }
   if (view.layer === "cover") return data.cover ? { view, raster: data.cover, band: 1 } : null;
+  if (view.layer === "signature") {
+    // Only a season's NDVI goes on the map; the reflectance bands stay in the download.
+    const raster = data.signature;
+    if (!raster) return null;
+    const bands = mapBands(raster);
+    const band = view.band ?? defaultVegetationBand(raster);
+    return bands.some((item) => item.index === band) ? { view, raster, band } : null;
+  }
   if (!data.vegetation) return null;
   const band = view.band ?? defaultVegetationBand(data.vegetation);
   return bandOf(data.vegetation, band) ? { view, raster: data.vegetation, band } : null;
@@ -222,7 +245,8 @@ export function useSpotReading(land: LandArea, data: OverviewData): SpotReading 
     })
       ? selection
       : null;
-  const sources = [data.terrain, data.cover].filter((item): item is Raster => Boolean(item));
+  const ground = terrainOf(data);
+  const sources = [ground, data.cover].filter((item): item is Raster => Boolean(item));
   const query = useQuery({
     queryKey: [
       "land-rasters",
@@ -253,14 +277,14 @@ export function useSpotReading(land: LandArea, data: OverviewData): SpotReading 
   const samples = query.data;
   const sampleOf = (raster: Raster | null) =>
     raster ? samples?.[sources.indexOf(raster)] : undefined;
-  const terrainSample = sampleOf(data.terrain);
+  const terrainSample = sampleOf(ground);
   const coverSample = sampleOf(data.cover);
   const code = data.cover ? valueAt(data.cover, coverSample, 1) : null;
   return {
     at: point.at,
     position: [point.longitude, point.latitude],
-    elevation: data.terrain ? valueAt(data.terrain, terrainSample, 1) : null,
-    slope: data.terrain ? valueAt(data.terrain, terrainSample, 2) : null,
+    elevation: ground ? valueAt(ground, terrainSample, 1) : null,
+    slope: ground ? valueAt(ground, terrainSample, 2) : null,
     cover:
       code == null
         ? null

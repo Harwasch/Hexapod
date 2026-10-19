@@ -1,5 +1,7 @@
-import type { components } from "@twin/contracts";
+import type { components, RasterDataset } from "@twin/contracts";
 import { toFeet, type UnitSystem } from "@twin/geo";
+
+import { RASTER_RUNS, rasterRequest as runRequest } from "../../../rasterRuns";
 
 /**
  * The Overview lens's words and numbers, worked out from the saved rasters alone: no model, no
@@ -14,73 +16,106 @@ export type Timeline = components["schemas"]["VegetationTimeline"];
 export type Observation = components["schemas"]["VegetationObservation"];
 export type Period = components["schemas"]["VegetationPeriod"];
 type RasterRequest = components["schemas"]["RasterRequest"];
-type Dataset = NonNullable<RasterRequest["dataset"]>;
 
-export type OverviewKey = "terrain" | "cover" | "vegetation";
+/**
+ * The Overview's analyses: three a step at a time on the card (terrain, then land cover, then
+ * greenness), and two on demand in Details (bare-earth terrain, US only, and the seasonal
+ * signatures Show once compares).
+ */
+export type OverviewKey = "terrain" | "cover" | "vegetation" | "bareEarth" | "signature";
 
 export interface OverviewSpec {
   key: OverviewKey;
-  /** The investigation title the run is saved under (shared with the old research tab). */
+  /** The investigation title the run is saved under (rasterRuns.ts, one table for all). */
   title: string;
-  dataset: Dataset;
+  dataset: RasterDataset;
   resolutionM: number;
   question: string;
+  /** The run's time budget in seconds (rasterRuns.ts). */
+  maxSeconds: number;
   /** What the person sees, in a few words. */
   name: string;
   start: string;
   running: string;
+  /** While the run waits for the research worker. */
+  queued: string;
   failed: string;
   source: string;
+}
+
+/** The request, title and budget of a dataset's run, from the one table every start uses. */
+function runOf(dataset: RasterDataset) {
+  const { title, question, resolutionM, maxSeconds } = RASTER_RUNS[dataset];
+  return { dataset, title, question, resolutionM, maxSeconds };
 }
 
 export const OVERVIEW_SPECS: Record<OverviewKey, OverviewSpec> = {
   terrain: {
     key: "terrain",
-    title: "Surface elevation and slope",
-    dataset: "cop-dem-glo-30",
-    resolutionM: 30,
-    question: "Analyze surface elevation and slope inside this land.",
+    ...runOf("cop-dem-glo-30"),
     name: "Terrain",
     start: "Read the terrain",
     running: "Reading the terrain…",
+    queued: "Waiting to read the terrain…",
     failed: "The terrain could not be read.",
     source: "Copernicus GLO-30 elevation model",
   },
   cover: {
     key: "cover",
-    title: "Land cover in 2021",
-    dataset: "esa-worldcover-2021",
-    resolutionM: 10,
-    question: "Analyze the broad land-cover classes mapped in 2021 inside this land.",
+    ...runOf("esa-worldcover-2021"),
     name: "Land cover",
     start: "Map land cover",
     running: "Mapping land cover…",
+    queued: "Waiting to map land cover…",
     failed: "Land cover could not be mapped.",
     source: "ESA WorldCover 2021",
   },
   vegetation: {
     key: "vegetation",
-    title: "Vegetation through time",
-    dataset: "sentinel-2-ndvi",
-    resolutionM: 20,
-    question: "Compare dated vegetation signals on common clear cells inside this land.",
+    ...runOf("sentinel-2-ndvi"),
     name: "Vegetation",
     start: "Compare greenness with last year",
     running: "Comparing greenness…",
+    queued: "Waiting to compare greenness…",
     failed: "Greenness could not be compared.",
     source: "Sentinel-2 satellite imagery",
   },
+  bareEarth: {
+    key: "bareEarth",
+    ...runOf("usgs-3dep-13"),
+    name: "Bare-earth terrain",
+    start: "Analyze bare-earth terrain",
+    running: "Reading the bare-earth terrain…",
+    queued: "Waiting to read the bare-earth terrain…",
+    failed: "The bare-earth terrain could not be read.",
+    source: "USGS 3DEP 1/3 arc-second bare-earth model",
+  },
+  signature: {
+    key: "signature",
+    ...runOf("sentinel-2-signature"),
+    name: "Seasonal signatures",
+    start: "Prepare 10 m signatures",
+    running: "Preparing the seasonal signatures…",
+    queued: "Waiting to prepare the seasonal signatures…",
+    failed: "The seasonal signatures could not be prepared.",
+    source: "Sentinel-2 seasonal scenes",
+  },
 };
 
-export const OVERVIEW_KEYS: readonly OverviewKey[] = ["terrain", "cover", "vegetation"];
+/** Said beside "Analyze bare-earth terrain" on land USGS 3DEP does not cover. */
+export const OUTSIDE_US =
+  "This land is outside the United States, where USGS 3DEP has no data. Its terrain comes from the worldwide Copernicus model instead.";
 
+/** The card's analyses, one next step at a time. */
+export const OVERVIEW_KEYS = ["terrain", "cover", "vegetation"] as const;
+/** The analyses Details offers on demand. */
+export const ON_DEMAND_KEYS = ["bareEarth", "signature"] as const;
+export const ALL_OVERVIEW_KEYS: readonly OverviewKey[] = [...OVERVIEW_KEYS, ...ON_DEMAND_KEYS];
+
+/** A run's request: months only for the analyses that read dated scenes. */
 export function rasterRequest(spec: OverviewSpec, periods?: Period[]): RasterRequest {
-  return {
-    dataset: spec.dataset,
-    resolutionM: spec.resolutionM,
-    maxDimension: 512,
-    ...(spec.dataset === "sentinel-2-ndvi" && periods?.length ? { periods } : {}),
-  };
+  const dated = spec.dataset === "sentinel-2-ndvi" || spec.dataset === "sentinel-2-signature";
+  return runRequest(spec.dataset, dated && periods?.length ? periods : undefined);
 }
 
 /** The months a vegetation comparison starts with: last month, and the same month a year before. */
@@ -93,7 +128,7 @@ export function defaultMonths(now = new Date()): string[] {
 /** The newest raster of a dataset: the analysis's own, else one for this outline, else any. */
 export function pickRaster(
   rows: readonly Raster[],
-  dataset: Dataset,
+  dataset: RasterDataset,
   preferredId: string | null,
   revision: number,
 ): Raster | null {
@@ -107,10 +142,13 @@ export function pickRaster(
   );
 }
 
-export type RasterKind = "terrain" | "cover" | "vegetation";
+export type RasterKind = "terrain" | "cover" | "vegetation" | "signature";
 
 /** Which analysis a raster came from, read from its request (or its bands, for old rows). */
 export function rasterKind(raster: Raster): RasterKind {
+  // A signature carries a vegetation timeline too (its dated NDVI bands): ask it first.
+  if (raster.metadata.signature || raster.request?.dataset === "sentinel-2-signature")
+    return "signature";
   if (raster.metadata.vegetation || raster.request?.dataset === "sentinel-2-ndvi")
     return "vegetation";
   if (
@@ -119,6 +157,44 @@ export function rasterKind(raster: Raster): RasterKind {
   )
     return "cover";
   return "terrain";
+}
+
+const SOURCE_BY_DATASET: Record<RasterDataset, string> = {
+  "cop-dem-glo-30": "Copernicus GLO-30 surface model",
+  "esa-worldcover-2021": "ESA WorldCover 2021",
+  "sentinel-2-ndvi": "Sentinel-2",
+  "sentinel-2-signature": "Sentinel-2 seasonal signatures",
+  "usgs-3dep-13": "USGS 3DEP 1/3 arc-second bare-earth model",
+};
+
+const SOURCE_BY_KIND: Record<RasterKind, string> = {
+  terrain: SOURCE_BY_DATASET["cop-dem-glo-30"],
+  cover: SOURCE_BY_DATASET["esa-worldcover-2021"],
+  vegetation: SOURCE_BY_DATASET["sentinel-2-ndvi"],
+  signature: SOURCE_BY_DATASET["sentinel-2-signature"],
+};
+
+/** The model or imagery a raster was made from, by name. */
+export function rasterSource(raster: Raster): string {
+  const dataset = raster.request?.dataset;
+  return dataset ? SOURCE_BY_DATASET[dataset] : SOURCE_BY_KIND[rasterKind(raster)];
+}
+
+export function isBareEarth(raster: Raster | null | undefined): boolean {
+  return raster?.request?.dataset === "usgs-3dep-13";
+}
+
+/**
+ * The bands a raster can put on the map. A signature holds five bands per season; the map shows
+ * its dated NDVI bands, and the reflectance bands stay in the download.
+ */
+export function mapBands(raster: Raster): RasterBand[] {
+  const ndvi = raster.metadata.signature?.features
+    .filter((feature) => feature.key === "ndvi")
+    .map((feature) => feature.band);
+  return ndvi
+    ? raster.metadata.bands.filter((band) => ndvi.includes(band.index))
+    : raster.metadata.bands;
 }
 
 export function isStale(raster: Raster, revision: number): boolean {
@@ -354,18 +430,50 @@ export function defaultVegetationBand(raster: Raster): number {
 
 // ---- Headline --------------------------------------------------------------
 
+/** The newest saved raster of each analysis on this land, by analysis. */
 export interface OverviewData {
+  /** Copernicus GLO-30: the surface model, worldwide. */
   terrain: Raster | null;
   cover: Raster | null;
   vegetation: Raster | null;
+  /** USGS 3DEP: bare earth at 10 m, United States only. */
+  bareEarth: Raster | null;
+  signature: Raster | null;
+}
+
+/**
+ * The terrain the card reads: bare earth (USGS 3DEP) where this land has it, since it leaves
+ * out trees and buildings; else the worldwide Copernicus surface model. One made for the
+ * current outline wins over one made for an earlier outline.
+ */
+export function terrainOf(data: Pick<OverviewData, "terrain" | "bareEarth">): Raster | null {
+  const { terrain, bareEarth } = data;
+  if (bareEarth && !bareEarth.stale) return bareEarth;
+  if (terrain && !terrain.stale) return terrain;
+  return bareEarth ?? terrain;
+}
+
+/** Which analysis the card's terrain came from. */
+export function terrainKey(data: OverviewData): "terrain" | "bareEarth" {
+  const ground = terrainOf(data);
+  return ground && ground === data.bareEarth ? "bareEarth" : "terrain";
+}
+
+/** Where a terrain number came from, in a few words: "Bare earth · USGS 3DEP, 10 m". */
+export function terrainNote(raster: Raster): string {
+  const grid = `${Math.round(raster.metadata.resolutionM).toLocaleString()} m`;
+  return isBareEarth(raster)
+    ? `Bare earth · USGS 3DEP, ${grid}`
+    : `Surface incl. trees and buildings · Copernicus, ${grid}`;
 }
 
 /** One sentence: slope, height, then what covers the land ("Mostly gentle slopes, 62–78 m…"). */
 export function overviewHeadline(data: OverviewData, units: UnitSystem): string | null {
   const parts: string[] = [];
-  if (data.terrain) {
-    const elevation = bandOf(data.terrain, 1);
-    const slope = slopeSummary(bandOf(data.terrain, 2));
+  const ground = terrainOf(data);
+  if (ground) {
+    const elevation = bandOf(ground, 1);
+    const slope = slopeSummary(bandOf(ground, 2));
     if (slope) parts.push(slopeHeadline(slope.word));
     if (elevation?.validCells && elevation.minimum != null && elevation.maximum != null)
       parts.push(elevationPhrase(elevation.minimum, elevation.maximum, units));
@@ -375,7 +483,7 @@ export function overviewHeadline(data: OverviewData, units: UnitSystem): string 
   if (!parts.length) {
     const green = greenness(data.vegetation?.metadata.vegetation);
     if (green) return `${green.value}.`;
-    if (data.terrain || data.cover)
+    if (ground || data.cover)
       return "The maps have no samples inside this land. It may be smaller than their grid.";
     return null;
   }

@@ -395,3 +395,22 @@
   font-size: var(--text-xs);
   color: var(--text-secondary);
 }
+
+/* ---- research: on-demand analyses and the research worker ---------------- */
+/* An analysis Details offers on demand (bare-earth terrain, seasonal signatures). */
+.overview-analysis {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--divider);
+}
+.overview-analysis h5,
+.overview-analysis p {
+  margin: 0;
+}
+/* What a queued run waits for, under its running line. */
+.overview-worker {
+  margin: 0;
+  padding-left: calc(13px + var(--space-2));
+}

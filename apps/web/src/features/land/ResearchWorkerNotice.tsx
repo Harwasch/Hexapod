@@ -2,7 +2,7 @@ import type { ResearchRun } from "@twin/contracts";
 
 import { env } from "@/app/env";
 
-import { workerLine } from "./researchAvailability";
+import { workerIdleNote, workerLine } from "./researchAvailability";
 import { useResearchStatus } from "./researchApi";
 
 /**
@@ -30,6 +30,28 @@ export function ResearchWorkerNotice({
     <p className={className} role="status" data-testid="research-worker-notice">
       {line}
       {env.isDev && offline && (
+        <span className="land-footnote">
+          {" "}
+          Developers: start one with <code>pnpm dev:research</code>.
+        </span>
+      )}
+    </p>
+  );
+}
+
+/**
+ * Said before anyone asks, when no research worker is online: a new analysis would wait in the
+ * queue ("Analyses run on a separate research worker, which has not checked in for 2 h."). The
+ * caller leaves it out while its own run is queued, where ResearchWorkerNotice says more.
+ */
+export function ResearchWorkerIdle({ className = "land-muted" }: { className?: string }) {
+  const status = useResearchStatus();
+  const note = workerIdleNote(status.data);
+  if (!note) return null;
+  return (
+    <p className={className} data-testid="research-worker-idle">
+      {note}
+      {env.isDev && (
         <span className="land-footnote">
           {" "}
           Developers: start one with <code>pnpm dev:research</code>.
