@@ -1,6 +1,9 @@
 import { cloneElement, useId, type ReactElement, type ReactNode } from "react";
 
-/** A label and the one control it names (the control receives the id the label points at). */
+/**
+ * A label and the one control it names. A control with an id of its own (a field the save
+ * checklist points at) keeps it; any other receives one for the label to point at.
+ */
 export function PlanField({
   label,
   children,
@@ -8,7 +11,8 @@ export function PlanField({
   label: ReactNode;
   children: ReactElement<{ id?: string }>;
 }) {
-  const id = useId();
+  const generated = useId();
+  const id = children.props.id ?? generated;
   return (
     <label className="land-field" htmlFor={id}>
       {label}

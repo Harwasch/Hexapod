@@ -229,6 +229,14 @@ it("rejects invalid or cross-land captures without losing the downloadable origi
       land.id,
     ),
   ).toThrow(/camera/);
+  // A four-season signature keeps October's NDVI in band 20; the server allows up to 30.
+  const band = (value: number) =>
+    serializeViewCapture(land.id, {
+      ...capture,
+      state: { ...view.state, rasters: [{ id: opened.rasters[0]!.id, band: value }] },
+    });
+  expect(parseViewCapture(band(20), land.id).state.rasters?.[0]?.band).toBe(20);
+  expect(() => parseViewCapture(band(31), land.id)).toThrow(/layer value/);
   localStorage.setItem(viewDraftKey(landScope(), land.id), raw);
   vi.spyOn(api, "GET").mockResolvedValue({ data: [], response: new Response() });
   const post = vi.spyOn(api, "POST");

@@ -1,6 +1,6 @@
 import type { PlanStep } from "@twin/contracts";
 
-import { scheduleLanes } from "@/missions/planDraft";
+import { scheduleLanes, tickStep } from "@/missions/planDraft";
 
 const LANE_H = 22;
 const LABEL_W = 64;
@@ -11,10 +11,13 @@ export function PlanSchedule({
   steps,
   startDate,
   colorFor,
+  zoneLabel = (zoneId) => zoneId,
 }: {
   steps: PlanStep[];
   startDate: string;
   colorFor: (machineId: string) => string;
+  /** How a bar names its zone; a Land's zones go by name, their ids are opaque. */
+  zoneLabel?: (zoneId: string) => string;
 }) {
   const { lanes, totalDays } = scheduleLanes(steps);
   if (lanes.length === 0) return null;
@@ -22,7 +25,7 @@ export function PlanSchedule({
   const plotW = width - LABEL_W - 8;
   const dayW = plotW / totalDays;
   const height = TOP + lanes.length * LANE_H + 6;
-  const tickEvery = totalDays > 21 ? 7 : totalDays > 10 ? 2 : 1;
+  const tickEvery = tickStep(dayW);
   const start = new Date(`${startDate}T00:00:00`);
   const dayLabel = (day: number) => {
     if (Number.isNaN(start.getTime())) return `D${day + 1}`;
@@ -83,7 +86,7 @@ export function PlanSchedule({
                     y={y + 14}
                     className="mc-schedule__bar-label"
                   >
-                    {bar.zoneId ?? bar.title}
+                    {bar.zoneId ? zoneLabel(bar.zoneId) : bar.title}
                   </text>
                 )}
               </g>

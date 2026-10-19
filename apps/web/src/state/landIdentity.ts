@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { env } from "@/app/env";
 import { useLand } from "./land";
+import { useMission } from "./mission";
 
 export const landUsesOidc = Boolean(env.landOidcAuthority ?? env.landOidcClientId);
 
@@ -32,12 +33,19 @@ export const useLandIdentity = create<LandIdentityState>((set, get) => ({
       error: null,
       ...(changed || !accessToken ? { workspaceId: null, role: null } : {}),
     });
-    if (changed || !accessToken) useLand.getState().clear();
+    if (changed || !accessToken) {
+      // One person's private plans and ground never outlive their sign-out.
+      useLand.getState().clear();
+      useMission.getState().dropPrivate();
+    }
   },
   selectWorkspace: (workspaceId, role) => {
     const changed = workspaceId !== get().workspaceId;
     set({ workspaceId, role: role ?? null });
-    if (changed) useLand.getState().clear();
+    if (changed) {
+      useLand.getState().clear();
+      useMission.getState().dropPrivate();
+    }
   },
   setError: (error) => set({ error, ready: true }),
 }));

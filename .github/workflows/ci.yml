@@ -100,10 +100,11 @@ jobs:
         env:
           VITE_CESIUM_ION_ACCESS_TOKEN: ""
       # admin.html, upload.html and view.html must not load CesiumJS (README: "Neither of
-      # the last two loads CesiumJS"); the script exits non-zero when one of the built pages
-      # references a Cesium chunk. It is written in a parallel change (apps/web/scripts/
-      # check-bundle.mjs) -- this step needs it on the branch to pass.
-      - name: The pages that must not load Cesium do not
+      # them loads CesiumJS"), and the globe page keeps its entry script within its gzip
+      # budget and loads no Land code before its first frame (the feature is behind
+      # VITE_ENABLE_LAND_EXPLORATION, off here as in production, and loaded on demand). The
+      # script exits non-zero when a built page crosses one of those lines.
+      - name: The pages that must not load Cesium do not, and the globe keeps its budget
         run: node apps/web/scripts/check-bundle.mjs
 
   worlds:

@@ -6,6 +6,7 @@ import { GlassButton, GlassPanel } from "@twin/ui";
 
 import { api, unwrap } from "@/api/client";
 import { describeError } from "@/lib/log";
+import { tapOrClick } from "@/lib/pointer";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { landScope } from "@/state/landIdentity";
@@ -19,8 +20,8 @@ const LAYER = "boundary-split";
 const PINS = "split";
 
 /**
- * Split the draft with a line: draw the cut across it, then click the pieces on the map to
- * keep. The original land stays saved until a revision is saved.
+ * Split the draft with a line: draw the cut across it, then tap or click the pieces on the map
+ * to keep. The original land stays saved until a revision is saved.
  */
 export function LandSplitBar() {
   const points = useLand((s) => s.points);
@@ -128,7 +129,7 @@ export function LandSplitBar() {
       <span className="land-drawbar__status" aria-live="polite">
         {current ? (
           <>
-            Click pieces to keep · <b>{keep.length}</b> of {current.parts.length}
+            {tapOrClick()} pieces to keep · <b>{keep.length}</b> of {current.parts.length}
           </>
         ) : points.length ? (
           <>

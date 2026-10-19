@@ -13,9 +13,11 @@ import type {
   PlanStep,
 } from "@twin/contracts";
 
-import { isAreaZone, zoneFromFootprint } from "./areas";
+import { isAreaZone, LAND_AREA_PREFIX, nextAreaId, zoneFromFootprint } from "./areas";
 import { bookedWindows } from "./conflicts";
-import { learnedRates } from "./rates";
+import { isLandZone, isPrivateZone, landIdOfProject } from "./landGround";
+import { learnedRates, type LearnedRate } from "./rates";
+import { SCOUT_SHORT } from "./scout";
 import type { Plan, PlanOverlay, Project, Zone } from "./types";
 
 export interface DraftSeed {
@@ -27,7 +29,11 @@ export interface DraftSeed {
   /** The plan being revised, left out of the booked windows sent to the planner. */
   replacePlanId?: string | null;
   answers?: Record<string, string | number | boolean>;
+  /** Zones not offered to the planner (replaced in the card by derived ground). */
+  exclude?: readonly string[];
 }
+
+type PlannerZoneRequest = NonNullable<PlanDraftRequest["zones"]>[number];
 
 const CADENCE_LABEL: Record<PlanCadence, string> = {
   once: "One-off",
@@ -37,8 +43,54 @@ const CADENCE_LABEL: Record<PlanCadence, string> = {
   seasonal: "Seasonal",
 };
 
+/**
+ * The outline the planner sizes a zone's work from: a Land's fence as its line, every other
+ * zone as its footprint. The simulated demo's zones send theirs too, now that their acres are
+ * their footprints' measured acres (demoRanchData.ts), so a demo draft's hours come from path
+ * length under the assumed machine classes, the same as on real ground.
+ */
+function outline(zone: Zone): NonNullable<PlannerZoneRequest["geometry"]> {
+  return zone.land?.line ?? zone.footprint;
+}
+
+/**
+ * Work rates the log measured, for the planner to prefer over a path estimate. A simulated
+ * project's log measured nothing (the demo's shifts are written at the assumed class rates),
+ * so it sends none and its drafts are sized from the outlines.
+ */
+function measuredRates(project: Project): LearnedRate[] {
+  return project.simulated ? [] : learnedRates(project.workLog);
+}
+
+/**
+ * What the planner is told a private workspace mission is called when the draft may be saved
+ * as a public plan. The planner quotes plan titles in its risks ("TR-04 is already booked by
+ * “…”"), and a public plan stores its risks where anyone listing the project's plans reads
+ * them; a private mission's title is private Land data. Its windows and zones still go, so
+ * the clash is still found.
+ */
+export const PRIVATE_PLAN_TITLE = "A private workspace mission";
+
+/**
+ * Whether a draft over `zoneIds` is approved privately whatever the planner picks: on a Land's
+ * own project, or with private ground (a Land's zones, areas derived from them) already in its
+ * scope. Only then may the planner see private ground; otherwise the draft may be stored on
+ * the public plan routes, and its steps and risks must not be able to name a Land's features.
+ */
+export function privateScope(project: Project, zoneIds: readonly string[]): boolean {
+  return (
+    landIdOfProject(project.id) !== null ||
+    project.zones.some((z) => zoneIds.includes(z.id) && isPrivateZone(z))
+  );
+}
+
 /** The context the planner needs: the goal plus the project's zones, machines and plans. */
 export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftRequest {
+  // On a Land's own project every plan is approved privately (planIsPrivate), so private
+  // titles may be quoted there; anywhere else the draft may go to the public plan routes.
+  const onlyPrivate = landIdOfProject(project.id) !== null;
+  const showPrivate = privateScope(project, seed.zoneIds ?? []);
+  const isPrivate = (id: string) => project.zones.some((z) => z.id === id && isPrivateZone(z));
   const request: PlanDraftRequest = {
     goal: seed.goal.trim(),
     projectName: project.name,
@@ -50,35 +102,40 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
       task: m.task,
       batteryPct: m.batteryPct,
     })),
-    zones: project.zones.map((z) => ({
-      id: z.id,
-      name: z.name,
-      acres: z.acres,
-      task: z.task,
-      progressPct: z.progressPct,
-      treated: z.treated,
-      note: z.note,
-    })),
+    zones: project.zones
+      .filter((z) => !seed.exclude?.includes(z.id) && (showPrivate || !isPrivateZone(z)))
+      .map((z) => ({
+        id: z.id,
+        name: z.name,
+        acres: z.acres,
+        task: z.task,
+        progressPct: z.progressPct,
+        treated: z.treated,
+        note: z.note,
+        geometry: outline(z),
+        ...(z.scout ? { capture: z.scout } : {}),
+      })),
     existingPlans: project.plans
       .filter((p) => p.id !== seed.replacePlanId)
       .map((p) => {
         const booked = bookedWindows([p]).find((b) => b.plan.id === p.id);
         return {
           id: p.id,
-          title: p.title,
+          title: p.scope === "workspace" && !onlyPrivate ? PRIVATE_PLAN_TITLE : p.title,
           zoneIds: p.zoneIds,
           status: p.state === "Done" ? "done" : p.state === "Cancelled" ? "cancelled" : "scheduled",
           busy: booked?.busy ?? [],
         };
       }),
-    rates: learnedRates(project.workLog),
+    rates: measuredRates(project),
     preferredZoneIds: seed.zoneIds ?? [],
     preferredMachineIds: seed.machineIds ?? [],
     today: new Date().toISOString().slice(0, 10),
   };
   if (seed.refinement) request.refinement = seed.refinement;
   if (seed.answers && Object.keys(seed.answers).length) request.answers = seed.answers;
-  if (seed.previous) {
+  // A draft made over private ground is not shown to a draft that may go public.
+  if (seed.previous && (showPrivate || !seed.previous.zoneIds.some(isPrivate))) {
     const { source: _source, model: _model, note: _note, ...body } = seed.previous;
     request.previousDraft = body;
   }
@@ -92,9 +149,19 @@ function formatDay(iso: string): string {
     : date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-/** "Z-14 West bench" once, whether or not the name already carries the id. */
+/**
+ * "Z-14 West bench" once, whether or not the name already carries the id. Land zones and
+ * land-action areas ("L-…", "LA-…") have opaque ids and go by their name alone.
+ */
 export function idLabel(id: string, name: string): string {
+  if (id.startsWith("L-") || id.startsWith("LA-")) return name;
   return name.startsWith(id) ? name : `${id} ${name}`;
+}
+
+/** Machine-hours as a stat: minutes when a run is short, so a fence check never reads "0 h". */
+export function formatMachineHours(hours: number): string {
+  if (hours > 0 && hours < 1) return `${Math.max(1, Math.round(hours * 60))} min`;
+  return `${Math.round(hours)} h`;
 }
 
 function slug(text: string): string {
@@ -116,20 +183,30 @@ export function planFromDraft(
   const acres = draft.estimates.acres || zones.reduce((sum, z) => sum + z.acres, 0);
   const ongoing = draft.cadence !== "once" || !draft.endDate;
   const machineList = machines.map((m) => idLabel(m.id, m.name)).join(", ") || "unassigned";
+  const named = draft.zoneIds.map((id) => {
+    const zone = zones.find((z) => z.id === id);
+    return zone ? idLabel(zone.id, zone.name) : id;
+  });
+  // Work along a line (a fence) has a path, not an area: say how far.
+  const pathM = draft.estimates.pathM ?? null;
+  const alongLine = draft.estimates.acres < 0.5 && pathM !== null && pathM > 0;
+  const size = alongLine ? `${(pathM / 1000).toFixed(1)} km` : `${Math.round(acres)} acres`;
   return {
     id: options.id ?? `plan-${slug(draft.title) || "new"}-${Date.now().toString(36)}`,
     title: draft.title,
     state: "Scheduled",
     status: "idle",
-    meta: `${CADENCE_LABEL[draft.cadence]} · ${draft.zoneIds.join(", ") || "no zones"} · ${Math.round(acres)} acres`,
+    meta: `${CADENCE_LABEL[draft.cadence]} · ${named.join(", ") || "no zones"} · ${size}`,
     progressPct: 0,
     progressLabel: "Not started",
     objective: draft.objective,
     stats: [
-      { value: String(Math.round(acres)), label: "Acres in scope" },
+      alongLine
+        ? { value: `${(pathM / 1000).toFixed(1)} km`, label: "Path" }
+        : { value: String(Math.round(acres)), label: "Acres in scope" },
       { value: String(machines.length), label: "Machines" },
       {
-        value: `${Math.round(draft.estimates.machineHours)} h`,
+        value: formatMachineHours(draft.estimates.machineHours),
         label: "Machine-hours",
         accent: true,
       },
@@ -163,7 +240,11 @@ export function planFromDraft(
   };
 }
 
-/** The API body for approving a draft (create) or a revision (same shape plus a note). */
+/**
+ * The API body for approving a draft (create) or a revision (same shape plus a note). The
+ * ground found in the console travels with it: drawn and outlined areas, and a Land's zones
+ * (a line as its corridor), each with where its outline came from.
+ */
 export function recordBodyFromDraft(
   draft: PlanDraft,
   goal: string,
@@ -175,8 +256,14 @@ export function recordBodyFromDraft(
     projectId,
     siteId,
     areas: zones
-      .filter((z) => isAreaZone(z) && draft.zoneIds.includes(z.id))
-      .map((z) => ({ id: z.id, name: z.name, footprint: z.footprint })),
+      .filter((z) => (isAreaZone(z) || isLandZone(z)) && draft.zoneIds.includes(z.id))
+      .map((z) => ({
+        id: z.id,
+        name: z.name,
+        footprint: z.footprint,
+        ...(z.attribution ? { attribution: z.attribution.slice(0, 300) } : {}),
+        ...(z.scout ? { capture: z.scout } : {}),
+      })),
     title: draft.title.trim() || "New plan",
     objective: draft.objective,
     goal,
@@ -215,9 +302,65 @@ export function presentStatus(status: PlanRecordStatus): {
   return STATUS_PRESENTATION[status];
 }
 
-/** The drawn areas a stored plan carries, as zones. */
+/**
+ * A project's stored plans with no area id standing for two different outlines across the
+ * public and private lists. A public plan's areas are numbered in browsers that never see a
+ * workspace's missions, so a private mission's area (one derived from a Land before those
+ * were numbered A-L…, or one drawn into it) can carry the id of another public area. That
+ * private area takes an A-L id here, the same in every private record that carries it, so
+ * neither plan's ground shadows the other's; revising the mission stores the new id. An area
+ * a private plan shares with a public one (the same outline) keeps its id.
+ */
+export function separatePrivateAreas(records: readonly PlanRecord[]): PlanRecord[] {
+  const outline = (area: PlanRecord["areas"][number]) => JSON.stringify(area.footprint);
+  const shared = new Map<string, string>();
+  for (const record of records)
+    if (!record.private) for (const area of record.areas) shared.set(area.id, outline(area));
+  const used = records.flatMap((record) => record.areas.map((area) => ({ id: area.id })));
+  const renamed = new Map<string, string>();
+  return records.map((record) => {
+    if (!record.private) return record;
+    const own = new Map<string, string>();
+    for (const area of record.areas) {
+      const theirs = shared.get(area.id);
+      if (theirs === undefined || theirs === outline(area)) continue;
+      const key = `${area.id} ${outline(area)}`;
+      let id = renamed.get(key);
+      if (!id) {
+        id = nextAreaId(used, LAND_AREA_PREFIX);
+        used.push({ id });
+        renamed.set(key, id);
+      }
+      own.set(area.id, id);
+    }
+    if (own.size === 0) return record;
+    const rename = (id: string) => own.get(id) ?? id;
+    return {
+      ...record,
+      areas: record.areas.map((area) => ({ ...area, id: rename(area.id) })),
+      zoneIds: record.zoneIds.map(rename),
+      steps: record.steps.map((step) =>
+        step.zoneId ? { ...step, zoneId: rename(step.zoneId) } : step,
+      ),
+    };
+  });
+}
+
+/**
+ * The ground a stored plan carries, as zones, with where each outline came from and, for a
+ * scout area, how it is flown. A workspace's plan's ground is private, so it never reaches
+ * browser storage.
+ */
 export function zonesFromRecord(record: PlanRecord): Zone[] {
-  return record.areas.map((a) => zoneFromFootprint(a.id, a.name, a.footprint));
+  return record.areas.map((a) => {
+    const zone = zoneFromFootprint(a.id, a.name, a.footprint);
+    return {
+      ...zone,
+      ...(a.attribution ? { attribution: a.attribution, note: a.attribution } : {}),
+      ...(record.private ? { private: true } : {}),
+      ...(a.capture ? { scout: a.capture, task: "Scout", short: SCOUT_SHORT } : {}),
+    };
+  });
 }
 
 /** A persisted plan as the console's record, with the lifecycle state the API holds. */
@@ -245,6 +388,19 @@ export function planFromRecord(record: PlanRecord, project: Project): Plan {
   return {
     ...plan,
     ...presentation,
+    ...(record.landActionId
+      ? {
+          agentNote:
+            "Scheduled from a land action and approved in Land; machine-hours were not estimated.",
+          // A land action costs its steps; it never sized machine time, so none is shown.
+          stats: plan.stats.map((stat) =>
+            stat.label === "Machine-hours" ? { ...stat, value: "Not estimated" } : stat,
+          ),
+        }
+      : {}),
+    scope: record.private ? "workspace" : "public",
+    landId: record.landId,
+    landActionId: record.landActionId,
     revision: record.revision,
     revisions: record.revisions.map((r) => ({
       revision: r.revision,
@@ -258,11 +414,14 @@ export function planFromRecord(record: PlanRecord, project: Project): Plan {
 
 /** One line for the agent stream once a draft is ready. */
 export function describeDraft(draft: PlanDraft): string {
+  const pathM = draft.estimates.pathM ?? 0;
   const parts = [
     `Drafted “${draft.title}”`,
     `${draft.steps?.length ?? 0} steps`,
     `${draft.machineIds.length} machine${draft.machineIds.length === 1 ? "" : "s"}`,
-    `${Math.round(draft.estimates.acres)} acres`,
+    draft.estimates.acres < 0.5 && pathM > 0
+      ? `${(pathM / 1000).toFixed(1)} km path`
+      : `${Math.round(draft.estimates.acres)} acres`,
   ];
   return `${parts.join(" · ")}. Approve it, drag the outline, or tell me what to change.`;
 }
@@ -341,4 +500,13 @@ export function diffDrafts(before: PlanDraft, after: PlanDraft): string[] {
   const stepsAfter = (after.steps ?? []).length;
   if (stepsBefore !== stepsAfter) out.push(`Steps ${stepsBefore} → ${stepsAfter}.`);
   return out;
+}
+
+/** Room one schedule date tick needs: "Oct 16" in the 12 px mono tick face, plus a gap. */
+const TICK_LABEL_W = 52;
+const TICK_STEPS = [1, 2, 3, 7, 14];
+
+/** Days between labelled ticks: the smallest step whose labels cannot overlap. */
+export function tickStep(dayWidth: number): number {
+  return TICK_STEPS.find((step) => step * dayWidth >= TICK_LABEL_W) ?? 28;
 }

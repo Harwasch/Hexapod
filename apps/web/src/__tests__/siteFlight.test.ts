@@ -18,6 +18,7 @@ import {
   Math as CesiumMath,
   Event,
   Matrix4,
+  sampleTerrainMostDetailed,
   Transforms,
 } from "cesium";
 import type * as Cesium from "cesium";
@@ -188,6 +189,17 @@ function harness() {
     refreshPose: vi.fn(),
     setObjectScale: vi.fn(),
     durationFor: () => 4,
+    /** CameraController.groundHeightAt, over the faked terrain above. */
+    groundHeightAt: async (longitude: number, latitude: number) => {
+      try {
+        const [sample] = await sampleTerrainMostDetailed(undefined as never, [
+          Cartographic.fromDegrees(longitude, latitude),
+        ]);
+        return sample?.height;
+      } catch {
+        return undefined;
+      }
+    },
     sphereArrival: (sphere: BoundingSphere) => {
       spheres.push(sphere);
       const center = Cartographic.fromCartesian(sphere.center);

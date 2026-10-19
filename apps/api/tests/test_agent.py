@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
+import re
+import time
 from datetime import date
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -407,3 +411,673 @@ def test_outline_endpoint_says_when_no_model_is_configured(monkeypatch: pytest.M
     )
     assert response.status_code == 503
     assert "ANTHROPIC_API_KEY" in response.json()["detail"]
+
+
+# A fence line near Redmond (~300 m east-west) and a ~200 x 100 m paddock, as GeoJSON.
+FENCE = {"type": "LineString", "coordinates": [[-122.139, 47.644], [-122.135, 47.644]]}
+PADDOCK = {
+    "type": "Polygon",
+    "coordinates": [
+        [
+            [-122.139, 47.644],
+            [-122.136338, 47.644],
+            [-122.136338, 47.6449],
+            [-122.139, 47.6449],
+            [-122.139, 47.644],
+        ]
+    ],
+}
+
+
+def land_request(goal: str, zones: list[PlannerZone], **overrides: Any) -> PlanDraftRequest:
+    return request(goal, zones=zones, machines=[], **overrides)
+
+
+def test_monitoring_and_checking_are_surveys_while_mowing_along_stays_treatment() -> None:
+    from app.services.planner import _task_kind
+
+    assert _task_kind("monitor the fence every week") == "survey"
+    assert _task_kind("check the troughs") == "survey"
+    assert _task_kind("scout the north pasture") == "survey"
+    assert _task_kind("mow along the fence") == "treat"
+    assert _task_kind("patrolling the boundary") == "survey"
+    # The looking verbs are whole words: a county road, a checkpoint and a country lane do not
+    # turn a repair into a survey.
+    assert _task_kind("repair the fence along the county road") == "treat"
+    assert _task_kind("fix the gate at the checkpoint") == "treat"
+    assert _task_kind("grade the country lane") == "treat"
+
+
+def test_a_line_zone_is_followed_by_the_assumed_drone_and_sized_by_its_length() -> None:
+    from app.services.coverage import measure
+    from app.services.machine_classes import MACHINE_CLASSES
+
+    fence = PlannerZone(id="L-1a2b3c4d", name="North fence", acres=0.7, geometry=FENCE)
+    draft = RulesPlanner().draft(
+        land_request("monitor the fence every week", [fence], preferred_zone_ids=["L-1a2b3c4d"])
+    )
+    length = measure(FENCE, 1)
+    assert length is not None
+    assert draft.cadence == "weekly" and draft.zone_ids == ["L-1a2b3c4d"]
+    assert not any(step.title.startswith("Treat") for step in draft.steps)
+    assert all("L-1a2b3c4d" not in step.title for step in draft.steps)
+    assert any(step.title == "Survey North fence" for step in draft.steps)
+    assert draft.estimates.path_m == pytest.approx(length.length_m, rel=0.001)
+    assert draft.estimates.acres == 0
+    sized = draft.coverage[0]
+    speed = MACHINE_CLASSES.drone.speed_mps
+    assert sized.kind == "line" and sized.machine_class == "drone"
+    assert sized.hours == pytest.approx(length.length_m / speed / 3600)
+    assert "Mapping drone, Mavic 3 Enterprise class (assumed)" in sized.basis
+    step = next(s for s in draft.steps if s.title == "Survey North fence")
+    assert step.detail == "Follow 301 m of North fence (0.01 machine-hours)."
+    path = next(a for a in draft.assumptions if a.startswith("Path from the outline"))
+    assert "assumed" in path and "one run" in path and "it repeats weekly" in path
+
+
+def test_an_outlined_area_takes_its_geodesic_acres_and_the_mower_path() -> None:
+    from app.services.coverage import measure
+
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=999, task="Mow", geometry=PADDOCK)
+    draft = RulesPlanner().draft(
+        land_request("mow the paddock", [paddock], preferred_zone_ids=["A-01"])
+    )
+    measured = measure(PADDOCK, 2.0)
+    assert measured is not None and measured.area_m2 is not None
+    # Acres from the outline (~4.9), never the 999 the client stated.
+    assert draft.estimates.acres == pytest.approx(measured.area_m2 / 4046.8564224, abs=0.05)
+    hours = ((measured.length_m + measured.transit_m) / 1.4 + measured.spans * 8) / 3600
+    assert draft.coverage[0].hours == pytest.approx(hours)
+    assert draft.coverage[0].machine_class == "mower" and draft.coverage[0].spacing_m == 2.0
+    assert draft.estimates.machine_hours == pytest.approx(hours, abs=0.05)
+    assert not any("acres per machine-hour assumed" in a for a in draft.assumptions)
+    two = RulesPlanner().draft(
+        land_request(
+            "mow the paddock", [paddock], preferred_zone_ids=["A-01"], answers={"passes": "two"}
+        )
+    )
+    assert two.coverage[0].hours == pytest.approx(2 * hours)
+    seeded = RulesPlanner().draft(
+        land_request("seed the paddock", [paddock], preferred_zone_ids=["A-01"])
+    )
+    assert seeded.coverage[0].machine_class == "seeder" and seeded.coverage[0].spacing_m == 3.0
+
+
+def test_a_learned_rate_still_sets_the_hours_of_an_outlined_area() -> None:
+    from app.schemas.agent import PlannerRate
+
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=999, task="Mow", geometry=PADDOCK)
+    draft = RulesPlanner().draft(
+        land_request(
+            "mow the paddock",
+            [paddock],
+            preferred_zone_ids=["A-01"],
+            rates=[PlannerRate(task="Mow", acres_per_machine_hour=2.0, samples=4)],
+        )
+    )
+    area = draft.coverage[0].area_m2
+    assert area is not None
+    assert draft.coverage[0].hours == pytest.approx(area / 4046.8564224 / 2.0)
+    assert "measured rate" in draft.coverage[0].basis
+    assert any("learned from 4 logged runs" in a for a in draft.assumptions)
+
+
+def test_survey_detail_scales_the_drone_but_not_a_ground_rover() -> None:
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=999, geometry=PADDOCK)
+
+    def sized(goal: str, detail: str) -> tuple[float, str, float | None]:
+        draft = RulesPlanner().draft(
+            land_request(
+                goal, [paddock], preferred_zone_ids=["A-01"], answers={"resolution": detail}
+            )
+        )
+        c = draft.coverage[0]
+        return c.hours, c.basis, c.altitude_m
+
+    flown, flown_basis, altitude = sized("survey the paddock", "2")
+    assert flown == pytest.approx(2 * sized("survey the paddock", "5")[0])
+    assert "2 times the flying for 2 cm detail" in flown_basis and altitude == 60
+    rover, rover_basis, rover_altitude = sized("survey the paddock with the rover", "2")
+    assert rover == pytest.approx(sized("survey the paddock with the rover", "5")[0])
+    assert "flying" not in rover_basis and rover_altitude is None
+
+
+def test_a_scan_reports_the_altitude_its_line_spacing_came_from() -> None:
+    from app.services.machine_classes import MACHINE_CLASSES
+
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=999, geometry=PADDOCK)
+    draft = RulesPlanner().draft(
+        land_request(
+            "3d scan the paddock",
+            [paddock],
+            preferred_zone_ids=["A-01"],
+            answers={"resolution": "2"},
+        )
+    )
+    c = draft.coverage[0]
+    assert c.altitude_m == 70
+    assert c.spacing_m == pytest.approx(MACHINE_CLASSES.drone.line_spacing_m(70))
+
+
+def test_one_invalid_outline_out_of_scope_does_not_block_the_draft(client: TestClient) -> None:
+    """A bow-tie left in the project (a corner dragged across an edge) is repaired or
+    dropped, never a 422 for every later draft on the project."""
+    bow_tie = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [-122.139, 47.644],
+                [-122.137, 47.645],
+                [-122.137, 47.644],
+                [-122.139, 47.645],
+                [-122.139, 47.644],
+            ]
+        ],
+    }
+    paddock = PlannerZone(id="A-01", name="Paddock", acres=5, task="Mow", geometry=PADDOCK)
+    body: dict[str, Any] = {
+        "goal": "mow the paddock",
+        "projectName": "Oak Bench",
+        "zones": [
+            paddock.model_dump(by_alias=True, mode="json", exclude_none=True),
+            {"id": "A-02", "name": "Old sketch", "acres": 3, "geometry": bow_tie},
+            {
+                "id": "A-03",
+                "name": "Broken",
+                "acres": 2,
+                "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 0], [0, 0], [0, 0]]]},
+            },
+        ],
+        "preferredZoneIds": ["A-01"],
+        "today": "2026-09-17",
+    }
+    response = client.post("/api/v1/agent/plan-draft", json=body)
+    assert response.status_code == 200, response.text
+    if response.json()["source"] == "rules":
+        assert [c["zoneId"] for c in response.json()["coverage"]] == ["A-01"]
+    zones = PlanDraftRequest.model_validate(body).zones
+    # The bow-tie keeps its two triangles; an outline with nothing left falls back to acres.
+    assert zones[1].geometry is not None and zones[1].geometry.type == "MultiPolygon"
+    assert zones[2].geometry is None
+
+
+def test_a_long_derived_zone_name_is_clipped_not_refused(client: TestClient) -> None:
+    """A Land's names run to 200 characters and the console derives longer ones from them
+    ("<feature>, workable"); one such name must not refuse the whole draft."""
+    long_name = "Upper bench below the old oak line where the creek turns west " * 2
+    long_name = f"{long_name.strip()[:118]}, workable"
+    assert len(long_name) > 120
+    zones = [*ZONES, PlannerZone(id="A-07", name=long_name, acres=12, task="Mow thistle")]
+    assert zones[-1].name.endswith("…") and len(zones[-1].name) == 120
+    draft = RulesPlanner().draft(
+        request("Mow A-07 with one mower", zones=zones, preferred_zone_ids=["A-07"])
+    )
+    assert draft.zone_ids == ["A-07"]
+    body = {
+        "goal": "Mow A-07 with one mower",
+        "projectName": "Blackrock Mesa",
+        "zones": [*(z.model_dump(by_alias=True) for z in ZONES), {"id": "A-07", "name": long_name}],
+        "preferredZoneIds": ["A-07"],
+        "today": "2026-09-17",
+    }
+    response = client.post("/api/v1/agent/plan-draft", json=body)
+    assert response.status_code == 200, response.text
+
+
+def test_zones_without_outlines_are_sized_exactly_as_before() -> None:
+    draft = RulesPlanner().draft(request("Mow Z-21 with one mower"))
+    assert draft.coverage == [] and draft.estimates.path_m is None
+    assert draft.estimates.machine_hours == pytest.approx(220 / 1.5, abs=0.05)
+    assert not any(a.startswith("Path from the outline") for a in draft.assumptions)
+
+
+def test_claude_planner_sends_paths_not_outlines_and_returns_server_coverage() -> None:
+    parsed = ModelPlanDraft(
+        title="Weekly fence check",
+        objective="Fly the fence weekly.",
+        zone_ids=["L-1a2b3c4d"],
+        machine_ids=[],
+        cadence="weekly",
+        start_date="2026-09-18",
+        end_date=None,
+        estimated_acres=12,
+        estimated_machine_hours=0.5,
+        estimated_calendar_days=1,
+        steps=[],
+        assumptions=["8 m/s"],
+        risks=[],
+        questions=[],
+        clarifications=[],
+    )
+    settings = Settings(ANTHROPIC_API_KEY="k", ANTHROPIC_MODEL="claude-opus-5", _env_file=None)
+    client = _FakeClient(parsed)
+    fence = PlannerZone(id="L-1a2b3c4d", name="North fence", acres=0.7, geometry=FENCE)
+    draft = ClaudePlanner(settings, client=client).draft(  # type: ignore[arg-type]
+        land_request("monitor the fence every week", [fence], preferred_zone_ids=["L-1a2b3c4d"])
+    )
+    prompt = client.messages.calls[0]["messages"][0]["content"]
+    assert '"geometry"' not in prompt and "-122.139" not in prompt
+    assert '"coverage"' in prompt and '"lengthM"' in prompt
+    assert draft.coverage[0].zone_id == "L-1a2b3c4d" and draft.coverage[0].kind == "line"
+    assert draft.estimates.path_m == pytest.approx(draft.coverage[0].length_m, abs=0.1)
+    # A line has no area, so the model's acres stand; its hours always stand.
+    assert draft.estimates.acres == 12 and draft.estimates.machine_hours == 0.5
+
+
+def test_plan_draft_endpoint_accepts_a_previous_draft_with_coverage(client: TestClient) -> None:
+    fence = PlannerZone(id="L-1a2b3c4d", name="North fence", acres=0.7, geometry=FENCE)
+    body: dict[str, Any] = {
+        "goal": "monitor the fence every week",
+        "projectName": "Oak Bench",
+        "zones": [fence.model_dump(by_alias=True, mode="json", exclude_none=True)],
+        "preferredZoneIds": ["L-1a2b3c4d"],
+        "today": "2026-09-17",
+    }
+    first = client.post("/api/v1/agent/plan-draft", json=body)
+    assert first.status_code == 200, first.text
+    draft = first.json()
+    if draft["source"] != "rules":
+        return
+    assert draft["coverage"][0]["kind"] == "line" and draft["estimates"]["pathM"] > 0
+    previous = {k: v for k, v in draft.items() if k not in {"source", "model", "note"}}
+    again = client.post(
+        "/api/v1/agent/plan-draft",
+        json={**body, "refinement": "every month", "previousDraft": previous},
+    )
+    assert again.status_code == 200, again.text
+
+
+def test_the_fog_goal_drafts_a_survey_flown_at_the_scout_capture() -> None:
+    """ "Lift the fog" proposes scout areas carrying their capture numbers: the goal reads as
+    a survey (never a treatment, so it must not say "clear"), and the planner flies each area
+    at its own altitude, overlap and speed rather than its detail table."""
+    from app.schemas.scout import ScoutCapture
+    from app.services.machine_classes import MACHINE_CLASSES
+    from app.services.planner import _task_kind
+
+    goal = "Survey the foggy ground from the air at 2 cm per pixel so the fog can lift"
+    assert _task_kind(goal) == "survey"
+    assert (
+        _task_kind("Survey the foggy ground from the air at 1.7 cm per pixel so the fog can lift")
+        == "survey"
+    )
+    assert _task_kind("scout the creek") == "survey"
+    capture = ScoutCapture(altitude_m=60, forward_overlap=0.75, side_overlap=0.7, speed_ms=8)
+    patch = PlannerZone(id="A-01", name="Fog patch 1", acres=999, geometry=PADDOCK, capture=capture)
+    draft = RulesPlanner().draft(
+        land_request(goal, [patch], preferred_zone_ids=["A-01"], answers={"resolution": "2"})
+    )
+    c = draft.coverage[0]
+    drone = MACHINE_CLASSES.drone
+    assert c.machine_class == "drone" and c.altitude_m == 60 and c.speed_mps == 8
+    assert c.spacing_m == pytest.approx(drone.footprint_width_m(60) * 0.3)
+    # The capture already says how it is flown: no detail multiplier on top.
+    assert "times the flying" not in c.basis and "scout capture" in c.basis
+    plain = PlannerZone(id="A-01", name="Fog patch 1", acres=999, geometry=PADDOCK)
+    doubled = (
+        RulesPlanner()
+        .draft(
+            land_request(goal, [plain], preferred_zone_ids=["A-01"], answers={"resolution": "2"})
+        )
+        .coverage[0]
+    )
+    assert doubled.hours == pytest.approx(2 * c.hours, rel=0.01)
+
+
+def test_a_name_that_leads_with_its_id_answers_to_the_rest_of_it() -> None:
+    """People say "the west grassland", not "Z-14 West grassland", and "Kestrel", not "TR-04
+    Kestrel": the rest of a name that leads with its id is matched too, and excluded too."""
+    zones = [
+        PlannerZone(id="Z-14", name="Z-14 West grassland", acres=414, task="Mow thistle"),
+        PlannerZone(id="Z-21", name="Z-21 Fence line", acres=34, task="Mow"),
+    ]
+    fleet = [
+        PlannerMachine(id="TR-04", name="TR-04 Kestrel", model="mower", status="working"),
+        PlannerMachine(id="TR-12", name="TR-12 Pipit", model="mower", status="idle"),
+    ]
+    draft = RulesPlanner().draft(
+        request("Mow the west grassland with Kestrel", zones=zones, machines=fleet)
+    )
+    assert draft.zone_ids == ["Z-14"]
+    assert draft.machine_ids == ["TR-04"]
+    skipped = RulesPlanner().draft(
+        request("Mow everything but skip the fence line", zones=zones, machines=fleet)
+    )
+    assert skipped.zone_ids == ["Z-14"]
+    # A short remainder is not a name: "Z-1 N" does not answer to every "n".
+    from app.services.planner import _mentioned
+
+    assert _mentioned("north and south", [("Z-1", "Z-1 N")]) == []
+
+
+def test_the_default_crew_is_the_machines_that_suit_the_work() -> None:
+    """With no count asked for, mowing takes the mowers and drilling the one seed drill, not
+    whichever machines happen to be idle; a survey in a fleet with no drone goes to its survey
+    scouts. A count asked for still fills up from the rest."""
+    fleet = [
+        PlannerMachine(
+            id="TR-04", name="TR-04 Kestrel", model="Ranger 2 · mower", status="working"
+        ),
+        PlannerMachine(id="TR-12", name="TR-12 Pipit", model="Ranger 2 · mower", status="working"),
+        PlannerMachine(id="TR-11", name="TR-11 Vireo", model="Scout 1 · survey", status="idle"),
+        PlannerMachine(id="TR-15", name="TR-15 Towhee", model="Drill 1 · seeder", status="idle"),
+    ]
+    zone = [PlannerZone(id="Z-14", name="Z-14 West grassland", acres=414, task="Mow thistle")]
+
+    def crew(goal: str, machines: list[PlannerMachine] = fleet) -> list[str]:
+        return RulesPlanner().draft(request(goal, zones=zone, machines=machines)).machine_ids
+
+    assert crew("Mow the west grassland") == ["TR-04", "TR-12"]
+    assert crew("Drill native seed on the west grassland") == ["TR-15"]
+    assert crew("Survey the west grassland every month") == ["TR-11"]
+    assert crew("Drill seed on the west grassland with two machines") == ["TR-15", "TR-11"]
+    # A drone in the fleet flies the survey, and only machines that may fly fill a flight.
+    drone = PlannerMachine(id="UA-01", name="UA-01 Kite", model="Mavic 3E drone", status="idle")
+    assert crew("Survey the west grassland every month", [*fleet, drone]) == ["UA-01"]
+    assert crew("3D scan the west grassland with two machines", [*fleet, drone]) == ["UA-01"]
+
+
+DEMO_NAMES = {"Z-14": "Z-14 West grassland", "Z-21": "Z-21 Fence line", "Z-08": "Z-08 Creek draw"}
+DEMO_TASKS = {"Z-14": "Mow yellow star thistle", "Z-21": "Buffer + mow queued", "Z-08": "Survey"}
+# The simulated fleet as apps/web/src/missions/demo.ts sends it.
+DEMO_FLEET = [
+    PlannerMachine(id="TR-04", name="TR-04 Kestrel", model="Ranger 2 · mower", status="working"),
+    PlannerMachine(id="TR-12", name="TR-12 Pipit", model="Ranger 2 · mower", status="working"),
+    PlannerMachine(id="TR-07", name="TR-07 Harrier", model="Ranger 2 · mower", status="attention"),
+    PlannerMachine(id="TR-18", name="TR-18 Shrike", model="Scout 1 · survey", status="attention"),
+    PlannerMachine(id="TR-11", name="TR-11 Vireo", model="Scout 1 · survey", status="idle"),
+    PlannerMachine(id="TR-15", name="TR-15 Towhee", model="Drill 1 · seeder", status="idle"),
+]
+REPO = Path(__file__).resolve().parents[3]
+
+
+def demo_ranch() -> tuple[dict[str, Any], list[PlannerZone]]:
+    """The demo ranch's derived zones and the planner zones the console sends for them: each
+    with its footprint, at its footprint's measured acres."""
+    ranch = json.loads((REPO / "apps/api/app/seed/demo_ranch.json").read_text())
+    derived = ranch["derived"]["zones"]
+    zones = [
+        PlannerZone(
+            id=zid,
+            name=name,
+            acres=round(derived[zid]["areaM2"] / 4046.8564224),
+            task=DEMO_TASKS[zid],
+            treated=zid == "Z-14",
+            geometry=derived[zid]["footprint"],
+        )
+        for zid, name in DEMO_NAMES.items()
+    ]
+    return derived, zones
+
+
+def demo_draft(goal: str) -> Any:
+    _, zones = demo_ranch()
+    return RulesPlanner().draft(
+        request(goal, zones=zones, machines=DEMO_FLEET, project_name="Oak Bench Ranch")
+    )
+
+
+def demo_examples() -> list[str]:
+    """The example chips the plan composer offers on the demo ranch, read from the console."""
+    source = (REPO / "apps/web/src/missions/demo.ts").read_text()
+    block = re.search(r"export const DEMO_EXAMPLES = \[(.*?)\];", source, re.S)
+    assert block, "DEMO_EXAMPLES moved: point this test at it"
+    return re.findall(r'"([^"]+)"', block.group(1))
+
+
+def test_the_demo_ranch_drafts_from_its_outlines_with_the_assumptions_shown() -> None:
+    """The simulated demo's zones now send their outlines (their acres are the footprints'
+    measured acres), so its drafts are sized from path length under the assumed machine
+    classes, and say so. The numbers stay in a field's range: a 2 m mower at 1.4 m/s does
+    about 2.4 acres an hour, a 3 m drill at 1.2 m/s about 3."""
+    derived, _ = demo_ranch()
+    mow = demo_draft("Mow the star thistle on the west grassland by Friday")
+    assert mow.zone_ids == ["Z-14"] and mow.machine_ids == ["TR-04", "TR-12"]
+    [c] = mow.coverage
+    assert c.machine_class == "mower" and c.area_m2 == pytest.approx(derived["Z-14"]["areaM2"])
+    assert mow.estimates.acres == pytest.approx(derived["Z-14"]["areaM2"] / 4046.8564224, abs=0.1)
+    assert 2.0 < mow.estimates.acres / mow.estimates.machine_hours < 2.6
+    assert "Robotic brush mower (assumed)" in c.basis and "not a field-ready route" in c.basis
+    assert any(a.startswith("Path from the outline: Z-14 West grassland") for a in mow.assumptions)
+    assert not any("logged run" in a for a in mow.assumptions), "nothing measured is claimed"
+
+    # The 30 m strip inside the fence turns far more often than the open grassland, so its
+    # rate is a little lower.
+    fence = demo_draft("Mow the fence line")
+    assert fence.zone_ids == ["Z-21"] and fence.coverage[0].machine_class == "mower"
+    assert 1.7 < fence.estimates.acres / fence.estimates.machine_hours < 2.6
+
+    seed = demo_draft("Drill native seed on the west grassland")
+    assert seed.machine_ids == ["TR-15"] and seed.coverage[0].machine_class == "seeder"
+    assert 2.5 < seed.estimates.acres / seed.estimates.machine_hours < 3.2
+    assert "Seed drill (assumed)" in seed.coverage[0].basis
+
+
+def test_the_demo_examples_are_sized_for_the_crew_that_does_them() -> None:
+    """Every example chip on the demo ranch drafts work its simulated fleet can do, sized for
+    the machines it is given. The fleet has no drone: the creek survey goes to the survey
+    scouts at the survey rover's assumptions (10 m swath at 1.5 m/s is about 13 acres an hour
+    before turns), and the scan, which needs a mapping drone, gets no ground crew and says the
+    drone is not in this fleet."""
+    from app.services.machine_classes import MACHINE_CLASSES
+
+    mow_goal, survey_goal, scan_goal = demo_examples()
+    mow = demo_draft(mow_goal)
+    assert mow.machine_ids == ["TR-04", "TR-12"]
+    assert {c.machine_class for c in mow.coverage} == {"mower"}
+
+    survey = demo_draft(survey_goal)
+    assert survey.zone_ids == ["Z-08"], "the creek survey stays on the creek"
+    assert survey.machine_ids == ["TR-11", "TR-18"] and survey.cadence == "monthly"
+    [c] = survey.coverage
+    rover = MACHINE_CLASSES.survey
+    assert c.machine_class == "survey" and c.speed_mps == rover.speed_mps
+    assert c.spacing_m == rover.swath_m and c.altitude_m is None
+    assert "Survey rover (assumed)" in c.basis and "Mapping drone" not in c.basis
+    acres_per_hour = survey.estimates.acres / survey.estimates.machine_hours
+    assert 8 < acres_per_hour < 13.4, "a rover's pace, not a drone's"
+    assert 3 < survey.estimates.machine_hours < 5
+    assert "before driving them" in survey.steps[0].detail
+    assert any("by a survey rover (assumed)" in a for a in survey.assumptions)
+    assert all(c.id != "resolution" for c in survey.clarifications), "detail is a flight's"
+
+    scan = demo_draft(scan_goal)
+    assert scan.machine_ids == [] and all(not s.machine_ids for s in scan.steps)
+    assert {c.machine_class for c in scan.coverage} == {"drone"}
+    assert all("(assumed), not in this fleet" in c.basis for c in scan.coverage)
+    assert any("not in this fleet" in a for a in scan.assumptions)
+    assert any(q.startswith("Which drone flies this?") for q in scan.questions)
+    assert not any("No machines are assigned" in q for q in scan.questions)
+    assert all(c.id != "crew" for c in scan.clarifications), "no count of nothing to ask for"
+
+    # A ground machine named for a flight keeps the operator's choice, with the mismatch said.
+    named = demo_draft(f"{scan_goal} with TR-11")
+    assert named.machine_ids == ["TR-11"]
+    assert any("TR-11 Vireo works on the ground" in r for r in named.risks)
+    # Asked for from the air, a survey stays a flight even without a drone to fly it.
+    aerial = demo_draft("Survey the creek draw from the air")
+    assert aerial.machine_ids == [] and aerial.coverage[0].machine_class == "drone"
+
+
+def _square(index: int) -> dict[str, Any]:
+    west, south = -122.14 + index * 0.002, 47.64
+    ring = [[west, south], [west + 0.001, south], [west + 0.001, south + 0.001]]
+    return {"type": "Polygon", "coordinates": [[*ring, [west, south + 0.001], [west, south]]]}
+
+
+SQUARES = [
+    PlannerZone(id=f"A-{i:02d}", name=f"Patch {i}", acres=6, task="Mow", geometry=_square(i))
+    for i in range(30)
+]
+
+
+class _CountingMeasure:
+    """Stands in for coverage.measure: counts calls and advances a fake clock per call."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, seconds_each: float = 0.0) -> None:
+        from app.services import coverage, planner
+
+        self.calls = 0
+        self.now = 0.0
+        self._measure = coverage.measure
+        self._seconds = seconds_each
+        monkeypatch.setattr(coverage, "measure", self)
+        monkeypatch.setattr(planner, "_clock", lambda: self.now, raising=False)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls += 1
+        self.now += self._seconds
+        return self._measure(*args, **kwargs)
+
+
+def test_a_draft_request_bounds_its_preferred_ids() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        request("Mow", preferred_zone_ids=["Z-14"] * 501)
+    with pytest.raises(ValidationError):
+        request("Mow", preferred_machine_ids=["TR-04"] * 201)
+
+
+def test_sizing_measures_each_zone_once_and_a_bounded_amount_of_ground(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import planner
+    from app.services.planner import size_zones
+
+    measure = _CountingMeasure(monkeypatch)
+    many = request("Mow the patches", zones=SQUARES, machines=[])
+    assert len(size_zones(many, ["A-00"] * 400, "treat", {})) == 1
+    assert measure.calls == 1, "a zone named again is not measured again"
+    sized = size_zones(many, [z.id for z in SQUARES], "treat", {})
+    assert [c.zone_id for c in sized] == [f"A-{i:02d}" for i in range(planner.SIZED_ZONES_MAX)]
+    # Past the vertex budget a zone is sized by its acres (5 vertices a square).
+    monkeypatch.setattr(planner, "SIZED_VERTICES_MAX", 12)
+    assert len(size_zones(many, [z.id for z in SQUARES], "treat", {})) == 2
+    # Past the time budget no further zone is measured.
+    monkeypatch.setattr(planner, "SIZED_VERTICES_MAX", 50_000)
+    slow = _CountingMeasure(monkeypatch, seconds_each=planner.SIZING_BUDGET_S * 0.6)
+    assert len(size_zones(many, [z.id for z in SQUARES], "treat", {})) == 2
+    assert slow.calls == 2
+    # The rules planner sizes the rest from their acres, and says at what rate.
+    monkeypatch.setattr(planner, "SIZING_BUDGET_S", 1e9)
+    ids = [z.id for z in SQUARES]
+    draft = RulesPlanner().draft(
+        request("Mow the patches", zones=SQUARES, machines=MACHINES, preferred_zone_ids=ids)
+    )
+    assert len(draft.coverage) == planner.SIZED_ZONES_MAX and draft.zone_ids == ids
+    assert any("acres per machine-hour" in a for a in draft.assumptions)
+    # ...and names the zones that rate applies to, and why.
+    assert (
+        "A-20 Patch 20, A-21 Patch 21, A-22 Patch 22, A-23 Patch 23, A-24 Patch 24, "
+        "A-25 Patch 25 and 4 more are sized from their acres, not their outlines: past the 20 "
+        "outlines one draft measures."
+    ) in draft.assumptions
+
+
+def test_a_draft_names_each_outline_it_left_to_acres_and_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import planner
+
+    def notes(zones: list[PlannerZone]) -> list[str]:
+        draft = RulesPlanner().draft(request("Mow the patches", zones=zones, machines=MACHINES))
+        return [a for a in draft.assumptions if "sized from" in a]
+
+    assert notes(SQUARES[:3]) == []
+    monkeypatch.setattr(planner, "ZONE_VERTICES_MAX", 4)
+    assert notes(SQUARES[:2]) == [
+        "A-00 Patch 0 and A-01 Patch 1 are sized from their acres, not their outlines: more "
+        "than 4 outline points."
+    ]
+    monkeypatch.setattr(planner, "ZONE_VERTICES_MAX", 20_000)
+    monkeypatch.setattr(planner, "SIZED_VERTICES_MAX", 12)
+    assert notes(SQUARES[:3]) == [
+        "A-02 Patch 2 is sized from its acres, not its outline: past the 12 outline points one "
+        "draft measures."
+    ]
+    monkeypatch.setattr(planner, "SIZED_VERTICES_MAX", 50_000)
+    _CountingMeasure(monkeypatch, seconds_each=planner.SIZING_BUDGET_S * 0.6)
+    assert notes(SQUARES[:3]) == [
+        "A-02 Patch 2 is sized from its acres, not its outline: past the 10 seconds one draft "
+        "spends measuring."
+    ]
+
+
+def test_a_jagged_outline_drafts_within_the_sizing_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import coverage
+    from tests.test_coverage import spiky
+
+    def traced(*_: Any) -> Any:
+        raise AssertionError("an outline past MAX_SPANS was traced span by span")
+
+    monkeypatch.setattr(coverage, "_segments", traced)
+    # 1,500 points: 477,000 spans at the mower's swath. Traced, this draft took 22 s and 1.3 GB.
+    zone = PlannerZone(id="A-00", name="Spiky", acres=1, task="Mow", geometry=spiky(1500))
+    started = time.monotonic()
+    draft = RulesPlanner().draft(request("Mow A-00", zones=[zone], machines=MACHINES))
+    assert time.monotonic() - started < 5
+    [sized] = draft.coverage
+    assert sized.spans > 20 * coverage.MAX_SPANS and sized.passes == 5000
+    assert "too many to trace one by one" in sized.basis
+    assert draft.estimates.acres == pytest.approx((sized.area_m2 or 0) / 4046.8564224, abs=0.1)
+
+
+def _patch_draft(zone_ids: list[str]) -> ModelPlanDraft:
+    return ModelPlanDraft(
+        title="Mow the patch",
+        objective="Mow A-00.",
+        zone_ids=zone_ids,
+        machine_ids=[],
+        cadence="once",
+        start_date="2026-09-18",
+        end_date="2026-09-19",
+        estimated_acres=12,
+        estimated_machine_hours=4,
+        estimated_calendar_days=1,
+        steps=[],
+        assumptions=[],
+        risks=[],
+        questions=[],
+        clarifications=[],
+    )
+
+
+CLAUDE = Settings(ANTHROPIC_API_KEY="k", ANTHROPIC_MODEL="claude-opus-5", _env_file=None)
+
+
+def test_claude_planner_sizes_a_repeated_preferred_zone_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    measure = _CountingMeasure(monkeypatch)
+    client = _FakeClient(_patch_draft(["A-00", "A-00", "A-01"]))
+    planner = ClaudePlanner(CLAUDE, client=client)  # type: ignore[arg-type]
+    draft = planner.draft(
+        land_request("Mow the patch", SQUARES[:2], preferred_zone_ids=["A-00"] * 500)
+    )
+    assert measure.calls == 2, "A-00 once for the model's context and the draft, A-01 once"
+    assert draft.zone_ids == ["A-00", "A-01"]
+    assert [c.zone_id for c in draft.coverage] == ["A-00", "A-01"]
+
+
+def test_claude_planner_spends_one_sizing_budget_per_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import planner as planner_module
+
+    measure = _CountingMeasure(monkeypatch, seconds_each=planner_module.SIZING_BUDGET_S * 0.6)
+    client = _FakeClient(_patch_draft(["A-00", "A-01", "A-02"]))
+    planner = ClaudePlanner(CLAUDE, client=client)  # type: ignore[arg-type]
+    draft = planner.draft(land_request("Mow the patches", SQUARES[:3]))
+    # The model's context measured two zones before the budget ran out; the draft reuses
+    # them and gets no second budget for the third.
+    assert measure.calls == 2
+    assert [c.zone_id for c in draft.coverage] == ["A-00", "A-01"]
+    note = (
+        "A-02 Patch 2 is sized from its acres, not its outline: past the 10 seconds one draft "
+        "spends measuring."
+    )
+    assert note in draft.assumptions
+    assert note in client.messages.calls[0]["messages"][0]["content"]

@@ -295,7 +295,11 @@ describe("the agent card", () => {
 
   it("says plainly when the agent isn't set up on this server", async () => {
     mount({ configured: false });
-    expect(await screen.findByText("The agent isn't set up on this server.")).toBeVisible();
+    expect(
+      await screen.findByText(
+        "The agent isn't set up on this server. The lens analyses still work.",
+      ),
+    ).toBeVisible();
     fireEvent.change(screen.getByLabelText("Ask about this land"), {
       target: { value: "What grows here?" },
     });
@@ -496,7 +500,7 @@ describe("the agent card", () => {
 });
 
 describe("one agent card at every width", () => {
-  function host(compact: boolean) {
+  function host(compact: boolean, fixture: Fixture = {}) {
     vi.spyOn(window, "matchMedia").mockImplementation(
       (query: string) =>
         ({
@@ -510,7 +514,7 @@ describe("one agent card at every width", () => {
           dispatchEvent: () => false,
         }) as MediaQueryList,
     );
-    mount();
+    mount(fixture);
     cleanup();
     useUi.setState({ activePanel: "land" });
     return render(
@@ -535,6 +539,25 @@ describe("one agent card at every width", () => {
     host(true);
     expect(await within(screen.getByTestId("sheet")).findByTestId("land-agent")).toBeVisible();
     expect(within(screen.getByTestId("dock")).queryByTestId("land-agent")).toBeNull();
+  });
+
+  it("folds to its ask row in the narrow sheet until it has something to show", async () => {
+    host(true);
+    const card = await within(screen.getByTestId("sheet")).findByTestId("land-agent");
+    expect(await within(card).findByLabelText("Ask about this land")).toBeVisible();
+    expect(within(card).getByText("Agent")).not.toBeVisible();
+    expect(within(card).queryByText("Research limits")).toBeNull();
+  });
+
+  it("says in one line, in the narrow sheet, that the agent isn't set up", async () => {
+    host(true, { configured: false });
+    const card = await within(screen.getByTestId("sheet")).findByTestId("land-agent");
+    expect(
+      await within(card).findByText(
+        "The agent isn't set up on this server. The lens analyses still work.",
+      ),
+    ).toBeVisible();
+    expect(within(card).queryByLabelText("Ask about this land")).toBeNull();
   });
 
   it("stays away while there is no saved land open", () => {

@@ -47,6 +47,7 @@ from app.models.research import (
     ResearchEvent,
     ResearchMessage,
     ResearchRun,
+    ResearchWorkerPresence,
 )
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.models.site import Site
@@ -105,6 +106,7 @@ __all__ = [
     "ResearchEvent",
     "ResearchMessage",
     "ResearchRun",
+    "ResearchWorkerPresence",
     "RunStatus",
     "ScaleSource",
     "Site",

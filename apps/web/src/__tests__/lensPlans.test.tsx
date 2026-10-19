@@ -26,6 +26,7 @@ import {
   staleReasonText,
   stepTiming,
 } from "@/features/land/surface/lenses/plans/plansFormat";
+import { anywhereProject } from "@/missions/anywhere";
 import { useLandContext } from "@/state/landContext";
 import { useLandMap } from "@/state/landMap";
 import type * as IdentityModule from "@/state/landIdentity";
@@ -312,9 +313,7 @@ describe("plans card", () => {
 
   it("schedules an approved plan as a mission under the open project", async () => {
     useMission.setState({
-      project: { id: "project-1", name: "North field" } as ReturnType<
-        typeof useMission.getState
-      >["project"],
+      project: { ...anywhereProject(), id: "project-1", name: "North field" },
     });
     const post = vi.spyOn(api, "POST").mockResolvedValue({ data: {}, response: new Response() });
     mount({ actions: [{ ...meadow, status: "approved", approvedAt: "2026-10-10" }] });
@@ -331,7 +330,12 @@ describe("plans card", () => {
   it("shows the mission a scheduled plan became", async () => {
     mount({
       actions: [{ ...meadow, status: "scheduled", missionId: "mission-1" }],
-      mission: { startDate: "2026-10-10", endDate: "2026-10-12", status: "scheduled" },
+      mission: {
+        projectId: "land:land",
+        startDate: "2026-10-10",
+        endDate: "2026-10-12",
+        status: "scheduled",
+      },
     });
     expect(await screen.findByText(/Mission scheduled for/)).toBeVisible();
     expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull();

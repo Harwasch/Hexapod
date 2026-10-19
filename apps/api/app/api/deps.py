@@ -176,5 +176,23 @@ def limit_step_log(request: Request, settings: SettingsDep) -> None:
     limits_of(request).step_log.take(client_key(request, settings))
 
 
+def limit_place(request: Request, settings: SettingsDep) -> None:
+    """One public-agency lookup per token: see app/services/ratelimit.py."""
+    limits_of(request).place.take(client_key(request, settings))
+
+
+def limit_topo_tile(request: Request, settings: SettingsDep) -> None:
+    """A few byte-range reads of a USGS sheet per token: see app/services/ratelimit.py."""
+    limits_of(request).topo_tile.take(client_key(request, settings))
+
+
+def limit_imagery_catalog(request: Request, settings: SettingsDep) -> None:
+    """One dated-imagery catalog per token. Called by the route itself, only on a cache miss:
+    a catalog this server holds costs nothing to answer."""
+    limits_of(request).imagery_catalog.take(client_key(request, settings))
+
+
 LimitReconcile = Depends(limit_reconcile)
 LimitStepLog = Depends(limit_step_log)
+LimitPlace = Depends(limit_place)
+LimitTopoTile = Depends(limit_topo_tile)

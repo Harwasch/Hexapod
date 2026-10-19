@@ -28,7 +28,8 @@ import { AREA_CANDIDATE_PREFIX, AREA_HANDLE_PREFIX } from "./AreaEditor";
 import type { CameraController } from "./CameraController";
 import type { LayerManager } from "./LayerManager";
 import { LongPress } from "./longPress";
-import { ZONE_ENTITY_PREFIX } from "./MissionManager";
+import { ZONE_ENTITY_PREFIX, zoneIdOfEntity } from "./MissionManager";
+import { rehearsalPick } from "./RehearsalManager";
 import type { SiteManager } from "./SiteManager";
 import type { SceneEvents } from "./types";
 import type { SplatCollider } from "./SplatCollider";
@@ -41,6 +42,8 @@ interface PickContext {
   carto: Cartographic;
   /** The splat tileset the position is on, when a scan's solids answered (SplatCollider). */
   splat?: object;
+  /** Only the bare ellipsoid answered: off by the ground's height along the ray. */
+  approximate?: boolean;
 }
 
 /**
@@ -49,6 +52,8 @@ interface PickContext {
  * here" inspects whatever is at the point, the ground included.
  */
 type SelectMode = "click" | "inspect";
+/** Whether a point (degrees) is ground a 'ground-tap' consumer answers for. */
+export type GroundClaim = (longitude: number, latitude: number) => boolean;
 
 /** How long the pointer must rest before a hover pick runs. */
 const HOVER_REST_MS = 120;
@@ -88,6 +93,11 @@ export class SelectionManager {
   private readonly longPress: LongPress;
   /** The selection last reported, until cleared: what a terrain sample may still refine. */
   private current: Selection | null = null;
+  /**
+   * Consumers that want plain clicks on empty ground as 'ground-tap' events, each with the
+   * ground it claims (where a click on a mission zone's fill is its tap, not the zone's).
+   */
+  private readonly groundTaps = new Set<{ claims: GroundClaim; overFeatures: boolean }>();
 
   constructor(
     private readonly viewer: CesiumWidget,
@@ -181,6 +191,39 @@ export class SelectionManager {
     if (!enabled) this.viewer.canvas.style.cursor = "";
   }
 
+  /**
+   * Asks for a 'ground-tap' on every plain click that finds nothing to select. `claims` says
+   * where the consumer's own ground is (the fog: inside the Land of the grid it shows): there,
+   * a click on a mission zone's fill is a tap too; anywhere else, the zone is selected as
+   * usual. Returns the release; while nobody holds one, a click on the ground does nothing at
+   * all, as before. With `overFeatures` (a tool in hand, such as Show once's taps) a Land's
+   * mapped lines and points on that ground are taps too, instead of opening the feature.
+   */
+  wantGroundTaps(
+    claims: GroundClaim = () => false,
+    options: { overFeatures?: boolean } = {},
+  ): () => void {
+    const holder = { claims, overFeatures: options.overFeatures ?? false };
+    this.groundTaps.add(holder);
+    return () => {
+      this.groundTaps.delete(holder);
+    };
+  }
+
+  private groundClaimed(longitude: number, latitude: number): boolean {
+    for (const holder of this.groundTaps) if (holder.claims(longitude, latitude)) return true;
+    return false;
+  }
+
+  /** Emits a 'ground-tap' at the picked point when it is bare ground or a layer claims it. */
+  private emitClaimedTap(tapped: PickContext, window: Cartesian2, bare = false): boolean {
+    const longitude = CesiumMath.toDegrees(tapped.carto.longitude);
+    const latitude = CesiumMath.toDegrees(tapped.carto.latitude);
+    if (!bare && !this.groundClaimed(longitude, latitude)) return false;
+    this.events.emit("ground-tap", { longitude, latitude, x: window.x, y: window.y });
+    return true;
+  }
+
   clear(): void {
     this.unhighlight();
     this.current = null;
@@ -210,9 +253,43 @@ export class SelectionManager {
     if (!position && this.scene.pickPositionSupported) position = this.scene.pickPosition(window);
     if (!position && ray) position = this.scene.globe.pick(ray, this.scene);
     // No terrain drawn there yet: the bare ellipsoid still says where the point is.
+    const approximate = !position;
     position ??= this.viewer.camera.pickEllipsoid(window, this.scene.globe.ellipsoid);
     if (!position) return null;
-    return { position, carto: Cartographic.fromCartesian(position), splat: splat?.tileset };
+    return {
+      position,
+      carto: Cartographic.fromCartesian(position),
+      splat: splat?.tileset,
+      approximate,
+    };
+  }
+
+  /**
+   * Where a ground tap landed. Mid-click the depth pick can come back empty (measured over a
+   * selected Land on the photorealistic tiles: every click), and the bare ellipsoid behind it
+   * is off by the ground's height along the ray: a ranch at 250 m seen from 4.4 km, tapped
+   * 1.3 km off-centre, landed 90 m away, a different 10 m cell altogether. So an approximate
+   * answer is asked again after a fresh frame, when the depth answers; the ellipsoid stays the
+   * last resort.
+   */
+  private async groundTapPosition(
+    window: Cartesian2,
+    picked: unknown,
+  ): Promise<PickContext | null> {
+    const first = this.pickPosition(window, picked);
+    if (!first?.approximate) return first;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        off();
+        clearTimeout(timer);
+        resolve();
+      };
+      const off = this.scene.postRender.addEventListener(done);
+      const timer = setTimeout(done, 500);
+      this.scene.requestRender();
+    });
+    if (this.scene.isDestroyed()) return null;
+    return this.pickPosition(window, picked) ?? first;
   }
 
   /**
@@ -229,11 +306,15 @@ export class SelectionManager {
       picked = await this.scene.pickAsync(position);
       // The active study boundary is context, not the inspected feature. Look
       // through its fill/outline so it cannot cover a creek, pole, or other data.
-      if (isEntityPick(picked) && picked.id.id.startsWith("land-boundary:")) {
+      // A dress rehearsal's lanes and creeks are a picture of the plan over the same ground:
+      // a click there is for the zone, machine or place beneath them.
+      const lookThrough = (candidate: unknown) =>
+        isEntityPick(candidate) &&
+        (candidate.id.id.startsWith("land-boundary:") ||
+          rehearsalPick(candidate.id.id) === "through");
+      if (lookThrough(picked)) {
         const beneath: unknown[] = this.scene.drillPick(position, 32);
-        picked = beneath.find(
-          (candidate) => !isEntityPick(candidate) || !candidate.id.id.startsWith("land-boundary:"),
-        );
+        picked = beneath.find((candidate) => !lookThrough(candidate));
       }
     } catch {
       picked = undefined;
@@ -254,6 +335,10 @@ export class SelectionManager {
   private async select(window: Cartesian2, mode: SelectMode): Promise<void> {
     const { picked, current } = await this.pickObject(window);
     if (!current) return;
+    // A ground tap may wait a frame for its position (`groundTapPosition`): a click made
+    // meanwhile is the latest, and this one then says nothing.
+    const ticket = this.pickTicket;
+    const superseded = () => ticket !== this.pickTicket || this.scene.isDestroyed();
     // Area handles and candidate outlines belong to the area editor, not to selection.
     if (
       isEntityPick(picked) &&
@@ -263,6 +348,29 @@ export class SelectionManager {
         picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
     )
       return;
+    // A rehearsal's raised hand opens in the plan card (features/mission/Rehearsal.tsx); the
+    // ghost of one of the project's machines is that machine.
+    const rehearsal = isEntityPick(picked) ? rehearsalPick(picked.id.id) : null;
+    if (rehearsal && rehearsal !== "through") {
+      if (rehearsal.kind === "hand") this.events.emit("rehearsal-hand", { id: rehearsal.handId });
+      else this.events.emit("mission-select", { kind: "machine", id: rehearsal.machineId });
+      return;
+    }
+    // A ground layer taking taps answers for a mapped area of the Land on its own ground (an
+    // inventory polygon such as the oak woodland covers much of a ranch): there it is ground,
+    // as a zone's fill is below. Its lines and points, and areas off that ground, still select,
+    // unless a tool in hand asked for them too (`overFeatures`).
+    let tapped: PickContext | null | undefined;
+    const overFeatures = [...this.groundTaps].some((holder) => holder.overFeatures);
+    if (
+      mode === "click" &&
+      this.groundTaps.size > 0 &&
+      (isLandAreaPick(picked) || (overFeatures && isLandFeaturePick(picked)))
+    ) {
+      tapped = await this.groundTapPosition(window, picked);
+      if (superseded()) return;
+      if (tapped && this.emitClaimedTap(tapped, window)) return;
+    }
     if (isEntityPick(picked) && picked.id.id.startsWith("land-context:")) {
       const properties = picked.id.properties?.getValue(this.viewer.clock.currentTime) as
         Record<string, unknown> | undefined;
@@ -285,9 +393,24 @@ export class SelectionManager {
     // A plain click is for things on the map. On the ground, or on a site's surface (its mesh,
     // or the ground under a scan's splats), it does nothing at all: no marker, no card, and
     // what is open stays open. "What's here" in the map menu is how to ask about a place.
-    if (mode === "click" && !(picked instanceof Cesium3DTileFeature) && !isEntityPick(picked))
-      return;
-    const context = this.pickPosition(window, picked);
+    const onGround = !(picked instanceof Cesium3DTileFeature) && !isEntityPick(picked);
+    // Unless a ground layer asked for taps (the fog, Show once): then the point goes out as a
+    // 'ground-tap', and still nothing is selected here. On the ground the layer claims, a
+    // mission zone's fill is ground too; elsewhere (outside the Land, no grid shown yet) the
+    // zone is selected as it would be without the layer.
+    if (mode === "click" && this.groundTaps.size > 0) {
+      const onZoneFill =
+        isEntityPick(picked) &&
+        typeof picked.id.id === "string" &&
+        picked.id.id.startsWith(ZONE_ENTITY_PREFIX);
+      if (onGround || onZoneFill) {
+        tapped = await this.groundTapPosition(window, picked);
+        if (superseded()) return;
+        if (tapped && this.emitClaimedTap(tapped, window, onGround)) return;
+      }
+    }
+    if (mode === "click" && onGround) return;
+    const context = tapped === undefined ? this.pickPosition(window, picked) : tapped;
     if (!context) {
       this.clear();
       return;
@@ -314,7 +437,8 @@ export class SelectionManager {
     ) {
       this.events.emit("mission-select", {
         kind: "zone",
-        id: picked.id.id.slice(ZONE_ENTITY_PREFIX.length),
+        // Any part of a zone of several parts selects the zone.
+        id: zoneIdOfEntity(picked.id.id) ?? picked.id.id.slice(ZONE_ENTITY_PREFIX.length),
       });
       return;
     }
@@ -669,6 +793,26 @@ export class SelectionManager {
 
 function isEntityPick(value: unknown): value is { id: Entity } {
   return typeof value === "object" && value !== null && "id" in value && value.id instanceof Entity;
+}
+
+/** Anything a Land's inventory or research layers put on the map: an area, a line, a point. */
+export function isLandFeaturePick(value: unknown): boolean {
+  return (
+    isEntityPick(value) &&
+    typeof value.id.id === "string" &&
+    value.id.id.startsWith("land-context:") &&
+    !value.id.id.startsWith("land-context:candidates/")
+  );
+}
+
+/** A mapped area of a Land on the map: a polygon of the inventory or of a research layer. */
+export function isLandAreaPick(value: unknown): boolean {
+  return (
+    isEntityPick(value) &&
+    typeof value.id.id === "string" &&
+    value.id.id.startsWith("land-context:") &&
+    value.id.polygon !== undefined
+  );
 }
 
 function isPrimitivePick(value: unknown): value is { primitive: unknown } {

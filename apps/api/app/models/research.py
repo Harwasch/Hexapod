@@ -143,3 +143,22 @@ class ResearchArtifact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     output_key: Mapped[str] = mapped_column(String(200), nullable=False)
     content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+class ResearchWorkerPresence(Base):
+    """One research worker process, as it last checked in (app/research/queue.py:check_in).
+
+    The worker supplies its own id, so there is no default. `current_run_id` has no foreign
+    key on purpose: presence writes must never touch a run's row lock. Hostname and pid stay
+    on the server; /research/status reports only ages and states."""
+
+    __tablename__ = "land_research_workers"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False)
+    pid: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

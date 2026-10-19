@@ -6,6 +6,7 @@ import { footprintAreaM2, formatLength } from "@twin/geo";
 import { GlassButton } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
+import { tapOrClick } from "@/lib/pointer";
 import { useLandContext, type LandContextLayer } from "@/state/landContext";
 import { useSettings } from "@/state/settings";
 
@@ -18,9 +19,9 @@ const MAX_POINTS = 2000;
 const STYLE = { color: "#f1cb7a", fill: 0.2, width: 3 };
 
 /**
- * Drawing an asset on the map: each click on the ground adds a point (one for a point asset),
- * the shape so far is drawn on the map, and Undo, Done and Cancel sit with the count and the
- * live length or area. Escape pauses; "Keep drawing" picks up again.
+ * Drawing an asset on the map: each tap or click on the ground adds a point (one for a point
+ * asset), the shape so far is drawn on the map, and Undo, Done and Cancel sit with the count and
+ * the live length or area. Escape pauses; "Keep drawing" picks up again.
  */
 export function AssetsDrawing({
   owner,
@@ -134,11 +135,11 @@ export function AssetsDrawing({
     kind === "Point"
       ? points.length && busy
         ? "Checking the spot…"
-        : `Click the map where ${what} is.`
+        : `${tapOrClick()} the map where ${what} is.`
       : !points.length
         ? kind === "LineString"
-          ? `Click along ${what} on the map, then Done.`
-          : `Click the corners of ${what} on the map, then Done.`
+          ? `${tapOrClick()} along ${what} on the map, then Done.`
+          : `${tapOrClick()} the corners of ${what} on the map, then Done.`
         : [
             plural(points.length, kind === "LineString" ? "point" : "corner"),
             measure,

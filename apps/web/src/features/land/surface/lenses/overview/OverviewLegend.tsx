@@ -25,6 +25,7 @@ export function OverviewLegend({ shown, units }: { shown: ShownLayer; units: Uni
     caption = "Slope";
     ends = [percentLabel(slopePercent(low)), percentLabel(slopePercent(high))];
   } else if (observation) {
+    // A vegetation month or a signature's season: both are dated NDVI.
     caption = `Greenness, ${monthLabel(observation.period.startDate)}`;
     ends = ["Bare", "Green"];
   } else {
@@ -37,7 +38,7 @@ export function OverviewLegend({ shown, units }: { shown: ShownLayer; units: Uni
       role="img"
       aria-label={`Map colours: ${caption}, from ${ends[0]} to ${ends[1]}`}
     >
-      {shown.view.layer === "vegetation" && (
+      {(shown.view.layer === "vegetation" || shown.view.layer === "signature") && (
         <span className="overview-legend__caption">{caption}</span>
       )}
       <span className={`overview-ramp overview-ramp--${band.palette}`} />

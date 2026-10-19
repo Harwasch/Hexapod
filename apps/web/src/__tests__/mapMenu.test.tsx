@@ -10,6 +10,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { LandArea } from "@twin/contracts";
+
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { LONG_PRESS_MS, LongPress } from "@/cesium/longPress";
 import { sceneRegistry } from "@/cesium/SceneContext";
@@ -18,11 +20,34 @@ import { MapContextMenu } from "@/features/map/MapContextMenu";
 import { placeMenu } from "@/features/map/placeMenu";
 import { stepBack } from "@/features/shell/stepBack";
 import { Emitter } from "@/lib/emitter";
+import { env } from "@/app/env";
+import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useSceneSelect } from "@/state/sceneSelect";
 import { useUi, type MapMenuAt } from "@/state/ui";
 
+// The workspace role and readiness, as the identity hooks report them (the real ones always
+// say yes without OIDC configured, as in tests).
+const identity = vi.hoisted(() => ({ ready: true, canEdit: true }));
+vi.mock("@/state/landIdentity", async (original) => ({
+  ...(await original<object>()),
+  useLandAccessReady: () => identity.ready,
+  useLandCanEdit: () => identity.canEdit,
+}));
+
 const AT: MapMenuAt = { x: 200, y: 150, longitude: -122.1385, latitude: 47.645, height: 41.5 };
+const SAVED: LandArea = {
+  id: "land-1",
+  name: "Saved elsewhere",
+  description: "",
+  revision: 3,
+  areaM2: 1,
+  perimeterM: 4,
+  createdAt: "2026-10-16",
+  updatedAt: "2026-10-16",
+  source: { method: "drawn", label: "Fixture" },
+  boundary: { type: "Polygon", coordinates: [] },
+};
 
 function fakeScene() {
   const events = new Emitter<SceneEvents>();
@@ -31,6 +56,7 @@ function fakeScene() {
     viewer: { canvas: document.createElement("canvas") },
     selection: { inspectAt: vi.fn(), flyTowards: vi.fn(), clear: vi.fn() },
     measurement: { seed: vi.fn() },
+    areas: { cancelPick: vi.fn(), edit: vi.fn() },
     sceneSelect: { escape: () => false },
     mission: { setSelectedZone: vi.fn() },
   };
@@ -56,6 +82,8 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => sceneRegistry.set(null));
+  identity.ready = true;
+  identity.canEdit = true;
 });
 
 function open(at: MapMenuAt = AT): void {
@@ -129,6 +157,97 @@ describe("MapContextMenu", () => {
     expect(scene.selection.flyTowards).toHaveBeenCalledWith(AT);
   });
 
+  it("outlines land at the point, only where land exploration is on", async () => {
+    const user = userEvent.setup();
+    const enabled = env.landExplorationEnabled;
+    try {
+      env.landExplorationEnabled = false;
+      const { unmount } = render(<MapContextMenu />);
+      open();
+      await screen.findByRole("menu");
+      expect(screen.queryByTestId("map-menu-outline")).not.toBeInTheDocument();
+      act(() => useUi.getState().setMapMenu(null));
+      unmount();
+      env.landExplorationEnabled = true;
+      act(() => useLand.getState().select(SAVED));
+      render(<MapContextMenu />);
+      open();
+      const items = await screen.findAllByRole("menuitem");
+      expect(items.map((item) => item.textContent)).toEqual([
+        "What's here",
+        "Measure from here",
+        "Plan here",
+        "Outline land here",
+        "Fly here",
+      ]);
+      await user.click(screen.getByTestId("map-menu-outline"));
+      expect(scene.areas.cancelPick).toHaveBeenCalled();
+      expect(useUi.getState().activePanel).toBe("land");
+      expect(useLand.getState()).toMatchObject({
+        mode: "candidates",
+        points: [[AT.longitude, AT.latitude]],
+        active: null,
+      });
+    } finally {
+      env.landExplorationEnabled = enabled;
+      act(() => useLand.getState().clear());
+    }
+  });
+
+  it("offers no outline the user could not save: a viewer's role, or a workspace not ready", async () => {
+    const enabled = env.landExplorationEnabled;
+    try {
+      env.landExplorationEnabled = true;
+      act(() => useLand.getState().select(SAVED));
+      for (const state of [
+        { ready: true, canEdit: false },
+        { ready: false, canEdit: true },
+      ]) {
+        Object.assign(identity, state);
+        const { unmount } = render(<MapContextMenu />);
+        open();
+        const items = await screen.findAllByRole("menuitem");
+        expect(items.map((item) => item.textContent)).not.toContain("Outline land here");
+        act(() => useUi.getState().setMapMenu(null));
+        unmount();
+      }
+      // The selected land was never cleared for it.
+      expect(useLand.getState().active).toEqual(SAVED);
+    } finally {
+      env.landExplorationEnabled = enabled;
+      act(() => useLand.getState().clear());
+    }
+  });
+
+  it("returns to an outline still being drawn rather than replacing it", async () => {
+    const user = userEvent.setup();
+    const enabled = env.landExplorationEnabled;
+    try {
+      env.landExplorationEnabled = true;
+      act(() => {
+        useLand.getState().begin("draw");
+        useLand.getState().addPoint([-122.14, 47.64]);
+        useLand.getState().addPoint([-122.13, 47.64]);
+      });
+      render(<MapContextMenu />);
+      open();
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Return to your unsaved outline" }),
+      );
+      expect(useUi.getState().activePanel).toBe("land");
+      expect(useLand.getState()).toMatchObject({
+        mode: "draw",
+        points: [
+          [-122.14, 47.64],
+          [-122.13, 47.64],
+        ],
+      });
+    } finally {
+      env.landExplorationEnabled = enabled;
+      act(() => useLand.getState().clear());
+    }
+  });
+
   it("closes when the camera moves or on a press anywhere else", async () => {
     render(<MapContextMenu />);
     open();
@@ -148,6 +267,23 @@ describe("MapContextMenu", () => {
       document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     });
     expect(useUi.getState().mapMenu).toBeNull();
+  });
+
+  it("keeps a menu reopened while the last one is still leaving open on a press inside it", async () => {
+    render(<MapContextMenu />);
+    open();
+    await screen.findByRole("menu");
+    // Closed by the camera and reopened at once: the first menu is still playing its exit, and
+    // a press inside the new one must not reach the leaving one's "press elsewhere" close.
+    act(() => scene.events.emit("motion", true));
+    open({ ...AT, x: 300 });
+    const menus = [...document.querySelectorAll<HTMLElement>(".map-menu")];
+    expect(menus.filter((menu) => menu.hasAttribute("inert"))).toHaveLength(1);
+    const current = menus.find((menu) => !menu.hasAttribute("inert"));
+    act(() => {
+      current?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(useUi.getState().mapMenu).not.toBeNull();
   });
 });
 

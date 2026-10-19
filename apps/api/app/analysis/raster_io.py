@@ -24,9 +24,25 @@ HOSTS = frozenset(
         "esa-worldcover.s3.eu-central-1.amazonaws.com",
         "sentinel-cogs.s3.us-west-2.amazonaws.com",
         "e84-earth-search-sentinel-data.s3.us-west-2.amazonaws.com",
+        # USGS National Map staged products: 3DEP elevation tiles and historical topo sheets.
+        "prd-tnm.s3.amazonaws.com",
     }
 )
 BLOCK_SIZE = 64 * 1024
+
+
+class RasterStatusError(OSError):
+    """The source answered a range read with an HTTP status other than 206.
+
+    Still an OSError, so every existing handler treats it as before. It carries the status
+    because rasterio replaces an opener's exception with a bare RasterioIOError: a caller that
+    must tell a missing tile (404) from an outage probes through the opener first."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(
+            f"The raster source must support byte ranges and remain unchanged (HTTP {status_code})."
+        )
+        self.status_code = status_code
 
 
 @dataclass
@@ -108,9 +124,7 @@ class RasterHttpFile(io.RawIOBase):
             "GET", self.url, headers=headers, timeout=timeout, follow_redirects=False
         ) as response:
             if response.status_code != 206:
-                raise OSError(
-                    f"The raster source must support byte ranges and remain unchanged (HTTP {response.status_code})."
-                )
+                raise RasterStatusError(response.status_code)
             match = re.fullmatch(
                 r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", "")
             )
@@ -178,7 +192,10 @@ class RasterHttpFile(io.RawIOBase):
         return len(data)
 
     def close(self) -> None:
-        self.cache.clear()
+        # __init__ can reject the URL before the cache exists; io.IOBase still calls close().
+        cache = getattr(self, "cache", None)
+        if cache is not None:
+            cache.clear()
         super().close()
 
 

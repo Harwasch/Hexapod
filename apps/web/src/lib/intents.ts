@@ -60,7 +60,10 @@ export async function runIntent(input: string, ctx: IntentContext): Promise<stri
   if (/\b(earth|planet|zoom out all the way|home)\b/.test(lower) && !/\bfly to\b/.test(lower))
     return ctx.camera("home");
   if (/\bsettings?\b/.test(lower)) return ctx.openSettings();
-  if (/\b(fleet|machines|robots)\b/.test(lower) && /\b(show|open|list|view)\b/.test(lower))
+  if (
+    /\b(fleet|machines|robots)\b/.test(lower) &&
+    /\b(show|open|list|view|how|status|doing|what)\b/.test(lower)
+  )
     return ctx.setView("fleet");
   if (/\bplans?\b/.test(lower)) {
     const named = /\bplan (?:for|about|on)?\s*(.+)$/.exec(lower)?.[1] ?? null;
@@ -95,10 +98,20 @@ export async function runIntent(input: string, ctx: IntentContext): Promise<stri
   return ctx.flyToPlace(place);
 }
 
-const WORK_VERBS =
-  "mow|cut|clear|spray|treat|seed|reseed|drill|till|remove|survey|inspect|scan|photograph|capture|monitor|patrol|weed|harvest|fertili[sz]e|irrigate|mulch|map";
+/** Verbs that lead a sentence of work; `missions/landGround.ts` also skips them when it looks
+ * for the ground a goal names. */
+export const WORK_VERBS = [
+  "mow|cut|clear|spray|treat|seed|reseed|drill|till|remove|survey|inspect|scan|photograph|capture",
+  "monitor|patrol|weed|harvest|fertili[sz]e|irrigate|mulch|map",
+  "restore|replant|plant|prune|trim|thin|graze|water|pick|collect|sample|count|check|protect",
+  "maintain|keep|eradicate|control|clean|fix|repair|install|build|haul|chip|tidy|beautify",
+].join("|");
 
-/** "mow …", "3D scan …", "please survey …": the sentence starts with work to do. */
+/** How people lead into a goal: "please", "I want to", "can you", "let's", "we need to". */
+const LEAD_IN =
+  "(?:please\\s+|(?:i|we)(?:\\s+(?:want|need|would like)|'d like)\\s+to\\s+|(?:can|could|would) you\\s+(?:please\\s+)?|help me\\s+|let'?s\\s+)*";
+
+/** "mow …", "3D scan …", "please survey …", "I want to restore …": the sentence is work to do. */
 export function isWorkRequest(lower: string): boolean {
-  return new RegExp(`^(?:please\\s+)?(?:(?:3d|3-d)\\s+)?(?:${WORK_VERBS})\\b`).test(lower);
+  return new RegExp(`^${LEAD_IN}(?:(?:3d|3-d)\\s+)?(?:${WORK_VERBS})\\b`).test(lower);
 }

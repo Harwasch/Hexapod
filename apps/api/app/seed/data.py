@@ -1,4 +1,5 @@
-"""Seed catalog: the demo site the simulated fleet runs on, and open-data layers.
+"""Seed catalog: the Redmond scan showcase, and open-data layers. The demo ranch the
+simulated fleet works is `demo_ranch.py`.
 
 Everything here is real, publicly documented data with its license and
 attribution recorded. Observation dates are only set when the provider states
@@ -36,10 +37,11 @@ from app.schemas.layer import (
 )
 from app.schemas.site import SiteCreate
 
-# The demo site is where Cesium's public "3D Tiles Gaussian splats with LOD" Sandcastle asset
-# (ion 4547222) sits, in Redmond, WA. The splat itself is withdrawn (`app.seed.WITHDRAWN`):
-# this deployment's ion account cannot read it. The place stays, because the simulated fleet
-# (apps/web/src/missions/demo.ts, "Blackrock Mesa") is drawn inside it.
+# The scan showcase is where Cesium's public "3D Tiles Gaussian splats with LOD" Sandcastle
+# asset (ion 4547222) sits, in Redmond, WA. The splat itself is withdrawn
+# (`app.seed.WITHDRAWN_ASSETS`): this deployment's ion account cannot read it, and adding it
+# from the ion Asset Depot (or VITE_DEFAULT_SPLAT_ASSET_ID in the web app) brings it back.
+# The simulated fleet no longer works here; it moved to the demo ranch (`demo_ranch.py`).
 DEMO_CENTER_LON = -122.13810992689156
 DEMO_CENTER_LAT = 47.644519699638366
 DEMO_CENTER_HEIGHT = 120.0
@@ -181,8 +183,9 @@ DEMO_SITE = SiteCreate(
     slug="cesium-splat-demo",
     name="Cesium Gaussian splat demo",
     description=(
-        "Where the simulated fleet demo runs, in the photorealistic world around Cesium's "
-        "'3D Tiles Gaussian splats with LOD' Sandcastle site. It has no reality model of its own."
+        "Cesium's '3D Tiles Gaussian splats with LOD' Sandcastle site in Redmond, WA: the "
+        "3D-scan showcase. Its splat (Cesium ion 4547222) is withdrawn in this deployment; "
+        "VITE_DEFAULT_SPLAT_ASSET_ID or adding the asset from the ion Asset Depot brings it back."
     ),
     boundary=DEMO_BOUNDARY,
     centroid=GeoPosition(

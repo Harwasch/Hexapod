@@ -1,0 +1,135 @@
+import type { LandArea, LandCreate } from "@twin/contracts";
+
+import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
+import { useLand, type LandMode, type LandPoint } from "@/state/land";
+import { useLandContext } from "@/state/landContext";
+import { useUi } from "@/state/ui";
+
+import { drawingReferences } from "./boundarySources";
+import { sectionOfLens, useLens, type LensId } from "./surface/lenses";
+
+/**
+ * Ways into the Land surface from elsewhere on the map: the inspector's "What's here", the map's
+ * right-click menu, the Descent's arrival card and the command box. They live here, not in each
+ * caller, because entering the surface the wrong way loses work:
+ *
+ * - Saving a draft (`saveDraft` in surface/landFlow.ts) REVISES the active land when one is
+ *   selected. A new outline started while a saved land is active would silently replace that
+ *   land's boundary on save, so a new outline always clears the selection first
+ *   (`useLand.clear()`).
+ * - An unsaved outline is never replaced: the surface opens on it instead (its review card, or
+ *   the draw bar). That covers a proposed or imported one (`useLand.draft`) and one still being
+ *   drawn (points placed in draw, corridor or split mode, with no draft yet). `clear()` and
+ *   `select()` drop both, are not undoable, and LandDraftRecovery then deletes the browser copy
+ *   too.
+ *
+ * Selecting a land is picked up by the mission side too (LandMissionBridge), which may switch
+ * the plan's project to that land. That is intended: a selected land is the ground plans use.
+ */
+
+export type OutlineResult = "started" | "has-draft";
+
+/**
+ * Whether the Land surface holds an outline the user would lose: a draft, or a sketch with points
+ * placed. The sketch test is the one LandDraftRecovery uses to decide what to keep in the
+ * browser, so "unsaved" here means the same thing it does there.
+ */
+export function hasUnsavedOutline(s: {
+  draft: LandCreate | null;
+  mode: LandMode;
+  points: readonly LandPoint[];
+}): boolean {
+  return (
+    s.draft !== null ||
+    ((s.mode === "draw" || s.mode === "corridor" || s.mode === "split") && s.points.length > 0)
+  );
+}
+
+function openTool(): void {
+  useUi.getState().setPanel("land");
+}
+
+/** Stop whatever the map is doing with the pointer, as the surface's own `beginLand` does. */
+function freePointer(scene: CesiumSceneManager | null): void {
+  const ui = useUi.getState();
+  ui.setMeasureMode(null);
+  ui.setExploreMode(false);
+  scene?.areas.cancelPick();
+  scene?.areas.edit(null);
+}
+
+/**
+ * Open the Land surface on its parcel picker, finding mapped parcels, fields and lines at a
+ * point, the way "Pick parcels" does after its first tap or click. Returns "has-draft", and only
+ * opens the surface, when an unsaved outline (a draft or a sketch in progress) exists.
+ */
+export function outlineLandAt(
+  point: { longitude: number; latitude: number },
+  scene: CesiumSceneManager | null,
+): OutlineResult {
+  if (hasUnsavedOutline(useLand.getState())) {
+    openTool();
+    return "has-draft";
+  }
+  freePointer(scene);
+  useLand.getState().clear();
+  openTool();
+  useLand.getState().begin("candidates");
+  useLand.getState().addPoint([point.longitude, point.latitude]);
+  return "started";
+}
+
+/**
+ * Propose an outline found elsewhere (a mapped feature, say) as a new, unsaved land. Use this
+ * rather than `useLand.propose`, which keeps the active land and so would turn the next save
+ * into a revision of it. Refuses, like `outlineLandAt`, to replace an unsaved outline.
+ */
+export function proposeOutline(draft: LandCreate, scene: CesiumSceneManager | null): OutlineResult {
+  if (hasUnsavedOutline(useLand.getState())) {
+    openTool();
+    return "has-draft";
+  }
+  freePointer(scene);
+  useLand.getState().clear();
+  useLand.getState().propose(draft);
+  openTool();
+  return "started";
+}
+
+/**
+ * Open the Land surface drawing a new outline, as its own "Draw on the map" does: where a place
+ * was reached but no mapped area was found around it (the Descent's "Outline this land").
+ * Refuses, like `outlineLandAt`, to replace an unsaved outline.
+ */
+export function drawOutline(scene: CesiumSceneManager | null): OutlineResult {
+  if (hasUnsavedOutline(useLand.getState())) {
+    openTool();
+    return "has-draft";
+  }
+  freePointer(scene);
+  useLand.getState().clear();
+  openTool();
+  useLand.getState().begin("draw");
+  const guides = useLandContext.getState().layers["drawing-guides"];
+  useLand.getState().setTraceSources(drawingReferences(guides?.drawingGuideSources ?? []));
+  return "started";
+}
+
+/**
+ * Select a saved land and open the surface on its chip and a lens (Overview by default), not on
+ * whichever lens another land was last looked at through. Selecting drops any unsaved outline,
+ * so with one open this only opens the surface on it ("has-draft"). The caller frames the land
+ * (`frameLandSoon`) where the person is not already looking at it.
+ */
+export function openLand(land: LandArea, lens: LensId = "overview"): "opened" | "has-draft" {
+  if (hasUnsavedOutline(useLand.getState())) {
+    openTool();
+    return "has-draft";
+  }
+  useLand.getState().select(land);
+  useLens.getState().setLens(lens);
+  // The section is what views saved before lenses, and Show Once, still read.
+  useLandContext.getState().setSection(sectionOfLens(lens));
+  openTool();
+  return "opened";
+}

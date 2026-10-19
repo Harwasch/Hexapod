@@ -1,0 +1,301 @@
+/* ---- Time Lantern: the strip control ---------------------------------------- */
+.lantern-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.45rem;
+  pointer-events: auto;
+  max-width: min(40rem, 100%);
+}
+
+.lantern-control--open {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem 0.55rem;
+  border-radius: 18px;
+}
+
+.lantern-control__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.lantern-control .glass-button {
+  gap: 0.35rem;
+}
+
+.lantern-control__reason {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  padding-right: 0.35rem;
+}
+
+.lantern-control__kinds {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.lantern-chip {
+  border: 1px solid var(--control-border);
+  border-radius: var(--glass-radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+}
+
+.lantern-chip[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.lantern-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.lantern-rail {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  padding: 0.1rem 0.05rem 0.25rem;
+}
+
+.lantern-rail__item {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  min-width: 5.2rem;
+  padding: 0.3rem 0.55rem 0.35rem;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  scroll-snap-align: center;
+  cursor: pointer;
+}
+
+.lantern-rail__item:hover {
+  background: var(--control-bg-hover);
+}
+
+.lantern-rail__item[aria-checked="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.lantern-rail__item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.lantern-rail__year {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.lantern-rail__meta {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.lantern-control__live,
+.lantern-control__note,
+.lantern-control__hint {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.lantern-control__live {
+  color: var(--text-secondary);
+}
+
+.lantern-control__live:empty {
+  display: none;
+}
+
+.lantern-control__note {
+  color: var(--text-secondary);
+}
+
+.lantern-control__note--error {
+  color: var(--danger);
+}
+
+.lantern-control__hint {
+  color: var(--text-tertiary);
+}
+
+.lantern-control__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+}
+
+/* What the record's date means, its caveats in the catalog's words, and its page. */
+.lantern-about {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.lantern-about ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.lantern-about__warning {
+  padding-left: 0.55rem;
+  border-left: 2px solid var(--warning);
+}
+
+.lantern-about__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.2rem;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.lantern-about__link:hover {
+  color: var(--text-primary);
+}
+
+.lantern-about__link:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: var(--focus-ring);
+}
+
+.lantern-control__providers {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.lantern-control__providers .glass-button {
+  margin-top: 0.3rem;
+}
+
+.lantern-control__providers summary {
+  cursor: pointer;
+}
+
+.lantern-control__providers ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1rem;
+}
+
+/* ---- Time Lantern: the rim around the lens -------------------------------------- */
+.lantern-rim {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 1;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.lantern-rim[data-visible="false"] {
+  opacity: 0;
+}
+
+.lantern-rim__ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  will-change: transform;
+}
+
+.lantern-rim__glow {
+  fill: none;
+  stroke: rgba(255, 236, 196, 0.5);
+  stroke-width: 12;
+}
+
+.lantern-rim__line {
+  fill: none;
+  stroke: rgba(255, 244, 222, 0.92);
+  stroke-width: 1.5;
+}
+
+.lantern-rim__cross line {
+  stroke: rgba(255, 248, 232, 0.95);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.lantern-rim__text,
+.lantern-rim__caption,
+.lantern-rim__centre {
+  fill: #fff8ec;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  paint-order: stroke;
+  stroke: rgba(8, 10, 8, 0.82);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.lantern-rim__text--top {
+  font-size: 12px;
+}
+
+.lantern-rim__caption {
+  font-weight: 500;
+  font-size: 10.5px;
+  fill: rgba(255, 248, 236, 0.86);
+}
+
+.lantern-rim__centre {
+  font-size: 11.5px;
+}
+
+.lantern-rim__corner {
+  position: absolute;
+  top: 4.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(44rem, calc(100% - 2rem));
+  margin: 0;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--glass-radius-pill);
+  background: rgba(8, 10, 8, 0.55);
+  color: rgba(255, 248, 236, 0.9);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lantern-rim {
+    transition: none;
+  }
+}
+
+:root[data-motion="reduced"] .lantern-rim {
+  transition: none;
+}

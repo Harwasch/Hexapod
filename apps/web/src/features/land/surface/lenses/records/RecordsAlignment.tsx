@@ -8,10 +8,13 @@ import { GlassButton } from "@twin/ui";
 import { api, ApiError, unwrap } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
+import { tapOrClick, touchFirst } from "@/lib/pointer";
+import { useLand } from "@/state/land";
 import { useLandContext, type LandContextLayer } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 import { useUi } from "@/state/ui";
 
+import { invalidateLandDerived } from "../../../landDerived";
 import { lensMeta, useLens } from "../../lenses";
 import { useLensLayer } from "../../useLensMap";
 import {
@@ -292,6 +295,8 @@ function AlignmentEditor({
           attribution,
         });
         void cache.invalidateQueries({ queryKey: ["land-image-alignments", scope, id] });
+        // An aligned map is dated evidence with a footprint: the fog over the land is asked again.
+        void invalidateLandDerived(cache, useLand.getState().active?.id ?? null);
       } else {
         const response = await unwrap(
           api.POST("/api/v1/research/evidence/{evidence_id}/image/registrations/preview", {
@@ -314,14 +319,17 @@ function AlignmentEditor({
     }
   };
   const valid = draft.points.length >= MIN_POINTS && draft.name.trim().length > 0 && !editing;
+  // A finger has no Escape key: on a touch screen the way out is the Cancel map pick button.
   const status = picking
-    ? "Now click the same spot on the map. Press Escape to cancel."
+    ? touchFirst()
+      ? "Tap the matching place on the globe, or press Cancel map pick."
+      : "Now click the same spot on the map. Press Escape to cancel."
     : validPixel
       ? editing
         ? `Editing ${editing}. Pick its spot on the map, or type it below.`
         : "Spot chosen. Pick the same spot on the map."
       : draft.points.length < MIN_POINTS
-        ? `${draft.points.length} of ${MIN_POINTS} matches. Click a spot you can find on today's map: a road crossing, a bend in a creek, a corner.`
+        ? `${draft.points.length} of ${MIN_POINTS} matches. ${tapOrClick()} a spot you can find on today's map: a road crossing, a bend in a creek, a corner.`
         : `${draft.points.length} matches. Check the fit, or add more spread across the map.`;
   const zoomIndex = ZOOMS.indexOf(zoom);
 

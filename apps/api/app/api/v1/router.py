@@ -9,6 +9,7 @@ from app.api.v1 import (
     artifacts,
     assets,
     captures,
+    imagery,
     ion,
     jobs,
     land,
@@ -17,6 +18,7 @@ from app.api.v1 import (
     land_documents,
     land_features,
     land_image_registrations,
+    land_knowledge,
     land_rasters,
     land_solar,
     land_surveys,
@@ -31,6 +33,7 @@ from app.api.v1 import (
     sites,
     storage,
     system,
+    workspace_missions,
     workspaces,
 )
 from app.schemas.common import Problem
@@ -69,9 +72,11 @@ api_v1.include_router(worlds_reconstruction_router)
 api_v1.include_router(worlds_customization_router)
 api_v1.include_router(land.router)
 api_v1.include_router(land_rasters.router)
+api_v1.include_router(land_knowledge.router)
 api_v1.include_router(land_image_registrations.router)
 api_v1.include_router(land_archive_images.router)
 api_v1.include_router(workspaces.router)
+api_v1.include_router(workspace_missions.router)
 api_v1.include_router(research.router)
 
 api_v1.include_router(scenarios.router)
@@ -87,3 +92,5 @@ api_v1.include_router(land_surveys.router)
 api_v1.include_router(land_solar.router)
 
 api_v1.include_router(land_views.router)
+
+api_v1.include_router(imagery.router)

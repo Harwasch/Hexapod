@@ -51,6 +51,7 @@ import {
 
 import {
   loadInstances,
+  resolveBeside,
   tileInstanceIds,
   type InstancesDoc,
   type InstancesRef,
@@ -739,10 +740,20 @@ export function cesiumInstanceGpu(): InstanceGpu | undefined {
 
 // ---- Attachment --------------------------------------------------------------------------
 
-/** Loaded scans, by asset id, for flying to an instance. */
+/**
+ * Loaded scans, by asset id, for flying to an instance: and where their `instances.json` was
+ * read from and how many instances its declaration counts, which is where and how long its
+ * `instances.emb` is (`embeddingOf`).
+ */
 const ATTACHED = new Map<
   string,
-  { tileset: Cesium3DTileset; doc: InstancesDoc; hook: SplatInstances }
+  {
+    tileset: Cesium3DTileset;
+    doc: InstancesDoc;
+    hook: SplatInstances;
+    instancesUrl: string;
+    declared: number;
+  }
 >();
 
 /**
@@ -783,6 +794,38 @@ export function instancesDocOf(assetId: string): InstancesDoc | undefined {
 /** The hooks of `assetId`'s scan, once its instances loaded: what keys motion on instances. */
 export function instancesHookOf(assetId: string): SplatInstances | undefined {
   return ATTACHED.get(assetId)?.hook;
+}
+
+/** Where a scan's object embeddings are and their shape: what "More like this" reads. */
+export interface EmbeddingSource {
+  /** `instances.emb`, beside the `instances.json` drawn now (Today's, or a variant's). */
+  url: string;
+  /** Rows: the instances the declaration counts, else the largest id (row `k` is id `k + 1`). */
+  rows: number;
+  dim: number;
+  /** The embedding model's id, as the file names it. */
+  model: string;
+}
+
+/**
+ * The embeddings of the objects of `assetId`'s scan drawn now, or null when its instances have
+ * not loaded or their file declares none (a variant can carry none).
+ */
+export function embeddingOf(assetId: string): EmbeddingSource | null {
+  const entry = ATTACHED.get(assetId);
+  const embedding = entry?.doc.embedding;
+  if (!entry || !embedding) return null;
+  return {
+    url: resolveBeside(entry.instancesUrl, embedding.file),
+    rows: entry.declared > 0 ? entry.declared : entry.doc.maxId,
+    dim: embedding.dim,
+    model: embedding.model,
+  };
+}
+
+/** `embeddingOf(assetId)`'s URL, or null. */
+export function embeddingUrlOf(assetId: string): string | null {
+  return embeddingOf(assetId)?.url ?? null;
 }
 
 /**
@@ -885,15 +928,24 @@ export function attachInstances(
   const report = (status: VariantStatus | null): void => {
     if (offersVariants) useVariants.getState().setStatus(assetId, "objects", status);
   };
-  /** Draws from `doc`: the hooks keep their place on the primitive, the table is replaced. */
-  const adopt = (doc: InstancesDoc): void => {
+  /**
+   * Draws from `doc`, read from `ref` beside the tileset: the hooks keep their place on the
+   * primitive, the table is replaced.
+   */
+  const adopt = (doc: InstancesDoc, ref: InstancesRef): void => {
     base = doc;
     const drawn = effectiveDoc(assetId, doc);
     if (hook) hook.setDoc(drawn);
     else hook = new SplatInstances(drawn, gpu, splatTilesetOf(tileset));
     if (!follower) {
       // Before the table: a dedicated renderer reads the document as the store changes.
-      ATTACHED.set(assetId, { tileset, doc, hook });
+      ATTACHED.set(assetId, {
+        tileset,
+        doc,
+        hook,
+        instancesUrl: resolveBeside(url, ref.uri),
+        declared: ref.count,
+      });
       useInstances.getState().setTable(assetId, doc);
     }
     push();
@@ -930,7 +982,7 @@ export function attachInstances(
     load(url, ref)
       .then((doc) => {
         if (disposed || mine !== serial) return;
-        adopt(doc);
+        adopt(doc, ref);
         report({ state: "ready" });
         log.info("instances attached", {
           asset: assetId,

@@ -1,22 +1,32 @@
 import { describe, expect, it } from "vitest";
 
 import type { PlanDraft } from "@twin/contracts";
+import { footprintAreaM2, toAcres } from "@twin/geo";
 
-import { DemoMissionProvider } from "@/missions/demo";
+import { anywhereProject } from "@/missions/anywhere";
+import { viewAreaZone } from "@/missions/areas";
+import { demoRanchProject } from "@/missions/demo";
+import { landProject } from "@/missions/landGround";
 import {
   buildDraftRequest,
   describeDraft,
   diffDrafts,
+  formatMachineHours,
+  idLabel,
   overlayFor,
   planFromDraft,
   planFromRecord,
   presentStatus,
   recordBodyFromDraft,
   scheduleLanes,
+  tickStep,
+  zonesFromRecord,
 } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 
-const project = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+import { ground, land, LAND_ID } from "./landGroundFixture";
+
+const project = demoRanchProject();
 
 const draft: PlanDraft = {
   title: "Clear thistle on the west bench",
@@ -74,6 +84,17 @@ describe("plan drafting", () => {
     expect(request.previousDraft).not.toHaveProperty("source");
   });
 
+  it("leaves out of the request a zone that derived ground replaced in the card", () => {
+    const request = buildDraftRequest(project, {
+      goal: "Mow the star thistle on the west grassland",
+      zoneIds: ["A-01"],
+      exclude: ["Z-14"],
+    });
+    // The goal still names the west grassland: the planner is not offered all of it again.
+    expect(request.zones?.map((z) => z.id)).not.toContain("Z-14");
+    expect(request.zones?.map((z) => z.id)).toContain("Z-21");
+  });
+
   it("turns an approved draft into a scheduled plan with steps and provenance", () => {
     const plan = planFromDraft(draft, project, { goal: "Mow Z-14" });
     expect(plan.status).toBe("idle");
@@ -84,7 +105,8 @@ describe("plan drafting", () => {
     expect(plan.ongoing).toBe(false);
     expect(plan.source).toEqual({ kind: "rules", model: null });
     expect(plan.facts.find((f) => f.k === "Risks")?.v).toContain("22%");
-    expect(plan.facts.find((f) => f.k === "Area")?.v).toBe("Z-14 West bench");
+    const z14 = project.zones.find((z) => z.id === "Z-14")!;
+    expect(plan.facts.find((f) => f.k === "Area")?.v).toBe(idLabel("Z-14", z14.name));
     const recurring = planFromDraft({ ...draft, cadence: "monthly", endDate: null }, project, {
       goal: "x",
     });
@@ -204,6 +226,10 @@ describe("plan drafting", () => {
       ],
       createdAt: "2026-09-17T00:00:00Z",
       updatedAt: "2026-09-18T00:00:00Z",
+      landId: null,
+      boundaryRevision: null,
+      private: false,
+      landActionId: null,
       areas: body.areas ?? [],
       zoneIds: body.zoneIds ?? [],
       machineIds: body.machineIds ?? [],
@@ -246,5 +272,204 @@ describe("plan drafting", () => {
     expect(ids).toContain("thistle");
     store.removePlan("plan-local");
     store.setRemotePlans(project.id, []);
+  });
+});
+
+describe("plans on a saved land", () => {
+  const onLand = landProject(land, ground);
+  const fenceDraft: PlanDraft = {
+    ...draft,
+    title: "Weekly fence check",
+    zoneIds: ["L-aaaa0001"],
+    machineIds: [],
+    cadence: "weekly",
+    endDate: null,
+    estimates: { acres: 0, machineHours: 0.03, calendarDays: 2, pathM: 1000 },
+  };
+
+  it("sends every zone's outline: drawn, land (a fence as its line) and the simulated demo's", () => {
+    const request = buildDraftRequest(onLand, { goal: "monitor the fence" });
+    const byId = new Map(request.zones?.map((z) => [z.id, z]));
+    expect(byId.get("L-aaaa0001")?.geometry?.type).toBe("LineString");
+    expect(byId.get("L-0f1e2d3c")?.geometry?.type).toBe("Polygon");
+    const anywhere = anywhereProject();
+    const area = viewAreaZone("A-01", "View area 01", {
+      center: { longitude: -120, latitude: 34.7 },
+      metersPerPixel: 1,
+      width: 800,
+      height: 600,
+      fraction: 0.5,
+      dx: 0,
+      dy: 0,
+    });
+    const drawn = buildDraftRequest({ ...anywhere, zones: [area] }, { goal: "mow it" });
+    expect(drawn.zones?.[0]?.geometry?.type).toBe("Polygon");
+    // The demo's acres are its outlines' measured acres, so its drafts are sized from them too:
+    // each zone sends its own footprint, and its stated acres agree with that footprint.
+    const demo = buildDraftRequest(project, { goal: "mow" });
+    expect(demo.zones?.map((z) => z.id)).toEqual(["Z-14", "Z-21", "Z-08"]);
+    for (const zone of project.zones) {
+      const sent = demo.zones?.find((z) => z.id === zone.id);
+      expect(sent?.geometry).toEqual(zone.footprint);
+      expect(sent?.acres).toBe(Math.round(toAcres(footprintAreaM2(zone.footprint))));
+    }
+    // A simulated log measured nothing: no rate from it outranks the path estimate.
+    expect(demo.rates).toEqual([]);
+  });
+
+  it("stores land zones with their provenance and reads them back private", () => {
+    const body = recordBodyFromDraft(fenceDraft, "monitor", onLand.id, null, onLand.zones);
+    expect(body.areas).toEqual([
+      {
+        id: "L-aaaa0001",
+        name: "North fence",
+        footprint: onLand.zones[1]!.footprint,
+        attribution: "Inventory · confirmed · revision 3 · Walked with a GPS",
+      },
+    ]);
+    const record = {
+      ...body,
+      id: "rec-1",
+      status: "scheduled" as const,
+      revision: 1,
+      revisions: [],
+      createdAt: "",
+      updatedAt: "",
+      areas: body.areas ?? [],
+      zoneIds: body.zoneIds ?? [],
+      machineIds: body.machineIds ?? [],
+      steps: body.steps ?? [],
+      assumptions: body.assumptions ?? [],
+      risks: body.risks ?? [],
+      questions: body.questions ?? [],
+      cadence: body.cadence ?? ("once" as const),
+      source: body.source ?? ("rules" as const),
+      model: body.model ?? null,
+      endDate: body.endDate ?? null,
+      siteId: null,
+      landId: LAND_ID,
+      boundaryRevision: 2,
+      private: true,
+      landActionId: null,
+    };
+    const [zone] = zonesFromRecord(record);
+    expect(zone?.attribution).toBe("Inventory · confirmed · revision 3 · Walked with a GPS");
+    expect(zone?.private).toBe(true);
+    const plan = planFromRecord(record, onLand);
+    expect(plan.scope).toBe("workspace");
+    expect(plan.landId).toBe(LAND_ID);
+    expect(plan.agentNote).toContain("Rule-based draft approved by you");
+    // A line has a path, not acres; a short run reads in minutes.
+    expect(plan.stats[0]).toEqual({ value: "1.0 km", label: "Path" });
+    expect(plan.stats[2]?.value).toBe("2 min");
+    expect(plan.meta).toBe("Weekly · North fence · 1.0 km");
+    const scheduled = planFromRecord({ ...record, landActionId: "action-1" }, onLand);
+    expect(scheduled.landActionId).toBe("action-1");
+    expect(scheduled.agentNote).toContain("land action");
+    expect(scheduled.agentNote).not.toContain("Rule-based draft approved by you");
+    expect(scheduled.stats[2]?.value).toBe("Not estimated");
+    expect(planFromRecord({ ...record, private: false }, onLand).scope).toBe("public");
+  });
+
+  it("names land zones without their opaque ids", () => {
+    expect(idLabel("L-aaaa0001", "North fence")).toBe("North fence");
+    expect(idLabel("LA-1234abcd", "Approved work area")).toBe("Approved work area");
+    expect(idLabel("Z-14", "West bench")).toBe("Z-14 West bench");
+    expect(formatMachineHours(0)).toBe("0 h");
+    expect(formatMachineHours(0.004)).toBe("1 min");
+    expect(formatMachineHours(12.4)).toBe("12 h");
+    expect(describeDraft(fenceDraft)).toContain("1.0 km path");
+  });
+});
+
+describe("schedule ticks", () => {
+  it("spaces date labels so they never overlap", () => {
+    // 448 viewBox units of plot: 21 days used to tick every 2 days, 42 units apart,
+    // narrower than one "Oct 16" label.
+    expect(tickStep(448 / 21)).toBe(3);
+    expect(tickStep(448 / 4)).toBe(1);
+    expect(tickStep(448 / 60)).toBe(7);
+    expect(tickStep(448 / 120)).toBe(14);
+    expect(tickStep(448 / 400)).toBe(28);
+    for (const days of [1, 5, 10, 21, 30, 45, 90]) {
+      expect(tickStep(448 / days) * (448 / days)).toBeGreaterThanOrEqual(52);
+    }
+  });
+});
+
+describe("scout areas", () => {
+  const capture = {
+    purpose: "lift-knowledge-fog" as const,
+    camera: "dji-m3e-wide" as const,
+    altitudeM: 60,
+    forwardOverlap: 0.75,
+    sideOverlap: 0.7,
+    speedMs: 8,
+    headingDeg: null,
+  };
+  const anywhere = anywhereProject();
+  const patch = {
+    ...viewAreaZone("A-01", "Fog patch 1", {
+      center: { longitude: -120.04, latitude: 34.698 },
+      metersPerPixel: 1,
+      width: 800,
+      height: 600,
+      fraction: 0.5,
+      dx: 0,
+      dy: 0,
+    }),
+    task: "Scout",
+    attribution: "Fog of knowing fog-v1",
+    scout: capture,
+    private: true,
+  };
+  const scoutDraft: PlanDraft = {
+    ...draft,
+    title: "Survey the foggy ground",
+    zoneIds: ["A-01"],
+    machineIds: [],
+    steps: [],
+  };
+
+  it("sends the capture to the planner and keeps it on the stored plan", () => {
+    // The patches are the card's scope (liftFog), so the private patch is shown to the planner.
+    const request = buildDraftRequest(
+      { ...anywhere, zones: [patch] },
+      { goal: "survey", zoneIds: ["A-01"] },
+    );
+    expect(request.zones?.[0]?.capture).toEqual(capture);
+    const body = recordBodyFromDraft(scoutDraft, "survey", anywhere.id, null, [patch]);
+    expect(body.areas?.[0]?.capture).toEqual(capture);
+    expect(body.areas?.[0]?.attribution).toBe("Fog of knowing fog-v1");
+    const record = {
+      ...body,
+      id: "rec-2",
+      status: "scheduled" as const,
+      revision: 1,
+      revisions: [],
+      createdAt: "",
+      updatedAt: "",
+      areas: body.areas ?? [],
+      zoneIds: body.zoneIds ?? [],
+      machineIds: body.machineIds ?? [],
+      steps: body.steps ?? [],
+      assumptions: body.assumptions ?? [],
+      risks: body.risks ?? [],
+      questions: body.questions ?? [],
+      cadence: body.cadence ?? ("once" as const),
+      source: body.source ?? ("rules" as const),
+      model: body.model ?? null,
+      endDate: body.endDate ?? null,
+      siteId: null,
+      landId: null,
+      boundaryRevision: null,
+      private: true,
+      landActionId: null,
+    };
+    const [zone] = zonesFromRecord(record);
+    expect(zone?.scout).toEqual(capture);
+    expect(zone?.task).toBe("Scout");
+    expect(zone?.private).toBe(true);
+    expect(planFromRecord(record, anywhere).zoneIds).toEqual(["A-01"]);
   });
 });

@@ -5,14 +5,42 @@ a model's work."""
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import (
+    BeforeValidator,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+)
+from shapely import make_valid
+from shapely.errors import ShapelyError
+from shapely.geometry import MultiPolygon, Polygon, mapping, shape
+from shapely.ops import unary_union
 
 from app.schemas.base import CamelModel
+from app.schemas.geojson import MapGeometry
+from app.schemas.scout import ScoutCapture
 
 Cadence = Literal["once", "daily", "weekly", "monthly", "seasonal"]
 PlannerSource = Literal["claude", "rules"]
+ZONE_NAME_MAX = 120
+
+
+def _clip_zone_name(value: object) -> object:
+    """A zone name longer than ZONE_NAME_MAX is clipped, not refused. Zone names come from a
+    Land's names (up to 200 characters) and from names the console derives from them
+    ("<feature>, workable"), and one long name must not refuse a whole draft or approval."""
+    if isinstance(value, str) and len(text := value.strip()) > ZONE_NAME_MAX:
+        return text[: ZONE_NAME_MAX - 1].rstrip() + "…"
+    return value
+
+
+#: A zone's or a plan area's name, as the planner reads it and an approved plan keeps it.
+ZoneName = Annotated[
+    str, BeforeValidator(_clip_zone_name), Field(min_length=1, max_length=ZONE_NAME_MAX)
+]
 
 
 class PlannerMachine(CamelModel):
@@ -26,12 +54,56 @@ class PlannerMachine(CamelModel):
 
 class PlannerZone(CamelModel):
     id: str = Field(min_length=1, max_length=40)
-    name: str = Field(min_length=1, max_length=120)
+    name: ZoneName
     acres: float = Field(default=0, ge=0)
     task: str = Field(default="", max_length=200)
     progress_pct: int = Field(default=0, ge=0, le=100)
     treated: bool = False
     note: str = Field(default="", max_length=500)
+    # The zone's outline (or, for a mapped line such as a fence, the line itself), so the
+    # planner sizes work from the ground rather than from stated acres. Never sent to a model.
+    geometry: MapGeometry | None = None
+    # A scout area's capture parameters: the planner flies it at these, not its detail table.
+    capture: ScoutCapture | None = None
+
+    @field_validator("geometry", mode="wrap")
+    @classmethod
+    def _tolerate_invalid_outline(
+        cls, value: object, handler: ValidatorFunctionWrapHandler
+    ) -> object:
+        """An outline is sizing context, not a stored shape: one the console let through
+        invalid (a corner dragged across an edge, OSM outers that touch) is repaired, or
+        dropped so the zone falls back to its acres, rather than failing the whole draft."""
+        try:
+            return handler(value)
+        except ValidationError:
+            repaired = _repaired_outline(value)
+            if repaired is None:
+                return None
+            try:
+                return handler(repaired)
+            except ValidationError:
+                return None
+
+
+def _repaired_outline(value: object) -> dict[str, object] | None:
+    """The polygonal part of `shapely.make_valid` for an invalid (Multi)Polygon, as GeoJSON;
+    None when nothing with area is left or the value is not a polygon at all."""
+    if not isinstance(value, dict) or value.get("type") not in {"Polygon", "MultiPolygon"}:
+        return None
+    try:
+        fixed = make_valid(shape(value))
+    except (ShapelyError, ValueError, TypeError, AttributeError, IndexError, KeyError):
+        return None
+    if not isinstance(fixed, Polygon | MultiPolygon):
+        # A collection (a bow-tie with a stray edge): keep the parts with area.
+        parts = [g for g in getattr(fixed, "geoms", []) if isinstance(g, Polygon | MultiPolygon)]
+        if not parts:
+            return None
+        fixed = unary_union(parts)
+    if not isinstance(fixed, Polygon | MultiPolygon) or fixed.is_empty or fixed.area == 0:
+        return None
+    return dict(mapping(fixed))
 
 
 class BusyWindow(CamelModel):
@@ -102,6 +174,35 @@ class PlanEstimates(CamelModel):
     acres: float = Field(ge=0)
     machine_hours: float = Field(ge=0)
     calendar_days: int = Field(ge=0)
+    # Metres of path one run covers, when the work was sized from outlines.
+    path_m: float | None = Field(default=None, ge=0)
+
+
+MachineClassId = Literal["mower", "seeder", "survey", "drone"]
+
+
+class ZoneCoverage(CamelModel):
+    """How one zone's work was sized from its outline: the path, the assumed machine class
+    (`app/services/machine_classes.json`) and the hours that follow. `basis` is the sentence
+    the console shows beside the number."""
+
+    zone_id: str = Field(min_length=1, max_length=40)
+    kind: Literal["area", "line"]
+    machine_class: MachineClassId
+    area_m2: float | None
+    length_m: float = Field(ge=0)
+    transit_m: float = Field(ge=0)
+    passes: int = Field(ge=0)
+    spans: int = Field(ge=0)
+    spacing_m: float | None
+    # Flight height above ground the drone class flew at (set by the detail asked); None for
+    # ground classes, whose spacing is their swath.
+    altitude_m: float | None = Field(default=None, ge=0)
+    speed_mps: float = Field(gt=0)
+    turn_s: float = Field(ge=0)
+    hours: float = Field(ge=0)
+    capped: bool
+    basis: str = Field(max_length=600)
 
 
 class PlanDraftBody(CamelModel):
@@ -121,6 +222,7 @@ class PlanDraftBody(CamelModel):
     risks: list[str] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
     clarifications: list[Clarification] = Field(default_factory=list)
+    coverage: list[ZoneCoverage] = Field(default_factory=list, max_length=500)
 
 
 class PlanDraftRequest(CamelModel):
@@ -133,8 +235,8 @@ class PlanDraftRequest(CamelModel):
     # Rates learned from the work log; the planner prefers them over its defaults.
     rates: list[PlannerRate] = Field(default_factory=list, max_length=100)
     # Operator pre-selections from the console (a selected zone, machines ticked in Fleet).
-    preferred_zone_ids: list[str] = Field(default_factory=list)
-    preferred_machine_ids: list[str] = Field(default_factory=list)
+    preferred_zone_ids: list[str] = Field(default_factory=list, max_length=500)
+    preferred_machine_ids: list[str] = Field(default_factory=list, max_length=200)
     # A follow-up instruction on a previous draft ("use three machines", "skip Z-21").
     refinement: str | None = Field(default=None, max_length=2000)
     # Answers to the planner's clarifications, by clarification id.
@@ -163,6 +265,9 @@ class PlanDraft(CamelModel):
     model: str | None
     # Shown next to the draft: who drafted it and what it assumed.
     note: str
+    # Per zone, how the hours were sized from its outline (empty when no zone had one). Not
+    # persisted with an approved plan; its sentence is, under assumptions.
+    coverage: list[ZoneCoverage] = Field(default_factory=list)
 
 
 class PlannerStatus(CamelModel):

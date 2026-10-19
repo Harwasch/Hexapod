@@ -30,11 +30,13 @@ import {
   addGoogleCredit,
   expect,
   mockApi,
+  RANCH_NAME,
   selectObject,
   stageObjects,
   test,
   type MockOptions,
 } from "./fixtures";
+import { landApi, rectangle } from "./landApi";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1440, height: 900 },
@@ -177,7 +179,10 @@ async function showView(page: Page, view: "map" | "plan" | "fleet"): Promise<voi
 }
 
 /** A rail tool, or on a phone the same tool under More. */
-async function tool(page: Page, id: "layers" | "measure" | "add" | "settings"): Promise<void> {
+async function tool(
+  page: Page,
+  id: "land" | "layers" | "measure" | "add" | "settings",
+): Promise<void> {
   const more = page.getByTestId("phone-tab-more");
   if (await more.isVisible()) {
     await more.click();
@@ -195,7 +200,7 @@ async function ask(page: Page, text: string): Promise<void> {
 
 async function loadDemo(page: Page): Promise<void> {
   await page.getByTestId("onboarding-demo").click();
-  await expect(page.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+  await expect(page.getByTestId("project-card")).toContainText(RANCH_NAME, {
     timeout: 30_000,
   });
   await expect(page.getByTestId("onboarding")).toHaveCount(0);
@@ -321,6 +326,10 @@ for (const viewport of VIEWPORTS) {
         return els.filter((el) => el.getBoundingClientRect().bottom <= bottom + 1).length;
       });
       expect(rows).toBeGreaterThanOrEqual(viewport.name === "phone" ? 3 : 5);
+      // What is scheduled follows the table in the same scrolling body, never above it.
+      await expect(
+        page.locator(".hud-drawer .mc-window__body [data-testid='fleet-scheduled']"),
+      ).toContainText("Mow yellow star thistle");
       // A machine picked from the table: its card opens beside the drawer, which stays.
       await page.getByTestId("fleet-row-TR-04").click();
       await expect(page.getByTestId("selection-card")).toContainText("TR-04 Kestrel");
@@ -377,6 +386,63 @@ for (const viewport of VIEWPORTS) {
       expect(box.y).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
       expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
+    });
+
+    test("a descent's arrival, then a saved land there with its lenses, fog and Time Lantern", async ({
+      page,
+    }) => {
+      test.skip(process.env.VITE_ENABLE_LAND_EXPLORATION !== "true", "Land preview is opt-in.");
+      test.setTimeout(240_000);
+      await boot(page, {}, true);
+      const land = await landApi(page);
+      land.saved.push({
+        id: "55555555-5555-4555-8555-555555555555",
+        name: "Creek field",
+        description: "",
+        boundary: { type: "Polygon", coordinates: rectangle(-120.605, 35.615, -120.595, 35.625) },
+        source: { method: "drawn", label: "Drawn on the map", meaning: "study-area" },
+        revision: 1,
+        areaM2: 1_000_000,
+        perimeterM: 4_000,
+        createdAt: "2026-10-09T00:00:00Z",
+        updatedAt: "2026-10-09T00:00:00Z",
+      });
+      // Down to it from the welcome card, on a clock that steps 100 ms a frame (descent.spec.ts).
+      await page.evaluate(`(() => {
+        const twin = window.__twin;
+        let virtual = performance.now();
+        twin.scene.preRender.addEventListener(() => { virtual += 100; });
+        twin.camera.setGlideClock(() => virtual);
+      })()`);
+      await page.getByTestId("descent-input").fill("35.62, -120.60");
+      await page.getByTestId("descent-submit").click();
+      const arrival = page.getByTestId("descent-arrival");
+      await expect(arrival).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByTestId("lantern-control")).toBeVisible();
+      await expectNoOverlap(page, "the descent's arrival over the strip");
+      // The saved land there, on its Overview: its chip and card, the lenses along the strip
+      // beside the Time Lantern and the fog, and the agent.
+      await tool(page, "land");
+      await page
+        .getByRole("region", { name: "Saved land" })
+        .getByRole("button", { name: /Creek field/ })
+        .click();
+      await expect(page.getByTestId("land-chip")).toBeVisible();
+      await expect(page.getByTestId("land-lens-card-overview")).toBeVisible();
+      await expect(page.getByTestId("land-dock")).toBeVisible();
+      await expect(page.getByTestId("knowledge-legend")).toBeVisible();
+      await expect(page.getByTestId("lantern-control")).toBeVisible();
+      await expect(page.getByTestId("land-agent")).toBeVisible();
+      // The arrival card stays beside them; on a phone it gives way to the sheet, as the
+      // welcome card does.
+      if (viewport.name === "phone") await expect(arrival).toBeHidden();
+      else await expect(arrival).toBeVisible();
+      await expectNoOverlap(page, "a saved land with its lenses, the fog and the Time Lantern");
+      // Land closed, the land stays selected: the fog stays in the strip.
+      await page.getByRole("button", { name: "Close land", exact: true }).click();
+      await expect(page.getByTestId("land-dock")).toHaveCount(0);
+      await expect(page.getByTestId("knowledge-legend")).toBeVisible();
+      await expectNoOverlap(page, "the fog and the Time Lantern with Land closed");
     });
   });
 }

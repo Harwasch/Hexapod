@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.research import Evidence, Finding, ResearchRun
@@ -266,6 +266,73 @@ def test_overview_is_idempotent_per_boundary_revision(client: TestClient) -> Non
     second = client.post(url, json={"boundaryRevision": 2}).json()
     assert second["investigation"]["id"] != first.json()["investigation"]["id"]
     assert second["run"]["id"] != first.json()["run"]["id"]
+
+
+def test_status_reports_worker_presence_and_workspace_queue(
+    client: TestClient, db: Session
+) -> None:
+    """A queued run can say why it waits: no worker yet, one gone quiet, or one stopped."""
+    status = client.get("/api/v1/research/status").json()
+    assert status["worker"]["state"] == "never"
+    assert status["worker"]["lastSeenAt"] is None and status["worker"]["busy"] is False
+    assert status["worker"]["checkInEverySeconds"] == queue.CHECK_IN_EVERY_S
+    assert status["queue"] == {
+        "queued": 0,
+        "oldestQueuedAt": None,
+        "oldestQueuedSeconds": None,
+        "running": 0,
+    }
+    start(client)
+    status = client.get("/api/v1/research/status").json()
+    assert status["queue"]["queued"] == 1 and status["queue"]["running"] == 0
+    assert status["queue"]["oldestQueuedSeconds"] >= 0
+    worker = uuid.uuid4()
+    queue.check_in(db, worker, hostname="t", pid=1, current_run_id=None)
+    status = client.get("/api/v1/research/status").json()
+    assert status["worker"]["state"] == "online"
+    assert status["worker"]["secondsSinceSeen"] <= 2
+    db.execute(
+        text(
+            "UPDATE land_research_workers SET last_seen_at = clock_timestamp() - interval '10 min'"
+        )
+    )
+    db.commit()
+    status = client.get("/api/v1/research/status").json()
+    assert status["worker"]["state"] == "stale"
+    assert 595 <= status["worker"]["secondsSinceSeen"] <= 610
+    queue.check_in(db, worker, hostname="t", pid=1, current_run_id=None, stopping=True)
+    response = client.get("/api/v1/research/status")
+    assert response.json()["worker"]["state"] == "stopped"
+    # Presence is states and ages only: which machine runs the worker stays on the server.
+    assert "hostname" not in response.text and '"pid"' not in response.text
+    claimed = queue.claim(db)
+    assert claimed is not None
+    status = client.get("/api/v1/research/status").json()
+    assert status["worker"]["busy"] is True
+    assert status["queue"]["queued"] == 0 and status["queue"]["running"] == 1
+
+
+def test_status_queue_counts_are_workspace_scoped(oidc_client: IdentityClient, db: Session) -> None:
+    client, token = oidc_client
+    alice_space = client.post(
+        "/api/v1/workspaces", headers=headers(token()), json={"name": "Alice"}
+    ).json()["id"]
+    bob_space = client.post(
+        "/api/v1/workspaces", headers=headers(token("bob")), json={"name": "Bob"}
+    ).json()["id"]
+    alice = headers(token(), alice_space)
+    bob = headers(token("bob"), bob_space)
+    start(client, bob)
+    db.rollback()
+    assert client.get("/api/v1/research/status", headers=alice).json()["queue"]["queued"] == 0
+    assert client.get("/api/v1/research/status", headers=bob).json()["queue"]["queued"] == 1
+    assert queue.claim(db) is not None
+    for caller in (alice, bob):
+        status = client.get("/api/v1/research/status", headers=caller).json()
+        # Busy is server-wide: one worker serves every workspace, whoever's run it holds.
+        assert status["worker"]["busy"] is True
+    assert client.get("/api/v1/research/status", headers=alice).json()["queue"]["running"] == 0
+    assert client.get("/api/v1/research/status", headers=bob).json()["queue"]["running"] == 1
 
 
 def test_investigations_say_what_has_run_in_them(client: TestClient) -> None:

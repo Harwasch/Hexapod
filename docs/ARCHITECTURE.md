@@ -89,8 +89,10 @@ extensible parts (render config, resolution, license) without a migration per fi
 - `apps/web/src/features/` — one directory per surface (search, layers, sites, inspector,
   measure, compare, bookmarks, add-data, captures, settings, command-palette — the command
   box — dev, nav, timeline, explore, onboarding, mission, living, shell). The rail has four
-  tools (Layers, Measure, Add, Settings); Plan and Fleet are a drawer on the right; the site
-  switcher holds sites and saved views. Panels are lazy where large.
+  tools (Layers, Measure, Add, Settings), and Land with `VITE_ENABLE_LAND_EXPLORATION` on;
+  Plan and Fleet are a drawer on the right; the site switcher holds sites and saved views.
+  Panels are lazy where large, and the whole Land feature is: a build with its flag off never
+  loads any of it (`scripts/check-bundle.mjs` checks the globe's first load).
   `apps/web/src/app/hotkeys.ts` is the one list of keyboard shortcuts. See
   [MISSION_CONTROL.md](MISSION_CONTROL.md) for the layout and [GLOSSARY.md](GLOSSARY.md) for
   the one word each thing goes by.

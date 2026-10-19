@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import uuid
 from copy import deepcopy
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Any, Literal
 
 from pydantic import TypeAdapter
 from sqlalchemy import Select, func, select
@@ -18,6 +18,7 @@ from app.models.research import (
     ResearchEvent,
     ResearchMessage,
     ResearchRun,
+    ResearchWorkerPresence,
 )
 from app.research.locations import focus_location
 from app.schemas.land_ecology import EcologyRequest
@@ -37,6 +38,8 @@ from app.schemas.research import (
     ResearchBudget,
     ResearchFocusReference,
     ResearchPage,
+    ResearchQueueStatus,
+    ResearchWorkerStatus,
     RunCreate,
     RunRead,
 )
@@ -368,3 +371,72 @@ def ensure_overview(
         db, workspace_id, row.id, RunCreate(request_key=land_id, kind="overview", question=question)
     )
     return read_investigation(db, row), run
+
+
+def research_status(
+    db: Session, workspace_id: uuid.UUID
+) -> tuple[ResearchWorkerStatus, ResearchQueueStatus]:
+    """Is anything going to pick up queued research, and what is waiting in this workspace?
+
+    Worker presence is server-wide (workers serve every workspace) and reported as states and
+    ages only: no hostname, pid or worker list leaves the server. Queue counts are scoped to
+    the caller's workspace."""
+    from app.research.queue import CHECK_IN_EVERY_S, ONLINE_WITHIN_S  # queue imports this module
+
+    t = now(db)
+    latest = db.scalar(
+        select(ResearchWorkerPresence)
+        .order_by(ResearchWorkerPresence.last_seen_at.desc(), ResearchWorkerPresence.id)
+        .limit(1)
+    )
+    online = db.scalar(
+        select(
+            select(ResearchWorkerPresence.id)
+            .where(
+                ResearchWorkerPresence.last_seen_at >= t - timedelta(seconds=ONLINE_WITHIN_S),
+                ResearchWorkerPresence.stopped_at.is_(None),
+            )
+            .exists()
+        )
+    )
+    busy = db.scalar(
+        select(
+            select(ResearchRun.id)
+            .where(ResearchRun.status == "running", ResearchRun.lease_expires_at > t)
+            .exists()
+        )
+    )
+    state: Literal["online", "stale", "stopped", "never"]
+    if online:
+        state = "online"
+    elif latest is None:
+        state = "never"
+    elif latest.stopped_at is not None:
+        state = "stopped"
+    else:
+        state = "stale"
+    worker = ResearchWorkerStatus(
+        state=state,
+        last_seen_at=latest.last_seen_at if latest else None,
+        seconds_since_seen=(
+            max(0, int((t - latest.last_seen_at).total_seconds())) if latest else None
+        ),
+        busy=bool(busy),
+        check_in_every_seconds=CHECK_IN_EVERY_S,
+    )
+    scoped = (
+        select(func.count(ResearchRun.id), func.min(ResearchRun.created_at))
+        .join(Investigation, Investigation.id == ResearchRun.investigation_id)
+        .join(LandArea, LandArea.id == Investigation.land_id)
+        .where(LandArea.workspace_id == workspace_id)
+    )
+    queued, oldest = db.execute(scoped.where(ResearchRun.status == "queued")).one()
+    running, _ = db.execute(
+        scoped.where(ResearchRun.status == "running", ResearchRun.lease_expires_at > t)
+    ).one()
+    return worker, ResearchQueueStatus(
+        queued=queued,
+        oldest_queued_at=oldest,
+        oldest_queued_seconds=max(0, int((t - oldest).total_seconds())) if oldest else None,
+        running=running,
+    )

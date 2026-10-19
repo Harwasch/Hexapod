@@ -1200,6 +1200,66 @@ In the app, `e2e/app.spec.ts` ("a scan object in the selection card") checks the
 card around a selection: `B` and `V` once each, one Escape one step, Tab on the body, an object
 replacing a machine's card, and the touch screen's brush.
 
+### More like this
+
+The card offers **More like this** for one selected object (not a combination, not a painted
+object, not while the brush is out) when the scan's `instances.json` names an `embedding`
+(`features/sites/MoreLikeThis.tsx`). It lights the scan's other objects whose views look like
+the chosen one's, through the objects store's highlight, so every renderer shows them.
+
+- **Read once.** The first press fetches `instances.emb` beside the `instances.json` drawn now
+  (`cesium/splatInstances.ts` `embeddingOf`: Today's file or a variant's, its declared count of
+  rows) through the payload cache (`lib/instances.ts` `loadEmbeddings`). The card says how much
+  and how far along: "Reading object signatures · 43.6 MB · 37%" on the camp (28,400 rows of
+  768 float16s). A file of another length is refused, not read as if it fitted.
+- **Centred.** Only described rows count (norm ≥ 0.5; an object too small in every view has a
+  zero row). Raw SigLIP 2 cosines between one scan's objects all sit between about 0.83 and 1.0,
+  because every crop shares the scan's light and lens, so they cannot tell objects apart.
+  `describedMatrix` subtracts the described rows' mean and makes each row unit length again,
+  which spreads them to about -0.65..0.95. It is made once per file.
+- **Ranked** (`rankSimilar`). The chosen instance, or when it was not described the nearest
+  described instance above it (the card then says "Compared by Bush, the object it is part
+  of."), against every described row. What holds it and what is part of it are not scored:
+  lighting a whole that holds the seed would light the seed itself.
+- **Lit** (`state/instances.ts` `showSimilar`, focus `similar`). The matches at or above the
+  threshold and what was compared, each with everything below it (splats carry leaf ids).
+  **How alike** moves the threshold from 30% to 95% (cosine × 100, default 60%). The line
+  under it counts objects, not instances (`similarSummary`: several matches in one object are
+  one, and the object compared is not counted) and says what they mostly are: "21 objects ·
+  mostly Shrubs & bushes (13)". **Show only these** hides the rest, as the card's **Show only**
+  does, as one undoable step. **Clear** gives the highlight back to the selection; any other
+  highlight (a new selection, a category row, Reset) ends it.
+- **Said as what it is.** Always shown beside the matches: "Inferred · similar look in this
+  scan's image embeddings (SigLIP 2, from each object's views), not a species ID or a verified
+  identification. How alike is relative to the other objects in this scan."
+
+Measured on the camp in the app (PlayCanvas, 2026-10-16), tapping a bush by the cabins: at 60%,
+72 objects, Ground & soil (26) and Shrubs & bushes (22) first, because a coarse ground region
+whose crops hold bushes looks like a bush to SigLIP; at 75%, 21 objects, mostly shrubs and
+bushes (13). The slider is the honest control: there is no threshold at which "alike" means
+"the same plant". Unit tests: `__tests__/instancesSimilar.test.ts` (centring, exclusions, the
+seed walk, the threshold, the store), `__tests__/moreLikeThis.test.tsx` (the card).
+
+To try it locally, register the hosted catalog's phone scans (the camp, the pumpkin and the
+spool, which carry SigLIP 2 embeddings; no local site does) and let the dev server read their
+bucket on its own origin, as Pages does in production (`functions/r2/`):
+
+```bash
+cd apps/api && uv run python -m app.seed.scans    # idempotent; reads the committed snapshot
+TILE_PROXY_HOST=pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev pnpm dev
+```
+
+`app/seed/hosted_scans.json` is the snapshot (`--refresh-snapshot` re-reads it from the hosted
+API; nothing else does). With `TILE_PROXY_HOST` set, the dev server answers `/r2/` with the
+Pages Function itself (`tileProxyDev` in `apps/web/vite.config.ts`); without it, a tileset on the
+bucket loads from its own URL, and the bucket's CORS rule decides whether the dev origin may
+read it. Behind an HTTPS proxy, start the dev server with `NODE_USE_ENV_PROXY=1`.
+
+Limits: the camp's file is 43.6 MB, read whole on the first press (a phone feels it; a sidecar
+of the described rows only would be about 6× smaller). Only about one object in seven is
+described. Text search by meaning (`rankByEmbedding`, `rankByVector`) still waits for a text
+encoder in the browser.
+
 ### Variants: other methods for the same scan (bake-offs)
 
 A bake-off publishes other methods' objects, fills and skins for the **same measured splats**,

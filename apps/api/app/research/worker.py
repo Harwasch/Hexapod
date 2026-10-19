@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import socket
 import threading
+import time
 import uuid
 from contextlib import suppress
 from dataclasses import asdict
@@ -15,8 +18,12 @@ from pydantic import TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.analysis.raster_runner import RasterCancelledError
+from app.analysis.dem_3dep import SPEC as DEM3DEP_SPEC
+from app.analysis.raster_runner import MIN_SECONDS as RASTER_MIN_SECONDS
+from app.analysis.raster_runner import SAVE_SECONDS as RASTER_SAVE_SECONDS
+from app.analysis.raster_runner import RasterCancelledError, wall_seconds
 from app.analysis.raster_runner import run as run_raster
+from app.analysis.signature import SPEC as SIGNATURE_SPEC
 from app.analysis.solar_runner import SolarCancelledError
 from app.analysis.solar_runner import run as run_solar
 from app.analysis.terrain import SPEC as TERRAIN_SPEC
@@ -139,6 +146,13 @@ def pack(result: SourceResult) -> dict[str, Any]:
     }
 
 
+def remaining_seconds(budget: ResearchBudget, started_at: datetime | None) -> float:
+    """What is left of a run's time budget. It counts from the first claim, so a resumed run
+    has what its earlier attempts left; the lease keeper ends the run at zero."""
+    elapsed = (datetime.now(UTC) - started_at).total_seconds() if started_at else 0.0
+    return budget.max_seconds - elapsed
+
+
 def unpack(value: dict[str, Any]) -> SourceResult:
     return SourceResult(
         value["provider"],
@@ -198,6 +212,48 @@ class ResearchWorker:
         self.model = model
         self.client = client
         self.searcher = searcher
+        # Presence (land_research_workers): who this process is, and when it last said so.
+        self.worker_id = uuid.uuid4()
+        self._hostname = socket.gethostname()
+        self._pid = os.getpid()
+        self._last_check_in = 0.0
+        self._check_in_lock = threading.Lock()
+
+    def _check_in(
+        self,
+        current_run_id: uuid.UUID | None = None,
+        *,
+        force: bool = False,
+        stopping: bool = False,
+    ) -> None:
+        """Tell /research/status this worker is alive, at most every CHECK_IN_EVERY_S.
+
+        Called from the poll loop and the lease keeper's thread, hence the lock. Presence is
+        advisory: a failure is logged and never breaks the loop or a run."""
+        with self._check_in_lock:
+            if (
+                not force
+                and self._last_check_in
+                and time.monotonic() - self._last_check_in < queue.CHECK_IN_EVERY_S
+            ):
+                return
+            try:
+                with self.sessions() as db:
+                    queue.check_in(
+                        db,
+                        self.worker_id,
+                        hostname=self._hostname,
+                        pid=self._pid,
+                        current_run_id=current_run_id,
+                        stopping=stopping,
+                    )
+                self._last_check_in = time.monotonic()
+            except Exception as error:
+                log.warning("Research worker check-in failed: %s", type(error).__name__)
+
+    def stop(self) -> None:
+        """Mark this worker stopped, so a queued run says so instead of "not seen lately"."""
+        self._check_in(None, force=True, stopping=True)
 
     def _keep_alive(self, run_id: uuid.UUID, token: uuid.UUID, stopped: threading.Event) -> None:
         while not stopped.wait(5):
@@ -205,11 +261,7 @@ class ResearchWorker:
                 with self.sessions() as db:
                     run = queue.locked(db, run_id, token)
                     budget = ResearchBudget.model_validate(run.budget)
-                    if (
-                        run.started_at
-                        and (datetime.now(UTC) - run.started_at).total_seconds()
-                        >= budget.max_seconds
-                    ):
+                    if remaining_seconds(budget, run.started_at) <= 0:
                         queue.finish(
                             db,
                             run_id,
@@ -220,6 +272,7 @@ class ResearchWorker:
                         stopped.set()
                         return
                     queue.heartbeat(db, run_id, token)
+                self._check_in(run_id)  # Long runs keep presence fresh between polls.
             except queue.LeaseLostError:
                 stopped.set()
                 return
@@ -228,11 +281,13 @@ class ResearchWorker:
                 # The lease expires naturally if the database remains unreachable.
 
     def run_once(self) -> bool:
+        self._check_in()
         with self.sessions() as db:
             claimed = queue.claim(db)
         if claimed is None:
             return False
         run_id, token = claimed
+        self._check_in(run_id, force=True)
         stopped = threading.Event()
         keeper = threading.Thread(
             target=self._keep_alive, args=(run_id, token, stopped), daemon=True
@@ -256,6 +311,7 @@ class ResearchWorker:
         finally:
             stopped.set()
             keeper.join(timeout=6)
+            self._check_in(None, force=True)
             if self.client is None:
                 client.close()
         return True
@@ -400,9 +456,18 @@ class ResearchWorker:
     ) -> dict[str, Any]:
         categorical = request.dataset == "esa-worldcover-2021"
         vegetation = request.dataset == "sentinel-2-ndvi"
-        spec = VEGETATION_SPEC if vegetation else COVER_SPEC if categorical else TERRAIN_SPEC
+        signature = request.dataset == "sentinel-2-signature"
+        bare_earth = request.dataset == "usgs-3dep-13"
+        # Dated Sentinel-2 runs: their windows key the run and their scenes date the evidence.
+        dated = vegetation or signature
+        spec = {
+            "sentinel-2-ndvi": VEGETATION_SPEC,
+            "sentinel-2-signature": SIGNATURE_SPEC,
+            "esa-worldcover-2021": COVER_SPEC,
+            "usgs-3dep-13": DEM3DEP_SPEC,
+        }.get(request.dataset, TERRAIN_SPEC)
         # Preserve keys for pre-period terrain/cover runs resumed after this upgrade.
-        canonical = request.model_dump_json(exclude=None if vegetation else {"periods"})
+        canonical = request.model_dump_json(exclude=None if dated else {"periods"})
         key = "raster/" + hashlib.sha256(canonical.encode()).hexdigest()
         if key in state["sources"]:
             return dict(state["sources"][key])
@@ -410,6 +475,19 @@ class ResearchWorker:
         row = db.get(LandRaster, identifier)
         extent = land_box(context, "analysis-extent")
         if row is None:
+            # The processor stops before the run's time budget does, leaving time to save.
+            # Otherwise the lease keeper would end the run mid-calculation as "partial" and
+            # say outputs were kept when no raster was saved.
+            current = queue.locked(db, run_id, token)
+            left = remaining_seconds(
+                ResearchBudget.model_validate(current.budget), current.started_at
+            )
+            if left - RASTER_SAVE_SECONDS < RASTER_MIN_SECONDS:
+                raise ValueError(
+                    f"Only {max(0, left):.0f} s of this run's time budget is left, and "
+                    f"{spec.name} can take up to {wall_seconds(request):.0f} s. Start the "
+                    "analysis again from Explore this land, which gives it a fresh time budget."
+                )
             queue.checkpoint(
                 db,
                 run_id,
@@ -419,15 +497,22 @@ class ResearchWorker:
                 payload={
                     "message": "Reading dated satellite reflectance and checking local cloud/quality masks."
                     if vegetation
+                    else f"Reading {len(request.periods)} seasonal Sentinel-2 scenes for 10 m "
+                    "signatures. This takes a minute or two."
+                    if signature
                     else "Reading mapped land-cover classes inside the selected boundary."
                     if categorical
+                    else "Reading USGS 3DEP bare-earth elevation and calculating slope."
+                    if bare_earth
                     else "Reading surface elevation and calculating slope inside the selected boundary."
                 },
                 location=extent,
             )
             db.rollback()
             try:
-                calculated = run_raster(context.boundary, request, cancelled)
+                calculated = run_raster(
+                    context.boundary, request, cancelled, left - RASTER_SAVE_SECONDS
+                )
             except RasterCancelledError as error:
                 raise queue.LeaseLostError() from error
             run = queue.locked(db, run_id, token)
@@ -465,7 +550,7 @@ class ResearchWorker:
                 record_id=source.id,
                 retrieved_at=row.created_at,
                 observed_at=datetime.fromisoformat(source.catalog_datetime.replace("Z", "+00:00"))
-                if vegetation and source.catalog_datetime
+                if dated and source.catalog_datetime
                 else None,
                 excerpt=json.dumps(
                     {
@@ -497,6 +582,24 @@ class ResearchWorker:
                     f"using {series.change_cells} cells valid at both endpoints."
                 )
             summary += " This is a vegetation signal, not species cover or proof of ecological improvement."
+        elif signature:
+            series, info = metadata.vegetation, metadata.signature
+            if series is None or info is None:
+                raise ValueError("The signature processor omitted its dated scene metadata.")
+            dates = [
+                item.acquired_at.date().isoformat()
+                for item in series.observations
+                if item.acquired_at and item.valid_cells
+            ]
+            summary = (
+                f"{len(dates)} of {len(series.observations)} seasonal windows have clear Sentinel-2 "
+                "samples"
+                + (f" (acquired {', '.join(dates)})" if dates else "")
+                + f". {info.common_cells} cells on the {metadata.resolution_m:.0f} m grid are clear "
+                f"in every window ({(info.common_coverage_fraction or 0) * 100:.1f}% of boundary "
+                f"cells) and carry a full {len(info.features)}-band signature. A similar signature "
+                "means similar reflectance on these dates, not the same species or habitat."
+            )
         elif categorical:
             if not metadata.valid_cells:
                 summary = "No valid 2021 land-cover samples fall inside this boundary at the analysis resolution."
@@ -515,18 +618,19 @@ class ResearchWorker:
                 )
         else:
             elevation, slope = metadata.bands[:2]
+            model = "bare-earth" if bare_earth else "surface"
             if elevation.mean is None:
                 summary = (
-                    "The surface model has no valid analysis samples inside this boundary "
+                    f"The {model} model has no valid analysis samples inside this boundary "
                     "at the selected resolution."
                 )
             else:
                 summary = (
-                    f"Mean sampled surface elevation is {elevation.mean:.1f} m "
-                    f"on a {metadata.resolution_m:.1f} m grid."
+                    f"Mean sampled {model} elevation is {elevation.mean:.1f} m"
+                    f"{' (NAVD88)' if bare_earth else ''} on a {metadata.resolution_m:.1f} m grid."
                 )
                 if slope.mean is not None:
-                    summary += f" Mean sampled surface slope is {slope.mean:.1f} degrees."
+                    summary += f" Mean sampled {model} slope is {slope.mean:.1f} degrees."
                 summary += (
                     f" Valid elevation coverage: {(metadata.coverage_fraction or 0) * 100:.1f}% "
                     "of boundary grid cells."
@@ -540,13 +644,15 @@ class ResearchWorker:
             content=FindingContent(
                 title=spec.name,
                 summary=summary,
-                category="ecology" if categorical or vegetation else "physical",
+                category="ecology" if categorical or dated else "physical",
                 evidence_ids=ids,
                 confidence="supported" if metadata.valid_cells else "uncertain",
                 uncertainty=" ".join(metadata.warnings)[:3000],
                 suggested_questions=[
                     "How do season, cloud coverage and field observations affect this vegetation comparison?"
                     if vegetation
+                    else "Which places share a seasonal signature, and what would a field visit need to confirm?"
+                    if signature
                     else "What field observations would help assess restoration opportunities in these mapped classes?"
                     if categorical
                     else "Where are the steepest sampled areas, and what would field measurements need to verify?"
@@ -561,8 +667,12 @@ class ResearchWorker:
             ArtifactContent(
                 title="Vegetation through time"
                 if vegetation
+                else "Seasonal 10 m signatures"
+                if signature
                 else "Land cover in 2021"
                 if categorical
+                else "Bare-earth elevation and slope (USGS 3DEP)"
+                if bare_earth
                 else "Surface elevation and slope",
                 method=metadata.method,
                 evidence_ids=ids,
@@ -1123,6 +1233,7 @@ class ResearchWorker:
                 raise queue.LeaseLostError()
             context = SourceContext(FOOTPRINT.validate_python(boundary.boundary))
             budget = ResearchBudget.model_validate(run.budget)
+            started_at = run.started_at
             kind, question = run.kind, run.question
             focus_snapshot = run.focus_snapshot
             analysis_request = (
@@ -1415,6 +1526,7 @@ class ResearchWorker:
                             "retrieved": state["sources"],
                             "previousActions": state["actions"][-20:],
                             "remainingSteps": budget.max_steps - state["steps"],
+                            "remainingSeconds": round(remaining_seconds(budget, started_at)),
                             "remainingWebSearches": budget.max_web_searches
                             - state.get("web_searches", 0),
                         },

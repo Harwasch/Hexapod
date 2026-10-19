@@ -22,6 +22,8 @@ import { useRenameSite, useSites as useSiteCatalog } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
 import { describeError } from "@/lib/log";
+import { landIdOfProject } from "@/missions/landGround";
+import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -29,6 +31,7 @@ import { useUi } from "@/state/ui";
 
 import { useSavedViews, type SavedView } from "../bookmarks/savedViews";
 import { WriteTokenField } from "../captures/WriteTokenField";
+import { useListedSites } from "../sites/siteFixtures";
 import { namedByProject, siteDisplayName, useSiteName } from "../sites/siteNames";
 
 /**
@@ -46,10 +49,27 @@ export function ProjectCard() {
   const open = useMission((s) => s.projectsOpen);
   const setOpen = useMission((s) => s.setProjectsOpen);
   const focusOn = useUi((s) => s.switcherFocus);
+  const catalog = useSiteCatalog();
+  const units = useSettings((s) => s.units);
   // A project is named after its site (`siteNames.ts`), so this is the site's one name.
   const title = project?.name ?? "Land Ops";
+  // One number for the place, in the user's units, wherever it is shown: the catalog site's
+  // area (formatted as the switcher's row formats it), or a saved Land's own area for its
+  // project, which carries no numbers of its own.
+  const summary = project?.siteId
+    ? catalog.data?.find((site) => site.id === project.siteId)
+    : undefined;
+  const land = useLand((s) => s.active);
+  const landAreaM2 = landIdOfProject(project?.id) === land?.id ? land?.areaM2 : undefined;
+  const areaM2 = summary?.areaM2 ?? landAreaM2;
   const meta = project
-    ? `${project.meta}${project.simulated ? " · simulated fleet" : ""}`
+    ? [
+        areaM2 === undefined ? null : formatArea(areaM2, units),
+        project.meta,
+        project.simulated ? "simulated fleet" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
     : "Pick a site to start";
   const root = useRef<HTMLDivElement>(null);
   const badge = useRef<HTMLButtonElement>(null);
@@ -161,6 +181,8 @@ export function ProjectCard() {
 function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
   const scene = useScene();
   const sites = useSiteCatalog();
+  // Developer fixtures (the synthetic tree, audit records) only with developer readouts on.
+  const listed = useListedSites();
   const activeSiteId = useSites((s) => s.activeSiteId);
   const units = useSettings((s) => s.units);
   const openAdd = useUi((s) => s.openAdd);
@@ -217,7 +239,7 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
       </div>
       {sites.builtin && <p className="mc-project__note mc-muted">Built-in demo (API offline)</p>}
       <ul className="mc-project__menu-list" ref={list}>
-        {(sites.data ?? []).map((site) => {
+        {listed.shown.map((site) => {
           const here = site.id === activeSiteId;
           if (editing === site.id) {
             return (
@@ -249,8 +271,12 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
                 <span className="mc-project__row-text">
                   <span className="mc-project__row-name">{name}</span>
                   <span className="mc-project__row-meta">
-                    {formatArea(site.areaM2, units)} ·{" "}
-                    {site.representations.map(representationLabel).join(", ")}
+                    {[
+                      formatArea(site.areaM2, units),
+                      site.representations.map(representationLabel).join(", "),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </span>
                 </span>
                 {here && <span className="mc-project__row-count">Here</span>}
@@ -277,6 +303,13 @@ function SiteList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
         })}
         {sites.data?.length === 0 && <li className="mc-project__empty mc-muted">No sites yet.</li>}
       </ul>
+      {listed.hidden > 0 && (
+        <p className="mc-project__note mc-muted" data-testid="switcher-fixtures-hidden">
+          {listed.hidden === 1
+            ? "1 developer fixture is not listed. Turn on Settings › Advanced › Show developer readouts to list it."
+            : `${listed.hidden} developer fixtures are not listed. Turn on Settings › Advanced › Show developer readouts to list them.`}
+        </p>
+      )}
       {failed &&
         (isUnauthorized(rename.error) ? (
           <div className="mc-project__token">

@@ -85,7 +85,7 @@ export function parseViewCapture(text: string, landId: string): ViewCapture {
       !["raster", "archive-alignment"].includes(typeof raster.kind === "string" ? raster.kind : "")
     )
       throw new Error("The captured imagery type is unsupported.");
-    number(raster.band ?? 1, 1, 16, true);
+    number(raster.band ?? 1, 1, 30, true);
     number(raster.opacity ?? 0.8, 0, 1);
   }
   return payload as ViewCapture;

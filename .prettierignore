@@ -15,3 +15,5 @@ data/tiles
 # Derived capture fixtures (compact JSON, written by tools)
 packages/world/fixtures/*.json
 packages/world/fixtures/**/*.json
+# Local scratch scripts that are never committed
+*.tmp.*

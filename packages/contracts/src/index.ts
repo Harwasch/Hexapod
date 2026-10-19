@@ -171,3 +171,58 @@ export type LandCandidate = Schemas["LandCandidate"];
 export type CandidateResult = Schemas["CandidateResult"];
 export type SelectionInterpretation = Schemas["SelectionInterpretation"];
 export type LandMapGeometry = LandCandidate["geometry"];
+
+/** Research worker presence and point facts ("What's here"): stream research-status. */
+export type ResearchStatus = Schemas["ResearchStatus"];
+export type ResearchWorkerStatus = Schemas["ResearchWorkerStatus"];
+export type ResearchQueueStatus = Schemas["ResearchQueueStatus"];
+export type PlaceFact = Schemas["PlaceFact"];
+export type PlaceFactKind = PlaceFact["kind"];
+/** Land as mission ground (stream loop): a saved Land's zones, outline-sized estimates, and
+ * plans held in a workspace. */
+export type LandGround = Schemas["LandGround"];
+export type LandGroundItem = Schemas["LandGroundItem"];
+export type ZoneCoverage = Schemas["ZoneCoverage"];
+export type MachineClassId = ZoneCoverage["machineClass"];
+export type WorkspaceMissionCreate = Schemas["WorkspaceMissionCreate"];
+/** Land-scale data (stream showdata): seasonal Sentinel-2 signatures, USGS 3DEP bare-earth
+ * rasters and USGS NHD flowlines around a saved Land. */
+export type RasterDataset = NonNullable<Schemas["RasterRequest"]["dataset"]>;
+export type SignatureInfo = Schemas["SignatureInfo"];
+export type SignatureFeature = Schemas["SignatureFeature"];
+export type LandHydrography = Schemas["LandHydrography"];
+export type HydrographyFeature = Schemas["HydrographyFeature"];
+/** The Fog of Knowing (stream fog): a lon/lat grid of how fine and fresh the stored knowledge of
+ * a Land is, the records behind a cell, and the foggiest patches to scout. */
+export type LonLatGrid = Schemas["LonLatGrid"];
+export type KnowledgeGrid = Schemas["KnowledgeGridRead"];
+export type KnowledgeRecord = Schemas["KnowledgeRecordRead"];
+export type KnowledgeCell = Schemas["KnowledgeCellRead"];
+export type KnowledgeCellRecord = Schemas["KnowledgeCellRecord"];
+export type KnowledgePolicy = Schemas["KnowledgePolicyRead"];
+export type KnowledgeClassId = KnowledgeRecord["classId"];
+export type KnowledgeNotCounted = Schemas["NotCountedRead"];
+export type KnowledgeScoutRequest = Schemas["KnowledgeScoutRequest"];
+export type KnowledgeScoutRead = Schemas["KnowledgeScoutRead"];
+export type KnowledgeScoutArea = Schemas["KnowledgeScoutArea"];
+export type ScoutCapture = Schemas["ScoutCapture"];
+/** Dated public imagery for the Time Lantern (stream lantern): NAIP years, dry-season
+ * Sentinel-2 scenes and USGS historical map editions, each with its date's meaning, licence
+ * and stated positional accuracy. */
+export type DatedImageryCatalog = Schemas["DatedImageryCatalog"];
+export type DatedImagerySource = Schemas["DatedImagerySource"];
+export type DatedImageryPart = Schemas["DatedImageryPart"];
+export type DatedImageryProviderStatus = Schemas["DatedImageryProviderStatus"];
+export type StatedAccuracy = Schemas["StatedAccuracy"];
+/** Show once, everywhere (stream showonce): how alike every 10 m cell of a Land is to one tapped
+ * cell by seasonal Sentinel-2 signature, and the alike cells as areas for a plan. */
+export type SignatureSimilarity = Schemas["SignatureSimilarityRead"];
+export type SignatureSeed = Schemas["SignatureSeed"];
+export type SignatureScene = Schemas["SignatureScene"];
+export type SignatureZonesRequest = Schemas["SignatureZonesRequest"];
+export type SignatureZones = Schemas["SignatureZonesRead"];
+export type SignatureZone = Schemas["SignatureZone"];
+// Workable ground: an outline less what an assumed machine class cannot work there.
+export type WorkableGroundRequest = Schemas["WorkableGroundRequest"];
+export type WorkableGround = Schemas["WorkableGroundRead"];
+export type WorkableLeftOut = Schemas["WorkableLeftOut"];

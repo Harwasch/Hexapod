@@ -609,12 +609,25 @@ describe("Overview words", () => {
   });
 
   it("builds one headline from what exists", () => {
-    expect(overviewHeadline({ terrain, cover: null, vegetation: null }, "metric")).toBe(
+    const none = { terrain: null, cover: null, vegetation: null, bareEarth: null, signature: null };
+    expect(overviewHeadline({ ...none, terrain }, "metric")).toBe(
       "Mostly gentle slopes, 62–78 m above sea level.",
     );
-    expect(overviewHeadline({ terrain: null, cover, vegetation: null }, "metric")).toBe(
-      "About two-thirds grassland.",
+    expect(overviewHeadline({ ...none, cover }, "metric")).toBe("About two-thirds grassland.");
+    expect(overviewHeadline(none, "metric")).toBeNull();
+    // Bare earth, where the land has it, is the terrain the headline reads.
+    const bare = { ...terrain, id: "bare", request: { dataset: "usgs-3dep-13" as const } };
+    const lower = {
+      ...bare,
+      metadata: {
+        ...bare.metadata,
+        bands: bare.metadata.bands.map((item) =>
+          item.index === 1 ? { ...item, minimum: 50, maximum: 70 } : item,
+        ),
+      },
+    };
+    expect(overviewHeadline({ ...none, terrain, bareEarth: lower }, "metric")).toBe(
+      "Mostly gentle slopes, 50–70 m above sea level.",
     );
-    expect(overviewHeadline({ terrain: null, cover: null, vegetation: null }, "metric")).toBeNull();
   });
 });

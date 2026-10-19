@@ -1,13 +1,13 @@
 import { ChevronDown, ChevronUp, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useSites as useSiteCatalog } from "@/api/queries";
 import { DemoMissionProvider } from "@/missions/demo";
 import { useMission } from "@/state/mission";
 import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 
 import { useConnectionIssues } from "../notices/connection";
+import { useListedSites } from "../sites/siteFixtures";
 import { AgentActivityLog, Blink } from "./AgentStream";
 import {
   REPLY_HOLD_MS,
@@ -27,18 +27,19 @@ const LOG_ID = "agent-activity";
  * visited — including before the first visit.
  */
 function useFleetOverview(): { sites: number; counts: FleetCounts; simulated: boolean } {
-  const catalog = useSiteCatalog();
+  // The sites the switcher lists: developer fixtures count only with developer readouts on.
+  const { shown } = useListedSites();
   return useMemo(() => {
     const provider = new DemoMissionProvider();
-    const projects = (catalog.data ?? [])
+    const projects = shown
       .map((site) => provider.projectForSite(site.id, site.slug))
       .filter((project) => project !== null);
     return {
-      sites: catalog.data?.length ?? 0,
+      sites: shown.length,
       counts: sumFleet(projects.map(fleetCounts)),
       simulated: projects.some((project) => project.simulated),
     };
-  }, [catalog.data]);
+  }, [shown]);
 }
 
 /**

@@ -14,6 +14,7 @@ import { RecordsLens } from "@/features/land/surface/lenses/RecordsLens";
 import { RecordsAlignment } from "@/features/land/surface/lenses/records/RecordsAlignment";
 import { RecordsDocumentOcr } from "@/features/land/surface/lenses/records/RecordsDocumentOcr";
 import { useRecords } from "@/features/land/surface/lenses/records/recordsStore";
+import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useLandMap } from "@/state/landMap";
 import { useUi } from "@/state/ui";
@@ -41,9 +42,28 @@ const scene = vi.hoisted(() => ({
 }));
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => scene }));
 
-function wrap(child: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+function wrap(
+  child: ReactNode,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }),
+) {
   return render(<QueryClientProvider client={client}>{child}</QueryClientProvider>);
+}
+
+/** A finger as the main pointer (`(pointer: coarse)`), or a mouse. */
+function touchScreen(coarse: boolean) {
+  vi.spyOn(window, "matchMedia").mockImplementation(
+    (query: string) =>
+      ({
+        matches: coarse && query === "(pointer: coarse)",
+        media: query,
+        onchange: null,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        dispatchEvent: () => false,
+      }) as MediaQueryList,
+  );
 }
 
 const createUrl = vi.fn(() => "blob:preview");
@@ -73,6 +93,7 @@ afterEach(() => {
   vi.clearAllMocks();
   useLandContext.getState().clear();
   useLandMap.setState({ pins: {}, focus: null });
+  useLand.getState().clear();
   localStorage.clear();
   if (originalCreate) Object.defineProperty(URL, "createObjectURL", originalCreate);
   else Reflect.deleteProperty(URL, "createObjectURL");
@@ -356,8 +377,8 @@ describe("lining up a historical map", () => {
     add(600, 400, -77.045, 38.886);
     add(0, 400, -77.055, 38.886);
   }
-  async function mountEditor() {
-    const view = wrap(<RecordsAlignment evidence={sheet} />);
+  async function mountEditor(client?: QueryClient) {
+    const view = wrap(<RecordsAlignment evidence={sheet} />, client);
     await screen.findByRole("button", { name: "Choose a spot on the old map" });
     return view;
   }
@@ -387,13 +408,20 @@ describe("lining up a historical map", () => {
   });
 
   it("matches points, checks the fit, saves an overlay and fades it", async () => {
-    await mountEditor();
+    useLand.getState().select(land);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // The land's fog: an aligned map is dated evidence with a footprint.
+    const fog = ["land-knowledge", "pilot", land.id, 20];
+    client.setQueryData(fog, { cells: [] });
+    await mountEditor(client);
     expect(screen.getByRole("button", { name: "Check alignment" })).toBeDisabled();
     fourPoints();
     fireEvent.click(screen.getByRole("button", { name: "Check alignment" }));
     await screen.findByText("Each point left out");
+    expect(client.getQueryState(fog)?.isInvalidated).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Save and show on the land" }));
     await screen.findByRole("article", { name: "Saved alignment: Mount Vernon, WA, 1894" });
+    expect(client.getQueryState(fog)?.isInvalidated).toBe(true);
     expect(posts[0]?.body.requestKey).toBe(posts[1]?.body.requestKey);
     expect(posts[1]?.body.imageSha256).toBe(image.sha256);
     expect(useLandContext.getState().rasters.alignment).toMatchObject({
@@ -462,6 +490,57 @@ describe("lining up a historical map", () => {
     expect(scene.areas.cancelPick).toHaveBeenCalledOnce();
     expect(useLandContext.getState().pointPicker).toBeNull();
     expect(useLandContext.getState().layers["records-alignment"]).toBeUndefined();
+  });
+
+  it("on a touch screen says tap, and offers Cancel map pick rather than Escape", async () => {
+    touchScreen(true);
+    let resolve!: (point: { longitude: number; latitude: number } | null) => void;
+    scene.areas.pickGround.mockImplementation(
+      () =>
+        new Promise<{ longitude: number; latitude: number } | null>((done) => {
+          resolve = done;
+        }),
+    );
+    scene.areas.cancelPick.mockImplementation(() => resolve(null));
+    await mountEditor();
+    expect(
+      screen.getByText(/^0 of 4 matches\. Tap a spot you can find on today's map/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Type positions instead"));
+    fill("Image X", 100);
+    fill("Image Y", 150);
+    fireEvent.click(screen.getByRole("button", { name: "Pick matching map point" }));
+    expect(
+      screen.getByText("Tap the matching place on the globe, or press Cancel map pick."),
+    ).toHaveAttribute("aria-live", "polite");
+    expect(screen.queryByText(/Escape to cancel/)).not.toBeInTheDocument();
+    const cancel = screen.getByRole("button", { name: "Cancel map pick" });
+    expect(cancel).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(cancel);
+      await Promise.resolve();
+    });
+    expect(scene.areas.cancelPick).toHaveBeenCalled();
+    await waitFor(() => expect(useLandContext.getState().pointPicker).toBeNull());
+    expect(screen.queryByRole("button", { name: "Cancel map pick" })).not.toBeInTheDocument();
+    // Cancelled, not matched: no point was added.
+    expect(screen.queryByRole("list", { name: "Point matches" })).not.toBeInTheDocument();
+  });
+
+  it("with a mouse says click, and Escape cancels", async () => {
+    touchScreen(false);
+    scene.areas.pickGround.mockImplementation(() => new Promise(() => undefined));
+    await mountEditor();
+    expect(
+      screen.getByText(/^0 of 4 matches\. Click a spot you can find on today's map/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Type positions instead"));
+    fill("Image X", 100);
+    fill("Image Y", 150);
+    fireEvent.click(screen.getByRole("button", { name: "Pick matching map point" }));
+    expect(
+      screen.getByText("Now click the same spot on the map. Press Escape to cancel."),
+    ).toBeInTheDocument();
   });
 
   it("ignores a late fit after a point changes", async () => {

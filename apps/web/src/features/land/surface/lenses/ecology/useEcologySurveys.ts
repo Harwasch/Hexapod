@@ -8,6 +8,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit } from "@/state/landIdentity";
 
+import { invalidateLandDerived } from "../../../landDerived";
 import { parseSurveyCorners, parseSurveyDraft } from "../../../surveyDraft";
 import { landError } from "../../landFlow";
 
@@ -329,6 +330,8 @@ export function useSurveyDraft(land: LandArea, scope: string) {
         setCorners([]);
         useLandContext.getState().selectSurvey(result.id);
       }
+      // A dated field survey counts for the whole land: the fog over it is asked again.
+      void invalidateLandDerived(cache, land.id);
       await cache.invalidateQueries({ queryKey: ["land-surveys", scope, land.id] });
     } catch (cause) {
       if (mine === ticket.current) setError(landError(cause));

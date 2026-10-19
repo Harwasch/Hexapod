@@ -3,6 +3,7 @@ import type { components, LandMapGeometry } from "@twin/contracts";
 import { api, ApiError, unwrap } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
+import { tapOrClick } from "@/lib/pointer";
 import { useLandContext } from "@/state/landContext";
 
 import {
@@ -474,7 +475,7 @@ export function AssetsGeometryEditor({
       )}
       {picker === owner && (
         <p role="status" className="land-muted">
-          Click the map to place this vertex.{" "}
+          {tapOrClick()} the map to place this vertex.{" "}
           <button type="button" className="land-link" onClick={cancelPick}>
             Cancel map pick
           </button>

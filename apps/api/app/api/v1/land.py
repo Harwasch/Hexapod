@@ -20,6 +20,8 @@ from app.schemas.land import (
     LandRead,
     LandRevise,
 )
+from app.schemas.land_ground import LandGround
+from app.schemas.land_hydrography import LandHydrography
 from app.schemas.land_import import BoundaryImportRead
 from app.schemas.land_selection import (
     CandidateRequest,
@@ -27,7 +29,15 @@ from app.schemas.land_selection import (
     SelectionInstruction,
     SelectionInterpretation,
 )
-from app.services import land, land_import, land_selection
+from app.schemas.land_workable import WorkableGroundRead, WorkableGroundRequest
+from app.services import (
+    land,
+    land_ground,
+    land_hydrography,
+    land_import,
+    land_selection,
+    land_workable,
+)
 
 router = APIRouter(prefix="/land", tags=["land"])
 
@@ -88,6 +98,38 @@ def area_revisions(
     land_id: uuid.UUID, db: DbSession, workspace: WorkspaceDep
 ) -> list[BoundaryRevisionRead]:
     return land.revisions(db, workspace.id, land_id)
+
+
+@router.get("/{land_id}/ground", response_model=LandGround)
+def area_ground(land_id: uuid.UUID, db: DbSession, workspace: WorkspaceDep) -> LandGround:
+    """The land as mission ground: its boundary and inventory features as plannable zones."""
+    return land_ground.ground(db, workspace.id, land_id)
+
+
+@router.get("/{land_id}/hydrography", response_model=LandHydrography)
+def area_hydrography(
+    land_id: uuid.UUID, db: DbSession, workspace: WorkspaceDep, response: Response
+) -> LandHydrography:
+    """USGS NHD streams and ditches within 100 m of the land, read live and cited."""
+    # The answer is clipped to a private boundary: never let a shared cache keep it.
+    response.headers["Cache-Control"] = "private, no-store"
+    return land_hydrography.hydrography(db, workspace.id, land_id)
+
+
+@router.post("/{land_id}/workable-ground", response_model=WorkableGroundRead)
+def workable_ground(
+    land_id: uuid.UUID,
+    payload: WorkableGroundRequest,
+    db: DbSession,
+    workspace: WorkspaceDep,
+    response: Response,
+) -> WorkableGroundRead:
+    """The part of an outline on this land a ground machine class can work: less the slope
+    over its assumed limit (the land's elevation raster) and its assumed buffer around USGS
+    NHD creeks. Derived on request, never saved; what the dress rehearsal's hands ask for."""
+    # Ground clipped to a private boundary: never let a shared cache keep it.
+    response.headers["Cache-Control"] = "private, no-store"
+    return land_workable.workable_ground(db, workspace.id, land_id, payload)
 
 
 @router.delete("/{land_id}", status_code=204)

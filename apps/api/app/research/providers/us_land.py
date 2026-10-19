@@ -43,17 +43,23 @@ US_SOURCES = {
 }
 
 
-def in_us(context: SourceContext) -> bool:
-    lon, lat = context.point
+def covers_us(lon: float, lat: float) -> bool:
+    """The rough US extent the US-only sources answer for (CONUS, Alaska, Hawaii, territories)."""
     return (-180 <= lon <= -60 and 17 <= lat <= 73) or (140 <= lon <= 146 and 12 <= lat <= 22)
 
 
-def soils(context: SourceContext, client: httpx.Client) -> SourceResult:
-    spec = US_SOURCES["usda-soils"]
-    if not in_us(context):
-        return SourceResult(spec.id, "uncovered", "USDA soil mapping does not cover this location.")
-    lon, lat = context.point
+def in_us(context: SourceContext) -> bool:
+    return covers_us(*context.point)
+
+
+def soil_components_at(
+    client: httpx.Client, lon: float, lat: float, timeout: float = 25
+) -> tuple[list[dict[str, Any]], str, str]:
+    """Major soil components of the survey map unit containing one point, largest first:
+    the cleaned records, the query URL and the SQL sent. An empty list means no map unit."""
     # The only interpolated SQL values are finite geometry-derived numbers, never free text.
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        raise ValueError("Soil lookups need a finite point.")
     query = (
         "SELECT TOP 50 mu.mukey, mu.muname, c.compname, c.comppct_r, "  # noqa: S608
         "c.drainagecl, c.hydgrp, c.slope_r "
@@ -63,15 +69,16 @@ def soils(context: SourceContext, client: httpx.Client) -> SourceResult:
         "WHERE c.majcompflag='Yes' ORDER BY c.comppct_r DESC"
     )
     raw, url = fetch_json(
-        client, spec, {"query": query, "format": "JSON+COLUMNNAME"}, method="POST", encoding="json"
+        client,
+        US_SOURCES["usda-soils"],
+        {"query": query, "format": "JSON+COLUMNNAME"},
+        method="POST",
+        encoding="json",
+        timeout=timeout,
     )
     table = raw.get("Table", [])
     if not table:
-        return SourceResult(
-            spec.id,
-            "empty",
-            "No soil map-unit components were returned at the sample point. This is not a soil condition assessment.",
-        )
+        return [], url, query
     if not isinstance(table, list) or not isinstance(table[0], list):
         raise SourceError("Soil Data Access returned an unexpected table.")
     columns = [str(key).lower() for key in table[0]]
@@ -83,9 +90,20 @@ def soils(context: SourceContext, client: httpx.Client) -> SourceResult:
             number = float(value) if value is not None and value != "" else None
             row[key] = number if number is not None and math.isfinite(number) else None
         records.append(row)
+    return records, url, query
+
+
+def soils(context: SourceContext, client: httpx.Client) -> SourceResult:
+    spec = US_SOURCES["usda-soils"]
+    if not in_us(context):
+        return SourceResult(spec.id, "uncovered", "USDA soil mapping does not cover this location.")
+    lon, lat = context.point
+    records, url, query = soil_components_at(client, lon, lat)
     if not records:
         return SourceResult(
-            spec.id, "empty", "No usable mapped soil components were returned at this point."
+            spec.id,
+            "empty",
+            "No soil map-unit components were returned at the sample point. This is not a soil condition assessment.",
         )
     data = {
         "records": records,
@@ -202,3 +220,39 @@ def flood_zones(context: SourceContext, client: httpx.Client) -> SourceResult:
         [("zones", item)],
         data,
     )
+
+
+def flood_zone_at(
+    client: httpx.Client, lon: float, lat: float, timeout: float = 10
+) -> tuple[list[dict[str, Any]], str]:
+    """NFHL flood-zone attributes at one point, without geometry, and the query URL.
+
+    A point query with returnGeometry=false stays small where flood_zones() cannot: its
+    envelope query returns whole polygons, and one county-wide Zone X polygon can exceed
+    fetch_json's 2 MB cap (seen on a Central Coast parcel: 3.48 MB)."""
+    raw, url = fetch_json(
+        client,
+        US_SOURCES["fema-flood-zones"],
+        {
+            "f": "geojson",
+            "where": "1=1",
+            "geometry": f"{lon},{lat}",
+            "geometryType": "esriGeometryPoint",
+            "inSR": 4326,
+            "spatialRel": "esriSpatialRelIntersects",
+            "outFields": "FLD_AR_ID,FLD_ZONE,ZONE_SUBTY,SFHA_TF,DFIRM_ID",
+            "returnGeometry": "false",
+            "resultRecordCount": 10,
+        },
+        timeout=timeout,
+    )
+    if "error" in raw or raw.get("type") != "FeatureCollection":
+        raise SourceError("FEMA returned no valid feature collection.")
+    features = raw.get("features", [])
+    if not isinstance(features, list):
+        raise SourceError("FEMA returned no valid feature collection.")
+    return [
+        dict(feature.get("properties") or {})
+        for feature in features[:10]
+        if isinstance(feature, dict)
+    ], url

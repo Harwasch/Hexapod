@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PlanDraft } from "@twin/contracts";
 
-import { DemoMissionProvider } from "@/missions/demo";
+import { demoRanchProject } from "@/missions/demo";
 import { planFromDraft } from "@/missions/planDraft";
 import { planProgress, replanRefinement } from "@/missions/progress";
 import {
@@ -14,7 +14,7 @@ import {
   resetPlanningMetrics,
 } from "@/lib/planningMetrics";
 
-const project = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+const project = demoRanchProject();
 
 const draft: PlanDraft = {
   title: "Mow Z-14",

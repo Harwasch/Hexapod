@@ -27,6 +27,7 @@ import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import type { SiteLoad } from "@/state/sites";
+import type { Viewport } from "@/missions/framing";
 
 import { prefetchScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatRendererKind } from "./scanView/types";
@@ -269,6 +270,9 @@ function drawn(entry: ActiveSite): boolean {
   return entry.engaged || entry.far;
 }
 
+/** Where to arrive at `site` in `viewport` instead of its bookmark, or null to keep it. */
+export type ArrivalFraming = (site: Site, viewport: Viewport) => ArrivalPose | null;
+
 /** The flight `flyTo` is steering: where it is headed, and the glide carrying the camera. */
 interface SiteFlight {
   /** Which `flyTo` call this belongs to; a later call supersedes it. */
@@ -398,6 +402,8 @@ export class SiteManager {
    * has landed at the summary's pose the pill must still say why nothing loaded and offer Retry.
    */
   private flightSiteId: string | null = null;
+  /** Where a site arrives instead of its bookmark, for this window (`setArrivalFraming`). */
+  private arrivalFraming: ArrivalFraming | null = null;
   private readonly unsubscribe: (() => void)[] = [];
   private lastProximityCheck = 0;
 
@@ -765,6 +771,16 @@ export class SiteManager {
     });
   }
 
+  /**
+   * Lets the app frame a site for the window it is shown in, where one fixed bookmark cannot:
+   * the demo ranch's Overview is authored for a landscape window and crops the sides of a
+   * phone held upright (`missions/demo.ts`, demoRanchArrival). Null from `framing` keeps the
+   * site's bookmark.
+   */
+  setArrivalFraming(framing: ArrivalFraming | null): void {
+    this.arrivalFraming = framing;
+  }
+
   /** The default camera bookmark of a site, if it has any. */
   private bookmarkOf(site: Site): Site["cameraBookmarks"][number] | undefined {
     return site.cameraBookmarks.find((b) => b.isDefault) ?? site.cameraBookmarks[0];
@@ -775,6 +791,8 @@ export class SiteManager {
    * the terrain under the site at full detail, when it has been sampled (`sampleGround`).
    */
   private arrivalFor(site: Site, sampled?: number): GlidePose {
+    const framed = this.arrivalFraming?.(site, this.camera.viewport());
+    if (framed) return { ...framed };
     const bookmark = this.bookmarkOf(site);
     if (bookmark) {
       return {
@@ -845,17 +863,10 @@ export class SiteManager {
 
   /**
    * The terrain under a point at the most detailed level the terrain has there, or undefined
-   * when there is none to be had: the ellipsoid (no terrain layer), a tile that failed.
+   * when there is none to be had (CameraController.groundHeightAt).
    */
-  private async sampleGround(longitude: number, latitude: number): Promise<number | undefined> {
-    try {
-      const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
-        Cartographic.fromDegrees(longitude, latitude),
-      ]);
-      return sample && Number.isFinite(sample.height) ? sample.height : undefined;
-    } catch {
-      return undefined;
-    }
+  private sampleGround(longitude: number, latitude: number): Promise<number | undefined> {
+    return this.camera.groundHeightAt(longitude, latitude);
   }
 
   /**

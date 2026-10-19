@@ -13,7 +13,7 @@ that layer and the seam where real fleet data plugs in.
 │ Measure   │ (one at a  │   markers and zone       Selection   │ full height; the map│ │
 │ Add       │  time)     │   chips; one site pin    Inspector   │ beside it stays live│ │
 │ Settings  └────────────┘   above 50 km                        │                     │ │
-│              [ Blackrock Mesa  Splat · Mesh · Points ] [ Load ]└─────────────────────┘ │
+│              [ Cesium Gaussian splat demo  Splat · Mesh ]      └─────────────────────┘ │
 └ Fleet: 4 working · 2 need attention │ Agent: <task> +4 tasks ⌃          ◎ ⌂ │ Data ┘
 ```
 
@@ -29,7 +29,13 @@ labelled tools above the bar.
 - **Site switcher** (`features/mission/ProjectCard`) names the site — one name per site,
   its project's when it has one (`features/sites/siteNames.ts`, `docs/GLOSSARY.md`) — and
   leaves room beside the name for a status chip. Its menu is where you change where you are:
-  every catalog site (fly there; the one you are at is marked), the current site's saved
+  every catalog site (fly there; the one you are at is marked) but developer fixtures — the
+  synthetic Living Survey tree and audit or probe records, known by their slugs
+  (`synthetic-tree`, `audit-…`, `probe-…`) and never by words in a name, listed with
+  Settings › Advanced › Show developer readouts on, never a dated capture, always the site you
+  are at
+  (`features/sites/siteFixtures.ts`; the command box and the status line count the same
+  list) — the current site's saved
   views (open, save the current camera, delete; `features/bookmarks/savedViews.ts`), "Add a
   site", and links to the scan gallery and the data console. `s` opens it on its sites, `v`
   on its saved views; both are command-box actions ("Switch site", "Saved views"). Views saved
@@ -104,8 +110,9 @@ labelled tools above the bar.
   without a plan) open the plan composer described below.
 - **Command box** (`features/command-palette/CommandBox`, `⌘K` / `Ctrl+K` or `/`) is the one
   text box: it replaced the search pill, the ⌘K palette and the agent bar. Results are grouped
-  — Sites, Zones and Plans (from the project), Layers, Actions with their keys, then Places
-  (the geocoder) — and the last row is always “Ask the agent: …”, which runs the words through
+  — Sites, Saved land (by name, with the Land feature on), Zones and Plans (from the project),
+  Layers, Actions with their keys (with Land on, "Open Land" and "Outline land" among them),
+  then Places (the geocoder) — and the last row is always “Ask the agent: …”, which runs the words through
   `lib/intents.ts` (machine and zone ids, views, layers, measure, camera, site fly-to,
   geocoding, and a sentence of work to the planner; `useAgentCommand`). Enter runs the
   highlighted row, the arrows move it, Escape closes. Which row is highlighted follows the
@@ -232,7 +239,11 @@ the spot: "Use current view" takes half the viewport around the view centre (60 
 way), "Draw area" borrows the measurement tool's polygon drawing and turns the finished polygon
 into a zone (`missions/areas.ts`, ids `A-01…`). Drawn areas are kept in the browser and stored
 on the plans that cover them (`areas` on the plan record), so a plan opened on another device
-brings its ground with it. The world redraws zones whenever the store's project changes.
+brings its ground with it. Areas derived from a saved Land (fog patches, like-here patches,
+workable ground) are private and numbered apart, `A-L01…`, so a public plan's area, numbered in
+a browser that never saw them, never takes the same id on a shared project; a private mission
+stored with an id a public plan's different outline also uses gets an `A-L…` id when the lists
+are merged (`separatePrivateAreas`). The world redraws zones whenever the store's project changes.
 
 **Planning from the command box.** The command box is the one place to talk. A sentence of work
 ("3D scan this field into a splat", "mow the orchard by Friday with two mowers", or the older
@@ -289,9 +300,94 @@ active plans (a machine booked on overlapping days, a zone another plan still co
 functions in `missions/conflicts.ts`). The planner request carries the same booked windows
 plus rates learned from the work log per task family (`missions/rates.ts`), so the rules
 planner prefers free machines and estimates from what the fleet actually did, saying so in
-the assumptions. A dispatched plan's detail shows progress from the work log against where
+the assumptions. A simulated project sends no rates: its log was written at the assumed class
+rates, so nothing in it was measured. Every zone sends its outline, the simulated demo's too
+(its acres are its footprints' measured acres), and a zone with an outline is sized from path
+length under the assumed machine classes (`apps/api/app/services/machine_classes.json`), each
+labelled "(assumed)" in the draft. The rules planner takes a zone or machine by the rest of a
+name that leads with its id ("the west grassland" for "Z-14 West grassland"), and without a
+count asked for its crew is the machines whose model suits the work (the mowers to mow, the
+seed drill to seed). The crew also settles how a survey is sized: with a drone it is flown,
+and with only survey scouts it is driven at the survey rover's assumptions. Flight lines never
+go to a machine whose model says it works on the ground, so a scan in a fleet with no drone
+has no crew and says the mapping drone is not in this fleet. On the demo, "Mow the star
+thistle on the west grassland" drafts two mowers over 414 acres, about 174 machine-hours at
+2.4 acres an hour, and "Survey the Figueroa Creek draw" drafts the two scouts over its 44
+acres, about 3.7 machine-hours at the survey rover's 10 m swath and 1.5 m/s. A dispatched
+plan's detail shows progress from the work log against where
 the schedule expects it today (`missions/progress.ts`) and offers "Replan from here", which
 reopens the composer with the drift written into the goal.
+
+**Dress rehearsal.** "Rehearse" (beside Approve) plays the draft before anyone approves it:
+ghost machines labelled "SIM" drive the lanes the map draws for each zone, at 300x or 600x, and
+a hand goes up at a lane's worst point when it breaks a limit its machine class is assumed to
+keep: grade along the lane or cross-slope across it over `maxSlopePct` (read every 5 m), or a
+lane inside `creekBufferM` of a mapped creek (measured exactly, lane piece against creek piece,
+so a lane that crosses a creek between samples reads "Crosses"). Both limits are in
+`machine_classes.json` and labelled assumed. Each hand names the value, the limit and the
+source; a click on it, on the map or in the card, flies there and offers "Leave this lane out"
+(not on a followed line such as a fence), which takes that lane out of the draft's preview
+only: the approved plan still drives it, so its hands still count on the approve button, which
+reads "Approve despite N hands". The end summary counts lanes per rule out of the lanes that
+rule could read ("2 of 26 checked lanes"), says the lanes are the preview's and how far apart,
+and names a rule clear only where it was read on every lane; lanes outside the elevation grid,
+beyond where creeks were fetched (100 m around a Land, or the demo ranch outline), or an NHD
+answer cut at its record limit are said as gaps, never as clear. Machines come from the zone's
+steps; their class from the model ("Ranger 2 · mower"), else the plan's class for the zone; a
+plan with no machines (a Land's own project) gets one assumed generic machine per class, each
+in its own colour after the project's; a drone's lanes are flown but not checked. Slope comes
+from the Land's USGS 3DEP raster (labelled with the cell size it was read at), else its
+Copernicus GLO-30 (a surface model with the canopy in it), else the globe's terrain sampled over
+the lanes; creeks from the Land's USGS NHD flowlines (ephemeral ones on request), or the demo
+ranch's supplied Figueroa Creek without a Land. A click on a ghost of a project machine selects
+that machine; lanes and creeks are looked through to the zone or place beneath. The clock is
+the time to drive the drawn lanes, not the plan's machine-hours; the ground between drawn lanes,
+turns and transits are not checked, and the card says so. The planner, ground reader and panel
+load on the first "Rehearse". Code: `missions/rehearsal.ts` (pure), `missions/rehearsalClock.ts`,
+`features/mission/rehearsalGround.ts`, `dressRehearsal.ts`, `Rehearsal.tsx`,
+`cesium/RehearsalManager.ts`.
+
+On steep ground a rehearsal raises a lot of hands (Oak Bench Ranch's west grassland, mowed:
+147, one per lane and rule). The map gathers them (`missions/rehearsalClusters.ts`): hands of
+one kind within 80 m of each other or on neighbouring lanes of a zone share one marker, at
+their first hand, with a badge counting the hands raised so far; the radius doubles until at
+most 15 markers stand. A click on a marker opens its first hand in the card. The card lists
+hands by rule with their counts ("Too steep across · 65 lanes", "Too steep up or downhill ·
+55", "Inside a creek buffer · 27"), each group open to every lane; nothing is dropped from a
+count.
+
+**Work only the ground it can.** When hands go up on a Land's ground (the Land's own project,
+or the demo ranch with the seeded Oak Bench Ranch Land selected over it), the card asks the API
+what the machines could work instead (`POST /land/{id}/workable-ground`, docs/LAND_EXPLORATION.md)
+and offers it as one action with what it cuts: "−137 ac too steep, −39 ac steep edge, −13 ac
+creek buffer, −1.1 ac too small to work → 225 ac". Each zone with slope or creek hands is cut to
+the strictest class driving it, on the raster the rehearsal read slope from; the steep edge is
+the half cell (5 m) beside too-steep cells, where slope read between cells takes in the steep
+one. Hands on lanes left out of the preview count too, since the approved plan still drives
+them. The answer is cached per zone outline (a hash of all of it, so a dragged corner asks
+again) and dropped with the Land's other derived answers when its records change. Taking it
+makes the answer a private area derived from the Land ("West grassland,
+workable", attributed "Workable ground for a robotic brush mower: slope ≤ 25 % (assumed), 5 m
+clear of steeper cells, on USGS 3DEP 1/3″ DEM, published …, 15 m creek buffer (assumed) on USGS
+NHD, from West grassland (Z-14)"), puts it in the source zone's place in the plan, keeps the
+goal, machines and answers, and redrafts (`features/mission/workableGround.ts`); the card's
+ground reads "GROUND · DERIVED FROM YOUR LAND". The source zone is set aside for that card
+(`PlanComposerState.setAside`, followed through a second cut of the workable area), so a goal
+that names it ("the west grassland") does not bring all of it back. A zone with nothing left
+within the limits is not reworked: it stays whole, and the offer and the note say so. The ground
+left out is hatched on the map while the card is open (red too steep, lighter red its edge, blue
+a creek buffer, labelled "Left out: too steep · derived"; slivers are counted, not drawn), and
+the new draft is rehearsed again straight to its verdict. On Oak Bench Ranch, 414 ac and 174
+machine-hours become 223 ac and 101 h, and 147 hands become none, so the button reads "Approve
+plan"; where hands remain on the workable area, the card says why (slope hands: lanes run up to
+left-out ground between cells; creek hands: the cut had no creeks to buffer, NHD not read
+then), counts them against the reworked zone's hands before, gives hands on other ground (a
+kept fence) their own reason, and says what Approve now counts against before. A
+followed line (a fence) has no ground to leave out and keeps its hands; without a Land the card
+says "Save this ground as a Land (or open the Land it is on) to read its terrain", and without
+the Land's elevation it asks for the bare-earth analysis, each with "Open in Land". If NHD does
+not answer, the cut and the redrafted plan's ground note say the creek buffer was not applied,
+and the next rehearsal can still raise creek hands.
 
 **Quality.** `apps/web/src/missions/planDraft.ts` converts between the API draft and the
 console's `Plan`; `apps/api/app/services/planner.py` holds both planners behind one `Planner`
@@ -354,11 +450,41 @@ camera leaves it, the project does not.
 
 ## Demo data is simulated
 
-`missions/demo.ts` ships one project, **Blackrock Mesa**, attached to the public Cesium splat
-site. Every record carries `simulated: true`, the project badge says so, and nothing in the
-demo is presented as a live feed (camera feeds show "no stream"). Replace
-`DemoMissionProvider` with a provider backed by your fleet API (REST/WebSocket/MCAP) to get
-live positions; the overlays, cards, command box and status line do not change.
+`missions/demo.ts` ships one project, **Oak Bench Ranch**, attached to the demo ranch: a real
+place on California's Central Coast (oak savanna along Figueroa Creek, near Santa Ynez) whose
+outline is a demo area, not a property line. The name, machines, zones, plans and work log are
+simulated, with no affiliation with the landowner. Every record carries `simulated: true`, the
+project badge and the onboarding card say so, and nothing in the demo is presented as a live
+feed (camera feeds show "no stream"). `DemoMissionProvider` attaches it to the seeded
+`demo-ranch` site and its offline copy `builtin-demo-ranch` and to nothing else. Replace it with
+a provider backed by your fleet API (REST/WebSocket/MCAP) to get live positions; the overlays,
+cards, command box and status line do not change.
+
+**One file holds the place.** `apps/api/app/seed/demo_ranch.json` has the outline, Figueroa
+Creek (USGS NHD), the WorldCover grassland and oak patches, the simulated fence, the two machine
+bases, the camera framing and where each layer came from (credited on the site record:
+WorldCover's CC BY 4.0 requires it). Its `derived` block (zone footprints, geodesic areas, chip
+anchors, creek and fence lengths) is written by `python -m app.seed.demo_ranch --write` and never
+by hand; `tests/test_demo_ranch.py` fails when it is stale. The API seed and the web app
+(`missions/demoRanchData.ts` imports the JSON) read only this file, so every acreage is computed:
+a zone's acres are its footprint's, a plan's acres are its zones', each working machine stands on
+the coverage passes the plan preview draws, and the badge's area is the catalog site's, formatted
+as the switcher formats it. To move the ranch: edit the source half, run the build, run
+`src/__tests__/demoRanch.test.ts` (it prints a camera block to paste when the Overview no longer
+frames every zone and machine at 1440×900 and 1280×720), then `python -m app.seed` (and
+`python -m app.seed.publish --catalog-only` for the offline catalog). The seed is not part of a
+deploy: run both after one.
+
+**The arrival** is the site's authored Overview bookmark, looking north up the valley. A window
+it would crop (a phone held upright) gets a fit for its own shape instead (`demoRanchArrival`,
+`missions/framing.ts`), and the site pin's "whole site" flight (`MissionManager.flyToProject`)
+always fits the live window.
+
+The **Redmond** site (`cesium-splat-demo`, where Cesium's Gaussian-splat sample sits) is the
+3D-scan showcase, with no project of its own. Its splat (ion 4547222) is withdrawn in this
+deployment; `VITE_DEFAULT_SPLAT_ASSET_ID` or adding the asset from the ion Asset Depot brings it
+back. Until then the onboarding card's "or see a 3D scan" goes to the first site that has a
+splat.
 
 ## Design language
 

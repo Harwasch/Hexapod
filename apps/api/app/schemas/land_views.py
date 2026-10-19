@@ -25,7 +25,8 @@ class LandViewCamera(CamelModel):
 class LandViewRaster(CamelModel):
     id: uuid.UUID
     kind: Literal["raster", "archive-alignment"] = "raster"
-    band: int = Field(default=1, ge=1, le=16)
+    # Up to 30, like RasterBand.index: a six-window signature keeps five bands per window.
+    band: int = Field(default=1, ge=1, le=30)
     opacity: Finite = Field(default=0.8, ge=0, le=1)
 
 

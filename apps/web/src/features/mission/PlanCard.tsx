@@ -1,14 +1,27 @@
-import { ArrowLeft, Crosshair, PenLine, Scan } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Crosshair, LandPlot, PenLine, Scan, X } from "lucide-react";
+import { useIsPresent } from "motion/react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
 
 import { usePlannerStatus } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { planningEdited } from "@/lib/planningMetrics";
+import { tapOrClick, touchFirst } from "@/lib/pointer";
 import { areaFromMeasurement, isAreaZone, nextAreaId } from "@/missions/areas";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
-import { diffDrafts, idLabel, overlayFor } from "@/missions/planDraft";
+import { DEMO_EXAMPLES } from "@/missions/demo";
+import { DEMO_RANCH_PROJECT_ID } from "@/missions/demoRanchData";
+import { isLandZone } from "@/missions/landGround";
+import { machineClassSummary, type FlightHeight } from "@/missions/machineClasses";
+import { diffDrafts, formatMachineHours, idLabel, overlayFor } from "@/missions/planDraft";
+import {
+  goalAtDetail,
+  scoutGeometry,
+  scoutOf,
+  scoutResolution,
+  scoutZonesInOrder,
+} from "@/missions/scout";
 import type { Project, Zone } from "@/missions/types";
 import { useMeasurements } from "@/state/measurements";
 import { useMission } from "@/state/mission";
@@ -16,13 +29,21 @@ import { useUi } from "@/state/ui";
 
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
+import { approveLabel, useDressRehearsal } from "./dressRehearsal";
+import { ScoutExport } from "./ScoutExport";
 import { groundFromView, waitForGround } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
+import { useLeftOutHatch } from "./workableGround";
+
+/** The rehearsal's panel and styles load with its first "Rehearse", not with the app. */
+const RehearsalPanel = lazy(() =>
+  import("./Rehearsal").then((module) => ({ default: module.RehearsalPanel })),
+);
 
 const EXAMPLES = [
   "3D scan this field into a gaussian splat",
   "Mow the orchard by Friday with two mowers",
-  "Survey the lake shore for erosion every month",
+  "Survey the creek for erosion every month",
 ];
 
 /** How long after a corner is dropped the plan redrafts for the new outline. */
@@ -103,19 +124,24 @@ export function PlanCard({ project }: { project: Project }) {
   };
 
   // The ground's corners are on the map for as long as the card is open; a dropped corner
-  // redrafts the plan for the new outline.
-  const groundId = composer?.zoneIds.find((id) => isAreaZone({ id })) ?? null;
-  const groundZone = project.zones.find((z) => z.id === groundId) ?? null;
+  // redrafts the plan for the new outline. A saved Land's zones are records, not sketches:
+  // they are edited in Land, so they get no corners here.
+  const groundZone =
+    project.zones.find(
+      (z) => composer?.zoneIds.includes(z.id) && (isAreaZone(z) || isLandZone(z)),
+    ) ?? null;
+  const groundId = groundZone?.id ?? null;
+  const onLand = groundZone !== null && isLandZone(groundZone);
   const groundFootprint = groundZone?.footprint;
   useEffect(() => {
     if (!scene) return;
-    if (!groundId || !groundFootprint) {
+    if (!groundId || !groundFootprint || onLand) {
       scene.areas.edit(null);
       return;
     }
     if (scene.areas.editing === groundId) scene.areas.update(groundFootprint);
     else scene.areas.edit(groundId, groundFootprint);
-  }, [scene, groundId, groundFootprint]);
+  }, [scene, groundId, groundFootprint, onLand]);
   useEffect(() => {
     if (!scene) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -135,6 +161,8 @@ export function PlanCard({ project }: { project: Project }) {
   // Only the handles leave with the card; a pending click is the flow's to cancel (React's
   // development double-mount would otherwise cancel it at once).
   useEffect(() => () => scene?.areas.edit(null), [scene]);
+  // Ground a redraft onto workable ground left out stays hatched while the card is open.
+  useLeftOutHatch(project);
 
   if (!composer) return null;
   const status = composer.status;
@@ -181,7 +209,7 @@ export function PlanCard({ project }: { project: Project }) {
               defaults, and you change what you disagree with.
             </p>
             <div className="mc-tags" aria-label="Examples">
-              {EXAMPLES.map((example) => (
+              {(project.id === DEMO_RANCH_PROJECT_ID ? DEMO_EXAMPLES : EXAMPLES).map((example) => (
                 <button
                   key={example}
                   type="button"
@@ -200,7 +228,7 @@ export function PlanCard({ project }: { project: Project }) {
                   onClick={pickAgain}
                   data-testid="ground-pick"
                 >
-                  <Crosshair size={13} aria-hidden="true" /> Click the ground on the map
+                  <Crosshair size={13} aria-hidden="true" /> {tapOrClick()} the ground on the map
                 </button>
               </div>
             )}
@@ -209,10 +237,10 @@ export function PlanCard({ project }: { project: Project }) {
         {status === "awaiting-ground" && (
           <div className="mc-prompt mc-prompt--live" data-testid="plan-awaiting-ground">
             <Crosshair size={22} aria-hidden="true" className="mc-prompt__icon" />
-            <div className="mc-prompt__title">Click the ground you mean on the map.</div>
+            <div className="mc-prompt__title">{tapOrClick()} the ground you mean on the map.</div>
             <p className="mc-muted">
-              I'll outline the field, pond or lot under your click and draft “{composer.goal}”. Esc
-              to cancel.
+              I'll outline the field, pond or lot under your {tapOrClick(true)} and draft “
+              {composer.goal}”.{touchFirst() ? "" : " Esc to cancel."}
             </p>
             <div className="mc-actions mc-actions--start">
               <button
@@ -231,6 +259,14 @@ export function PlanCard({ project }: { project: Project }) {
               >
                 <Scan size={12} aria-hidden="true" /> Use what's in view
               </button>
+              <button
+                type="button"
+                className="mc-btn mc-btn--sm"
+                onClick={() => scene?.areas.cancelPick()}
+                data-testid="ground-cancel"
+              >
+                <X size={12} aria-hidden="true" /> Cancel
+              </button>
             </div>
           </div>
         )}
@@ -241,7 +277,16 @@ export function PlanCard({ project }: { project: Project }) {
             <p className="mc-muted">Map data first, then the imagery if nothing is mapped.</p>
           </div>
         )}
-        {groundZone && status !== "awaiting-ground" && (
+        {groundZone && onLand && status !== "awaiting-ground" && (
+          <LandGroundSection
+            zone={groundZone}
+            count={composer.zoneIds.length}
+            note={composer.ground?.note ?? null}
+            onPickAgain={pickAgain}
+            disabled={!scene || status === "drafting"}
+          />
+        )}
+        {groundZone && !onLand && status !== "awaiting-ground" && (
           <section className="mc-ground" data-testid="plan-ground">
             <span className="mc-eyebrow">GROUND</span>
             <div className="mc-ground__row">
@@ -302,6 +347,133 @@ export function PlanCard({ project }: { project: Project }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** How far a path runs, in the units the planner reports. */
+function distance(metres: number): string {
+  return metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.round(metres)} m`;
+}
+
+/**
+ * The ground when it is a saved Land's: what it is and where it came from. It is changed in
+ * Land (the outline, the inventory), so the card offers to go there rather than drag corners.
+ * Ground derived from the Land (workable ground, a Show Once area) says so: it is not the
+ * saved record.
+ */
+function LandGroundSection({
+  zone,
+  count,
+  note,
+  onPickAgain,
+  disabled,
+}: {
+  zone: Zone;
+  count: number;
+  note: string | null;
+  onPickAgain: () => void;
+  disabled: boolean;
+}) {
+  const land = zone.land;
+  const size =
+    land?.line && land.lengthM
+      ? `${distance(land.lengthM)} line`
+      : `${zone.acres.toLocaleString()} ac`;
+  return (
+    <section className="mc-ground" data-testid="plan-ground" data-ground="land">
+      <span className="mc-eyebrow">
+        {land?.kind === "derived" ? "GROUND · DERIVED FROM YOUR LAND" : "GROUND · YOUR SAVED LAND"}
+      </span>
+      <div className="mc-ground__row">
+        <span className="mc-ground__name">
+          <span className={`mc-dot mc-dot--${zone.tone}`} aria-hidden="true" />
+          {zone.name}
+          <span className="mc-muted">
+            {" "}
+            · {size}
+            {count > 1 ? ` · and ${count - 1} more` : ""}
+          </span>
+        </span>
+        <span className="mc-row" style={{ gap: "0.3rem" }}>
+          <button
+            type="button"
+            className="mc-btn mc-btn--sm"
+            onClick={onPickAgain}
+            disabled={disabled}
+            data-testid="ground-pick-again"
+          >
+            <Crosshair size={12} aria-hidden="true" /> Pick again
+          </button>
+          <button
+            type="button"
+            className="mc-btn mc-btn--sm"
+            onClick={() => useUi.getState().setPanel("land")}
+            data-testid="ground-open-land"
+          >
+            <LandPlot size={12} aria-hidden="true" /> Open in Land
+          </button>
+        </span>
+      </div>
+      <p className="mc-muted mc-ground__note">{note ?? zone.note}</p>
+      {note && zone.attribution && note !== zone.attribution && (
+        <p className="mc-muted mc-ground__note">{zone.attribution}</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * How the hours were sized from the outlines: per zone, the path, its passes and spacing, and
+ * the hours, with the assumed machine class it rests on (`missions/machineClasses.ts`, the
+ * same table the planner used).
+ */
+function PathList({ draft, project }: { draft: PlanDraft; project: Project }) {
+  const coverage = draft.coverage ?? [];
+  if (coverage.length === 0) return null;
+  const classes = [...new Set(coverage.map((c) => c.machineClass))];
+  // The heights the planner flew each drone zone at, so the note states the same assumption
+  // the rows' spacing came from. A scout area is flown at its capture's height above take-off
+  // (the planner sizes it from the capture it carries), not above the ground under it.
+  const flights = coverage.flatMap((c): FlightHeight[] =>
+    c.machineClass === "drone" && c.altitudeM != null
+      ? [
+          {
+            altitudeM: c.altitudeM,
+            above: project.zones.find((z) => z.id === c.zoneId)?.scout ? "take-off" : "ground",
+          },
+        ]
+      : [],
+  );
+  // A flight with no crew in a project that has machines: none of them flies (the planner
+  // never hands a mower or a scout rover flight lines), so the drone is not in this fleet.
+  const noFlyer =
+    classes.includes("drone") && draft.machineIds.length === 0 && project.machines.length > 0;
+  return (
+    <section data-testid="plan-path">
+      <span className="mc-eyebrow">PATH</span>
+      <ul className="mc-list mc-list--plain mc-path">
+        {coverage.map((c) => {
+          const zone = project.zones.find((z) => z.id === c.zoneId);
+          const shape =
+            c.kind === "line"
+              ? `${distance(c.lengthM)} along the line`
+              : `${distance(c.lengthM)} · ${c.passes.toLocaleString()} passes${c.spacingM ? ` ${Math.round(c.spacingM)} m apart${c.capped ? " (widened)" : ""}` : ""}`;
+          return (
+            <li key={c.zoneId} title={c.basis}>
+              <span className="mc-path__zone">{zone ? idLabel(zone.id, zone.name) : c.zoneId}</span>
+              <span className="mc-mono">
+                {shape} · {formatMachineHours(c.hours)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mc-muted mc-path__note">
+        Computed from the outline; speeds assumed.{" "}
+        {classes.map((id) => machineClassSummary(id, id === "drone" ? flights : [])).join(". ")}.
+        {noFlyer && " No machine in this fleet flies, so the drone has no crew yet."}
+      </p>
+    </section>
   );
 }
 
@@ -448,11 +620,16 @@ function DraftReview({
     },
     project.plans,
   );
+  // The drawer animates out when the view changes (another tab, a tool panel), and the card
+  // unmounts only when that ends, which a busy main thread (software GL, a slow phone) can hold
+  // off for seconds. The draft and its rehearsal leave the map as the card starts to go.
+  const present = useIsPresent();
   // The draft is on the map as soon as it exists; the camera fits the ground when it changes.
   const zoneKey = draft.zoneIds.join(",");
   const overlayKey = `${zoneKey}|${(draft.steps ?? []).map((s) => `${s.zoneId}:${s.machineIds.join("+")}`).join(";")}`;
   const flownFor = useRef<string | null>(null);
   useEffect(() => {
+    if (!present) return;
     if (flownFor.current === zoneKey) {
       scene?.mission.showPlan(
         overlayFor({ zoneIds: draft.zoneIds, machineIds: draft.machineIds, steps: draft.steps }),
@@ -463,7 +640,14 @@ function DraftReview({
     }
     return () => clearPlanOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw only when the scope changes
-  }, [overlayKey, showPlanOnMap, clearPlanOverlay]);
+  }, [overlayKey, present, showPlanOnMap, clearPlanOverlay]);
+  // The dress rehearsal runs this draft's lanes; a change to what it drives stops it.
+  const rehearsalKey = `${overlayKey}|${(draft.coverage ?? []).map((c) => `${c.zoneId}:${c.machineClass}`).join(";")}`;
+  const rehearsal = useDressRehearsal(draft, project, rehearsalKey);
+  const stopRehearsal = rehearsal.stop;
+  useEffect(() => {
+    if (!present) stopRehearsal();
+  }, [present, stopRehearsal]);
   const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
   const zoneName = (id: string | null | undefined) =>
     id ? (project.zones.find((z) => z.id === id)?.name ?? id) : null;
@@ -488,12 +672,19 @@ function DraftReview({
         }}
       />
       <div className="mc-stats mc-stats--tight">
+        {draft.estimates.acres < 0.5 && (draft.estimates.pathM ?? 0) > 0 ? (
+          <div className="mc-stat">
+            <div className="mc-stat__value">{((draft.estimates.pathM ?? 0) / 1000).toFixed(1)}</div>
+            <div className="mc-stat__label">Path km</div>
+          </div>
+        ) : (
+          <div className="mc-stat">
+            <div className="mc-stat__value">{Math.round(draft.estimates.acres)}</div>
+            <div className="mc-stat__label">Acres</div>
+          </div>
+        )}
         <div className="mc-stat">
-          <div className="mc-stat__value">{Math.round(draft.estimates.acres)}</div>
-          <div className="mc-stat__label">Acres</div>
-        </div>
-        <div className="mc-stat">
-          <div className="mc-stat__value">{Math.round(draft.estimates.machineHours)} h</div>
+          <div className="mc-stat__value">{formatMachineHours(draft.estimates.machineHours)}</div>
           <div className="mc-stat__label">Machine-hours</div>
         </div>
         <div className="mc-stat">
@@ -510,6 +701,29 @@ function DraftReview({
           {draft.endDate ? ` → ${draft.endDate}` : " → ongoing"}
         </span>
       </div>
+      <PathList draft={draft} project={project} />
+      <ScoutExport
+        zones={scoutZonesInOrder(
+          project.zones,
+          overlayFor({ zoneIds: draft.zoneIds, machineIds: draft.machineIds, steps: draft.steps }),
+        )}
+        onAltitude={(altitudeM) => {
+          // The patches fly at the new height: the map's lanes and the planner's hours follow,
+          // and so does the detail the goal and its answer name (the plan states it).
+          let gsdM: number | null = null;
+          for (const zone of project.zones) {
+            if (!zone.scout || !draft.zoneIds.includes(zone.id)) continue;
+            const scout = { ...zone.scout, altitudeM };
+            gsdM ??= scoutGeometry(scoutOf(scout)).gsdM;
+            useMission.getState().addArea(project.id, { ...zone, scout });
+          }
+          void startPlanDraft(gsdM === null ? goal : goalAtDetail(goal, gsdM), {
+            zoneIds: composer?.zoneIds ?? draft.zoneIds,
+            reshaped: true,
+            ...(gsdM === null ? {} : { answers: { resolution: scoutResolution(gsdM) } }),
+          });
+        }}
+      />
       <Assumptions
         items={assumed(draft.clarifications ?? [], composer?.asked ?? {}, composer?.answers ?? {})}
         answers={composer?.answers ?? {}}
@@ -536,7 +750,12 @@ function DraftReview({
       {(draft.steps ?? []).length > 0 && (
         <section>
           <span className="mc-eyebrow">SCHEDULE</span>
-          <PlanSchedule steps={draft.steps ?? []} startDate={draft.startDate} colorFor={colorFor} />
+          <PlanSchedule
+            steps={draft.steps ?? []}
+            startDate={draft.startDate}
+            colorFor={colorFor}
+            zoneLabel={(id) => zoneName(id) ?? id}
+          />
         </section>
       )}
       <section>
@@ -594,9 +813,28 @@ function DraftReview({
           </ul>
         </details>
       )}
+      {rehearsal.status !== "idle" && (
+        <Suspense fallback={null}>
+          <RehearsalPanel run={rehearsal} />
+        </Suspense>
+      )}
       <div className="mc-actions">
         <button type="button" className="mc-btn" onClick={() => showPlanOnMap(draft)}>
           Fit on map
+        </button>
+        <button
+          type="button"
+          className="mc-btn"
+          onClick={rehearsal.start}
+          disabled={!scene || drafting || rehearsal.status === "loading"}
+          data-testid="plan-rehearse"
+          title="Simulated machines drive the drawn lanes and raise a hand where a lane breaks a limit their class is assumed to keep"
+        >
+          {rehearsal.status === "loading"
+            ? "Reading the ground…"
+            : rehearsal.status === "ready"
+              ? "Rehearse again"
+              : "Rehearse"}
         </button>
         <button
           type="button"
@@ -605,7 +843,7 @@ function DraftReview({
           disabled={draft.zoneIds.length === 0 || approving || drafting}
           data-testid="plan-approve"
         >
-          {approving ? "Saving…" : conflicts.length ? "Approve despite conflicts" : "Approve plan"}
+          {approving ? "Saving…" : approveLabel(conflicts.length, rehearsal.raised)}
         </button>
       </div>
       <p className="mc-muted mc-review__hint">

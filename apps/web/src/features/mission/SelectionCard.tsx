@@ -5,6 +5,7 @@ import { GlassPanel, GlassProgress } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
 import { useMission } from "@/state/mission";
+import { useUi } from "@/state/ui";
 import { objectSelected, useSceneSelect } from "@/state/sceneSelect";
 
 import { ObjectCard } from "../sites/ObjectCard";
@@ -133,7 +134,9 @@ export function SelectionCard() {
                   </div>
                 </div>
                 <div className="mc-card__meta">
-                  {zone.task} · {zone.machines}
+                  {zone.land
+                    ? `${zone.land.kind === "boundary" ? "Saved land" : zone.land.kind === "derived" ? "Derived from your saved land" : `Mapped ${zone.short}`} · private to your workspace`
+                    : `${zone.task} · ${zone.machines}`}
                 </div>
                 <GlassProgress
                   className={`mc-progress mc-progress--${zone.tone}`}
@@ -142,6 +145,12 @@ export function SelectionCard() {
                   valueText={`${zone.progressPct}%`}
                 />
                 <div className="mc-card__note">{zone.note}</div>
+                {/* A Land's zones carry their source in both: say it once. */}
+                {zone.attribution && zone.attribution !== zone.note && (
+                  <div className="mc-card__note mc-muted" data-testid="zone-attribution">
+                    {zone.attribution}
+                  </div>
+                )}
                 <div className="mc-actions">
                   <button
                     type="button"
@@ -156,20 +165,30 @@ export function SelectionCard() {
                       ? "Open plan"
                       : "Plan here"}
                   </button>
-                  <button
-                    type="button"
-                    className="mc-btn"
-                    onClick={() => {
-                      appendLog("you", `Reassign ${zone.id}`);
-                      appendLog(
-                        "agent",
-                        `I can move ${zone.machines} off ${zone.name} — tell me which machine should take it and I'll re-sequence the passes.`,
-                      );
-                      setStreamOpen(true);
-                    }}
-                  >
-                    Reassign
-                  </button>
+                  {zone.land ? (
+                    <button
+                      type="button"
+                      className="mc-btn"
+                      onClick={() => useUi.getState().setPanel("land")}
+                    >
+                      Open in Land
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="mc-btn"
+                      onClick={() => {
+                        appendLog("you", `Reassign ${zone.id}`);
+                        appendLog(
+                          "agent",
+                          `I can move ${zone.machines} off ${zone.name} — tell me which machine should take it and I'll re-sequence the passes.`,
+                        );
+                        setStreamOpen(true);
+                      }}
+                    >
+                      Reassign
+                    </button>
+                  )}
                 </div>
               </>
             )}

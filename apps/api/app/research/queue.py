@@ -5,12 +5,20 @@ from copy import deepcopy
 from datetime import timedelta
 from typing import Any, Literal
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.models.land_raster import LandRaster
 from app.models.land_solar import LandSolar
-from app.models.research import Evidence, Finding, ResearchArtifact, ResearchMessage, ResearchRun
+from app.models.research import (
+    Evidence,
+    Finding,
+    ResearchArtifact,
+    ResearchMessage,
+    ResearchRun,
+    ResearchWorkerPresence,
+)
 from app.research.calculations import METHOD, calculate
 from app.research.locations import geometry_location, media_location, union_location
 from app.schemas.calculations import CalculationOutput
@@ -29,9 +37,62 @@ from app.schemas.research import (
 from app.services.errors import InvalidInputError
 from app.services.research import event, now
 
+#: How often a worker records that it is alive, idle or busy (ResearchWorker._check_in).
+CHECK_IN_EVERY_S = 15
+#: A worker seen within this long, and not stopped, is "online" in /research/status: three
+#: missed check-ins, so one slow database round trip never reads as an outage.
+ONLINE_WITHIN_S = 45
+
 
 class LeaseLostError(Exception):
     """The result belongs to a cancelled or superseded attempt and cannot be published."""
+
+
+def check_in(
+    db: Session,
+    worker_id: uuid.UUID,
+    *,
+    hostname: str,
+    pid: int,
+    current_run_id: uuid.UUID | None,
+    stopping: bool = False,
+) -> None:
+    """Record that this worker is alive (or, with `stopping`, that it has stopped).
+
+    Times come from the database clock, as every research age does (services.research.now),
+    so the API and the worker never disagree about how long ago "now" was."""
+    clock = func.clock_timestamp()
+    statement = insert(ResearchWorkerPresence).values(
+        id=worker_id,
+        hostname=hostname[:255],
+        pid=pid,
+        started_at=clock,
+        last_seen_at=clock,
+        current_run_id=current_run_id,
+        stopped_at=clock if stopping else None,
+    )
+    db.execute(
+        statement.on_conflict_do_update(
+            index_elements=[ResearchWorkerPresence.id],
+            set_={
+                "last_seen_at": statement.excluded.last_seen_at,
+                "current_run_id": statement.excluded.current_run_id,
+                "stopped_at": statement.excluded.stopped_at,
+            },
+        )
+    )
+    db.commit()
+
+
+def prune_presence(db: Session, older_than: timedelta = timedelta(days=7)) -> None:
+    """Forget workers not seen for a while, so restarts do not pile up rows. A worker calls
+    this once at start-up, just before its own first check-in."""
+    db.execute(
+        delete(ResearchWorkerPresence).where(
+            ResearchWorkerPresence.last_seen_at < now(db) - older_than
+        )
+    )
+    db.commit()
 
 
 def claim(

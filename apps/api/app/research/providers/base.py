@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -52,19 +53,26 @@ class SourceContext:
 
 
 class SourceError(Exception):
-    pass
+    # too_large: the answer passed fetch_json's size limit, so asking again gets the same one.
+    def __init__(self, message: str = "", *, too_large: bool = False) -> None:
+        super().__init__(message)
+        self.too_large = too_large
 
 
 def fetch_json(
     client: httpx.Client,
     spec: SourceSpec,
-    params: dict[str, str | int | float | bool],
+    params: Mapping[str, Any],
     *,
     method: Literal["GET", "POST"] = "GET",
     encoding: Literal["form", "json"] = "form",
+    timeout: float = 25,
 ) -> tuple[dict[str, Any], str]:
     # Only registry endpoints are fetched. Redirects cannot turn a trusted endpoint
     # into an arbitrary URL, and response size is bounded even without Content-Length.
+    # Point lookups (app/research/place.py) pass a shorter timeout: someone is waiting.
+    # Query strings and forms take flat values; a JSON body may nest (a STAC search's
+    # cql2 filter, providers/dated_imagery.py).
     with client.stream(
         method,
         spec.endpoint,
@@ -72,14 +80,16 @@ def fetch_json(
         data=params if method == "POST" and encoding == "form" else None,
         json=params if method == "POST" and encoding == "json" else None,
         follow_redirects=False,
-        timeout=25,
+        timeout=timeout,
     ) as response:
         response.raise_for_status()
         chunks = bytearray()
         for chunk in response.iter_bytes():
             chunks.extend(chunk)
             if len(chunks) > 2_000_000:
-                raise SourceError("The provider response exceeded the analysis size limit.")
+                raise SourceError(
+                    "The provider response exceeded the analysis size limit.", too_large=True
+                )
         result = json.loads(chunks)
         if not isinstance(result, dict):
             raise SourceError("The provider returned an unexpected response.")

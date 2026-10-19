@@ -17,14 +17,26 @@ export function isAreaZone(zone: Pick<Zone, "id">): boolean {
   return zone.id.startsWith(AREA_PREFIX);
 }
 
-/** A-01, A-02 … past the highest number in use. */
-export function nextAreaId(existing: readonly Pick<Zone, "id">[]): string {
+/**
+ * Areas derived from a saved Land (fog patches, like-here patches, workable ground) are
+ * private: a mission on a shared project (the demo, a site) stores them where only its
+ * workspace reads them. They are numbered on their own, A-L01, A-L02 …, so a public plan's
+ * area, numbered in a browser that never saw them, can never take the same id.
+ */
+export const LAND_AREA_PREFIX = "A-L";
+
+/** A-01, A-02 … (A-L01 … with `LAND_AREA_PREFIX`) past the highest number in use. */
+export function nextAreaId(
+  existing: readonly Pick<Zone, "id">[],
+  prefix: typeof AREA_PREFIX | typeof LAND_AREA_PREFIX = AREA_PREFIX,
+): string {
+  const numbered = new RegExp(`^${prefix}(\\d+)$`);
   let max = 0;
   for (const zone of existing) {
-    const match = /^A-(\d+)$/.exec(zone.id);
+    const match = numbered.exec(zone.id);
     if (match) max = Math.max(max, Number(match[1]));
   }
-  return `${AREA_PREFIX}${String(max + 1).padStart(2, "0")}`;
+  return `${prefix}${String(max + 1).padStart(2, "0")}`;
 }
 
 export function zoneFromFootprint(id: string, name: string, footprint: Footprint): Zone {

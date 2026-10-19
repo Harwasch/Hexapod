@@ -28,6 +28,7 @@ import { LivingSurveyManager } from "./LivingSurveyManager";
 import { MeasurementManager } from "./MeasurementManager";
 import { MissionManager } from "./MissionManager";
 import { PerformanceManager } from "./PerformanceManager";
+import { RehearsalManager } from "./RehearsalManager";
 import { FallbackGeocoder, IonGeocoder, NominatimGeocoder } from "./providers/geocoder";
 import { ScaleMeasure } from "./ScaleMeasure";
 import { SelectionManager } from "./SelectionManager";
@@ -46,8 +47,10 @@ import {
 } from "./scanView/ScanRendererHost";
 import { SceneSelectController } from "./sceneSelect/SceneSelectController";
 import { SkinPokeController } from "./skinPoke";
+import { TimeLantern } from "./TimeLantern";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Geocoder, SceneEvents } from "./types";
+import { WorldShader } from "./worldShader";
 import type { TokenState } from "@/state/viewer";
 
 const log = createLogger("scene");
@@ -95,6 +98,10 @@ export class CesiumSceneManager {
   readonly camera: CameraController;
   readonly clipping: ClippingManager;
   readonly layers: LayerManager;
+  /** The photorealistic world's one custom shader (worldShader.ts): the lantern's lens today. */
+  readonly worldShader: WorldShader;
+  /** Dated imagery under the cursor, through the photorealistic world (TimeLantern.ts). */
+  readonly lantern: TimeLantern;
   readonly performance: PerformanceManager;
   readonly splatGate: SplatMotionGate;
   readonly collider: SplatCollider;
@@ -114,6 +121,8 @@ export class CesiumSceneManager {
   /** Two points on a scan, for the Set real size tool (features/inspector/RealSize.tsx). */
   readonly scaleMeasure: ScaleMeasure;
   readonly mission: MissionManager;
+  /** A draft plan's dress rehearsal: ghost machines on its lanes (RehearsalManager.ts). */
+  readonly rehearsal: RehearsalManager;
   readonly areas: AreaEditor;
   readonly explore: ExploreController;
   readonly keyboard: KeyboardNavigator;
@@ -203,6 +212,8 @@ export class CesiumSceneManager {
     this.camera = new CameraController(this.viewer, this.events);
     this.clipping = new ClippingManager(scene);
     this.layers = new LayerManager(this.viewer, this.events, this.clipping);
+    this.worldShader = new WorldShader(scene);
+    this.layers.bindWorldShader(this.worldShader);
     this.performance = new PerformanceManager(this.viewer, this.events);
     // The interface first, then the camera, then streaming (uiActivity.ts).
     this.uiActivity = new UiActivity(this.viewer.canvas);
@@ -272,6 +283,7 @@ export class CesiumSceneManager {
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.measurement.setCollider(this.collider);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
+    this.rehearsal = new RehearsalManager(this.viewer, this.mission);
     this.areas = new AreaEditor(this.viewer, this.events);
     // The map menu (right-click, Ctrl+click, a long press) waits while a tool owns the pointer:
     // measuring, exploring and picking ground switch selection off, an area's corners take the
@@ -300,6 +312,7 @@ export class CesiumSceneManager {
     this.unsubscribe.push(
       this.events.on("explore", (on) => {
         this.exploring = on;
+        if (on) this.lantern.setMode("off");
         this.selection.setEnabled(this.selectionWanted());
         this.updateScanView();
       }),
@@ -322,6 +335,15 @@ export class CesiumSceneManager {
       this.sites.scalableTileset(siteId),
     );
     this.keyboard = new KeyboardNavigator(this.viewer, this.camera);
+    // After the object brush, whose Alt+wheel comes first (both listen on window, capturing).
+    this.lantern = new TimeLantern(
+      this.viewer,
+      this.events,
+      this.clipping,
+      this.layers,
+      this.worldShader,
+      this.camera,
+    );
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
       this.clipping.setEnabled(enabled),
     );
@@ -556,6 +578,7 @@ export class CesiumSceneManager {
     this.selection.setEnabled(this.selectionWanted());
     if (mode !== "measure") this.measurement.stop();
     if (mode !== "explore") this.explore.exit();
+    else this.lantern.setMode("off");
   }
 
   get isDestroyed(): boolean {
@@ -571,6 +594,7 @@ export class CesiumSceneManager {
     this.explore.destroy();
     this.scaleMeasure.destroy();
     this.measurement.destroy();
+    this.rehearsal.destroy();
     this.mission.destroy();
     this.areas.destroy();
     this.selection.destroy();
@@ -586,6 +610,7 @@ export class CesiumSceneManager {
     this.uiActivity.destroy();
     this.splatGate.destroy();
     this.performance.destroy();
+    this.lantern.destroy();
     this.layers.destroy();
     this.clipping.destroy();
     this.camera.destroy();

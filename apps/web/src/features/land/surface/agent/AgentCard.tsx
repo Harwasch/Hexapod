@@ -12,6 +12,8 @@ import { useLandContext } from "@/state/landContext";
 import { useLandCanEdit, useLandScope } from "@/state/landIdentity";
 
 import { EvidenceView } from "../../EvidenceView";
+import { AGENT_NOT_SET_UP } from "../../researchAvailability";
+import { ResearchWorkerNotice } from "../../ResearchWorkerNotice";
 import {
   cancelResearch,
   setFindingDisposition,
@@ -234,8 +236,12 @@ export function AgentCard({
     />
   );
   const limits = <ResearchLimits budget={ask.budget} onChange={ask.setBudget} />;
-  const modelConfigured = status.data?.modelConfigured;
+  // Undefined while the status loads; null when it could not be loaded.
+  const modelConfigured = status.data?.modelConfigured ?? (status.isError ? null : undefined);
   const inline = variant === "inline";
+  // On a phone the agent shares the sheet with the land chip and the lens card. Until it has
+  // something to show, it folds to its ask row so the land stays in sight above the sheet.
+  const folded = inline && !shownId;
 
   return (
     <GlassPanel
@@ -249,7 +255,7 @@ export function AgentCard({
       aria-label="Agent"
       data-testid="land-agent"
     >
-      <div className="land-eyebrow-row">
+      <div className="land-eyebrow-row" hidden={folded}>
         <span className="land-agent__who">
           <span className="land-agent__pulse" aria-hidden="true" />
           Agent
@@ -265,7 +271,7 @@ export function AgentCard({
                 .catch((cause: unknown) => setError(describeError(cause)))
             }
           >
-            Cancel
+            {run.status === "queued" ? "Cancel queued request" : "Cancel"}
           </GlassButton>
         ) : shownId ? (
           <GlassButton
@@ -309,6 +315,10 @@ export function AgentCard({
                   >
                     <i style={{ width: `${runProgress(run, events, now) * 100}%` }} />
                   </div>
+                  <ResearchWorkerNotice
+                    run={run ?? undefined}
+                    className="land-muted land-agent__notice"
+                  />
                   <AgentSteps steps={steps} evidence={evidence} limit={inline ? 2 : undefined} />
                   <p className="land-visually-hidden" aria-live="polite">
                     {active?.text ?? "Working"}
@@ -454,13 +464,19 @@ export function AgentCard({
         </>
       ) : (
         <>
-          <AgentAskForm
-            land={land}
-            ask={ask}
-            placeholder="Ask about this land…"
-            modelConfigured={modelConfigured}
-            onViewPending={(id) => choose(id)}
-          />
+          {folded && modelConfigured === false ? (
+            <p className="land-muted" data-testid="land-agent-blocked">
+              {AGENT_NOT_SET_UP}
+            </p>
+          ) : (
+            <AgentAskForm
+              land={land}
+              ask={ask}
+              placeholder="Ask about this land…"
+              modelConfigured={modelConfigured}
+              onViewPending={(id) => choose(id)}
+            />
+          )}
           {list.isError && (
             <p className="land-alert" role="alert">
               Earlier questions couldn't be loaded.{" "}
@@ -469,7 +485,7 @@ export function AgentCard({
               </button>
             </p>
           )}
-          {(agentList.length > 0 || canEdit) && (
+          {(agentList.length > 0 || (canEdit && !folded)) && (
             <details className="land-details">
               <summary>
                 {agentList.length ? `Earlier questions · ${agentList.length}` : "Research limits"}

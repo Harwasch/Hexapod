@@ -9,6 +9,8 @@ import type { ToastTone } from "@/state/toasts";
 import type { MapMenuAt } from "@/state/ui";
 import type { CameraPose, PerformanceSnapshot, TokenState, ViewerStatus } from "@/state/viewer";
 
+import type { LanternFrame } from "./lanternTypes";
+
 export type { LoadState };
 
 /** Events the Cesium subsystem raises; a bridge component mirrors them into React stores. */
@@ -45,6 +47,8 @@ export interface SceneEvents extends Record<string, unknown> {
   "land-feature-select": { id: string };
   "land-research-feature-select": { layerId: string; featureId: string };
   "mission-select": { kind: "zone" | "machine"; id: string };
+  /** A click on a dress rehearsal's raised hand: the hand's id (`RaisedHand.id`). */
+  "rehearsal-hand": { id: string };
   /** The operator reshaped an area on the map; the store takes the new outline. */
   "area-edit": { zoneId: string; footprint: Footprint };
   /** True while a handle is held (the camera is paused for the duration). */
@@ -62,6 +66,15 @@ export interface SceneEvents extends Record<string, unknown> {
    */
   living: LivingSurveyStatus;
   "area-candidate-pick": string;
+  /**
+   * A plain click on empty ground (no feature, entity or scan object under it), raised only
+   * while a consumer asked for them (`SelectionManager.wantGroundTaps`: the fog's cell card);
+   * on a mission zone's fill too, where the consumer claims the ground. x and y are CSS px
+   * from the canvas's top left.
+   */
+  "ground-tap": { longitude: number; latitude: number; x: number; y: number };
+  /** The Time Lantern's lens and what it shows (cesium/TimeLantern.ts, lanternTypes.ts). */
+  lantern: LanternFrame;
 }
 
 export interface GeocodeResult {

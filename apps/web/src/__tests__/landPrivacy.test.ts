@@ -1,0 +1,559 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { PlanDraft, PlanRecord } from "@twin/contracts";
+
+import type * as Queries from "@/api/queries";
+import type * as LandIdentity from "@/state/landIdentity";
+
+import { anywhereProject } from "@/missions/anywhere";
+import { bookedWindows } from "@/missions/conflicts";
+import { demoRanchProject } from "@/missions/demo";
+import { boundaryZoneOf, landProject, landZones } from "@/missions/landGround";
+import {
+  buildDraftRequest,
+  planFromRecord,
+  PRIVATE_PLAN_TITLE,
+  separatePrivateAreas,
+  zonesFromRecord,
+} from "@/missions/planDraft";
+import { useLand } from "@/state/land";
+import { migrateMissionStorage, missionLandId, persistable, useMission } from "@/state/mission";
+
+import { ground, land, LAND_ID } from "./landGroundFixture";
+
+const api = vi.hoisted(() => ({
+  publicCreate: vi.fn(),
+  publicRevise: vi.fn(),
+  workspaceCreate: vi.fn(),
+  workspaceRevise: vi.fn(),
+  workspaceStatus: vi.fn(),
+  fetchLandGround: vi.fn(),
+}));
+
+vi.mock("@/api/queries", async (importOriginal) => ({
+  ...(await importOriginal<typeof Queries>()),
+  plansApi: {
+    create: api.publicCreate,
+    revise: api.publicRevise,
+    setStatus: vi.fn(),
+    remove: vi.fn(),
+  },
+  workspaceMissionsApi: {
+    create: api.workspaceCreate,
+    revise: api.workspaceRevise,
+    setStatus: api.workspaceStatus,
+  },
+  fetchLandGround: api.fetchLandGround,
+}));
+
+// Whose session it is: a test signs someone else in by setting `scope.current`.
+const scope = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock("@/state/landIdentity", async (importOriginal) => {
+  const actual = await importOriginal<typeof LandIdentity>();
+  return { ...actual, landScope: () => scope.current ?? actual.landScope() };
+});
+
+const { approveDraft, planIsPrivate, setPlanStatus } =
+  await import("@/features/mission/planDrafting");
+const { engageLand, missionProjectName, planOnLand } =
+  await import("@/features/mission/landPlanning");
+
+const OTHER_ID = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+const otherLand = { ...land, id: OTHER_ID, name: "Creek Field" };
+const otherGround = {
+  ...ground,
+  landId: OTHER_ID,
+  name: "Creek Field",
+  items: ground.items.map((item) => ({ ...item, zoneId: item.zoneId.replace("L-", "L-b") })),
+};
+
+const draft = (zoneIds: string[]): PlanDraft => ({
+  title: "Weekly fence check",
+  objective: "Fly the north fence every week.",
+  zoneIds,
+  machineIds: [],
+  cadence: "weekly",
+  startDate: "2026-10-16",
+  endDate: null,
+  estimates: { acres: 0, machineHours: 0.03, calendarDays: 2, pathM: 1000 },
+  steps: [],
+  assumptions: ["Path from the outline: North fence 1.0 km at 8 m/s."],
+  risks: [],
+  questions: [],
+  clarifications: [],
+  source: "rules",
+  model: null,
+  note: "Rule-based draft",
+});
+
+function record(body: Record<string, unknown>, extra: Partial<PlanRecord> = {}): PlanRecord {
+  return {
+    ...(body as unknown as PlanRecord),
+    id: "11111111-2222-4333-8444-555555555555",
+    siteId: null,
+    status: "scheduled",
+    revision: 1,
+    revisions: [],
+    createdAt: "2026-10-16T00:00:00Z",
+    updatedAt: "2026-10-16T00:00:00Z",
+    landId: LAND_ID,
+    boundaryRevision: 2,
+    private: true,
+    landActionId: null,
+    ...extra,
+  };
+}
+
+describe("plans on a saved land stay private", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    scope.current = null;
+    useMission.setState({ composer: null, landGround: null, approvedPlans: {}, areas: {} });
+    useLand.getState().clear();
+  });
+
+  it("drops a private plan whose save lands after a sign-out", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    let answer: (record: PlanRecord) => void = () => undefined;
+    api.workspaceCreate.mockImplementation(
+      () => new Promise<PlanRecord>((resolve) => (answer = resolve)),
+    );
+    const saving = approveDraft(draft(["L-aaaa0001"]), "monitor the fence");
+    // Signed out (or another workspace chosen) while the API answers.
+    scope.current = "someone-else/workspace-b";
+    useMission.getState().dropPrivate();
+    const body = api.workspaceCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    answer(record(body));
+    expect(await saving).toBeNull();
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
+    expect(state.project?.plans.some((p) => p.scope === "workspace")).toBe(false);
+    expect(JSON.stringify(state.approvedPlans)).not.toContain(LAND_ID);
+    expect(state.planId).toBeNull();
+    expect(state.log.some((entry) => entry.text.includes("Weekly fence check"))).toBe(false);
+  });
+
+  it("files a plan under the project it was drafted on when another is current by then", async () => {
+    const own = landProject(land, ground);
+    useMission.getState().setProject(own);
+    let answer: (record: PlanRecord) => void = () => undefined;
+    api.workspaceCreate.mockImplementation(
+      () => new Promise<PlanRecord>((resolve) => (answer = resolve)),
+    );
+    const saving = approveDraft(draft(["L-aaaa0001"]), "monitor the fence");
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    const body = api.workspaceCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    answer(record(body));
+    const plan = await saving;
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
+    expect(state.project?.plans.some((p) => p.id === plan?.id)).toBe(false);
+    expect(state.approvedPlans[demo.id] ?? []).toEqual([]);
+    expect(state.approvedPlans[own.id]?.map((p) => p.id)).toEqual([plan?.id]);
+    expect(state.planId).toBeNull();
+  });
+
+  it("sends a land project's plan to the workspace with the land and its boundary revision", async () => {
+    useMission.getState().setProject(landProject(land, ground));
+    api.workspaceCreate.mockImplementation((body: Record<string, unknown>) =>
+      Promise.resolve(record(body)),
+    );
+    const plan = await approveDraft(draft(["L-aaaa0001"]), "monitor the fence every week");
+    expect(api.publicCreate).not.toHaveBeenCalled();
+    expect(api.workspaceCreate).toHaveBeenCalledTimes(1);
+    const body = api.workspaceCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body).toMatchObject({
+      projectId: `land:${LAND_ID}`,
+      landId: LAND_ID,
+      boundaryRevision: 2,
+    });
+    expect((body.areas as { id: string; attribution?: string }[])[0]).toMatchObject({
+      id: "L-aaaa0001",
+      attribution: "Inventory · confirmed · revision 3 · Walked with a GPS",
+    });
+    expect(plan?.scope).toBe("workspace");
+    expect(plan?.landId).toBe(LAND_ID);
+    // The status goes to the workspace route too.
+    api.workspaceStatus.mockResolvedValue(record(body, { status: "dispatched" }));
+    await setPlanStatus(plan!, "dispatched");
+    expect(api.workspaceStatus).toHaveBeenCalledWith(plan!.id, "dispatched");
+  });
+
+  it("sends land zones layered on a fleet's project to the workspace, and the fleet's own to /plans", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    expect(missionLandId()).toBe(LAND_ID);
+    // Ground engaged on another project says nothing about this one.
+    expect(
+      missionLandId({ landGround: useMission.getState().landGround, project: anywhereProject() }),
+    ).toBeNull();
+    api.workspaceCreate.mockImplementation((body: Record<string, unknown>) =>
+      Promise.resolve(record(body)),
+    );
+    api.publicCreate.mockImplementation((body: Record<string, unknown>) =>
+      Promise.resolve(record(body, { private: false, landId: null, boundaryRevision: null })),
+    );
+    await approveDraft(draft(["L-aaaa0001"]), "monitor the fence");
+    expect(api.workspaceCreate.mock.calls[0]?.[0]).toMatchObject({
+      projectId: demo.id,
+      landId: LAND_ID,
+    });
+    await approveDraft(draft([demo.zones[0]!.id]), "mow it");
+    expect(api.publicCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("never lets a private mission's title reach a public plan through the planner's risks", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    const z14 = demo.zones[0]!.id;
+    const secret = "Mow thistle along Smith's north spring at 12 Oak Rd";
+    const privatePlan = planFromRecord(
+      record({
+        ...draft(["L-aaaa0001", z14]),
+        title: secret,
+        machineIds: [demo.machines[0]!.id],
+        goal: "g",
+        projectId: demo.id,
+        areas: [],
+      }),
+      useMission.getState().project!,
+    );
+    expect(privatePlan.scope).toBe("workspace");
+    expect(bookedWindows([privatePlan])[0]?.busy.length).toBeGreaterThan(0);
+    useMission.getState().setRemotePlans(demo.id, [privatePlan]);
+    const request = buildDraftRequest(useMission.getState().project!, { goal: "Mow Z-14" });
+    expect(JSON.stringify(request)).not.toContain(secret);
+    // The clash is still found: the mission's zones and booked windows still go.
+    expect(request.existingPlans?.find((p) => p.id === privatePlan.id)).toMatchObject({
+      title: PRIVATE_PLAN_TITLE,
+      zoneIds: ["L-aaaa0001", z14],
+      busy: bookedWindows([privatePlan])[0]?.busy ?? [],
+    });
+    // What the rules planner writes from that context (planner.py): the titles it was sent.
+    const risks = (request.existingPlans ?? []).map((p) => `“${p.title}” already covers ${z14}.`);
+    api.publicCreate.mockImplementation((body: Record<string, unknown>) =>
+      Promise.resolve(record(body, { private: false, landId: null, boundaryRevision: null })),
+    );
+    await approveDraft({ ...draft([z14]), risks }, "Mow Z-14");
+    expect(api.publicCreate).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(api.publicCreate.mock.calls[0]?.[0])).not.toContain(secret);
+    // On a Land's own project every plan is approved privately, so its titles still go.
+    const own = landProject(land, ground);
+    const mine = planFromRecord(
+      record({ ...draft(["L-aaaa0001"]), title: secret, goal: "g", projectId: own.id, areas: [] }),
+      own,
+    );
+    const onLand = buildDraftRequest({ ...own, plans: [mine] }, { goal: "monitor the fence" });
+    expect(onLand.existingPlans?.[0]?.title).toBe(secret);
+  });
+
+  it("shows the planner a layered land's ground only when the draft is private anyway", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    const project = useMission.getState().project!;
+    const z14 = demo.zones[0]!.id;
+    const fenceDraft = draft(["L-aaaa0001"]);
+    // A card on the fleet's own zone may be approved on the public routes: the model never
+    // reads the land's names, notes or outlines, nor a draft made over them.
+    const open = buildDraftRequest(project, {
+      goal: "Mow Z-14 and keep clear of the fence",
+      zoneIds: [z14],
+      refinement: "two passes",
+      previous: fenceDraft,
+    });
+    expect(open.zones?.map((z) => z.id)).toEqual(demo.zones.map((z) => z.id));
+    expect(JSON.stringify(open)).not.toContain("North fence");
+    expect(JSON.stringify(open)).not.toContain("Saved boundary");
+    expect(open.previousDraft).toBeUndefined();
+    // Nothing pre-selected: the planner picks among the fleet's zones only.
+    expect(
+      buildDraftRequest(project, { goal: "mow" }).zones?.some((z) => z.id === "L-aaaa0001"),
+    ).toBe(false);
+    // The land's ground in the card's scope: the plan is private, so the model sees it all.
+    const onLand = buildDraftRequest(project, {
+      goal: "monitor the fence",
+      zoneIds: ["L-aaaa0001"],
+      refinement: "weekly",
+      previous: fenceDraft,
+    });
+    expect(onLand.zones?.map((z) => z.id)).toContain("L-0f1e2d3c");
+    expect(onLand.previousDraft?.zoneIds).toEqual(["L-aaaa0001"]);
+    // A draft that left the card's private ground out is still approved privately.
+    api.workspaceCreate.mockImplementation((body: Record<string, unknown>) =>
+      Promise.resolve(record(body)),
+    );
+    useMission.getState().openComposer({ goal: "monitor the fence", zoneIds: ["L-aaaa0001"] });
+    await approveDraft(draft([z14]), "monitor the fence");
+    expect(api.publicCreate).not.toHaveBeenCalled();
+    expect(api.workspaceCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("never keeps a private plan in the browser when the API is offline", async () => {
+    useMission.getState().setProject(landProject(land, ground));
+    api.workspaceCreate.mockRejectedValue(new TypeError("Failed to fetch"));
+    const plan = await approveDraft(draft(["L-aaaa0001"]), "monitor the fence");
+    expect(plan).toBeNull();
+    expect(useMission.getState().log.at(-1)?.text).toMatch(/^Not saved: the API is offline/);
+    expect(useMission.getState().approvedPlans[`land:${LAND_ID}`] ?? []).toEqual([]);
+  });
+
+  it("writes no private plan or zone to browser storage, and forgets them on sign-out", () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    useMission.getState().engageLand({ landId: LAND_ID, zones: landZones(ground) });
+    const project = useMission.getState().project!;
+    const privatePlan = planFromRecord(
+      record({ ...draft(["L-aaaa0001"]), goal: "g", projectId: demo.id, areas: [] }),
+      project,
+    );
+    const publicPlan = planFromRecord(
+      record(
+        { ...draft([demo.zones[0]!.id]), goal: "g", projectId: demo.id, areas: [] },
+        { id: "public-1", private: false, landId: null, boundaryRevision: null },
+      ),
+      project,
+    );
+    expect(privatePlan.scope).toBe("workspace");
+    useMission.getState().setRemotePlans(demo.id, [privatePlan, publicPlan]);
+    useMission.getState().mergeAreas(demo.id, [{ ...landZones(ground)[1]!, id: "LA-1234abcd" }]);
+    const stored = persistable(useMission.getState());
+    expect(stored.approvedPlans[demo.id]?.map((p) => p.id)).toEqual(["public-1"]);
+    expect(stored.areas[demo.id]).toEqual([]);
+    expect(JSON.stringify(stored)).not.toContain(LAND_ID);
+    useMission.getState().dropPrivate();
+    const after = useMission.getState();
+    expect(after.landGround).toBeNull();
+    expect(after.project?.plans.some((p) => p.scope === "workspace")).toBe(false);
+    expect(after.project?.zones.some((z) => Boolean(z.private) || z.land !== undefined)).toBe(
+      false,
+    );
+    useMission.getState().setProject(landProject(land, ground));
+    useMission.getState().dropPrivate();
+    expect(useMission.getState().project?.id).toBe(anywhereProject().id);
+  });
+
+  it("keeps one copy of a stored mission area however often the plans are refetched", () => {
+    useMission.getState().setProject(landProject(land, ground));
+    useMission
+      .getState()
+      .engageLand({ landId: LAND_ID, zones: landZones(ground) }, landProject(land, ground));
+    const area = { ...landZones(ground)[0]!, id: "LA-c518a69e", land: undefined, private: true };
+    const projectId = `land:${LAND_ID}`;
+    for (let i = 0; i < 3; i++) {
+      useMission
+        .getState()
+        .mergeAreas(projectId, [area, { ...landZones(ground)[1]!, land: undefined }]);
+      useMission.getState().setRemotePlans(projectId, []);
+    }
+    const ids = useMission.getState().project?.zones.map((z) => z.id) ?? [];
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toContain("LA-c518a69e");
+    // The Land's own copy of a feature keeps its metadata over a stored copy of it.
+    const fence = useMission.getState().project?.zones.find((z) => z.id === "L-aaaa0001");
+    expect(fence?.land?.line).not.toBeNull();
+  });
+
+  it("never lets a private mission's area and a public plan's share one id on a shared project", () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    const z14 = demo.zones[0]!;
+    const box = (west: number) => ({
+      type: "Polygon" as const,
+      coordinates: [
+        [
+          [west, 34.69],
+          [west + 0.002, 34.69],
+          [west + 0.002, 34.692],
+          [west, 34.692],
+          [west, 34.69],
+        ],
+      ],
+    });
+    const area = (west: number, name: string) => ({ id: "A-01", name, footprint: box(west) });
+    const body = (zoneIds: string[], areas: ReturnType<typeof area>[]) => ({
+      ...draft(zoneIds),
+      steps: [
+        {
+          title: "Work it",
+          detail: "",
+          when: "Day 1",
+          startDay: 0,
+          days: 1,
+          machineIds: [],
+          zoneId: zoneIds[0] ?? null,
+        },
+      ],
+      goal: "g",
+      projectId: demo.id,
+      areas,
+    });
+    // A visitor's public plan drew its own A-01; a land user's private mission stored a
+    // workable area as A-01 before derived areas were numbered apart; a second public plan
+    // covers the same drawn A-01.
+    const publicPlan = record(body(["A-01"], [area(-120.05, "Drawn field")]), {
+      id: "public-1",
+      private: false,
+      landId: null,
+      boundaryRevision: null,
+    });
+    const samePublic = { ...publicPlan, id: "public-2" };
+    const privatePlan = record(body(["A-01", z14.id], [area(-120.04, "Z-14, workable")]), {
+      id: "private-1",
+    });
+    const records = separatePrivateAreas([publicPlan, samePublic, privatePlan]);
+    const [keptPublic, , renamed] = records;
+    expect(keptPublic).toBe(publicPlan);
+    expect(renamed?.areas.map((a) => a.id)).toEqual(["A-L01"]);
+    expect(renamed?.zoneIds).toEqual(["A-L01", z14.id]);
+    expect(renamed?.steps[0]?.zoneId).toBe("A-L01");
+    // A private plan on the public plan's own outline shares its id.
+    const onPublic = record(body(["A-01"], [area(-120.05, "Drawn field")]), { id: "private-2" });
+    expect(separatePrivateAreas([publicPlan, onPublic])[1]).toBe(onPublic);
+
+    useMission.getState().mergeAreas(demo.id, records.flatMap(zonesFromRecord));
+    const project = useMission.getState().project!;
+    useMission.getState().setRemotePlans(
+      demo.id,
+      records.map((r) => planFromRecord(r, project)),
+    );
+    const zones = useMission.getState().project?.zones ?? [];
+    const ids = zones.map((z) => z.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(zones.find((z) => z.id === "A-01")?.footprint).toEqual(box(-120.05));
+    expect(zones.find((z) => z.id === "A-01")?.private).toBeUndefined();
+    expect(zones.find((z) => z.id === "A-L01")?.footprint).toEqual(box(-120.04));
+    // The public plan stays a public plan to revise; the mission keeps its own ground.
+    const now = useMission.getState().project!;
+    expect(planIsPrivate(now, ["A-01"])).toBe(false);
+    expect(now.plans.find((p) => p.id === "private-1")?.zoneIds).toEqual(["A-L01", z14.id]);
+  });
+
+  it("drops land-shaped ground from storage written before version 2", () => {
+    const zone = landZones(ground)[0]!;
+    const migrated = migrateMissionStorage(
+      {
+        approvedPlans: { [`land:${LAND_ID}`]: [], demo: [] },
+        areas: {
+          demo: [
+            { ...zone, private: undefined, land: undefined },
+            { ...zone, id: "A-01", private: undefined, land: undefined },
+          ],
+        },
+      },
+      1,
+    ) as { approvedPlans: Record<string, unknown[]>; areas: Record<string, { id: string }[]> };
+    expect(Object.keys(migrated.approvedPlans)).toEqual(["demo"]);
+    expect(migrated.areas.demo?.map((z) => z.id)).toEqual(["A-01"]);
+  });
+
+  it("opens the plan card on the land with its boundary as the ground", async () => {
+    useMission.getState().setProject(anywhereProject());
+    api.fetchLandGround.mockResolvedValue(ground);
+    useLand.getState().select(land);
+    await planOnLand(land);
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(`land:${LAND_ID}`);
+    expect(state.view).toBe("plan");
+    expect(state.composer?.zoneIds).toEqual(["L-0f1e2d3c"]);
+    expect(state.composer?.ground).toEqual({
+      source: "land",
+      note: "Oak Bench, 247.1 ac, saved boundary revision 2 + 2 mapped features.",
+    });
+    expect(state.log.at(-1)?.text).toContain("monitor the fence every week");
+    expect(api.fetchLandGround).toHaveBeenCalledWith(LAND_ID, 2);
+  });
+
+  it("never layers one land's ground onto another land's project: the switch waits for the card", async () => {
+    useMission
+      .getState()
+      .engageLand({ landId: LAND_ID, zones: landZones(ground) }, landProject(land, ground));
+    useMission.getState().openComposer({ goal: "monitor the fence", zoneIds: ["L-0f1e2d3c"] });
+    api.fetchLandGround.mockResolvedValue(otherGround);
+    useLand.getState().select(otherLand);
+    expect(await engageLand(otherLand)).toBeNull();
+    let state = useMission.getState();
+    expect(state.project?.id).toBe(`land:${LAND_ID}`);
+    expect(state.landGround?.landId).toBe(LAND_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === OTHER_ID)).toBe(false);
+    expect(state.composer?.goal).toBe("monitor the fence");
+    expect(state.log.at(-1)?.text).toBe(
+      "Creek Field opens in Plan once you approve or close the plan card on Oak Bench.",
+    );
+    // Without the Land's own project too: the store never layers onto another Land's project.
+    useMission.getState().engageLand({ landId: OTHER_ID, zones: landZones(otherGround) });
+    expect(useMission.getState().landGround?.landId).toBe(LAND_ID);
+    useMission.getState().closeComposer();
+    await vi.waitFor(() => expect(useMission.getState().project?.id).toBe(`land:${OTHER_ID}`));
+    state = useMission.getState();
+    expect(state.landGround?.landId).toBe(OTHER_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
+  });
+
+  it("switching between two lands layered on one project leaves only the selected one's ground", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    api.fetchLandGround.mockResolvedValue(ground);
+    useLand.getState().select(land);
+    expect(await engageLand(land)).toBe("layer");
+    // The Land panel's library selects another Land straight away, with no clear between.
+    api.fetchLandGround.mockResolvedValue(otherGround);
+    useLand.getState().select(otherLand);
+    expect(await engageLand(otherLand)).toBe("layer");
+    const state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
+    expect(missionLandId()).toBe(OTHER_ID);
+    expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
+    expect(state.project?.zones.filter((z) => z.land?.landId === OTHER_ID)).toHaveLength(
+      otherGround.items.length,
+    );
+    // A goal naming no feature grounds on the selected Land's boundary, not the last one's.
+    expect(boundaryZoneOf(state.project!.zones)?.land?.landId).toBe(OTHER_ID);
+    useMission.getState().disengageLand();
+    expect(useMission.getState().project?.zones.map((z) => z.id)).toEqual(
+      demo.zones.map((z) => z.id),
+    );
+  });
+
+  it("waits for an open card before switching between lands layered on one project", async () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(demo);
+    api.fetchLandGround.mockResolvedValue(ground);
+    useLand.getState().select(land);
+    expect(await engageLand(land)).toBe("layer");
+    useMission.getState().openComposer({ goal: "monitor the fence", zoneIds: ["L-aaaa0001"] });
+    api.fetchLandGround.mockResolvedValue(otherGround);
+    useLand.getState().select(otherLand);
+    expect(await engageLand(otherLand)).toBeNull();
+    // The card keeps the ground it was drafted on, so it is still filed and routed by it.
+    let state = useMission.getState();
+    expect(state.landGround?.landId).toBe(LAND_ID);
+    expect(state.project?.zones.some((z) => z.id === "L-aaaa0001")).toBe(true);
+    expect(state.project?.zones.some((z) => z.land?.landId === OTHER_ID)).toBe(false);
+    expect(state.composer?.goal).toBe("monitor the fence");
+    expect(state.log.at(-1)?.text).toBe(
+      `Creek Field opens in Plan once you approve or close the plan card on ${demo.name}.`,
+    );
+    useMission.getState().closeComposer();
+    await vi.waitFor(() => expect(useMission.getState().landGround?.landId).toBe(OTHER_ID));
+    state = useMission.getState();
+    expect(state.project?.id).toBe(demo.id);
+    expect(state.project?.zones.some((z) => z.land?.landId === LAND_ID)).toBe(false);
+  });
+
+  it("names a mission's project in the copy, never its id", () => {
+    const demo = demoRanchProject();
+    useMission.getState().setProject(landProject(land, ground));
+    expect(missionProjectName(demo.id, undefined)).toBe(demo.name);
+    expect(missionProjectName(`land:${LAND_ID}`, undefined)).toBe("Oak Bench");
+    expect(missionProjectName(`land:${OTHER_ID}`, undefined)).toBeNull();
+    const site = { id: "5d0c", slug: "west-yard", name: "West yard" };
+    expect(missionProjectName("site-5d0c", [site as never])).toBe("West yard");
+    expect(missionProjectName("site-nope", [site as never])).toBeNull();
+  });
+});

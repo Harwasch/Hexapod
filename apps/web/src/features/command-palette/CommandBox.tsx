@@ -2,6 +2,7 @@ import {
   ClipboardList,
   CornerDownLeft,
   Hexagon,
+  LandPlot,
   Layers,
   Loader2,
   MapPin,
@@ -13,20 +14,28 @@ import {
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
+import { formatArea } from "@twin/geo";
 import { GlassButton, GlassPanel, Kbd } from "@twin/ui";
 
-import { useLayers as useLayerCatalog, useSites as useSiteCatalog } from "@/api/queries";
+import { useLayers as useLayerCatalog } from "@/api/queries";
+import { env } from "@/app/env";
 import { HOTKEYS, hotkeyKeys } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
 import { useHotkey } from "@/lib/hotkeys";
 import { useLayers } from "@/state/layers";
 import { useMission } from "@/state/mission";
+import { useSettings } from "@/state/settings";
+import { useToasts } from "@/state/toasts";
 
+import { useLandAreas } from "../land/api";
+import { openLand } from "../land/landEntry";
+import { frameLandSoon } from "../land/landFraming";
 import { setLayerVisible } from "../layers/layerVisibility";
 import { useQuickLayers } from "../mission/quickLayers";
 import { useAgentCommand } from "../mission/useAgentCommand";
 import { useMissionActions } from "../mission/useMissionActions";
 import { flyToPlace, usePlaceSearch } from "../search/places";
+import { useListedSites } from "../sites/siteFixtures";
 import { siteDisplayName } from "../sites/siteNames";
 import {
   buildCommandGroups,
@@ -40,6 +49,7 @@ import { useAppActions } from "./useAppActions";
 const GROUP_ICONS: Record<CommandGroupId, LucideIcon> = {
   places: Search,
   sites: MapPin,
+  lands: LandPlot,
   zones: Hexagon,
   plans: ClipboardList,
   layers: Layers,
@@ -80,7 +90,11 @@ export function CommandBox() {
   const { ask, busy: asking } = useAgentCommand();
   const actions = useAppActions();
   const quickLayers = useQuickLayers();
-  const sites = useSiteCatalog();
+  // The sites the switcher lists (developer fixtures only with developer readouts on).
+  const sites = useListedSites();
+  // Saved land, asked for while the box is open (the Land tool's list, same query and cache).
+  const lands = useLandAreas(open && env.landExplorationEnabled);
+  const units = useSettings((s) => s.units);
   const layerCatalog = useLayerCatalog();
   const runtime = useLayers((s) => s.runtime);
   const project = useMission((s) => s.project);
@@ -148,13 +162,31 @@ export function CommandBox() {
         ),
         sites: withIcon(
           "sites",
-          (sites.data ?? []).map((site) => ({
+          sites.shown.map((site) => ({
             id: `site-${site.id}`,
             label: siteDisplayName(site),
             sub: "Site · fly to its reality model",
             // Still found by the catalog's own name and slug, which the label no longer shows.
             keywords: `${site.name} ${site.slug.replace(/-/g, " ")}`,
             run: () => void scene?.sites.flyTo(site.id),
+          })),
+        ),
+        lands: withIcon(
+          "lands",
+          (lands.data ?? []).map((land) => ({
+            id: `land-${land.id}`,
+            label: land.name,
+            sub: `Saved land · ${formatArea(land.areaM2, units)}`,
+            keywords: "land saved boundary",
+            run: () => {
+              if (openLand(land) === "opened") frameLandSoon(scene, land.boundary);
+              else
+                useToasts.getState().push({
+                  tone: "info",
+                  title: "Your unsaved outline is open",
+                  body: `Save or discard it, then open ${land.name}.`,
+                });
+            },
           })),
         ),
         zones: withIcon(
@@ -213,7 +245,9 @@ export function CommandBox() {
   }, [
     query,
     places,
-    sites.data,
+    sites.shown,
+    lands.data,
+    units,
     project,
     quickLayers,
     layerCatalog.data,

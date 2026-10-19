@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import type { LandArea } from "@twin/contracts";
@@ -13,6 +13,7 @@ import { WriteTokenField } from "../../captures/WriteTokenField";
 import { useLandAreas } from "../api";
 import { LandBoundaryImport } from "../LandBoundaryImport";
 import { LandDraftRecovery } from "../LandDraftRecovery";
+import { revealLand } from "../landFraming";
 import { WorkspaceIdentity } from "../WorkspaceIdentity";
 import { LandAgentInline } from "./LandAgent";
 import { LandChip } from "./LandChip";
@@ -54,7 +55,26 @@ export function LandSurface() {
   const error = useLand((s) => s.error);
   const catalog = useLandAreas(open);
   const fileInput = useRef<HTMLInputElement>(null);
+  const surface = useRef<HTMLDivElement>(null);
+  const lens = useLens((s) => s.lens);
   useMappedFeaturePick(open);
+
+  // A boundary under review stays in sight: on a phone the review card is a sheet over the
+  // lower map, where the outline just drawn usually is. Checked whenever the reviewed boundary
+  // changes (a new draft, a combined or split shape, corners adjusted), and framed only when
+  // something hides it. Keyed on the boundary itself: naming the draft never moves the camera.
+  const reviewBoundary = open && draft && mode === "browse" ? draft.boundary : null;
+  useEffect(() => {
+    if (!reviewBoundary) return;
+    return revealLand(scene, reviewBoundary);
+  }, [scene, reviewBoundary]);
+
+  // Opening a land, or another lens, starts at its chip: never wherever the cards before it
+  // were scrolled to (a long saved-land list, a lens's details).
+  const shownId = open && !draft ? (active?.id ?? null) : null;
+  useEffect(() => {
+    if (shownId && surface.current) surface.current.scrollTop = 0;
+  }, [shownId, lens]);
 
   const content =
     mode === "candidates" ? (
@@ -75,6 +95,7 @@ export function LandSurface() {
     <AnimatePresence>
       {open && (
         <motion.div
+          ref={surface}
           key="land"
           className="hud-item land-surface"
           data-testid="land-panel"

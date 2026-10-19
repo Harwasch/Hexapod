@@ -6,13 +6,14 @@ import { anywhereProject } from "@/missions/anywhere";
 import {
   areaFromMeasurement,
   isAreaZone,
+  LAND_AREA_PREFIX,
   nextAreaId,
   rectangleFootprint,
   viewAreaZone,
   viewFootprint,
   zoneFromFootprint,
 } from "@/missions/areas";
-import { DemoMissionProvider } from "@/missions/demo";
+import { demoRanchProject } from "@/missions/demo";
 import { recordBodyFromDraft, zonesFromRecord } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 
@@ -22,6 +23,10 @@ describe("drawn areas", () => {
   it("numbers areas past the highest in use and sizes them from the footprint", () => {
     expect(nextAreaId([])).toBe("A-01");
     expect(nextAreaId([{ id: "A-03" }, { id: "Z-14" }])).toBe("A-04");
+    // Areas derived from a Land are numbered apart: neither range takes the other's ids.
+    expect(nextAreaId([{ id: "A-L03" }])).toBe("A-01");
+    expect(nextAreaId([{ id: "A-07" }, { id: "A-L02" }], LAND_AREA_PREFIX)).toBe("A-L03");
+    expect(isAreaZone({ id: "A-L03" })).toBe(true);
     const rect = rectangleFootprint(center, 200, 100);
     expect(footprintAreaM2(rect)).toBeCloseTo(400 * 200, -3);
     const zone = zoneFromFootprint("A-01", "Test", rect);
@@ -141,6 +146,10 @@ describe("drawn areas", () => {
       revisions: [],
       createdAt: "",
       updatedAt: "",
+      landId: null,
+      boundaryRevision: null,
+      private: false,
+      landActionId: null,
       areas: body.areas ?? [],
       zoneIds: body.zoneIds ?? [],
       machineIds: body.machineIds ?? [],
@@ -157,7 +166,7 @@ describe("drawn areas", () => {
     store.removeArea("anywhere", "A-01");
     expect(useMission.getState().project?.zones).toEqual([]);
     // Demo zones are kept in front of drawn areas.
-    const demo = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+    const demo = demoRanchProject();
     store.setProject(demo);
     store.addArea(demo.id, zone);
     const ids = useMission.getState().project?.zones.map((z) => z.id) ?? [];

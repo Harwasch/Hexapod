@@ -1,32 +1,37 @@
-import { lazy, Suspense, useEffect } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  type ComponentType,
+  type LazyExoticComponent,
+  type ReactNode,
+} from "react";
 
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { env } from "@/app/env";
 import { HOTKEYS } from "@/app/hotkeys";
 import { useScene } from "@/cesium/SceneContext";
-import { LandRasterBridge } from "@/cesium/LandRasterBridge";
-import { LandContextBridge } from "@/cesium/LandContextBridge";
-import { LandBridge } from "@/cesium/LandBridge";
-import { LandFocusBridge } from "@/cesium/LandFocusBridge";
-import { LandIdentityBridge } from "../land/WorkspaceIdentity";
-import { LandAgent } from "../land/surface/LandAgent";
-import { LandOverlays } from "../land/surface/LandOverlays";
-import { LandStrip } from "../land/surface/LandStrip";
-import { LandSurface } from "../land/surface/LandSurface";
 import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useSkinPoke } from "@/state/skinPoke";
+import { useLantern } from "@/state/lantern";
+import { useToasts } from "@/state/toasts";
 import { useUi } from "@/state/ui";
 
 import { AddPanel } from "../add-data/AddPanel";
 import { CommandBox } from "../command-palette/CommandBox";
 import { ShortcutSheet } from "../command-palette/ShortcutSheet";
 import { CompareSplit } from "../compare/Compare";
+import { DescentArrival } from "../descent/DescentArrival";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
+import { LanternBridge } from "../lantern/LanternBridge";
+import { LanternRim } from "../lantern/LanternRim";
+import { UNAVAILABLE } from "../lantern/lanternWords";
+import { TimeLanternControl } from "../lantern/TimeLanternControl";
 import { LayerAboutSheet } from "../layers/LayerAboutSheet";
 import { LayersPanel } from "../layers/LayersPanel";
 import { PokeBadge } from "../living/PokeBadge";
@@ -48,6 +53,7 @@ import { RepresentationSwitcher } from "../sites/RepresentationSwitcher";
 import { SiteLoadStatus } from "../sites/SiteLoadStatus";
 import { TimelineControl } from "../timeline/TimelineControl";
 import { DevReadouts } from "./DevReadouts";
+import { LandSurfaceSlot } from "./LandSurfaceSlot";
 import { MapCorner } from "./MapCorner";
 import { PhoneTabBar } from "./PhoneTabBar";
 import { stepBack } from "./stepBack";
@@ -57,6 +63,48 @@ import { useUndoHotkeys } from "./undoHotkeys";
 const SettingsSheet = lazy(() =>
   import("../settings/SettingsSheet").then((m) => ({ default: m.SettingsSheet })),
 );
+
+/** `React.lazy` for a module's named component (lazy wants a default export). */
+function lazyNamed<K extends string, M extends Record<K, ComponentType>>(
+  load: () => Promise<M>,
+  name: K,
+): LazyExoticComponent<M[K]> {
+  return lazy(() => load().then((module) => ({ default: module[name] })));
+}
+
+// The Land feature (VITE_ENABLE_LAND_EXPLORATION): its surface, strip, overlays and agent, the bridges that draw and sync it
+// on the globe, the fog of knowing, and the workspace sign-in behind them (oidc-client-ts, which
+// only the identity bridge and the surface reach). Each is loaded on demand like SettingsSheet,
+// and only rendered with the flag on, so a build with the flag off never requests any of it
+// (its chunks are still built) and the globe's first load carries none of it
+// (`scripts/check-bundle.mjs` holds that line). With the flag on they load as the shell mounts
+// and behave as before; a chunk that fails to load fails alone (`OnDemand` for the bridges,
+// `LandSurfaceSlot`'s own boundary for the surface, the inline boundaries for the card and legend).
+const LandIdentityBridge = lazyNamed(
+  () => import("../land/WorkspaceIdentity"),
+  "LandIdentityBridge",
+);
+const LandBridge = lazyNamed(() => import("@/cesium/LandBridge"), "LandBridge");
+const LandContextBridge = lazyNamed(
+  () => import("@/cesium/LandContextBridge"),
+  "LandContextBridge",
+);
+const LandRasterBridge = lazyNamed(() => import("@/cesium/LandRasterBridge"), "LandRasterBridge");
+const LandFocusBridge = lazyNamed(() => import("@/cesium/LandFocusBridge"), "LandFocusBridge");
+const LandOverlays = lazyNamed(() => import("../land/surface/LandOverlays"), "LandOverlays");
+const LandAgent = lazyNamed(() => import("../land/surface/LandAgent"), "LandAgent");
+const LandStrip = lazyNamed(() => import("../land/surface/LandStrip"), "LandStrip");
+const KnowledgeFogBridge = lazyNamed(
+  () => import("@/cesium/KnowledgeFogBridge"),
+  "KnowledgeFogBridge",
+);
+const ShowOnceBridge = lazyNamed(() => import("@/cesium/ShowOnceBridge"), "ShowOnceBridge");
+const LandMissionBridge = lazyNamed(() => import("../land/LandMissionBridge"), "LandMissionBridge");
+const KnowledgeCellCard = lazyNamed(
+  () => import("../knowledge/KnowledgeCellCard"),
+  "KnowledgeCellCard",
+);
+const KnowledgeLegend = lazyNamed(() => import("../knowledge/KnowledgeLegend"), "KnowledgeLegend");
 
 /** The app's own keys, bound from the registry (`app/hotkeys.ts`) that the `?` sheet prints. */
 function GlobalHotkeys() {
@@ -90,6 +138,18 @@ function GlobalHotkeys() {
   });
   // Poke and drag objects that move by skins (cesium/skinPoke.ts).
   useHotkey(HOTKEYS.poke.combo, () => useSkinPoke.getState().toggle());
+  // The Time Lantern (cesium/TimeLantern.ts): Look back, or close it.
+  useHotkey(HOTKEYS.lantern.combo, () => {
+    const lantern = useLantern.getState();
+    if (lantern.mode === "off" && !lantern.availability.ok) {
+      const reason = UNAVAILABLE[lantern.availability.reason];
+      useToasts
+        .getState()
+        .push({ tone: "info", title: "The Time Lantern is not available here", body: reason });
+      return;
+    }
+    lantern.toggle();
+  });
   useHotkey(HOTKEYS.resetNorth.combo, () => scene?.camera.resetNorth());
   useHotkey(HOTKEYS.topDown.combo, () => scene?.camera.topDown());
   useHotkey(HOTKEYS.home.combo, () => scene?.camera.flyHome());
@@ -120,9 +180,22 @@ function SettingsSheetLazy() {
   const open = useUi((s) => s.settingsOpen);
   if (!open) return null;
   return (
-    <Suspense fallback={null}>
+    <OnDemand label="Settings">
       <SettingsSheet />
-    </Suspense>
+    </OnDemand>
+  );
+}
+
+/**
+ * Where a component loaded on demand mounts: nothing while its chunk loads, and nothing (with a
+ * log line) if the chunk fails to load, from a flaky network or a tab left open across a deploy,
+ * so the failure stays its own rather than replacing the whole HUD.
+ */
+function OnDemand({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <ErrorBoundary quiet label={label}>
+      <Suspense fallback={null}>{children}</Suspense>
+    </ErrorBoundary>
   );
 }
 
@@ -163,24 +236,29 @@ export function AppShell() {
     <>
       <GlobalHotkeys />
       {env.landExplorationEnabled && (
-        <>
+        <OnDemand label="Land bridges">
           <LandIdentityBridge />
           <LandBridge />
           <LandContextBridge />
           <LandRasterBridge />
           <LandFocusBridge />
-        </>
+          <KnowledgeFogBridge />
+          <ShowOnceBridge />
+          <LandMissionBridge />
+        </OnDemand>
       )}
+      <LanternBridge />
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">
         <ErrorBoundary inline label="Fleet overlay">
           <MissionOverlays />
         </ErrorBoundary>
         {env.landExplorationEnabled && (
-          <ErrorBoundary inline label="Land overlay">
+          <OnDemand label="Land overlay">
             <LandOverlays />
-          </ErrorBoundary>
+          </OnDemand>
         )}
         <CompareSplit />
+        <LanternRim />
         <header className="hud-region hud-top">
           <ErrorBoundary inline label="Site">
             <ProjectCard />
@@ -198,7 +276,8 @@ export function AppShell() {
         <section className="hud-region hud-dock hud-dock--left" aria-label="Panel">
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
-            {env.landExplorationEnabled && <LandSurface />}
+            {/* Its own boundary: a Land chunk that fails to load leaves the other panels. */}
+            {env.landExplorationEnabled && <LandSurfaceSlot />}
             <MeasurePanel />
             <AddPanel />
           </ErrorBoundary>
@@ -211,6 +290,7 @@ export function AppShell() {
         </section>
         <div className="hud-region hud-center">
           <OnboardingCard />
+          <DescentArrival />
         </div>
         <aside className="hud-region hud-dock hud-dock--right" aria-label="Details">
           <div className="hud-stack hud-messages">
@@ -222,9 +302,9 @@ export function AppShell() {
           </div>
           <div className="hud-stack hud-detail">
             {env.landExplorationEnabled && (
-              <ErrorBoundary inline label="Land agent">
+              <OnDemand label="Land agent">
                 <LandAgent />
-              </ErrorBoundary>
+              </OnDemand>
             )}
             <ErrorBoundary inline label="Selection">
               <SelectionCard />
@@ -234,16 +314,35 @@ export function AppShell() {
               <InspectorPanel />
               <DevPanel />
             </ErrorBoundary>
+            {env.landExplorationEnabled && (
+              <ErrorBoundary inline label="Fog of knowing">
+                <Suspense fallback={null}>
+                  <KnowledgeCellCard />
+                </Suspense>
+              </ErrorBoundary>
+            )}
           </div>
         </aside>
         <div className="hud-region hud-strip">
           {env.landExplorationEnabled && (
-            <ErrorBoundary inline label="Land controls">
+            <OnDemand label="Land controls">
               <LandStrip />
-            </ErrorBoundary>
+            </OnDemand>
           )}
           <ExploreHud />
+          {/* Dates, then the lens over dated imagery, then how old what you know is: time
+              first, the way the strip reads left to right. */}
           <TimelineControl />
+          <ErrorBoundary inline label="Time Lantern">
+            <TimeLanternControl />
+          </ErrorBoundary>
+          {env.landExplorationEnabled && (
+            <ErrorBoundary inline label="Fog of knowing">
+              <Suspense fallback={null}>
+                <KnowledgeLegend />
+              </Suspense>
+            </ErrorBoundary>
+          )}
           <RepresentationSwitcher />
           <SiteLoadStatus />
         </div>

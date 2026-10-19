@@ -73,4 +73,22 @@ describe("runIntent", () => {
     expect(await runIntent("where is TR-07", open)).toBe("Locating TR-07.");
     expect(await runIntent("fly to Yosemite", ctx())).toBe("Flying to yosemite.");
   });
+
+  it("hears goals said the way people say them", async () => {
+    for (const goal of [
+      "restore the creek on my land",
+      "I want to restore the creek and remove invasives",
+      "I'd like to keep the fence line clear",
+      "we need to replant the burn scar",
+      "can you please check the fence every week",
+      "let's prune the orchard",
+      "help me clean up the solar array",
+    ]) {
+      expect(await runIntent(goal, ctx())).toBe(`draft ${goal}`);
+    }
+    expect(await runIntent("how is the fleet doing?", ctx())).toBe("view fleet");
+    expect(await runIntent("what are the robots doing", ctx())).toBe("view fleet");
+    // Places and sites still fly.
+    expect(await runIntent("Paso Robles", ctx())).toBe("Flying to Paso Robles.");
+  });
 });

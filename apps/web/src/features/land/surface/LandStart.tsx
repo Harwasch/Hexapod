@@ -87,6 +87,11 @@ export function LandStart({ fileInput }: { fileInput: RefObject<HTMLInputElement
           </button>
         </p>
       )}
+      {catalog.data?.length === 0 && (
+        <p className="land-muted" data-testid="land-saved-empty">
+          Your saved areas stay here; plans you make on them appear in Plan.
+        </p>
+      )}
       {(catalog.data?.length ?? 0) > 0 && (
         <section className="land-saved" aria-label="Saved land">
           <h3 className="land-muted">Saved land</h3>

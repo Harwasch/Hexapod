@@ -375,10 +375,35 @@ class InvestigationDetail(CamelModel):
     artifacts: list[ResearchArtifactRead]
 
 
+class ResearchWorkerStatus(CamelModel):
+    """Whether any research worker is alive. Ages come from the database clock.
+
+    online: seen within 45 s and not stopped. stale: seen before, not lately. stopped: the
+    newest worker said it was stopping. never: no worker has checked in on this server."""
+
+    state: Literal["online", "stale", "stopped", "never"]
+    last_seen_at: datetime | None
+    seconds_since_seen: int | None
+    # Any run, in any workspace, holds a live lease. It says nothing about whose run it is.
+    busy: bool
+    check_in_every_seconds: int = 15
+
+
+class ResearchQueueStatus(CamelModel):
+    """Runs waiting or running in the caller's workspace only."""
+
+    queued: int
+    oldest_queued_at: datetime | None
+    oldest_queued_seconds: int | None
+    running: int
+
+
 class ResearchStatus(CamelModel):
     model_configured: bool
     model: str | None
     worker_required: bool = True
+    worker: ResearchWorkerStatus
+    queue: ResearchQueueStatus
 
 
 class SourceRead(CamelModel):

@@ -1,10 +1,12 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useId, useState, type CSSProperties, type ReactNode } from "react";
 import { clsx } from "clsx";
-import { MessageCircleQuestion, Plus, Scale } from "lucide-react";
+import { ClipboardList, MessageCircleQuestion, Plus, Scale } from "lucide-react";
 
 import type { LandArea } from "@twin/contracts";
 import { footprintAreaM2 } from "@twin/geo";
 import { GlassButton, GlassSelect } from "@twin/ui";
+
+import { planOnLand } from "@/features/mission/landPlanning";
 
 import { askAgent } from "../../agentBus";
 import { areaLabel } from "../../landFlow";
@@ -72,8 +74,41 @@ function PlanSwitcher({
 }
 
 /**
- * The plans card: one sentence about every plan, then one plan at a time with its steps (each
- * tied to its area on the map), its known cost and work area, and the one next step.
+ * "Plan work on this land": the Plan drawer opens on a new mission plan with this land as its
+ * ground, and the command bar takes the sentence of work. Viewers see why they cannot.
+ */
+function PlanWork({ land, canEdit }: { land: LandArea; canEdit: boolean }) {
+  const [opening, setOpening] = useState(false);
+  const noteId = useId();
+  return (
+    <div className="plans-work">
+      <GlassButton
+        variant="primary"
+        loading={opening}
+        disabled={!canEdit || opening}
+        leadingIcon={<ClipboardList size={15} aria-hidden="true" />}
+        aria-describedby={canEdit ? undefined : noteId}
+        data-testid="land-plan-work"
+        onClick={() => {
+          setOpening(true);
+          void planOnLand(land).finally(() => setOpening(false));
+        }}
+      >
+        Plan work on this land
+      </GlassButton>
+      {!canEdit && (
+        <p className="land-muted" id={noteId} data-testid="land-plan-work-note">
+          Viewers can see this land&apos;s plans. A workspace editor can plan work here.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The plans card: one sentence about every plan, the way to plan robot work on this land, then
+ * one plan at a time with its steps (each tied to its area on the map), its known cost and
+ * work area, and the one next step.
  */
 export function PlanCard({
   land,
@@ -171,6 +206,7 @@ export function PlanCard({
         ) : undefined
       }
     >
+      <PlanWork land={land} canEdit={canEdit} />
       {banner}
       {loading && (
         <p className="land-muted" aria-live="polite">
@@ -190,11 +226,7 @@ export function PlanCard({
           action={
             <>
               {canEdit && !makeBlocked && (
-                <GlassButton
-                  variant="primary"
-                  leadingIcon={<Plus size={15} aria-hidden="true" />}
-                  onClick={onMake}
-                >
+                <GlassButton leadingIcon={<Plus size={15} aria-hidden="true" />} onClick={onMake}>
                   Make a plan
                 </GlassButton>
               )}

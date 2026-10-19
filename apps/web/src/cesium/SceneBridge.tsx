@@ -8,11 +8,13 @@ import {
   watchSiteRecords,
 } from "@/api/queries";
 import { api, ApiError, unwrap } from "@/api/client";
-import { builtinDemoSite } from "@/api/fallback";
+import { builtinSite } from "@/api/fallback";
 import { anywhereProject } from "@/missions/anywhere";
-import { DemoMissionProvider } from "@/missions/demo";
+import { DemoMissionProvider, demoRanchArrival } from "@/missions/demo";
+import { hiddenMissionZoneIds } from "@/missions/landGround";
 import { siteProject } from "@/missions/siteProject";
 import { isReplaying } from "@/state/history";
+import { useLand } from "@/state/land";
 import { useLayers } from "@/state/layers";
 import { useLiving } from "@/state/living";
 import { reshapeArea, useMission } from "@/state/mission";
@@ -151,7 +153,7 @@ export function SceneBridge() {
     // SiteManager's deadline aborting `signal`) is thrown, so the scene can offer Retry
     // instead of reporting a site that exists as gone.
     const resolver = async (id: string, signal?: AbortSignal): Promise<Site | null> => {
-      if (id.startsWith("builtin-")) return builtinDemoSite();
+      if (id.startsWith("builtin-")) return builtinSite(id);
       try {
         return await unwrap<Site>(
           api.GET("/api/v1/sites/{site_id}", { params: { path: { site_id: id } }, signal }),
@@ -164,7 +166,18 @@ export function SceneBridge() {
     scene.sites.setCatalog(siteCatalog.data, resolver);
   }, [scene, siteCatalog.data, siteCatalog.isLoading]);
 
-  // Active site → mission project: the demo provider for the demo site, otherwise a project
+  // The demo ranch arrives framed for this window (its Overview is authored for a landscape
+  // one); every other site at its bookmark.
+  useEffect(() => {
+    if (!scene) return;
+    const provider = new DemoMissionProvider();
+    scene.sites.setArrivalFraming((site, viewport) =>
+      provider.projectForSite(site.id, site.slug) ? demoRanchArrival(viewport) : null,
+    );
+    return () => scene.sites.setArrivalFraming(null);
+  }, [scene]);
+
+  // Active site → mission project: the demo provider for the demo ranch, otherwise a project
   // built from the catalog site itself (boundary as the one zone, no machines yet) so
   // planning works for every site; a backend/ROS bridge replaces this per site later.
   const activeSiteId = useSites((s) => s.activeSiteId);
@@ -200,15 +213,18 @@ export function SceneBridge() {
     useMission.getState().setProject(project);
   }, [scene, activeSiteId, siteCatalog.data, activeSite.data]);
 
-  // The world draws whatever the store composes (provider zones plus drawn areas, plans).
+  // The world draws whatever the store composes (provider zones plus drawn areas, plans),
+  // except the selected Land's boundary, which the Land layer draws.
   const missionProject = useMission((s) => s.project);
+  const activeLandId = useLand((s) => s.active?.id ?? null);
   useEffect(() => {
     if (!scene) return;
+    scene.mission.setHiddenZones(hiddenMissionZoneIds(missionProject, activeLandId));
     scene.mission.setProject(missionProject);
     const layers = useMission.getState().layers;
     scene.mission.setLayer("zones", layers.zones);
     scene.mission.setLayer("tracks", layers.tracks);
-  }, [scene, missionProject]);
+  }, [scene, missionProject, activeLandId]);
 
   // Settings → scene
   const quality = useSettings((s) => s.quality);

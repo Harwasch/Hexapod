@@ -4692,6 +4692,370 @@
         "title": "CzmlSource",
         "type": "object"
       },
+      "DatedImageryCatalog": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds",
+            "type": "array"
+          },
+          "cached": {
+            "default": false,
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/DatedImageryProviderStatus"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/DatedImagerySource"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bounds",
+          "retrievedAt",
+          "sources",
+          "providers"
+        ],
+        "title": "DatedImageryCatalog",
+        "type": "object"
+      },
+      "DatedImageryPart": {
+        "additionalProperties": false,
+        "description": "One record a source is made of (a NAIP quarter quad, a scene, a map sheet).",
+        "properties": {
+          "accuracy": {
+            "$ref": "#/components/schemas/StatedAccuracy"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "observedOn": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedon"
+          },
+          "observedYear": {
+            "maximum": 2200.0,
+            "minimum": 1800.0,
+            "title": "Observedyear",
+            "type": "integer"
+          },
+          "recordUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Recordurl",
+            "type": "string"
+          }
+        },
+        "required": [
+          "observedYear",
+          "footprint",
+          "recordUrl",
+          "accuracy"
+        ],
+        "title": "DatedImageryPart",
+        "type": "object"
+      },
+      "DatedImageryProviderStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "name",
+          "status",
+          "summary"
+        ],
+        "title": "DatedImageryProviderStatus",
+        "type": "object"
+      },
+      "DatedImagerySource": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "maxLength": 500,
+            "title": "Attribution",
+            "type": "string"
+          },
+          "bounds": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds",
+            "type": "array"
+          },
+          "dateLabel": {
+            "maxLength": 120,
+            "title": "Datelabel",
+            "type": "string"
+          },
+          "dateMeaning": {
+            "maxLength": 600,
+            "title": "Datemeaning",
+            "type": "string"
+          },
+          "datumShift": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatumShift"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "maxLength": 200,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "aerial-photo",
+              "satellite",
+              "historical-map"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "license": {
+            "maxLength": 300,
+            "title": "License",
+            "type": "string"
+          },
+          "licenseUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Licenseurl"
+          },
+          "mapScale": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapscale"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/DatedImageryPart"
+            },
+            "maxItems": 40,
+            "minItems": 1,
+            "title": "Parts",
+            "type": "array"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "resolutionM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolutionm"
+          },
+          "sortDate": {
+            "format": "date",
+            "title": "Sortdate",
+            "type": "string"
+          },
+          "tiles": {
+            "$ref": "#/components/schemas/DatedImageryTiles"
+          },
+          "title": {
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "kind",
+          "title",
+          "dateLabel",
+          "dateMeaning",
+          "sortDate",
+          "bounds",
+          "tiles",
+          "license",
+          "attribution",
+          "parts"
+        ],
+        "title": "DatedImagerySource",
+        "type": "object"
+      },
+      "DatedImageryTiles": {
+        "additionalProperties": false,
+        "description": "How a browser draws the source: an XYZ template on a tiling scheme.",
+        "properties": {
+          "format": {
+            "const": "png",
+            "default": "png",
+            "title": "Format",
+            "type": "string"
+          },
+          "maximumLevel": {
+            "maximum": 22.0,
+            "minimum": 0.0,
+            "title": "Maximumlevel",
+            "type": "integer"
+          },
+          "scheme": {
+            "enum": [
+              "web-mercator",
+              "geographic"
+            ],
+            "title": "Scheme",
+            "type": "string"
+          },
+          "urlTemplate": {
+            "maxLength": 2000,
+            "title": "Urltemplate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scheme",
+          "urlTemplate",
+          "maximumLevel"
+        ],
+        "title": "DatedImageryTiles",
+        "type": "object"
+      },
+      "DatumShift": {
+        "additionalProperties": false,
+        "description": "How a map drawn on an older datum was moved onto WGS 84 to lie under today's world: the\noperation PROJ used, its stated accuracy, and whether a better one exists that this server\ndoes not have (the NADCON grids). The lens says it beside the map's own accuracy.",
+        "properties": {
+          "accuracyM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accuracym"
+          },
+          "betterAvailable": {
+            "title": "Betteravailable",
+            "type": "boolean"
+          },
+          "fromDatum": {
+            "const": "NAD27",
+            "title": "Fromdatum",
+            "type": "string"
+          },
+          "operation": {
+            "maxLength": 300,
+            "title": "Operation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromDatum",
+          "operation",
+          "betterAvailable"
+        ],
+        "title": "DatumShift",
+        "type": "object"
+      },
       "DirectorRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6778,6 +7142,71 @@
         "title": "HighlightsResult",
         "type": "object"
       },
+      "HydrographyFeature": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "fcode": {
+            "title": "Fcode",
+            "type": "integer"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/LineString"
+          },
+          "id": {
+            "maxLength": 80,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "perennial",
+              "intermittent",
+              "ephemeral",
+              "unclassified",
+              "artificial-path",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "lengthM": {
+            "title": "Lengthm",
+            "type": "number"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "permanentIdentifier": {
+            "maxLength": 60,
+            "title": "Permanentidentifier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "permanentIdentifier",
+          "name",
+          "fcode",
+          "kind",
+          "description",
+          "geometry",
+          "lengthM"
+        ],
+        "title": "HydrographyFeature",
+        "type": "object"
+      },
       "IdentityRead": {
         "additionalProperties": false,
         "properties": {
@@ -8260,6 +8689,706 @@
           "updatedAt"
         ],
         "title": "JobStepRead",
+        "type": "object"
+      },
+      "KnowledgeCellRead": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bounds"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "column": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column"
+          },
+          "density": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density"
+          },
+          "inside": {
+            "title": "Inside",
+            "type": "boolean"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "notCounted": {
+            "items": {
+              "$ref": "#/components/schemas/NotCountedRead"
+            },
+            "title": "Notcounted",
+            "type": "array"
+          },
+          "policyVersion": {
+            "title": "Policyversion",
+            "type": "string"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeCellRecord"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "row": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row"
+          }
+        },
+        "required": [
+          "longitude",
+          "latitude",
+          "column",
+          "row",
+          "inside",
+          "density",
+          "cellM",
+          "bounds",
+          "records",
+          "notCounted",
+          "policyVersion"
+        ],
+        "title": "KnowledgeCellRead",
+        "type": "object"
+      },
+      "KnowledgeCellRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "arithmetic": {
+            "title": "Arithmetic",
+            "type": "string"
+          },
+          "best": {
+            "title": "Best",
+            "type": "boolean"
+          },
+          "credit": {
+            "title": "Credit",
+            "type": "number"
+          },
+          "record": {
+            "$ref": "#/components/schemas/KnowledgeRecordRead"
+          }
+        },
+        "required": [
+          "record",
+          "credit",
+          "best",
+          "arithmetic"
+        ],
+        "title": "KnowledgeCellRecord",
+        "type": "object"
+      },
+      "KnowledgeClassRead": {
+        "additionalProperties": false,
+        "properties": {
+          "example": {
+            "title": "Example",
+            "type": "string"
+          },
+          "halfLifeDays": {
+            "title": "Halflifedays",
+            "type": "number"
+          },
+          "id": {
+            "enum": [
+              "centimetre",
+              "field",
+              "aerial",
+              "satellite",
+              "regional"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "maxResolutionM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxresolutionm"
+          },
+          "quality": {
+            "title": "Quality",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "quality",
+          "halfLifeDays",
+          "maxResolutionM",
+          "example"
+        ],
+        "title": "KnowledgeClassRead",
+        "type": "object"
+      },
+      "KnowledgeGridRead": {
+        "additionalProperties": false,
+        "properties": {
+          "asOf": {
+            "format": "date-time",
+            "title": "Asof",
+            "type": "string"
+          },
+          "best": {
+            "$ref": "#/components/schemas/LonLatGrid"
+          },
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "density": {
+            "$ref": "#/components/schemas/LonLatGrid"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "notCounted": {
+            "items": {
+              "$ref": "#/components/schemas/NotCountedRead"
+            },
+            "title": "Notcounted",
+            "type": "array"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/KnowledgePolicyRead"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeRecordRead"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/KnowledgeSummary"
+          }
+        },
+        "required": [
+          "landId",
+          "boundaryRevision",
+          "asOf",
+          "density",
+          "best",
+          "records",
+          "summary",
+          "policy",
+          "notCounted"
+        ],
+        "title": "KnowledgeGridRead",
+        "type": "object"
+      },
+      "KnowledgeLink": {
+        "additionalProperties": false,
+        "description": "Where the record lives in the app: a scan site, an inventory feature, a land raster, an\naligned archive image, a research evidence row or a field survey.",
+        "properties": {
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "site",
+              "inventory",
+              "raster",
+              "registration",
+              "evidence",
+              "survey"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "KnowledgeLink",
+        "type": "object"
+      },
+      "KnowledgePolicyRead": {
+        "additionalProperties": false,
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeClassRead"
+            },
+            "title": "Classes",
+            "type": "array"
+          },
+          "fieldReachM": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Fieldreachm",
+            "type": "object"
+          },
+          "foggyThreshold": {
+            "title": "Foggythreshold",
+            "type": "number"
+          },
+          "formula": {
+            "title": "Formula",
+            "type": "string"
+          },
+          "undatedFactor": {
+            "title": "Undatedfactor",
+            "type": "number"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "classes",
+          "undatedFactor",
+          "fieldReachM",
+          "foggyThreshold",
+          "formula"
+        ],
+        "title": "KnowledgePolicyRead",
+        "type": "object"
+      },
+      "KnowledgeProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "provider",
+          "license",
+          "attribution"
+        ],
+        "title": "KnowledgeProvenance",
+        "type": "object"
+      },
+      "KnowledgeRecordRead": {
+        "additionalProperties": false,
+        "properties": {
+          "ageDays": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agedays"
+          },
+          "arithmetic": {
+            "title": "Arithmetic",
+            "type": "string"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "classId": {
+            "enum": [
+              "centimetre",
+              "field",
+              "aerial",
+              "satellite",
+              "regional"
+            ],
+            "title": "Classid",
+            "type": "string"
+          },
+          "classNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classnote"
+          },
+          "countedClassId": {
+            "enum": [
+              "centimetre",
+              "field",
+              "aerial",
+              "satellite",
+              "regional"
+            ],
+            "title": "Countedclassid",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "capture",
+              "inspection",
+              "raster-observation",
+              "archive-alignment",
+              "research-evidence",
+              "survey"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "link": {
+            "$ref": "#/components/schemas/KnowledgeLink"
+          },
+          "located": {
+            "title": "Located",
+            "type": "boolean"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "observedLabel": {
+            "title": "Observedlabel",
+            "type": "string"
+          },
+          "peakCredit": {
+            "title": "Peakcredit",
+            "type": "number"
+          },
+          "positionalUncertaintyM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positionaluncertaintym"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/KnowledgeProvenance"
+          },
+          "recordedAt": {
+            "format": "date-time",
+            "title": "Recordedat",
+            "type": "string"
+          },
+          "resolutionM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolutionm"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "title",
+          "classId",
+          "countedClassId",
+          "classNote",
+          "resolutionM",
+          "observedAt",
+          "observedLabel",
+          "recordedAt",
+          "ageDays",
+          "peakCredit",
+          "arithmetic",
+          "located",
+          "positionalUncertaintyM",
+          "cells",
+          "provenance",
+          "link"
+        ],
+        "title": "KnowledgeRecordRead",
+        "type": "object"
+      },
+      "KnowledgeScoutArea": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "bestClassCounts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Bestclasscounts",
+            "type": "object"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "footprint": {
+            "$ref": "#/components/schemas/Polygon"
+          },
+          "meanDensity": {
+            "title": "Meandensity",
+            "type": "number"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "footprint",
+          "areaM2",
+          "cells",
+          "meanDensity",
+          "bestClassCounts",
+          "reason"
+        ],
+        "title": "KnowledgeScoutArea",
+        "type": "object"
+      },
+      "KnowledgeScoutRead": {
+        "additionalProperties": false,
+        "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeScoutArea"
+            },
+            "title": "Areas",
+            "type": "array"
+          },
+          "budgetM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budgetm2"
+          },
+          "forecast": {
+            "title": "Forecast",
+            "type": "string"
+          },
+          "policyVersion": {
+            "title": "Policyversion",
+            "type": "string"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "truncatedByBudget": {
+            "title": "Truncatedbybudget",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "areas",
+          "threshold",
+          "budgetM2",
+          "truncatedByBudget",
+          "forecast",
+          "policyVersion"
+        ],
+        "title": "KnowledgeScoutRead",
+        "type": "object"
+      },
+      "KnowledgeScoutRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "budgetM2": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 50000000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budgetm2"
+          },
+          "cellM": {
+            "default": 20,
+            "maximum": 100.0,
+            "minimum": 10.0,
+            "title": "Cellm",
+            "type": "number"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus"
+          },
+          "maxAreas": {
+            "default": 3,
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Maxareas",
+            "type": "integer"
+          },
+          "threshold": {
+            "default": 0.5,
+            "maximum": 1.0,
+            "minimum": 0.05,
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "title": "KnowledgeScoutRequest",
+        "type": "object"
+      },
+      "KnowledgeSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "byBestClass": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Bybestclass",
+            "type": "object"
+          },
+          "foggyFraction": {
+            "title": "Foggyfraction",
+            "type": "number"
+          },
+          "insideCells": {
+            "title": "Insidecells",
+            "type": "integer"
+          },
+          "medianDensity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediandensity"
+          }
+        },
+        "required": [
+          "insideCells",
+          "byBestClass",
+          "foggyFraction",
+          "medianDensity"
+        ],
+        "title": "KnowledgeSummary",
         "type": "object"
       },
       "LandActionCreate": {
@@ -9881,6 +11010,245 @@
         "title": "LandFeatureRevisionRead",
         "type": "object"
       },
+      "LandGround": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LandGroundItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "landId",
+          "name",
+          "boundaryRevision",
+          "items",
+          "skipped"
+        ],
+        "title": "LandGround",
+        "type": "object"
+      },
+      "LandGroundItem": {
+        "additionalProperties": false,
+        "description": "One plannable piece of a Land. Read model: every field explicit.",
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "bufferM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bufferm"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "featureId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Featureid"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "kind": {
+            "enum": [
+              "boundary",
+              "feature"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "lengthM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lengthm"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineString"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "maxLength": 300,
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "zoneId": {
+            "maxLength": 40,
+            "title": "Zoneid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zoneId",
+          "kind",
+          "featureId",
+          "revision",
+          "name",
+          "category",
+          "status",
+          "footprint",
+          "line",
+          "areaM2",
+          "lengthM",
+          "bufferM",
+          "source"
+        ],
+        "title": "LandGroundItem",
+        "type": "object"
+      },
+      "LandHydrography": {
+        "additionalProperties": false,
+        "properties": {
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "bufferM": {
+            "title": "Bufferm",
+            "type": "number"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/HydrographyFeature"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PlaceFactSource"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "landId",
+          "boundaryRevision",
+          "status",
+          "message",
+          "bufferM",
+          "features",
+          "truncated",
+          "source",
+          "retrievedAt"
+        ],
+        "title": "LandHydrography",
+        "type": "object"
+      },
       "LandRasterRead": {
         "additionalProperties": false,
         "properties": {
@@ -10242,7 +11610,7 @@
         "properties": {
           "band": {
             "default": 1,
-            "maximum": 16.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Band",
             "type": "integer"
@@ -10284,7 +11652,7 @@
           },
           "band": {
             "default": 1,
-            "maximum": 16.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Band",
             "type": "integer"
@@ -11658,6 +13026,100 @@
         "title": "LiveState",
         "type": "object"
       },
+      "LonLatGrid": {
+        "additionalProperties": false,
+        "description": "`value = raw * scale + offset`, except raw == `nodata`. `data` is base64 of the raw\nvalues, little-endian, row-major from the north-west cell.",
+        "properties": {
+          "cellM": {
+            "exclusiveMinimum": 0.0,
+            "title": "Cellm",
+            "type": "number"
+          },
+          "columns": {
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Columns",
+            "type": "integer"
+          },
+          "data": {
+            "title": "Data",
+            "type": "string"
+          },
+          "east": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "East",
+            "type": "number"
+          },
+          "encoding": {
+            "enum": [
+              "u8",
+              "u16",
+              "f32"
+            ],
+            "title": "Encoding",
+            "type": "string"
+          },
+          "nodata": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodata"
+          },
+          "north": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "North",
+            "type": "number"
+          },
+          "offset": {
+            "default": 0.0,
+            "title": "Offset",
+            "type": "number"
+          },
+          "rows": {
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "scale": {
+            "default": 1.0,
+            "title": "Scale",
+            "type": "number"
+          },
+          "south": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "South",
+            "type": "number"
+          },
+          "west": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "West",
+            "type": "number"
+          }
+        },
+        "required": [
+          "west",
+          "south",
+          "east",
+          "north",
+          "columns",
+          "rows",
+          "cellM",
+          "encoding",
+          "data"
+        ],
+        "title": "LonLatGrid",
+        "type": "object"
+      },
       "MapFeature": {
         "additionalProperties": false,
         "properties": {
@@ -11977,6 +13439,25 @@
           "urlTemplate"
         ],
         "title": "MvtSource",
+        "type": "object"
+      },
+      "NotCountedRead": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "reason"
+        ],
+        "title": "NotCountedRead",
         "type": "object"
       },
       "ObjectiveAssessment": {
@@ -12325,10 +13806,204 @@
         "title": "PipelineCatalogue",
         "type": "object"
       },
+      "PlaceFact": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "enum": [
+              "modelled-surface",
+              "mapped-survey",
+              "classified-imagery",
+              "regulatory-map",
+              "regional-framework"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "cached": {
+            "default": false,
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "caveat": {
+            "title": "Caveat",
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Data",
+            "type": "object"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "kind": {
+            "enum": [
+              "elevation",
+              "soil",
+              "land-cover",
+              "flood-zone",
+              "ecoregion"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "retrievedAt": {
+            "format": "date-time",
+            "title": "Retrievedat",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlaceFactSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "vintage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vintage"
+          }
+        },
+        "required": [
+          "kind",
+          "status",
+          "label",
+          "basis",
+          "caveat",
+          "longitude",
+          "latitude",
+          "retrievedAt",
+          "source"
+        ],
+        "title": "PlaceFact",
+        "type": "object"
+      },
+      "PlaceFactSource": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "documentationUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Documentationurl",
+            "type": "string"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "linkUrl": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Linkurl",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "resolution": {
+            "title": "Resolution",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "name",
+          "url",
+          "linkUrl",
+          "documentationUrl",
+          "license",
+          "attribution",
+          "resolution"
+        ],
+        "title": "PlaceFactSource",
+        "type": "object"
+      },
       "PlanArea": {
         "additionalProperties": false,
-        "description": "A zone drawn in the console for this plan (the fleet backend owns the other zones).",
+        "description": "Ground the console found for this plan: an area drawn or outlined there, a saved\nLand's boundary or feature (the fleet backend owns the other zones).",
         "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution"
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutCapture"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "footprint": {
             "discriminator": {
               "mapping": {
@@ -12550,6 +14225,13 @@
             "title": "Clarifications",
             "type": "array"
           },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/ZoneCoverage"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
           "endDate": {
             "anyOf": [
               {
@@ -12688,6 +14370,14 @@
             "title": "Clarifications",
             "type": "array"
           },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/ZoneCoverage"
+            },
+            "maxItems": 500,
+            "title": "Coverage",
+            "type": "array"
+          },
           "endDate": {
             "anyOf": [
               {
@@ -12811,6 +14501,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 200,
             "title": "Preferredmachineids",
             "type": "array"
           },
@@ -12818,6 +14509,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
             "title": "Preferredzoneids",
             "type": "array"
           },
@@ -12914,6 +14606,18 @@
             "minimum": 0.0,
             "title": "Machinehours",
             "type": "number"
+          },
+          "pathM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pathm"
           }
         },
         "required": [
@@ -12941,6 +14645,17 @@
             },
             "title": "Assumptions",
             "type": "array"
+          },
+          "boundaryRevision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundaryrevision"
           },
           "cadence": {
             "enum": [
@@ -12982,6 +14697,30 @@
             "title": "Id",
             "type": "string"
           },
+          "landActionId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landactionid"
+          },
+          "landId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landid"
+          },
           "machineIds": {
             "items": {
               "type": "string"
@@ -13003,6 +14742,10 @@
           "objective": {
             "title": "Objective",
             "type": "string"
+          },
+          "private": {
+            "title": "Private",
+            "type": "boolean"
           },
           "projectId": {
             "title": "Projectid",
@@ -13116,6 +14859,10 @@
           "model",
           "revision",
           "revisions",
+          "landId",
+          "boundaryRevision",
+          "private",
+          "landActionId",
           "createdAt",
           "updatedAt"
         ],
@@ -13566,6 +15313,49 @@
             "minimum": 0.0,
             "title": "Acres",
             "type": "number"
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutCapture"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "geometry": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "LineString": "#/components/schemas/LineString",
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Point": "#/components/schemas/Point",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Point"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LineString"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geometry"
           },
           "id": {
             "maxLength": 40,
@@ -14280,7 +16070,7 @@
             "type": "array"
           },
           "index": {
-            "maximum": 16.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Index",
             "type": "integer"
@@ -14441,7 +16231,7 @@
             "items": {
               "$ref": "#/components/schemas/RasterBand"
             },
-            "maxItems": 16,
+            "maxItems": 30,
             "minItems": 1,
             "title": "Bands",
             "type": "array"
@@ -14502,11 +16292,21 @@
             "title": "Sampledaream2",
             "type": "number"
           },
+          "signature": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignatureInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sources": {
             "items": {
               "$ref": "#/components/schemas/RasterSource"
             },
-            "maxItems": 40,
+            "maxItems": 64,
             "title": "Sources",
             "type": "array"
           },
@@ -14588,7 +16388,9 @@
             "enum": [
               "cop-dem-glo-30",
               "esa-worldcover-2021",
-              "sentinel-2-ndvi"
+              "sentinel-2-ndvi",
+              "sentinel-2-signature",
+              "usgs-3dep-13"
             ],
             "title": "Dataset",
             "type": "string"
@@ -15545,6 +17347,51 @@
         "title": "ResearchPage",
         "type": "object"
       },
+      "ResearchQueueStatus": {
+        "additionalProperties": false,
+        "description": "Runs waiting or running in the caller's workspace only.",
+        "properties": {
+          "oldestQueuedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldestqueuedat"
+          },
+          "oldestQueuedSeconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldestqueuedseconds"
+          },
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued",
+          "oldestQueuedAt",
+          "oldestQueuedSeconds",
+          "running"
+        ],
+        "title": "ResearchQueueStatus",
+        "type": "object"
+      },
       "ResearchStatus": {
         "additionalProperties": false,
         "properties": {
@@ -15563,6 +17410,12 @@
             "title": "Modelconfigured",
             "type": "boolean"
           },
+          "queue": {
+            "$ref": "#/components/schemas/ResearchQueueStatus"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/ResearchWorkerStatus"
+          },
           "workerRequired": {
             "default": true,
             "title": "Workerrequired",
@@ -15571,9 +17424,67 @@
         },
         "required": [
           "modelConfigured",
-          "model"
+          "model",
+          "worker",
+          "queue"
         ],
         "title": "ResearchStatus",
+        "type": "object"
+      },
+      "ResearchWorkerStatus": {
+        "additionalProperties": false,
+        "description": "Whether any research worker is alive. Ages come from the database clock.\n\nonline: seen within 45 s and not stopped. stale: seen before, not lately. stopped: the\nnewest worker said it was stopping. never: no worker has checked in on this server.",
+        "properties": {
+          "busy": {
+            "title": "Busy",
+            "type": "boolean"
+          },
+          "checkInEverySeconds": {
+            "default": 15,
+            "title": "Checkineveryseconds",
+            "type": "integer"
+          },
+          "lastSeenAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastseenat"
+          },
+          "secondsSinceSeen": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondssinceseen"
+          },
+          "state": {
+            "enum": [
+              "online",
+              "stale",
+              "stopped",
+              "never"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "lastSeenAt",
+          "secondsSinceSeen",
+          "busy"
+        ],
+        "title": "ResearchWorkerStatus",
         "type": "object"
       },
       "ResolutionMetadata": {
@@ -16794,6 +18705,68 @@
         "title": "ScenarioRevise",
         "type": "object"
       },
+      "ScoutCapture": {
+        "additionalProperties": false,
+        "properties": {
+          "altitudeM": {
+            "maximum": 120.0,
+            "minimum": 20.0,
+            "title": "Altitudem",
+            "type": "number"
+          },
+          "camera": {
+            "const": "dji-m3e-wide",
+            "default": "dji-m3e-wide",
+            "title": "Camera",
+            "type": "string"
+          },
+          "forwardOverlap": {
+            "maximum": 0.9,
+            "minimum": 0.5,
+            "title": "Forwardoverlap",
+            "type": "number"
+          },
+          "headingDeg": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 360.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headingdeg"
+          },
+          "purpose": {
+            "const": "lift-knowledge-fog",
+            "default": "lift-knowledge-fog",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "sideOverlap": {
+            "maximum": 0.9,
+            "minimum": 0.5,
+            "title": "Sideoverlap",
+            "type": "number"
+          },
+          "speedMs": {
+            "maximum": 15.0,
+            "minimum": 1.0,
+            "title": "Speedms",
+            "type": "number"
+          }
+        },
+        "required": [
+          "altitudeM",
+          "forwardOverlap",
+          "sideOverlap",
+          "speedMs"
+        ],
+        "title": "ScoutCapture",
+        "type": "object"
+      },
       "Select": {
         "additionalProperties": false,
         "properties": {
@@ -17178,6 +19151,592 @@
           "flaggedAt"
         ],
         "title": "SidecarFlag",
+        "type": "object"
+      },
+      "SignatureFeature": {
+        "additionalProperties": false,
+        "description": "One band of a seasonal Sentinel-2 signature: which window and which measurement.",
+        "properties": {
+          "band": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Band",
+            "type": "integer"
+          },
+          "commonMean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commonmean"
+          },
+          "commonStandardDeviation": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commonstandarddeviation"
+          },
+          "key": {
+            "enum": [
+              "green",
+              "red",
+              "nir",
+              "swir16",
+              "ndvi"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "window": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "band",
+          "window",
+          "key",
+          "name",
+          "commonMean",
+          "commonStandardDeviation"
+        ],
+        "title": "SignatureFeature",
+        "type": "object"
+      },
+      "SignatureInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "commonCells": {
+            "minimum": 0.0,
+            "title": "Commoncells",
+            "type": "integer"
+          },
+          "commonCoverageFraction": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commoncoveragefraction"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureFeature"
+            },
+            "maxItems": 30,
+            "minItems": 10,
+            "title": "Features",
+            "type": "array"
+          },
+          "similarity": {
+            "title": "Similarity",
+            "type": "string"
+          },
+          "standardization": {
+            "title": "Standardization",
+            "type": "string"
+          }
+        },
+        "required": [
+          "features",
+          "commonCells",
+          "commonCoverageFraction",
+          "standardization",
+          "similarity"
+        ],
+        "title": "SignatureInfo",
+        "type": "object"
+      },
+      "SignatureLeftOut": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "minimum": 0.0,
+            "title": "Aream2",
+            "type": "number"
+          },
+          "patches": {
+            "minimum": 0.0,
+            "title": "Patches",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "patches",
+          "areaM2"
+        ],
+        "title": "SignatureLeftOut",
+        "type": "object"
+      },
+      "SignatureScene": {
+        "additionalProperties": false,
+        "description": "One dated window of the signature: the scene it was read from.",
+        "properties": {
+          "acquiredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acquiredat"
+          },
+          "period": {
+            "$ref": "#/components/schemas/VegetationPeriod"
+          },
+          "sceneId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sceneid"
+          },
+          "window": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window",
+          "period",
+          "sceneId",
+          "acquiredAt"
+        ],
+        "title": "SignatureScene",
+        "type": "object"
+      },
+      "SignatureSeed": {
+        "additionalProperties": false,
+        "properties": {
+          "cellLatitude": {
+            "title": "Celllatitude",
+            "type": "number"
+          },
+          "cellLongitude": {
+            "title": "Celllongitude",
+            "type": "number"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureSeedWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "longitude",
+          "latitude",
+          "cellLongitude",
+          "cellLatitude",
+          "windows"
+        ],
+        "title": "SignatureSeed",
+        "type": "object"
+      },
+      "SignatureSeedWindow": {
+        "additionalProperties": false,
+        "description": "The tapped cell's own values in one window (reflectance 0..1, NDVI -1..1).",
+        "properties": {
+          "acquiredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acquiredat"
+          },
+          "green": {
+            "title": "Green",
+            "type": "number"
+          },
+          "ndvi": {
+            "title": "Ndvi",
+            "type": "number"
+          },
+          "nir": {
+            "title": "Nir",
+            "type": "number"
+          },
+          "red": {
+            "title": "Red",
+            "type": "number"
+          },
+          "swir16": {
+            "title": "Swir16",
+            "type": "number"
+          },
+          "window": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window",
+          "acquiredAt",
+          "green",
+          "red",
+          "nir",
+          "swir16",
+          "ndvi"
+        ],
+        "title": "SignatureSeedWindow",
+        "type": "object"
+      },
+      "SignatureSimilarityRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "boundaryCells": {
+            "minimum": 0.0,
+            "title": "Boundarycells",
+            "type": "integer"
+          },
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "cellAreaM2": {
+            "title": "Cellaream2",
+            "type": "number"
+          },
+          "comparedCells": {
+            "minimum": 0.0,
+            "title": "Comparedcells",
+            "type": "integer"
+          },
+          "grid": {
+            "$ref": "#/components/schemas/LonLatGrid"
+          },
+          "interpretation": {
+            "title": "Interpretation",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "nativeResolutionM": {
+            "title": "Nativeresolutionm",
+            "type": "number"
+          },
+          "rasterId": {
+            "format": "uuid",
+            "title": "Rasterid",
+            "type": "string"
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureScene"
+            },
+            "title": "Scenes",
+            "type": "array"
+          },
+          "seed": {
+            "$ref": "#/components/schemas/SignatureSeed"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rasterId",
+          "landId",
+          "boundaryRevision",
+          "stale",
+          "seed",
+          "grid",
+          "cellAreaM2",
+          "nativeResolutionM",
+          "comparedCells",
+          "boundaryCells",
+          "scenes",
+          "method",
+          "interpretation",
+          "warnings",
+          "attribution"
+        ],
+        "title": "SignatureSimilarityRead",
+        "type": "object"
+      },
+      "SignatureZone": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "minimum": 0.0,
+            "title": "Aream2",
+            "type": "number"
+          },
+          "cells": {
+            "minimum": 0.0,
+            "title": "Cells",
+            "type": "integer"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "meanSimilarity": {
+            "title": "Meansimilarity",
+            "type": "number"
+          },
+          "patches": {
+            "minimum": 1.0,
+            "title": "Patches",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "footprint",
+          "areaM2",
+          "cells",
+          "meanSimilarity",
+          "patches"
+        ],
+        "title": "SignatureZone",
+        "type": "object"
+      },
+      "SignatureZonesRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "cellAreaM2": {
+            "title": "Cellaream2",
+            "type": "number"
+          },
+          "dropped": {
+            "$ref": "#/components/schemas/SignatureLeftOut"
+          },
+          "interpretation": {
+            "title": "Interpretation",
+            "type": "string"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "matchedCells": {
+            "minimum": 0.0,
+            "title": "Matchedcells",
+            "type": "integer"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "nativeResolutionM": {
+            "title": "Nativeresolutionm",
+            "type": "number"
+          },
+          "protectedCells": {
+            "minimum": 0.0,
+            "title": "Protectedcells",
+            "type": "integer"
+          },
+          "rasterId": {
+            "format": "uuid",
+            "title": "Rasterid",
+            "type": "string"
+          },
+          "remainder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignatureZone"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureScene"
+            },
+            "title": "Scenes",
+            "type": "array"
+          },
+          "seed": {
+            "$ref": "#/components/schemas/SignatureSeed"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "unoutlined": {
+            "$ref": "#/components/schemas/SignatureLeftOut"
+          },
+          "zones": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureZone"
+            },
+            "title": "Zones",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rasterId",
+          "landId",
+          "boundaryRevision",
+          "stale",
+          "threshold",
+          "seed",
+          "zones",
+          "remainder",
+          "dropped",
+          "unoutlined",
+          "protectedCells",
+          "matchedCells",
+          "cellAreaM2",
+          "nativeResolutionM",
+          "scenes",
+          "method",
+          "interpretation",
+          "attribution"
+        ],
+        "title": "SignatureZonesRead",
+        "type": "object"
+      },
+      "SignatureZonesRequest": {
+        "additionalProperties": false,
+        "description": "The seed again (the server recomputes on the analysis grid), the slider's threshold\nand the cells the operator protected.",
+        "properties": {
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          },
+          "maxZones": {
+            "default": 8,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Maxzones",
+            "type": "integer"
+          },
+          "minPatchM2": {
+            "default": 2000,
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Minpatchm2",
+            "type": "number"
+          },
+          "protected": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            },
+            "maxItems": 5000,
+            "title": "Protected",
+            "type": "array"
+          },
+          "threshold": {
+            "default": 0.8,
+            "maximum": 0.99,
+            "minimum": 0.3,
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "required": [
+          "longitude",
+          "latitude"
+        ],
+        "title": "SignatureZonesRequest",
         "type": "object"
       },
       "SiteCreate": {
@@ -18902,6 +21461,59 @@
         "title": "StacSource",
         "type": "object"
       },
+      "StatedAccuracy": {
+        "additionalProperties": false,
+        "description": "How far positions may be off, and on whose word.\n\nmeasured-fit: control points measured against the image (a land's own alignment).\nstated-by-source: the record's own sentence, quoted in `basis`. standard: the published\nstandard the source was made to, if the sheet states compliance. not-stated: the record says\nnothing, and nothing is borrowed from another year or product.",
+        "properties": {
+          "basis": {
+            "maxLength": 1200,
+            "title": "Basis",
+            "type": "string"
+          },
+          "citationUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citationurl"
+          },
+          "kind": {
+            "enum": [
+              "measured-fit",
+              "stated-by-source",
+              "standard",
+              "not-stated"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "valueM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valuem"
+          }
+        },
+        "required": [
+          "kind",
+          "basis"
+        ],
+        "title": "StatedAccuracy",
+        "type": "object"
+      },
       "StorageReconciliation": {
         "additionalProperties": false,
         "description": "One pass over the prefixes this system owns, against the rows that claim them.",
@@ -19847,7 +22459,7 @@
             "title": "Acquiredat"
           },
           "band": {
-            "maximum": 6.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Band",
             "type": "integer"
@@ -20162,6 +22774,380 @@
         "title": "WmtsSource",
         "type": "object"
       },
+      "WorkableCreeks": {
+        "additionalProperties": false,
+        "properties": {
+          "counted": {
+            "minimum": 0.0,
+            "title": "Counted",
+            "type": "integer"
+          },
+          "ephemeralIncluded": {
+            "title": "Ephemeralincluded",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "empty",
+              "uncovered",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "label",
+          "counted",
+          "ephemeralIncluded",
+          "message"
+        ],
+        "title": "WorkableCreeks",
+        "type": "object"
+      },
+      "WorkableElevation": {
+        "additionalProperties": false,
+        "properties": {
+          "dataset": {
+            "enum": [
+              "usgs-3dep-13",
+              "cop-dem-glo-30"
+            ],
+            "title": "Dataset",
+            "type": "string"
+          },
+          "edgeM": {
+            "title": "Edgem",
+            "type": "number"
+          },
+          "fallback": {
+            "title": "Fallback",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "published": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published"
+          },
+          "rasterId": {
+            "format": "uuid",
+            "title": "Rasterid",
+            "type": "string"
+          },
+          "resolutionM": {
+            "title": "Resolutionm",
+            "type": "number"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rasterId",
+          "dataset",
+          "label",
+          "published",
+          "resolutionM",
+          "edgeM",
+          "stale",
+          "fallback"
+        ],
+        "title": "WorkableElevation",
+        "type": "object"
+      },
+      "WorkableGroundRead": {
+        "additionalProperties": false,
+        "properties": {
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "boundaryRevision": {
+            "title": "Boundaryrevision",
+            "type": "integer"
+          },
+          "creeks": {
+            "$ref": "#/components/schemas/WorkableCreeks"
+          },
+          "elevation": {
+            "$ref": "#/components/schemas/WorkableElevation"
+          },
+          "footprintM2": {
+            "minimum": 0.0,
+            "title": "Footprintm2",
+            "type": "number"
+          },
+          "landId": {
+            "format": "uuid",
+            "title": "Landid",
+            "type": "string"
+          },
+          "leftOut": {
+            "items": {
+              "$ref": "#/components/schemas/WorkableLeftOut"
+            },
+            "title": "Leftout",
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/WorkableLimits"
+          },
+          "removed": {
+            "$ref": "#/components/schemas/WorkableRemoved"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "workable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workableM2": {
+            "minimum": 0.0,
+            "title": "Workablem2",
+            "type": "number"
+          }
+        },
+        "required": [
+          "landId",
+          "boundaryRevision",
+          "workable",
+          "footprintM2",
+          "workableM2",
+          "removed",
+          "leftOut",
+          "limits",
+          "elevation",
+          "creeks",
+          "sources",
+          "assumptions",
+          "warnings"
+        ],
+        "title": "WorkableGroundRead",
+        "type": "object"
+      },
+      "WorkableGroundRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "demRasterId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Demrasterid"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "includeEphemeralCreeks": {
+            "default": false,
+            "title": "Includeephemeralcreeks",
+            "type": "boolean"
+          },
+          "machineClass": {
+            "enum": [
+              "mower",
+              "seeder",
+              "survey",
+              "drone"
+            ],
+            "title": "Machineclass",
+            "type": "string"
+          }
+        },
+        "required": [
+          "footprint",
+          "machineClass"
+        ],
+        "title": "WorkableGroundRequest",
+        "type": "object"
+      },
+      "WorkableLeftOut": {
+        "additionalProperties": false,
+        "description": "One reason's left-out ground, for the map to draw hatched.",
+        "properties": {
+          "areaM2": {
+            "minimum": 0.0,
+            "title": "Aream2",
+            "type": "number"
+          },
+          "geometry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "steep",
+              "steep-edge",
+              "creek-buffer",
+              "sliver",
+              "no-data"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "label",
+          "areaM2",
+          "geometry"
+        ],
+        "title": "WorkableLeftOut",
+        "type": "object"
+      },
+      "WorkableLimits": {
+        "additionalProperties": false,
+        "properties": {
+          "creekBufferM": {
+            "title": "Creekbufferm",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "machineClass": {
+            "enum": [
+              "mower",
+              "seeder",
+              "survey",
+              "drone"
+            ],
+            "title": "Machineclass",
+            "type": "string"
+          },
+          "maxSlopePct": {
+            "title": "Maxslopepct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "machineClass",
+          "label",
+          "maxSlopePct",
+          "creekBufferM"
+        ],
+        "title": "WorkableLimits",
+        "type": "object"
+      },
+      "WorkableRemoved": {
+        "additionalProperties": false,
+        "description": "Ground taken out of the outline, by reason. Each part is counted once, in the order\nno data, too steep, steep edge, creek buffer, slivers, so the parts and `workableM2` add up\nto `footprintM2`.",
+        "properties": {
+          "creekBufferM2": {
+            "minimum": 0.0,
+            "title": "Creekbufferm2",
+            "type": "number"
+          },
+          "noDataM2": {
+            "minimum": 0.0,
+            "title": "Nodatam2",
+            "type": "number"
+          },
+          "slivers": {
+            "minimum": 0.0,
+            "title": "Slivers",
+            "type": "integer"
+          },
+          "sliversM2": {
+            "minimum": 0.0,
+            "title": "Sliversm2",
+            "type": "number"
+          },
+          "steepEdgeM2": {
+            "minimum": 0.0,
+            "title": "Steepedgem2",
+            "type": "number"
+          },
+          "steepM2": {
+            "minimum": 0.0,
+            "title": "Steepm2",
+            "type": "number"
+          }
+        },
+        "required": [
+          "steepM2",
+          "steepEdgeM2",
+          "creekBufferM2",
+          "sliversM2",
+          "slivers",
+          "noDataM2"
+        ],
+        "title": "WorkableRemoved",
+        "type": "object"
+      },
       "WorkerCreate": {
         "additionalProperties": false,
         "properties": {
@@ -20213,6 +23199,184 @@
           "name"
         ],
         "title": "WorkspaceCreate",
+        "type": "object"
+      },
+      "WorkspaceMissionCreate": {
+        "additionalProperties": false,
+        "description": "A plan approved inside a workspace: private, and optionally on one of its saved Lands.",
+        "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/PlanArea"
+            },
+            "maxItems": 50,
+            "title": "Areas",
+            "type": "array"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "boundaryRevision": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundaryrevision"
+          },
+          "cadence": {
+            "default": "once",
+            "enum": [
+              "once",
+              "daily",
+              "weekly",
+              "monthly",
+              "seasonal"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "endDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enddate"
+          },
+          "estimates": {
+            "$ref": "#/components/schemas/PlanEstimates"
+          },
+          "goal": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "landId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landid"
+          },
+          "machineIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Machineids",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "objective": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Objective",
+            "type": "string"
+          },
+          "projectId": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Projectid",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "risks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risks",
+            "type": "array"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "source": {
+            "default": "rules",
+            "enum": [
+              "claude",
+              "rules"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "startDate": {
+            "format": "date",
+            "title": "Startdate",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "zoneIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Zoneids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "objective",
+          "goal",
+          "startDate",
+          "estimates",
+          "projectId"
+        ],
+        "title": "WorkspaceMissionCreate",
         "type": "object"
       },
       "WorkspaceRead": {
@@ -20308,6 +23472,132 @@
           "urlTemplate"
         ],
         "title": "XyzSource",
+        "type": "object"
+      },
+      "ZoneCoverage": {
+        "additionalProperties": false,
+        "description": "How one zone's work was sized from its outline: the path, the assumed machine class\n(`app/services/machine_classes.json`) and the hours that follow. `basis` is the sentence\nthe console shows beside the number.",
+        "properties": {
+          "altitudeM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Altitudem"
+          },
+          "areaM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aream2"
+          },
+          "basis": {
+            "maxLength": 600,
+            "title": "Basis",
+            "type": "string"
+          },
+          "capped": {
+            "title": "Capped",
+            "type": "boolean"
+          },
+          "hours": {
+            "minimum": 0.0,
+            "title": "Hours",
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "area",
+              "line"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "lengthM": {
+            "minimum": 0.0,
+            "title": "Lengthm",
+            "type": "number"
+          },
+          "machineClass": {
+            "enum": [
+              "mower",
+              "seeder",
+              "survey",
+              "drone"
+            ],
+            "title": "Machineclass",
+            "type": "string"
+          },
+          "passes": {
+            "minimum": 0.0,
+            "title": "Passes",
+            "type": "integer"
+          },
+          "spacingM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spacingm"
+          },
+          "spans": {
+            "minimum": 0.0,
+            "title": "Spans",
+            "type": "integer"
+          },
+          "speedMps": {
+            "exclusiveMinimum": 0.0,
+            "title": "Speedmps",
+            "type": "number"
+          },
+          "transitM": {
+            "minimum": 0.0,
+            "title": "Transitm",
+            "type": "number"
+          },
+          "turnS": {
+            "minimum": 0.0,
+            "title": "Turns",
+            "type": "number"
+          },
+          "zoneId": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Zoneid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zoneId",
+          "kind",
+          "machineClass",
+          "areaM2",
+          "lengthM",
+          "transitM",
+          "passes",
+          "spans",
+          "spacingM",
+          "speedMps",
+          "turnS",
+          "hours",
+          "capped",
+          "basis"
+        ],
+        "title": "ZoneCoverage",
         "type": "object"
       }
     },
@@ -22304,6 +25594,274 @@
         ]
       }
     },
+    "/api/v1/imagery/dated": {
+      "get": {
+        "description": "NAIP years, dry-season Sentinel-2 scenes and USGS historical map editions over an area\n(each side at most 0.25\u00b0), newest first, each with its date's meaning, its licence and its\nstated positional accuracy. A provider that fails is listed as unavailable; the others\nstill answer. Cached on this server for 6 h per area rounded to 0.01\u00b0; a catalog missing\nsomething that may answer if asked again is cached for seconds, and not by browsers.\n\nAn `async def`, so a catalog waiting for one of the few catalog builders waits on the event\nloop and holds none of the threads every other route runs on; the build runs on the\nbuilders' own threads (dated_imagery.build). Past them it is answered busy (503).",
+        "operationId": "dated_api_v1_imagery_dated_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "west",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "West",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "south",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "South",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "east",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "East",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "north",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "North",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatedImageryCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "description": "Every catalog builder is busy: ask again after Retry-After seconds."
+          }
+        },
+        "summary": "Dated public imagery for an area",
+        "tags": [
+          "dated imagery"
+        ]
+      }
+    },
+    "/api/v1/imagery/usgs-topo/tiles/{z}/{x}/{y}.png": {
+      "get": {
+        "description": "A 256 px PNG on the WGS1984Quad grid (the grid of the land raster tiles), cut from the\nsheet's USGS GeoTIFF and transparent outside its neatline (`w`, `s`, `e`, `n`, NAD27).\n\nAn `async def`, so a tile waiting for one of the tiler's few sheet readers waits on the event\nloop and holds none of the threads every other route runs on; the read itself runs on the\ntiler's own threads (usgs_topo_tiles.render_tile).",
+        "operationId": "usgs_topo_tile_api_v1_imagery_usgs_topo_tiles__z___x___y__png_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "z",
+            "required": true,
+            "schema": {
+              "title": "Z",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "x",
+            "required": true,
+            "schema": {
+              "title": "X",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "y",
+            "required": true,
+            "schema": {
+              "title": "Y",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "STATE/STATE_name_scanid_year_scale_geo",
+            "in": "query",
+            "name": "sheet",
+            "required": true,
+            "schema": {
+              "description": "STATE/STATE_name_scanid_year_scale_geo",
+              "maxLength": 120,
+              "title": "Sheet",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "w",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "W",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "s",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "S",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "e",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "E",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "N",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "204": {
+            "description": "The client left before the tile was drawn; nothing was read."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "description": "Every sheet reader is busy: ask again after Retry-After seconds."
+          }
+        },
+        "summary": "A tile of a USGS historical topographic map",
+        "tags": [
+          "dated imagery"
+        ]
+      }
+    },
     "/api/v1/ion/assets/{asset_id}": {
       "get": {
         "description": "Narrow, documented read of `GET https://api.cesium.com/v1/assets/{id}` using the server-side ion token. Used to monitor reconstruction jobs. This is not a general proxy.",
@@ -23663,6 +27221,114 @@
         ]
       }
     },
+    "/api/v1/land/rasters/{raster_id}/grid": {
+      "get": {
+        "description": "One band's values on a lon/lat grid (float32, NaN for no value), e.g. the elevation a\nplan's dress rehearsal reads slope from.",
+        "operationId": "band_grid_api_v1_land_rasters__raster_id__grid_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "band",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 30,
+              "minimum": 1,
+              "title": "Band",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LonLatGrid"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Band Grid",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
     "/api/v1/land/rasters/{raster_id}/sample": {
       "get": {
         "operationId": "sample_api_v1_land_rasters__raster_id__sample_get",
@@ -23775,6 +27441,230 @@
           }
         ],
         "summary": "Sample",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
+    "/api/v1/land/rasters/{raster_id}/similar": {
+      "get": {
+        "description": "How alike every cell of the land is to the tapped one, by seasonal Sentinel-2 signature\n(a `sentinel-2-signature` raster; 409 for any other). Computed on request, never saved.",
+        "operationId": "similar_api_v1_land_rasters__raster_id__similar_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Longitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureSimilarityRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Similar",
+        "tags": [
+          "land rasters"
+        ]
+      }
+    },
+    "/api/v1/land/rasters/{raster_id}/similar/zones": {
+      "post": {
+        "description": "The cells at least `threshold` alike to the tapped one, protected ground left out, as\nareas for a plan: the largest patches each, the rest together. Read-only computation.",
+        "operationId": "similar_zones_api_v1_land_rasters__raster_id__similar_zones_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "raster_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Raster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignatureZonesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureZonesRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Similar Zones",
         "tags": [
           "land rasters"
         ]
@@ -28899,6 +32789,198 @@
         ]
       }
     },
+    "/api/v1/land/{land_id}/ground": {
+      "get": {
+        "description": "The land as mission ground: its boundary and inventory features as plannable zones.",
+        "operationId": "area_ground_api_v1_land__land_id__ground_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandGround"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Area Ground",
+        "tags": [
+          "land"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/hydrography": {
+      "get": {
+        "description": "USGS NHD streams and ditches within 100 m of the land, read live and cited.",
+        "operationId": "area_hydrography_api_v1_land__land_id__hydrography_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandHydrography"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Area Hydrography",
+        "tags": [
+          "land"
+        ]
+      }
+    },
     "/api/v1/land/{land_id}/investigations": {
       "get": {
         "operationId": "list_investigations_api_v1_land__land_id__investigations_get",
@@ -29121,6 +33203,381 @@
         "summary": "Create Investigation",
         "tags": [
           "land research"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/knowledge": {
+      "get": {
+        "operationId": "grid_api_v1_land__land_id__knowledge_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cellM",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 10,
+              "title": "Cellm",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asOf",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Asof"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeGridRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Grid",
+        "tags": [
+          "land knowledge"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/knowledge/cell": {
+      "get": {
+        "operationId": "cell_api_v1_land__land_id__knowledge_cell_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Longitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cellM",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 10,
+              "title": "Cellm",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asOf",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Asof"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeCellRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Cell",
+        "tags": [
+          "land knowledge"
+        ]
+      }
+    },
+    "/api/v1/land/{land_id}/knowledge/scout-areas": {
+      "post": {
+        "operationId": "scout_areas_api_v1_land__land_id__knowledge_scout_areas_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeScoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeScoutRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Scout Areas",
+        "tags": [
+          "land knowledge"
         ]
       }
     },
@@ -31569,6 +36026,112 @@
         ]
       }
     },
+    "/api/v1/land/{land_id}/workable-ground": {
+      "post": {
+        "description": "The part of an outline on this land a ground machine class can work: less the slope\nover its assumed limit (the land's elevation raster) and its assumed buffer around USGS\nNHD creeks. Derived on request, never saved; what the dress rehearsal's hands ask for.",
+        "operationId": "workable_ground_api_v1_land__land_id__workable_ground_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "land_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Land Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkableGroundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkableGroundRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Workable Ground",
+        "tags": [
+          "land"
+        ]
+      }
+    },
     "/api/v1/layers": {
       "get": {
         "operationId": "list_layers_api_v1_layers_get",
@@ -32380,6 +36943,7 @@
     },
     "/api/v1/plans": {
       "get": {
+        "description": "The project's public plans, oldest first: the newest 200 when it has more.",
         "operationId": "list_plans_api_v1_plans_get",
         "parameters": [
           {
@@ -32407,7 +36971,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Truncated": {
+                "description": "'true' when older plans were left out: a list holds the newest only.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -34470,6 +39042,142 @@
         ]
       }
     },
+    "/api/v1/research/place/{fact}": {
+      "get": {
+        "description": "One public fact about a point, looked up live and not saved (app/research/place.py).\n\nBehind land identity and its own rate limit, so it is not an open proxy to the agencies.",
+        "operationId": "place_fact_api_v1_research_place__fact__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fact",
+            "required": true,
+            "schema": {
+              "enum": [
+                "elevation",
+                "soil",
+                "land-cover",
+                "flood-zone",
+                "ecoregion"
+              ],
+              "title": "Fact",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Longitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Ask the source again after a cached failure.",
+            "in": "query",
+            "name": "retry",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Ask the source again after a cached failure.",
+              "title": "Retry",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceFact"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Place Fact",
+        "tags": [
+          "land research"
+        ]
+      }
+    },
     "/api/v1/research/runs/{run_id}": {
       "get": {
         "operationId": "get_run_api_v1_research_runs__run_id__get",
@@ -34977,6 +39685,7 @@
     },
     "/api/v1/research/status": {
       "get": {
+        "description": "What research can do here: the model, the worker's presence and this workspace's queue.\n\nPolled every 10 s while a run waits (useResearchStatus), so it holds no transaction.",
         "operationId": "status_api_v1_research_status_get",
         "parameters": [
           {
@@ -36935,6 +41644,547 @@
         "summary": "Remove Member",
         "tags": [
           "workspaces"
+        ]
+      }
+    },
+    "/api/v1/workspaces/missions": {
+      "get": {
+        "description": "The workspace's missions, oldest first: the newest `limit` when it has more.",
+        "operationId": "list_missions_api_v1_workspaces_missions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "projectId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Projectid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "landId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Landid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlanRead"
+                  },
+                  "title": "Response List Missions Api V1 Workspaces Missions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response",
+            "headers": {
+              "X-Truncated": {
+                "description": "'true' when older plans were left out: a list holds the newest only.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "List the workspace's missions",
+        "tags": [
+          "workspace missions"
+        ]
+      },
+      "post": {
+        "operationId": "create_mission_api_v1_workspaces_missions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMissionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Approve a mission in the workspace",
+        "tags": [
+          "workspace missions"
+        ]
+      }
+    },
+    "/api/v1/workspaces/missions/{plan_id}": {
+      "get": {
+        "operationId": "get_mission_api_v1_workspaces_missions__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Get a workspace mission",
+        "tags": [
+          "workspace missions"
+        ]
+      },
+      "put": {
+        "operationId": "revise_mission_api_v1_workspaces_missions__plan_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRevise"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Approve a new mission revision",
+        "tags": [
+          "workspace missions"
+        ]
+      }
+    },
+    "/api/v1/workspaces/missions/{plan_id}/status": {
+      "patch": {
+        "operationId": "set_mission_status_api_v1_workspaces_missions__plan_id__status_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Workspace-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanStatusUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Change a mission's lifecycle state",
+        "tags": [
+          "workspace missions"
         ]
       }
     },

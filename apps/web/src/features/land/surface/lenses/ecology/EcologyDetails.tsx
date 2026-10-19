@@ -5,6 +5,7 @@ import type { LandArea, LandEvidence } from "@twin/contracts";
 import { GlassButton, GlassSelect, GlassTextarea } from "@twin/ui";
 
 import { EvidenceView } from "../../../EvidenceView";
+import { analysisBlocker } from "../../../researchAvailability";
 import {
   PROVIDERS,
   SOURCE_LABELS,
@@ -43,6 +44,10 @@ export function EcologyDetails({
   const [evidence, setEvidence] = useState<LandEvidence | null>(null);
   const [evidencePage, setEvidencePage] = useState(0);
   const { choices, setChoices, chosenRequest, canEdit } = research;
+  // The lookup in progress blocks another; otherwise the choices must make a request.
+  const blocked = research.running
+    ? analysisBlocker({ ready: true, canEdit: true, run: research.run ?? undefined })
+    : null;
   const sources = Object.values(context?.sources ?? {});
   const evidenceItems = context?.evidence ?? [];
   const evidencePages = Math.max(1, Math.ceil(evidenceItems.length / EVIDENCE_PAGE));
@@ -117,7 +122,7 @@ export function EcologyDetails({
               whether it is native, or whether it suits restoration.
             </p>
             {!chosenRequest && (
-              <p role="status" className="land-muted">
+              <p role="status" className="land-muted" id={`${id}-choices`}>
                 Choose at least one source or name. Use at most 20 distinct names, each under 201
                 characters.
               </p>
@@ -127,11 +132,19 @@ export function EcologyDetails({
                 size="sm"
                 leadingIcon={<Play size={14} aria-hidden="true" />}
                 disabled={!chosenRequest || research.busy || research.running}
+                aria-describedby={
+                  blocked ? `${id}-blocked` : !chosenRequest ? `${id}-choices` : undefined
+                }
                 onClick={() => chosenRequest && research.start(chosenRequest)}
               >
                 {research.busy ? "Starting…" : "Run with these choices"}
               </GlassButton>
             </div>
+            {blocked && (
+              <p role="status" className="land-muted" id={`${id}-blocked`}>
+                {blocked}
+              </p>
+            )}
           </div>
         </details>
       )}

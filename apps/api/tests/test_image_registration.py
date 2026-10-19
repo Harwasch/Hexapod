@@ -51,7 +51,7 @@ def test_affine_recovers_known_correspondence_and_densifies_extent() -> None:
     transform = Affine(*result.transform)
     reverse = Transformer.from_crs(result.crs, "EPSG:4326", always_xy=True)
     for point in payload.points:
-        assert reverse.transform(*(transform * (point.image_x, point.image_y))) == pytest.approx(
+        assert reverse.transform(*(transform @ (point.image_x, point.image_y))) == pytest.approx(
             (point.longitude, point.latitude), abs=1e-7
         )
     noisy = payload.model_copy(deep=True)
@@ -103,8 +103,8 @@ def test_render_resizes_preserving_pixel_edges_and_rgba(tmp_path: Path) -> None:
             ColorInterp.blue,
             ColorInterp.alpha,
         )
-        assert dataset.transform * (1024, 512) == pytest.approx(
-            Affine(*result.transform) * (2048, 1024)
+        assert dataset.transform @ (1024, 512) == pytest.approx(
+            Affine(*result.transform) @ (2048, 1024)
         )
         assert dataset.tags()["algorithm"] == "affine-aeqd-v1"
         np.testing.assert_allclose(dataset.read()[:, 200, 200], [100, 50, 20, 128], atol=1)

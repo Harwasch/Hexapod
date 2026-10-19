@@ -13,9 +13,11 @@
  * tile's own gaussian order, exactly as `plants.json` does (`tileRuns.ts` in `@twin/world`);
  * id 0 is "no instance". Ids are leaf-level; the hierarchy is walked through `parent`.
  *
- * `instances.emb` (float16, `count × dim`, row `k` is id `k + 1`, L2-normalised) is what text
- * search by meaning will read once there is a text encoder at runtime: `rankByEmbedding` is
- * the seam. v1 search is by tags.
+ * `instances.emb` (float16, `count × dim`, row `k` is id `k + 1`, L2-normalised) is each
+ * object's image embedding. "More like this" reads it (`loadEmbeddings`, `describedMatrix`,
+ * `rankSimilar`): the objects whose views look like a chosen one's. Text search by meaning
+ * will read it too once there is a text encoder at runtime: `rankByEmbedding` is that seam.
+ * v1 search is by tags.
  */
 
 import { decodeRuns, runsLength, tileRunsIssue } from "@twin/world";
@@ -517,4 +519,241 @@ export function rankByEmbedding(
   }
   out.sort((a, b) => b.score - a.score);
   return out.slice(0, limit);
+}
+
+// ---- More like this ----------------------------------------------------------------------
+
+/** Every half's value, made once: a scan's file is tens of millions of halves. */
+let HALVES: Float32Array | null = null;
+
+function halfTable(): Float32Array {
+  if (HALVES) return HALVES;
+  const table = new Float32Array(65536);
+  for (let h = 0; h < 65536; h += 1) table[h] = halfToFloat(h);
+  HALVES = table;
+  return table;
+}
+
+/** "43.6 MB": a download's size, decimal as a browser's network panel says it. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1e6) return `${Math.max(1, Math.round(bytes / 1e3)).toLocaleString()} kB`;
+  return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+/**
+ * The body of `response`, read into one buffer of the `expected` size as it arrives (the camp's
+ * file is 43.6 MB, so no second copy is made), with `onProgress` told the bytes received.
+ * A body of another size is read to its end and returned at its own length, for the caller to
+ * refuse.
+ */
+async function readBody(
+  response: Response,
+  expected: number,
+  onProgress?: (received: number, total: number) => void,
+): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array(await response.arrayBuffer());
+  const out = new Uint8Array(expected);
+  const extra: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const fits = Math.max(0, Math.min(value.length, expected - received));
+    out.set(value.subarray(0, fits), received);
+    if (fits < value.length) extra.push(value.subarray(fits));
+    received += value.length;
+    onProgress?.(received, expected);
+  }
+  if (received === expected) return out;
+  if (received < expected) return out.subarray(0, received);
+  // Longer than declared: whole, so the size it reports is its own.
+  const whole = new Uint8Array(received);
+  whole.set(out);
+  let at = expected;
+  for (const part of extra) {
+    whole.set(part, at);
+    at += part.length;
+  }
+  return whole;
+}
+
+/**
+ * Fetches a scan's `instances.emb`: `count` rows of `dim` float16s, the raw bits. Throws when
+ * it is missing or is not that size (a file of another scan or another model). Kept in memory
+ * once read (lib/payloadCache.ts), so a second "More like this" on the scan is instant.
+ */
+export function loadEmbeddings(
+  url: string,
+  count: number,
+  dim: number,
+  onProgress?: (received: number, total: number) => void,
+): Promise<Uint16Array> {
+  const expected = count * dim * 2;
+  return scanPayloads.get(url, async () => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`object signatures answered ${String(response.status)}`);
+    const bytes = await readBody(response, expected, onProgress);
+    if (bytes.byteLength !== expected)
+      throw new Error(
+        `object signatures are ${String(bytes.byteLength)} bytes, not ${String(expected)} ` +
+          `(${String(count)} objects × ${String(dim)} values)`,
+      );
+    return {
+      value: new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2),
+      bytes: bytes.byteLength,
+    };
+  });
+}
+
+/**
+ * A row this long or longer is a description; an object too small in every view for a useful
+ * crop has a zero row (docs/SCENE_OBJECTS.md §2 step 4), and the file's rows are otherwise unit.
+ */
+export const DESCRIBED_MIN_NORM = 0.5;
+
+/** The described rows of a scan's embeddings, centred: what "More like this" compares. */
+export interface DescribedMatrix {
+  dim: number;
+  /** The instance id of each row of `m`. */
+  ids: Int32Array;
+  /** The row of `m` of each described instance id. */
+  rowOf: ReadonlyMap<number, number>;
+  /** `ids.length × dim`: each described row less their mean, then made unit length again. */
+  m: Float32Array;
+}
+
+const MATRICES = new WeakMap<Uint16Array, DescribedMatrix>();
+
+/**
+ * The described rows of `raw` (row `k` is id `k + 1`), less their mean and made unit length
+ * again. Raw SigLIP cosines between a scan's objects all sit between about 0.83 and 1.0 -- every
+ * crop shares the scan's light, lens and ground -- so they cannot tell objects apart; taking
+ * away what every object shares spreads them to about -0.5..1 (measured on the camp, the
+ * pumpkin and the spool, 2026-10-16). Made once per file.
+ */
+export function describedMatrix(raw: Uint16Array, dim: number): DescribedMatrix {
+  const kept = MATRICES.get(raw);
+  if (kept?.dim === dim) return kept;
+  if (!Number.isInteger(dim) || dim <= 0) throw new Error("describedMatrix: dimension must be > 0");
+  const table = halfTable();
+  const count = Math.floor(raw.length / dim);
+  const rows: number[] = [];
+  const minSquared = DESCRIBED_MIN_NORM * DESCRIBED_MIN_NORM;
+  for (let k = 0; k < count; k += 1) {
+    let sum = 0;
+    for (let j = 0, at = k * dim; j < dim; j += 1, at += 1) {
+      const v = table[raw[at] ?? 0] ?? 0;
+      sum += v * v;
+    }
+    // NaN (a corrupt half) fails this too.
+    if (sum >= minSquared) rows.push(k);
+  }
+  const m = new Float32Array(rows.length * dim);
+  const mean = new Float64Array(dim);
+  rows.forEach((k, r) => {
+    for (let j = 0; j < dim; j += 1) {
+      const v = table[raw[k * dim + j] ?? 0] ?? 0;
+      m[r * dim + j] = v;
+      mean[j] = (mean[j] ?? 0) + v;
+    }
+  });
+  if (rows.length > 0) for (let j = 0; j < dim; j += 1) mean[j] = (mean[j] ?? 0) / rows.length;
+  const ids = new Int32Array(rows.length);
+  const rowOf = new Map<number, number>();
+  rows.forEach((k, r) => {
+    let sum = 0;
+    for (let j = 0; j < dim; j += 1) {
+      const v = (m[r * dim + j] ?? 0) - (mean[j] ?? 0);
+      m[r * dim + j] = v;
+      sum += v * v;
+    }
+    // One described object alone centres to nothing: it stays zero, alike to nothing.
+    const scale = sum > 0 ? 1 / Math.sqrt(sum) : 0;
+    for (let j = 0; j < dim; j += 1) m[r * dim + j] = (m[r * dim + j] ?? 0) * scale;
+    ids[r] = k + 1;
+    rowOf.set(k + 1, r);
+  });
+  const matrix: DescribedMatrix = { dim, ids, rowOf, m };
+  MATRICES.set(raw, matrix);
+  return matrix;
+}
+
+/**
+ * The cosine between `query` and every row of `m` (`rows × dim`, rows unit length), by row.
+ * Over a matrix already decoded, unlike `rankByEmbedding`: what a chosen object or, later, a
+ * text query is compared with.
+ */
+export function rankByVector(query: Float32Array, m: Float32Array, dim: number): Float32Array {
+  if (query.length !== dim || dim <= 0) throw new Error("rankByVector: dimension mismatch");
+  let norm = 0;
+  for (const v of query) norm += v * v;
+  const inv = norm > 0 ? 1 / Math.sqrt(norm) : 0;
+  const rows = Math.floor(m.length / dim);
+  const out = new Float32Array(rows);
+  for (let r = 0; r < rows; r += 1) {
+    let dot = 0;
+    for (let j = 0, at = r * dim; j < dim; j += 1, at += 1) dot += (m[at] ?? 0) * (query[j] ?? 0);
+    out[r] = dot * inv;
+  }
+  return out;
+}
+
+export interface SimilarRanking {
+  /**
+   * What was compared: the chosen instance, or when its views were too small to describe, the
+   * nearest instance above it that was described (the object it is part of).
+   */
+  seedUsed: number;
+  /** Per described instance id, its cosine with `seedUsed` (centred). */
+  scores: ReadonlyMap<number, number>;
+}
+
+/**
+ * How alike every described object of the scan looks to `seedId` (`describedMatrix`). Not
+ * scored: what `seedUsed` is part of and what is part of it -- they hold the seed, and lighting
+ * a whole that holds it would light the seed itself -- and what was never described. Null when
+ * neither `seedId` nor anything above it was described.
+ */
+export function rankSimilar(
+  doc: Pick<InstancesDoc, "instances" | "byId">,
+  matrix: DescribedMatrix,
+  seedId: number,
+): SimilarRanking | null {
+  let seedUsed: number | null = null;
+  const above = new Set<number>();
+  for (let id: number | null = seedId; id !== null && !above.has(id);) {
+    above.add(id);
+    if (matrix.rowOf.has(id)) {
+      seedUsed = id;
+      break;
+    }
+    id = doc.byId.get(id)?.parent ?? null;
+  }
+  const row = seedUsed === null ? undefined : matrix.rowOf.get(seedUsed);
+  if (seedUsed === null || row === undefined) return null;
+  const skip = withDescendants(doc, [seedUsed]);
+  const seen = new Set<number>();
+  for (let id = doc.byId.get(seedUsed)?.parent ?? null; id !== null && !seen.has(id);) {
+    seen.add(id);
+    skip.add(id);
+    id = doc.byId.get(id)?.parent ?? null;
+  }
+  const { dim, m, ids } = matrix;
+  const cosines = rankByVector(m.subarray(row * dim, (row + 1) * dim), m, dim);
+  const scores = new Map<number, number>();
+  for (let r = 0; r < ids.length; r += 1) {
+    const id = ids[r] ?? 0;
+    if (!skip.has(id)) scores.set(id, cosines[r] ?? 0);
+  }
+  return { seedUsed, scores };
+}
+
+/** What an embedding model id is called in a sentence: "SigLIP 2" for `siglip:google/siglip2-…`. */
+export function embeddingModelName(model: string): string {
+  const lower = model.toLowerCase();
+  if (lower.includes("siglip2")) return "SigLIP 2";
+  if (lower.includes("siglip")) return "SigLIP";
+  if (lower.includes("clip")) return "CLIP";
+  return model;
 }

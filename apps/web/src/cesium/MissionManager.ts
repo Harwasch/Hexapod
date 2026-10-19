@@ -7,41 +7,57 @@ import {
   ColorMaterialProperty,
   ConstantProperty,
   type Entity,
-  HeightReference,
+  HorizontalOrigin,
+  PolygonHierarchy,
   PolylineDashMaterialProperty,
   SceneTransforms,
   sampleTerrainMostDetailed,
   type Scene,
   type CesiumWidget,
+  VerticalOrigin,
 } from "cesium";
+import type { Position } from "geojson";
 
 import {
   boundingRadiusM,
   centerOf,
-  coveragePath,
   destination,
   flattenRing,
-  outerRings,
+  footprintLanes,
+  laneStrokes,
+  polygonsOf,
+  type CoverageLane,
 } from "@twin/geo";
 
 import type { Emitter } from "@/lib/emitter";
+import { eyeOf, frameGround, projectGroundPoints, viewportOptions } from "@/missions/framing";
+import { PREVIEW_MAX_PASSES, PREVIEW_SWATH_M } from "@/missions/preview";
+import { scoutLanes, scoutOf } from "@/missions/scout";
 import { siteAnchor } from "@/missions/sitePin";
-import type { Machine, PlanOverlay, Project, Zone } from "@/missions/types";
+import type { LonLat, Machine, PlanOverlay, Project, Zone } from "@/missions/types";
 
 import type { CameraController } from "./CameraController";
 import type { SceneEvents } from "./types";
 
 export const ZONE_ENTITY_PREFIX = "mission:zone:";
+/** A zone of several parts draws one entity per part: `mission:zone:A-03`, then `…#1`, `…#2`. */
+const ZONE_PART_SEPARATOR = "#";
+
+/** The zone a zone entity (any of its parts) draws; null for any other entity. */
+export function zoneIdOfEntity(id: string): string | null {
+  if (!id.startsWith(ZONE_ENTITY_PREFIX)) return null;
+  return id.slice(ZONE_ENTITY_PREFIX.length).split(ZONE_PART_SEPARATOR)[0] ?? null;
+}
 export const PLAN_ENTITY_PREFIX = "mission:plan:";
-/** Working width assumed for the coverage preview (a mid-size mower deck). */
-export const PREVIEW_SWATH_M = 6;
-/** The preview never draws more passes than this per zone; the spacing widens instead. */
-export const PREVIEW_MAX_PASSES = 28;
 /** One colour per machine so passes read as "who drives where". */
 const MACHINE_PALETTE = ["#7fd8c0", "#f0b254", "#9db8f0", "#e79ac8", "#c6e07a", "#c3a6f0"].map(
   (css) => Color.fromCssColorString(css),
 );
 const ROUTE_COLOR = Color.fromCssColorString("#9db8f0");
+/** A scout area's passes: pale, dashed, a forecast of where the fog would lift. */
+const FOG_LIFT = Color.fromCssColorString("#e8eef0");
+/** How far below its zone's point the forecast label hangs: past the zone chip (about 31 px). */
+const FORECAST_LABEL_OFFSET_PX = 40;
 
 const TONE: Record<Zone["tone"], Color> = {
   teal: Color.fromCssColorString("#7fd8c0"),
@@ -69,6 +85,12 @@ const MAX_TILESET_TERRAIN_GAP_M = 60;
 /** Anchor heights refresh slowly while moving (terrain only) and rarely at rest (with a pick). */
 const MOVING_HEIGHT_TTL_MS = 1500;
 const RESTING_HEIGHT_TTL_MS = 4000;
+
+/** A lane's identity in a zone: its ends, to a centimetre or so. */
+function laneKey(zoneId: string, lane: CoverageLane): string {
+  const p = (q: LonLat) => `${q.longitude.toFixed(7)},${q.latitude.toFixed(7)}`;
+  return `${zoneId}|${p(lane.a)}|${p(lane.b)}`;
+}
 
 function isPlausibleHeight(height: number | undefined): height is number {
   return height !== undefined && Number.isFinite(height) && height > -500 && height < 9000;
@@ -98,8 +120,22 @@ export class MissionManager {
   private readonly zoneEntities: Entity[] = [];
   private readonly trackEntities: Entity[] = [];
   private zonesVisible = true;
+  /** Zones another layer draws (the selected Land's boundary): no entity, no chip anchor. */
+  private hiddenZoneIds: ReadonlySet<string> = new Set();
   private tracksVisible = true;
   private readonly planEntities: Entity[] = [];
+  /** The lanes drawn for each zone of the plan overlay (`previewLanes`). */
+  private readonly drawnLanes = new Map<string, CoverageLane[]>();
+  /** Each drawn lane's number in its zone counting the left-out ones, so numbers stay put. */
+  private readonly drawnNumbers = new Map<string, number[]>();
+  /**
+   * Lanes the operator left out of the draft's preview (the rehearsal's "Leave this lane
+   * out"), by zone and lane geometry, so a redraw of the same outline keeps them out and a
+   * changed outline drops them. Only the preview: a plan's zones and hours are unchanged.
+   */
+  private readonly leftOut = new Set<string>();
+  /** Off while a rehearsal draws the lanes in its own states (pending, done, a raised hand). */
+  private passesShown = true;
   private overlay: PlanOverlay | null = null;
   private readonly listeners = new Set<FrameListener>();
   private readonly removeFrame: () => void;
@@ -108,6 +144,13 @@ export class MissionManager {
     string,
     { height: number; at: number; sampled?: boolean }
   >();
+  /**
+   * The terrain under each overlay anchor at full detail, sampled once per project. Under
+   * photorealistic tiles the globe may never load its own terrain there, and its placeholder
+   * heights are kilometres off; without this an anchor stood at the last height that answered
+   * anywhere, or at sea level: on a ranch 300 m up, chips drew a hundred pixels off their zones.
+   */
+  private readonly groundHeights = new Map<string, number>();
   private exploring = false;
   private readonly removeExplore: () => void;
   private readonly scratchWindow = new Cartesian2();
@@ -134,41 +177,34 @@ export class MissionManager {
     return this.project;
   }
 
+  /** Zones to leave undrawn from the next `setProject` on (`missions/landGround.ts`). */
+  setHiddenZones(ids: ReadonlySet<string>): void {
+    this.hiddenZoneIds = ids;
+  }
+
   setProject(project: Project | null): void {
     const overlay = this.overlay;
     this.clearEntities();
     this.project = project;
     this.heightCache.clear();
+    this.groundHeights.clear();
     if (!project) return;
+    this.sampleGround(project);
     // Zones may have been added or removed; the plan overlay is redrawn at the end.
-    if (overlay) queueMicrotask(() => this.project === project && this.showPlan(overlay));
-    for (const zone of project.zones) {
-      const ring = outerRings(zone.footprint)[0];
-      if (!ring) continue;
-      const positions = Cartesian3.fromDegreesArray(flattenRing(ring));
-      const first = positions[0];
-      if (!first) continue;
-      const tone = TONE[zone.tone];
-      this.zoneEntities.push(
-        this.viewer.entities.add({
-          id: `${ZONE_ENTITY_PREFIX}${zone.id}`,
-          show: this.zonesVisible,
-          polygon: {
-            hierarchy: positions,
-            material: tone.withAlpha(zone.treated ? 0.22 : 0.14),
-            heightReference: HeightReference.CLAMP_TO_GROUND,
-            classificationType: undefined,
-          },
-          polyline: {
-            positions: [...positions, first],
-            width: zone.treated ? 2.4 : 1.8,
-            material: zone.treated
-              ? tone
-              : new PolylineDashMaterialProperty({ color: tone, dashLength: 14 }),
-            clampToGround: true,
-          },
-        }),
+    // Unless the overlay was cleared or replaced meanwhile: a stale one must not come back.
+    if (overlay)
+      queueMicrotask(
+        () => this.project === project && this.overlay === overlay && this.showPlan(overlay),
       );
+    const drawn = new Set<string>();
+    for (const zone of project.zones) {
+      // One entity per id: a second zone with an id already drawn would throw in Cesium.
+      if (this.hiddenZoneIds.has(zone.id) || drawn.has(zone.id)) continue;
+      drawn.add(zone.id);
+      // Every part of a MultiPolygon (workable ground left in pieces, a remainder of patches).
+      polygonsOf(zone.footprint).forEach(([ring, ...holes], part) => {
+        if (ring) this.drawZonePart(zone, part, ring, holes);
+      });
     }
     for (const machine of project.machines) {
       if (!machine.track || machine.track.length < 2) continue;
@@ -200,6 +236,39 @@ export class MissionManager {
     this.scene.requestRender();
   }
 
+  /** One polygon of a zone: its fill (holes open) and its outline. */
+  private drawZonePart(zone: Zone, part: number, ring: Position[], holes: Position[][]): void {
+    const positions = Cartesian3.fromDegreesArray(flattenRing(ring));
+    const first = positions[0];
+    if (!first) return;
+    const tone = TONE[zone.tone];
+    this.zoneEntities.push(
+      this.viewer.entities.add({
+        id: `${ZONE_ENTITY_PREFIX}${zone.id}${part ? `${ZONE_PART_SEPARATOR}${part}` : ""}`,
+        show: this.zonesVisible,
+        polygon: {
+          // Holes stay open: the woods and the homestead inside a grassland zone are not in it.
+          hierarchy: new PolygonHierarchy(
+            positions,
+            holes.map(
+              (hole) => new PolygonHierarchy(Cartesian3.fromDegreesArray(flattenRing(hole))),
+            ),
+          ),
+          material: tone.withAlpha(zone.treated ? 0.22 : 0.14),
+          classificationType: undefined,
+        },
+        polyline: {
+          positions: [...positions, first],
+          width: zone.treated ? 2.4 : 1.8,
+          material: zone.treated
+            ? tone
+            : new PolylineDashMaterialProperty({ color: tone, dashLength: 14 }),
+          clampToGround: true,
+        },
+      }),
+    );
+  }
+
   setLayer(key: "zones" | "tracks", visible: boolean): void {
     if (key === "zones") {
       this.zonesVisible = visible;
@@ -214,7 +283,8 @@ export class MissionManager {
   /** Highlights the selected zone outline. */
   setSelectedZone(zoneId: string | null): void {
     for (const entity of this.zoneEntities) {
-      const zone = this.project?.zones.find((z) => `${ZONE_ENTITY_PREFIX}${z.id}` === entity.id);
+      const id = typeof entity.id === "string" ? zoneIdOfEntity(entity.id) : null;
+      const zone = this.project?.zones.find((z) => z.id === id);
       if (!zone || !entity.polyline) continue;
       const selected = zone.id === zoneId;
       entity.polyline.width = new ConstantProperty(selected ? 3 : zone.treated ? 2.4 : 1.8);
@@ -229,18 +299,35 @@ export class MissionManager {
   /** Colour used for a machine's passes, stable for the project. */
   machineColor(machineId: string): Color {
     const index = this.project?.machines.findIndex((m) => m.id === machineId) ?? -1;
-    return MACHINE_PALETTE[(index < 0 ? 0 : index) % MACHINE_PALETTE.length] ?? ROUTE_COLOR;
+    return this.paletteColor(index < 0 ? 0 : index);
+  }
+
+  /**
+   * The machine palette's colour at `slot`; slot n is the project's nth machine. A rehearsal's
+   * assumed generic machines take the slots after the project's own.
+   */
+  paletteColor(slot: number): Color {
+    return MACHINE_PALETTE[slot % MACHINE_PALETTE.length] ?? ROUTE_COLOR;
   }
 
   /**
    * Draws a plan on the world: every zone in scope with its coverage passes in the colour of
    * the machine assigned, a numbered marker per step, and the route between zones in step
-   * order. `null` clears it. The passes are a preview (see PREVIEW_SWATH_M).
+   * order. `null` clears it. Passes come from `footprintLanes` over every part of a zone with
+   * its holes left out, so nothing is drawn over a homestead or a cleared fog hole. Three
+   * styles: a mapped line (a fence) is drawn as the line it follows; a scout area ("Lift the
+   * fog") is drawn as its real flight lines, dashed and labelled a forecast; anything else as
+   * preview passes (see PREVIEW_SWATH_M). `previewLanes` hands out exactly what is drawn.
    */
   showPlan(overlay: PlanOverlay | null): void {
+    // A different plan, or none: lanes left out of the last one's preview come back.
+    const zones = (o: PlanOverlay | null) => (o?.zones.map((z) => z.zoneId) ?? []).join(",");
+    if (!overlay || zones(overlay) !== zones(this.overlay)) this.leftOut.clear();
     this.overlay = overlay;
     for (const entity of this.planEntities) this.viewer.entities.remove(entity);
     this.planEntities.length = 0;
+    this.drawnLanes.clear();
+    this.drawnNumbers.clear();
     this.setSelectedZone(null);
     const project = this.project;
     if (!overlay || !project) {
@@ -250,33 +337,79 @@ export class MissionManager {
     const centers: Cartesian3[] = [];
     overlay.zones.forEach((item, index) => {
       const zone = project.zones.find((z) => z.id === item.zoneId);
-      const ring = zone ? outerRings(zone.footprint)[0] : undefined;
-      if (!zone || !ring) return;
+      if (!zone || polygonsOf(zone.footprint).length === 0) return;
       const color = this.machineColor(item.machineIds[0] ?? "");
-      const path = coveragePath(ring, { swathM: PREVIEW_SWATH_M, maxPasses: PREVIEW_MAX_PASSES });
-      if (path.positions.length >= 2) {
+      // A mapped line (a fence) is followed, not covered: draw the line, not passes over its
+      // corridor.
+      const line = zone.land?.line?.coordinates ?? null;
+      const scout = zone.scout ? scoutOf(zone.scout) : null;
+      const all: CoverageLane[] = line
+        ? []
+        : scout
+          ? scoutLanes(zone.footprint, scout)
+          : footprintLanes(zone.footprint, {
+              swathM: PREVIEW_SWATH_M,
+              maxPasses: PREVIEW_MAX_PASSES,
+            }).lanes;
+      const lanes: CoverageLane[] = [];
+      const numbers: number[] = [];
+      all.forEach((lane, index) => {
+        if (this.leftOut.has(laneKey(zone.id, lane))) return;
+        lanes.push(lane);
+        numbers.push(index + 1);
+      });
+      this.drawnLanes.set(zone.id, lanes);
+      this.drawnNumbers.set(zone.id, numbers);
+      if (line && line.length >= 2) {
         this.planEntities.push(
           this.viewer.entities.add({
-            id: `${PLAN_ENTITY_PREFIX}passes:${zone.id}`,
+            id: `${PLAN_ENTITY_PREFIX}line:${zone.id}`,
             polyline: {
-              positions: Cartesian3.fromDegreesArray(
-                path.positions.flatMap((p) => [p.longitude, p.latitude]),
-              ),
-              width: 1.6,
-              material: color.withAlpha(0.8),
+              positions: Cartesian3.fromDegreesArray(line.flatMap((p) => [p[0] ?? 0, p[1] ?? 0])),
+              width: 3.2,
+              material: color,
               clampToGround: true,
             },
           }),
         );
       }
-      const outline = this.zoneEntities.find((e) => e.id === `${ZONE_ENTITY_PREFIX}${zone.id}`);
-      if (outline?.polyline) {
+      // Consecutive passes join at the turn; lanes of one pass split by a hole stay apart.
+      laneStrokes(lanes).forEach((stroke, strokeIndex) => {
+        if (stroke.length < 2) return;
+        this.planEntities.push(
+          this.viewer.entities.add({
+            // The first stroke keeps the zone's plain id; one split by a hole or a notch
+            // adds numbered ones.
+            id: `${PLAN_ENTITY_PREFIX}passes:${zone.id}${strokeIndex ? `:${strokeIndex}` : ""}`,
+            show: this.passesShown,
+            polyline: {
+              positions: Cartesian3.fromDegreesArray(
+                stroke.flatMap((p) => [p.longitude, p.latitude]),
+              ),
+              width: scout ? 1.8 : 1.6,
+              material: scout
+                ? new PolylineDashMaterialProperty({ color: FOG_LIFT, dashLength: 10 })
+                : color.withAlpha(0.8),
+              clampToGround: true,
+            },
+          }),
+        );
+      });
+      for (const outline of this.zoneEntities) {
+        if (!outline.polyline || zoneIdOfEntity(outline.id) !== zone.id) continue;
         outline.polyline.width = new ConstantProperty(3.2);
-        outline.polyline.material = new ColorMaterialProperty(color);
+        outline.polyline.material = new ColorMaterialProperty(scout ? FOG_LIFT : color);
       }
       const center = centerOf(zone.footprint);
-      const position = Cartesian3.fromDegrees(center.longitude, center.latitude);
-      centers.push(position);
+      centers.push(Cartesian3.fromDegrees(center.longitude, center.latitude));
+      // Labels stand on the ground as the zone chips do (`surfaceHeight`): clamping a label
+      // needs the globe's terrain, which photorealistic tiles hide, and then it sank to the
+      // ellipsoid, hundreds of metres under a ranch and off its zone.
+      const position = Cartesian3.fromDegrees(
+        center.longitude,
+        center.latitude,
+        this.surfaceHeight(center.longitude, center.latitude, `plan:${zone.id}`) + 3,
+      );
       this.planEntities.push(
         this.viewer.entities.add({
           id: `${PLAN_ENTITY_PREFIX}step:${zone.id}`,
@@ -288,11 +421,37 @@ export class MissionManager {
             showBackground: true,
             backgroundColor: color,
             backgroundPadding: new Cartesian2(7, 4),
-            heightReference: HeightReference.CLAMP_TO_GROUND,
+            // Above the zone's chip, which starts at the same point and runs right.
+            horizontalOrigin: HorizontalOrigin.LEFT,
+            verticalOrigin: VerticalOrigin.BOTTOM,
+            pixelOffset: new Cartesian2(0, -16),
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         }),
       );
+      if (scout) {
+        // Said where the lines are: these passes are what a flight would do, not evidence.
+        this.planEntities.push(
+          this.viewer.entities.add({
+            id: `${PLAN_ENTITY_PREFIX}forecast:${zone.id}`,
+            position,
+            label: {
+              text: "Would lift fog · forecast",
+              font: "500 12px Inter, system-ui, sans-serif",
+              fillColor: Color.fromCssColorString("#0a0e09"),
+              showBackground: true,
+              backgroundColor: FOG_LIFT.withAlpha(0.92),
+              backgroundPadding: new Cartesian2(7, 4),
+              // Below the zone's chip, an HTML button about 31 px tall that hangs from the same
+              // point and is drawn over the canvas: clear all of it, or it hides the label.
+              horizontalOrigin: HorizontalOrigin.LEFT,
+              verticalOrigin: VerticalOrigin.TOP,
+              pixelOffset: new Cartesian2(0, FORECAST_LABEL_OFFSET_PX),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+          }),
+        );
+      }
     });
     if (centers.length >= 2) {
       this.planEntities.push(
@@ -308,6 +467,65 @@ export class MissionManager {
       );
     }
     this.scene.requestRender();
+  }
+
+  /**
+   * The lanes the plan overlay draws for a zone, in driving order (empty for a mapped line or
+   * a zone not on the map): what a scout export flies and a rehearsal runs.
+   */
+  previewLanes(zoneId: string): readonly CoverageLane[] {
+    return this.drawnLanes.get(zoneId) ?? [];
+  }
+
+  /** The number of each of `previewLanes(zoneId)`, from 1, with left-out lanes still counted. */
+  previewLaneNumbers(zoneId: string): readonly number[] {
+    return this.drawnNumbers.get(zoneId) ?? [];
+  }
+
+  /** Takes one drawn lane out of the draft's preview and redraws it without. */
+  leaveOutLane(zoneId: string, lane: CoverageLane): void {
+    this.leftOut.add(laneKey(zoneId, lane));
+    if (this.overlay) this.showPlan(this.overlay);
+  }
+
+  /** Every lane left out of the preview comes back. */
+  restoreLanes(): void {
+    if (this.leftOut.size === 0) return;
+    this.leftOut.clear();
+    if (this.overlay) this.showPlan(this.overlay);
+  }
+
+  /** Shows or hides the drawn passes (zone outlines and step markers stay). */
+  setPreviewPassesShown(shown: boolean): void {
+    this.passesShown = shown;
+    for (const entity of this.planEntities)
+      if (typeof entity.id === "string" && entity.id.startsWith(`${PLAN_ENTITY_PREFIX}passes:`))
+        entity.show = shown;
+    this.scene.requestRender();
+  }
+
+  /**
+   * Flies to a point on the ground, framing `radiusM` around it; like `flyToZones`, the framed
+   * centre moves screen-right by `sideOffset` radii so the point lands beside the plan window.
+   */
+  flyToPoint(point: LonLat, radiusM = 80, sideOffset = 0.75): void {
+    const heading = 20;
+    const h = (heading * Math.PI) / 180;
+    const target = destination(
+      point,
+      (Math.atan2(Math.cos(h), -Math.sin(h)) * 180) / Math.PI,
+      radiusM * sideOffset,
+    );
+    const key = `point-fly:${target.longitude.toFixed(5)},${target.latitude.toFixed(5)}`;
+    void this.detailedHeight(target.longitude, target.latitude, key).then((height) => {
+      this.camera.flyToBoundingSphere(
+        new BoundingSphere(
+          Cartesian3.fromDegrees(target.longitude, target.latitude, height),
+          radiusM * (1 + sideOffset * 0.4),
+        ),
+        { heading, pitch: -40, rangeMultiplier: 2.6, durationS: 1.4 },
+      );
+    });
   }
 
   /**
@@ -390,17 +608,26 @@ export class MissionManager {
     });
   }
 
+  /**
+   * Flies to the whole project, fitted to this window: every zone outline, chip and machine
+   * inside the part of the screen the HUD leaves open (`missions/framing.ts`), so the site pin
+   * and "the whole ranch" land framed on a phone held upright as on a desktop.
+   */
   flyToProject(): void {
     const project = this.project;
     if (!project || project.zones.length === 0) return;
-    const centers = project.zones.map((z) => centerOf(z.footprint));
-    const lon = centers.reduce((a, c) => a + c.longitude, 0) / centers.length;
-    const lat = centers.reduce((a, c) => a + c.latitude, 0) / centers.length;
-    void this.detailedHeight(lon, lat, "project-fly").then((height) => {
-      this.camera.flyToBoundingSphere(
-        new BoundingSphere(Cartesian3.fromDegrees(lon, lat, height), 1100),
-        { heading: 15, pitch: -45, rangeMultiplier: 2.2, durationS: 2 },
-      );
+    const framing = frameGround(
+      projectGroundPoints(project),
+      viewportOptions(this.camera.viewport(), 15, -40),
+    );
+    const { longitude, latitude } = framing.target;
+    void this.detailedHeight(longitude, latitude, "project-fly").then((height) => {
+      const eye = eyeOf(framing, height);
+      this.camera.flyTo(eye.longitude, eye.latitude, eye.height, {
+        heading: eye.heading,
+        pitch: eye.pitch,
+        durationS: 2,
+      });
     });
   }
 
@@ -437,6 +664,50 @@ export class MissionManager {
     return detailed;
   }
 
+  /** Where each overlay anchor of `project` stands, keyed as `projectAnchors` keys them. */
+  private anchorPoints(project: Project): { key: string; longitude: number; latitude: number }[] {
+    const points = [
+      ...project.machines.map((m) => ({ key: `machine:${m.id}`, ...m.position })),
+      ...project.zones.map((z) => ({ key: `zone:${z.id}`, ...z.anchor })),
+    ];
+    const site = siteAnchor(project);
+    if (site) points.push({ key: `site:${project.id}`, ...site });
+    return points;
+  }
+
+  /**
+   * Samples the most detailed terrain under every anchor once; see `groundHeights`. A terrain
+   * provider still loading (the app's first seconds) is asked again a little later.
+   */
+  private sampleGround(project: Project, attempt = 0): void {
+    const points = this.anchorPoints(project);
+    if (points.length === 0) return;
+    sampleTerrainMostDetailed(
+      this.viewer.terrainProvider,
+      points.map((p) => Cartographic.fromDegrees(p.longitude, p.latitude)),
+    )
+      .then((samples) => {
+        if (this.project !== project) return;
+        samples.forEach((sample, i) => {
+          const key = points[i]?.key;
+          if (key && isPlausibleHeight(sample.height)) this.groundHeights.set(key, sample.height);
+        });
+        // Guesses made before it answered give way at the next frame; a drawn-surface sample stays.
+        for (const key of this.groundHeights.keys()) {
+          if (!this.heightCache.get(key)?.sampled) this.heightCache.delete(key);
+        }
+        this.scene.requestRender();
+      })
+      .catch(() => {
+        if (attempt < 3 && this.project === project) {
+          setTimeout(
+            () => this.project === project && this.sampleGround(project, attempt + 1),
+            2000,
+          );
+        }
+      });
+  }
+
   /**
    * Cheap ground estimate for overlay anchors and flights. `globe.getHeight` is a CPU lookup
    * into loaded terrain; `scene.sampleHeight` is a render pass, so it runs only when the camera
@@ -459,7 +730,7 @@ export class MissionManager {
         fromTileset = undefined;
       }
     }
-    const fromTerrain = this.scene.globe.getHeight(carto);
+    const fromTerrain = this.groundHeights.get(key) ?? this.scene.globe.getHeight(carto);
     let height = reconcileHeights(fromTileset, fromTerrain);
     if (height === undefined) height = this.lastGoodHeight ?? 0;
     else this.lastGoodHeight = height;
@@ -485,7 +756,8 @@ export class MissionManager {
       push(`machine:${machine.id}`, machine.position.longitude, machine.position.latitude, 1.2);
     if (this.zonesVisible)
       for (const zone of project.zones)
-        push(`zone:${zone.id}`, zone.anchor.longitude, zone.anchor.latitude, 0.5);
+        if (!this.hiddenZoneIds.has(zone.id))
+          push(`zone:${zone.id}`, zone.anchor.longitude, zone.anchor.latitude, 0.5);
     // The site pin that stands for all of the above at globe scale (`missions/sitePin.ts`).
     const site = siteAnchor(project);
     if (site) push(`site:${project.id}`, site.longitude, site.latitude, 0);

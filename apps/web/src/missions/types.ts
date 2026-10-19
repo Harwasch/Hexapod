@@ -5,7 +5,8 @@
  * provider; the `MissionProvider` seam is where a backend / ROS bridge plugs in.
  */
 
-import type { Footprint, PlanStep } from "@twin/contracts";
+import type { Footprint, PlanStep, ScoutCapture } from "@twin/contracts";
+import type { LineString } from "geojson";
 
 export type MachineStatus = "working" | "attention" | "idle";
 export type PlanStatus = "ok" | "run" | "warn" | "idle";
@@ -53,6 +54,36 @@ export interface Zone {
   attribution?: string;
   /** Reshaped in this browser (dragged on the map); a stored copy never replaces it. */
   shaped?: boolean;
+  /** Ground from a saved Land: its boundary, an inventory feature, or an area derived from it. */
+  land?: ZoneLand;
+  /**
+   * Workspace-private ground (a Land's, or derived from one). Plans on it go to the
+   * workspace's mission routes, and it is never written to browser storage.
+   */
+  private?: boolean;
+  /**
+   * A scout area's capture ("Lift the fog"): flown by a mapping drone at these numbers. The
+   * map draws its passes dashed as a forecast, the planner sizes it from them, and the plan
+   * keeps them so the route can be exported (`missions/scout.ts`, `missions/wpml.ts`).
+   */
+  scout?: ScoutCapture;
+}
+
+/** Where a land zone comes from. */
+export interface ZoneLand {
+  kind: "boundary" | "feature" | "derived";
+  landId: string;
+  /** The inventory feature, for kind "feature"; null for the boundary and derived areas. */
+  featureId: string | null;
+  /** The land's boundary revision the zone was made from; a plan on it pins that outline. */
+  boundaryRevision?: number;
+  /** The boundary's or feature's own revision. */
+  revision?: number;
+  /** A mapped line (a fence): the zone is a corridor around it, and plans follow the line. */
+  line?: LineString | null;
+  lengthM?: number | null;
+  /** The corridor's assumed width around `line`, metres. */
+  bufferM?: number | null;
 }
 
 export interface ViewAreaOrigin {
@@ -102,6 +133,12 @@ export interface Plan {
   revisions?: { revision: number; note: string; createdAt: string; title: string }[];
   persisted?: boolean;
   startDate?: string;
+  /** Where the API holds it: the public plan routes, or a workspace's private missions. */
+  scope?: "public" | "workspace";
+  /** The saved Land the plan is on. */
+  landId?: string | null;
+  /** The land action it was scheduled from: revised in Land, not here. */
+  landActionId?: string | null;
 }
 
 /** What the map draws for a plan or draft: zones in step order with the machines assigned. */

@@ -18,9 +18,14 @@ Apply **all migrations through the current Alembic head**, not just the first la
 
 ## Product direction
 
-Land exploration is independent of mission planning. The selected land persists while a
-person inspects features, follows evidence, compares scenarios, and eventually chooses an
-action. Existing selection and planning interactions are not the design constraint.
+A saved Land is the ground mission planning runs on. The selected land persists while a
+person inspects features, follows evidence, compares scenarios and chooses an action, and the
+same land is what plans, scheduled missions and their proof hang off: its boundary and inventory
+features become plannable zones, "Plan work on this land" opens the plan card on it, and a
+scheduled action opens in Plan. Plans that touch a land are workspace-private (a database check,
+the `/workspaces/missions` routes, never browser storage), and their estimates are sized from
+the outlines with every assumption stated. Existing selection and planning interactions are not
+the design constraint.
 
 The warehouse-roof/solar example illustrates extensibility; it is not a required first-class
 product workflow. Dedicated roof reconstruction, roof surveying and fitted panel layouts are
@@ -59,7 +64,9 @@ legal, or financial findings are shown in place of missing integrations.
 Apply migrations through the current Alembic head to an isolated development/preview database and run the API normally.
 Set `VITE_ENABLE_LAND_EXPLORATION=true` on the web development server or build. It defaults
 to false, including in development, so current production flows remain unchanged until a
-deployer explicitly enables it. Set `VITE_API_BASE_URL` to the preview API when using a
+deployer explicitly enables it. A build with it off never loads any of the Land code: the shell
+loads the panel, its bridges and the workspace sign-in on demand (see "Polish" below), so their
+chunks are built and deployed but never requested. Set `VITE_API_BASE_URL` to the preview API when using a
 separate port; `API_CORS_ORIGINS` is a comma-separated list, not JSON.
 
 The desktop rail exposes **Land**, also available with Shift+L. On phones it is under
@@ -248,6 +255,9 @@ Run browser checks with the preview flag enabled:
 ```sh
 VITE_ENABLE_LAND_EXPLORATION=true pnpm --filter @twin/web exec playwright test e2e/land.spec.ts --project=chromium
 ```
+
+CI's Playwright shards serve the app with the flag on (`.github/workflows/ci.yml`), so these
+specs run with every other one whenever the web app changes. Production stays opt-in.
 
 These drive the real map for drawing, saving, inspecting underlying ground, revising,
 reloading, importing exclusions, and phone layout. Their API fixture is deterministic.
@@ -2035,6 +2045,662 @@ occurred. Artifacts: `/tmp/land-calculation-result.json`, `/tmp/land-calculation
 live model credentials remain unavailable. The isolated API and worker were restarted, and the
 isolated Vite preview was restored on port 5175. The original checkout and deployment are unchanged.
 
+## Implemented increment: research worker presence and "What's here" point facts
+
+### Research worker presence
+
+Land research runs (overviews, terrain, land cover, vegetation, archives, ecology, solar and AI
+investigations) are queued by the API and executed by a separate process,
+`python -m app.research` (`pnpm dev:research` locally). The API never starts it. Before this
+increment the API could not tell an idle worker from a missing one: it only saw per-run leases,
+which exist while a run is held, so a run queued with no worker stayed "queued" indefinitely and
+said nothing.
+
+Each worker process now upserts one row in `land_research_workers` (migration 0030: id, hostname,
+pid, started, last seen, stopped, current run) every 15 s, idle or busy, using the database clock.
+The lease keeper refreshes it during long runs; a clean exit, Ctrl+C or SIGTERM marks it stopped.
+The worker prunes rows not seen for a week when it starts. Presence writes are advisory and never
+break the poll loop. `current_run_id` has no foreign key, so presence never waits on a run lock.
+
+`GET /api/v1/research/status` keeps `modelConfigured`, `model` and `workerRequired` and adds:
+
+- `worker`: `state` is `online` (a non-stopped worker seen within 45 s), `stale` (seen before, not
+  lately), `stopped` (the newest worker said it was stopping) or `never`; with `lastSeenAt`,
+  `secondsSinceSeen` (database clock, so browser clock skew never shows wrong minutes), `busy`
+  (any run in any workspace holds a live lease; it says nothing about whose) and
+  `checkInEverySeconds`. Hostnames, pids and worker lists never leave the server.
+- `queue`: `queued`, `oldestQueuedAt`, `oldestQueuedSeconds` and `running` (live lease), scoped
+  to the caller's workspace.
+
+In the land workspace a queued run explains itself ("Waiting for the research worker: none has
+checked in for 14 min. Your request is saved and starts when a worker runs."), and the status is
+polled every 10 s while it waits, so the notice clears when a worker starts. Ecology and solar
+status rows show the same line. Every disabled research button now says why next to it (connecting,
+role, the one queued or running request, AI not configured, a captured request or unreadable saved
+question to resolve, an empty question once the box has been used). A queued run's reason is short
+("One request runs at a time. Cancel the queued request to start something else."): the worker's
+state and age are said once, in the notice beside the run. The Stop button reads "Cancel
+queued request" for a queued run. When no worker is online and nothing of this land is queued, a
+footnote warns that new requests will wait. In development builds the notice adds
+`pnpm dev:research`; production users never see shell commands.
+
+Deployment: `fly.toml` `[processes]` defines only `app` and `worker` (the capture pipeline). It has
+no research process, so on the deployed API research runs are queued and never executed; the
+status now says so honestly ("none has checked in on this server yet"). Running
+`python -m app.research` as its own process group is a deployment decision left open here.
+
+### "What's here": point facts in the inspector
+
+`GET /api/v1/research/place/{fact}?longitude=&latitude=` answers one public fact about one point.
+`fact` is `elevation`, `soil`, `land-cover`, `flood-zone` or `ecoregion`. Each reuses a source the
+land research already registers, through the same bounded fetches (registry endpoints only, no
+redirects, 2 MB cap; a 10 s timeout for point lookups), so no host is added:
+
+| Fact       | Source                                         | Basis                    | Caveat shown                                                                                   |
+| ---------- | ---------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
+| Elevation  | USGS EPQS (3DEP), public domain                | Elevation model          | Interpolated from the 3DEP model at this point; not a surveyed height.                         |
+| Soil       | USDA NRCS Soil Data Access, public domain      | Mapped survey            | Map-unit estimate for the unit containing the point; not a soil test or parcel-wide soil map.  |
+| Land cover | ESA WorldCover 2021, CC BY 4.0 (one 10 m cell) | Satellite classification | Broad class for the 10 m cell, classified from 2021 imagery; not today's condition or species. |
+| Flood zone | FEMA NFHL layer 28 point query, public domain  | Regulatory map           | Check the effective FIRM and amendments; "No mapped zone" does not establish low flood risk.   |
+| Ecoregion  | EPA Level IV ecoregions (2011), CC0            | Regional framework       | Compiled at 1:250,000 for large extents; names the region around the point, not its habitat.   |
+
+Each answer carries `status` (`available`, `empty`, `uncovered` or `unavailable`), a label and
+detail, its basis and vintage, the caveat, the exact public query URL, license, attribution and
+source resolution. The citation link (`source.linkUrl`) is that query when a browser can open it
+(USGS, FEMA and EPA answer a GET with JSON). Soil Data Access takes its SQL only as a POST, and a
+WorldCover tile is a 10-20 MB image, so those two link Web Soil Survey and the WorldCover viewer,
+and keep the exact query in `data.query` (the SQL) and `data.tileUrl`. Flood zone D reads
+"Undetermined flood hazard: not studied" (never "outside the Special Flood Hazard Area"), and a
+point FEMA's map leaves out is `empty`, "Not included in FEMA flood mapping", with the same
+"does not establish low flood risk" caveat as "No mapped zone". A failure is "could not be retrieved (HTTP 503)" or the exception type, never
+a response body, and is never shown as "nothing here". The US-only sources answer `uncovered`
+outside the United States without making a request; a missing WorldCover tile (open ocean, HTTP 404) is `uncovered`, not an outage. The flood-zone lookup is a point query with
+`returnGeometry=false`: the boundary adapter's envelope query can return a county-wide Zone X
+polygon over the 2 MB cap (3.48 MB on a Central Coast parcel), which this avoids; fixing that
+adapter is separate work.
+
+Nothing is persisted. Answers are cached in the API process for 6 h, keyed by the point rounded
+to about a metre (failures for 2 min; the inspector's Retry asks again past a cached failure).
+The route sits behind land identity (`WorkspaceDep`) and its own token bucket (burst 25, 60 per
+minute per client; one inspection makes five lookups), so it is not an open proxy to the agencies.
+The route is synchronous, so a slow agency holds a server thread for up to the 10 s timeout (15 s
+for the WorldCover read). At most 8 lookups ask a source at once across all clients; a lookup
+that finds no free slot within 2 s answers `unavailable` ("... was not asked because the server
+is busy with other lookups"), uncached, so a hung agency cannot take the threads every other route
+needs. Identical lookups in flight are not merged.
+
+In the inspector, any non-site pick (open ground, and Google Photorealistic tiles, which pick as a
+layer feature) shows "At this point · looked up live, not saved" with the five rows filling in as
+each agency answers. Below them: "Research <land>" when the point is inside a saved land (it opens
+that land on Discover), otherwise "Outline this land", which opens the Land tool finding mapped
+parcels, fields and lines at the point. The map's right-click menu has the same "Outline land
+here", offered like the inspector's only when the workspace is ready and the role can add land.
+Both go through `features/land/landEntry.ts`, which clears the active land first (Save would
+otherwise revise it with the new outline) and never replaces an unsaved outline
+(`hasUnsavedOutline`: a draft, or a sketch with points placed in draw, corridor or split mode, the
+same test the browser recovery copy uses): with one open, the button and the menu item read
+"Return to your unsaved outline" and only reopen the tool on it. Other entry points (Descent) should use
+`landEntry` (`proposeOutline` for a found outline) rather than `useLand.propose`.
+
+The Terrain row above stays: it is the scene's own terrain sample, and the two elevation values
+can differ; each names its source and neither is a survey.
+
+Validation: API tests cover presence states and ages, workspace-scoped queue counts, the worker's
+idle check-in throttle and stop, pruning, every fact's mapping (including empty, uncovered,
+unavailable without bodies, caching and retry), the 422 bounds and the 429 limit. Web tests cover
+the copy and precedence of every reason, the queued notice and polling, the Investigate reason,
+the inspector rows, retry and CTAs, the menu item and the landEntry safety rules. All five lookups
+were checked live at -120.72, 35.53: 236.8 m (1 m DEM, 2019); Corducci and Typic Xerofluvents;
+Tree cover (class 10); Zone A, Special Flood Hazard Area, map 06079C; Paso Robles Hills and Valleys.
+
+## Implemented increment: land as mission ground
+
+Migration `0031_plan_land` (after `0030_research_worker_presence`) adds `plans.land_id` (foreign key to `land_areas`, set null on
+delete, indexed) and `plans.boundary_revision`, with the check `ck_plans_land_private`: only a
+plan that belongs to a workspace may carry land. Missions already scheduled from land actions
+are linked on upgrade through `land_action_revisions.mission_id`.
+
+Routes, all workspace-scoped through `WorkspaceDep`:
+
+- `GET /api/v1/land/{id}/ground` returns the land as plannable items: the boundary (`L-` plus
+  the first 8 hex of the land id) and every polygon or line inventory feature (`L-` plus the
+  feature id's). A line becomes an assumed 10 m work corridor and keeps the line itself; points
+  are counted as `skipped`; retired features are left out. Each item says where it came from.
+- `GET/POST /api/v1/workspaces/missions`, `GET/PUT /api/v1/workspaces/missions/{id}` and
+  `PATCH /api/v1/workspaces/missions/{id}/status` list and act on a workspace's plans. Any role
+  reads; owners and editors write. A `land:<id>` project must name that land, the land must be
+  in the workspace, and a pinned boundary revision must exist. A mission scheduled from a land
+  action refuses revision here (409): the action holds the approved version.
+- The public `/api/v1/plans` routes are unchanged and still never list, read or change a
+  workspace's plan.
+
+Scheduling a land action now records the land and boundary revision on the mission, uses
+`LA-<8 hex of the action id>-r<revision>` area ids (and `-r<revision>-<n>` per step footprint) so
+two actions never share a zone id, and neither do two scheduled revisions of one action: a
+revision may cover other ground, and the console keys zones by id, so a shared id drew and
+rehearsed the second mission on the first revision's outline. It attributes each area to the
+approved action revision and rejects another land's `land:<id>` project id. Stored missions keep
+the ids they were written with.
+
+Planning: the planner sizes a zone that comes with an outline from a shapely port of the
+console's coverage passes (`services/coverage.py`; holes and MultiPolygons included), using the
+assumed machine classes in `services/machine_classes.json`, the one table the web app reads too
+(robotic brush mower, seed drill, survey rover, Mavic 3 Enterprise class mapping drone; every label says
+"assumed"). Hours are path length over the class speed plus turns, with each zone's basis
+sentence on the draft and one combined line under assumptions. A measured work-log rate still
+sets an area's hours. Zones without an outline (the simulated demo fleet's) are sized exactly as
+before. Outlines are never sent to the model; the measured paths are. An outline that is not
+valid (a corner dragged across an edge, OpenStreetMap outers that touch) is repaired with
+`make_valid`, or dropped so its zone is sized by acres, rather than failing the draft. Survey
+detail scales a drone's flying only, and each drone zone records the height it was flown at.
+One draft request measures within one budget, shared by the model's context and its draft: each
+outline once per spacing, at most 20 zones, outlines of up to 20,000 points (a Land boundary's
+limit) and 50,000 in all, and no zone started after 10 s of measuring. An outline whose passes
+break into more than 20,000 separate stretches is not traced pass by pass: its stretches and
+passes are counted from its edges and its length is the area over the spacing, and its basis
+says so. A zone left out of the budget is sized by its acres, and the draft's assumptions name
+it and say why.
+"Monitor", "patrol", "check", "watch", "count" and "scout" read as surveys as whole words, so a
+"county road" or a "checkpoint" does not turn a repair into one.
+
+Console: selecting a saved land engages it as ground. It joins the current project when that
+project's zones or machines are on the land (the fleet stays), or becomes the land's own
+`land:<id>` project. The plan card and the bar take the land, or the feature a goal names ("the
+fence", "the troughs"), before OpenStreetMap, a click or the rough square; a click on the land
+takes the land. A land's zones never join another land's own project: with a plan card open
+there, selecting a second land waits until the card is approved or closed. Approvals that touch
+land ground go to the workspace routes with the land and boundary revision; offline, such a plan
+is not saved at all. Plan lists public and workspace plans together (a land's own project asks
+only the workspace route, never public `/plans`), Fleet lists what is scheduled, the plan card
+shows each zone's path, passes, spacing and hours with the assumed class, and the Land panel
+offers "Plan work on this land" (to owners and editors) and "Open in Plan" after scheduling. A
+land action's mission is revised as the action, in Land, never with the agent. Browser storage
+(`twin.mission.v1`, now version 2) never holds a workspace plan or private zone, and a sign-out
+or workspace switch forgets them.
+
+Known limits: a land's own project has no machines, so its plans draft unassigned. The planner
+receives land outlines briefly through the write-gated, stateless plan-draft endpoint. The
+console's map preview of passes still uses its own preview spacing, not the machine classes.
+
+## Implemented increment: the demo ranch as a saved Land
+
+`uv run python -m app.seed.demo_land` (in `apps/api`, after `python -m app.seed`) saves the demo
+ranch, Oak Bench Ranch, as a Land in the pilot workspace, so the joined loop has real ground at
+the place the simulated fleet works. Everything comes from `apps/api/app/seed/demo_ranch.json`,
+the file the `demo-ranch` site and the web app read, and goes in through the same services as the
+Land panel's routes:
+
+- **The Land**: the demo outline as its boundary, with source method `imported`, record id
+  `demo-ranch` and meaning `study-area`. The description says that the outline is a demo area,
+  not a property line, that the name, fleet, zones and plans are simulated, and that nothing has
+  been inspected.
+- **Three inventory features**, each a `candidate` with an external reference
+  `demo_ranch.json` / its key in the file, clipped to the outline:
+  - _Perimeter fence_ (`other`, a line on the outline's east, north and west edges). Its source
+    reads "Demo outline fence, simulated", and it carries `simulated: true`. No fence was mapped
+    or surveyed.
+  - _Figueroa Creek_ (`water`): the USGS NHD flowlines, merged into one line, with the NHD
+    credit (public domain).
+  - _Oak woodland_ (`vegetation`): the ESA WorldCover 2021 tree cover and shrubland patch, with
+    the CC BY 4.0 credit. WorldCover does not map species, so `species` reads "oak (assumed)".
+
+It writes nothing observed: no inspections, findings, evidence, rasters, surveys or research
+results. Those come from people and from real runs. `--research` queues the Land's overview, the
+same `ensure_overview` behind `POST /land/{id}/overview`, once per boundary revision. It says
+when no research worker is running (`pnpm dev:research`).
+
+Running it again is safe. The Land's id is `uuid5(workspace, "demo-land/demo-ranch")`, and each
+feature's is the one `land_features.create` derives from a fixed request key. So a rerun finds
+them by id, creates what is missing, and brings the outline, the words, the sources and the
+geometry back to the file's as new revisions, which keeps any edit in the history. Some things
+stay the user's: the Land's and features' names, a feature's status (confirmed or retired), the
+evidence they linked, and anything they added. `create_land` takes an optional `identifier`
+for this, which the API never passes.
+
+In the console: with the demo ranch open, select Oak Bench Ranch in **Land**. Its ranch zones
+overlap the Land, so `groundModeFor` layers it: the project stays the demo ranch, with its fleet
+and zones Z-14, Z-21 and Z-08. The fence, the creek and the oak woodland join them as private
+zones, and the boundary stays with the Land layer. "Monitor the fence every week" then names
+the fence. Two console details came out of checking this in a browser:
+
+- A line feature's chip now sits halfway along its line (`halfwayAlong`). The middle of the
+  fence's bounds was in the middle of the ranch.
+- A zone's card no longer prints the same source twice when its note and attribution are the
+  same, as they are for every Land zone.
+
+Tests: `tests/test_demo_land.py` covers the listed Land, the features and their sources, the
+ground's notes, geometry inside the outline, a rerun that changes nothing, a rerun that puts the
+file back and keeps the user's choices, a changed file, workspace scoping, the queued overview,
+the command's output, and a check that no inspection, evidence, finding, artifact, raster,
+survey, document or action exists. `landGround.test.ts` checks that the seeded outline layers
+onto the demo ranch's project and where line chips sit.
+
+## Implemented increment: seasonal signatures, bare-earth terrain and NHD flowlines
+
+Three land-scale data sources for the later "Show once, everywhere" and Dress Rehearsal work.
+They are computed or read once per boundary revision through the existing research run, raster
+processor and private raster storage; no migration.
+
+- **Seasonal 10 m signatures** (`sentinel-2-signature`, "Prepare 10 m signatures" in Explore this
+  land). For each of two to six chronological windows (the button asks for 30-day windows centred
+  on mid-January, April, July and October of the latest complete year) the processor selects one
+  Sentinel-2 L2A scene with the same bounded catalog search and local SCL check as the vegetation
+  comparison (`vegetation.select_scene`, at most two quality masks per window) and samples green
+  B03, red B04, NIR B08, SWIR B11 and NDVI on the shared 10 m grid. One SCL 4/5 mask per window
+  applies to all five bands, so a cell is a full sample in a window or missing; nothing is
+  interpolated. B11 and the mask are 20 m sources resampled nearest. The COG holds five float32
+  bands per window, band-interleaved without a float predictor (smaller and faster to tile than
+  pixel interleaving or PREDICTOR=3 on real data). Metadata carries the dated scenes as a
+  `VegetationTimeline` (each window's NDVI band, acquisition date, quality counts, common-cell
+  means), which the existing timeline view shows, and a `SignatureInfo` listing every band with
+  the common-cell mean and spread that a later similarity's z-scores use. Common cells are clear
+  in every band of every window. The map shows the dated NDVI bands; the download and point
+  sample hold all of them. A saved view can keep any of a signature's bands (up to 30, the
+  six-window ceiling), such as October's NDVI at band 20 of four seasons. Warnings say a similar signature is not a species identification, cover
+  estimate or habitat assessment and that "alike" is relative to the variety on this land.
+- **Bare-earth terrain** (`usgs-3dep-13`, "Analyze bare-earth terrain"). USGS 3DEP 1/3
+  arc-second DTM tiles (`prd-tnm.s3.amazonaws.com`, now in the `raster_io` allowlist, read
+  through `RasterOpener`) are warped bilinearly onto the 10 m grid and merged by tile name;
+  `terrain.derive` gives elevation (NAVD88 m) and slope (degrees). Each tile is cited with its
+  ETag and FGDC metadata link; its file date is not an acquisition date. Outside the United
+  States, or where USGS publishes no tile, the run fails with "use cop-dem-glo-30 here", and the
+  button is disabled with that reason.
+- **NHD flowlines** (`GET /land/{id}/hydrography`). USGS NHD Flowline - Large Scale features
+  within 100 m of the boundary, read live by the API (the browser cannot ask NHD), clipped with
+  shapely, each with its permanent identifier, GNIS name, FCode and a kind. Natural channels
+  are perennial, intermittent, ephemeral, or unclassified when NHD records no permanence (FCode
+  46000, common in NHD); `artificial-path` (FType 558) carries a stream through a pond, lake or
+  wide river, so a creek check that includes it keeps the creek unbroken; `other` is only canals
+  and ditches, connectors, conduits, pipelines and coastline. A creek check should take every
+  kind but `other` (and decide about ephemeral), never just perennial and intermittent. The
+  query asks for 6-decimal coordinates generalised by 1e-5 degrees (about 1 m, well inside the
+  1:24,000 accuracy of about 12 m), which made the same answer 40% smaller (98 KB instead of
+  166 KB). It answers "uncovered" outside the US and "unavailable" when it cannot read
+  flowlines: an upstream failure says to try again and is asked again next time; an answer past
+  the 2 MB response limit says trying again will not help and is kept for ten minutes. It says
+  when the 500-record limit was hit and keeps good answers in memory for an hour per land
+  revision. Responses are private, no-store.
+
+The research agent's `analyze_raster` text describes both datasets. Processor limits: signature
+120 CPU s and 200 s wall time with a 128 MiB / 1,024-request / 180 s read budget; NDVI 165 s;
+3DEP 75 CPU s and 90 s with a 64 MiB / 256-request / 60 s budget; all keep the 16 MiB output
+limit. A raster run's research time budget must cover its processor: Explore this land sends
+300 s for signatures, 240 s for NDVI and 180 s otherwise (`maxSeconds` in
+`features/land/rasterRuns.ts`; the default budget is 180 s). The worker stops a processor 15 s
+before the run's budget ends, so a raster that finishes is always saved with its evidence and
+a budget stop says plainly that no raster was saved; with under 45 s left (a resumed run counts
+from its first start) it refuses to start one and says why. An investigation's agent sees
+`remainingSeconds` and is told a signature needs about 220 s of it, which a default 180 s
+investigation never has, so it points the person to "Prepare 10 m signatures" instead.
+
+Map tiles of a stored raster decode each band once into a 64 MiB in-process cache keyed by the
+blob's content hash (`land_rasters.band_array`, for the later similarity too), instead of
+reading the whole blob from Postgres and inflating the band for every 256 px tile; tiles that
+arrive together wait for the one decode. Rendering one z15 view of the signature's October NDVI
+(30 tiles of band 20, 3.35 MB blob) took 3.29 s without it and 1.53 s with it, in process.
+
+Measured on the Oak Bench Ranch demo outline (1,349 ac, 254 x 255 cells at 10 m) with the API,
+the research worker and the buttons in a browser, through this environment's proxy: bare-earth
+terrain finished 6.0 s after the click (5.3 s processing), read 1.8 MB from one tile (n35w121)
+and stored 0.49 MB (elevation 312 to 505 m, mean slope 13.2 degrees, every boundary cell
+valid). Seasonal signatures finished 98.7 s after the click (96.9 s processing), read 43.5 MB
+from 28 cited files and stored 3.35 MB in 20 bands; scenes acquired 2025-01-15, 2025-04-05,
+2025-07-24 and 2025-10-17 left 54,436 of 54,596 cells (99.7%) clear in every window, with
+common-cell NDVI 0.29, 0.52, 0.26 and 0.29. The July NDVI band shows the oaks and the Figueroa
+Creek corridor staying green over dry annual grass. Run again with the button's 300 s budget,
+signatures finished 95.1 s after the click (93.3 s in the worker); October's NDVI (band 20)
+mapped, and a view saved on it reopened on band 20 in a fresh browser. Hydrography answered in
+2.9 s (17 ms cached) with 55 flowlines in 56 clipped pieces: 21 intermittent (10 of them
+Figueroa Creek), 34 ephemeral and 1 artificial path; the generalised query answered in 1.5 s.
+Known limit: land rasters are Cesium imagery layers, which are not drawn while Google
+Photorealistic 3D Tiles are on; the maps above were checked in the open world mode.
+
+## Implemented increment: the Fog of Knowing (fog-v1)
+
+A saved land can show how fine and how fresh the knowledge this workspace has _stored_ about
+each patch of it is: soft fog over the map that is thick where nothing is stored, or only old or
+coarse records, and thin where there is recent, fine evidence. It is computed, never measured,
+and it lifts only when new evidence is stored; computing it again changes nothing.
+
+Policy `fog-v1` (`apps/api/app/analysis/knowledge.py`). Cells are lon/lat-aligned, 20 m by
+default (10 to 100 m, grown until the grid is at most 256 x 256), and a cell is inside when its
+centre is (holes stay out).
+
+    density = 1 - max over records r covering the cell of Q(class r) x 0.5^(age r / H(class r))
+
+| Class                              | Q    | Half-life | Example                                         |
+| ---------------------------------- | ---- | --------- | ----------------------------------------------- |
+| Centimetre capture (5 cm or finer) | 1.00 | 180 d     | a drone or phone capture                        |
+| Field inspection                   | 0.85 | 120 d     | a person's dated inspection of a mapped feature |
+| Aerial imagery (5 cm to 1 m)       | 0.70 | 365 d     | an aligned air photo or historical map          |
+| Satellite (1 to 20 m)              | 0.45 | 90 d      | a cloud-masked Sentinel-2 scene                 |
+| Regional or unlocated              | 0.20 | 5 y       | a soil map, a 30 m elevation model, a document  |
+
+- An undated record counts at Q x 0.25, as if two half-lives old. The age is from the
+  observation (or publication) date, never the retrieval date.
+- A record with no published location (all research evidence and field surveys today) counts
+  for the whole land with Q capped at the regional 0.20; its half-life stays its class's.
+- A record placed less precisely than a cell (a capture's georeference uncertainty, an aligned
+  image's leave-one-out RMS) drops one class.
+- An inspected point reaches 15 m, a line 5 m; a footprint covers the cells it touches.
+- The qualities and half-lives are judgement, not measurement. Any change is a new policy
+  version, and the version is shown beside every number.
+
+Counted: public scan sites whose assets meet the land (class from the recorded ground
+resolution; a scan with none is assumed centimetre and says so), inspections of the land's
+inventory features (on the geometry as inspected), the land's newest 20 rasters (each dated
+Sentinel-2 scene on the cells it actually saw, so cloud-masked cells earn nothing; the
+`sentinel-2-signature` dataset counts the same way from its observations; ESA WorldCover as
+2021; Copernicus and USGS 3DEP elevation as regional and undated), archive images aligned to the
+ground, research evidence and field surveys. Not counted, and listed in the legend: the Google
+photorealistic basemap (no capture date), public NAIP air photos and Sentinel-2 scenes that are
+not stored here (the Time Lantern shows them; they count once stored), and mission plans, the
+simulated fleet and its tracks, Living Survey motion and inferred fill. GBIF records withhold
+their coordinates and are never drawn as points. Derived analyses (solar, scenarios) and name
+lookups are not observations.
+
+API, read-only and workspace-scoped (viewers may ask): `GET /land/{id}/knowledge?cellM&asOf`
+returns the grid as two `LonLatGrid`s (the shared wire format in `app/schemas/grids.py`, row 0 at
+the north: density u8, 0..250 = density x 250, 255 outside; best record u16, 65535 none), the
+records, a summary and the policy. `GET /land/{id}/knowledge/cell` lists every record covering
+one cell with its credit arithmetic. `POST /land/{id}/knowledge/scout-areas` returns the foggiest
+patches within a budget, nearest a focus point when the fog is even. Each kind of record is read
+in one statement, so the query count does not grow with the evidence.
+
+Console: the strip's "Fog of knowing" pill shows the fog over the selected land, one ground
+drape (`cesium/GroundGridLayer.ts`) whose noise breaks it into fog rather than a heatmap. While
+it shows, a plain click inside the land opens the cell's card, on a mission zone's fill as well
+(outside the land, or before the grid is in, the zone is selected as usual; the map menu has
+"What do we know here" too); otherwise a click on the ground still does nothing. Saving an
+inspection, editing the inventory, aligning an archive image, saving a field survey, finishing a
+research run, registering a capture or revising the boundary refreshes everything computed from
+the land's records (`invalidateLandDerived`); the grid is also keyed by the boundary revision, so
+a revised boundary never shows the old grid. Where fog went it dissolves over 1.5 s. The drape's
+fragment shader reads two texels and two 3-octave noise fields (the land's edge comes pre-softened
+in the texture), since it covers the screen on the photorealistic tiles. "Fetch latest satellite
+look" stores one Sentinel-2 scene from the last 30 days.
+
+"Lift the fog" asks for the foggiest ground within one battery (about 64 acres at the assumed
+drone's flight) near the view and drafts a survey over it through a fresh plan card (one left
+open, a revision included, is replaced, as "Plan on this land" does): the patches
+are private area zones carrying their scout capture (`PlanArea.capture`), the map draws their
+real flight lines dashed with "Would lift fog · forecast", and the planner flies them at those
+numbers. The draft or the approved plan exports a DJI WPML route (KMZ: `wpmz/template.kml` and
+`wpmz/waylines.wpml`) for a Mavic 3 Enterprise class aircraft in DJI Pilot 2 or FlightHub 2:
+one waypoint at each end of every drawn lane, areas in the plan's step order as the map routes
+them and each with its own capture's lanes, photos every photo spacing along lanes and none on
+transit legs, heights relative to the take-off point. Areas set to different heights or overlaps
+are not exported as one route. Changing the height restates the detail in the goal and in the
+planner's detail answer. Caveats, said in the console as well: the route is a draft that has not
+been imported into DJI Pilot 2 or FlightHub 2 or flown; it does not follow terrain (the card
+samples the 3D surface under the patches once per outline, at most 150 points reused across
+heights, and gives the resulting detail range and lowest clearance); the zip is store-only; the
+battery time is assumed; check airspace
+(B4UFLY or LAANC) and fly under Part 107. The drone class in `machine_classes.json` is now that
+aircraft's wide camera (73.7 degrees across), so lines at 60 m are 27 m apart.
+
+## Implemented increment: the Descent and the Time Lantern
+
+The welcome card asks "Where is your land?" (with the Land flag off, "Where do you want to
+go?"). An address or place is geocoded once, on submit, never per keystroke (Nominatim, the
+fallback geocoder, forbids autocomplete); coordinates ("34.698, -120.04", with or without ° and
+N/S/E/W) skip the geocoder. One place flies there at once, several are offered as choices, none
+says so in place. The flight is one glide (`features/descent/descent.ts`, CameraController.glide)
+from wherever the camera is to a 700 m square around the point, re-pointed on the way by the
+terrain sampled at full detail and by the OpenStreetMap area containing the point, which is drawn
+as "Mapped area from OpenStreetMap, not a legal parcel". A geocoder box more than 8 km across is
+a town or a region: a plain flight to its box, no lookup. Overpass is never waited for; its
+failure is a line on the arrival card. The arrival card offers "Outline this land", which goes
+through `landEntry` (`proposeOutline` for the mapped area, a new `drawOutline` otherwise) so a
+selected land is never revised by it, and "Look back in time", which opens the Time Lantern over
+the place.
+
+The Time Lantern (Y, or Look back in the strip; ADR 0010) shows dated public imagery under the
+cursor through the photorealistic world: each year NAIP was flown (Planetary Computer mosaics,
+U.S. public domain), the clearest June to September Sentinel-2 scene of each year since 2016
+(off by default: 10 m), and each edition of the USGS topographic sheets covering the place, which
+this API tiles from USGS's own GeoTIFFs (`/api/v1/imagery/usgs-topo/tiles`, through the raster
+allowlist, the collar cut at the neatline). The wheel over the map steps through real
+acquisitions only, Alt peeks, Esc closes (a sheet or popover open over the map takes Esc first).
+The rim names the source, its date (the record's under the cursor), its licence and its
+positional accuracy on whose word: the sentence the year's NAIP records state where they have
+one ("+/- 6 meters to ground specification"; one record is read per year and state, and the
+four quarter quads over the ranch say the same in every year that has records), "not stated"
+where they have none, "could not be read" when the record did not answer, the 1947 National Map
+Accuracy Standards for sheets made after them, "predates the standards" before; for a sheet,
+also the stated accuracy of its NAD27 to WGS 84 shift ("datum shift ±7 m": the NADCON grids that
+would do better are not installed on the server); and every source says "not checked against
+today's 3D world". Under the rail the strip says what the date means ("Catalog publication
+year; surveying, revision and scanning may have different dates") and every caveat in the
+catalog's words (the datum shift, a sheet edge that could not be matched to the map grid, a
+scene's cloud), with a link to the record under the lens (or the source's only record). When the
+cursor is outside the area listed, it says where the list is for. A source that could not be
+reached is counted apart from a source with nothing here ("2 sources could not be reached, 1 has
+nothing here"), an empty rail with one of them says the list may be incomplete rather than that
+nothing exists, and "Try again" asks again.
+
+`GET /api/v1/imagery/dated` is a public, rate-limited read (each side at most 0.25°; each
+provider's answer cached 6 h per area rounded to 0.01°, and a cached answer spends no token). A
+catalog missing a provider that could not be reached is held 30 s and marked `no-store`; the next
+one asks that provider alone. A saved land's bounds are rounded outward to 0.05° before they
+reach it, so the public route never receives the land's own extent. That does not hide where
+the operator looks: the lens's tiles are requested for the ground under it (USGS sheets from this
+API's public, cacheable tile route down to level 17, about 150 m; NAIP and Sentinel-2 from
+Planetary Computer), as any map's tiles are, so the access logs of both record the area viewed.
+A land selected after a descent replaces the descent's area as the place looked back on. The topo tile route is an `async def`: a tile waits for one of four sheet readers on the
+event loop, holding none of the threads every other route runs on, and the reads run on threads
+of their own. Past twelve waiting, or four seconds, a tile is answered 503 with Retry-After,
+which the lantern's layers wait out and ask again (`cesium/busyTiles.ts`). The bytes a sheet is
+read for (its size and ETag, its header and IFDs, the image blocks neighbouring tiles share) are
+kept in process, so a tile costs only the ranges no tile has read yet. The three sources are registered with the
+research sources (`/research/sources`) and list what exists without storing evidence; the
+overview does not run them. Not done: Esri Wayback and the Esri-hosted topo service (not openly
+licensed), image registrations and NDVI rasters in the lens (they need workspace auth on the
+tiles), and any check of alignment against the Google mesh.
+
+## Implemented increment: Show once, everywhere
+
+Tap one place on a saved land and every cell with a similar seasonal satellite signature
+lights up; slide how alike, protect patches, and make the lit ground the job. Cells are 10 m,
+or coarser on a land more than about 5 km across: the raster's grid keeps at most 506 cells
+across (`make_grid`), so a 6 km ranch is analysed at about 11.9 m, and every line that names the
+spacing (the card, the server's interpretation and errors, a job's provenance) takes it from
+the raster's `resolutionM`, never a fixed 10 m. The card shows the raster's coarsening warning
+then, and before preparing says what spacing the land's extent will give. It is computed on
+request from the land's stored `sentinel-2-signature` raster (above) and never saved; no
+migration.
+
+Similarity (`apps/api/app/analysis/similarity.py`). Only cells valid in every band of every
+window are compared. Each band is standardized by the mean and spread the raster's
+`SignatureInfo` stores for those common cells (a band with no spread is left out), each cell's
+vector is scaled to unit length, and two cells are as alike as the cosine of their vectors: 1 the
+same signature, 0 unrelated, below 0 opposite. Scores are quantized once,
+`round(max(0, cosine) x 250)`, and every threshold compares that number (`raw_threshold`, the
+console's `rawThreshold`), so the slider, its tally and the areas a job gets light the same
+cells. Alike is relative to the variety on this land, and the card says what it is whatever the
+slider: "Measured: satellite reflectance", "Inferred: similarity", "Similar seasonal satellite
+signature at 10 m. Not a species ID." (at the raster's spacing).
+
+API, read-only and workspace-scoped (viewers may ask), private and no-store:
+
+- `GET /land/rasters/{id}/similar?longitude&latitude` returns the tapped cell (its centre and
+  its values per dated scene), and the scores as a `LonLatGrid` at the analysis spacing (u8,
+  0..250 = cosine x 250, 255 outside the land or without a full signature), resampled nearest
+  from the analysis grid, with the cell area for a tally, the scenes, the method, the raster's
+  warnings and attribution, and whether the boundary changed since (stale). Only signature
+  rasters compare (409 otherwise); a point outside the boundary, or a cell cloudy, shadowed,
+  snowy or water in any window, is a 422 that says so.
+- `POST /land/rasters/{id}/similar/zones` (`longitude`, `latitude`, `threshold` 0.3 to 0.99,
+  `protected` as up to 5,000 lon/lat rectangles, `minPatchM2` 2,000, `maxZones` 8) recomputes on
+  the analysis grid and outlines the alike cells the way the fog's scout patches are made: cell
+  squares merged, closed by half a cell (single-cell gaps and diagonal steps bridged), simplified,
+  clipped to the boundary, with protected ground cut out afterwards so it is always a hole. The
+  largest patches become areas of their own and the rest one remainder area, so an oak-like
+  signature that fragments into hundreds of patches keeps the plan and the map sane; patches
+  under half an acre are left out and counted, as are alike cells that were protected.
+  Footprints are stored to 8 decimals; a patch whose ring that rounding pinches is snapped to it
+  with a valid result, and one narrower than the rounding is left out and counted
+  (`unoutlined`), never dropped without a word. A part that reprojection splits shares its cells
+  between the pieces by area. `nativeResolutionM` says the grid the areas were outlined on.
+
+The standardized vectors of a raster stay in memory between taps, keyed by its content hash
+(96 MiB budget, sized with the API's other in-process caches to fit the 1 GB API VM): a tap after
+the first is one matrix product. Cold builds run one at a time across rasters, because one peaks
+near 200 MB; a tap on a built stack never waits for them.
+
+Console: the card leads the land's Ecology section. Without signatures for the current boundary
+it offers "Prepare 10 m signatures" (the same raster run Explore this land starts; "Prepare
+seasonal signatures" on a land too wide for 10 m) and follows the run. Signatures made only for
+an earlier boundary are offered again for this one. Signatures for this boundary in which no
+cell was clear in every season say so with the raster's own warning (which window was empty),
+and the button tries the year before the earliest year tried, since the same dates would read
+the same cloudy scenes; the status line stops once the list has the run's raster. With
+signatures, "Click a place" (Tap on a touch screen) starts a session. A bridge in the
+shell takes the ground taps while the card is on screen and drapes the answer with the shared
+`GroundGridLayer` 'ramp' material: magenta, a hue the land never has, deeper and more opaque the
+more alike, with the tapped cell outlined. "How alike" (30 to 99%, from 80%) is the drape's
+threshold uniform, so sliding fetches and uploads nothing; the tally counts the lit cells of the
+display grid and says it is approximate. In Protect mode a tap on a lit patch leaves the whole
+8-connected patch out (hatched in blue; a second tap brings it back); protected ground is sent as
+row runs and kept for the next tap on the same grid. The card, the hatch and the job's note count
+the same protected cells: those still lit at the slider's setting, the ground protection keeps
+out of this job. Escape (not one typed into a field, nor one
+an open sheet, dialog or popover takes first), the fog taking the ground, another land or a
+revised boundary ends the session; hiding the card only lifts the drape and the taps.
+"Make this the job" opens a fresh plan card on the land with the areas, private and marked as
+derived from the land, each citing "Similar Sentinel-2 signature at 10 m to the cell at <lat,
+lon>, at least N% alike; scenes <dates>" (the raster's spacing) with the data's attribution; the
+ground note names the protected acres, the specks and any patch too thin to outline left out, and the bar asks what should happen there. A typed goal
+keeps derived areas as the ground (it used to swap them for the land's boundary). A job made
+again replaces the last one's areas unless a plan keeps them.
+
+Two fixes found tapping the ranch in a browser, shared with the fog: mid-click the depth pick came
+back empty, so a ground tap fell back to the bare ellipsoid, off by the ground's height along
+the ray (the ranch sits at 250 m: from 4.4 km a tap 1.3 km off-centre landed 90 m away). An
+approximate tap is now asked again after a fresh frame (or after 500 ms, when the ellipsoid
+stays the last resort), when the depth answers; a click made meanwhile supersedes it. And inside the
+land a click on an inventory polygon (the oak woodland) selected the feature instead of reaching
+the layer taking taps; there it is now ground, as a mission zone's fill already was. The drape
+also kept rebuilding its primitive on every show (it forgot the texture it had just uploaded), so
+a protect tap now swaps the texture in place.
+
+Measured on Oak Bench Ranch (54,436 compared cells) with the API, the worker and a browser:
+`/similar` answered in 0.55 s on the first tap and about 0.2 s after (88 KB); `/similar/zones`
+in 0.5 s at 80% and 0.85 s at 65%. A cell in a block of evergreen canopy (NDVI 0.69, 0.64, 0.58
+and 0.65 on 2025-01-15, 04-05, 07-24 and 10-17: green through the dry summer, as live oak is)
+lit 8,148 cells (201 ac) at 80%, 4,061 at 90% and 11,912 at 65%, following the oak woodland,
+the creek corridor and scattered oaks; protecting a 75-cell oak patch on the east fence left
+8,073. The job at 80% was 8 areas and one area of 33 smaller patches (195 ac), with 220 specks
+(21 ac) left out; "Survey these oak patches for sudden oak death next week" drafted it as a
+2-hour survey by the assumed mapping drone. Known limits: the display grid is the analysis grid
+resampled nearest onto lon/lat cells, so its tally is approximate; the signature is four dated
+scenes, so a field green in April only matches other April-green ground, whatever grows there.
+
+## Implemented increment: the Dress Rehearsal
+
+A draft plan on a Land can be rehearsed before it is approved (docs/MISSION_CONTROL.md,
+"Dress rehearsal"). The rehearsal reads the Land's own records through two workspace routes:
+`GET /api/v1/land/rasters/{id}/grid?band=N` sends one band of a stored raster as a `LonLatGrid`
+(float32, NaN for no value, about the raster's cell size, at most 512 cells a side; bilinear for
+measured bands, nearest for categorical ones; `Cache-Control: private, no-store`), and
+`GET /land/{id}/hydrography` gives the USGS NHD flowlines. The newest USGS 3DEP raster made for
+the current outline is preferred (bare earth, so trees and buildings do not read as slope),
+then Copernicus GLO-30, which the card labels a 30 m surface model including canopy; a Land
+with neither is checked against the globe's terrain sampled over the lanes, labelled as such,
+and, when the Land feature is on, the card suggests analyzing bare-earth terrain (inside the
+United States; elsewhere, GLO-30 if the Land has no elevation at all). A grid coarser than the
+raster (the route caps it at 512 cells a side) is labelled "resampled to N m", since slope over
+coarser cells reads lower. The raster has heights inside the outline only and the NHD answer
+reaches 100 m past it, so the rehearsal counts lanes it could not read on either and never calls
+them clear; a truncated NHD answer is said too. The raster heights are NAVD88 or EGM2008, so
+ghosts stand on them plus the median difference to the globe's terrain (or, without terrain, its
+3D tiles) at a few points; with no heights at all they stand on the 3D tiles sampled over the
+lanes. Slope is a difference of heights and does not need the datum. The limits are assumptions in
+`apps/api/app/services/machine_classes.json`: `maxSlopePct` (mower 25 %, seed drill 20 %,
+survey rover 35 %) and `creekBufferM` (15 m, 15 m and 5 m). Not done: hands are not stored with
+the plan or sent to the planner, lanes cannot be dragged, machine kinematics (headland turns,
+turning radius, battery), machine-to-machine conflicts and aerial rules (altitude, wind,
+airspace) are not simulated.
+
+## Implemented increment: workable ground
+
+The rehearsal's hands have one answer that changes what is approved: work only the ground the
+machines can. `POST /api/v1/land/{id}/workable-ground` takes an outline on the Land (a plan's
+zone), a machine class, and optionally the elevation raster to read (`demRasterId`) and whether
+ephemeral drainages count as creeks. It reads the Land's newest elevation raster for its current
+outline, USGS 3DEP before Copernicus GLO-30 (a surface model, said so in a warning; none at all
+is a 409 `no_elevation` that says to analyze bare-earth terrain), the NHD flowlines of
+`GET /land/{id}/hydrography` under the rehearsal's rule (perennial, intermittent, unclassified
+and artificial paths; ephemeral on request), and the class's assumed `maxSlopePct` and
+`creekBufferM` (`machine_classes.json`; a drone is refused). On the raster's own metric grid each
+cell's slope is its steepest gradient (central differences one cell either side, one-sided at the
+edge of the data, as the rehearsal reads it), so a cell within the limit can be driven in any
+direction. The outline is split in order, so the parts add up to it: no data (no height in the
+raster; the ring of cells the Land's outline cuts takes its steepest neighbour's slope, so the
+outline's edge is not lost to the cell-centre rule), too steep (whole cells), steep edge (the
+half cell beside a steep cell: slope at a point is read from heights a cell either side, so
+there it takes in the steep cell, and a lane run up to the cell edge would still go past the
+limit; half the raster's cell, not a machine assumption; mitred, so the steep ground's
+staircase outline is offset with square corners rather than rounded with arcs that would
+triple its vertices), creek buffer (drawn 10 cm wide of the
+limit with fine arcs, so a lane along its edge reads outside it), slivers under 0.1 ac (dropped
+and counted), and workable. The answer gives the workable MultiPolygon, the
+square metres of each part, each left-out part's geometry for the hatch, the limits, the raster
+(dataset, label, the source file's publication date, stale or a fallback), the creeks read,
+sources, assumptions and warnings. Workspace-scoped, `Cache-Control: private, no-store`, computed
+on request and never saved (`app/analysis/workable.py`, `app/services/land_workable.py`; tests
+on a synthetic DEM saved through the worker in `tests/test_land_workable.py`).
+
+Measured on Oak Bench Ranch (USGS 3DEP 10 m, 22 counted NHD flowlines): the west grassland
+(414 ac) for a mower leaves out 137 ac over 25 %, 39 ac of steep edge, 13 ac within 15 m of
+creeks and 1.1 ac of 91 slivers, leaving 225 ac in 23 pieces, in about two seconds on first
+read; rehearsed again on it, the mowers raise no hands (147 before). Without the steep edge the
+same cut left 263 ac and 35 hands, every one on the edge of the left-out ground. That edge was
+first drawn with rounded corners; it is now mitred. In the browser with NHD read, the west
+grassland comes to 223 ac (225 rounded) and 101 h, and its rerun raises no hands either way;
+the whole ranch on its own Land comes to 517 ac (524 rounded) with 1 hand left of 82 either
+way, and its hatch is 373 map entities instead of 854. Measured both ways on the same 3DEP
+raster with the demo creek line standing in for NHD, the west grassland's workable ground is
+2,042 vertices against 5,947 and its steep edge 4,735 against 9,066; the whole ranch's answer
+is about 840 KB of outlines against 1.7 MB (workable 5,360 vertices against 16,581, slivers 214
+pieces against 458). The hatch draws one shape per part, so slivers are counted and not drawn. Not done: no headland or turning room is assumed, the cut is not remembered
+with the approved plan beyond its area's attribution, and there is no undo button: naming the
+zone in the bar ("mow Z-14") or picking the ground again brings the whole zone back.
+
+## Polish: the Land feature on demand, on a phone and in the command box
+
+The audit's remaining Land items, each tested:
+
+- **On demand.** `AppShell` loads the Land panel, the land bridges (`LandIdentityBridge`,
+  `LandBridge`, `LandContextBridge`, `LandRasterBridge`, `KnowledgeFogBridge`,
+  `LandMissionBridge`), the fog of knowing's card and legend, and with them oidc-client-ts, with
+  `React.lazy`, and renders them only with the flag on. With it off their chunks are still
+  built, but nothing requests them. The globe's entry chunk went from 383 kB to 179 kB gzipped.
+  `apps/web/scripts/check-bundle.mjs` fails a build whose globe page reaches the Land code
+  before its first frame, and holds the entry to a gzip budget (`INDEX_ENTRY_GZIP_BUDGET`). A
+  chunk that fails to load (a flaky network, a tab left open across a deploy) fails alone: the
+  bridges and the settings sheet mount under a quiet error boundary (`OnDemand` in `AppShell`)
+  and the panel, card and legend under their inline ones, so the HUD keeps running.
+- **On a phone.** The review sheet covers the lower half of the map, so a boundary going to
+  review is framed above it when anything hides it (`features/land/landFraming.ts`, arithmetic in
+  `lib/viewFraming.ts`); opening a saved land frames it beside the panel on a desktop and above
+  the sheet on a phone. Opening a saved land, from the panel's list, the command box or the map,
+  scrolls the panel to the land's overview. On a touch screen (`(pointer: coarse)`) the Land
+  tool and the plan composer say "Tap the map", not "Click the map" (`lib/pointer.ts`), and a
+  wait for a point on the map never says "Escape": it names the button that cancels it (the
+  plan card's **Cancel**, the map alignment's **Cancel map pick**).
+- **In the command box.** With the flag on, the Actions include "Open Land" (`Shift+L`) and
+  "Outline land" ("Return to your unsaved outline" while one is open), and saved land is
+  listed by name under "Saved land": choosing one opens it and frames it.
+- **The strip** reads TimelineControl, TimeLanternControl, KnowledgeLegend: dates, the lens over
+  dated imagery, then how old what you know is.
+
+Tests: `landPanelPhone.test.tsx` (tap copy, review framing above the sheet, overview on
+reopening), `touchPickCancel.test.tsx` and `landImageAlignment.test.tsx` (no Escape on a phone,
+a Cancel that ends the wait), `errorBoundaryQuiet.test.tsx`, `viewFraming.test.ts`,
+`commandBox.test.tsx` ("the Land tool in the command box"), `checkBundle.test.ts`, and in
+`e2e/land.spec.ts` "on a touch phone" and the strip order in the fog test.
+
 ## Implemented increment: map-first Land and California parcels
 
 The side panel, with its six tabs, roughly 35 controls on a saved land and a single scroll, is
@@ -2080,3 +2746,27 @@ and the picker says so. Re-check the registry with `python -m app.scripts.verify
 Validation: web unit tests (159 files, 1,374 tests), API tests (977 passed; S3 and OCR tests
 skipped without their services), ruff, mypy, eslint, prettier, typecheck and the contract check
 pass. The seven Land Chromium regressions were rewritten for the new controls and pass.
+
+## Implemented increment: the audit branch on the map-first lenses
+
+The Fog of Knowing, Descent, Time Lantern, Show once, Dress Rehearsal and the Land → Plan loop
+were built on the side panel. Merged onto map-first, the panel's deletion stands and each feature
+moved to the surface that now owns its job. Migrations follow production's
+`0029_research_event_location`: `0030_research_worker_presence`, then `0031_plan_land`.
+
+| Feature                                       | Was (side panel)                   | Now (map-first)                                                                                                                                                    |
+| --------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Plan work on this land                        | button under the land overview     | Plans lens, primary action under the headline (`land-plan-work`)                                                                                                   |
+| Schedule an action as a mission, Open in Plan | Actions tab                        | Plans lens `PlanNextStep`: "Schedule under" this land's plans or the open project, then "Open in Plan"                                                             |
+| Why Save, Approve or Schedule is disabled     | beside each control                | the same, in the plan editor and next-step form (`plans-draft-problems`, `plans-approval-blockers`)                                                                |
+| Research worker presence, queued runs         | Research tab                       | every lens that runs research and the agent card (`research-worker-notice`, "Cancel queued request")                                                               |
+| Bare-earth terrain (3DEP), 10 m signatures    | Research tab                       | Overview lens Details (`overview-bare-earth`, `overview-signatures`); terrain facts prefer bare earth when current and name their source                           |
+| Show once, everywhere                         | foot of the Ecology tab            | Ecology lens, under "Show once, everywhere"; it ends when the lens changes                                                                                         |
+| Fog and ground refresh after new evidence     | panel save handlers                | boundary revision, asset save, inspection, asset import, archive alignment and field survey all call `invalidateLandDerived`                                       |
+| Touch copy, framing above the phone sheet     | panel                              | draw bar, parcel picker, assets, records, plan step areas (`tapOrClick`); `landFraming` frames reviewed drafts and opened land beside the cards or above the sheet |
+| Opening a saved land                          | scrolled the panel to its overview | chip plus Overview lens, from the list, the command box, the map menu or the seeded ranch                                                                          |
+
+On a phone the agent card shares the bottom sheet with the land chip and the lens card, so until it
+has an answer it folds to its ask row (and to one line where the agent is not set up), which keeps
+the land in sight above the sheet. The Land surface, strip, overlays and agent load on demand like
+the bridges, so the globe's first load still carries no Land code (`scripts/check-bundle.mjs`).

@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { PlanDraft } from "@twin/contracts";
 
 import { busyWindows, describeConflict, planConflicts } from "@/missions/conflicts";
-import { DemoMissionProvider } from "@/missions/demo";
+import { demoRanchProject } from "@/missions/demo";
 import { buildDraftRequest, planFromDraft } from "@/missions/planDraft";
 import { learnedRates, parseHours, taskFamily } from "@/missions/rates";
 
-const project = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+const project = demoRanchProject();
 
 const base: PlanDraft = {
   title: "Mow Z-14",
@@ -113,8 +113,14 @@ describe("conflicts", () => {
     expect(mow!.samples).toBeGreaterThan(1);
     expect(mow!.acresPerMachineHour).toBeGreaterThan(0);
     const existing = planFromDraft(base, project, { goal: "x", id: "existing" });
+    // A real fleet's log is measured, and its rates go to the planner; the simulated demo's
+    // log is written at the assumed rates, so it sends none (its drafts size from outlines).
+    const live = { ...project, simulated: false, plans: [existing] };
+    expect(buildDraftRequest(live, { goal: "Mow Z-21" }).rates?.map((r) => r.task)).toContain(
+      "mow",
+    );
     const request = buildDraftRequest({ ...project, plans: [existing] }, { goal: "Mow Z-21" });
-    expect(request.rates?.map((r) => r.task)).toContain("mow");
+    expect(request.rates).toEqual([]);
     expect(request.existingPlans?.[0]?.busy?.[0]?.machineId).toBe("TR-04");
     const revising = buildDraftRequest(
       { ...project, plans: [existing] },

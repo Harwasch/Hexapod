@@ -4,8 +4,10 @@ import { persist } from "zustand/middleware";
 import type { Footprint, PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
 
 import { planningOpened } from "@/lib/planningMetrics";
+import { anywhereProject } from "@/missions/anywhere";
 import { isAreaZone, reshapedZone } from "@/missions/areas";
 import type { GroundSource } from "@/missions/ground";
+import { isPrivateZone, landIdOfProject } from "@/missions/landGround";
 import type { Plan, Project, Zone } from "@/missions/types";
 
 import { record } from "./history";
@@ -39,6 +41,24 @@ export interface PlanComposerState {
   /** Every clarification a draft has carried, by id, so an answered one stays a chip. */
   asked: Record<string, PlanClarification>;
   error: string | null;
+  /**
+   * Zones a derived area replaced in this card (a zone's workable ground, by source zone id):
+   * the planner is not offered the source while its replacement, or the replacement's own
+   * (`setAsideZones`), is in scope, so a goal that names it ("the west grassland") does not
+   * bring the whole of it back.
+   */
+  setAside?: Record<string, string>;
+}
+
+/**
+ * A saved Land's zones engaged as ground (`features/mission/landPlanning.ts`): layered onto
+ * `projectId` when that project's ground overlaps the Land, or carried by the Land's own
+ * `land:<id>` project. Never persisted: Land ground is workspace-private.
+ */
+export interface EngagedLandGround {
+  landId: string;
+  projectId: string;
+  zones: Zone[];
 }
 
 export interface ComposerSeed {
@@ -73,6 +93,8 @@ interface MissionState {
   approvedPlans: Record<string, Plan[]>;
   /** Areas drawn in the console, per project id; the plans that cover them carry them too. */
   areas: Record<string, Zone[]>;
+  /** The selected Land's zones, when it is engaged as ground. Not persisted. */
+  landGround: EngagedLandGround | null;
   setProject: (project: Project | null) => void;
   /**
    * The current project again with fresh details (its site renamed): composed as `setProject`
@@ -92,7 +114,11 @@ interface MissionState {
   openComposer: (seed?: ComposerSeed) => void;
   closeComposer: () => void;
   updateComposer: (patch: Partial<PlanComposerState>) => void;
-  approvePlan: (plan: Plan) => void;
+  /**
+   * Files an approved plan under `projectId` (the current project when omitted). The plan card
+   * opens on it only while that project is current.
+   */
+  approvePlan: (plan: Plan, projectId?: string) => void;
   updatePlan: (planId: string, patch: Partial<Plan>) => void;
   removePlan: (planId: string) => void;
   /** Plans the API holds for a project replace the persisted ones; local-only plans stay. */
@@ -101,6 +127,22 @@ interface MissionState {
   removeArea: (projectId: string, zoneId: string) => void;
   /** Areas that arrived with persisted plans join the drawn ones (same id: the stored one wins). */
   mergeAreas: (projectId: string, zones: Zone[]) => void;
+  /**
+   * Engages a Land's zones as ground. With `project` (the Land's own project) it switches to
+   * it as `setProject` does; while a composer is open the switch waits, and the zones join
+   * the current project instead so the card in progress keeps its goal. Without `project`
+   * the zones join the current project (its fleet and zones stay), replacing another Land's
+   * layered there. They never join another Land's own project, nor replace another Land's
+   * layered zones while a card is open: then nothing changes until the card closes.
+   */
+  engageLand: (ground: { landId: string; zones: Zone[] }, project?: Project) => void;
+  /** The Land's zones leave the current project; a Land's own project keeps its zones. */
+  disengageLand: () => void;
+  /**
+   * Forgets every private plan and zone this browser holds (a sign-out or a workspace switch),
+   * and leaves a Land's project for "anywhere".
+   */
+  dropPrivate: () => void;
 }
 
 let logCounter = 0;
@@ -113,16 +155,76 @@ function compose(
   project: Project | null,
   approved: Record<string, Plan[]>,
   areas: Record<string, Zone[]>,
+  landGround: EngagedLandGround | null,
 ): Project | null {
   if (!project) return null;
   const extra = approved[project.id] ?? [];
   const replaced = new Set(extra.map((p) => p.id));
   const drawn = areas[project.id] ?? [];
+  // An engaged Land's zones come last and win over a zone with the same id.
+  const land = landGround?.projectId === project.id ? landGround.zones : [];
+  const landIds = new Set(land.map((z) => z.id));
+  const drawnIds = new Set(drawn.map((z) => z.id));
+  // A project passed back in is already composed, so stored ground with ids other than
+  // "A-…" (a mission's "LA-…" areas) is in it once already: the console's copy replaces it.
+  // A zone the project carries with its Land metadata keeps it over a stored copy.
+  const own = project.zones.filter(
+    (z) => !isAreaZone(z) && !landIds.has(z.id) && (z.land !== undefined || !drawnIds.has(z.id)),
+  );
+  const ownIds = new Set(own.map((z) => z.id));
   return {
     ...project,
     plans: [...project.plans.filter((p) => !replaced.has(p.id)), ...extra],
-    zones: [...project.zones.filter((z) => !isAreaZone(z)), ...drawn],
+    zones: [...own, ...drawn.filter((z) => !landIds.has(z.id) && !ownIds.has(z.id)), ...land],
   };
+}
+
+/** What may be written to browser storage: never a workspace's plans or private ground. */
+export function persistable(state: {
+  approvedPlans: Record<string, Plan[]>;
+  areas: Record<string, Zone[]>;
+}): { approvedPlans: Record<string, Plan[]>; areas: Record<string, Zone[]> } {
+  const approvedPlans: Record<string, Plan[]> = {};
+  for (const [projectId, plans] of Object.entries(state.approvedPlans)) {
+    if (landIdOfProject(projectId)) continue;
+    approvedPlans[projectId] = plans.filter((p) => p.scope !== "workspace");
+  }
+  const areas: Record<string, Zone[]> = {};
+  for (const [projectId, zones] of Object.entries(state.areas)) {
+    if (landIdOfProject(projectId)) continue;
+    areas[projectId] = zones.filter((z) => !isPrivateZone(z));
+  }
+  return { approvedPlans, areas };
+}
+
+/** Storage written before version 2 could not tell private ground; drop anything land-shaped. */
+export function migrateMissionStorage(persisted: unknown, version: number): unknown {
+  if (version >= 2 || !persisted || typeof persisted !== "object") return persisted;
+  const state = persisted as {
+    approvedPlans?: Record<string, Plan[]>;
+    areas?: Record<string, Zone[]>;
+  };
+  const landShaped = (id: string) => id.startsWith("L-") || id.startsWith("LA-");
+  const areas: Record<string, Zone[]> = {};
+  for (const [projectId, zones] of Object.entries(state.areas ?? {})) {
+    areas[projectId] = zones.filter((z) => !landShaped(z.id));
+  }
+  return persistable({ approvedPlans: state.approvedPlans ?? {}, areas });
+}
+
+/**
+ * The Land planning is engaged on: the layered ground's, else the Land whose own project is
+ * current. One selector so every flow asks the same question (`useLand.active` stays the
+ * single source of truth for which Land is selected).
+ */
+export function missionLandId(
+  state: Pick<MissionState, "landGround" | "project"> = useMission.getState(),
+): string | null {
+  const layered =
+    state.landGround && state.landGround.projectId === state.project?.id
+      ? state.landGround.landId
+      : null;
+  return layered ?? landIdOfProject(state.project?.id);
 }
 
 export const useMission = create<MissionState>()(
@@ -142,9 +244,10 @@ export const useMission = create<MissionState>()(
       composer: null,
       approvedPlans: {},
       areas: {},
+      landGround: null,
       setProject: (project) =>
         set((s) => ({
-          project: compose(project, s.approvedPlans, s.areas),
+          project: compose(project, s.approvedPlans, s.areas, s.landGround),
           selection: null,
           planId: null,
           composer: null,
@@ -152,7 +255,7 @@ export const useMission = create<MissionState>()(
       refreshProject: (project) =>
         set((s) =>
           s.project?.id === project.id
-            ? { project: compose(project, s.approvedPlans, s.areas) }
+            ? { project: compose(project, s.approvedPlans, s.areas, s.landGround) }
             : {},
         ),
       setView: (view) => set({ view, projectsOpen: false }),
@@ -194,18 +297,22 @@ export const useMission = create<MissionState>()(
       setPlannerConfigured: (plannerConfigured) => set({ plannerConfigured }),
       updateComposer: (patch) =>
         set((s) => (s.composer ? { composer: { ...s.composer, ...patch } } : {})),
-      approvePlan: (plan) => {
+      approvePlan: (plan, projectId) => {
         const project = get().project;
-        if (!project) return;
+        const target = projectId ?? project?.id;
+        if (!target) return;
         set((s) => {
-          const current = (s.approvedPlans[project.id] ?? []).filter((p) => p.id !== plan.id);
-          const approvedPlans = { ...s.approvedPlans, [project.id]: [...current, plan] };
+          const current = (s.approvedPlans[target] ?? []).filter((p) => p.id !== plan.id);
+          const approvedPlans = { ...s.approvedPlans, [target]: [...current, plan] };
+          // Another project is current now: the plan joins its own, which shows it when opened.
+          if (project?.id !== target) return { approvedPlans };
           return {
             approvedPlans,
             project: compose(
               { ...project, plans: project.plans.filter((p) => p.id !== plan.id) },
               approvedPlans,
               s.areas,
+              s.landGround,
             ),
             composer: null,
             planId: plan.id,
@@ -238,7 +345,7 @@ export const useMission = create<MissionState>()(
           if (project?.id !== projectId) return { approvedPlans };
           // Provider plans carry no goal; everything else came from the console and is rebuilt.
           const base = { ...project, plans: project.plans.filter((p) => p.goal === undefined) };
-          return { approvedPlans, project: compose(base, approvedPlans, s.areas) };
+          return { approvedPlans, project: compose(base, approvedPlans, s.areas, s.landGround) };
         }),
       addArea: (projectId, zone) =>
         set((s) => {
@@ -249,7 +356,10 @@ export const useMission = create<MissionState>()(
           const project = s.project;
           return {
             areas,
-            project: project?.id === projectId ? compose(project, s.approvedPlans, areas) : project,
+            project:
+              project?.id === projectId
+                ? compose(project, s.approvedPlans, areas, s.landGround)
+                : project,
           };
         }),
       removeArea: (projectId, zoneId) =>
@@ -261,7 +371,99 @@ export const useMission = create<MissionState>()(
           const project = s.project;
           return {
             areas,
-            project: project?.id === projectId ? compose(project, s.approvedPlans, areas) : project,
+            project:
+              project?.id === projectId
+                ? compose(project, s.approvedPlans, areas, s.landGround)
+                : project,
+          };
+        }),
+      engageLand: (ground, project) =>
+        set((s) => {
+          const current = s.project;
+          // A Land's own project, unless a card in progress would lose its goal: then the
+          // zones join the current project and the switch waits.
+          if (project && (!s.composer || current?.id === project.id || !current)) {
+            const landGround = {
+              landId: ground.landId,
+              projectId: project.id,
+              zones: ground.zones,
+            };
+            if (current?.id === project.id) {
+              return {
+                landGround,
+                project: compose(project, s.approvedPlans, s.areas, landGround),
+              };
+            }
+            return {
+              landGround,
+              project: compose(project, s.approvedPlans, s.areas, landGround),
+              selection: null,
+              planId: null,
+              composer: null,
+            };
+          }
+          if (!current) return {};
+          // Never onto another Land's own project: a mission is filed under one Land, so a
+          // plan there that took in this Land's ground is one the server refuses. Nothing
+          // changes, and the switch waits for the card (`landPlanning.ts`).
+          const other = landIdOfProject(current.id);
+          if (other !== null && other !== ground.landId) return {};
+          // Another Land layered here leaves with the switch: one Land's ground at a time, so
+          // the map, the ground a goal names and the Land a mission is filed under are this
+          // one's. A card in progress may hold that ground, so then nothing changes and the
+          // switch waits for the card, as above.
+          const previous =
+            s.landGround?.projectId === current.id && s.landGround.landId !== ground.landId
+              ? new Set(s.landGround.zones.map((z) => z.id))
+              : null;
+          if (previous && s.composer) return {};
+          const base = previous
+            ? { ...current, zones: current.zones.filter((z) => !previous.has(z.id)) }
+            : current;
+          const landGround = { landId: ground.landId, projectId: current.id, zones: ground.zones };
+          return { landGround, project: compose(base, s.approvedPlans, s.areas, landGround) };
+        }),
+      disengageLand: () =>
+        set((s) => {
+          if (!s.landGround) return {};
+          const project = s.project;
+          // A Land's own project carries its zones; only layered ones leave.
+          if (!project || landIdOfProject(project.id) === s.landGround.landId)
+            return { landGround: null };
+          const zones = new Set(s.landGround.zones.map((z) => z.id));
+          return {
+            landGround: null,
+            project: compose(
+              { ...project, zones: project.zones.filter((z) => !zones.has(z.id)) },
+              s.approvedPlans,
+              s.areas,
+              null,
+            ),
+          };
+        }),
+      dropPrivate: () =>
+        set((s) => {
+          const kept = persistable(s);
+          const current = s.project;
+          const base =
+            !current || landIdOfProject(current.id)
+              ? current && anywhereProject()
+              : {
+                  ...current,
+                  plans: current.plans.filter((p) => p.scope !== "workspace"),
+                  zones: current.zones.filter((z) => !isPrivateZone(z)),
+                };
+          const project = compose(base, kept.approvedPlans, kept.areas, null);
+          const planOpen = project?.plans.some((p) => p.id === s.planId) ?? false;
+          const composerPrivate =
+            s.composer?.zoneIds.some((id) => !project?.zones.some((z) => z.id === id)) ?? false;
+          return {
+            ...kept,
+            landGround: null,
+            project,
+            planId: planOpen ? s.planId : null,
+            composer: composerPrivate || project?.id !== current?.id ? null : s.composer,
+            selection: project?.id === current?.id ? s.selection : null,
           };
         }),
       mergeAreas: (projectId, zones) =>
@@ -270,7 +472,13 @@ export const useMission = create<MissionState>()(
           // copy that a plans refetch brings back; stored areas fill in the rest.
           const local = s.areas[projectId] ?? [];
           const shaped = new Set(local.filter((z) => z.view ?? z.shaped).map((z) => z.id));
-          const incoming = zones.filter((z) => !shaped.has(z.id));
+          // Two plans covering one area each carry it: the first copy joins, once.
+          const seen = new Set<string>();
+          const incoming = zones.filter((z) => {
+            if (shaped.has(z.id) || seen.has(z.id)) return false;
+            seen.add(z.id);
+            return true;
+          });
           if (incoming.length === 0) return {};
           const ids = new Set(incoming.map((z) => z.id));
           const areas = {
@@ -280,7 +488,10 @@ export const useMission = create<MissionState>()(
           const project = s.project;
           return {
             areas,
-            project: project?.id === projectId ? compose(project, s.approvedPlans, areas) : project,
+            project:
+              project?.id === projectId
+                ? compose(project, s.approvedPlans, areas, s.landGround)
+                : project,
           };
         }),
       removePlan: (planId) => {
@@ -301,8 +512,11 @@ export const useMission = create<MissionState>()(
     }),
     {
       name: "twin.mission.v1",
-      version: 1,
-      partialize: (s) => ({ approvedPlans: s.approvedPlans, areas: s.areas }),
+      // Version 2: Land ground and workspace plans are never written to browser storage.
+      version: 2,
+      partialize: (s) => persistable(s),
+      migrate: (persisted, version) =>
+        migrateMissionStorage(persisted, version) as Pick<MissionState, "approvedPlans" | "areas">,
     },
   ),
 );

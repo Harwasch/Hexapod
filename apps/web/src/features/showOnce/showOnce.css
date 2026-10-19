@@ -1,0 +1,199 @@
+/* Show once, everywhere: the card in the Land surface's Ecology lens. Its magenta is the
+   drape's (GroundGridLayer "ramp": #ff8fdc to #ff1fb0, a hue the land never has); the hatch
+   swatch is the drape's protected pattern in the agent blue. */
+.show-once {
+  --show-once: #ff4fc4;
+  --show-once-ink: #1c0716;
+  --show-once-soft: rgba(255, 79, 196, 0.07);
+  --show-once-border: rgba(255, 79, 196, 0.4);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--show-once-border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--show-once-soft);
+  overflow-wrap: anywhere;
+}
+:root[data-theme="light"] .show-once {
+  --show-once: #b0127c;
+  --show-once-ink: #ffffff;
+  --show-once-soft: rgba(176, 18, 124, 0.06);
+  --show-once-border: rgba(176, 18, 124, 0.35);
+}
+.show-once > * {
+  min-width: 0;
+}
+.show-once .show-once__lead {
+  color: var(--text-primary);
+}
+.show-once__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.show-once__chip {
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  line-height: 1.6;
+  border: 1px solid var(--control-border);
+}
+.show-once__chip--measured {
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+.show-once__chip--inferred {
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+.show-once__prepare,
+.show-once__session {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.show-once__modes {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  border: 1px solid var(--control-border);
+}
+.show-once .show-once__modes button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  min-height: 36px;
+  padding: 6px;
+  font-size: 12px;
+}
+.show-once .show-once__modes button[aria-pressed="true"] {
+  background: var(--show-once);
+  color: var(--show-once-ink);
+  font-weight: 600;
+}
+.show-once .show-once__label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.show-once__seed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.show-once__spark {
+  flex: none;
+  overflow: visible;
+}
+.show-once__spark polyline {
+  stroke: var(--show-once);
+  stroke-width: 1.6;
+}
+.show-once__spark circle {
+  fill: var(--show-once);
+}
+.show-once .show-once__seasons {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.show-once__num {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.show-once__slider {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 3.2em;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.show-once__slider .show-once__num {
+  text-align: right;
+}
+.show-once .show-once__tally {
+  font-size: 13px;
+}
+.show-once .show-once__tally strong {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.show-once .show-once__protected {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.show-once__hatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(157, 184, 240, 0.9) 0 3px,
+    transparent 3px 6px
+  );
+  border: 1px solid var(--agent-border);
+}
+.show-once .show-once__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: none;
+  padding: 4px;
+  font-size: 12px;
+  text-decoration: underline;
+}
+.show-once .show-once__caveat {
+  font-size: 12px;
+}
+.show-once .show-once__caveat strong {
+  color: var(--warn);
+}
+.show-once .show-once__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.show-once__ramp {
+  display: inline-block;
+  width: 34px;
+  height: 10px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(255, 143, 220, 0.6), #ff1fb0);
+}
+
+/* In the Ecology lens card: its notes read as the lens's muted lines, its errors as alerts. */
+.show-once p {
+  margin: 0;
+}
+.show-once .land-footnote {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.show-once .land-error {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  border: 1px solid rgba(224, 106, 90, 0.4);
+}
+.show-once .show-once__lead {
+  font-size: var(--text-sm);
+}
+.show-once .show-once__heading {
+  margin: 0;
+  font-weight: 600;
+}

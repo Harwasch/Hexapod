@@ -322,3 +322,96 @@
   max-width: 100%;
   box-sizing: border-box;
 }
+
+.land-snap-toggle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+}
+.land-snap-toggle input {
+  width: 18px;
+  height: 18px;
+}
+.land-snap-toggle small {
+  flex-basis: 100%;
+  color: var(--text-muted);
+}
+.land-split-pieces label {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.land-split-pieces input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+/* A scheduled action's mission: where it is filed, and the way into Plan. */
+.land-mission-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.land-mission-status p {
+  margin: 0;
+  flex: 1 1 14rem;
+}
+
+/* Why an action cannot be saved, approved or scheduled yet: each reason sits beside the
+   control it holds back. */
+.land-action-workspace [aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+}
+.land-workspace .land-field-problem {
+  margin-top: -6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger);
+}
+/* A step's details stack by margin, not by the fieldset's flex gap. */
+.land-action-step details > .land-field-problem {
+  margin-top: 6px;
+}
+.land-draft-problems ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+}
+.land-draft-problems .land-evidence-link {
+  padding: 2px 0;
+  text-align: left;
+  font-size: 12px !important;
+  line-height: 1.5;
+}
+.land-blockers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+.land-blockers .is-hint {
+  color: var(--text-secondary, #adb5a9);
+}
+.land-blockers button {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+}

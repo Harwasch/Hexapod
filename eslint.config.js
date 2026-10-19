@@ -18,6 +18,8 @@ export default tseslint.config(
       "apps/api/**",
       "packages/contracts/src/generated/**",
       ".agents/**",
+      // Local scratch scripts (screenshots, probes) that are never committed.
+      "**/*.tmp.*",
     ],
   },
   js.configs.recommended,
