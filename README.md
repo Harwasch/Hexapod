@@ -181,6 +181,7 @@ Show developer readouts.
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — the committed deployment: Cloudflare Pages + R2, the API and worker on Fly, Neon for PostGIS; a `provision` workflow that creates all of it from CI, and the four steps left for an account owner
 - [docs/DECISIONS/](docs/DECISIONS/) — architecture decision records
 - [docs/ENGINEERING_REPORT.md](docs/ENGINEERING_REPORT.md) — what was built, limitations, next steps
+- [docs/ARCHIVE.md](docs/ARCHIVE.md) — parked experiment branches kept as `archive/*` tags: what each asked and found, and how to read one
 
 ## Hardware subsystems
 
