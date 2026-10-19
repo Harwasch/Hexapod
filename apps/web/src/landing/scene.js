@@ -5234,6 +5234,12 @@ function startHero(Wd, OPT) {
     const tgt = arc[i * 40] - 4;
     let ds = (((tgt - s) % LOOP) + LOOP) % LOOP;
     if (ds > LOOP / 2) ds -= LOOP;
+    // reduced motion: cut to the crew instead of flying there
+    if (still.matches) {
+      s += ds;
+      fly = null;
+      return;
+    }
     fly = { s0: s, ds, t0: performance.now(), dur: Math.min(4200, 1400 + Math.abs(ds) * 9) };
   }
   function tick(now) {
@@ -5252,7 +5258,8 @@ function startHero(Wd, OPT) {
       ahead = at(s + 6),
       f = frame([(p[0] + ahead[0]) / 2, (p[1] + ahead[1]) / 2]);
     const target = [(p[0] * 2 + ahead[0]) / 3, (p[1] * 2 + ahead[1]) / 3, 1.2];
-    const k = camInit ? 1 - Math.exp(-dt / 1.2) : 1;
+    // reduced motion: the camera holds its framing rather than easing into it
+    const k = camInit && !still.matches ? 1 - Math.exp(-dt / 1.2) : 1;
     camInit = true;
     cam.target = cam.target.map((v, i) => v + (target[i] - v) * k);
     cam.az += (f.az - cam.az) * k;
@@ -5316,7 +5323,7 @@ function startHero(Wd, OPT) {
         });
     }
     // a mapping drone circling the whole landscape
-    vtA += dt * 0.05;
+    if (!still.matches) vtA += dt * 0.05;
     const vc = route.reduce(
       (a, r) => [a[0] + r.c[0] / route.length, a[1] + r.c[1] / route.length],
       [0, 0],
