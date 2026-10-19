@@ -148,6 +148,17 @@ def test_spz_records_round_trip_to_the_same_bytes() -> None:
         assert np.array_equal(spz.positions(), tile_positions(tiles / uri))
 
 
+def test_write_spz_refuses_a_record_past_24_bits() -> None:
+    tiles = YARD / "splat"
+    uri = tile_uris(json.loads((tiles / "tileset.json").read_text(encoding="utf-8")))[0]
+    spz = so.read_spz(glb_spz(tiles / uri))
+    # 3000 m at 12 fractional bits: 12,288,000, past the 24-bit field's 8,388,607. Before
+    # the refusal the top bit was masked away and the record read back as -1096 m.
+    spz.fixed[0, 0] = 3000 << spz.fractional_bits
+    with pytest.raises(ValueError, match="24-bit"):
+        so.write_spz(spz)
+
+
 def test_default_choice_is_the_movable_objects_of_a_useful_size(scan: Path) -> None:
     doc = json.loads((scan / "instances.json").read_text(encoding="utf-8"))
     chosen = so.choose(doc)

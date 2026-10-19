@@ -308,6 +308,12 @@ SPZ_MAGIC = 0x5053474E  # "NGSP"
 SPZ_VERSION = 2
 SPZ_FRACTIONAL_BITS = 12
 SPZ_COLOR_SCALE = 0.15
+#: The largest magnitude a 24-bit two's-complement position component stores. At
+#: `SPZ_FRACTIONAL_BITS` that is 8,388,607 / 4096 = 2047.99976 m either side of the tile's
+#: frame; `pack_spz` refuses anything past it rather than letting the top bits fall away.
+SPZ_FIXED_MAX = (1 << 23) - 1
+#: The fewest fractional bits a header can declare: whole metres, +/-8,388 km.
+SPZ_MIN_FRACTIONAL_BITS = 0
 
 # ------------------------------------------------------------- spherical harmonics (SH)
 
@@ -408,6 +414,7 @@ def pack_spz(
     log_scales: np.ndarray,
     quat_xyzw: np.ndarray,
     sh_rest: np.ndarray | None = None,
+    fractional_bits: int = SPZ_FRACTIONAL_BITS,
 ) -> bytes:
     """SPZ version 2 (nianticlabs/spz): 24-bit fixed-point positions, byte alphas, colours,
     log-scales and the xyz of a w-positive quaternion, gzip-compressed after a 16-byte header.
@@ -415,15 +422,38 @@ def pack_spz(
     `sh_rest`, (n, K, 3) with K one of 3/8/15, adds SH degree 1-3: the header's degree
     byte says which, and a byte a coefficient follows the rotations, coefficient-major and
     colour innermost (`quantize_sh`). Without it the output is what it always was, degree 0.
+
+    Positions are stored at `fractional_bits` (the header byte says how many), so they
+    span `SPZ_FIXED_MAX * 2^-bits` m either side of the tile's frame: +/-2047.99976 m at
+    the default 12. Nothing wraps: a position past that range, or one that is not finite,
+    is refused (`SplatFormatError`), and a tile that must hold one is given an origin of
+    its own (`tile_frame`). Until 2026-10 the top bits were masked away silently, so 3000 m
+    read back as -1096 m.
     """
     count = positions.shape[0]
     degree = 0 if sh_rest is None else SH_DIMS.index(sh_rest.shape[1])
     if sh_rest is not None and sh_rest.shape != (count, SH_DIMS[degree], 3):
         raise ValueError(f"sh_rest must be (n, K, 3) for n = {count}, not {sh_rest.shape}")
-    header = struct.pack(
-        "<IIIBBBB", SPZ_MAGIC, SPZ_VERSION, count, degree, SPZ_FRACTIONAL_BITS, 0, 0
-    )
-    fixed = np.round(positions * (1 << SPZ_FRACTIONAL_BITS)).astype(np.int32).reshape(-1)
+    if not SPZ_MIN_FRACTIONAL_BITS <= fractional_bits <= 23:
+        raise ValueError(
+            f"fractional_bits must be {SPZ_MIN_FRACTIONAL_BITS} to 23 (a 24-bit field), "
+            f"not {fractional_bits}"
+        )
+    header = struct.pack("<IIIBBBB", SPZ_MAGIC, SPZ_VERSION, count, degree, fractional_bits, 0, 0)
+    # Positions times an int, exactly as before the range check existed: for float32 input
+    # that stays float32 arithmetic, so every tileset that fits packs to the same bytes.
+    scaled = np.round(positions * (1 << fractional_bits))
+    if scaled.size and not np.isfinite(scaled).all():
+        raise SplatFormatError("SPZ positions must be finite; a NaN or infinity cannot be packed")
+    if scaled.size and np.abs(scaled).max() > SPZ_FIXED_MAX:
+        reach = float(np.abs(positions).max())
+        raise SplatFormatError(
+            f"an SPZ position reaches {reach:.3f} m from the tile's frame, past the "
+            f"+/-{SPZ_FIXED_MAX / (1 << fractional_bits):.5f} m that 24-bit fixed point "
+            f"holds at {fractional_bits} fractional bits; give the tile an origin "
+            "(tile_frame) or fewer fractional bits"
+        )
+    fixed = scaled.astype(np.int32).reshape(-1)
     fixed_u = fixed.astype(np.uint32)
     pos_bytes = np.stack(
         [fixed_u & 0xFF, (fixed_u >> 8) & 0xFF, (fixed_u >> 16) & 0xFF], axis=1
