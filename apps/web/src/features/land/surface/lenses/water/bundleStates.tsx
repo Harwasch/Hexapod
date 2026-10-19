@@ -3,6 +3,7 @@ import { ArrowUpRight, MessageCircleQuestion } from "lucide-react";
 
 import { GlassButton } from "@twin/ui";
 
+import { ResearchWorkerNotice } from "../../../ResearchWorkerNotice";
 import { askAgent } from "../../agentBus";
 import { LensEmpty } from "../../LensCard";
 import {
@@ -79,19 +80,22 @@ export function OverviewNotices({
   let line: ReactNode = null;
   if (state.running)
     line = (
-      <div className="bundle-progress" role="status">
-        <span className="bundle-progress__text">
-          Checking public maps · {state.progress.done} of {state.progress.total} done
-        </span>
-        <span className="bundle-progress__bar" aria-hidden="true">
-          <i style={{ width: `${(state.progress.done / state.progress.total) * 100}%` }} />
-        </span>
-        {state.canEdit && (
-          <GlassButton size="sm" variant="ghost" disabled={state.busy} onClick={state.stop}>
-            Stop
-          </GlassButton>
-        )}
-      </div>
+      <>
+        <div className="bundle-progress" role="status">
+          <span className="bundle-progress__text">
+            Checking public maps · {state.progress.done} of {state.progress.total} done
+          </span>
+          <span className="bundle-progress__bar" aria-hidden="true">
+            <i style={{ width: `${(state.progress.done / state.progress.total) * 100}%` }} />
+          </span>
+          {state.canEdit && (
+            <GlassButton size="sm" variant="ghost" disabled={state.busy} onClick={state.stop}>
+              {state.latest?.status === "queued" ? "Cancel queued request" : "Stop"}
+            </GlassButton>
+          )}
+        </div>
+        <ResearchWorkerNotice run={state.latest ?? undefined} className="land-muted" />
+      </>
     );
   else if (state.stale)
     line = (

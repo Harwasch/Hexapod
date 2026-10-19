@@ -295,7 +295,11 @@ describe("the agent card", () => {
 
   it("says plainly when the agent isn't set up on this server", async () => {
     mount({ configured: false });
-    expect(await screen.findByText("The agent isn't set up on this server.")).toBeVisible();
+    expect(
+      await screen.findByText(
+        "The agent isn't set up on this server. The lens analyses still work.",
+      ),
+    ).toBeVisible();
     fireEvent.change(screen.getByLabelText("Ask about this land"), {
       target: { value: "What grows here?" },
     });

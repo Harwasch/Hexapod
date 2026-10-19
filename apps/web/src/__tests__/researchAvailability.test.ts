@@ -146,7 +146,7 @@ describe("askBlocker", () => {
       "One request runs at a time.",
     );
     expect(askBlocker({ ...ask, modelConfigured: false, pending: true })).toBe(
-      "AI investigation isn't configured on this server. The analyses above still work.",
+      "The agent isn't set up on this server. The lens analyses still work.",
     );
     expect(askBlocker({ ...ask, pending: true, recoveryError: true })).toBe(
       "Confirm or discard the captured request above first.",
@@ -158,9 +158,9 @@ describe("askBlocker", () => {
     expect(askBlocker(ask)).toBeNull();
   });
 
-  it("says when it cannot yet tell whether AI investigation is available", () => {
+  it("says when it cannot yet tell whether the agent is available", () => {
     expect(askBlocker({ ...ask, modelConfigured: undefined })).toBe(
-      "Checking whether AI investigation is available…",
+      "Checking whether the agent is available…",
     );
     expect(askBlocker({ ...ask, modelConfigured: null })).toContain("Could not check");
   });
