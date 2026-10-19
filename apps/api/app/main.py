@@ -258,7 +258,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.rate_limits = RateLimits()
     # Loaded on the first search, not here (app/services/text_encoder.py).
     app.state.text_encoder = LazyTextEncoder(
-        settings.text_encoder_dir, threads=settings.text_encoder_threads
+        settings.text_encoder_dir if settings.text_encoder_enabled else None,
+        threads=settings.text_encoder_threads,
     )
     app.include_router(api_v1)
     # **Development only.** Capture tiles kept on a developer's disk

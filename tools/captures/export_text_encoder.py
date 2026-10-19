@@ -185,7 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     manifest["check"] = check(args.out)
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest["check"]))
-    if manifest["check"]["minCosine"] < MIN_COSINE:
+    # `not >=`, so a NaN (a broken export compares false with everything) fails too.
+    if not manifest["check"]["minCosine"] >= MIN_COSINE:
         print(f"exported text tower disagrees with the reference (< {MIN_COSINE})", file=sys.stderr)
         return 1
     return 0

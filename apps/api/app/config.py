@@ -129,9 +129,14 @@ class Settings(BaseSettings):
 
     # Search by meaning (app/services/text_encoder.py): the directory
     # tools/captures/export_text_encoder.py wrote -- SigLIP 2's text tower, which the image
-    # bakes in at /opt/text-encoder. Unset, `GET /api/v1/text-embeddings` answers 503 and
-    # the viewer searches by tags alone. Threads: onnxruntime's intra-op count; the app
-    # machine is shared-cpu-1x.
+    # bakes in at /opt/text-encoder and points TEXT_ENCODER_DIR at. It is used only when
+    # TEXT_ENCODER_ENABLED is true: loaded, the encoder takes the API process from ~360 MB to
+    # ~880 MB resident and peaks at ~1.03 GB while it loads (measured 2026-10-19), more than
+    # a 1 GB app machine has, so it is off unless a deployment turns it on (docs/DEPLOYMENT.md,
+    # "Search by meaning runs on the app machine": that needs a 2 GB app machine). Off, or with
+    # no directory, `GET /api/v1/text-embeddings` answers 503 and the viewer searches by tags
+    # alone. Threads: onnxruntime's intra-op count; the app machine is shared-cpu-1x.
+    text_encoder_enabled: bool = False
     text_encoder_dir: Path | None = None
     text_encoder_threads: int = 1
 

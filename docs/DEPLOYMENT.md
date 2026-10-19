@@ -223,6 +223,7 @@ committed.
 | `FLY_API_TOKEN`                                           | a token that can start this app's machines; see waking the worker, below     |
 | `QUEUE_CHECK_URL`                                         | optional; a healthchecks.io-style check for jobs queued and never claimed    |
 | `SENTRY_DSN`                                              | optional; error reporting, see [Observability](#observability)               |
+| `TEXT_ENCODER_ENABLED`                                    | optional, default false; `true` turns on search by meaning: needs 2 GB       |
 
 ### Production refuses to start when it cannot do its job
 
@@ -288,20 +289,25 @@ torch (which does not reach the runtime image) and fails the build if it disagre
 transformers; the runtime gets ~545 MB at `/opt/text-encoder` and `TEXT_ENCODER_DIR` points
 at it. No secret, no Modal: the model is public (Apache-2.0).
 
-- **Memory -- unverified on Fly, and the reason to look before relying on it.** The model
-  loads on the first search, not at boot. Measured locally on 2026-10-19 (today's main, one
-  uvicorn process): 358 MB resident before, 877 MB after, and a peak of 1.03 GB while it
-  loads. The app group is `shared-cpu-1x` with 1 GB (`fly.toml`), so the first search may
-  get the machine OOM-killed. onnxruntime's `disable_prepacking` and arena options do not
-  lower the peak (measured). Watch the app machine's memory in Fly's metrics on the first
-  search after a deploy; if it nears the limit, raise it to 2 GB
-  (`fly scale memory 2048 --process-group app`) or unset `TEXT_ENCODER_DIR` (search falls
-  back to tags) rather than live with restarts. The worker and research groups run the same
-  image but never load it.
+**It is off unless `TEXT_ENCODER_ENABLED=true`** (app/config.py; the image sets the
+directory but not the flag). Off, the route answers 503 and the viewer searches by tags.
+**Turning it on in production needs a 2 GB app machine**: `fly scale memory 2048
+--process-group app` first, then set the flag (`fly secrets set TEXT_ENCODER_ENABLED=true`,
+or `[env]` in `fly.toml`), then watch the first search.
+
+- **Memory -- why it is off by default.** The model loads on the first search, not at boot.
+  Measured locally on 2026-10-19 (today's main, one uvicorn process): 358 MB resident
+  before, 877 MB after, and a peak of 1.03 GB while it loads. The app group is
+  `shared-cpu-1x` with 1 GB (`fly.toml`), so on it the first search would likely get the
+  machine OOM-killed. onnxruntime's `disable_prepacking` and arena options do not lower the
+  peak (measured). Unverified on Fly: after enabling it on 2 GB, watch the app machine's
+  memory in Fly's metrics on the first search. To turn it off again, set the flag false
+  (not by unsetting `TEXT_ENCODER_DIR`: the image's `ENV` sets that). The worker and
+  research groups run the same image but never load it.
 - **Time.** The first search on a freshly started machine pays ~0.9-1.3 s to load, later ones
   ~100-140 ms on one core (`TEXT_ENCODER_THREADS`, default 1; slower on a shared vCPU).
   Responses are cacheable (the same text gives the same vector).
-- **Without it** (`TEXT_ENCODER_DIR` unset, or the files missing) the route answers 503 and
+- **Without it** (the flag false, the default, or the files missing) the route answers 503 and
   the viewer searches by tags, which is also what it does while the encoder loads.
 - **Build.** The export stage downloads torch (CPU) and the 1.5 GB model once per uncached
   build: a few minutes on the builder. CI's `image` job asks the built image for

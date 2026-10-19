@@ -6,6 +6,10 @@ parity there); here only what keeps the two sides in step, and the token layout.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 import export_text_encoder as ete
 import segment_models as sm
 
@@ -29,3 +33,14 @@ def test_token_ids_lower_case_eos_and_padding() -> None:
     long = ete.token_ids(_Pieces(), "x" * 200)
     assert len(long) == ete.MAX_LENGTH
     assert long[-1] == ete.EOS_ID
+
+
+@pytest.mark.parametrize(("min_cosine", "code"), [(0.9999998, 0), (0.99, 1), (float("nan"), 1)])
+def test_the_build_fails_below_the_threshold_and_on_nan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, min_cosine: float, code: int
+) -> None:
+    # A NaN cosine (a broken export) compares false with everything: it must fail too.
+    monkeypatch.setattr(ete, "export", lambda out: {"format": "hexapod.text-encoder"})
+    monkeypatch.setattr(ete, "check", lambda out: {"minCosine": min_cosine, "prompts": 6})
+    assert ete.main([str(tmp_path)]) == code
+    assert (tmp_path / "manifest.json").is_file()

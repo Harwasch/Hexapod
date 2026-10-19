@@ -634,8 +634,10 @@ jobs:
         # The container runs `alembic upgrade head` before uvicorn, so this step is also
         # what creates the tables the worker step below queries.
         run: |
+          # TEXT_ENCODER_ENABLED: off by default (it does not fit a 1 GB app machine), on
+          # here so "The image can embed a search query" below exercises the encoder.
           docker run -d --name twin-api --network host \
-            -e DATABASE_URL="$DATABASE_URL" \
+            -e DATABASE_URL="$DATABASE_URL" -e TEXT_ENCODER_ENABLED=true \
             twin-api
           for _ in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null; then

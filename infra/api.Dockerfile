@@ -66,8 +66,9 @@ COPY tools/captures/export_text_encoder.py /export/export_text_encoder.py
 RUN uv run --no-project --index https://download.pytorch.org/whl/cpu \
       --index-strategy unsafe-best-match \
       --with torch==2.14.1 --with transformers==5.18.0 --with onnx==1.23.1 \
-      --with onnxruntime==1.30.0 --with sentencepiece==0.2.2 --with huggingface_hub \
-      --with numpy python /export/export_text_encoder.py /opt/text-encoder \
+      --with onnxruntime==1.30.0 --with sentencepiece==0.2.2 \
+      --with huggingface_hub==2.2.0 --with numpy==2.5.4 \
+      python /export/export_text_encoder.py /opt/text-encoder \
  && rm -rf /root/.cache
 
 FROM ubuntu:24.04 AS builder
@@ -103,6 +104,9 @@ COPY --from=text-encoder /opt/text-encoder /opt/text-encoder
 # that says out loud where the layout above puts the pipeline, and it is what the worker
 # hands its child process. QT_QPA_PLATFORM because COLMAP links Qt: its CLI commands used
 # here open no window, and `offscreen` makes sure one that tried would not need a display.
+# TEXT_ENCODER_DIR says where the text tower is; it is used only where TEXT_ENCODER_ENABLED
+# is true (default false: loaded it peaks at ~1.03 GB, more than a 1 GB app machine has --
+# docs/DEPLOYMENT.md, "Search by meaning runs on the app machine").
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PIPELINE_DIR=/app/tools/pipeline \
     QT_QPA_PLATFORM=offscreen TEXT_ENCODER_DIR=/opt/text-encoder
 USER api

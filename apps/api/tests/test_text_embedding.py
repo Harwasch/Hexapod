@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -181,11 +182,43 @@ def test_a_failed_load_is_503_and_not_retried(export_dir: Path) -> None:
     assert loader.loads == 1
 
 
+def test_an_inference_error_is_503_and_logged(
+    client: TestClient, loader: Loader, caplog: pytest.LogCaptureFixture
+) -> None:
+    def broken(prompt: str) -> np.ndarray:
+        raise RuntimeError("[ONNXRuntimeError] : 6 : RUNTIME_EXCEPTION")
+
+    loader.encoder.embed = broken  # type: ignore[method-assign]
+    with caplog.at_level(logging.ERROR, logger="twin.text_encoder"):
+        response = client.get("/api/v1/text-embeddings", params={"text": "spool"})
+    assert response.status_code == 503
+    assert response.json()["title"] == "Search by meaning unavailable"
+    assert "RuntimeError" in response.json()["detail"]
+    assert "text encoder failed" in caplog.text
+
+
 def test_the_settings_reach_the_holder(export_dir: Path) -> None:
-    app = create_app(Settings(text_encoder_dir=export_dir, text_encoder_threads=3))
-    holder = app.state.text_encoder
+    settings = Settings(
+        text_encoder_enabled=True, text_encoder_dir=export_dir, text_encoder_threads=3
+    )
+    holder = create_app(settings).state.text_encoder
     assert isinstance(holder, te.LazyTextEncoder)
     assert holder._directory == export_dir and holder._threads == 3
+
+
+def test_off_unless_enabled(export_dir: Path, loader: Loader) -> None:
+    # The image sets TEXT_ENCODER_DIR; without TEXT_ENCODER_ENABLED it is never loaded.
+    holder = create_app(
+        Settings(text_encoder_enabled=False, text_encoder_dir=export_dir)
+    ).state.text_encoder
+    assert isinstance(holder, te.LazyTextEncoder)
+    assert holder._directory is None
+    assert Settings.model_fields["text_encoder_enabled"].default is False
+    for client in _client(holder):
+        response = client.get("/api/v1/text-embeddings", params={"text": "spool"})
+        assert response.status_code == 503
+        assert "TEXT_ENCODER_ENABLED" in response.json()["detail"]
+    assert loader.loads == 0
 
 
 # ---- the real encoder, where an export is present ------------------------------------------

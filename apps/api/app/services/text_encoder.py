@@ -14,11 +14,15 @@ Why here, measured 2026-10-02 (docs/SCENE_OBJECTS.md §3 step 4 has the table):
   top-10 overlap down to 3/10 on a real scan);
 * not on Modal -- a container cold start (image pull, torch import, weights) is seconds
   to tens of seconds per idle period, on top of the Fly machine's own start;
-* here: the first request 1.3 s (load included), then ~140 ms a query on one core; about
-  +500 MB resident (onnxruntime's float32 weights and their prepacked copies; the 393 MB
-  token table is memory-mapped and a query touches <= 64 rows of it) -- ~640 MB for the
-  whole app process, inside the app machine's 1 GB. Cosine to the transformers reference
-  1.000000 (min 0.9999998), the same top-10 on every query and scan tried.
+* here: the first request 1.3 s (load included), then ~140 ms a query on one core. Cosine
+  to the transformers reference 1.000000 (min 0.9999998), the same top-10 on every query
+  and scan tried.
+
+What it costs, re-measured on 2026-10-19 (today's API, one uvicorn process): about +520 MB
+resident once loaded (onnxruntime's float32 weights and their prepacked copies; the 393 MB
+token table is memory-mapped and a query touches <= 64 rows of it) -- 358 MB idle to 877 MB
+loaded, **peaking at 1.03 GB while it loads**. That does not fit a 1 GB app machine, so the
+encoder is off unless `TEXT_ENCODER_ENABLED` is true (app/config.py), which needs 2 GB.
 
 The model loads on the first request, not at start-up, so a machine that never serves a
 search never pays for it. Embeddings of the same prompt are cached.
@@ -27,6 +31,7 @@ search never pays for it. Embeddings of the same prompt are cached.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from collections import OrderedDict
@@ -42,6 +47,8 @@ MODEL = "google/siglip2-base-patch16-224"
 MODEL_NAME = f"siglip:{MODEL}"
 TAG_TEMPLATE = "a photo of a {}."
 MAX_QUERY_CHARS = 200
+
+log = logging.getLogger("twin.text_encoder")
 
 _ARTICLE = re.compile(r"^(?:a photo of )?(?:(?:a|an|the)(?:\s+|$))?", re.IGNORECASE)
 
@@ -151,7 +158,10 @@ class LazyTextEncoder:
 
     def _load(self) -> str | None:
         if self._directory is None:
-            return "search by meaning is not configured here (TEXT_ENCODER_DIR is unset)"
+            return (
+                "search by meaning is off here (TEXT_ENCODER_ENABLED is false, "
+                "or TEXT_ENCODER_DIR is unset)"
+            )
         if not (self._directory / "manifest.json").is_file():
             return f"no text encoder at {self._directory}"
         try:
@@ -167,7 +177,13 @@ class LazyTextEncoder:
         encoder = self.get()
         cached = self._cache.get(prompt)
         if cached is None:
-            cached = encoder.embed(prompt)
+            try:
+                cached = encoder.embed(prompt)
+            except Exception as error:  # a failed run is the documented 503, not a 500
+                log.exception("text encoder failed on %r", prompt)
+                raise TextEncoderUnavailableError(
+                    f"the text encoder failed: {type(error).__name__}"
+                ) from error
             with self._lock:
                 self._cache[prompt] = cached
                 while len(self._cache) > self._cache_size:
