@@ -79,6 +79,8 @@ interface Options {
    * "bush", so the panel lists Trees and Shrubs & bushes over Other.
    */
   panel?: boolean;
+  /** Also tag the third largest object "barrel", for search by meaning to find without a tag. */
+  barrel?: boolean;
 }
 
 function harnessHtml(options: Options): string {
@@ -127,6 +129,7 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
       .sort((a, b) => b.splats - a.splats);
     if (roots[0]) roots[0].tags = [{ label: "conifer", score: 0.6 }];
     if (roots[1]) roots[1].tags = [{ label: "bush", score: 0.5 }];
+    if (options.barrel && roots[2]) roots[2].tags = [{ label: "barrel", score: 0.5 }];
   }
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
@@ -451,4 +454,119 @@ test("the objects panel hides a category, highlights it on a click, and resets, 
   expect(lit.warmth).toBeGreaterThan(baseline.warmth + 5);
   expect(lit.luma).toBeLessThan(baseline.luma);
   expect(cleared.coverage).toBeGreaterThan(baseline.coverage * 0.95);
+});
+
+/** The yard's `instances.emb` row of instance `id` (row `id - 1`), as floats. */
+function yardRow(id: number, dim: number): number[] {
+  const bytes = readFileSync(resolve(TILES, "synthetic-yard/instances/instances.emb"));
+  const half = (h: number): number => {
+    const sign = h & 0x8000 ? -1 : 1;
+    const exponent = (h >> 10) & 0x1f;
+    const fraction = h & 0x3ff;
+    if (exponent === 0) return sign * 2 ** -14 * (fraction / 1024);
+    return sign * 2 ** (exponent - 15) * (1 + fraction / 1024);
+  };
+  const out: number[] = [];
+  for (let j = 0; j < dim; j += 1) out.push(half(bytes.readUInt16LE(((id - 1) * dim + j) * 2)));
+  return out;
+}
+
+/**
+ * Search by meaning (state/instances.ts): a word no tag holds finds an object by its
+ * embedding. The yard's embeddings are a fake 64-d colour histogram, not SigLIP 2, so the
+ * API's encoder is stood in for: it answers "spool" with the barrel's own row, under the
+ * yard's model name. What is checked is the app's side -- tags answer at once, the panel says
+ * meaning is on the way, then lists the barrel marked "by meaning", and Enter lights it -- and
+ * that a deployment without an encoder (503) leaves search on tags.
+ */
+test("search by meaning lists an object no tag names, and falls back to tags without an encoder", async ({
+  page,
+}) => {
+  test.setTimeout(600_000);
+  const errors: string[] = [];
+  const doc = JSON.parse(
+    readFileSync(resolve(TILES, "synthetic-yard/instances/instances.json"), "utf-8"),
+  ) as {
+    instances: { id: number; parent: number | null; splats: number }[];
+    embedding: { model: string; dim: number };
+  };
+  const barrel = doc.instances
+    .filter((i) => i.parent === null)
+    .sort((a, b) => b.splats - a.splats)[2];
+  if (!barrel) throw new Error("the yard has fewer than three objects");
+  const asked: string[] = [];
+  let encoder: "up" | "down" = "up";
+  await page.route("**/api/v1/text-embeddings?*", async (route) => {
+    const text = new URL(route.request().url()).searchParams.get("text") ?? "";
+    asked.push(text);
+    if (encoder === "down") {
+      return route.fulfill({
+        status: 503,
+        contentType: "application/problem+json",
+        json: { title: "Search by meaning unavailable", status: 503 },
+      });
+    }
+    // Long enough for the panel to show that meaning is on the way.
+    await new Promise((done) => setTimeout(done, 600));
+    return route.fulfill({
+      status: 200,
+      json: {
+        model: doc.embedding.model,
+        prompt: `a photo of a ${text}.`,
+        dim: doc.embedding.dim,
+        embedding: yardRow(barrel.id, doc.embedding.dim),
+      },
+    });
+  });
+  await open(
+    page,
+    {
+      incremental: true,
+      maximumScreenSpaceError: 16,
+      renderer: "playcanvas",
+      panel: true,
+      barrel: true,
+    },
+    errors,
+  );
+  const call = caller(page);
+  await call("view", 30, -50, 45);
+  const baseline = await call("view", 30, -50, 45);
+  const panel = page.getByTestId("instance-panel");
+  const search = panel.getByRole("searchbox", { name: "Search objects" });
+
+  await search.fill("spool");
+  await expect(panel.getByTestId("instance-meaning-loading")).toHaveText(
+    "Matching by meaning too…",
+  );
+  await expect(panel.getByTestId("instance-count")).toHaveText("No tag matches yet");
+  const barrelRow = panel.locator("li[data-category='containers'] li.objects-row--object").first();
+  await expect(barrelRow).toContainText("barrel");
+  await expect(barrelRow.getByTestId("instance-by-meaning")).toHaveText(/by meaning/);
+  await expect(panel.getByTestId("instance-meaning-loading")).toHaveCount(0);
+  expect(asked).toEqual(["spool"]);
+  await page.locator("#panel").screenshot({ path: test.info().outputPath("meaning-spool.png") });
+
+  await search.press("Enter");
+  await page.waitForTimeout(500);
+  const lit = await call("measure");
+  await page.screenshot({ path: test.info().outputPath("meaning-spool-lit.png") });
+
+  // A deployment without the encoder: the same panel, by tags alone.
+  encoder = "down";
+  await search.fill("crate");
+  await expect(panel.getByTestId("instance-count")).toHaveText("No objects match");
+  await expect(panel.getByTestId("instance-by-meaning")).toHaveCount(0);
+  await search.fill("conifer");
+  await expect(panel.getByTestId("instance-count")).toHaveText("1 match");
+  await expect(panel.getByTestId("instance-by-meaning")).toHaveCount(0);
+  // Backed off after the 503: not asked again on every keystroke.
+  expect(asked).toEqual(["spool", "crate"]);
+
+  test.info().annotations.push({
+    type: "measures",
+    description: JSON.stringify({ baseline, lit }),
+  });
+  expect(shaderErrors(errors)).toEqual([]);
+  expect(lit.warmth).toBeGreaterThan(baseline.warmth + 2);
 });

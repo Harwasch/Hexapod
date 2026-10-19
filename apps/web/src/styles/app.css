@@ -2076,6 +2076,13 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   font-variant-numeric: tabular-nums;
 }
 
+/* An object search by meaning found (state/instances.ts `byMeaning`): inferred, not a tag. */
+.objects-row__via {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
 .objects-row__eye {
   flex: none;
 }

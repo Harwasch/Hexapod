@@ -15,9 +15,11 @@
  *
  * `instances.emb` (float16, `count × dim`, row `k` is id `k + 1`, L2-normalised) is each
  * object's image embedding. "More like this" reads it (`loadEmbeddings`, `describedMatrix`,
- * `rankSimilar`): the objects whose views look like a chosen one's. Text search by meaning
- * will read it too once there is a text encoder at runtime: `rankByEmbedding` is that seam.
- * v1 search is by tags.
+ * `rankSimilar`): the objects whose views look like a chosen one's. Search by meaning reads it
+ * too: a query's embedding from the same model's text tower (the API's
+ * `/api/v1/text-embeddings`) against every described row (`textCosines`, `meaningScores`),
+ * blended with the tag match in `searchInstances`. Without it -- or while it or the query's
+ * embedding loads (state/instances.ts) -- search is by tags alone.
  */
 
 import { decodeRuns, runsLength, tileRunsIssue } from "@twin/world";
@@ -77,6 +79,17 @@ export interface EmbeddingRef {
   model: string;
   dim: number;
   dtype: "float16";
+}
+
+/** Where a scan's object embeddings are and their shape: what "More like this" and search by meaning read. */
+export interface EmbeddingSource {
+  /** `instances.emb`, beside the `instances.json` drawn now (Today's, or a variant's). */
+  url: string;
+  /** Rows: the instances the declaration counts, else the largest id (row `k` is id `k + 1`). */
+  rows: number;
+  dim: number;
+  /** The embedding model's id, as the file names it. */
+  model: string;
 }
 
 export interface InstancesDoc {
@@ -320,6 +333,8 @@ export interface SearchResult {
   behaviour: Behaviour;
   /** Gaussians the instance holds: tells apart rows that share a label. */
   splats: number;
+  /** Which evidence carried the score: the tags, or the embedding (search by meaning). */
+  via: "tags" | "meaning";
 }
 
 /** The default number of results a search lists; the whole match set is kept beside them. */
@@ -428,26 +443,62 @@ export function prominence(splats: number, largest: number): number {
 }
 
 /**
+ * Per id, the splats of an instance and of every instance below it: what `searchInstances`
+ * weighs prominence by. `splats` is leaf-level, so a coarse instance whose splats all sit in
+ * its parts carries only its leftovers -- the spool itself (id 1 of the spool scan) has 220 of
+ * its 95,064, and a match by meaning on it would otherwise rank below its own fragments.
+ */
+export function subtreeSplats(instances: readonly Instance[]): Map<number, number> {
+  const byId = new Map(instances.map((i) => [i.id, i]));
+  const out = new Map<number, number>();
+  for (const instance of instances) {
+    // Up the chain, guarded against a cycle a malformed file could hold.
+    const seen = new Set<number>();
+    for (let at: Instance | undefined = instance; at && !seen.has(at.id);) {
+      seen.add(at.id);
+      out.set(at.id, (out.get(at.id) ?? 0) + instance.splats);
+      at = at.parent === null ? undefined : byId.get(at.parent);
+    }
+  }
+  return out;
+}
+
+/**
  * Ranks instances for a query. Words match each tag's label (`matchLabel`) weighted by the
  * tag's own score, and property names weighted by the property's value — so "vegetation"
  * finds what scored as vegetation without a class list. Filters must all pass. With filters
  * and no words, every passing instance is returned, ordered by the first numeric filter's
  * property. Ties go to the larger instance.
+ *
+ * With `meaning` (`meaningScores`: the query's text embedding against `instances.emb`), words
+ * also match by meaning, which finds what the tags missed (the spool scan's 1,300-label
+ * vocabulary has no "spool"). The blend is a noisy-OR, `1 - (1 - tag) * (1 - meaning)`: either
+ * kind of evidence alone can carry a result, both together score higher than either, and with
+ * no meaning (encoder loading or absent, or no `instances.emb`) it is exactly the tag score.
+ * The prominence prior, counted with each instance's parts (`subtreeSplats`), applies to the
+ * blend. An instance whose meaning is inherited from its nearest described ancestor (no
+ * embedding of its own) is left out when that ancestor is already listed, since highlighting
+ * or hiding the ancestor covers it.
  */
 export function searchInstances(
   instances: readonly Instance[],
   query: InstanceQuery | string,
   limit = RESULT_LIMIT,
+  meaning?: MeaningScores,
 ): SearchResult[] {
   const q = typeof query === "string" ? parseQuery(query) : query;
   if (q.terms.length === 0 && q.filters.length === 0) return [];
-  const results: SearchResult[] = [];
+  const results: (SearchResult & { inherited: boolean })[] = [];
   const sortBy = q.filters.find((f) => f.name !== "behaviour")?.name;
-  const largest = instances.reduce((m, i) => Math.max(m, i.splats), 0);
+  const totals = subtreeSplats(instances);
+  let largest = 0;
+  for (const total of totals.values()) largest = Math.max(largest, total);
   for (const instance of instances) {
     if (!q.filters.every((f) => passes(instance, f))) continue;
     let score = 0;
     let label = instanceLabel(instance);
+    let via: SearchResult["via"] = "tags";
+    let inherited = false;
     if (q.terms.length > 0) {
       if (instance.name !== undefined) score = matchLabel(q.terms, instance.name);
       for (const tag of instance.tags) {
@@ -464,8 +515,18 @@ export function searchInstances(
           label = `${name} ${value.toFixed(2)}`;
         }
       }
+      const m = meaning?.score[instance.id] ?? 0;
+      if (m > 0) {
+        if (m > score) {
+          via = "meaning";
+          label = instanceLabel(instance);
+          inherited = meaning?.inherited[instance.id] === 1;
+        }
+        score = 1 - (1 - score) * (1 - m);
+      }
       if (score <= 0) continue;
-      score *= PROMINENCE_FLOOR + (1 - PROMINENCE_FLOOR) * prominence(instance.splats, largest);
+      const splats = totals.get(instance.id) ?? instance.splats;
+      score *= PROMINENCE_FLOOR + (1 - PROMINENCE_FLOOR) * prominence(splats, largest);
     } else {
       score = sortBy === undefined ? 1 : Math.max(0, Math.min(1, instance.properties[sortBy] ?? 0));
     }
@@ -475,13 +536,39 @@ export function searchInstances(
       label,
       behaviour: instance.behaviour,
       splats: instance.splats,
+      via,
+      inherited,
     });
   }
   results.sort((a, b) => b.score - a.score || b.splats - a.splats || a.id - b.id);
-  return Number.isFinite(limit) ? results.slice(0, limit) : results;
+  const byId = new Map(instances.map((i) => [i.id, i]));
+  const listed = new Set<number>();
+  const out: SearchResult[] = [];
+  for (const { inherited, ...result } of results) {
+    if (out.length >= limit) break;
+    if (inherited && ancestorIn(byId, result.id, listed)) continue;
+    listed.add(result.id);
+    out.push(result);
+  }
+  return out;
 }
 
-// ---- Search by meaning (the seam) --------------------------------------------------------
+/** Whether an ancestor of `id` is in `ids`. */
+function ancestorIn(
+  byId: ReadonlyMap<number, Instance>,
+  id: number,
+  ids: ReadonlySet<number>,
+): boolean {
+  const seen = new Set<number>([id]);
+  for (let p = byId.get(id)?.parent ?? null; p !== null && !seen.has(p);) {
+    if (ids.has(p)) return true;
+    seen.add(p);
+    p = byId.get(p)?.parent ?? null;
+  }
+  return false;
+}
+
+// ---- Search by meaning ---------------------------------------------------------------------
 
 /** IEEE 754 half to number. */
 export function halfToFloat(h: number): number {
@@ -496,8 +583,8 @@ export function halfToFloat(h: number): number {
 /**
  * Ranks instances by cosine similarity between a query embedding and `instances.emb` (raw
  * float16 bits, `count × dim`, row `k` is id `k + 1`, rows L2-normalised). `queryVec` must
- * come from the text tower of the model `embedding.model` names, which v1 does not ship in
- * the browser; this is where it plugs in.
+ * come from the text tower of the model `embedding.model` names. The app ranks over the
+ * decoded matrix instead (`textCosines`); this stays for a caller with only the raw file.
  */
 export function rankByEmbedding(
   queryVec: Float32Array,
@@ -621,6 +708,10 @@ export interface DescribedMatrix {
   rowOf: ReadonlyMap<number, number>;
   /** `ids.length × dim`: each described row less their mean, then made unit length again. */
   m: Float32Array;
+  /** The described rows' mean, which `m` has had taken away. */
+  mean: Float32Array;
+  /** Per row of `m`, its length before it was made unit again: row `r` was `m_r * spread_r + mean`. */
+  spread: Float32Array;
 }
 
 const MATRICES = new WeakMap<Uint16Array, DescribedMatrix>();
@@ -661,6 +752,7 @@ export function describedMatrix(raw: Uint16Array, dim: number): DescribedMatrix 
   if (rows.length > 0) for (let j = 0; j < dim; j += 1) mean[j] = (mean[j] ?? 0) / rows.length;
   const ids = new Int32Array(rows.length);
   const rowOf = new Map<number, number>();
+  const spread = new Float32Array(rows.length);
   rows.forEach((k, r) => {
     let sum = 0;
     for (let j = 0; j < dim; j += 1) {
@@ -669,20 +761,21 @@ export function describedMatrix(raw: Uint16Array, dim: number): DescribedMatrix 
       sum += v * v;
     }
     // One described object alone centres to nothing: it stays zero, alike to nothing.
+    spread[r] = Math.sqrt(sum);
     const scale = sum > 0 ? 1 / Math.sqrt(sum) : 0;
     for (let j = 0; j < dim; j += 1) m[r * dim + j] = (m[r * dim + j] ?? 0) * scale;
     ids[r] = k + 1;
     rowOf.set(k + 1, r);
   });
-  const matrix: DescribedMatrix = { dim, ids, rowOf, m };
+  const matrix: DescribedMatrix = { dim, ids, rowOf, m, mean: Float32Array.from(mean), spread };
   MATRICES.set(raw, matrix);
   return matrix;
 }
 
 /**
  * The cosine between `query` and every row of `m` (`rows × dim`, rows unit length), by row.
- * Over a matrix already decoded, unlike `rankByEmbedding`: what a chosen object or, later, a
- * text query is compared with.
+ * Over a matrix already decoded, unlike `rankByEmbedding`: what a chosen object or a text
+ * query (`textCosines`) is compared with.
  */
 export function rankByVector(query: Float32Array, m: Float32Array, dim: number): Float32Array {
   if (query.length !== dim || dim <= 0) throw new Error("rankByVector: dimension mismatch");
@@ -756,4 +849,113 @@ export function embeddingModelName(model: string): string {
   if (lower.includes("siglip")) return "SigLIP";
   if (lower.includes("clip")) return "CLIP";
   return model;
+}
+
+// ---- Search by meaning: the blend's inputs -------------------------------------------------
+
+/**
+ * The cosine between a text query and every described object's *own* row (not centred), by id
+ * (`out[id]`); NaN for an id that was not described. From the centred matrix "More like this"
+ * already made (`describedMatrix`), so a scan's embeddings are decoded once for both: row `r`
+ * was `m_r * spread_r + mean`, so its dot with the unit query is `spread_r * (q . m_r) +
+ * q . mean`. Raw rather than centred because `MEANING_FLOOR` and `MEANING_SPAN` were measured
+ * on the raw cosine; `meaningScores` takes the per-query median away, which is what removes
+ * the shared `q . mean`.
+ */
+export function textCosines(query: Float32Array, matrix: DescribedMatrix): Float32Array {
+  const { dim, ids, m, mean, spread } = matrix;
+  if (query.length !== dim || dim <= 0) throw new Error("textCosines: dimension mismatch");
+  let norm = 0;
+  for (const v of query) norm += v * v;
+  const inv = norm > 0 ? 1 / Math.sqrt(norm) : 0;
+  let shared = 0;
+  for (let j = 0; j < dim; j += 1) shared += (mean[j] ?? 0) * (query[j] ?? 0);
+  shared *= inv;
+  const centred = rankByVector(query, m, dim);
+  let maxId = 0;
+  for (const id of ids) maxId = Math.max(maxId, id);
+  const out = new Float32Array(maxId + 1).fill(Number.NaN);
+  for (let r = 0; r < ids.length; r += 1) {
+    out[ids[r] ?? 0] = (spread[r] ?? 0) * (centred[r] ?? 0) + shared;
+  }
+  return out;
+}
+
+/**
+ * From cosine to a 0..1 match: `(cos - baseline - MEANING_FLOOR) / MEANING_SPAN`, clamped,
+ * where `baseline` is the median cosine of the query over the scan's described instances.
+ *
+ * Why relative to the scan, not SigLIP's own sigmoid (`112.7 * cos - 16.8`): the crops are
+ * renders of splats, darker and blurrier than the photos it was calibrated on, so an absolute
+ * threshold calls the spool scan's spool (cos 0.081-0.106 for "cable spool") a 0.00-0.01
+ * match. What separates a match is the margin over the scan's typical cosine for that query.
+ * Measured 2026-10-02 on the segmented spool, pumpkin and camp scans (the top instance's
+ * cosine minus the median): real matches +0.04 to +0.09 (spool +0.04 on the spool, pumpkin
+ * +0.07, cabin +0.06, log cabin +0.09, flagpole +0.06, conifer +0.05); queries for what is not
+ * there +0.01 to +0.03 (spool on the pumpkin scan +0.01, pumpkin on the camp +0.02, tent on
+ * the camp +0.03). So a margin of 0.015 is no evidence and 0.065 is full. Two of those scans
+ * carry most of the calibration; a new scan that disagrees is a reason to measure again.
+ */
+export const MEANING_FLOOR = 0.015;
+export const MEANING_SPAN = 0.05;
+/** An instance with no embedding of its own takes its nearest described ancestor's, times this. */
+export const ANCESTOR_DISCOUNT = 0.9;
+
+/** Per id (index), the match by meaning, 0..1, and whether it came from an ancestor. */
+export interface MeaningScores {
+  score: Float32Array;
+  inherited: Uint8Array;
+}
+
+function median(values: Float32Array): number {
+  if (values.length === 0) return 0;
+  const sorted = Float32Array.from(values).sort();
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? (sorted[mid] ?? 0) : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
+}
+
+/**
+ * The match by meaning per instance, from `textCosines`. An instance without an embedding (too
+ * small in every view to describe; docs/SCENE_OBJECTS.md §3 step 4) takes its nearest
+ * described ancestor's score times `ANCESTOR_DISCOUNT`, marked inherited; with none, 0.
+ */
+export function meaningScores(
+  instances: readonly Instance[],
+  cosines: Float32Array,
+): MeaningScores {
+  let maxId = 0;
+  for (const i of instances) maxId = Math.max(maxId, i.id);
+  const score = new Float32Array(maxId + 1);
+  const inherited = new Uint8Array(maxId + 1);
+  const finite: number[] = [];
+  for (const i of instances) {
+    const c = cosines[i.id];
+    if (c !== undefined && Number.isFinite(c)) finite.push(c);
+  }
+  const baseline = median(Float32Array.from(finite));
+  const own = (id: number): number | undefined => {
+    const c = cosines[id];
+    if (c === undefined || !Number.isFinite(c)) return undefined;
+    return Math.max(0, Math.min(1, (c - baseline - MEANING_FLOOR) / MEANING_SPAN));
+  };
+  const byId = new Map(instances.map((i) => [i.id, i]));
+  for (const instance of instances) {
+    const s = own(instance.id);
+    if (s !== undefined) {
+      score[instance.id] = s;
+      continue;
+    }
+    const seen = new Set<number>([instance.id]);
+    for (let p = instance.parent; p !== null && !seen.has(p);) {
+      const up = own(p);
+      if (up !== undefined) {
+        score[instance.id] = up * ANCESTOR_DISCOUNT;
+        inherited[instance.id] = 1;
+        break;
+      }
+      seen.add(p);
+      p = byId.get(p)?.parent ?? null;
+    }
+  }
+  return { score, inherited };
 }
