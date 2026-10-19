@@ -47,10 +47,12 @@ export function PlanNextStep({
   const [noteVisited, setNoteVisited] = useState(false);
   const ownProject = landProjectId(land.id);
   // A fleet's project that works this land keeps its missions together; otherwise the land's
-  // own plans, the project "Plan work on this land" uses.
-  const [projectId, setProjectId] = useState(() =>
-    project && groundModeFor(project, land) === "layer" ? project.id : ownProject,
-  );
+  // own plans, the project "Plan work on this land" uses. Read from the project in view now,
+  // not when the plan was first shown (the map arriving at the land can bring a fleet's
+  // project after it), until a project is chosen.
+  const [chosen, setChosen] = useState<string | null>(null);
+  const projectId =
+    chosen ?? (project && groundModeFor(project, land) === "layer" ? project.id : ownProject);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ticket = useRef(0);
@@ -278,7 +280,7 @@ export function PlanNextStep({
               <GlassSelect
                 aria-label="Schedule under"
                 value={scheduleUnder}
-                onChange={(event) => setProjectId(event.target.value)}
+                onChange={(event) => setChosen(event.target.value)}
               >
                 <option value={ownProject}>{projectLabel(ownProject)}</option>
                 {project && project.id !== ownProject && !otherLandProject && (
