@@ -1409,16 +1409,26 @@ img {
 [hidden] {
   display: none !important;
 }
+/* --field-line: form field borders at 3:1 or more against the field (WCAG 1.4.11); the
+   design's --line2 is 1.7:1 light and 1.5:1 dark, fine for rules, too faint for an input's
+   edge. Light 3.45:1 on --field, dark 3.68:1. */
 :root {
   --danger: #b4231b;
+  --field-line: #868c83;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --danger: #ff8a7a;
+    --field-line: #6b7368;
   }
 }
 :root[data-theme="dark"] {
   --danger: #ff8a7a;
+  --field-line: #6b7368;
+}
+input,
+textarea {
+  border-color: var(--field-line);
 }
 /* The hero's still: shown only when the 3D scene cannot start (no WebGL), under the copy. */
 .hero-still {
