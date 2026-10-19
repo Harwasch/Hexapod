@@ -44,6 +44,8 @@ const SOURCE_NAMES: Record<string, string> = {
   "cop-dem-glo-30": "Copernicus elevation",
   "esa-worldcover-2021": "ESA land cover",
   "sentinel-2-ndvi": "Sentinel-2 imagery",
+  "sentinel-2-signature": "Sentinel-2 seasonal signatures",
+  "usgs-3dep-13": "USGS 3DEP bare-earth elevation",
   "nasa-power-hourly": "NASA hourly weather",
   "public-web-search": "Public web search",
   "saved-archive-image": "Saved archive image",

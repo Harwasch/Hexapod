@@ -272,6 +272,7 @@ export function useAgentAsk(land: LandArea, followUp: string | null) {
     clearError: () => setError(null),
     canAsk: canEdit && ready,
     canEdit,
+    ready,
     storageError,
     recoveryError,
     discardUnreadable,

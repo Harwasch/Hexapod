@@ -1,4 +1,4 @@
-/* Show once, everywhere: the card in the Land panel's Ecology section. Its magenta is the
+/* Show once, everywhere: the card in the Land surface's Ecology lens. Its magenta is the
    drape's (GroundGridLayer "ramp": #ff8fdc to #ff1fb0, a hue the land never has); the hatch
    swatch is the drape's protected pattern in the agent blue. */
 .show-once {
@@ -25,7 +25,7 @@
 .show-once > * {
   min-width: 0;
 }
-.land-workspace .show-once__lead {
+.show-once .show-once__lead {
   color: var(--text-primary);
 }
 .show-once__chips {
@@ -61,7 +61,7 @@
   border-radius: 9px;
   border: 1px solid var(--control-border);
 }
-.land-workspace .show-once__modes button {
+.show-once .show-once__modes button {
   flex: 1;
   display: inline-flex;
   align-items: center;
@@ -74,12 +74,12 @@
   padding: 6px;
   font-size: 12px;
 }
-.land-workspace .show-once__modes button[aria-pressed="true"] {
+.show-once .show-once__modes button[aria-pressed="true"] {
   background: var(--show-once);
   color: var(--show-once-ink);
   font-weight: 600;
 }
-.land-workspace .show-once__label {
+.show-once .show-once__label {
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 600;
@@ -101,7 +101,7 @@
 .show-once__spark circle {
   fill: var(--show-once);
 }
-.land-workspace .show-once__seasons {
+.show-once .show-once__seasons {
   font-size: 12px;
   line-height: 1.5;
 }
@@ -119,14 +119,14 @@
 .show-once__slider .show-once__num {
   text-align: right;
 }
-.land-workspace .show-once__tally {
+.show-once .show-once__tally {
   font-size: 13px;
 }
-.land-workspace .show-once__tally strong {
+.show-once .show-once__tally strong {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
-.land-workspace .show-once__protected {
+.show-once .show-once__protected {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -145,7 +145,7 @@
   );
   border: 1px solid var(--agent-border);
 }
-.land-workspace .show-once__link {
+.show-once .show-once__link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -155,13 +155,13 @@
   font-size: 12px;
   text-decoration: underline;
 }
-.land-workspace .show-once__caveat {
+.show-once .show-once__caveat {
   font-size: 12px;
 }
-.land-workspace .show-once__caveat strong {
+.show-once .show-once__caveat strong {
   color: var(--warn);
 }
-.land-workspace .show-once__legend {
+.show-once .show-once__legend {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -174,4 +174,26 @@
   height: 10px;
   border-radius: 3px;
   background: linear-gradient(90deg, rgba(255, 143, 220, 0.6), #ff1fb0);
+}
+
+/* In the Ecology lens card: its notes read as the lens's muted lines, its errors as alerts. */
+.show-once p {
+  margin: 0;
+}
+.show-once .land-footnote {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.show-once .land-error {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  border: 1px solid rgba(224, 106, 90, 0.4);
+}
+.show-once .show-once__lead {
+  font-size: var(--text-sm);
+}
+.show-once .show-once__heading {
+  margin: 0;
+  font-weight: 600;
 }

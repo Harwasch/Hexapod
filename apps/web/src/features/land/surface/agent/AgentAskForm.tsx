@@ -1,16 +1,20 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ArrowUp, Sparkles, X } from "lucide-react";
 
 import type { LandArea } from "@twin/contracts";
 import { GlassButton } from "@twin/ui";
 
+import { askBlocker, TYPE_A_QUESTION } from "../../researchAvailability";
+import { ResearchWorkerIdle } from "../../ResearchWorkerNotice";
 import type { AgentAsk } from "./useAgentAsk";
 import { useAgentUi } from "./agentStore";
 
 /**
  * The question box: one line that grows as the person types, the map feature it is about,
  * and what to do when something got in the way (a lost send, a draft this browser couldn't
- * read or save). Enter sends; Shift+Enter starts a new line.
+ * read or save). Enter sends; Shift+Enter starts a new line. A disabled send button says why
+ * beside the box (researchAvailability.ts askBlocker); an empty box says so only once it has
+ * been used, and from then on, with no research worker online, that the question would wait.
  */
 export function AgentAskForm({
   land,
@@ -23,12 +27,17 @@ export function AgentAskForm({
   land: LandArea;
   ask: AgentAsk;
   placeholder: string;
-  /** False when this server has no model; undefined while that is still loading. */
-  modelConfigured: boolean | undefined;
+  /**
+   * False when this server has no model; undefined while that is still loading; null when the
+   * research status could not be loaded.
+   */
+  modelConfigured: boolean | null | undefined;
   onSent?: (investigationId: string) => void;
   onViewPending: (investigationId: string) => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
+  const reasonId = useId();
+  const [touched, setTouched] = useState(false);
   const focusTick = useAgentUi((state) => state.focusTick);
   useEffect(() => {
     if (!focusTick) return;
@@ -39,9 +48,20 @@ export function AgentAskForm({
     const id = await ask.ask();
     if (id) onSent?.(id);
   };
-  const blocked = Boolean(ask.pending) || Boolean(ask.recoveryError);
-  const disabled =
-    !ask.canAsk || ask.busy || blocked || !ask.question.trim() || modelConfigured !== true;
+  const reason = ask.busy
+    ? null
+    : askBlocker({
+        ready: ask.ready,
+        canEdit: ask.canEdit,
+        run: undefined,
+        modelConfigured,
+        pending: Boolean(ask.pending),
+        recoveryError: Boolean(ask.recoveryError),
+        question: ask.question,
+      });
+  const disabled = ask.busy || Boolean(reason);
+  // An empty box is not a problem until someone has been in it.
+  const shownReason = reason === TYPE_A_QUESTION && !touched ? null : reason;
   return (
     <>
       {ask.recoveryError && (
@@ -140,6 +160,7 @@ export function AgentAskForm({
           placeholder={placeholder}
           value={ask.question}
           disabled={!ask.canAsk || modelConfigured === false}
+          onFocus={() => setTouched(true)}
           onChange={(event) => ask.setQuestion(event.target.value)}
           onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
@@ -153,18 +174,19 @@ export function AgentAskForm({
           variant="primary"
           iconOnly
           aria-label="Ask the agent"
+          aria-describedby={shownReason ? reasonId : undefined}
           disabled={disabled}
           loading={ask.busy}
         >
           <ArrowUp size={15} aria-hidden="true" />
         </GlassButton>
       </form>
-      {modelConfigured === false && (
-        <p className="land-muted">The agent isn't set up on this server.</p>
+      {shownReason && (
+        <p id={reasonId} className="land-muted" role="status" data-testid="land-agent-blocked">
+          {shownReason}
+        </p>
       )}
-      {!ask.canEdit && modelConfigured !== false && (
-        <p className="land-muted">Asking the agent needs edit access to this land.</p>
-      )}
+      {touched && ask.canAsk && modelConfigured === true && <ResearchWorkerIdle />}
       {ask.error && (
         <p className="land-alert" role="alert">
           {ask.error}

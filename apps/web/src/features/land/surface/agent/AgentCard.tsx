@@ -12,6 +12,7 @@ import { useLandContext } from "@/state/landContext";
 import { useLandCanEdit, useLandScope } from "@/state/landIdentity";
 
 import { EvidenceView } from "../../EvidenceView";
+import { ResearchWorkerNotice } from "../../ResearchWorkerNotice";
 import {
   cancelResearch,
   setFindingDisposition,
@@ -234,7 +235,8 @@ export function AgentCard({
     />
   );
   const limits = <ResearchLimits budget={ask.budget} onChange={ask.setBudget} />;
-  const modelConfigured = status.data?.modelConfigured;
+  // Undefined while the status loads; null when it could not be loaded.
+  const modelConfigured = status.data?.modelConfigured ?? (status.isError ? null : undefined);
   const inline = variant === "inline";
 
   return (
@@ -265,7 +267,7 @@ export function AgentCard({
                 .catch((cause: unknown) => setError(describeError(cause)))
             }
           >
-            Cancel
+            {run.status === "queued" ? "Cancel queued request" : "Cancel"}
           </GlassButton>
         ) : shownId ? (
           <GlassButton
@@ -309,6 +311,10 @@ export function AgentCard({
                   >
                     <i style={{ width: `${runProgress(run, events, now) * 100}%` }} />
                   </div>
+                  <ResearchWorkerNotice
+                    run={run ?? undefined}
+                    className="land-muted land-agent__notice"
+                  />
                   <AgentSteps steps={steps} evidence={evidence} limit={inline ? 2 : undefined} />
                   <p className="land-visually-hidden" aria-live="polite">
                     {active?.text ?? "Working"}

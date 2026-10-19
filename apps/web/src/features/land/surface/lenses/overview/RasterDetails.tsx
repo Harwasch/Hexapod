@@ -11,26 +11,21 @@ import {
   className,
   GREENNESS_SCALE,
   heightLabel,
+  isBareEarth,
   monthLabel,
   percentLabel,
   presentClasses,
   rasterKind,
+  rasterSource,
   shareLabel,
   SLOPE_SCALE,
   slopePercent,
   type Observation,
   type Raster,
   type RasterBand,
-  type RasterKind,
   type Timeline,
 } from "./overviewData";
 import "./overview.css";
-
-const SOURCE_NAME: Record<RasterKind, string> = {
-  terrain: "Copernicus GLO-30",
-  cover: "ESA WorldCover 2021",
-  vegetation: "Sentinel-2",
-};
 
 const number = (value: number, digits = 1) =>
   value.toLocaleString(undefined, { maximumFractionDigits: digits });
@@ -63,19 +58,21 @@ export function RasterDetails({
   return (
     <div className="overview-raster">
       <p className="land-muted">
-        {SOURCE_NAME[kind]} · {number(metadata.resolutionM)} m grid · made{" "}
+        {rasterSource(raster)} · {number(metadata.resolutionM)} m grid · made{" "}
         {new Date(raster.createdAt).toLocaleDateString()} for outline {raster.boundaryRevision}
         {raster.stale ? " (an earlier one)" : ""}
       </p>
       <p className="overview-raster__coverage">{coverage}</p>
       {kind === "terrain" && <TerrainStats raster={raster} units={units} />}
       {kind === "cover" && <CoverClasses raster={raster} />}
-      {kind === "vegetation" && metadata.vegetation && (
+      {kind === "signature" && <SignatureSummary raster={raster} />}
+      {(kind === "vegetation" || kind === "signature") && metadata.vegetation && (
         <VegetationObservations
           raster={raster}
           series={metadata.vegetation}
           band={band ?? null}
           onChooseBand={onChooseBand}
+          seasons={kind === "signature"}
         />
       )}
       {metadata.warnings.length > 0 && (
@@ -99,6 +96,7 @@ export function RasterDetails({
 
 function TerrainStats({ raster, units }: { raster: Raster; units: UnitSystem }) {
   const boundaryCells = raster.metadata.boundaryCells;
+  const bare = isBareEarth(raster);
   return (
     <>
       {raster.metadata.bands.map((band) => {
@@ -116,7 +114,9 @@ function TerrainStats({ raster, units }: { raster: Raster; units: UnitSystem }) 
             note={
               slope
                 ? `${SLOPE_SCALE} The model gives degrees; percent is rise over run. Median ${band.percentiles["50"] == null ? "unknown" : `${number(band.percentiles["50"])}°`}.`
-                : "Surface height, including buildings and tree tops. Not a ground survey."
+                : bare
+                  ? "Ground height with trees and buildings left out (bare earth), in NAVD88 metres. Not a ground survey."
+                  : "Surface height, including buildings and tree tops. Not a ground survey."
             }
           />
         );
@@ -286,6 +286,32 @@ function CoverClasses({ raster }: { raster: Raster }) {
   );
 }
 
+// ---- Seasonal signatures -----------------------------------------------------
+
+/** What a signature holds: the cells with a full signature, and which bands go where. */
+function SignatureSummary({ raster }: { raster: Raster }) {
+  const signature = raster.metadata.signature;
+  const bands = raster.metadata.bands.length;
+  return (
+    <section className="overview-band" aria-label="Seasonal signature">
+      <h5>Seasonal signature</h5>
+      {signature && (
+        <p>
+          {signature.commonCells.toLocaleString()} cells clear in every season carry a full{" "}
+          {signature.features.length}-band signature ({shareLabel(signature.commonCoverageFraction)}{" "}
+          of the land).
+        </p>
+      )}
+      <p className="land-muted">
+        The map shows each season&apos;s NDVI; the download holds all {bands} measurement bands
+        (green, red, near-infrared, shortwave-infrared and NDVI per season). Show once in Ecology
+        compares places by them. A similar signature means similar reflectance on these dates, not
+        the same species.
+      </p>
+    </section>
+  );
+}
+
 // ---- Vegetation ------------------------------------------------------------
 
 function VegetationObservations({
@@ -293,16 +319,19 @@ function VegetationObservations({
   series,
   band,
   onChooseBand,
+  seasons = false,
 }: {
   raster: Raster;
   series: Timeline;
   band: number | null;
   onChooseBand?: (band: number) => void;
+  /** A signature's seasons rather than a comparison of months. */
+  seasons?: boolean;
 }) {
   const changeBand = series.changeBand;
   return (
     <section className="overview-band" aria-label="Vegetation observations">
-      <h5>Greenness through time</h5>
+      <h5>{seasons ? "Greenness by season" : "Greenness through time"}</h5>
       <p className="land-muted">
         {series.commonCells.toLocaleString()} cells were seen clearly every time (
         {shareLabel(series.commonCoverageFraction)} of the land). The trend uses only those.

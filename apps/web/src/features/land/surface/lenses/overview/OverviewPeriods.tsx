@@ -17,9 +17,12 @@ export function OverviewPeriods({
   onStart,
   startLabel = "Compare these months",
   initial,
+  describedBy,
 }: {
   disabled: boolean;
   busy: boolean;
+  /** The id of the words saying why Start is disabled, when it is. */
+  describedBy?: string;
   onStart: (periods: Period[]) => void;
   startLabel?: string;
   /** Months to start from (YYYY-MM); last month and the same month a year before otherwise. */
@@ -82,6 +85,7 @@ export function OverviewPeriods({
           size="sm"
           disabled={disabled || !periods}
           loading={busy}
+          aria-describedby={describedBy}
           onClick={() => {
             if (periods) onStart(periods);
           }}

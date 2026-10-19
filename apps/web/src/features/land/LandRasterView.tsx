@@ -8,13 +8,19 @@ import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
 import { useSettings } from "@/state/settings";
 
-import { bandOf, defaultVegetationBand, rasterKind } from "./surface/lenses/overview/overviewData";
+import {
+  bandOf,
+  defaultVegetationBand,
+  mapBands,
+  rasterKind,
+} from "./surface/lenses/overview/overviewData";
 import { RasterDetails } from "./surface/lenses/overview/RasterDetails";
 
 const LABEL = {
   terrain: "Terrain analysis",
   cover: "Land-cover analysis",
   vegetation: "Vegetation analysis",
+  signature: "Seasonal signature analysis",
 } as const;
 
 /**
@@ -53,12 +59,14 @@ export function LandRasterView({ id }: { id: string }) {
       </div>
     );
   const kind = rasterKind(raster);
+  // A signature's map shows its dated NDVI bands only; every band stays in the download.
+  const choices = mapBands(raster);
   const band =
     shown?.band ??
     preferred ??
-    (kind === "vegetation"
+    (kind === "vegetation" || kind === "signature"
       ? defaultVegetationBand(raster)
-      : (raster.metadata.bands[0]?.index ?? 1));
+      : (choices[0]?.index ?? 1));
   const definition = bandOf(raster, band);
   const show = (index: number) =>
     useLandContext.getState().setRaster({
@@ -89,11 +97,11 @@ export function LandRasterView({ id }: { id: string }) {
         >
           {shown ? "Hide from map" : "Show on map"}
         </GlassButton>
-        {raster.metadata.bands.length > 1 && (
+        {choices.length > 1 && (
           <label className="land-field">
             Map measurement
             <GlassSelect value={band} onChange={(event) => choose(Number(event.target.value))}>
-              {raster.metadata.bands.map((item) => (
+              {choices.map((item) => (
                 <option key={item.index} value={item.index}>
                   {item.name} ({item.unit})
                 </option>

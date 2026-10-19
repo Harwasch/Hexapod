@@ -10,6 +10,7 @@ import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landId
 import type { MapPin } from "@/state/landMap";
 
 import { cancelResearch } from "../../researchApi";
+import { ResearchWorkerIdle, ResearchWorkerNotice } from "../../ResearchWorkerNotice";
 import { askAgent } from "../agentBus";
 import { anchorOf } from "../geometryAnchor";
 import { landError } from "../landFlow";
@@ -302,30 +303,35 @@ function Solar({ land }: { land: LandArea }) {
 
   const running =
     analysis.running && run ? (
-      <div className="land-solar-running" role="status" aria-live="polite">
-        <span className="land-solar-running__pulse" aria-hidden="true" />
-        <span>
-          {mode === "running"
-            ? "This takes about a minute."
-            : runZone
-              ? `Modeling a ${zoneSize(footprintAreaM2(runZone.arrayZone))} array with ${runZone.year} weather…`
-              : "Running the hourly solar model…"}
-        </span>
-        {canEdit && (
-          <button
-            type="button"
-            className="land-link land-solar-push"
-            onClick={() => {
-              setCancelError(null);
-              void cancelResearch(run.id).catch((cause: unknown) =>
-                setCancelError(`The model could not be stopped. ${landError(cause)}`),
-              );
-            }}
-          >
-            Cancel
-          </button>
-        )}
-      </div>
+      <>
+        <div className="land-solar-running" role="status" aria-live="polite">
+          <span className="land-solar-running__pulse" aria-hidden="true" />
+          <span>
+            {mode === "running"
+              ? run.status === "queued"
+                ? "Waiting to start. It takes about a minute once it runs."
+                : "This takes about a minute."
+              : runZone
+                ? `Modeling a ${zoneSize(footprintAreaM2(runZone.arrayZone))} array with ${runZone.year} weather…`
+                : "Running the hourly solar model…"}
+          </span>
+          {canEdit && (
+            <button
+              type="button"
+              className="land-link land-solar-push"
+              onClick={() => {
+                setCancelError(null);
+                void cancelResearch(run.id).catch((cause: unknown) =>
+                  setCancelError(`The model could not be stopped. ${landError(cause)}`),
+                );
+              }}
+            >
+              {run.status === "queued" ? "Cancel queued request" : "Cancel"}
+            </button>
+          )}
+        </div>
+        <ResearchWorkerNotice run={run} className="land-muted" />
+      </>
     ) : null;
 
   const failedRequest = failedRun ? runRequest(failedRun.analysis) : null;
@@ -475,7 +481,13 @@ function Solar({ land }: { land: LandArea }) {
         {mode === "sketch" && <SolarSketch draft={draft} land={land} />}
 
         {mode === "draft" && plan && (
-          <DraftBody draft={draft} land={land} capacityKw={draftCapacity} />
+          <DraftBody
+            draft={draft}
+            land={land}
+            capacityKw={draftCapacity}
+            // A run already waiting says what it waits for; the idle note would repeat it.
+            idle={run?.status !== "queued"}
+          />
         )}
 
         {mode === "result" && selected && (
@@ -617,10 +629,13 @@ function DraftBody({
   draft,
   land,
   capacityKw,
+  idle,
 }: {
   draft: ReturnType<typeof useSolarDraft>;
   land: LandArea;
   capacityKw: number;
+  /** Say, before it is asked, when no research worker would pick the model up. */
+  idle: boolean;
 }) {
   const request = draft.request;
   if (!request) return null;
@@ -684,6 +699,7 @@ function DraftBody({
           Discard
         </GlassButton>
       </div>
+      {idle && <ResearchWorkerIdle />}
       <SolarSettings request={request} onChange={draft.updateRequest} disabled={draft.busy} />
     </>
   );

@@ -10,6 +10,7 @@ import type { LandPoint } from "@/state/land";
 import { useLandScope } from "@/state/landIdentity";
 
 import { cancelResearch } from "../../../researchApi";
+import { ResearchWorkerNotice } from "../../../ResearchWorkerNotice";
 import { LensDetails, LensEmpty } from "../../LensCard";
 import { Fact, MapLink } from "../../mapLinks";
 import { useFlyTo } from "../../mapHooks";
@@ -176,21 +177,24 @@ function ArchiveState({
     );
   if (archive.running)
     return (
-      <div className="records-running" role="status" aria-live="polite">
-        <span className="records-running__pulse" aria-hidden="true" />
-        <span>Searching photo and map catalogs…</span>
-        {canEdit && archive.run && (
-          <button
-            type="button"
-            className="land-link"
-            disabled={stopping}
-            onClick={() => void stop()}
-          >
-            Stop
-          </button>
-        )}
-        {stopError && <span className="land-muted">Could not stop: {stopError}</span>}
-      </div>
+      <>
+        <div className="records-running" role="status" aria-live="polite">
+          <span className="records-running__pulse" aria-hidden="true" />
+          <span>Searching photo and map catalogs…</span>
+          {canEdit && archive.run && (
+            <button
+              type="button"
+              className="land-link"
+              disabled={stopping}
+              onClick={() => void stop()}
+            >
+              {archive.run.status === "queued" ? "Cancel queued request" : "Stop"}
+            </button>
+          )}
+          {stopError && <span className="land-muted">Could not stop: {stopError}</span>}
+        </div>
+        <ResearchWorkerNotice run={archive.run ?? undefined} className="land-muted" />
+      </>
     );
   if (archive.failed)
     return (

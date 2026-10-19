@@ -2,6 +2,8 @@ import { create } from "zustand";
 
 import type { Investigation } from "@twin/contracts";
 
+import { RASTER_RUNS } from "../../rasterRuns";
+
 /**
  * What the agent card remembers across its two homes (the right dock on wide screens, the
  * left sheet on narrow ones), so resizing the window never loses the person's place.
@@ -35,9 +37,7 @@ export const useAgentUi = create<AgentUi>((set) => ({
 /** Titles of the analyses the lenses start; the agent's own questions are everything else. */
 const ANALYSIS_TITLES = new Set([
   "Land overview",
-  "Surface elevation and slope",
-  "Land cover in 2021",
-  "Vegetation through time",
+  ...Object.values(RASTER_RUNS).map((run) => run.title),
   "Photographs and historical maps",
   "Ecological context and name review",
 ]);

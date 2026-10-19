@@ -7,6 +7,8 @@ import { GlassButton, GlassProgress } from "@twin/ui";
 import { useLandContext } from "@/state/landContext";
 import { useLandScope } from "@/state/landIdentity";
 
+import { ShowOnceCard } from "../../../showOnce/ShowOnceCard";
+import { ResearchWorkerIdle, ResearchWorkerNotice } from "../../ResearchWorkerNotice";
 import { askAgent } from "../agentBus";
 import { areaLabel } from "../landFlow";
 import { LensCard, LensDetails, LensEmpty } from "../LensCard";
@@ -44,8 +46,10 @@ import "./ecology/ecology.css";
 
 /**
  * Ecology: what kind of country the land sits in, what plant community its soil points to and
- * which species have been recorded here, in plain words; and the field surveys recorded on it,
- * drawn on the map as plots. Lookups run only when asked; tables and sources sit in Details.
+ * which species have been recorded here, in plain words; the field surveys recorded on it,
+ * drawn on the map as plots; and Show once, everywhere, under its own heading, which lights
+ * the places whose seasonal satellite signature is like one tapped. Lookups run only when
+ * asked; tables and sources sit in Details.
  */
 export function EcologyLens({ land }: { land: LandArea }) {
   const scope = useLandScope();
@@ -168,6 +172,8 @@ function EcologyCard({ land, scope }: { land: LandArea; scope: string }) {
         </div>
       )}
 
+      <ShowOnceCard land={land} />
+
       <LensDetails>
         <EcologyDetails
           land={land}
@@ -223,6 +229,7 @@ function ContextState({
           See the ecoregion, the plant community the soil points to, and the species recorded here.
           {!canEdit && " An editor can look this up."}
         </LensEmpty>
+        {canEdit && <ResearchWorkerIdle />}
         {research.error && (
           <p role="alert" className="land-alert">
             Could not start the lookup. {research.error}
@@ -234,12 +241,14 @@ function ContextState({
   if (research.running) {
     const total = Math.max(1, plannedSources(research.request));
     const done = Math.min(total, completedSources(research.events));
+    const queued = run.status === "queued";
     return (
       <div className="land-eco-running" aria-live="polite">
         <p className="land-lede">
           Looking up what lives here… {done} of {total} {total === 1 ? "source" : "sources"} done
         </p>
         <GlassProgress value={done} max={total} label="Ecology lookup progress" />
+        <ResearchWorkerNotice run={run} className="land-muted" />
         {canEdit && (
           <div className="land-row">
             <GlassButton
@@ -249,7 +258,7 @@ function ContextState({
               leadingIcon={<Square size={13} aria-hidden="true" />}
               onClick={research.cancel}
             >
-              Stop
+              {queued ? "Cancel queued request" : "Stop"}
             </GlassButton>
           </div>
         )}
@@ -270,14 +279,17 @@ function ContextState({
 
   if (research.failed)
     return (
-      <div className="land-alert" role="alert">
-        <p>
-          {run.status === "cancelled" ? "The lookup was stopped." : "The lookup failed."}{" "}
-          {run.error ?? ""}
-        </p>
-        {again && <div className="land-row">{again}</div>}
-        {research.error && <p>{research.error}</p>}
-      </div>
+      <>
+        <div className="land-alert" role="alert">
+          <p>
+            {run.status === "cancelled" ? "The lookup was stopped." : "The lookup failed."}{" "}
+            {run.error ?? ""}
+          </p>
+          {again && <div className="land-row">{again}</div>}
+          {research.error && <p>{research.error}</p>}
+        </div>
+        {canEdit && <ResearchWorkerIdle />}
+      </>
     );
 
   return (
@@ -288,6 +300,7 @@ function ContextState({
           {again}
         </div>
       )}
+      {research.stale && canEdit && <ResearchWorkerIdle />}
       {context && <ContextFacts land={land} context={context} />}
       {research.error && (
         <p role="alert" className="land-alert">

@@ -3,8 +3,8 @@ import type { ResearchRun, ResearchStatus } from "@twin/contracts";
 /**
  * Why research is waiting or a research button is disabled, in words, from what
  * GET /research/status says about the worker (apps/api/app/services/research.py:
- * research_status). Pure, so the copy is tested without a server: ResearchWorkerNotice and
- * LandResearch only place it.
+ * research_status). Pure, so the copy is tested without a server: ResearchWorkerNotice, the
+ * lenses and the agent card only place it.
  *
  * Every age is the server's (the database clock), so a skewed browser clock never shows
  * the wrong minutes. A status from an older server, or one still loading, has no `worker`:
@@ -75,10 +75,9 @@ export interface AnalysisInputs {
 }
 
 /**
- * Why the analysis buttons (terrain, land cover, vegetation, archives) are disabled. A queued
- * run's reason leaves the worker out: ResearchWorkerNotice, next to the run, says what it is
- * waiting for and for how long, and this reason is shown twice more (under the analyses and
- * by Investigate), so saying it here too would repeat the worker's age three times.
+ * Why an analysis button is disabled. A queued run's reason leaves the worker out:
+ * ResearchWorkerNotice, next to the run, says what it is waiting for and for how long, so
+ * saying it here too would repeat the worker's age beside every disabled button.
  */
 export function analysisBlocker({ ready, canEdit, run }: AnalysisInputs): string | null {
   if (!ready) return "Connecting to your workspace…";
@@ -94,7 +93,7 @@ export function analysisBlocker({ ready, canEdit, run }: AnalysisInputs): string
 }
 
 /** Shown only once the question box has been used: an empty box is not an error at first. */
-export const TYPE_A_QUESTION = "Type a question to investigate.";
+export const TYPE_A_QUESTION = "Type a question to ask the agent.";
 
 export interface AskInputs extends AnalysisInputs {
   /** From /research/status: undefined while it loads, null when it could not be loaded. */
@@ -104,16 +103,15 @@ export interface AskInputs extends AnalysisInputs {
   question: string;
 }
 
-/** Why Investigate is disabled: the analysis reasons first, then the question's own. */
+/** Why the agent's send button is disabled: the analysis reasons first, then the question's. */
 export function askBlocker(inputs: AskInputs): string | null {
   const blocked = analysisBlocker(inputs);
   if (blocked) return blocked;
-  if (inputs.modelConfigured === undefined)
-    return "Checking whether AI investigation is available…";
+  if (inputs.modelConfigured === undefined) return "Checking whether the agent is available…";
   if (inputs.modelConfigured === null)
-    return "Could not check whether AI investigation is available. Reload the page to try again.";
+    return "Could not check whether the agent is available. Reload the page to try again.";
   if (!inputs.modelConfigured)
-    return "AI investigation isn't configured on this server. The analyses above still work.";
+    return "The agent isn't set up on this server. The lens analyses still work.";
   if (inputs.pending) return "Confirm or discard the captured request above first.";
   if (inputs.recoveryError) return "Resolve the unreadable saved question above first.";
   if (!inputs.question.trim()) return TYPE_A_QUESTION;

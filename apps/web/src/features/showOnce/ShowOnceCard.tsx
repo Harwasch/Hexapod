@@ -9,12 +9,12 @@ import { api, unwrap } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
 import { TOUCH_MEDIA, useMediaQuery } from "@/lib/media";
-import { useLandContext } from "@/state/landContext";
 import { useLandAccessReady, useLandCanEdit } from "@/state/landIdentity";
 import { useShowOnce } from "@/state/showOnce";
 import { useUi } from "@/state/ui";
 
 import { invalidateLandDerived } from "../land/landDerived";
+import { useLens } from "../land/surface/lenses";
 import { RASTER_RUNS, rasterRequest, signaturePeriods } from "../land/rasterRuns";
 import { beginInvestigation, useInvestigation, useResearchStatus } from "../land/researchApi";
 import { workerIdleNote, workerLine } from "../land/researchAvailability";
@@ -171,7 +171,7 @@ function SeedSeasons({ seed, scenes }: { seed: SignatureSeed; scenes: readonly S
 }
 
 /**
- * Show once, everywhere, for the selected Land (in its Ecology section): tap one place, and
+ * Show once, everywhere, for the selected Land (in its Ecology lens): tap one place, and
  * every 10 m cell whose seasonal Sentinel-2 signature is alike lights up on the map
  * (`cesium/ShowOnceBridge.tsx`). "How alike" moves the bar a cell must clear as a uniform of
  * the drape, so nothing is fetched or uploaded while it slides; the tally counts the lit cells
@@ -186,9 +186,10 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
   const ready = useLandAccessReady();
   const canEdit = useLandCanEdit();
   const scene = useScene();
-  const section = useLandContext((s) => s.section);
+  // On screen while the Land surface shows the Ecology lens, the card's home.
+  const lens = useLens((s) => s.lens);
   const panel = useUi((s) => s.activePanel);
-  const visible = ready && section === "ecology" && panel === "land";
+  const visible = ready && lens === "ecology" && panel === "land";
   const rasters = useLandRasters(land, visible);
   const raster = freshSignature(rasters.data, land);
   const gap = signatureGap(rasters.data, land);
@@ -289,9 +290,9 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
 
   return (
     <section className="show-once" aria-labelledby={headingId} data-testid="show-once">
-      <span className="land-eyebrow" id={headingId}>
+      <h4 className="land-eyebrow show-once__heading" id={headingId}>
         Show once, everywhere
-      </span>
+      </h4>
       <p className="show-once__lead">
         {tap} one place on the map. Every {spacing ? `${spacing} ` : ""}cell of {land.name} with a
         similar seasonal satellite signature lights up, and the lit ground can become the job.
