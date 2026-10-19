@@ -3,6 +3,7 @@ import { create } from "zustand";
 import type { SignatureSimilarity } from "@twin/contracts";
 
 import { ALIKE_DEFAULT, type ScoreGrid } from "@/features/showOnce/grid";
+import type { JobSummary } from "@/features/showOnce/makeJob";
 
 /**
  * Show once, everywhere: one session at a time, on the selected Land's freshest signature
@@ -37,6 +38,12 @@ interface ShowOnceState {
   threshold: number;
   /** Protected cells of the display grid (1 = left out of the job). */
   guarded: Uint8Array | null;
+  /**
+   * What "Make this the job" last made, and on which Land. Kept here, not in the card: the plan
+   * card opens as the job is made, which closes Land and the card with it, and the card says
+   * what became of the lit ground when it is next on screen. A new session clears it.
+   */
+  job: { landId: string; summary: JobSummary } | null;
   start: (session: ShowOnceSession) => void;
   stop: () => void;
   setShown: (shown: boolean) => void;
@@ -46,6 +53,7 @@ interface ShowOnceState {
   setResult: (result: ShowOnceResult) => void;
   setMessage: (message: string | null) => void;
   setGuarded: (guarded: Uint8Array | null) => void;
+  setJob: (job: ShowOnceState["job"]) => void;
 }
 
 const IDLE = {
@@ -61,6 +69,7 @@ const IDLE = {
 export const useShowOnce = create<ShowOnceState>()((set, get) => ({
   ...IDLE,
   shown: false,
+  job: null,
   start: (session) => {
     const current = get().session;
     // The same raster keeps its answer; another one (a new boundary, new signatures) starts over.
@@ -87,4 +96,5 @@ export const useShowOnce = create<ShowOnceState>()((set, get) => ({
     }),
   setMessage: (message) => set({ message, pending: null }),
   setGuarded: (guarded) => set({ guarded, message: null }),
+  setJob: (job) => set({ job }),
 }));

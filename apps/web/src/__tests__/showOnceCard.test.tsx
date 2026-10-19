@@ -159,6 +159,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useShowOnce.getState().stop();
+  useShowOnce.getState().setJob(null);
   useLandContext.getState().clear();
   useLens.getState().setLens("overview");
   useUi.getState().setPanel(null);
@@ -432,4 +433,58 @@ it("says when nothing at the setting is big enough to be a job", async () => {
   fireEvent.click(screen.getByTestId("show-once-make-job"));
   await screen.findByText(/Nothing at this setting makes an area of half an acre or more/);
   expect(useShowOnce.getState().session).not.toBeNull();
+});
+
+it("still says what the job made when the card is on screen again", async () => {
+  rasters = [signatureRaster()];
+  mount();
+  fireEvent.click(await screen.findByTestId("show-once-start"));
+  act(() =>
+    useShowOnce.getState().setResult({
+      read: {
+        seed: { cellLongitude: 0, cellLatitude: 0, windows: [] },
+        scenes: [],
+        comparedCells: 1,
+      } as unknown as SignatureSimilarity,
+      grid: {
+        west: 0,
+        south: 0,
+        east: 1,
+        north: 1,
+        columns: 1,
+        rows: 1,
+        cellM: 10,
+        cellAreaM2: 4046.8564224,
+        scores: Uint8Array.from([250]),
+      },
+    }),
+  );
+  // The plan card opens as the job is made, and Land closes with this card in it.
+  makeJob.mockImplementation(async () => {
+    await Promise.resolve();
+    cleanup();
+    return { areas: 1, acres: 1, protectedAcres: 0, dropped: { patches: 0, acres: 0 } };
+  });
+  fireEvent.click(screen.getByTestId("show-once-make-job"));
+  await waitFor(() => expect(useShowOnce.getState().job?.landId).toBe(land.id));
+  expect(useShowOnce.getState().session).toBeNull();
+  expect(screen.queryByTestId("show-once")).toBeNull();
+
+  // Back in the Ecology lens: what became of the lit ground, and a place to tap next.
+  mount();
+  expect((await screen.findByTestId("show-once-done")).textContent).toContain(
+    "Drafted as a job: 1 area · 1.0 ac on Oak Bench Ranch",
+  );
+  expect(screen.getByTestId("show-once-start").textContent).toContain("Click another place");
+  cleanup();
+  // Another land's card does not claim it.
+  mount({ ...land, id: "22222222-2222-4222-8222-222222222222", name: "North field" });
+  await screen.findByTestId("show-once");
+  expect(screen.queryByTestId("show-once-done")).toBeNull();
+  cleanup();
+  // A new session on this land starts over.
+  mount();
+  fireEvent.click(await screen.findByTestId("show-once-start"));
+  expect(useShowOnce.getState().job).toBeNull();
+  expect(screen.queryByTestId("show-once-done")).toBeNull();
 });

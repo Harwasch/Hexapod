@@ -27,7 +27,7 @@ import {
   litStats,
   spacingLabel,
 } from "./grid";
-import { makeJob, type JobSummary } from "./makeJob";
+import { makeJob } from "./makeJob";
 import { dropPendingTaps } from "./session";
 
 import "./showOnce.css";
@@ -209,7 +209,9 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
   const mine = session?.landId === land.id && session.rasterId === raster?.id;
   const [making, setMaking] = useState(false);
   const [jobError, setJobError] = useState<string | null>(null);
-  const [done, setDone] = useState<JobSummary | null>(null);
+  // What the last job made on this land, kept while the plan card has the map (and Land is shut).
+  const job = useShowOnce((s) => s.job);
+  const done = job?.landId === land.id ? job.summary : null;
 
   // The map answers taps (and drapes) only while this card is on screen.
   useEffect(() => {
@@ -236,7 +238,7 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
 
   const start = () => {
     if (!raster) return;
-    setDone(null);
+    useShowOnce.getState().setJob(null);
     setJobError(null);
     useShowOnce.getState().start({ landId: land.id, revision: land.revision, rasterId: raster.id });
   };
@@ -258,7 +260,7 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
       }
       dropPendingTaps();
       useShowOnce.getState().stop();
-      setDone(summary);
+      useShowOnce.getState().setJob({ landId: land.id, summary });
     } catch (cause) {
       setJobError(`Could not make the job: ${describeError(cause)}`);
     } finally {
