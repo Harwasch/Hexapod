@@ -6,7 +6,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { components, LandArea } from "@twin/contracts";
@@ -257,6 +257,30 @@ describe("scheduling a plan as a mission", () => {
     expect(
       (post.mock.calls[0]?.[1] as unknown as { body: { projectId: string } }).body,
     ).toMatchObject({ projectId: "fleet" });
+  });
+
+  it("files it with a fleet's project that came into view after the plan did, until one is chosen", async () => {
+    // The plan is on screen before the map reaches the fleet whose project works this land.
+    setProject({ id: "land:land", name: "Ranch" });
+    mount({ actions: () => [approved] });
+    const schedule = await screen.findByRole("button", { name: "Schedule as a mission" });
+    const fleet = (id: string, name: string) => {
+      act(() => {
+        setProject({
+          id,
+          name,
+          machines: [{ id: "m1", position: { longitude: -122.1, latitude: 47.602 } }] as never,
+        });
+      });
+    };
+    fleet("fleet", "North field");
+    fireEvent.click(schedule);
+    const under = screen.getByLabelText("Schedule under");
+    expect(under).toHaveValue("fleet");
+    // Chosen, it stays chosen when another project comes into view.
+    fireEvent.change(under, { target: { value: "land:land" } });
+    fleet("fleet-2", "South field");
+    expect(screen.getByLabelText("Schedule under")).toHaveValue("land:land");
   });
 
   it("never offers another land's project, and names no project by its id", async () => {
