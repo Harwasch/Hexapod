@@ -1,0 +1,140 @@
+name: Seed Land · Oak Bench Ranch
+
+# Writes the demo ranch, Oak Bench Ranch, into production as a saved Land in the pilot
+# workspace: `python -m app.seed.demo_land` (apps/api/app/seed/demo_land.py), run on an
+# `app` machine of the Fly app over `flyctl ssh console`. The seed is idempotent by stable
+# ids, so a second dispatch creates nothing new; it brings the Land and its three features
+# back in step with demo_ranch.json as new revisions.
+#
+# Over SSH rather than on the runner, unlike provision.yml's `seed` job: that job needs the
+# checkout's data/tiles, which the image does not carry, but this seed reads only
+# demo_ranch.json, which the image does. Running it on the machine means it uses the
+# deployed code and the app's own DATABASE_URL, and the runner never holds a database
+# credential. `fly ssh console` sessions see the machine's environment, Fly secrets
+# included (docs/DEPLOYMENT.md § Seeding the demo Land says how that was established);
+# the command still checks for DATABASE_URL first, so a session without it stops with a
+# message instead of trying the settings' localhost default.
+#
+# `workflow_dispatch` only, and guarded twice: `confirm` must be typed out, and
+# `research` (which queues one paid AI research run) is off unless asked for.
+# Rollback: `DELETE /api/v1/land/<id>`, printed in the job summary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      research:
+        description: Also queue the Land's AI research overview (one paid research run)
+        type: boolean
+        default: false
+      confirm:
+        description: Type seed-production to write to the production database
+        type: string
+        required: true
+        default: ""
+
+concurrency:
+  # One seed at a time. Its own group rather than deploy-production: a queued run in a
+  # shared group would replace a deploy that is waiting, and GitHub keeps only one.
+  group: seed-land-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    name: Oak Bench Ranch · production Land
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Confirmed by whoever dispatched it
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "${CONFIRM}" != "seed-production" ]; then
+            echo "::error::confirm must be exactly 'seed-production'; nothing was written."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - name: The secret this job needs
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::error::FLY_API_TOKEN is not set. Create a deploy token with"
+            echo "::error::'fly tokens create deploy -a twin-api' and add it as a"
+            echo "::error::repository secret. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      # flyctl's own installer, as deploy.yml installs it.
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+      # The app's name comes out of fly.toml, as in deploy.yml, and the machine is one in
+      # the `app` process group (the API; deploy.yml keeps exactly one) that is running.
+      - name: Pick a running API machine
+        id: machine
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          app=$(sed -n 's/^app *= *"\(.*\)"/\1/p' fly.toml | head -1)
+          [ -n "$app" ] || { echo "::error::no app named in fly.toml"; exit 1; }
+          machines=$(flyctl machines list --app "$app" --json)
+          machine=$(printf '%s' "$machines" | jq -r \
+            '[.[] | select(.config.metadata.fly_process_group == "app" and .state == "started") | .id] | first // empty')
+          if [ -z "$machine" ]; then
+            echo "::error::no started machine in the 'app' process group of $app."
+            printf '%s' "$machines" | jq -r '.[] | "\(.id) \(.config.metadata.fly_process_group) \(.state)"'
+            exit 1
+          fi
+          echo "seeding through $app machine $machine"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "id=$machine" >> "$GITHUB_OUTPUT"
+      - name: python -m app.seed.demo_land
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP: ${{ steps.machine.outputs.app }}
+          MACHINE: ${{ steps.machine.outputs.id }}
+          RESEARCH: ${{ inputs.research }}
+        run: |
+          set -euo pipefail
+          flags=""
+          if [ "$RESEARCH" = "true" ]; then
+            flags=" --research"
+          fi
+          guard='test -n "$DATABASE_URL" || { echo "DATABASE_URL is not set in this SSH session; nothing was written." >&2; exit 3; }'
+          flyctl ssh console --app "$APP" --machine "$MACHINE" --user api \
+            --command "sh -c '${guard}; cd /app && python -m app.seed.demo_land${flags}'" \
+            2>&1 | tee seed-output.txt
+      - name: Summary
+        if: always() && steps.machine.outcome == 'success'
+        env:
+          APP: ${{ steps.machine.outputs.app }}
+          RESEARCH: ${{ inputs.research }}
+        run: |
+          land_id=$(sed -n 's/.*(land \([0-9a-f-]\{36\}\),.*/\1/p' seed-output.txt 2>/dev/null | head -1)
+          land_id="${land_id:-b1cc807c-652c-574a-8a56-caef5599b71c}"
+          origin="https://${APP:-twin-api}.fly.dev"
+          {
+            echo "## Oak Bench Ranch · production Land"
+            echo
+            echo "- Land id: \`${land_id}\` (\`demo-land/demo-ranch\`, pilot workspace)"
+            echo "- Research overview queued: ${RESEARCH}"
+            echo
+            echo "### Seed output"
+            echo
+            echo '```'
+            cat seed-output.txt 2>/dev/null || echo "(the seed did not run)"
+            echo '```'
+            echo
+            echo "### Rollback"
+            echo
+            echo "Deletes the Land, its features and anything attached to it (it cascades):"
+            echo
+            echo '```sh'
+            echo "curl -fsS -X DELETE -H \"Authorization: Bearer \$API_WRITE_TOKEN\" \\"
+            echo "  ${origin}/api/v1/land/${land_id}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
