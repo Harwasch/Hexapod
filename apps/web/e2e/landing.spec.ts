@@ -18,6 +18,29 @@ function watchCesium(page: Page): string[] {
   return seen;
 }
 
+/**
+ * Everything that could carry the form's contents off the page: requests other than GETs,
+ * and any navigation of the page itself (a native GET submit is one, with the fields in its
+ * query string). Read `left()` after the page has loaded.
+ */
+function watchLeaks(page: Page) {
+  const sent: string[] = [];
+  const navigations: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "GET") sent.push(`${request.method()} ${request.url()}`);
+  });
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) navigations.push(frame.url());
+  });
+  return {
+    /** Call once the page has loaded: later navigations are the ones that count. */
+    arm: () => navigations.splice(0),
+    left: () => ({ sent, navigations, search: new URL(page.url()).search }),
+  };
+}
+
+const NOTHING_LEFT = { sent: [], navigations: [], search: "" };
+
 test("loads without CesiumJS, with the brand from brand.ts", async ({ page }) => {
   const cesium = watchCesium(page);
   await page.goto("/landing.html");
@@ -110,11 +133,9 @@ test("the toggle switches between light and dark", async ({ page }) => {
 test("the request form validates, and sends nothing while it is not connected", async ({
   page,
 }) => {
-  const sent: string[] = [];
-  page.on("request", (request) => {
-    if (request.method() !== "GET") sent.push(`${request.method()} ${request.url()}`);
-  });
+  const leaks = watchLeaks(page);
   await page.goto("/landing.html#start");
+  leaks.arm();
   const form = page.locator("form#f");
   const name = form.getByLabel("Name");
   const email = form.getByLabel("Email");
@@ -150,7 +171,93 @@ test("the request form validates, and sends nothing while it is not connected", 
   await expect(status).toBeVisible();
   await expect(status).toContainText("not connected yet, so nothing was sent");
   await expect(status).toContainText("12 acres");
-  expect(sent).toEqual([]);
+  expect(leaks.left()).toEqual(NOTHING_LEFT);
+});
+
+test("searching for an address adds its parcel, as a click on the map does", async ({ page }) => {
+  await page.goto("/landing.html#start");
+  const form = page.locator("form#f");
+  const list = form.locator("#pk-list");
+  await expect(list.locator("li")).toHaveCount(1);
+  await expect(list).toContainText("Home Ranch");
+  await form.getByRole("searchbox").fill("Creekside");
+  await form.getByRole("searchbox").press("Enter");
+  await expect(list.locator("li")).toHaveCount(2);
+  await expect(list).toContainText("Home Ranch");
+  await expect(list).toContainText("Creek Flats");
+});
+
+test("when the site picker fails, the form still validates and still sends nothing", async ({
+  page,
+}) => {
+  // The picker module, swapped for one that throws as the page starts it.
+  await page.route(
+    (url) => url.pathname.endsWith("/src/landing/picker.js"),
+    (route) =>
+      route.fulfill({
+        contentType: "text/javascript",
+        body: 'export const startSitePicker = () => { throw new Error("test: no picker"); };',
+      }),
+  );
+  const leaks = watchLeaks(page);
+  await page.goto("/landing.html#start");
+  leaks.arm();
+  const form = page.locator("form#f");
+  await expect(form.locator("#pk-hint")).toHaveText(/could not load/);
+  const submit = form.getByRole("button", { name: "Request a site scan" });
+  await form.getByLabel("Name").fill("Ada Lovelace");
+  await form.getByLabel("Email").fill("ada@example.com");
+  await submit.click();
+  await expect(page.locator("#pk-err")).toBeVisible();
+  await form.getByLabel("Acres").fill("30");
+  await submit.click();
+  await expect(form.getByRole("status")).toContainText("nothing was sent");
+  await expect(form.getByRole("status")).toContainText("30 acres");
+  expect(leaks.left()).toEqual(NOTHING_LEFT);
+});
+
+test.describe("without JavaScript", () => {
+  test.use({ javaScriptEnabled: false });
+
+  test("a submit carries none of the form's contents", async ({ page }) => {
+    const leaks = watchLeaks(page);
+    await page.goto("/landing.html");
+    leaks.arm();
+    const form = page.locator("form#f");
+    await form.getByLabel("Name").fill("Ada Lovelace");
+    await form.getByLabel("Email").fill("ada@example.com");
+    await form.getByLabel("Acres").fill("30");
+    await form.getByRole("button", { name: "Request a site scan" }).click();
+    await page.waitForLoadState("load");
+    const { sent, navigations, search } = leaks.left();
+    expect(sent).toEqual([]);
+    expect(search).toBe("");
+    // A native submit of a form with no named fields may reload the page; it carries nothing.
+    for (const url of navigations) expect(new URL(url).search).toBe("");
+  });
+});
+
+test.describe("with reduced motion", () => {
+  test.use({ reducedMotion: "reduce" });
+
+  test("the hero holds still, and an example cuts to its crew instead of flying", async ({
+    page,
+  }) => {
+    await page.goto("/landing.html");
+    await expect(page.locator("#top")).toHaveAttribute("data-scene", "live", { timeout: 60_000 });
+    // The crews' labels are placed from the camera every frame: still labels, still camera.
+    const labels = () =>
+      page.$$eval("#zl a", (links) => links.map((a) => a.style.transform).join(" "));
+    await expect.poll(labels, { timeout: 60_000 }).toMatch(/translate/);
+    const before = await labels();
+    await page.waitForTimeout(1500);
+    expect(await labels()).toBe(before);
+    await page.getByRole("button", { name: "Quarry" }).click();
+    await expect.poll(labels, { timeout: 30_000 }).not.toBe(before);
+    const after = await labels();
+    await page.waitForTimeout(1500);
+    expect(await labels()).toBe(after);
+  });
 });
 
 test("fits a phone without scrolling sideways", async ({ page }) => {

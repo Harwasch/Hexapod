@@ -915,7 +915,9 @@
               </li>
               <li><b>Record</b><span>You keep the map of everything that was done.</span></li>
             </ol>
-            <form id="f" class="pk" novalidate>
+            <!-- Inert without its script: no field has a name, so a native submit carries no data, and
+                 the inline guard stops even that. src/landing/main.ts handles the submit. -->
+            <form id="f" class="pk" novalidate onsubmit="return false;">
               <div class="pk-top">
                 <label class="pk-search" for="pk-q"
                   ><span class="lbl">1 · Find your site</span>
@@ -970,29 +972,19 @@
                 <span class="lbl wide">3 · Your details</span>
                 <div class="fld">
                   <label for="f-name"
-                    >Name<input
-                      id="f-name"
-                      name="name"
-                      type="text"
-                      autocomplete="name"
-                      aria-required="true"
+                    >Name<input id="f-name" type="text" autocomplete="name" aria-required="true"
                   /></label>
                   <p class="err" id="f-name-err" hidden></p>
                 </div>
                 <div class="fld">
                   <label for="f-org"
-                    >Organization<input
-                      id="f-org"
-                      name="organization"
-                      type="text"
-                      autocomplete="organization"
+                    >Organization<input id="f-org" type="text" autocomplete="organization"
                   /></label>
                 </div>
                 <div class="fld">
                   <label for="f-email"
                     >Email<input
                       id="f-email"
-                      name="email"
                       type="email"
                       autocomplete="email"
                       aria-required="true"
@@ -1001,13 +993,13 @@
                 </div>
                 <div class="fld">
                   <label for="f-acres"
-                    >Acres<input id="f-acres" name="acres" type="text" inputmode="decimal"
+                    >Acres<input id="f-acres" type="text" inputmode="decimal"
                   /></label>
                   <p class="err" id="f-acres-err" hidden></p>
                 </div>
                 <div class="fld wide">
                   <label for="f-msg"
-                    >What needs doing?<textarea id="f-msg" name="message" rows="3"></textarea>
+                    >What needs doing?<textarea id="f-msg" rows="3"></textarea>
                   </label>
                 </div>
                 <button class="btn pri wide" type="submit">Request a site scan</button>

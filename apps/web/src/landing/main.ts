@@ -10,7 +10,7 @@ import "./landing.css";
 
 import { BRAND } from "./brand";
 import { REQUEST_ENDPOINT, validateRequest, type RequestErrors, type RequestField } from "./form";
-import { startSitePicker } from "./picker.js";
+import { startSitePicker, type SitePicker } from "./picker.js";
 import type * as SceneModule from "./scene.js";
 import type { Hero, HeroLabel, HeroStop, HeroZone } from "./scene.js";
 
@@ -20,6 +20,77 @@ function $<T extends HTMLElement>(selector: string, type: new () => T): T {
   if (!(el instanceof type)) throw new Error(`landing: ${selector} is missing from the page`);
   return el;
 }
+
+// ── request form: first, so nothing below can keep its submit guard from attaching ──
+// landing.html's inline guard covers the page before this runs, and without JavaScript.
+const form = $("#f", HTMLFormElement);
+form.addEventListener("submit", (event) => event.preventDefault());
+let picker: SitePicker | null = null;
+try {
+  picker = startSitePicker();
+} catch (error) {
+  // The map is a convenience: the acres field still says how big the site is.
+  console.warn("landing: the site picker could not start", error);
+  $("#pk-hint", HTMLElement).textContent = "The map could not load. Enter the acres instead.";
+}
+const status = $("#f-ok", HTMLElement);
+const fields: Record<Exclude<RequestField, "area">, HTMLInputElement> = {
+  name: $("#f-name", HTMLInputElement),
+  email: $("#f-email", HTMLInputElement),
+  acres: $("#f-acres", HTMLInputElement),
+};
+const errorOf: Record<RequestField, HTMLElement> = {
+  name: $("#f-name-err", HTMLElement),
+  email: $("#f-email-err", HTMLElement),
+  acres: $("#f-acres-err", HTMLElement),
+  area: $("#pk-err", HTMLElement),
+};
+
+function showErrors(errors: RequestErrors) {
+  for (const key of Object.keys(errorOf) as RequestField[]) {
+    const message = errors[key];
+    const out = errorOf[key];
+    out.textContent = message ?? "";
+    out.hidden = !message;
+    if (key === "area") continue;
+    const input = fields[key];
+    if (message) {
+      input.setAttribute("aria-invalid", "true");
+      input.setAttribute("aria-describedby", out.id);
+    } else {
+      input.removeAttribute("aria-invalid");
+      input.removeAttribute("aria-describedby");
+    }
+  }
+}
+
+form.addEventListener("submit", () => {
+  const errors = validateRequest({
+    name: fields.name.value,
+    organization: $("#f-org", HTMLInputElement).value,
+    email: fields.email.value,
+    acres: fields.acres.value,
+    message: $("#f-msg", HTMLTextAreaElement).value,
+    areaCount: picker?.count() ?? 0,
+  });
+  showErrors(errors);
+  const first = (["name", "email", "acres"] as const).find((k) => errors[k]);
+  if (first) {
+    status.hidden = true;
+    fields[first].focus();
+    return;
+  }
+  if (errors.area) {
+    status.hidden = true;
+    return;
+  }
+  if (REQUEST_ENDPOINT === null) {
+    status.textContent =
+      `Your request is complete (${picker?.count() ? picker.summary() : `${fields.acres.value} acres`}), ` +
+      "but this form is not connected yet, so nothing was sent.";
+    status.hidden = false;
+  }
+});
 
 // ── brand ──
 for (const el of document.querySelectorAll<HTMLElement>("[data-brand]")) el.textContent = BRAND;
@@ -213,66 +284,3 @@ async function startScenes() {
 
 // As the design does: after the first frame, so the page paints before the scene builds.
 requestAnimationFrame(() => setTimeout(() => void startScenes(), 30));
-
-// ── request form ──
-const picker = startSitePicker();
-const form = $("#f", HTMLFormElement);
-const status = $("#f-ok", HTMLElement);
-const fields: Record<Exclude<RequestField, "area">, HTMLInputElement> = {
-  name: $("#f-name", HTMLInputElement),
-  email: $("#f-email", HTMLInputElement),
-  acres: $("#f-acres", HTMLInputElement),
-};
-const errorOf: Record<RequestField, HTMLElement> = {
-  name: $("#f-name-err", HTMLElement),
-  email: $("#f-email-err", HTMLElement),
-  acres: $("#f-acres-err", HTMLElement),
-  area: $("#pk-err", HTMLElement),
-};
-
-function showErrors(errors: RequestErrors) {
-  for (const key of Object.keys(errorOf) as RequestField[]) {
-    const message = errors[key];
-    const out = errorOf[key];
-    out.textContent = message ?? "";
-    out.hidden = !message;
-    if (key === "area") continue;
-    const input = fields[key];
-    if (message) {
-      input.setAttribute("aria-invalid", "true");
-      input.setAttribute("aria-describedby", out.id);
-    } else {
-      input.removeAttribute("aria-invalid");
-      input.removeAttribute("aria-describedby");
-    }
-  }
-}
-
-form.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const errors = validateRequest({
-    name: fields.name.value,
-    organization: $("#f-org", HTMLInputElement).value,
-    email: fields.email.value,
-    acres: fields.acres.value,
-    message: $("#f-msg", HTMLTextAreaElement).value,
-    areaCount: picker.count(),
-  });
-  showErrors(errors);
-  const first = (["name", "email", "acres"] as const).find((k) => errors[k]);
-  if (first) {
-    status.hidden = true;
-    fields[first].focus();
-    return;
-  }
-  if (errors.area) {
-    status.hidden = true;
-    return;
-  }
-  if (REQUEST_ENDPOINT === null) {
-    status.textContent =
-      `Your request is complete (${picker.count() ? picker.summary() : `${fields.acres.value} acres`}), ` +
-      "but this form is not connected yet, so nothing was sent.";
-    status.hidden = false;
-  }
-});
