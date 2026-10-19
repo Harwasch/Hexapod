@@ -6,6 +6,7 @@ import { describeError } from "@/lib/log";
 import { useLandAccessReady, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 import { useLandContext } from "@/state/landContext";
 
+import { invalidateLandDerived } from "../../../landDerived";
 import { assetKeys } from "./assetsApi";
 import { assetImportKey } from "./assetsDraft";
 import {
@@ -261,6 +262,8 @@ function Import({ land, scope, active }: { land: LandArea; scope: string; active
           setReceipt(value);
           persist(null);
         }
+        // Imported assets are records of the land like drawn ones: its ground and fog change.
+        void invalidateLandDerived(cache, land.id);
         await cache.invalidateQueries({ queryKey: assetKeys.all(scope, land.id) });
         await cache.invalidateQueries({ queryKey: assetKeys.imports(scope, land.id) });
       } else {

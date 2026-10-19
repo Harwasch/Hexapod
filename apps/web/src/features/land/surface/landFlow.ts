@@ -3,7 +3,6 @@ import type { QueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 
 import type { Footprint, LandArea } from "@twin/contracts";
-import { boundsOf } from "@twin/geo";
 
 import { ApiError, api, unwrap } from "@/api/client";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
@@ -15,6 +14,9 @@ import { useUi } from "@/state/ui";
 
 import { createCorridor, createLand, reviseLand } from "../api";
 import { drawingReferences } from "../boundarySources";
+import { invalidateLandDerived } from "../landDerived";
+import { openLand as enterLand } from "../landEntry";
+import { frameLand, frameLandSoon } from "../landFraming";
 import { mappedFeatureDraft } from "../mappedFeature";
 
 /**
@@ -47,17 +49,12 @@ export function areaLabel(squareMetres: number): string {
   return `${shown} ${shown === "1" ? "acre" : "acres"}`;
 }
 
-/** Frames a boundary with room on the left for the land cards. */
+/**
+ * Frames a boundary in the part of the map the land cards leave open: beside the left dock and
+ * the agent card on a wide screen, above the sheet on a phone (../landFraming.ts measures them).
+ */
 export function frameBoundary(scene: CesiumSceneManager | null, boundary: Footprint): void {
-  const b = boundsOf(boundary);
-  const dx = Math.max(0.0001, b.east - b.west);
-  const dy = Math.max(0.0001, b.north - b.south);
-  scene?.camera.flyToRectangle(
-    Math.max(-180, b.west - dx * 0.9),
-    Math.max(-90, b.south - dy * 0.4),
-    Math.min(180, b.east + dx * 0.45),
-    Math.min(90, b.north + dy * 0.35),
-  );
+  frameLand(scene, boundary);
 }
 
 /** Starts an outline (or returns to browsing), clearing whatever else held the pointer. */
@@ -169,6 +166,9 @@ export async function saveDraft(queryClient: QueryClient): Promise<void> {
         })
       : await createLand(draft);
     if (operation === ticket) useLand.getState().select(saved);
+    // A revised outline changes what is read within it (its ground, the fog, its rasters, the
+    // workable ground): ask them again. A new land has nothing derived yet.
+    if (active) void invalidateLandDerived(queryClient, saved.id);
     await queryClient.invalidateQueries({ queryKey: ["land-areas"] });
     await queryClient.invalidateQueries({ queryKey: ["land-history", saved.id] });
   } catch (error) {
@@ -203,10 +203,12 @@ export function exportBoundary(
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Opens saved land and frames it. */
+/**
+ * Opens saved land on its chip and Overview lens (../landEntry.ts), and frames it once they
+ * have laid out: on a phone the sheet they make is taller than the list it was opened from.
+ */
 export function openLand(scene: CesiumSceneManager | null, land: LandArea): void {
-  useLand.getState().select(land);
-  frameBoundary(scene, land.boundary);
+  if (enterLand(land) === "opened") frameLandSoon(scene, land.boundary);
 }
 
 /**

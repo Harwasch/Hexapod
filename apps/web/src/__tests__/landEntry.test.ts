@@ -16,6 +16,7 @@ import {
   outlineLandAt,
   proposeOutline,
 } from "@/features/land/landEntry";
+import { useLens } from "@/features/land/surface/lenses";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
@@ -66,6 +67,7 @@ function sketch(mode: "draw" | "corridor" = "draw"): void {
 }
 
 afterEach(() => {
+  useLens.getState().setLens("overview");
   useLand.getState().clear();
   useLandContext.getState().clear();
   useUi.setState({ activePanel: null, measureMode: null });
@@ -177,17 +179,28 @@ describe("drawOutline", () => {
 });
 
 describe("openLand", () => {
-  it("selects the land on Discover", () => {
+  it("selects the land on its Overview lens, whichever lens was open before", () => {
+    useLens.getState().setLens("assets");
     useLandContext.getState().setSection("inventory");
     expect(openLand(SAVED)).toBe("opened");
     expect(useLand.getState().active).toEqual(SAVED);
+    expect(useLens.getState().lens).toBe("overview");
+    // Views saved before lenses, and Show Once, still read the section.
     expect(useLandContext.getState().section).toBe("discover");
     expect(useUi.getState().activePanel).toBe("land");
   });
 
+  it("opens on another lens when asked", () => {
+    expect(openLand(SAVED, "plans")).toBe("opened");
+    expect(useLens.getState().lens).toBe("plans");
+    expect(useLandContext.getState().section).toBe("actions");
+  });
+
   it("does not drop an unsaved outline to select another land", () => {
     useLand.getState().propose(DRAFT);
-    expect(openLand(SAVED, "actions")).toBe("has-draft");
+    useLens.getState().setLens("water");
+    expect(openLand(SAVED, "plans")).toBe("has-draft");
+    expect(useLens.getState().lens).toBe("water");
     expect(useLand.getState().draft).toEqual(DRAFT);
     expect(useLand.getState().active).toBeNull();
   });

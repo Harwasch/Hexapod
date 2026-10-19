@@ -2,23 +2,26 @@ import type { LandArea, LandCreate } from "@twin/contracts";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { useLand, type LandMode, type LandPoint } from "@/state/land";
-import { useLandContext, type LandWorkspaceSection } from "@/state/landContext";
+import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
 
 import { drawingReferences } from "./boundarySources";
+import { sectionOfLens, useLens, type LensId } from "./surface/lenses";
 
 /**
- * Ways into the Land tool from elsewhere on the map: the inspector's "What's here", the map's
- * right-click menu, and the Descent's arrival card. They live here, not in each caller, because
- * entering the tool the wrong way loses work:
+ * Ways into the Land surface from elsewhere on the map: the inspector's "What's here", the map's
+ * right-click menu, the Descent's arrival card and the command box. They live here, not in each
+ * caller, because entering the surface the wrong way loses work:
  *
- * - `LandPanel.save()` REVISES the active land when one is selected. A new outline started
- *   while a saved land is active would silently replace that land's boundary on save, so a
- *   new outline always clears the selection first (`useLand.clear()`).
- * - An unsaved outline is never replaced: the tool opens on it instead. That covers a proposed
- *   or imported one (`useLand.draft`) and one still being drawn (points placed in draw,
- *   corridor or split mode, with no draft yet). `clear()` and `select()` drop both, are not
- *   undoable, and LandDraftRecovery then deletes the browser copy too.
+ * - Saving a draft (`saveDraft` in surface/landFlow.ts) REVISES the active land when one is
+ *   selected. A new outline started while a saved land is active would silently replace that
+ *   land's boundary on save, so a new outline always clears the selection first
+ *   (`useLand.clear()`).
+ * - An unsaved outline is never replaced: the surface opens on it instead (its review card, or
+ *   the draw bar). That covers a proposed or imported one (`useLand.draft`) and one still being
+ *   drawn (points placed in draw, corridor or split mode, with no draft yet). `clear()` and
+ *   `select()` drop both, are not undoable, and LandDraftRecovery then deletes the browser copy
+ *   too.
  *
  * Selecting a land is picked up by the mission side too (LandMissionBridge), which may switch
  * the plan's project to that land. That is intended: a selected land is the ground plans use.
@@ -27,7 +30,7 @@ import { drawingReferences } from "./boundarySources";
 export type OutlineResult = "started" | "has-draft";
 
 /**
- * Whether the Land tool holds an outline the user would lose: a draft, or a sketch with points
+ * Whether the Land surface holds an outline the user would lose: a draft, or a sketch with points
  * placed. The sketch test is the one LandDraftRecovery uses to decide what to keep in the
  * browser, so "unsaved" here means the same thing it does there.
  */
@@ -46,7 +49,7 @@ function openTool(): void {
   useUi.getState().setPanel("land");
 }
 
-/** Stop whatever the map is doing with the pointer, as LandPanel's own `begin` does. */
+/** Stop whatever the map is doing with the pointer, as the surface's own `beginLand` does. */
 function freePointer(scene: CesiumSceneManager | null): void {
   const ui = useUi.getState();
   ui.setMeasureMode(null);
@@ -56,9 +59,9 @@ function freePointer(scene: CesiumSceneManager | null): void {
 }
 
 /**
- * Open the Land tool finding mapped parcels, fields and lines at a point, the way "Find
- * parcels, lines or buildings" does after its first click. Returns "has-draft", and only
- * opens the tool, when an unsaved outline (a draft or a sketch in progress) exists.
+ * Open the Land surface on its parcel picker, finding mapped parcels, fields and lines at a
+ * point, the way "Pick parcels" does after its first tap or click. Returns "has-draft", and only
+ * opens the surface, when an unsaved outline (a draft or a sketch in progress) exists.
  */
 export function outlineLandAt(
   point: { longitude: number; latitude: number },
@@ -94,9 +97,9 @@ export function proposeOutline(draft: LandCreate, scene: CesiumSceneManager | nu
 }
 
 /**
- * Open the Land tool drawing a new outline, as its own Draw button does: where a place was
- * reached but no mapped area was found around it (the Descent's "Outline this land"). Refuses,
- * like `outlineLandAt`, to replace an unsaved outline.
+ * Open the Land surface drawing a new outline, as its own "Draw on the map" does: where a place
+ * was reached but no mapped area was found around it (the Descent's "Outline this land").
+ * Refuses, like `outlineLandAt`, to replace an unsaved outline.
  */
 export function drawOutline(scene: CesiumSceneManager | null): OutlineResult {
   if (hasUnsavedOutline(useLand.getState())) {
@@ -113,19 +116,20 @@ export function drawOutline(scene: CesiumSceneManager | null): OutlineResult {
 }
 
 /**
- * Select a saved land and open its workspace on a section (Discover by default). Selecting
- * drops any unsaved outline, so with one open this only opens the tool on it ("has-draft").
+ * Select a saved land and open the surface on its chip and a lens (Overview by default), not on
+ * whichever lens another land was last looked at through. Selecting drops any unsaved outline,
+ * so with one open this only opens the surface on it ("has-draft"). The caller frames the land
+ * (`frameLandSoon`) where the person is not already looking at it.
  */
-export function openLand(
-  land: LandArea,
-  section: LandWorkspaceSection = "discover",
-): "opened" | "has-draft" {
+export function openLand(land: LandArea, lens: LensId = "overview"): "opened" | "has-draft" {
   if (hasUnsavedOutline(useLand.getState())) {
     openTool();
     return "has-draft";
   }
   useLand.getState().select(land);
-  useLandContext.getState().setSection(section);
+  useLens.getState().setLens(lens);
+  // The section is what views saved before lenses, and Show Once, still read.
+  useLandContext.getState().setSection(sectionOfLens(lens));
   openTool();
   return "opened";
 }

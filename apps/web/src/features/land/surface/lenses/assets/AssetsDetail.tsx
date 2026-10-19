@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ClipboardCheck, MessageCircleQuestion, Pencil } from "lucide-react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 
 import type { LandArea } from "@twin/contracts";
 import { GlassButton } from "@twin/ui";
@@ -9,6 +9,7 @@ import { api, unwrap } from "@/api/client";
 import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
 import { useSettings } from "@/state/settings";
 
+import { invalidateLandDerived } from "../../../landDerived";
 import { askAgent } from "../../agentBus";
 import { Fact } from "../../mapLinks";
 import { useAssetHistory, useAssetInspections, useRefreshAssets } from "./assetsApi";
@@ -157,6 +158,7 @@ export function AssetsDetail({
   const units = useSettings((s) => s.units);
   const inspections = useAssetInspections(land, asset.id);
   const refresh = useRefreshAssets(land);
+  const cache = useQueryClient();
   const [inspecting, setInspecting] = useState(false);
   const [saved, setSaved] = useState(false);
   const latest = inspections.data?.[0] ?? null;
@@ -214,6 +216,8 @@ export function AssetsDetail({
           onSaved={async () => {
             setInspecting(false);
             setSaved(true);
+            // A dated inspection is evidence: the fog over this land lifts where it reaches.
+            void invalidateLandDerived(cache, land.id);
             await refresh(asset.id);
           }}
         />
