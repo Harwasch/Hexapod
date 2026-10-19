@@ -1,5 +1,8 @@
 # FA-2 Field Arm
 
+> **Two known errors** (wrist statics, joint speed) are open from the 2026-10-19 review; see
+> [Known errors in docs/DESIGN.md](docs/DESIGN.md#fa-2-design).
+
 The manipulator for the fleet's medium hexapod: the arm that reads the landscape (samples,
 close-range sensing) and writes to it (weeding, dosing, planting, picking, clearing). Its
 geometry and every part were chosen by optimization against 17 field tasks at delivered

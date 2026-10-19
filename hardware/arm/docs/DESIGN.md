@@ -1,5 +1,20 @@
 # FA-2 design
 
+> **Known errors (review 2026-10-19, not yet fixed)**
+>
+> - **Wrist statics.** `wrist_split` (`armdesign/model.py`, lines 378–381) decomposes the
+>   wrist moment along axes that are not orthogonal, when it should project it onto each
+>   joint axis (Jᵀ). Example: at a 45° bend, a 3 Nm moment about the tool axis should put
+>   2.12 Nm on the forearm roll; the model puts 0. FA-2 is the 6-DOF pick, so its wrist
+>   actuator sizing may be understated.
+> - **Speed.** The sim (`armdesign/sim.py`, line 578) clips torque but never limits joint
+>   speed. In the spray task the shoulder reaches 1.38× and the wrist pitch 1.52× their
+>   catalog speed limits; in the strawberry task the wrist reaches 1.18×. So "0.48 s per
+>   weed" is not backed by a feasible run.
+>
+> The picks and numbers below are unchanged from the study as run; treat FA-2's wrist sizing
+> and cycle times as unverified until these are fixed.
+
 FA-2 is a 6-axis arm with a parallelogram elbow. Its shoulder and elbow are cheap integrated
 QDD actuators that drive their joints through 3:1 Dyneema rope capstans on the turret.
 
