@@ -9,6 +9,7 @@ import { ApiError, api, unwrap } from "@/api/client";
 
 import {
   actionDraftKey,
+  actionFieldId,
   actionPayload,
   downloadActionDraft,
   serializeActionDraft,
@@ -21,7 +22,9 @@ import { useLensLayer, useLensPins } from "../../useLensMap";
 import { PlanField } from "./PlanField";
 import { PlanLegend } from "./PlanLegend";
 import { PlanSummary } from "./PlanDetails";
+import { usePlanProblems, PROBLEMS_ID, type PlanProblems } from "./planProblems";
 import { useDraftAutosave, type PlanSeed } from "./planRecovery";
+import { FieldProblem, PlanProblemList } from "./PlanSaveProblems";
 import { planError, useLandFeatures, useRefreshPlans, useScenarios } from "./plansApi";
 import {
   avoidLayer,
@@ -125,6 +128,7 @@ function StepEditor({
   onArea,
   onRemove,
   onFinishDrawing,
+  checklist,
 }: {
   step: Step;
   index: number;
@@ -136,9 +140,14 @@ function StepEditor({
   onArea: (area: Area | null, feature?: Feature) => void;
   onRemove: () => void;
   onFinishDrawing: () => void;
+  checklist: PlanProblems;
 }) {
   const n = index + 1;
   const drawingHere = drawing.target?.kind === "step" && drawing.target.id === step.id;
+  const at = (field: Parameters<typeof actionFieldId.step>[1]) => actionFieldId.step(index, field);
+  const problem = (field: Parameters<typeof actionFieldId.step>[1]) => (
+    <FieldProblem id={at(field)} checklist={checklist} />
+  );
   return (
     <li className="plans-edit-step" style={{ "--step": stepColor(index) } as CSSProperties}>
       <div className="plans-edit-step__head">
@@ -146,6 +155,7 @@ function StepEditor({
           {n}
         </span>
         <GlassInput
+          {...checklist.field(at("title"))}
           aria-label={`Step ${n} name`}
           placeholder="What happens, e.g. Mow the meadow"
           required
@@ -164,6 +174,7 @@ function StepEditor({
           <X size={14} aria-hidden="true" />
         </GlassButton>
       </div>
+      {problem("title")}
       <div className="plans-edit-step__where">
         <span className="plans-edit-step__area">
           {step.footprint ? shortArea(footprintAreaM2(step.footprint)) : "Whole area"}
@@ -196,15 +207,22 @@ function StepEditor({
           </GlassSelect>
         )}
         {step.footprint && (
-          <button type="button" className="land-link" onClick={() => onArea(null)}>
+          <button
+            type="button"
+            className="land-link"
+            {...checklist.control(at("area"))}
+            onClick={() => onArea(null)}
+          >
             Use the whole area
           </button>
         )}
       </div>
+      {problem("area")}
       {drawingHere && <DrawBar drawing={drawing} land={land} onFinish={onFinishDrawing} />}
       <div className="plans-edit-grid">
         <PlanField label="Start day">
           <GlassInput
+            {...checklist.field(at("start"))}
             aria-label={`Step ${n} start day`}
             type="number"
             min={1}
@@ -216,6 +234,7 @@ function StepEditor({
         </PlanField>
         <PlanField label="Days">
           <GlassInput
+            {...checklist.field(at("days"))}
             aria-label={`Step ${n} duration (days)`}
             type="number"
             min={1}
@@ -227,6 +246,7 @@ function StepEditor({
         </PlanField>
         <PlanField label={<>Cost ({draft.currency})</>}>
           <GlassInput
+            {...checklist.field(at("cost"))}
             aria-label={`Step ${n} cost`}
             type="number"
             min={0}
@@ -241,9 +261,13 @@ function StepEditor({
           />
         </PlanField>
       </div>
+      {problem("start")}
+      {problem("days")}
+      {problem("cost")}
       {step.estimatedCost != null && (
         <PlanField label="Where the cost comes from">
           <GlassInput
+            {...checklist.field(at("cost-basis"))}
             aria-label={`Step ${n} cost basis`}
             required
             maxLength={2000}
@@ -253,8 +277,10 @@ function StepEditor({
           />
         </PlanField>
       )}
+      {problem("cost-basis")}
       <PlanField label="Done when">
         <GlassInput
+          {...checklist.field(at("success"))}
           aria-label={`Step ${n} success measure`}
           required
           maxLength={2000}
@@ -263,10 +289,12 @@ function StepEditor({
           onChange={(event) => onChange({ successMeasure: event.target.value })}
         />
       </PlanField>
+      {problem("success")}
       <details className="plans-more">
         <summary>More about step {n}</summary>
         <PlanField label="What the work involves">
           <GlassTextarea
+            {...checklist.field(at("detail"))}
             aria-label={`Step ${n} description`}
             rows={2}
             maxLength={1000}
@@ -274,14 +302,17 @@ function StepEditor({
             onChange={(event) => onChange({ detail: event.target.value })}
           />
         </PlanField>
+        {problem("detail")}
         <PlanField label="Resources (one per line)">
           <GlassTextarea
+            {...checklist.field(at("resources"))}
             aria-label={`Step ${n} resources`}
             rows={2}
             value={(step.resources ?? []).join("\n")}
             onChange={(event) => onChange({ resources: event.target.value.split("\n") })}
           />
         </PlanField>
+        {problem("resources")}
         {draft.steps.length > 1 && (
           <fieldset className="plans-checks">
             <legend>Starts after</legend>
@@ -426,6 +457,9 @@ export function PlanEditor({
   const features = useLandFeatures(land, true);
   const refresh = useRefreshPlans(land);
   const drawing = usePlanDrawing();
+  const checklist = usePlanProblems(draft);
+  const ids = actionFieldId;
+  const problem = (id: string) => <FieldProblem id={id} checklist={checklist} />;
   const areas = useMemo(
     () => (features.data ?? []).filter((item) => isArea(item.geometry)),
     [features.data],
@@ -576,6 +610,9 @@ export function PlanEditor({
     );
   const avoidDrawing = drawing.target?.kind === "avoid";
   const reapproval = editing && editing.status !== "draft";
+  const saveBlocked = conflict
+    ? "Choose how to handle the changed plan above before saving."
+    : null;
 
   return (
     <LensCard
@@ -656,6 +693,7 @@ export function PlanEditor({
                   missionId: conflict.missionId,
                 });
                 setDraft(editablePlan(conflict));
+                checklist.reset();
                 setConflict(null);
                 setShowSaved(false);
                 setNotice(null);
@@ -683,14 +721,19 @@ export function PlanEditor({
       <form
         className="plans-edit"
         aria-label={editing ? "Revise plan" : "New plan"}
+        // The checklist above Save replaces the browser's bubbles, which cannot reach a field
+        // in a folded section. `required` stays on the fields for assistive technology.
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
+          if (conflict || !checklist.check()) return;
           void save();
         }}
       >
         <fieldset disabled={busy}>
           <PlanField label="Plan name">
             <GlassInput
+              {...checklist.field(ids.title)}
               required
               maxLength={200}
               placeholder="e.g. Meadow restoration"
@@ -698,8 +741,10 @@ export function PlanEditor({
               onChange={(event) => setDraft({ ...draft, title: event.target.value })}
             />
           </PlanField>
+          {problem(ids.title)}
           <PlanField label="Goal">
             <GlassTextarea
+              {...checklist.field(ids.objective)}
               required
               rows={2}
               maxLength={2000}
@@ -708,14 +753,17 @@ export function PlanEditor({
               onChange={(event) => setDraft({ ...draft, objective: event.target.value })}
             />
           </PlanField>
+          {problem(ids.objective)}
           <PlanField label="Start date">
             <GlassInput
+              {...checklist.field(ids.start)}
               required
               type="date"
               value={draft.startDate}
               onChange={(event) => setDraft({ ...draft, startDate: event.target.value })}
             />
           </PlanField>
+          {problem(ids.start)}
 
           <h4 className="plans-edit__heading">Steps</h4>
           <ol className="plans-edit-steps">
@@ -744,6 +792,7 @@ export function PlanEditor({
                   });
                 }}
                 onFinishDrawing={finishDrawing}
+                checklist={checklist}
               />
             ))}
           </ol>
@@ -812,6 +861,7 @@ export function PlanEditor({
             {areas.length > 0 && (
               <GlassSelect
                 aria-label="Avoid a mapped area"
+                disabled={(draft.exclusions?.length ?? 0) >= 50}
                 value=""
                 onChange={(event) => {
                   const feature = areas.find((item) => item.id === event.target.value);
@@ -833,12 +883,14 @@ export function PlanEditor({
               <button
                 type="button"
                 className="land-link"
+                {...checklist.control(ids.exclusions)}
                 onClick={() => setDraft({ ...draft, exclusions: [] })}
               >
                 Clear all
               </button>
             )}
           </div>
+          {problem(ids.exclusions)}
           {avoidDrawing && <DrawBar drawing={drawing} land={land} onFinish={finishDrawing} />}
           {features.data?.length === 500 && (
             <p className="land-muted">Showing the first 500 mapped assets.</p>
@@ -851,6 +903,7 @@ export function PlanEditor({
           <LensDetails summary="Money, sources and references">
             <PlanField label="Currency">
               <GlassInput
+                {...checklist.field(ids.currency)}
                 required
                 pattern="[A-Z]{3}"
                 maxLength={3}
@@ -860,6 +913,7 @@ export function PlanEditor({
                 }
               />
             </PlanField>
+            {problem(ids.currency)}
             <PlanField label="Scenario behind this plan">
               <GlassSelect
                 aria-label="Supporting scenario"
@@ -956,6 +1010,7 @@ export function PlanEditor({
               <div className="plans-group" key={index}>
                 <PlanField label={<>Question {index + 1}</>}>
                   <GlassTextarea
+                    {...checklist.field(ids.constraint(index, "text"))}
                     aria-label={`Question ${index + 1}`}
                     required
                     rows={2}
@@ -971,6 +1026,7 @@ export function PlanEditor({
                     }
                   />
                 </PlanField>
+                {problem(ids.constraint(index, "text"))}
                 <label className="plans-check">
                   <input
                     type="checkbox"
@@ -989,6 +1045,7 @@ export function PlanEditor({
                 {constraint.resolved && (
                   <PlanField label="How it was settled">
                     <GlassTextarea
+                      {...checklist.field(ids.constraint(index, "resolution"))}
                       aria-label={`How question ${index + 1} was settled`}
                       required
                       rows={2}
@@ -1005,6 +1062,7 @@ export function PlanEditor({
                     />
                   </PlanField>
                 )}
+                {problem(ids.constraint(index, "resolution"))}
                 <button
                   type="button"
                   className="land-link"
@@ -1035,6 +1093,7 @@ export function PlanEditor({
             </div>
             <PlanField label="Assumptions (one per line)">
               <GlassTextarea
+                {...checklist.field(ids.assumptions)}
                 rows={3}
                 value={(draft.assumptions ?? []).join("\n")}
                 onChange={(event) =>
@@ -1042,11 +1101,18 @@ export function PlanEditor({
                 }
               />
             </PlanField>
+            {problem(ids.assumptions)}
           </LensDetails>
         </fieldset>
         {error && (
           <p className="land-alert" role="alert">
             {error}
+          </p>
+        )}
+        {checklist.shown && <PlanProblemList problems={checklist.problems} />}
+        {saveBlocked && (
+          <p className="land-muted" id="plans-save-blocked">
+            {saveBlocked}
           </p>
         )}
         {reapproval && (
@@ -1058,6 +1124,9 @@ export function PlanEditor({
             variant="primary"
             loading={busy}
             disabled={busy || Boolean(conflict)}
+            aria-describedby={
+              saveBlocked ? "plans-save-blocked" : checklist.shown ? PROBLEMS_ID : undefined
+            }
           >
             {editing ? "Save changes" : "Save plan"}
           </GlassButton>

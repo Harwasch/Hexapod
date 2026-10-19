@@ -197,8 +197,9 @@ export async function openLandMission(
 }
 
 /**
- * "Revise the action in Land": the Land panel opens on the Land's actions. The plan's Land is
- * selected first if another one is.
+ * "Revise the action in Land": Land opens on the Land's Plans lens, where the action is a
+ * plan. The plan's Land is selected first if another one is. The lens store is loaded on
+ * demand, with the Land surface, so this bundle does not carry it.
  */
 export async function openLandActions(landId: string): Promise<void> {
   if (useLand.getState().active?.id !== landId) {
@@ -217,4 +218,6 @@ export async function openLandActions(landId: string): Promise<void> {
   }
   useLandContext.getState().setSection("actions");
   useUi.getState().setPanel("land");
+  const { useLens } = await import("@/features/land/surface/lenses");
+  useLens.getState().setLens("plans");
 }
