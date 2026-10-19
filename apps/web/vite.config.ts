@@ -222,6 +222,9 @@ export default defineConfig({
         view: resolve(import.meta.dirname, "view.html"),
         // A separate neural-world product on the same host, with no globe dependency.
         worlds: resolve(import.meta.dirname, "worlds.html"),
+        // The landing page: the fleet, its use cases and the request form. Its scenes are
+        // three.js, loaded on demand; no CesiumJS, which check-bundle.mjs asserts too.
+        landing: resolve(import.meta.dirname, "landing.html"),
       },
       // Keep shared chunks out of the entries. From rolldown 1.2.9 the common-chunk merge
       // (on by default) folded the globe page's lazy modules (demoRanchData, planFlow,

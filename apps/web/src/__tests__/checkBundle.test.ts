@@ -40,7 +40,7 @@ function build(files: Record<string, string>): string {
   return root;
 }
 
-/** Every page clean: the globe imports the engine, the other three do not. */
+/** Every page clean: the globe imports the engine, the others do not. */
 function cleanBuild(): Record<string, string> {
   return {
     "index.html": page("index-1.js", ["cesium-1.js", "helpers-1.js"]),
@@ -48,6 +48,7 @@ function cleanBuild(): Record<string, string> {
     "upload.html": page("upload-1.js"),
     "view.html": page("view-1.js"),
     "worlds.html": page("worlds-1.js"),
+    "landing.html": page("landing-1.js"),
     "assets/index-1.js": `import{a as e}from"./cesium-1.js";import"./helpers-1.js";e();`,
     "assets/cesium-1.js": `const s="uniform float czm_frameNumber;";export{s as a};`,
     "assets/helpers-1.js": `var o=Object.assign;export{o as a};`,
@@ -55,6 +56,7 @@ function cleanBuild(): Record<string, string> {
     "assets/client-1.js": `import{a}from"./helpers-1.js";export const r=a;`,
     "assets/upload-1.js": `export {};`,
     "assets/worlds-1.js": `export {};`,
+    "assets/landing-1.js": `export {};`,
     "assets/view-1.js": `const later=()=>import("./cesium-1.js");export{later};`,
     // The Land panel, on demand: AppShell's lazy import, never a static one.
     "assets/LandPanel-1.js": `export const p={className:\`land-library\`};`,

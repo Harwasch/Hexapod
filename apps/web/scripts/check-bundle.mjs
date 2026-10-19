@@ -4,9 +4,10 @@
 //   node apps/web/scripts/check-bundle.mjs            # reads apps/web/dist
 //   node apps/web/scripts/check-bundle.mjs /tmp/dist  # or any other build directory
 //
-// Three of the four entries have no use for a globe: `admin.html` is a table of runs,
+// Every entry but the globe has no use for one: `admin.html` is a table of runs,
 // `upload.html` is what a phone opens over cellular to pick one file, `view.html` renders a
-// scan with Spark. e2e watches the dev server for a cesium request, which proves the
+// scan with Spark, `worlds.html` is a separate product, `landing.html` is the landing page
+// (three.js scenes, loaded on demand). e2e watches the dev server for a cesium request, which proves the
 // *source* imports none -- but the dev server serves unbundled modules, so it cannot see
 // what the bundler does with them. That gap is real: a shared chunking rule once put `tslib`
 // inside `cesium-*.js`, and the admin page modulepreloaded the whole 4.9 MB engine for three
@@ -39,7 +40,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 
 /** Pages that must not reach CesiumJS, and the one that is measured but allowed to. */
-export const CESIUM_FREE_PAGES = ["admin.html", "upload.html", "view.html", "worlds.html"];
+export const CESIUM_FREE_PAGES = [
+  "admin.html",
+  "upload.html",
+  "view.html",
+  "worlds.html",
+  "landing.html",
+];
 export const GLOBE_PAGE = "index.html";
 
 /**
