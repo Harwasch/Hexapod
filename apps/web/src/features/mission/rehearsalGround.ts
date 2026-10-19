@@ -402,10 +402,10 @@ async function standOn(
 function betterSource(raster: LandRasterRead | null, inUs: boolean): string | null {
   if (!env.landExplorationEnabled || raster?.request.dataset === "usgs-3dep-13") return null;
   if (inUs)
-    return "For 10 m bare-earth slope, analyze bare-earth terrain (USGS 3DEP) for this land in Land, then rehearse again.";
+    return "For 10 m bare-earth slope, analyze bare-earth terrain (USGS 3DEP) in the land's Overview, then rehearse again.";
   return raster
     ? null
-    : "For slope from this land's own heights, analyze terrain (Copernicus GLO-30) for this land in Land, then rehearse again.";
+    : "For slope from this land's own heights, read the terrain (Copernicus GLO-30) in the land's Overview, then rehearse again.";
 }
 
 /** Everything the rehearsal reads, for the lanes it will drive. */

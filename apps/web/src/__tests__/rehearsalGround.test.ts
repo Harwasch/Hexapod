@@ -272,7 +272,7 @@ describe("the ground a rehearsal reads", () => {
     // No raster at all there: the Land's own GLO-30 is the better source.
     answer([], hydrography("uncovered"));
     const bare = await rehearsalGround(flat, { landId: "land", projectId: "demo", points });
-    expect(bare.better).toContain("analyze terrain (Copernicus GLO-30)");
+    expect(bare.better).toContain("read the terrain (Copernicus GLO-30)");
   });
 
   it("without a raster or terrain, says slope was not checked", async () => {
