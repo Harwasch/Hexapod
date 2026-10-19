@@ -149,12 +149,15 @@ def check(out: Path) -> dict[str, float]:
     import onnxruntime as ort
     import sentencepiece as spm
     import torch
-    from transformers import AutoModel, AutoProcessor
+    from transformers import AutoModel, AutoTokenizer
 
-    processor = AutoProcessor.from_pretrained(MODEL, revision=REVISION)
+    # The processor's text half, which is all `SiglipEmbedder`'s prompts go through:
+    # AutoProcessor would also build the image processor, and that needs Pillow, which this
+    # stage does not install.
+    processor = AutoTokenizer.from_pretrained(MODEL, revision=REVISION)
     model = AutoModel.from_pretrained(MODEL, revision=REVISION).eval()
     inputs = processor(
-        text=[p.lower() for p in CHECK_PROMPTS], padding="max_length", max_length=MAX_LENGTH,
+        [p.lower() for p in CHECK_PROMPTS], padding="max_length", max_length=MAX_LENGTH,
         truncation=True, return_tensors="pt",
     )  # fmt: skip
     with torch.inference_mode():
