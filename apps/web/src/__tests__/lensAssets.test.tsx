@@ -145,13 +145,26 @@ function mockApi(list: Asset[], extra: (path: string, init: Init) => unknown = (
   }) as never);
 }
 
-function show() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+/** The land's fog and mission ground: computed from its assets and their inspections. */
+const DERIVED = [
+  ["land-knowledge", "pilot", land.id, 20],
+  ["land-ground", "pilot", land.id],
+];
+
+function show(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   return render(
     <QueryClientProvider client={client}>
       <AssetsLens land={land} />
     </QueryClientProvider>,
   );
+}
+
+/** A query client holding the land's derived answers, to see which a save asks again. */
+function derivedClient() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  for (const key of DERIVED) client.setQueryData(key, { answer: true });
+  const stale = () => DERIVED.map((key) => client.getQueryState(key)?.isInvalidated);
+  return { client, stale };
 }
 
 beforeEach(() => {
@@ -245,7 +258,8 @@ describe("the card", () => {
       data: inspection("a1", "critical", "2026-10-10T10:00:00Z"),
       response: new Response(),
     });
-    show();
+    const derived = derivedClient();
+    show(derived.client);
     await screen.findByRole("heading", { name: "3 assets: 1 needs attention." });
     fireEvent.click(screen.getByRole("button", { name: /North well/ }));
     await screen.findByRole("heading", { name: "North well" });
@@ -261,8 +275,11 @@ describe("the card", () => {
     fireEvent.change(screen.getByLabelText("What did you see?"), {
       target: { value: "Pump housing cracked" },
     });
+    expect(derived.stale()).toEqual([false, false]);
     fireEvent.click(save);
     await screen.findByText("Inspection saved.");
+    // A dated inspection is evidence: the fog and the ground are asked again.
+    expect(derived.stale()).toEqual([true, true]);
     const calls = post.mock.calls as unknown as [string, { body: Record<string, unknown> }][];
     expect(calls[0]?.[0]).toContain("/inspections");
     expect(calls[0]?.[1].body).toMatchObject({
@@ -300,7 +317,8 @@ describe("the card", () => {
           : asset("new", "Well 2"),
         response: new Response(),
       })) as never);
-    show();
+    const derived = derivedClient();
+    show(derived.client);
     await screen.findByRole("heading", { name: "2 assets, none needing attention." });
     fireEvent.click(screen.getByRole("button", { name: "Add an asset" }));
     fireEvent.click(screen.getByRole("button", { name: "Well" }));
@@ -312,8 +330,10 @@ describe("the card", () => {
     expect(useLandContext.getState().layers["assets-draft"]?.features).toHaveLength(1);
     const key = `living-world-land-draft:${encodeURIComponent(landScope())}:inventory:${land.id}`;
     await waitFor(() => expect(localStorage.getItem(key)).toContain("Well 2"));
+    expect(derived.stale()).toEqual([false, false]);
     fireEvent.click(screen.getByRole("button", { name: "Add asset" }));
     await waitFor(() => expect(useLandContext.getState().selectedInventoryId).toBe("new"));
+    expect(derived.stale()).toEqual([true, true]);
     const calls = post.mock.calls as unknown as [string, { body: Record<string, unknown> }][];
     expect(calls[1]?.[0]).toBe("/api/v1/land/{land_id}/features");
     expect(calls[1]?.[1].body).toMatchObject({

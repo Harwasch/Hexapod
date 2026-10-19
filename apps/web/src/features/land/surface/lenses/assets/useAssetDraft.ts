@@ -8,6 +8,7 @@ import { describeError } from "@/lib/log";
 import { useLandCanEdit } from "@/state/landIdentity";
 import { useLandContext } from "@/state/landContext";
 
+import { invalidateLandDerived } from "../../../landDerived";
 import { assetKeys, useRefreshAssets } from "./assetsApi";
 import {
   assetDraftKey,
@@ -277,6 +278,9 @@ export function useAssetDraft(
               body: draft,
             }),
           );
+      // The land's mission ground and its fog are computed from its assets: ask them again,
+      // whether or not the person is still on this draft.
+      void invalidateLandDerived(cache, land.id);
       if (ticket.current === current) {
         clearRecovery();
         reset();

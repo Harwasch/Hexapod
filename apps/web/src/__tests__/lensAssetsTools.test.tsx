@@ -266,6 +266,9 @@ it("recovers the reviewed input and uses the same request after a failed save", 
       response: new Response(),
     });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // The land's fog, computed from its records (the assets among them).
+  const fog = ["land-knowledge", landScope(), land.id, 20];
+  client.setQueryData(fog, { cells: [] });
   render(
     <QueryClientProvider client={client}>
       <AssetsImport land={land} active />
@@ -277,8 +280,11 @@ it("recovers the reviewed input and uses the same request after a failed save", 
   await screen.findByText(/1 new assets/);
   fireEvent.click(screen.getByRole("button", { name: "Save reviewed import" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Connection lost");
+  expect(client.getQueryState(fog)?.isInvalidated).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Save reviewed import" }));
   await screen.findByRole("heading", { name: "Import saved" });
+  // Imported assets are the land's records: its fog is asked again.
+  expect(client.getQueryState(fog)?.isInvalidated).toBe(true);
   const calls = post.mock.calls as unknown as [string, { body: unknown }][];
   expect(calls[1]?.[1].body).toEqual(calls[2]?.[1].body);
   expect(calls[1]?.[1].body).toMatchObject({
