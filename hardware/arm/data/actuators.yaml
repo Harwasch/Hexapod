@@ -1,0 +1,627 @@
+# Actuators the optimizer may put at any joint. Curated from data/actuators_research.yaml
+# (80 parts, single-unit US retail read from the vendors' stores on 2026-10-16/17; that
+# file carries every source URL). Kept here: parts with an absolute output position
+# (or a cheap option for one), at least one candidate per price/torque niche, and the
+# hobby and stepper baselines the study compares against.
+#
+# rated_nm  continuous torque. For servos without a published rating: 35% of stall.
+# peak_nm   peak/stall torque.
+# speed_rpm rated output speed at the arm's 48 V bus (12 V for servos).
+# backlash_deg  estimate by gear type (single-stage planetary 0.15-0.25, two-stage 0.3,
+#               hobby servo 0.5-0.8, printed reducer 0.3-0.5); vendor figure where given.
+# force_sense   yes = low-ratio and backdrivable, so motor current is a usable force
+#               sensor; partly = backdrivable but coarse; no = not backdrivable.
+# ratio         the part's own gear reduction (servo ratios are nominal).
+# price_usd     list price at the source of the original read (mostly China-shipped, ex duty).
+# landed_usd    only where the list price ships duty-paid (Hiwonder's USPS option). Every
+#               other part lands at list x 1.403 (US duty on Chinese motors, Oct 2026) +
+#               freight by mass (costs.yaml), the same formula for all of them.
+# price_alt_usd the cheapest credible landed price for the same variant
+#               (docs/research/sourcing.md, verified prices only), used with the "sourcing" lever.
+actuators:
+  - id: rs_edulite_05
+    name: RobStride EduLite 05
+    kind: qdd
+    ratio: 9
+    rated_nm: 1.8
+    peak_nm: 6
+    mass_kg: 0.242
+    speed_rpm: 430
+    price_usd: 80
+    price_alt_usd: 82
+    price_alt_source: OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)
+    price_alt_confidence: high
+    dia_mm: 46
+    len_mm: 44
+    backlash_deg: 0.25
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: none
+    notes: Cheapest integrated dual-encoder QDD; powder-metal gears
+  - id: rs_05
+    name: RobStride 05
+    kind: qdd
+    ratio: 7.75
+    rated_nm: 1.8
+    peak_nm: 5.5
+    mass_kg: 0.191
+    speed_rpm: 480
+    price_usd: 110
+    price_alt_usd: 112
+    price_alt_source: Zennixtek DDP $105 + $7 shipping
+    price_alt_confidence: med
+    dia_mm: 46
+    len_mm: 44
+    backlash_deg: 0.2
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: none
+    notes: "Machined steel gears; RobStride 2026-07-13 table: rated corrected"
+  - id: dm_j4310_v4
+    name: Damiao DM-J4310-2EC (V4 driver)
+    kind: qdd
+    ratio: 10
+    rated_nm: 3.5
+    peak_nm: 12.5
+    mass_kg: 0.325
+    speed_rpm: 200
+    price_usd: 125
+    price_alt_usd: 132
+    price_alt_source: Zennixtek DDP $119 + $13 shipping
+    price_alt_confidence: med
+    dia_mm: 57
+    len_mm: 46
+    backlash_deg: 0.2
+    force_sense: true
+    backdrivable: true
+    interface: CAN-FD
+    output_encoder: true
+    ip: none
+    notes: Most-used low-cost arm joint in the LeRobot community
+  - id: rs_00
+    name: RobStride 00
+    kind: qdd
+    ratio: 10
+    rated_nm: 5
+    peak_nm: 14
+    mass_kg: 0.31
+    speed_rpm: 315
+    price_usd: 125
+    price_alt_usd: 138
+    price_alt_source: Zennixtek DDP $125 + $13 shipping
+    price_alt_confidence: med
+    dia_mm: 57
+    len_mm: 51
+    backlash_deg: 0.2
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: none
+    notes: Square 57 mm body
+  - id: sw_gim6010_8
+    name: Steadywin GIM6010-8 + output encoder
+    kind: qdd
+    ratio: 8
+    rated_nm: 5
+    peak_nm: 11
+    mass_kg: 0.388
+    speed_rpm: 420
+    price_usd: 105
+    price_alt_usd: 132
+    price_alt_source: OpenELAB DDP
+    price_alt_confidence: high
+    dia_mm: 80
+    len_mm: 40
+    backlash_deg: 0.25
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: IP54 (vendor claim)
+    notes: $90 without the output encoder (then it must home every boot); steel gears, 15 arcmin
+  - id: sw_gim6010_8_s48
+    name: Steadywin GIM6010-8, 48-slot star winding
+    kind: qdd
+    ratio: 8
+    rated_nm: 5.0
+    peak_nm: 17.0
+    mass_kg: 0.388
+    speed_rpm: 200
+    price_usd: 105
+    price_alt_usd: 132
+    price_alt_source: OpenELAB DDP (48 V variant, same price)
+    price_alt_confidence: med
+    dia_mm: 80
+    len_mm: 40
+    backlash_deg: 0.25
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: IP54 (vendor claim)
+    notes: GDS68 + secondary encoder, same $105 as the delta winding; vendor 17.91 Nm stall at 48 V (17.19 A). Needs the 48 V bus
+  - id: sw_gim8108_8
+    name: Steadywin GIM8108-8 + output encoder
+    kind: qdd
+    ratio: 8
+    rated_nm: 7.5
+    peak_nm: 22
+    mass_kg: 0.396
+    speed_rpm: 320
+    price_usd: 135
+    price_alt_usd: 159
+    price_alt_source: OpenELAB DDP
+    price_alt_confidence: high
+    dia_mm: 92
+    len_mm: 55
+    backlash_deg: 0.25
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: IP54 (vendor claim)
+    notes: $125 without the output encoder; best $/Nm under 450 g
+  - id: sw_gwk7015_8_gds68
+    name: Steadywin GWK7015-8 + GDS68
+    kind: qdd
+    ratio: 8
+    rated_nm: 8.4
+    peak_nm: 26.0
+    mass_kg: 0.395
+    speed_rpm: 220
+    price_usd: 115
+    dia_mm: 78
+    len_mm: 32
+    backlash_deg: 0.25
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: false
+    ip: none
+    notes: ~26 Nm at the GDS68's ~22 A; no secondary-encoder option, so the output homes every boot
+  - id: sw_gim4310_36
+    name: Steadywin GIM4310-36
+    kind: qdd
+    ratio: 36
+    rated_nm: 7.38
+    peak_nm: 20.16
+    mass_kg: 0.31
+    speed_rpm: 63
+    price_usd: 145
+    price_alt_usd: 197
+    price_alt_source: OpenELAB DDP
+    price_alt_confidence: high
+    dia_mm: 55
+    len_mm: 47
+    backlash_deg: 0.35
+    force_sense: partly
+    backdrivable: partly
+    interface: CAN
+    output_encoder: false
+    ip: IP54 (vendor claim)
+    notes: No output encoder option at 36:1, must home every boot
+  - id: dm_j4340
+    name: Damiao DM-J4340-2EC
+    kind: qdd
+    ratio: 40
+    rated_nm: 9
+    peak_nm: 27
+    mass_kg: 0.362
+    speed_rpm: 100
+    price_usd: 155
+    price_alt_usd: 202
+    price_alt_source: Zennixtek DDP $189 + $13 shipping
+    price_alt_confidence: med
+    dia_mm: 57
+    len_mm: 53.3
+    backlash_deg: 0.3
+    force_sense: partly
+    backdrivable: partly
+    interface: CAN-FD
+    output_encoder: true
+    ip: none
+    notes: 40:1; 36 rpm rated at 24 V, ~100 rpm at 48 V
+  - id: rs_02
+    name: RobStride 02
+    kind: qdd
+    ratio: 7.75
+    rated_nm: 7.0
+    peak_nm: 17
+    mass_kg: 0.405
+    speed_rpm: 360
+    price_usd: 145
+    price_alt_usd: 152
+    price_alt_source: Zennixtek DDP $139 + $13 shipping
+    price_alt_confidence: med
+    dia_mm: 78.5
+    len_mm: 45.5
+    backlash_deg: 0.2
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: none
+    notes: "RobStride 2026-07-13 table: rated corrected"
+  - id: rs_02_ip67
+    name: RobStride 02 IP67
+    kind: qdd
+    ratio: 7.75
+    rated_nm: 7.0
+    peak_nm: 17
+    mass_kg: 0.49
+    speed_rpm: 360
+    price_usd: 240
+    price_alt_usd: 248
+    price_alt_source: Zennixtek DDP $235 + $13 shipping
+    price_alt_confidence: med
+    dia_mm: 78.5
+    len_mm: 45.5
+    backlash_deg: 0.2
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: IP67
+    notes: "The only IP67 actuator found in the price class; RobStride 2026-07-13 table: rated corrected"
+  - id: haitai_hwg8108
+    name: Haitai HWG8108-J8
+    kind: qdd
+    ratio: 8
+    rated_nm: 10.2
+    peak_nm: 24.8
+    mass_kg: 0.36
+    speed_rpm: 390
+    price_usd: 205
+    dia_mm: 87
+    len_mm: 26
+    backlash_deg: 0.25
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: unknown
+    ip: IP54 (vendor claim)
+    notes: Mass with driver estimated
+  - id: sw_gwk8108_8_gdk100
+    name: Steadywin GWK8108-8 + GDK100
+    kind: qdd
+    ratio: 8
+    rated_nm: 10.2
+    peak_nm: 24.78
+    mass_kg: 0.34
+    speed_rpm: 288
+    price_usd: 125
+    dia_mm: 87
+    len_mm: 36
+    backlash_deg: 0.25
+    force_sense: true
+    backdrivable: true
+    interface: CAN-FD (MIT)
+    output_encoder: false
+    ip: IP54 (vendor claim)
+    notes: Same spec table as the Haitai HWG8108-J8. Motor-side absolute encoder only, so the output homes every boot
+  - id: dm_j8006
+    name: Damiao DM-J8006-2EC
+    kind: qdd
+    ratio: 6
+    rated_nm: 8
+    peak_nm: 20
+    mass_kg: 0.559
+    speed_rpm: 120
+    price_usd: 210
+    price_alt_usd: 226
+    price_alt_source: Zennixtek DDP $209 + $17 shipping
+    price_alt_confidence: med
+    dia_mm: 96
+    len_mm: 40
+    backlash_deg: 0.2
+    force_sense: true
+    backdrivable: true
+    interface: CAN-FD
+    output_encoder: true
+    ip: none
+    notes: ""
+  - id: rs_10p
+    name: RobStride 10P
+    kind: qdd
+    ratio: 25
+    rated_nm: 10
+    peak_nm: 42
+    mass_kg: 0.46
+    speed_rpm: 125
+    price_usd: 215
+    price_alt_usd: 222
+    price_alt_source: Zennixtek DDP $209 + $13 shipping
+    price_alt_confidence: med
+    dia_mm: 80
+    len_mm: 55
+    backlash_deg: 0.3
+    force_sense: partly
+    backdrivable: partly
+    interface: CAN
+    output_encoder: true
+    ip: none
+    notes: Dimensions not published; 80 x 55 assumed
+  - id: rs_06
+    name: RobStride 06
+    kind: qdd
+    ratio: 9
+    rated_nm: 11
+    peak_nm: 36
+    mass_kg: 0.621
+    speed_rpm: 100
+    price_usd: 210
+    price_alt_usd: 222
+    price_alt_source: Zennixtek DDP $205 + $17 shipping
+    price_alt_confidence: med
+    dia_mm: 88
+    len_mm: 49
+    backlash_deg: 0.25
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: none
+    notes: Newer 2025-26 part
+  - id: sw_gim6010_48
+    name: Steadywin GIM6010-48
+    kind: qdd
+    ratio: 48
+    rated_nm: 30
+    peak_nm: 66
+    mass_kg: 0.777
+    speed_rpm: 20
+    price_usd: 165
+    price_alt_usd: 235
+    price_alt_source: OpenELAB DDP (GDK468 driver)
+    price_alt_confidence: med
+    dia_mm: 80
+    len_mm: 67.5
+    backlash_deg: 0.4
+    force_sense: partly
+    backdrivable: partly
+    interface: CAN
+    output_encoder: true
+    ip: IP54 (vendor claim)
+    notes: aifitlab $165 with GDS68 (+ secondary encoder), duty unpaid; 20 rpm rated, 70 rpm max
+  - id: rs_03
+    name: RobStride 03
+    kind: qdd
+    ratio: 9
+    rated_nm: 21.0
+    peak_nm: 60
+    mass_kg: 0.88
+    speed_rpm: 195
+    price_usd: 225
+    price_alt_usd: 240
+    price_alt_source: Zennixtek DDP $219 + $21 shipping
+    price_alt_confidence: med
+    dia_mm: 106
+    len_mm: 56
+    backlash_deg: 0.2
+    force_sense: true
+    backdrivable: true
+    interface: CAN
+    output_encoder: true
+    ip: none
+    notes: "RobStride 2026-07-13 table: rated corrected"
+  - id: dm_j6248p
+    name: Damiao DM-J6248P-2EC
+    kind: qdd
+    ratio: 48
+    rated_nm: 30
+    peak_nm: 97
+    mass_kg: 0.628
+    speed_rpm: 60
+    price_usd: 265
+    price_alt_usd: 280
+    price_alt_source: Zennixtek DDP $259 + $21 shipping
+    price_alt_confidence: med
+    dia_mm: 76
+    len_mm: 62.5
+    backlash_deg: 0.3
+    force_sense: partly
+    backdrivable: partly
+    interface: CAN-FD
+    output_encoder: true
+    ip: none
+    notes: Rated 40 rpm
+  - id: sts3215
+    name: Feetech STS3215 (12 V, C018)
+    kind: servo
+    ratio: 345
+    rated_nm: 0.98
+    peak_nm: 2.94
+    mass_kg: 0.055
+    speed_rpm: 45
+    price_usd: 26
+    price_alt_usd: 27.4
+    price_alt_source: OpenELAB DDP (AliExpress ~$20, unverified)
+    price_alt_confidence: high
+    dia_mm: 45
+    len_mm: 35
+    backlash_deg: 0.6
+    force_sense: false
+    backdrivable: false
+    interface: TTL
+    output_encoder: true
+    ip: none
+    notes: Documented gear stripping on stalls and when back-driven powered
+    C018): null
+  - id: hx_35hm
+    name: Hiwonder HX-35HM
+    kind: servo
+    ratio: 300
+    rated_nm: 1.2
+    peak_nm: 3.43
+    mass_kg: 0.071
+    speed_rpm: 53
+    price_usd: 36
+    landed_usd: 39
+    dia_mm: 45
+    len_mm: 35
+    backlash_deg: 0.7
+    force_sense: false
+    backdrivable: false
+    interface: TTL
+    output_encoder: true
+    ip: none
+    notes: Vendor's 2.45 Nm rated is 71% of stall; 35% used; landed with Hiwonder's own USPS duty-paid shipping
+  - id: hx_65hm
+    name: Hiwonder HX-65HM
+    kind: servo
+    ratio: 300
+    rated_nm: 2.2
+    peak_nm: 6.37
+    mass_kg: 0.1435
+    speed_rpm: 53
+    price_usd: 50
+    landed_usd: 53.5
+    dia_mm: 70
+    len_mm: 45
+    backlash_deg: 0.7
+    force_sense: false
+    backdrivable: false
+    interface: TTL
+    output_encoder: true
+    ip: none
+    notes: Vendor's 4.9 Nm rated is implausible; 35% of stall used; landed with Hiwonder's own USPS duty-paid shipping
+  - id: sts3250
+    name: Feetech STS3250
+    kind: servo
+    ratio: 300
+    rated_nm: 1.57
+    peak_nm: 4.9
+    mass_kg: 0.0745
+    speed_rpm: 75
+    price_usd: 88
+    price_alt_usd: 72.5
+    price_alt_source: OpenELAB DDP
+    price_alt_confidence: high
+    dia_mm: 45
+    len_mm: 35
+    backlash_deg: 0.5
+    force_sense: false
+    backdrivable: false
+    interface: TTL
+    output_encoder: true
+    ip: none
+    notes: STS3215 footprint
+  - id: hls3960
+    name: Feetech HLS3960
+    kind: servo
+    ratio: 358
+    rated_nm: 2.26
+    peak_nm: 6.55
+    mass_kg: 0.103
+    speed_rpm: 60
+    price_usd: 116
+    price_alt_usd: 136
+    price_alt_source: Zennixtek DDP $129 + $7 shipping
+    price_alt_confidence: med
+    dia_mm: 45
+    len_mm: 35.5
+    backlash_deg: 0.5
+    force_sense: false
+    backdrivable: false
+    interface: RS-485
+    output_encoder: true
+    ip: none
+    notes: ""
+  - id: sts3095
+    name: Feetech STS3095
+    kind: servo
+    ratio: 300
+    rated_nm: 2.21
+    peak_nm: 9.32
+    mass_kg: 0.1945
+    speed_rpm: 31
+    price_usd: 140
+    price_alt_usd: 146
+    price_alt_source: Zennixtek DDP $139 + $7 shipping
+    price_alt_confidence: med
+    dia_mm: 65
+    len_mm: 48
+    backlash_deg: 0.5
+    force_sense: false
+    backdrivable: false
+    interface: TTL
+    output_encoder: true
+    ip: none
+    notes: ""
+  - id: diy_gb5225_cyc10
+    name: "DIY: GB5225 gimbal + SimpleFOC Mini + printed 10:1 cycloid"
+    kind: diy_qdd
+    ratio: 10
+    rated_nm: 7.5
+    peak_nm: 11
+    mass_kg: 0.57
+    speed_rpm: 61
+    price_usd: 87
+    dia_mm: 75
+    len_mm: 55
+    backlash_deg: 0.4
+    force_sense: partly
+    backdrivable: partly
+    interface: CAN
+    output_encoder: true
+    ip: none
+    notes: Torque and mass are estimates; firmware effort is the real cost
+  - id: stp_m17_cyc20
+    name: Gearotons M17-48 stepper + printed 20:1 reducer
+    kind: stepper
+    ratio: 20
+    rated_nm: 6
+    peak_nm: 8
+    mass_kg: 0.56
+    speed_rpm: 20
+    price_usd: 55
+    dia_mm: 60
+    len_mm: 90
+    backlash_deg: 0.4
+    force_sense: false
+    backdrivable: partly
+    interface: RS-485
+    output_encoder: false
+    ip: none
+    notes: Output torque estimated; motor-side encoder
+  - id: stp_n17_hd20
+    name: NEMA17 + MKS SERVO42D + printed HD20 20:1
+    kind: stepper
+    ratio: 20
+    rated_nm: 2.5
+    peak_nm: 3.5
+    mass_kg: 0.52
+    speed_rpm: 20
+    price_usd: 45
+    dia_mm: 60
+    len_mm: 80
+    backlash_deg: 0.4
+    force_sense: false
+    backdrivable: partly
+    interface: CAN
+    output_encoder: false
+    ip: none
+    notes: Builders measured 2.1-3.3 Nm at 48-58% efficiency
+  - id: stp_n23_cyc20
+    name: NEMA23 + MKS SERVO57D + printed 20:1 cycloid
+    kind: stepper
+    ratio: 20
+    rated_nm: 12
+    peak_nm: 15
+    mass_kg: 1.35
+    speed_rpm: 15
+    price_usd: 75
+    dia_mm: 80
+    len_mm: 110
+    backlash_deg: 0.4
+    force_sense: false
+    backdrivable: partly
+    interface: CAN
+    output_encoder: false
+    ip: none
+    notes: ""

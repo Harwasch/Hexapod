@@ -327,6 +327,24 @@ jobs:
       - name: Committed fixture is up to date
         run: git diff --exit-code -- ../../data/tiles/synthetic-tree
 
+  arm:
+    name: Arm · lint, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hardware/arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      # The CAD group (build123d / OpenCASCADE) is only needed to regenerate cad/; the
+      # tests check the optimizer's statics against MuJoCo and need the sim stack alone.
+      - run: uv sync --frozen --no-group cad
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q
+
   pipeline:
     name: Pipeline · lint, typecheck, test
     runs-on: ubuntu-latest

@@ -1,0 +1,155 @@
+[
+ {
+  "group": "Actuators",
+  "item": "RobStride EduLite 05",
+  "where": "yaw",
+  "qty": 1,
+  "usd": 82.0,
+  "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)"
+ },
+ {
+  "group": "Actuators",
+  "item": "Damiao DM-J4310-2EC (V4 driver)",
+  "where": "shoulder",
+  "qty": 1,
+  "usd": 132.0,
+  "source": "Zennixtek DDP $119 + $13 shipping"
+ },
+ {
+  "group": "Reductions",
+  "item": "3:1 capstan (drum, pinion, rope, bearings)",
+  "where": "shoulder",
+  "qty": 1,
+  "usd": 11.0
+ },
+ {
+  "group": "Reductions",
+  "item": "joint encoder (MT6701 at the joint, read on the servo-bus board)",
+  "where": "shoulder",
+  "qty": 1,
+  "usd": 6.0
+ },
+ {
+  "group": "Actuators",
+  "item": "RobStride EduLite 05",
+  "where": "elbow",
+  "qty": 1,
+  "usd": 82.0,
+  "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)"
+ },
+ {
+  "group": "Reductions",
+  "item": "3:1 capstan (drum, pinion, rope, bearings)",
+  "where": "elbow",
+  "qty": 1,
+  "usd": 11.0
+ },
+ {
+  "group": "Reductions",
+  "item": "joint encoder (MT6701 at the joint, read on the servo-bus board)",
+  "where": "elbow",
+  "qty": 1,
+  "usd": 6.0
+ },
+ {
+  "group": "Actuators",
+  "item": "Hiwonder HX-35HM",
+  "where": "wrist pitch",
+  "qty": 1,
+  "usd": 39.0,
+  "source": "retail"
+ },
+ {
+  "group": "Actuators",
+  "item": "Feetech STS3250",
+  "where": "forearm roll",
+  "qty": 1,
+  "usd": 72.5,
+  "source": "OpenELAB DDP"
+ },
+ {
+  "group": "Actuators",
+  "item": "Feetech STS3250",
+  "where": "tool roll",
+  "qty": 1,
+  "usd": 72.5,
+  "source": "OpenELAB DDP"
+ },
+ {
+  "group": "Structure",
+  "item": "aluminium tube",
+  "where": "",
+  "qty": 1,
+  "usd": 10.64
+ },
+ {
+  "group": "Structure",
+  "item": "printed parts",
+  "where": "",
+  "qty": 1,
+  "usd": 24.0
+ },
+ {
+  "group": "Structure",
+  "item": "bearings",
+  "where": "",
+  "qty": 1,
+  "usd": 16.0
+ },
+ {
+  "group": "Structure",
+  "item": "fasteners",
+  "where": "",
+  "qty": 1,
+  "usd": 10.0
+ },
+ {
+  "group": "End effector",
+  "item": "tool changer",
+  "where": "",
+  "qty": 1,
+  "usd": 14.0
+ },
+ {
+  "group": "End effector",
+  "item": "gripper (servo + fin-ray fingers)",
+  "where": "",
+  "qty": 1,
+  "usd": 31.0
+ },
+ {
+  "group": "Sensing",
+  "item": "wrist camera + ToF",
+  "where": "",
+  "qty": 1,
+  "usd": 43.0
+ },
+ {
+  "group": "Electrical + sealing",
+  "item": "harness + connectors",
+  "where": "",
+  "qty": 1,
+  "usd": 18.0
+ },
+ {
+  "group": "Electrical + sealing",
+  "item": "field kit (seals, vents, servo pods, heat plate)",
+  "where": "",
+  "qty": 1,
+  "usd": 57.0
+ },
+ {
+  "group": "Structure",
+  "item": "parallelogram rod + rod ends",
+  "where": "",
+  "qty": 1,
+  "usd": 8.0
+ },
+ {
+  "group": "Electrical + sealing",
+  "item": "servo bus adapter",
+  "where": "",
+  "qty": 1,
+  "usd": 10.0
+ }
+]

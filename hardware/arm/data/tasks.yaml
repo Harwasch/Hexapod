@@ -1,0 +1,207 @@
+# The work the arm is sized for. Each task is a region of target points around the hexapod
+# (ground frame: origin on the ground under the body centre, x forward, z up) and what has
+# to happen at each point. The optimizer scores a design by the weighted fraction of points
+# it can serve without exceeding an actuator, hitting the robot or the ground, or tipping
+# the robot over.
+#
+# approach.dir   direction the tool axis points, wrist -> tip; half_angle_deg is the cone
+#                of acceptable directions around it.
+# force          force the environment applies to the tool at the TCP, newtons.
+#                world: [x, y, z] in the ground frame; axis: F along the approach direction
+#                (positive pushes the tool further along it, e.g. a stem resisting a pull).
+# duty           hold: sustained, checked against rated torque. peak: about a second,
+#                checked against peak torque.
+# Forces are sourced in docs/REQUIREMENTS.md (research notes: docs/research/task_forces.md).
+defaults:
+  step: 0.05
+  standoff: 0.0
+  payload_kg: 0.0
+  tool_torque_nm: 0.0
+  ground_z: 0.0
+  weight: 1.0
+
+tasks:
+  - id: weed_pull
+    name: Pull a young weed (seedling to small rosette)
+    category: weed
+    weight: 3.0
+    region: { x: [0.25, 0.85], y: [-0.35, 0.35], z: 0.0 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 25 }
+    tool: gripper
+    payload_kg: 0.05
+    force: { world: [0, 0, -10] } # seedlings 0.3-2.5 N; 4x for small rosettes
+    duty: peak
+
+  - id: weed_taproot
+    name: Pull an established taprooted weed
+    category: weed
+    weight: 1.0
+    region: { x: [0.25, 0.85], y: [-0.35, 0.35], z: 0.0 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 25 }
+    tool: corer
+    force: { world: [0, 0, -100] } # 50-150 N design range (dock-weeding robots)
+    duty: peak
+
+  - id: weed_stab
+    name: Stab or stamp a weed
+    category: weed
+    weight: 2.0
+    region: { x: [0.25, 0.85], y: [-0.35, 0.35], z: 0.0 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 15 }
+    tool: probe
+    force: { world: [0, 0, 80] } # stamping ~100 N typical; capped by robot weight
+    duty: peak
+
+  - id: spot_spray
+    name: Spot-spray or micro-dose
+    category: dose
+    weight: 3.0
+    region: { x: [0.25, 0.85], y: [-0.35, 0.35], z: 0.0 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 35 }
+    tool: sprayer
+    standoff: 0.08
+    duty: hold
+
+  - id: seed_plant
+    name: Drop a seed or press in a plug
+    category: dose
+    weight: 1.0
+    region: { x: [0.25, 0.85], y: [-0.35, 0.35], z: 0.0 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 20 }
+    tool: gripper
+    payload_kg: 0.05
+    force: { world: [0, 0, 15] }
+    duty: peak
+
+  - id: soil_probe
+    name: Push in a soil probe or corer
+    category: sample
+    weight: 1.5
+    region: { x: [0.25, 0.85], y: [-0.35, 0.35], z: 0.0 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 8 }
+    tool: probe
+    force: { world: [0, 0, 80] } # short moisture probe 70-100 N; deeper cores go rotary
+    duty: peak
+
+  - id: sense_ground
+    name: Hold a sensor over the ground
+    category: sense
+    weight: 2.0
+    region: { x: [0.25, 0.85], y: [-0.35, 0.35], z: 0.0 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 60 }
+    tool: camera
+    standoff: 0.15
+    duty: hold
+
+  - id: sense_canopy
+    name: Look under or into a canopy
+    category: sense
+    weight: 1.0
+    step: 0.08
+    region: { x: [0.35, 0.85], y: [-0.3, 0.3], z: [0.05, 0.45] }
+    approach: { dir: [1, 0, 0], half_angle_deg: 50 }
+    tool: camera
+    standoff: 0.10
+    duty: hold
+
+  - id: leaf_sample
+    name: Clip a leaf or tissue sample
+    category: sample
+    weight: 1.0
+    step: 0.08
+    region: { x: [0.35, 0.85], y: [-0.3, 0.3], z: [0.05, 0.9] }
+    approach: { dir: [1, 0, 0], half_angle_deg: 60 }
+    tool: shears
+    force: { axis: 10 }
+    duty: peak
+
+  - id: fruit_ground
+    name: Pick fruit near the ground (strawberry)
+    category: harvest
+    weight: 2.0
+    step: 0.06
+    region: { x: [0.3, 0.85], y: [-0.3, 0.3], z: [0.03, 0.21] }
+    approach: { dir: [0.5, 0, -0.866], half_angle_deg: 60 }
+    tool: gripper
+    payload_kg: 0.05
+    force: { axis: 15 } # strawberry 13.9 N straight pull
+    duty: peak
+
+  - id: fruit_bush
+    name: Pick fruit from a bush or low branch (tomato, pepper, apple)
+    category: harvest
+    weight: 2.0
+    step: 0.08
+    region: { x: [0.35, 0.85], y: [-0.3, 0.3], z: [0.3, 1.1] }
+    approach: { dir: [1, 0, 0], half_angle_deg: 45 }
+    tool: gripper
+    payload_kg: 0.25
+    force: { axis: 30 } # apple 28.3 N (95th pct); tomato 12.5-16.3 N
+    duty: peak
+
+  - id: debris_pick
+    name: Pick up a rock, bottle or stick
+    category: maintain
+    weight: 2.0
+    region: { x: [0.25, 0.85], y: [-0.35, 0.35], z: 0.0 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 30 }
+    tool: gripper
+    payload_kg: 1.0
+    duty: hold
+
+  - id: deck_stow
+    name: Stow a sample, rock or tool on the robot's own deck
+    category: maintain
+    weight: 2.0
+    frame: body
+    step: 0.04
+    region: { x: [-0.22, 0.02], y: [-0.10, 0.10], z: 0.09 }
+    approach: { dir: [0, 0, -1], half_angle_deg: 15 }
+    tool: gripper
+    payload_kg: 1.0
+    duty: hold
+
+  - id: water_sample
+    name: Dip a vial into water below a bank
+    category: sample
+    weight: 0.5
+    step: 0.06
+    region: { x: [0.6, 0.9], y: [-0.2, 0.2], z: [-0.3, -0.1] }
+    ground_z: -0.5
+    approach: { dir: [0, 0, -1], half_angle_deg: 35 }
+    tool: gripper
+    payload_kg: 0.3
+    duty: hold
+
+  - id: gate_latch
+    name: Push a gate latch or button
+    category: maintain
+    weight: 0.5
+    step: 0.08
+    region: { x: [0.45, 0.8], y: [-0.2, 0.2], z: [0.7, 1.1] }
+    approach: { dir: [1, 0, 0], half_angle_deg: 30 }
+    tool: gripper
+    force: { axis: -20 } # accessible latches are limited to 22 N
+    duty: peak
+
+  - id: valve_turn
+    name: Turn a small valve or knob
+    category: maintain
+    weight: 0.5
+    step: 0.08
+    region: { x: [0.35, 0.8], y: [-0.25, 0.25], z: [0.05, 0.5] }
+    approach: { dir: [0, 0, -1], half_angle_deg: 60 }
+    tool: gripper
+    tool_torque_nm: 3.0 # small knobs and 1/4-1/2 in. valves; bigger ones by body yaw
+    duty: peak
+
+  - id: prune
+    name: Prune a small stem or clear a stick
+    category: maintain
+    weight: 1.0
+    step: 0.08
+    region: { x: [0.35, 0.85], y: [-0.3, 0.3], z: [0.1, 1.0] }
+    approach: { dir: [1, 0, 0], half_angle_deg: 50 }
+    tool: shears
+    force: { axis: -15 } # 100-500 N blade force stays inside the geared shear
+    duty: peak

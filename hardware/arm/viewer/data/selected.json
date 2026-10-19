@@ -1,0 +1,537 @@
+{
+ "design": {
+  "arch": "parallelogram",
+  "dof": 6,
+  "l1": 0.31,
+  "l2": 0.37,
+  "mount_x": 0.26,
+  "pedestal": 0.16,
+  "spring": false,
+  "wrist_len": 0.09
+ },
+ "label": "6DOF para L1=0.31 L2=0.37 x=0.26 ped=0.16",
+ "actuators": {
+  "yaw": {
+   "id": "rs_edulite_05",
+   "name": "RobStride EduLite 05",
+   "kind": "qdd",
+   "rated": 1.8,
+   "peak": 6.0,
+   "mass": 0.242,
+   "speed": 45.0294947014537,
+   "price": 82.0,
+   "backlash_deg": 0.25,
+   "force_sense": "yes",
+   "ip": "none",
+   "interface": "CAN",
+   "stage": "",
+   "ratio": 9.0,
+   "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)",
+   "retail": 80.0,
+   "needs_driver": false,
+   "stage_limit": null
+  },
+  "shoulder": {
+   "id": "dm_j4310_v4+capstan3-d20",
+   "name": "Damiao DM-J4310-2EC (V4 driver) + 3:1 capstan",
+   "kind": "qdd",
+   "rated": 9.66,
+   "peak": 18.359999999999996,
+   "mass": 0.387496,
+   "speed": 6.981317007977318,
+   "price": 149.0,
+   "backlash_deg": 0.06666666666666667,
+   "force_sense": "yes",
+   "ip": "none",
+   "interface": "CAN-FD",
+   "stage": "3:1 capstan",
+   "ratio": 30.0,
+   "source": "Zennixtek DDP $119 + $13 shipping",
+   "retail": 125.0,
+   "needs_driver": false,
+   "stage_limit": 18.36
+  },
+  "elbow": {
+   "id": "rs_edulite_05+capstan3-d20",
+   "name": "RobStride EduLite 05 + 3:1 capstan",
+   "kind": "qdd",
+   "rated": 4.968000000000001,
+   "peak": 16.560000000000002,
+   "mass": 0.304496,
+   "speed": 15.009831567151233,
+   "price": 99.0,
+   "backlash_deg": 0.08333333333333333,
+   "force_sense": "yes",
+   "ip": "none",
+   "interface": "CAN",
+   "stage": "3:1 capstan",
+   "ratio": 27.0,
+   "source": "OpenELAB DDP (Taobao at CNY 299 would be ~$71, unverified)",
+   "retail": 80.0,
+   "needs_driver": false,
+   "stage_limit": 18.36
+  },
+  "wrist_pitch": {
+   "id": "hx_35hm",
+   "name": "Hiwonder HX-35HM",
+   "kind": "servo",
+   "rated": 1.2,
+   "peak": 3.43,
+   "mass": 0.071,
+   "speed": 5.550147021341968,
+   "price": 39.0,
+   "backlash_deg": 0.7,
+   "force_sense": "no",
+   "ip": "none",
+   "interface": "TTL",
+   "stage": "",
+   "ratio": 300.0,
+   "source": "retail",
+   "retail": 36.0,
+   "needs_driver": false,
+   "stage_limit": null
+  },
+  "forearm_roll": {
+   "id": "sts3250",
+   "name": "Feetech STS3250",
+   "kind": "servo",
+   "rated": 1.57,
+   "peak": 4.9,
+   "mass": 0.0745,
+   "speed": 7.853981633974483,
+   "price": 72.5,
+   "backlash_deg": 0.5,
+   "force_sense": "no",
+   "ip": "none",
+   "interface": "TTL",
+   "stage": "",
+   "ratio": 300.0,
+   "source": "OpenELAB DDP",
+   "retail": 88.0,
+   "needs_driver": false,
+   "stage_limit": null
+  },
+  "tool_roll": {
+   "id": "sts3250",
+   "name": "Feetech STS3250",
+   "kind": "servo",
+   "rated": 1.57,
+   "peak": 4.9,
+   "mass": 0.0745,
+   "speed": 7.853981633974483,
+   "price": 72.5,
+   "backlash_deg": 0.5,
+   "force_sense": "no",
+   "ip": "none",
+   "interface": "TTL",
+   "stage": "",
+   "ratio": 300.0,
+   "source": "OpenELAB DDP",
+   "retail": 88.0,
+   "needs_driver": false,
+   "stage_limit": null
+  }
+ },
+ "cost": 755.64,
+ "mass": 2.499,
+ "backlash_mm": 4.37,
+ "tip_speed": 5.43,
+ "payload": {
+  "continuous_kg": 0.25,
+  "peak_kg": 1.19,
+  "reach_m": 0.846
+ },
+ "legs": {
+  "actuator": "Damiao DM-J4310-2EC (V4 driver) + 3:1 capstan",
+  "femur_need_nm": 9.5,
+  "femur_peak_need_nm": 19.0,
+  "rated_nm": 9.66,
+  "peak_nm": 18.359999999999996,
+  "fits": false
+ },
+ "printed_grams": 548.8,
+ "printed_parts": [
+  {
+   "part": "deck seal ring (printed)",
+   "file": "stl/deck_seal_ring.stl",
+   "grams": 5.3,
+   "link": "body"
+  },
+  {
+   "part": "turret plate (printed)",
+   "file": "stl/turret_plate.stl",
+   "grams": 22.3,
+   "link": "turret"
+  },
+  {
+   "part": "turret cheek, shoulder side (printed)",
+   "file": "stl/turret_cheek_shoulder_side.stl",
+   "grams": 61.5,
+   "link": "turret"
+  },
+  {
+   "part": "turret cheek, elbow side (printed)",
+   "file": "stl/turret_cheek_elbow_side.stl",
+   "grams": 66.6,
+   "link": "turret"
+  },
+  {
+   "part": "turret box (printed)",
+   "file": "stl/turret_box.stl",
+   "grams": 32.7,
+   "link": "turret"
+  },
+  {
+   "part": "upper arm hub (printed)",
+   "file": "stl/upper_arm_hub.stl",
+   "grams": 41.4,
+   "link": "upper"
+  },
+  {
+   "part": "elbow housing (printed)",
+   "file": "stl/elbow_housing.stl",
+   "grams": 21.2,
+   "link": "upper"
+  },
+  {
+   "part": "crank (printed)",
+   "file": "stl/crank.stl",
+   "grams": 39.3,
+   "link": "crank"
+  },
+  {
+   "part": "forearm hub and rear lever (printed)",
+   "file": "stl/forearm_hub_and_rear_lever.stl",
+   "grams": 29.1,
+   "link": "fore"
+  },
+  {
+   "part": "forearm roll clamp (printed)",
+   "file": "stl/forearm_roll_clamp.stl",
+   "grams": 24.1,
+   "link": "fore"
+  },
+  {
+   "part": "forearm roll yoke (printed)",
+   "file": "stl/forearm_roll_yoke.stl",
+   "grams": 20.7,
+   "link": "froll"
+  },
+  {
+   "part": "wrist bracket (printed)",
+   "file": "stl/wrist_bracket.stl",
+   "grams": 30.4,
+   "link": "wrist"
+  },
+  {
+   "part": "camera housing (printed)",
+   "file": "stl/camera_housing.stl",
+   "grams": 4.1,
+   "link": "wrist"
+  },
+  {
+   "part": "tool changer, arm side (printed)",
+   "file": "stl/tool_changer_arm_side.stl",
+   "grams": 23.9,
+   "link": "flange"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side.stl",
+   "grams": 14.2,
+   "link": "tool_gripper"
+  },
+  {
+   "part": "gripper palm (printed)",
+   "file": "stl/gripper_palm.stl",
+   "grams": 61.0,
+   "link": "tool_gripper"
+  },
+  {
+   "part": "fin-ray finger (TPU)",
+   "file": "stl/fin-ray_finger.stl",
+   "grams": 11.3,
+   "link": "finger_l"
+  },
+  {
+   "part": "fin-ray finger (TPU)",
+   "file": "stl/fin-ray_finger_2.stl",
+   "grams": 11.3,
+   "link": "finger_r"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side_2.stl",
+   "grams": 14.2,
+   "link": "tool_probe"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side_3.stl",
+   "grams": 14.2,
+   "link": "tool_sprayer"
+  }
+ ],
+ "coverage": [
+  {
+   "id": "weed_pull",
+   "name": "Pull a young weed (seedling to small rosette)",
+   "category": "weed",
+   "weight": 3.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "weed_taproot",
+   "name": "Pull an established taprooted weed",
+   "category": "weed",
+   "weight": 1.0,
+   "reach": 0.833,
+   "served": 0.208,
+   "points": 48
+  },
+  {
+   "id": "weed_stab",
+   "name": "Stab or stamp a weed",
+   "category": "weed",
+   "weight": 2.0,
+   "reach": 0.625,
+   "served": 0.583,
+   "points": 48
+  },
+  {
+   "id": "spot_spray",
+   "name": "Spot-spray or micro-dose",
+   "category": "dose",
+   "weight": 3.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "seed_plant",
+   "name": "Drop a seed or press in a plug",
+   "category": "dose",
+   "weight": 1.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "soil_probe",
+   "name": "Push in a soil probe or corer",
+   "category": "sample",
+   "weight": 1.5,
+   "reach": 0.583,
+   "served": 0.583,
+   "points": 48
+  },
+  {
+   "id": "sense_ground",
+   "name": "Hold a sensor over the ground",
+   "category": "sense",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "sense_canopy",
+   "name": "Look under or into a canopy",
+   "category": "sense",
+   "weight": 1.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 54
+  },
+  {
+   "id": "leaf_sample",
+   "name": "Clip a leaf or tissue sample",
+   "category": "sample",
+   "weight": 1.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 108
+  },
+  {
+   "id": "fruit_ground",
+   "name": "Pick fruit near the ground (strawberry)",
+   "category": "harvest",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 102
+  },
+  {
+   "id": "fruit_bush",
+   "name": "Pick fruit from a bush or low branch (tomato, pepper, apple)",
+   "category": "harvest",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 0.944,
+   "points": 108
+  },
+  {
+   "id": "debris_pick",
+   "name": "Pick up a rock, bottle or stick",
+   "category": "maintain",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 0.958,
+   "points": 48
+  },
+  {
+   "id": "deck_stow",
+   "name": "Stow a sample, rock or tool on the robot's own deck",
+   "category": "maintain",
+   "weight": 2.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 12
+  },
+  {
+   "id": "water_sample",
+   "name": "Dip a vial into water below a bank",
+   "category": "sample",
+   "weight": 0.5,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 48
+  },
+  {
+   "id": "gate_latch",
+   "name": "Push a gate latch or button",
+   "category": "maintain",
+   "weight": 0.5,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 36
+  },
+  {
+   "id": "valve_turn",
+   "name": "Turn a small valve or knob",
+   "category": "maintain",
+   "weight": 0.5,
+   "reach": 1.0,
+   "served": 0.768,
+   "points": 56
+  },
+  {
+   "id": "prune",
+   "name": "Prune a small stem or clear a stick",
+   "category": "maintain",
+   "weight": 1.0,
+   "reach": 1.0,
+   "served": 1.0,
+   "points": 126
+  }
+ ],
+ "score": 0.9014,
+ "hexapod": {
+  "name": "H-M12 reference medium hexapod",
+  "mass_kg": 12.0,
+  "mass_range_kg": [
+   8.0,
+   20.0
+  ],
+  "body": {
+   "length": 0.56,
+   "width": 0.3,
+   "thickness": 0.1,
+   "center_height": 0.24,
+   "cg": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "hips": [
+   [
+    0.24,
+    0.12,
+    -0.02
+   ],
+   [
+    0.0,
+    0.15,
+    -0.02
+   ],
+   [
+    -0.24,
+    0.12,
+    -0.02
+   ],
+   [
+    -0.24,
+    -0.12,
+    -0.02
+   ],
+   [
+    0.0,
+    -0.15,
+    -0.02
+   ],
+   [
+    0.24,
+    -0.12,
+    -0.02
+   ]
+  ],
+  "feet": [
+   [
+    0.4,
+    0.31,
+    0.0
+   ],
+   [
+    0.0,
+    0.45,
+    0.0
+   ],
+   [
+    -0.4,
+    0.31,
+    0.0
+   ],
+   [
+    -0.4,
+    -0.31,
+    0.0
+   ],
+   [
+    0.0,
+    -0.45,
+    0.0
+   ],
+   [
+    0.4,
+    -0.31,
+    0.0
+   ]
+  ],
+  "leg": {
+   "coxa": 0.06,
+   "femur": 0.18,
+   "tibia": 0.26,
+   "radius": 0.035
+  },
+  "body_motion": {
+   "dz": [
+    -0.07,
+    0.12
+   ],
+   "pitch_deg": [
+    -10,
+    15
+   ],
+   "yaw_deg": [
+    -20,
+    20
+   ],
+   "lean_dx": [
+    0.1
+   ]
+  }
+ }
+}

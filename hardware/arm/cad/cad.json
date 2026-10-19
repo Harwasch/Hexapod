@@ -1,0 +1,204 @@
+{
+ "links": {
+  "body": [
+   "actuator",
+   "actuator output",
+   "deck seal ring (printed)"
+  ],
+  "turret": [
+   "turret plate (printed)",
+   "turret cheek, shoulder side (printed)",
+   "turret cheek, elbow side (printed)",
+   "turret box (printed)",
+   "actuator",
+   "actuator output",
+   "shoulder capstan pinion (2 mm Dyneema DM20)",
+   "actuator",
+   "actuator output",
+   "elbow capstan pinion (2 mm Dyneema DM20)"
+  ],
+  "upper": [
+   "upper arm hub (printed)",
+   "aluminium tube",
+   "elbow housing (printed)",
+   "elbow axle"
+  ],
+  "crank": [
+   "crank (printed)"
+  ],
+  "rod": [
+   "carbon rod",
+   "rod end",
+   "rod end"
+  ],
+  "fore": [
+   "forearm hub and rear lever (printed)",
+   "aluminium tube",
+   "forearm roll clamp (printed)",
+   "servo",
+   "servo horn"
+  ],
+  "froll": [
+   "forearm roll yoke (printed)",
+   "servo",
+   "servo horn"
+  ],
+  "wrist": [
+   "wrist bracket (printed)",
+   "camera housing (printed)",
+   "camera lens",
+   "ToF window",
+   "servo",
+   "servo horn"
+  ],
+  "flange": [
+   "tool changer, arm side (printed)"
+  ],
+  "tool_gripper": [
+   "tool changer, tool side (printed)",
+   "gripper palm (printed)",
+   "servo",
+   "servo horn"
+  ],
+  "finger_l": [
+   "fin-ray finger (TPU)"
+  ],
+  "finger_r": [
+   "fin-ray finger (TPU)"
+  ],
+  "tool_probe": [
+   "tool changer, tool side (printed)",
+   "probe holder",
+   "probe rod"
+  ],
+  "tool_sprayer": [
+   "tool changer, tool side (printed)",
+   "spray head",
+   "nozzle"
+  ]
+ },
+ "printed": [
+  {
+   "part": "deck seal ring (printed)",
+   "file": "stl/deck_seal_ring.stl",
+   "grams": 5.3,
+   "link": "body"
+  },
+  {
+   "part": "turret plate (printed)",
+   "file": "stl/turret_plate.stl",
+   "grams": 22.3,
+   "link": "turret"
+  },
+  {
+   "part": "turret cheek, shoulder side (printed)",
+   "file": "stl/turret_cheek_shoulder_side.stl",
+   "grams": 61.5,
+   "link": "turret"
+  },
+  {
+   "part": "turret cheek, elbow side (printed)",
+   "file": "stl/turret_cheek_elbow_side.stl",
+   "grams": 66.6,
+   "link": "turret"
+  },
+  {
+   "part": "turret box (printed)",
+   "file": "stl/turret_box.stl",
+   "grams": 32.7,
+   "link": "turret"
+  },
+  {
+   "part": "upper arm hub (printed)",
+   "file": "stl/upper_arm_hub.stl",
+   "grams": 41.4,
+   "link": "upper"
+  },
+  {
+   "part": "elbow housing (printed)",
+   "file": "stl/elbow_housing.stl",
+   "grams": 21.2,
+   "link": "upper"
+  },
+  {
+   "part": "crank (printed)",
+   "file": "stl/crank.stl",
+   "grams": 39.3,
+   "link": "crank"
+  },
+  {
+   "part": "forearm hub and rear lever (printed)",
+   "file": "stl/forearm_hub_and_rear_lever.stl",
+   "grams": 29.1,
+   "link": "fore"
+  },
+  {
+   "part": "forearm roll clamp (printed)",
+   "file": "stl/forearm_roll_clamp.stl",
+   "grams": 24.1,
+   "link": "fore"
+  },
+  {
+   "part": "forearm roll yoke (printed)",
+   "file": "stl/forearm_roll_yoke.stl",
+   "grams": 20.7,
+   "link": "froll"
+  },
+  {
+   "part": "wrist bracket (printed)",
+   "file": "stl/wrist_bracket.stl",
+   "grams": 30.4,
+   "link": "wrist"
+  },
+  {
+   "part": "camera housing (printed)",
+   "file": "stl/camera_housing.stl",
+   "grams": 4.1,
+   "link": "wrist"
+  },
+  {
+   "part": "tool changer, arm side (printed)",
+   "file": "stl/tool_changer_arm_side.stl",
+   "grams": 23.9,
+   "link": "flange"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side.stl",
+   "grams": 14.2,
+   "link": "tool_gripper"
+  },
+  {
+   "part": "gripper palm (printed)",
+   "file": "stl/gripper_palm.stl",
+   "grams": 61.0,
+   "link": "tool_gripper"
+  },
+  {
+   "part": "fin-ray finger (TPU)",
+   "file": "stl/fin-ray_finger.stl",
+   "grams": 11.3,
+   "link": "finger_l"
+  },
+  {
+   "part": "fin-ray finger (TPU)",
+   "file": "stl/fin-ray_finger_2.stl",
+   "grams": 11.3,
+   "link": "finger_r"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side_2.stl",
+   "grams": 14.2,
+   "link": "tool_probe"
+  },
+  {
+   "part": "tool changer, tool side (printed)",
+   "file": "stl/tool_changer_tool_side_3.stl",
+   "grams": 14.2,
+   "link": "tool_sprayer"
+  }
+ ],
+ "step": "arm_assembly.step",
+ "printed_grams": 548.8
+}

@@ -1,0 +1,1692 @@
+# Actuator catalog for low-cost outdoor arm (0.6-0.7 m reach, ~1 kg payload, ~2 kg arm mass)
+# Compiled 2026-10-16/17 from live store data (Shopify products.json of the stores below) + official datasheets.
+#
+# CONVENTIONS
+#   rated_nm   : continuous / nominal / "rated" torque at OUTPUT as published by vendor (null = vendor gives none)
+#   peak_nm    : peak / stall / max torque at OUTPUT as published
+#   ratio      : gear ratio (motor turns per output turn)
+#   speed_rpm  : NO-LOAD (or vendor "max") OUTPUT speed at nominal voltage; rated-load speed is in notes
+#   dia_mm/len_mm : round body -> diameter x axial length; square body -> side x depth; servos -> longest face x depth (full box in notes)
+#   price_usd  : single-unit retail list price, USD, cheapest variant that includes a driver + bus interface.
+#                Non-USD prices converted at assumed 1 EUR = 1.10 USD, 1 GBP = 1.30 USD, 1 JPY = 0.0067 USD (marked "?").
+#                US prices may exclude import tariffs; several stores show "backorder".
+#   Any value I could not verify is flagged in notes with a trailing "?".
+#
+# MAIN PRICE SOURCES (all fetched 2026-10-16/17)
+#   aifitlab.com  (US reseller, USD, Shopify; widest Chinese-actuator catalog; prices updated 2026-10-17)
+#   openelab.io   (EU reseller, EUR incl. VAT) / openelab.com (same company, USD)
+#   store.cubemars.com (official, USD), mjbots.com (official), shop.odriverobotics.com (official),
+#   hiwonder.com (official), robotis.us (official US distributor), shop.pimoroni.com (GBP)
+# MAIN SPEC SOURCES
+#   Damiao 2025 selection catalog PDF (official): https://www.worldrobotconference.com/profile/robot/download/2025/06/30/达妙科技DAMIAO - 2025年产品选型手册_20250630192546A441.pdf
+#   Vendor spec tables reproduced on the aifitlab product pages (Steadywin, Robstride, CubeMars, MyActuator, LK, Feetech, HighTorque)
+#   ROBOTIS e-manual (Dynamixel), hiwonder.com product pages, mjbots.com product pages
+
+meta:
+  compiled: "2026-10-17"
+  kgcm_to_nm: 0.0980665
+  fx_assumed: {EUR_USD: 1.10, GBP_USD: 1.30, JPY_USD: 0.0067}
+
+actuators:
+
+# =====================================================================================
+# 1. INTEGRATED QDD / GEARED BLDC ACTUATORS (FOC driver + encoder + bus in housing)
+# =====================================================================================
+
+# ---------------- Damiao (DM) ----------------
+- id: dm_j3507_2ec
+  family: Damiao
+  name: "DM-J3507-2EC (24V)"
+  type: qdd
+  rated_nm: 0.8
+  peak_nm: 3.0
+  ratio: 7
+  speed_rpm: 460
+  mass_g: 150
+  dia_mm: 46
+  len_mm: 37.9
+  voltage_v: "24 (48V variant: 900 rpm no-load)"
+  interface: "CAN 1Mbps / CAN-FD (MIT, pos-vel, vel, force-pos modes)"
+  encoder: "dual single-turn magnetic (motor + output)"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 120
+  price_source: "https://aifitlab.com/products/damiao-dm-j3507-2ec-motor"
+  notes: "Rated speed 150 rpm. OpenELAB EUR 131.20. Specs from Damiao 2025 catalog. Wrist-roll class."
+
+- id: dm_j4310_2ec_v4
+  family: Damiao
+  name: "DM-J4310-2EC (V4 driver / V1.2, 24V)"
+  type: qdd
+  rated_nm: 3.5
+  peak_nm: 12.5
+  ratio: 10
+  speed_rpm: 200
+  mass_g: 325
+  dia_mm: 57
+  len_mm: 46
+  voltage_v: "24 (48V variant, 200-450 rpm no-load)"
+  interface: "CAN 1Mbps (CAN-FD per 2025 catalog); UART config"
+  encoder: "dual 16-bit single-turn magnetic (motor + output)"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 125
+  price_source: "https://aifitlab.com/products/damiao-dm-j4310-2ec-v1-1-servo-motor"
+  notes: "Older V3 driver (V1.1) is 3 Nm rated / 7 Nm peak per 2025 catalog, same $125 at aifitlab; OpenELAB EUR 119.95 (V3) / 137.50 (V4). Rated speed 120 rpm. Used in Seeed reBot Arm B601-DM. Most-used cheap arm joint in LeRobot community. Search snippets show aifitlab backorder at times. No public reliability data found on driver failures; closed firmware, Chinese-first docs; handle regen with bleeder/battery."
+
+- id: dm_j4310p_2ec
+  family: Damiao
+  name: "DM-J4310P-2EC (crossed-roller output, V4, 24V)"
+  type: qdd
+  rated_nm: 3.5
+  peak_nm: 12.5
+  ratio: 10
+  speed_rpm: 200
+  mass_g: 325
+  dia_mm: 57
+  len_mm: 49
+  voltage_v: "24 (48V: 450 rpm no-load)"
+  interface: "CAN 1Mbps; UART config"
+  encoder: "dual 16-bit single-turn magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 155
+  price_source: "https://aifitlab.com/products/damiao-dm-j4310p-2ec-motor"
+  notes: "P = crossed-roller output bearing (better moment load for arm joints). OpenELAB EUR 165.85."
+
+- id: dm_j4340_2ec
+  family: Damiao
+  name: "DM-J4340-2EC (24V)"
+  type: qdd
+  rated_nm: 9
+  peak_nm: 27
+  ratio: 40
+  speed_rpm: 52.5
+  mass_g: 362
+  dia_mm: 57
+  len_mm: 53.3
+  voltage_v: "24 (48V: 100 rpm no-load)"
+  interface: "CAN 1Mbps / CAN-FD"
+  encoder: "dual single-turn magnetic"
+  backdrivable: "partly (40:1 two-stage)"
+  ip: "none stated"
+  price_usd: 155
+  price_source: "https://aifitlab.com/products/damiao-dm-j4340-2ec-servo-motor"
+  notes: "Rated speed 36 rpm (slow at 24V; use 48V version for 100 rpm). OpenELAB EUR 188.95. Specs from Damiao 2025 catalog."
+
+- id: dm_j4340p_2ec
+  family: Damiao
+  name: "DM-J4340P-2EC (crossed-roller, 24V)"
+  type: qdd
+  rated_nm: 9
+  peak_nm: 27
+  ratio: 40
+  speed_rpm: 52.5
+  mass_g: 375
+  dia_mm: 57
+  len_mm: 56.5
+  voltage_v: "24 (48V: 100 rpm no-load, $185)"
+  interface: "CAN 1Mbps / CAN-FD"
+  encoder: "dual single-turn magnetic"
+  backdrivable: "partly (40:1)"
+  ip: "none stated"
+  price_usd: 175
+  price_source: "https://aifitlab.com/products/damiao-dm-j4340p-2ec-servo-motor"
+  notes: "One retailer table lists 12/40 Nm - contradicts official catalog 9/27 (treat as error). OpenELAB EUR 212.05. Good elbow/shoulder-roll candidate."
+
+- id: dm_j6006_2ec
+  family: Damiao
+  name: "DM-J6006-2EC"
+  type: qdd
+  rated_nm: 4
+  peak_nm: 11
+  ratio: 6
+  speed_rpm: 226
+  mass_g: 335
+  dia_mm: 76
+  len_mm: 36.5
+  voltage_v: "24-48 (408 rpm @48V)"
+  interface: "CAN 1Mbps / CAN-FD"
+  encoder: "dual 14-bit single-turn magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 150
+  price_source: "https://aifitlab.com/products/damiao-dm-j6006-2ec-servo-motor"
+  notes: "Catalog says 11 Nm peak, store table says 12 Nm peak. Rated speed 150 rpm."
+
+- id: dm_j6248p_2ec
+  family: Damiao
+  name: "DM-J6248P-2EC (new 2025)"
+  type: qdd
+  rated_nm: 30
+  peak_nm: 97
+  ratio: 48
+  speed_rpm: 60
+  mass_g: 628
+  dia_mm: 76
+  len_mm: 62.5
+  voltage_v: "24?"
+  interface: "CAN / CAN-FD"
+  encoder: "dual single-turn magnetic"
+  backdrivable: "partly/low (48:1)"
+  ip: "none stated"
+  price_usd: 265
+  price_source: "https://aifitlab.com/products/damiao-dm-j6248p-2ec-motor"
+  notes: "Specs from Damiao 2025 catalog (rated 40 rpm). Supply voltage not in catalog table - 24V assumed?. Very high torque density for shoulder pitch."
+
+- id: dm_j8006_2ec
+  family: Damiao
+  name: "DM-J8006-2EC V1.1"
+  type: qdd
+  rated_nm: 8
+  peak_nm: 20
+  ratio: 6
+  speed_rpm: 194
+  mass_g: 559
+  dia_mm: 96
+  len_mm: 40
+  voltage_v: "24-48 (393 rpm @48V)"
+  interface: "CAN 1Mbps / CAN-FD"
+  encoder: "dual 14-bit single-turn magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 210
+  price_source: "https://aifitlab.com/products/damiao-dm-j8006-2ec-v1-1-servo-motor"
+  notes: "Rated speed 120 rpm."
+
+- id: dm_j8009p_2ec
+  family: Damiao
+  name: "DM-J8009P-2EC"
+  type: qdd
+  rated_nm: 20
+  peak_nm: 40
+  ratio: 9
+  speed_rpm: 168
+  mass_g: 921
+  dia_mm: 98
+  len_mm: 61.7
+  voltage_v: "24-48 (335 rpm @48V)"
+  interface: "CAN 1Mbps / CAN-FD"
+  encoder: "dual 14-bit single-turn magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 395
+  price_source: "https://aifitlab.com/products/damiao-dm-j8009p-2ec-servo-motor"
+  notes: "Rated 100 rpm @24V. Retailer sheet says 930 g. OpenELAB EUR 444-450. Non-P J8009 listed at $470 (odd). Expensive vs J10010L below."
+
+- id: dm_j10010l_2ec
+  family: Damiao
+  name: "DM-J10010L-2EC"
+  type: qdd
+  rated_nm: 40
+  peak_nm: 120
+  ratio: 10
+  speed_rpm: 100
+  mass_g: 1375
+  dia_mm: 120
+  len_mm: 53
+  voltage_v: "24-48 (200 rpm @48V)"
+  interface: "CAN 1Mbps / CAN-FD"
+  encoder: "dual 14-bit single-turn magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 265
+  price_source: "https://aifitlab.com/products/damiao-dm-j10010l-2ec-servo-motor"
+  notes: "Too heavy for a 2 kg arm but cheapest $/Nm in catalog. OpenELAB EUR 289.75. Rated 70 rpm @24V."
+
+- id: dm_s3519_1ec
+  family: Damiao
+  name: "DM-S3519-1EC (M3508-style geared motor + separate driver)"
+  type: qdd
+  rated_nm: 3.5
+  peak_nm: 7.8
+  ratio: 19.2
+  speed_rpm: 435
+  mass_g: 396
+  dia_mm: 42
+  len_mm: 91.5
+  voltage_v: "24"
+  interface: "CAN (separate driver board)"
+  encoder: "single (Hall / motor magnetic)"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 105
+  price_source: "https://aifitlab.com/products/damiao-dm-s3519-1ec-servo-motor"
+  notes: "Inline (long) form factor, driver not integrated ($75 motor only). No output encoder -> needs homing. Catalog rated speed 395 rpm."
+
+- id: dm_2325
+  family: Damiao
+  name: "DM-2325 (DM-S2325) micro geared servo with driver"
+  type: qdd
+  rated_nm: 0.5
+  peak_nm: 2.0
+  ratio: 25
+  speed_rpm: 560
+  mass_g: 172
+  dia_mm: 28
+  len_mm: 77.6
+  voltage_v: "24-48"
+  interface: "CAN 1Mbps / CAN-FD 5Mbps"
+  encoder: "incremental (motor side)"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 100
+  price_source: "https://aifitlab.com/products/damiao-dm-2325-motor"
+  notes: "Store table literally says nominal 5 Nm / peak 2 Nm (inconsistent) - 0.5 Nm rated assumed?; 560 rpm no-load seems motor-side?. Incremental encoder => homing required. Gripper/wrist only."
+
+# ---------------- Robstride ----------------
+- id: rs_00
+  family: Robstride
+  name: "RobStride 00"
+  type: qdd
+  rated_nm: 5
+  peak_nm: 14
+  ratio: 10
+  speed_rpm: 315
+  mass_g: 310
+  dia_mm: 57
+  len_mm: 51
+  voltage_v: "48 (24-60)"
+  interface: "CAN 2.0 1Mbps (private 29-bit / MIT 11-bit / CANopen selectable)"
+  encoder: "dual 14-bit magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 125
+  price_source: "https://aifitlab.com/products/robstride-00-motor"
+  notes: "Square 57x57x51 mm. Rated speed 260 rpm. openelab.com USD 151.99. Protocol must match host driver (private vs MIT vs CANopen) - common integration pitfall; ROS2 driver young (v0.1.0, 2026-08). Best $/Nm in the <350 g class."
+
+- id: rs_01
+  family: Robstride
+  name: "RobStride 01"
+  type: qdd
+  rated_nm: 6
+  peak_nm: 17
+  ratio: 7.75
+  speed_rpm: 315
+  mass_g: 380
+  dia_mm: 78.5
+  len_mm: 40
+  voltage_v: "36 (24-48)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "single 14-bit single-turn absolute (motor side)"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 130
+  price_source: "https://aifitlab.com/products/robstride-01-motor"
+  notes: "Square 78.5 mm. Single encoder + 7.75 ratio => output position ambiguous after power-up (needs homing). CyberGear successor. openelab.com USD 157.99."
+
+- id: rs_02
+  family: Robstride
+  name: "RobStride 02"
+  type: qdd
+  rated_nm: 6
+  peak_nm: 17
+  ratio: 7.75
+  speed_rpm: 410
+  mass_g: 405
+  dia_mm: 78.5
+  len_mm: 45.5
+  voltage_v: "48 (24-60)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "dual 14-bit magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 145
+  price_source: "https://aifitlab.com/products/robstride-02-motor"
+  notes: "Rated speed 360 rpm. openelab.com USD 174.99; Pakronics AUD 328 (OOS). Search snippets show backorders."
+
+- id: rs_02_ip67
+  family: Robstride
+  name: "RobStride 02 IP67"
+  type: qdd
+  rated_nm: 6
+  peak_nm: 17
+  ratio: 7.75
+  speed_rpm: 410
+  mass_g: 490
+  dia_mm: 78.5
+  len_mm: 45.5
+  voltage_v: "48 (24-60)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "dual 14-bit magnetic"
+  backdrivable: "yes"
+  ip: "IP67"
+  price_usd: 240
+  price_source: "https://aifitlab.com/products/robstride-02-ip67-motor"
+  notes: "Only sealed QDD found at this price. Store table says size 60x60x27 mm (looks wrong, copy error?) - dims assumed same as RS02?. OpenELAB EUR 219.95, 'pre-sale, 4 weeks'."
+
+- id: rs_03
+  family: Robstride
+  name: "RobStride 03"
+  type: qdd
+  rated_nm: 20
+  peak_nm: 60
+  ratio: 9
+  speed_rpm: 195
+  mass_g: 880
+  dia_mm: 106
+  len_mm: 56
+  voltage_v: "48 (15-60)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "dual 14-bit magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 225
+  price_source: "https://aifitlab.com/products/robstride-03-motor"
+  notes: "Rated speed 180 rpm. openelab.com USD 249.99 (pre-sale). Shoulder-pitch candidate if 880 g acceptable."
+
+- id: rs_04
+  family: Robstride
+  name: "RobStride 04"
+  type: qdd
+  rated_nm: 40
+  peak_nm: 120
+  ratio: 9
+  speed_rpm: 200
+  mass_g: 1420
+  dia_mm: 120
+  len_mm: 56
+  voltage_v: "48 (15-60)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "dual 14-bit magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 255
+  price_source: "https://aifitlab.com/products/robstride-04-motor"
+  notes: "Overkill/too heavy for this arm; listed for $/Nm reference. Rated speed 167 rpm."
+
+- id: rs_05
+  family: Robstride
+  name: "RobStride 05"
+  type: qdd
+  rated_nm: 1.6
+  peak_nm: 5.5
+  ratio: 7.75
+  speed_rpm: 480
+  mass_g: 191
+  dia_mm: 46
+  len_mm: 44
+  voltage_v: "48 (15-60)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "dual 14-bit magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 110
+  price_source: "https://aifitlab.com/products/robstride-05-motor"
+  notes: "Square 46 mm. Rated speed 100 rpm. openelab.com USD 124.99. Wrist candidate."
+
+- id: rs_edulite_05
+  family: Robstride
+  name: "RobStride EduLite 05 (2026 'youth edition')"
+  type: qdd
+  rated_nm: 1.8
+  peak_nm: 6
+  ratio: 9
+  speed_rpm: 430
+  mass_g: 242
+  dia_mm: 46
+  len_mm: 44
+  voltage_v: "48 (15-60)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "dual magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 80
+  price_source: "https://aifitlab.com/products/robstride-edulite-05-motor"
+  notes: "Cheapest integrated dual-encoder QDD found. Powder-metallurgy gears (vs machined steel on RS05) - lower shock tolerance?. openelab.com USD 81.99, OpenELAB EUR 69.95. Robstride also sells 'Edulite A3' arm kit ($965)."
+
+- id: rs_06
+  family: Robstride
+  name: "RobStride 06"
+  type: qdd
+  rated_nm: 11
+  peak_nm: 36
+  ratio: 9
+  speed_rpm: 480
+  mass_g: 621
+  dia_mm: 88
+  len_mm: 49
+  voltage_v: "48 (15-60)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "dual 14-bit magnetic"
+  backdrivable: "yes"
+  ip: "none stated"
+  price_usd: 210
+  price_source: "https://aifitlab.com/products/robstride-06-motor"
+  notes: "Square 88 mm. Rated speed 100 rpm (vendor). Newer model (2025-26)."
+
+- id: rs_10p
+  family: Robstride
+  name: "RobStride 10P (25:1)"
+  type: qdd
+  rated_nm: 10
+  peak_nm: 42
+  ratio: 25
+  speed_rpm: 125
+  mass_g: 460
+  dia_mm: null
+  len_mm: null
+  voltage_v: "48 (15-60)"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "dual magnetic"
+  backdrivable: "partly (25:1)"
+  ip: "none stated"
+  price_usd: 215
+  price_source: "https://aifitlab.com/products/robstride-10p-motor"
+  notes: "Vendor: 'stall rated' 10 Nm, 'rotate rated' 14 Nm @100 rpm. Dimensions not published on store page?. OpenELAB EUR 199.95. Excellent torque/mass for elbow/shoulder."
+
+# ---------------- Xiaomi / Unitree ----------------
+- id: xiaomi_cybergear
+  family: Xiaomi
+  name: "Xiaomi CyberGear micromotor"
+  type: qdd
+  rated_nm: 4
+  peak_nm: 12
+  ratio: 7.75
+  speed_rpm: 296
+  mass_g: 317
+  dia_mm: 80.5
+  len_mm: 36.5
+  voltage_v: "24"
+  interface: "CAN 2.0 1Mbps"
+  encoder: "single 14-bit single-turn absolute (motor side)"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 179
+  price_source: "https://aifitlab.com/products/xiaomi-cybergear-micromotor"
+  notes: "Max speed at continuous torque 240 rpm. Now worse value than RobStride 00/01 (same design lineage); single encoder; long-term availability uncertain?."
+
+- id: unitree_go_m8010_6
+  family: Unitree
+  name: "Unitree GO-M8010-6"
+  type: qdd
+  rated_nm: null
+  peak_nm: 23.7
+  ratio: 6.33
+  speed_rpm: 286
+  mass_g: 530
+  dia_mm: 96.5
+  len_mm: 42.3
+  voltage_v: "24 (12-30)"
+  interface: "RS-485 4Mbps (Unitree protocol; needs RS-485 adapter, $35-50)"
+  encoder: "single 15-bit (motor side)"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 280
+  price_source: "https://aifitlab.com/products/unitree-go-m8010-6-motor"
+  notes: "Speed = 30 rad/s max. No official continuous torque rating (one reseller claims 23.7 rated / 45 peak - unverified?). Body 96.5x92.5x42.3 mm. Single motor-side encoder -> output ambiguity. Not CAN."
+
+# ---------------- Steadywin GIM (prices = cheapest CAN driver variant) ----------------
+- id: sw_gim4305_10
+  family: Steadywin
+  name: "Steadywin GIM4305-10 + GDS34 driver"
+  type: qdd
+  rated_nm: 1.05
+  peak_nm: 3.82
+  ratio: 10
+  speed_rpm: 402
+  mass_g: 150
+  dia_mm: 53
+  len_mm: 26
+  voltage_v: "24 (12-40)"
+  interface: "CAN (GDS) / CAN & RS485 (GDZ)"
+  encoder: "single 14-bit motor-side (separate output encoder supported)"
+  backdrivable: "yes"
+  ip: "IP54 (vendor claim)"
+  price_usd: 115
+  price_source: "https://aifitlab.com/products/steadywin-gim4305-planetary-reducer-servo-motor"
+  notes: "Pupper V3 actuator ($125 custom version). Motor-only $70. Rated speed 312 rpm."
+
+- id: sw_gim4310_10
+  family: Steadywin
+  name: "Steadywin GIM4310-10 + GDK34 driver"
+  type: qdd
+  rated_nm: 2.05
+  peak_nm: 5.6
+  ratio: 10
+  speed_rpm: 228
+  mass_g: 227
+  dia_mm: 53
+  len_mm: 32
+  voltage_v: "24 (12-48)"
+  interface: "CAN (GDS/GDK) / CAN & RS485 (GDZ)"
+  encoder: "single 14-bit motor-side"
+  backdrivable: "yes"
+  ip: "IP54 (vendor claim)"
+  price_usd: 125
+  price_source: "https://aifitlab.com/products/steadywin-gim4310-10-planetary-reducer-servo-motor"
+  notes: "Specs listed for GDS34 driver (GDZ34: 1.63/7.98 Nm). GDK34 is the cheapest driver option; its exact ratings not published?. Motor-only $82."
+
+- id: sw_gim4310_36
+  family: Steadywin
+  name: "Steadywin GIM4310-36 + GDK34 driver"
+  type: qdd
+  rated_nm: 7.38
+  peak_nm: 20.16
+  ratio: 36
+  speed_rpm: 63
+  mass_g: 310
+  dia_mm: 55
+  len_mm: 47
+  voltage_v: "24 (12-48)"
+  interface: "CAN (GDS/GDK) / CAN & RS485 (GDZ)"
+  encoder: "single 14-bit motor-side (no output encoder option)"
+  backdrivable: "partly (36:1)"
+  ip: "IP54 (vendor claim)"
+  price_usd: 145
+  price_source: "https://aifitlab.com/products/steadywin-gim4310-36-planetary-reducer-servo-motor"
+  notes: "Rated speed 41 rpm. Specs for GDS34 driver ($165). No output encoder at 36:1 => must home every boot. Motor-only $100."
+
+- id: sw_gim6010_8
+  family: Steadywin
+  name: "Steadywin GIM6010-8 + GDS68 (SDC104) driver"
+  type: qdd
+  rated_nm: 5
+  peak_nm: 11
+  ratio: 8
+  speed_rpm: 420
+  mass_g: 388
+  dia_mm: 80
+  len_mm: 40
+  voltage_v: "24 (12-56); 48V spec: 4.6 Nm rated / 17.9 Nm stall / 280 rpm"
+  interface: "CAN"
+  encoder: "16-bit motor-side; +$15 for secondary (output) encoder"
+  backdrivable: "yes"
+  ip: "IP54 (vendor claim)"
+  price_usd: 90
+  price_source: "https://aifitlab.com/products/steadywin-gim6010-8-planetary-reducer-servo-motor"
+  notes: "Steel gears, 15 arcmin backlash. Rated speed 120 rpm @24V. With output encoder $105. Bare motor+gearbox $70. Other sellers $72-105 (rcdrone, OpenELAB). Cheapest $/Nm small QDD found. Multiple driver families (GDS/GDZ/GDK/GDM) have different protocols & tools - pin the variant."
+
+- id: sw_gim6010_48
+  family: Steadywin
+  name: "Steadywin GIM6010-48 + GDS68 driver"
+  type: qdd
+  rated_nm: 30
+  peak_nm: 66
+  ratio: 48
+  speed_rpm: 70
+  mass_g: 777
+  dia_mm: 80
+  len_mm: 67.5
+  voltage_v: "24 (12-56)"
+  interface: "CAN (GDS68) / CAN & RS485 (GDZ468)"
+  encoder: "16-bit motor-side; secondary encoder only with GDZ/GDK driver (+$50)"
+  backdrivable: "partly/low (48:1)"
+  ip: "IP54 (vendor claim)"
+  price_usd: 165
+  price_source: "https://aifitlab.com/products/steadywin-gim6010-48-planetary-reducer-servo-motor"
+  notes: "Rated speed 20 rpm (slow!). GDZ468H 48V: 26.2/74.8 Nm, 95 rpm max, $236.50 with output encoder. Brake version +$50. Shoulder candidate if slow speed acceptable."
+
+- id: sw_gim8108_8
+  family: Steadywin
+  name: "Steadywin GIM8108-8 + GDS68 driver"
+  type: qdd
+  rated_nm: 7.5
+  peak_nm: 22
+  ratio: 8
+  speed_rpm: 320
+  mass_g: 396
+  dia_mm: 92
+  len_mm: 55
+  voltage_v: "48 (12-56)"
+  interface: "CAN"
+  encoder: "16-bit motor-side; +$10 secondary encoder"
+  backdrivable: "yes"
+  ip: "IP54 (vendor claim)"
+  price_usd: 125
+  price_source: "https://aifitlab.com/products/steadywin-gim8108-8-planetary-reducer-servo-motor"
+  notes: "Rated speed 110 rpm. With output encoder $135. OpenELAB EUR 131.20 / 142.75 (dual). Bare motor+gearbox $85."
+
+- id: sw_gim8108_36
+  family: Steadywin
+  name: "Steadywin GIM8108-36 + GDK810 driver"
+  type: qdd
+  rated_nm: 32.76
+  peak_nm: 109.5
+  ratio: 36
+  speed_rpm: 60
+  mass_g: 760
+  dia_mm: 96
+  len_mm: 57
+  voltage_v: "48 (24-48)"
+  interface: "CAN (GDS/GDK) / CAN & RS485 (GDZ)"
+  encoder: "14-bit motor-side; +$15 secondary"
+  backdrivable: "partly/low (36:1)"
+  ip: "IP54 (vendor claim)"
+  price_usd: 240
+  price_source: "https://aifitlab.com/products/steadywin-gim8108-36-planetary-reducer-servo-motor"
+  notes: "Specs for SDC103 driver ($275); GDK810 ratings not published?. Rated 51 rpm. Output encoder variant $255."
+
+# ---------------- CubeMars ----------------
+- id: cm_ak40_10
+  family: CubeMars
+  name: "CubeMars AK40-10 V3.0 KV170"
+  type: qdd
+  rated_nm: 1.3
+  peak_nm: 4.1
+  ratio: 10
+  speed_rpm: 435
+  mass_g: 200
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24"
+  interface: "CAN + UART"
+  encoder: "single 14-bit motor-side"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 135.9
+  price_source: "https://store.cubemars.com/products/ak40-10-v3-0-kv170"
+  notes: "Official store. Backlash 18 arcmin. Dims not on store page?."
+
+- id: cm_ak45_10
+  family: CubeMars
+  name: "CubeMars AK45-10 V3.0 KV75"
+  type: qdd
+  rated_nm: 2.5
+  peak_nm: 7
+  ratio: 10
+  speed_rpm: 180
+  mass_g: 260
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24"
+  interface: "CAN + UART"
+  encoder: "single 14-bit motor-side"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 155.9
+  price_source: "https://store.cubemars.com/products/ak45-10-v3-0-kv75"
+  notes: "Rated speed 150 rpm. Same at aifitlab."
+
+- id: cm_ak45_36
+  family: CubeMars
+  name: "CubeMars AK45-36 V3.0 KV80"
+  type: qdd
+  rated_nm: 8
+  peak_nm: 24
+  ratio: 36
+  speed_rpm: 52
+  mass_g: 340
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24"
+  interface: "CAN + UART"
+  encoder: "single 14-bit motor-side"
+  backdrivable: "partly (back-drive torque 0.8 Nm)"
+  ip: "none"
+  price_usd: 185.9
+  price_source: "https://store.cubemars.com/products/ak45-36-v3-0-kv80"
+  notes: "Rated speed 40 rpm. Backlash 12 arcmin. Single encoder at 36:1 -> homing."
+
+- id: cm_ak60_6
+  family: CubeMars
+  name: "CubeMars AK60-6 V3.0 KV80"
+  type: qdd
+  rated_nm: 3
+  peak_nm: 9
+  ratio: 6
+  speed_rpm: 320
+  mass_g: 380
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24/48 (640 rpm @48V)"
+  interface: "CAN + UART"
+  encoder: "21-bit inner (and outer per table?)"
+  backdrivable: "yes (0.2 Nm)"
+  ip: "none"
+  price_usd: 298.9
+  price_source: "https://store.cubemars.com/products/ak60-6-v3-0-kv80"
+  notes: "aifitlab $229.90 motor-only / $298.90 with driver; RobotShop $347-374. Poor $/Nm."
+
+- id: cm_ake60_8
+  family: CubeMars
+  name: "CubeMars AKE60-8 KV80 + driver board"
+  type: qdd
+  rated_nm: 5
+  peak_nm: 12.5
+  ratio: 8
+  speed_rpm: 240
+  mass_g: 260
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24"
+  interface: "CAN (driver board)"
+  encoder: "single?"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 298.8
+  price_source: "https://store.cubemars.com/products/ake60-8-kv80"
+  notes: "$218.90 motor + $79.99 driver board (official). Backlash 9 arcmin. Newer AKE40-6 ($119.90) and AKE50-8 ($169.90) listed but specs not published / sold out?."
+
+- id: cm_ak70_10
+  family: CubeMars
+  name: "CubeMars AK70-10 KV100 + driver"
+  type: qdd
+  rated_nm: 8.3
+  peak_nm: 24.8
+  ratio: 10
+  speed_rpm: 158
+  mass_g: 521
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24/48 (310 rpm rated @48V)"
+  interface: "CAN + UART"
+  encoder: "single 14-bit motor-side"
+  backdrivable: "yes (0.48 Nm)"
+  ip: "none"
+  price_usd: 498.9
+  price_source: "https://store.cubemars.com/products/ak70-10"
+  notes: "speed_rpm here = rated speed @24V (no-load not given). Expensive."
+
+- id: cm_ak80_9
+  family: CubeMars
+  name: "CubeMars AK80-9 V3.0 KV100"
+  type: qdd
+  rated_nm: 9
+  peak_nm: 22
+  ratio: 9
+  speed_rpm: 570
+  mass_g: 490
+  dia_mm: null
+  len_mm: null
+  voltage_v: "48"
+  interface: "CAN + UART"
+  encoder: "single 16-bit motor-side"
+  backdrivable: "yes (0.51 Nm)"
+  ip: "none"
+  price_usd: 579.9
+  price_source: "https://store.cubemars.com/products/ak80-9-v3-0-kv100"
+  notes: "Rated 390 rpm. Mini-cheetah class; 4-5x price of Robstride/Damiao equivalents."
+
+# ---------------- MyActuator RMD-X ----------------
+- id: ma_x2_7
+  family: MyActuator
+  name: "MyActuator RMD-X2-7 (P28, V4 'E')"
+  type: qdd
+  rated_nm: 2.5
+  peak_nm: 7
+  ratio: 28.17
+  speed_rpm: 178
+  mass_g: 260
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24"
+  interface: "CAN 1Mbps / EtherCAT"
+  encoder: "dual absolute 17-bit input / 18-bit output"
+  backdrivable: "partly (0.4 Nm)"
+  ip: "none"
+  price_usd: 345
+  price_source: "https://aifitlab.com/products/myactuator-rmd-x2-7-motor"
+  notes: "OpenELAB EUR 314.95. Rated speed 142 rpm."
+
+- id: ma_x4_10
+  family: MyActuator
+  name: "MyActuator RMD-X4-10 (P12.6, V4 'E')"
+  type: qdd
+  rated_nm: 4
+  peak_nm: 10
+  ratio: 12.6
+  speed_rpm: 317
+  mass_g: 330
+  dia_mm: 55
+  len_mm: 55.5
+  voltage_v: "24"
+  interface: "CAN 1Mbps / EtherCAT"
+  encoder: "dual absolute 17/18-bit"
+  backdrivable: "yes (0.8 Nm)"
+  ip: "none"
+  price_usd: 345
+  price_source: "https://aifitlab.com/products/myactuator-rmd-x4-10-motor"
+  notes: "Dims from reseller listing (55 x 55.5 mm)?. OpenELAB EUR 314.95. Rated 238 rpm. Good docs/protocol, but 3x Robstride price."
+
+- id: ma_x4_36
+  family: MyActuator
+  name: "MyActuator RMD-X4-36 (P36, V4 'E')"
+  type: qdd
+  rated_nm: 10.5
+  peak_nm: 34
+  ratio: 36
+  speed_rpm: 111
+  mass_g: 360
+  dia_mm: 55
+  len_mm: 61
+  voltage_v: "24"
+  interface: "CAN 1Mbps / EtherCAT"
+  encoder: "dual absolute 17/18-bit"
+  backdrivable: "partly (1.14 Nm)"
+  ip: "none"
+  price_usd: 400
+  price_source: "https://aifitlab.com/products/myactuator-rmd-x4-36-motor"
+  notes: "Crossed-roller output. Dims from a related X4-P36 listing?. OpenELAB EUR 367.45. Rated 83 rpm."
+
+- id: ma_x6_7
+  family: MyActuator
+  name: "MyActuator RMD-X6-7 (1:6, V2 motor + CAN V3 driver)"
+  type: qdd
+  rated_nm: 3.5
+  peak_nm: 7
+  ratio: 6
+  speed_rpm: 400
+  mass_g: 350
+  dia_mm: null
+  len_mm: null
+  voltage_v: "48"
+  interface: "CAN 1Mbps or RS485"
+  encoder: "18-bit (single?)"
+  backdrivable: "yes (0.08 Nm)"
+  ip: "none"
+  price_usd: 250
+  price_source: "https://aifitlab.com/products/myactuator-rmd-x6-7-motor"
+  notes: "speed_rpm = rated speed (no-load not given). Older generation."
+
+- id: ma_x6_60
+  family: MyActuator
+  name: "MyActuator RMD-X6-60 (P19.6, V4 'E')"
+  type: qdd
+  rated_nm: 20
+  peak_nm: 60
+  ratio: 19.612
+  speed_rpm: 176
+  mass_g: 820
+  dia_mm: null
+  len_mm: null
+  voltage_v: "48"
+  interface: "CAN 1Mbps / EtherCAT"
+  encoder: "dual absolute 17/17-bit"
+  backdrivable: "partly (1.6 Nm)"
+  ip: "none"
+  price_usd: 490
+  price_source: "https://aifitlab.com/products/myactuator-rmd-x6-60-motor"
+  notes: "Crossed-roller. OpenELAB EUR 449.35. Rated 153 rpm."
+
+- id: ma_x8_25
+  family: MyActuator
+  name: "MyActuator RMD-X8-25 (1:9, V2 + CAN V3)"
+  type: qdd
+  rated_nm: 10
+  peak_nm: 25
+  ratio: 9
+  speed_rpm: 110
+  mass_g: 710
+  dia_mm: null
+  len_mm: null
+  voltage_v: "48"
+  interface: "CAN 1Mbps or RS485"
+  encoder: "18-bit"
+  backdrivable: "yes (0.61 Nm)"
+  ip: "none"
+  price_usd: 470
+  price_source: "https://aifitlab.com/products/myactuator-rmd-x8-25-motor"
+  notes: "speed_rpm = rated speed. Older generation."
+
+# ---------------- LK-Tech (LKMTECH) MG ----------------
+- id: lk_mg4010e_i10
+  family: LK-Tech
+  name: "LK MG4010E-i10-V3"
+  type: qdd
+  rated_nm: 2.5
+  peak_nm: 4.5
+  ratio: 10
+  speed_rpm: 320
+  mass_g: 250
+  dia_mm: 53
+  len_mm: 41
+  voltage_v: "24 (7.4-32)"
+  interface: "CAN 1Mbps or RS485 (choose at order)"
+  encoder: "dual: 18-bit motor + 14-bit output"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 165
+  price_source: "https://aifitlab.com/products/lkmtech-mg4010e-i10-v3-motor"
+  notes: "Dims from reseller (phi53x41)?. Backlash <=8 arcmin. Rated 260 rpm."
+
+- id: lk_mg4010e_i36
+  family: LK-Tech
+  name: "LK MG4010E-i36-V3"
+  type: qdd
+  rated_nm: 6
+  peak_nm: 13
+  ratio: 36
+  speed_rpm: 90
+  mass_g: 378
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24 (12-24)"
+  interface: "CAN 1Mbps or RS485"
+  encoder: "dual: 18-bit motor + 14-bit output"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 290
+  price_source: "https://aifitlab.com/products/lkmtech-mg4010e-i36-v3-motor"
+  notes: "Rated 77 rpm."
+
+- id: lk_mg5010e_i10
+  family: LK-Tech
+  name: "LK MG5010E-i10-V3"
+  type: qdd
+  rated_nm: 4
+  peak_nm: 7
+  ratio: 10
+  speed_rpm: 320
+  mass_g: 420
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24 (7.4-32)"
+  interface: "CAN 1Mbps or RS485"
+  encoder: "single 18-bit motor"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 165
+  price_source: "https://aifitlab.com/products/lkmtech-mg5010e-i10-v3-motor"
+  notes: "rcdrone.top USD 236. Rated 235 rpm."
+
+- id: lk_mg5010e_i36
+  family: LK-Tech
+  name: "LK MG5010E-i36-V3"
+  type: qdd
+  rated_nm: 13
+  peak_nm: 25
+  ratio: 36
+  speed_rpm: 74
+  mass_g: 460
+  dia_mm: null
+  len_mm: null
+  voltage_v: "24 (7.4-32)"
+  interface: "CAN 1Mbps or RS485"
+  encoder: "dual: 18-bit motor + 14-bit output"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 240
+  price_source: "https://aifitlab.com/products/lkmtech-mg5010e-i36-v3-motor"
+  notes: "Rated 54 rpm. Note low peak/rated ratio (25/13)."
+
+- id: lk_mg6012e_i8
+  family: LK-Tech
+  name: "LK MG6012E-i8-V2 (dual encoder)"
+  type: qdd
+  rated_nm: 6
+  peak_nm: 16
+  ratio: 8
+  speed_rpm: 310
+  mass_g: 430
+  dia_mm: null
+  len_mm: null
+  voltage_v: "48 (12-60)"
+  interface: "CAN 1Mbps or RS485"
+  encoder: "dual: 18-bit motor + 14-bit output"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 210
+  price_source: "https://aifitlab.com/products/lkmtech-mg6012e-i8-v2-motor"
+  notes: "Single-encoder version $190. Backlash <=6 arcmin. Rated 256 rpm."
+
+- id: lk_mg8008e_i9
+  family: LK-Tech
+  name: "LK MG8008E-i9-V3 (48V)"
+  type: qdd
+  rated_nm: 10
+  peak_nm: 20
+  ratio: 9
+  speed_rpm: 220
+  mass_g: 570
+  dia_mm: null
+  len_mm: null
+  voltage_v: "48 (24V version 9 Nm rated / 112 rpm)"
+  interface: "CAN or RS485"
+  encoder: "single $260 / dual (18+14-bit) $280"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 260
+  price_source: "https://aifitlab.com/products/lkmtech-mg8008e-i9-v3-motor"
+  notes: "Rated 178 rpm @48V."
+
+# ---------------- HighTorque (Seeed partner) / Haitai ----------------
+- id: ht_htdw_4438_30
+  family: HighTorque
+  name: "HighTorque HTDW-4438-30-NE"
+  type: qdd
+  rated_nm: 2
+  peak_nm: 10
+  ratio: 30
+  speed_rpm: 75
+  mass_g: 194
+  dia_mm: 44
+  len_mm: 40
+  voltage_v: "12-48"
+  interface: "CAN-FD 5Mbps"
+  encoder: "dual 14-bit (input + output)"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 215
+  price_source: "https://aifitlab.com/products/high-torque-htdw-4438-30-ne-motor"
+  notes: "Square 44 mm. Rated 45 rpm. Low rated torque for price."
+
+- id: ht_htdw_5047_36
+  family: HighTorque
+  name: "HighTorque HTDW-5047-36-NE"
+  type: qdd
+  rated_nm: 4
+  peak_nm: 21
+  ratio: 36
+  speed_rpm: 60
+  mass_g: 321
+  dia_mm: 50
+  len_mm: 47
+  voltage_v: "12-48"
+  interface: "CAN-FD 5Mbps"
+  encoder: "dual 14-bit"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 197
+  price_source: "https://aifitlab.com/products/high-torque-htdw-5047-motor"
+  notes: "Square 50 mm. Rated 40 rpm. Same internal motor as RobStride 02 per one reseller?."
+
+- id: ht_htdw_6056_36
+  family: HighTorque
+  name: "HighTorque HTDW-6056-36-NE"
+  type: qdd
+  rated_nm: 10
+  peak_nm: 36
+  ratio: 36
+  speed_rpm: 60
+  mass_g: 565
+  dia_mm: 60
+  len_mm: 56
+  voltage_v: "12-48"
+  interface: "CAN-FD 5Mbps"
+  encoder: "dual 14-bit"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 236
+  price_source: "https://aifitlab.com/products/high-torque-htdw-6056-36-ne-motor"
+  notes: "Square 60 mm. Rated 50 rpm."
+
+- id: haitai_hwg8108_j8
+  family: Haitai
+  name: "HAITAI HWG8108-J8 + driver (12-40V)"
+  type: qdd
+  rated_nm: 10.2
+  peak_nm: 24.78
+  ratio: 8
+  speed_rpm: 390
+  mass_g: 360
+  dia_mm: 87
+  len_mm: 25.5
+  voltage_v: "24 (12-48)"
+  interface: "CAN? (driver comms not stated)"
+  encoder: "not stated?"
+  backdrivable: "yes"
+  ip: "IP54 (vendor claim)"
+  price_usd: 205
+  price_source: "https://aifitlab.com/products/haitai-hwg8108-j8-motor"
+  notes: "Frameless-style motor + steel 8:1 planetary; 327 g / phi87x25.5 WITHOUT driver; mass with driver est. 360 g?. $125 without driver."
+
+# =====================================================================================
+# 2. SMART SERIAL-BUS SERVOS
+# =====================================================================================
+- id: ft_sts3215_c001
+  family: Feetech
+  name: "Feetech STS3215-C001 (7.4V, 1/345)"
+  type: servo
+  rated_nm: 0.64
+  peak_nm: 1.91
+  ratio: 345
+  speed_rpm: 42
+  mass_g: 55
+  dia_mm: 45.2
+  len_mm: 35
+  voltage_v: "6-7.4 (spec @6V)"
+  interface: "TTL half-duplex serial 1Mbps (SCS protocol)"
+  encoder: "12-bit magnetic, 360 deg"
+  backdrivable: "no (backdriving while powered strips gears)"
+  ip: "none"
+  price_usd: 23
+  price_source: "https://aifitlab.com/products/feetech-sts3215-servo-motor"
+  notes: "Box 45.2x24.7x35. Copper gears. 19.5 kg.cm stall / 6.5 kg.cm rated @6V. OpenELAB EUR 23.57. Known issue: stripped gears on stalls >~15% of max torque and when back-driven (HBRobotics thread; SO-101 safety page). LeRobot SO-100/101 servo."
+
+- id: ft_sts3215_c018
+  family: Feetech
+  name: "Feetech STS3215-C018 (12V, 1/345)"
+  type: servo
+  rated_nm: 0.98
+  peak_nm: 2.94
+  ratio: 345
+  speed_rpm: 45
+  mass_g: 55
+  dia_mm: 45.2
+  len_mm: 35
+  voltage_v: "12 (4-14)"
+  interface: "TTL serial 1Mbps"
+  encoder: "12-bit magnetic"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 26
+  price_source: "https://aifitlab.com/products/feetech-sts3215-servo-motor"
+  notes: "Steel gears, PA+GF case. 30/10 kg.cm. Seeed lists ST3215-C047 12V at $22 (distributor sheet 2026-06)?; RobotShop $49 incl tariffs. Same stripping caveat."
+
+- id: ft_sts3235
+  family: Feetech
+  name: "Feetech STS3235 (12V, metal case)"
+  type: servo
+  rated_nm: 0.98
+  peak_nm: 2.94
+  ratio: null
+  speed_rpm: 45
+  mass_g: 70.5
+  dia_mm: 45.2
+  len_mm: 35
+  voltage_v: "6-12"
+  interface: "TTL serial 1Mbps"
+  encoder: "12-bit magnetic"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 56
+  price_source: "https://aifitlab.com/products/feetech-sts3235-servo-motor"
+  notes: "Aluminium case version of C018 (better heat sinking). Gear ratio not published?."
+
+- id: ft_sts3250
+  family: Feetech
+  name: "Feetech STS3250 (12V, coreless)"
+  type: servo
+  rated_nm: 1.57
+  peak_nm: 4.9
+  ratio: null
+  speed_rpm: 75
+  mass_g: 74.5
+  dia_mm: 45.2
+  len_mm: 35
+  voltage_v: "6-12"
+  interface: "TTL serial 1Mbps"
+  encoder: "12-bit magnetic"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 88
+  price_source: "https://aifitlab.com/products/feetech-sts3250-servo-motor"
+  notes: "50/16 kg.cm @12V, 0.133 s/60deg. $97 with bracket. Same footprint as STS3215 - drop-in upgrade for wrist."
+
+- id: ft_sts3095_c002
+  family: Feetech
+  name: "Feetech STS3095-C002 (12V 95kg)"
+  type: servo
+  rated_nm: 2.21
+  peak_nm: 9.32
+  ratio: null
+  speed_rpm: 31
+  mass_g: 194.5
+  dia_mm: 65
+  len_mm: 48
+  voltage_v: "12"
+  interface: "TTL serial 1Mbps"
+  encoder: "magnetic 360 deg (12-bit?)"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 140
+  price_source: "https://aifitlab.com/products/feetech-sts3095-servo-motor"
+  notes: "Box 30x65x48, steel gears, stall current 9.8 A. 7.4V C001 $136 (35 rpm). OpenELAB EUR 124.95. Rated only 22.5 kg.cm."
+
+- id: ft_hls3960
+  family: Feetech
+  name: "Feetech HLS3960 (12V 60kg coreless, force control)"
+  type: servo
+  rated_nm: 2.26
+  peak_nm: 6.55
+  ratio: 358
+  speed_rpm: 60
+  mass_g: 103.2
+  dia_mm: 45
+  len_mm: 35.5
+  voltage_v: "9-12"
+  interface: "TTL serial"
+  encoder: "magnetic (360 deg, multi-turn +-7 turns)"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 116
+  price_source: "https://aifitlab.com/products/feetech-hls3960-servo-motor"
+  notes: "Box 45x24.4x35.5, aluminium case, current/torque mode. Best torque/mass of the 45 mm-footprint servos."
+
+- id: ft_hls3625
+  family: Feetech
+  name: "Feetech HLS3625(M) / HL-3625 (7.4V 25kg)"
+  type: servo
+  rated_nm: null
+  peak_nm: 2.45
+  ratio: null
+  speed_rpm: 52
+  mass_g: 55
+  dia_mm: 45
+  len_mm: 35
+  voltage_v: "5-8.4"
+  interface: "TTL serial"
+  encoder: "position sensor type not confirmed (0-4096 / 360 deg)?"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 30
+  price_source: "https://aifitlab.com/products/feetech-hl-3625-servo-motor"
+  notes: "aifitlab lists HL-3625-C001 (7.4V25KG) $30; Switch Science JPY 3,652 (~$24?) for HLS3625M; rcdrone $39 (sold out). Naming HL vs HLS ambiguous?. Rated torque not published?."
+
+- id: ft_sm60cl
+  family: Feetech
+  name: "Feetech SM60CL (12V 60kg RS485)"
+  type: servo
+  rated_nm: 1.96
+  peak_nm: 5.88
+  ratio: 253
+  speed_rpm: 35
+  mass_g: 180
+  dia_mm: 62
+  len_mm: 40
+  voltage_v: "12"
+  interface: "RS485 1Mbps (Feetech or Modbus-RTU)"
+  encoder: "12-bit magnetic"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 168
+  price_source: "https://aifitlab.com/products/feetech-sm60cl-c001-servo-motor"
+  notes: "Box 62x34x40, steel gears, coreless. RS485 more robust for outdoor cable runs."
+
+- id: ft_sm85cl
+  family: Feetech
+  name: "Feetech SM85CL (12V 85kg RS485)"
+  type: servo
+  rated_nm: 2.75
+  peak_nm: 8.34
+  ratio: null
+  speed_rpm: 37
+  mass_g: 215
+  dia_mm: 62
+  len_mm: 47
+  voltage_v: "12"
+  interface: "RS485 1Mbps (Feetech or Modbus-RTU)"
+  encoder: "magnetic 360 deg (12-bit?)"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 212
+  price_source: "https://aifitlab.com/products/feetech-sm85cl-c001-servo-motor"
+  notes: "Box 62x34x47, steel gears. Worse $/Nm than Damiao/Robstride QDDs."
+
+- id: hw_htd_45h
+  family: Hiwonder
+  name: "Hiwonder HTD-45H"
+  type: servo
+  rated_nm: null
+  peak_nm: 4.41
+  ratio: null
+  speed_rpm: 56
+  mass_g: 64
+  dia_mm: 51.1
+  len_mm: 40
+  voltage_v: "9-12.6"
+  interface: "UART half-duplex 115200 (Hiwonder protocol)"
+  encoder: "potentiometer, 0-240 deg"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 24.99
+  price_source: "https://www.hiwonder.com/products/htd-45h"
+  notes: "Box 51.1x20.14x40. 45 kg.cm @11.1V. Pot wears, 240 deg only, slow 115200 bus - low-end option."
+
+- id: hw_htd_85h
+  family: Hiwonder
+  name: "Hiwonder HTD-85H (stainless gears)"
+  type: servo
+  rated_nm: null
+  peak_nm: 8.34
+  ratio: null
+  speed_rpm: 50
+  mass_g: 153
+  dia_mm: 65
+  len_mm: 62.2
+  voltage_v: "9-14.8"
+  interface: "UART 115200"
+  encoder: "potentiometer? 0-240 deg"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 39.99
+  price_source: "https://www.hiwonder.com/products/htd-85h"
+  notes: "Box 65x30x62.2. 85 kg.cm @11.1V stall. Cheapest peak-Nm of any servo found, but no rated torque spec, 240 deg range."
+
+- id: hw_hx_35hm
+  family: Hiwonder
+  name: "Hiwonder HX-35HM (magnetic encoder)"
+  type: servo
+  rated_nm: 2.45
+  peak_nm: 3.43
+  ratio: null
+  speed_rpm: 53
+  mass_g: 71
+  dia_mm: 45.2
+  len_mm: 35
+  voltage_v: "9-12.6"
+  interface: "UART 115200"
+  encoder: "12-bit magnetic, 360 deg"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 35.99
+  price_source: "https://www.hiwonder.com/products/hx-35hm"
+  notes: "STS3215 footprint. 'Rotation torque' 25 kg.cm used as rated."
+
+- id: hw_hx_65hm
+  family: Hiwonder
+  name: "Hiwonder HX-65HM (dual-motor, magnetic)"
+  type: servo
+  rated_nm: 4.9
+  peak_nm: 6.37
+  ratio: null
+  speed_rpm: 53
+  mass_g: 143.5
+  dia_mm: 70
+  len_mm: 45
+  voltage_v: "9-12.6"
+  interface: "UART 115200"
+  encoder: "12-bit magnetic, 360 deg"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 49.99
+  price_source: "https://www.hiwonder.com/products/hx-65hm"
+  notes: "Box 45x25x70. Vendor 'rated' 50 kg.cm @12.6V looks optimistic (77% of stall)?. Two motors synchronized."
+
+- id: dxl_xl430_w250
+  family: Dynamixel
+  name: "ROBOTIS Dynamixel XL430-W250-T"
+  type: servo
+  rated_nm: null
+  peak_nm: 1.5
+  ratio: 258.5
+  speed_rpm: 61
+  mass_g: 57.2
+  dia_mm: 46.5
+  len_mm: 34
+  voltage_v: "6.5-12"
+  interface: "TTL half-duplex up to 4.5Mbps (Protocol 2.0)"
+  encoder: "12-bit contactless absolute (AS5601)"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 27.5
+  price_source: "https://www.robotis.us/dynamixel-xl430-w250-t/"
+  notes: "Box 28.5x46.5x34. Stall 1.4 Nm @11.1V. robotis.us shows $27.50 in stock (2026-10-16) - historically ~$50, may be promo?. ROBOTIS gives stall only; continuous ~20-30% of stall rule-of-thumb?."
+
+- id: dxl_xc330_t288
+  family: Dynamixel
+  name: "ROBOTIS Dynamixel XC330-T288-T"
+  type: servo
+  rated_nm: null
+  peak_nm: 1.0
+  ratio: 288.35
+  speed_rpm: 71
+  mass_g: 23
+  dia_mm: 34
+  len_mm: 26
+  voltage_v: "6.5-12"
+  interface: "TTL up to 4Mbps"
+  encoder: "12-bit contactless absolute"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 103.39
+  price_source: "https://www.robotis.us/dynamixel-xc330-t288-t/"
+  notes: "Box 20x34x26. Stall 0.92 Nm @11.1V. Price looks tariff-inflated vs historic ~$40?."
+
+- id: dxl_xm430_w350
+  family: Dynamixel
+  name: "ROBOTIS Dynamixel XM430-W350-T"
+  type: servo
+  rated_nm: null
+  peak_nm: 4.1
+  ratio: 353.5
+  speed_rpm: 46
+  mass_g: 82
+  dia_mm: 46.5
+  len_mm: 34
+  voltage_v: "10-14.8 (12 nominal)"
+  interface: "TTL (-T) or RS-485 (-R), up to 4.5Mbps"
+  encoder: "12-bit contactless absolute (AS5045)"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 310.39
+  price_source: "https://www.robotis.us/dynamixel-xm430-w350-t/"
+  notes: "Stall 4.1 Nm @12V / 4.8 Nm @14.8V. Very reliable, current control, but ~$75/Nm."
+
+# =====================================================================================
+# 3. DIY QDD JOINTS (component bundles; torque = vendor motor spec x ratio x assumed efficiency)
+# =====================================================================================
+- id: diy_gb5225_simplefoc_cyc10
+  family: DIY
+  name: "Steadywin GB5225 gimbal + SimpleFOC Mini + MCU/CAN + MT6701 + printed 10:1 cycloidal"
+  type: diy_qdd
+  rated_nm: 7.5
+  peak_nm: 11
+  ratio: 10
+  speed_rpm: 61
+  mass_g: 570
+  dia_mm: 75
+  len_mm: 55
+  voltage_v: "24"
+  interface: "CAN via MCU+transceiver (DIY firmware) or UART"
+  encoder: "motor-side magnetic (MT6701/AS5047P); add 2nd MT6701 on output (+$3) for absolute output"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 87
+  price_source: "GB5225 $39 https://aifitlab.com/products/steadywin-gb5225-motor ; SimpleFOC Mini ~$10-15 (docs.simplefoc.com, Walmart/LittleBird); MT6701 ~$3 (eBay); STM32G4/ESP32 + CAN xcvr ~$10?; printed cycloid + bearings ~$20?"
+  notes: "Motor 1.26 Nm rated / 1.9 Nm stall @1.94 A (11.8 ohm) -> fits DRV8313-class drivers. Assumes 60% printed-cycloid efficiency (HD20 measured 48-58%). Mass/dims are estimates?. Firmware effort is the real cost."
+
+- id: diy_ht5210_simplefoc_pl6
+  family: DIY
+  name: "HAITAI HT5210 (+AS5047P) + SimpleFOC Mini + MCU + printed 6:1 planetary"
+  type: diy_qdd
+  rated_nm: 2.2
+  peak_nm: 4.9
+  ratio: 6
+  speed_rpm: 113
+  mass_g: 320
+  dia_mm: 65
+  len_mm: 45
+  voltage_v: "24"
+  interface: "CAN/UART via MCU (DIY)"
+  encoder: "AS5047P motor-side"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 84
+  price_source: "HT5210+AS5047P $50 https://aifitlab.com/products/haitai-ht5210-motor ; SimpleFOC Mini ~$12; MCU ~$10?; printed planetary ~$12?"
+  notes: "Motor 0.46/1.03 Nm, 202 g. 80% printed-planetary efficiency assumed?. Wrist-class; RobStride EduLite05 ($80, 1.8/6 Nm, 242 g, integrated) beats it."
+
+- id: diy_gb8115_moteusc1_pl8
+  family: DIY
+  name: "Steadywin GB8115-4 (36V winding) + moteus-c1 + printed 8:1 planetary"
+  type: diy_qdd
+  rated_nm: 8.6
+  peak_nm: 20
+  ratio: 8
+  speed_rpm: 67
+  mass_g: 780
+  dia_mm: 95
+  len_mm: 60
+  voltage_v: "36 (moteus-c1 10-51V)"
+  interface: "CAN-FD 5Mbps (moteus)"
+  encoder: "moteus on-board absolute magnetic (motor side)"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 172
+  price_source: "GB8115 $78 https://aifitlab.com/products/steadywin-gb8115-motor ; moteus-c1 $69 https://mjbots.com/products/moteus-c1 ; printed reducer ~$25?"
+  notes: "Motor 1.26 Nm rated / 4.11 Nm stall @6.6 A fits c1 (20 A pk). Theoretical peak 28 Nm; capped at ~20 Nm for printed teeth?. Compare: Steadywin GIM8108-8 integrated $125 (7.5/22 Nm, 396 g, steel gears) is cheaper AND lighter."
+
+- id: diy_mj5208_moteusn1_pl6
+  family: DIY
+  name: "mjbots mj5208 + moteus-n1 + printed 6:1 planetary"
+  type: diy_qdd
+  rated_nm: 3.3
+  peak_nm: 8.7
+  ratio: 6
+  speed_rpm: 1250
+  mass_g: 360
+  dia_mm: 70
+  len_mm: 50
+  voltage_v: "24-48"
+  interface: "CAN-FD 5Mbps"
+  encoder: "moteus on-board absolute magnetic"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 243
+  price_source: "mj5208 $74 https://mjbots.com/products/mj5208 ; moteus-n1 $149 https://mjbots.com/products/moteus-n1 ; reducer ~$20?"
+  notes: "mj5208 1.7 Nm peak, 193 g, Kv330. moteus-c1 ($69, 20 A pk) would cap output at ~3 Nm, hence n1. Continuous estimate assumes n1 with heat spreader (26 A)?; speed = mjbots max 7500 rpm / 6 (theoretical, unloaded). Best-documented/most robust DIY stack, but 2x price of Chinese integrated QDDs."
+
+- id: diy_gim6010_8_bare_moteusc1
+  family: DIY
+  name: "Steadywin GIM6010-8 (bare motor+steel 8:1) + moteus-c1"
+  type: diy_qdd
+  rated_nm: 5
+  peak_nm: 9.4
+  ratio: 8
+  speed_rpm: 420
+  mass_g: 380
+  dia_mm: 80
+  len_mm: 40
+  voltage_v: "24"
+  interface: "CAN-FD 5Mbps (moteus)"
+  encoder: "moteus on-board (motor side)"
+  backdrivable: "yes"
+  ip: "IP54 lost when driver cover removed?"
+  price_usd: 139
+  price_source: "GIM6010-8 bare $70 https://aifitlab.com/products/steadywin-gim6010-8-planetary-reducer-servo-motor + moteus-c1 $69"
+  notes: "Peak limited by c1 20 A x 0.47 Nm/A output Kt. Only worth it for the open moteus firmware/CAN-FD; stock GDS68 version is $90."
+
+- id: diy_8318_odrive_s1_opentorque
+  family: DIY
+  name: "OpenTorque-style: X8318S/9235 100KV + ODrive S1 + printed 6:1 planetary"
+  type: diy_qdd
+  rated_nm: 12
+  peak_nm: 28
+  ratio: 6
+  speed_rpm: 400
+  mass_g: 1200
+  dia_mm: 110
+  len_mm: 70
+  voltage_v: "24-48"
+  interface: "CAN 2.0 (ODrive CANSimple) / USB"
+  encoder: "ODrive S1 on-board magnetic"
+  backdrivable: "yes"
+  ip: "none"
+  price_usd: 265
+  price_source: "ODrive S1 $149 https://shop.odriverobotics.com/products/odrive-s1 ; 8318-class motor ~$60-80?; printed parts+bearings ~$40?; build report https://community.robotshop.com/forum/t/3d-printed-opentorque-actuator"
+  notes: "Measured 28 Nm peak / 1.2 kg in one build (VESC variant ~$150). Continuous/speed estimates?. Too heavy for this arm; ODrive also adds US tariff surcharge line items."
+
+# =====================================================================================
+# 4. STEPPER BASELINES
+# =====================================================================================
+- id: stp_nema17_servo42d_hd20
+  family: Stepper
+  name: "NEMA17 40 mm (17HS4401S) + MKS SERVO42D + printed HD20 20:1 cycloidal"
+  type: stepper
+  rated_nm: 2.5
+  peak_nm: 3.5
+  ratio: 20
+  speed_rpm: 20
+  mass_g: 520
+  dia_mm: 60
+  len_mm: 80
+  voltage_v: "12-24"
+  interface: "CAN or RS485 (SERVO42D variants) / step-dir"
+  encoder: "14-bit magnetic on motor shaft (closed-loop)"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 45
+  price_source: "17HS4401S EUR 7.40 https://openelab.io/products/hanpose-nema17-42mm-12v-stepper ; SERVO42D ~$20-28 (eBay/Newegg/probots, ~INR 2,999 kit)?; HD20 measured torque https://github.com/robrotics/hd20/releases"
+  notes: "HD20 load-cell: 2.1-2.6 Nm @0.7 A, 3.0-3.3 Nm @1.4 A, 3.5 Nm peak, efficiency 48-58%, backlash unmeasured (preliminary). Speed limited by stepper torque roll-off (~300-400 rpm motor)?. Mass/dims estimated?."
+
+- id: stp_nema17_pg27
+  family: Stepper
+  name: "StepperOnline 17HS19-1684S-PG27 (NEMA17 + 26.85:1 metal planetary) + SERVO42D"
+  type: stepper
+  rated_nm: 3
+  peak_nm: 3
+  ratio: 26.85
+  speed_rpm: 15
+  mass_g: 650
+  dia_mm: 42
+  len_mm: 100
+  voltage_v: "12-24"
+  interface: "CAN/RS485 via SERVO42D"
+  encoder: "motor-shaft magnetic (via SERVO42D)"
+  backdrivable: "no"
+  ip: "none"
+  price_usd: 70
+  price_source: "Motor ~$40-50 (user report; Walmart.ca $98.16, Carrefour AED 284) https://www.walmart.ca/en/c/brand/stepper-online ; + SERVO42D ~$25?"
+  notes: "3 Nm is gearbox max permissible torque; ~1 deg backlash typical for cheap planetary?. Mass/speed estimated?. Not compliant/unsafe for contact."
+
+- id: stp_gearotons_m17_48_cyc20
+  family: Stepper
+  name: "Gearotons M17-48 integrated RS-485 closed-loop NEMA17 + printed 20:1 cycloidal"
+  type: stepper
+  rated_nm: 6
+  peak_nm: 8
+  ratio: 20
+  speed_rpm: 20
+  mass_g: 560
+  dia_mm: 60
+  len_mm: 90
+  voltage_v: "12-24"
+  interface: "RS-485 bus (integrated driver/controller)"
+  encoder: "integrated encoder (motor side)"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 55
+  price_source: "EUR 36.59 https://openelab.io/products/gearotons-m17-48-high-torque + printed reducer ~$15?"
+  notes: "New 2026 part: 0.55 Nm rated, 360 g, 48.7 mm body, bus-addressable. Output torque = 0.55 x 20 x 0.55 eff (estimate?); peak estimate?."
+
+- id: stp_nema23_servo57d_cyc20
+  family: Stepper
+  name: "NEMA23 56 mm + MKS SERVO57D (CAN) + printed 20:1 cycloidal"
+  type: stepper
+  rated_nm: 12
+  peak_nm: 15
+  ratio: 20
+  speed_rpm: 15
+  mass_g: 1350
+  dia_mm: 80
+  len_mm: 110
+  voltage_v: "24-48"
+  interface: "CAN / RS485 / step-dir"
+  encoder: "magnetic on motor shaft"
+  backdrivable: "partly"
+  ip: "none"
+  price_usd: 75
+  price_source: "SERVO57D board ~$28-29 (Newegg/eBay, 2025) https://www.newegg.com/p/2TP-005J-00FJ3 ; NEMA23 ~$20-25?; printed reducer ~$20?"
+  notes: "All torque/mass numbers are estimates? (assumes ~1.2 Nm holding motor, 55% eff). Heavy: only plausible as base yaw on the hexapod body."
+
+# =====================================================================================
+# ACCESSORIES (not actuators)
+# =====================================================================================
+accessories:
+  usb_can_fd:
+    - {id: damiao_usb2canfd, name: "Damiao USB-to-CAN-FD module", price_usd: 20, price_source: "https://aifitlab.com/products/damiao-usb-to-can-canfd-module", notes: "5 Mbps; housing $25, dual-channel $25-30. OpenELAB EUR 28.30. Linux SocketCAN/gs_usb support not confirmed - typically used with Damiao SDK?"}
+    - {id: hightorque_usb_canfd, name: "Seeed/HighTorque USB-CANFD debugger", price_usd: 28, price_source: "https://openelab.io/products/seeed-hightorque-usb-canfd-debugger", notes: "EUR 25.15; 5 Mbps; aimed at HighTorque tools, generic use?"}
+    - {id: mks_canable_v2, name: "Makerbase MKS CANable V2.0 (STM32G431)", price_usd: 20, price_source: "https://canable.io/ ; https://probots.co.in/mks-canable-v2-0-usb-to-can-analyzer-can-fd-stm32g431c8.html", notes: "AliExpress ~$15-25?. candleLight (native gs_usb) firmware does NOT support FD frames; FD only via slcan firmware + slcand."}
+    - {id: canable_2, name: "CANable 2.0 (Openlight Labs)", price_usd: 35, price_source: "https://canable.io/", notes: "Same FD caveat (beta FD)."}
+    - {id: mjcanfd_usb_1x, name: "mjbots mjcanfd-usb-1x", price_usd: 39, price_source: "https://mjbots.com/products/mjcanfd-usb-1x", notes: "Cheapest well-documented native FD adapter: gs_usb SocketCAN + CDC, open STM32G4 firmware, up to 12 Mbps data, non-isolated. Recommended."}
+    - {id: candlelight_fd, name: "Linux Automation candleLight FD", price_usd: 51, price_source: "https://wwwlag2.kriton.pengutronix.de/catalogue/candlelightfd_3/", notes: "EUR 46 net; described as prototype."}
+    - {id: mjbots_fdcanusb, name: "mjbots fdcanusb", price_usd: 89, price_source: "https://mjbots.com/products/fdcanusb", notes: "Currently unavailable (NA)."}
+    - {id: pcan_usb_fd, name: "PEAK PCAN-USB FD", price_usd: 300, price_source: "https://m.reach.dog/shop/phytools/products/pcan-usb-fd-adapter", notes: "Industrial reference, isolated; price approximate?"}
+  usb_can_classic:
+    - {id: damiao_usb2can, name: "Damiao USB-to-CAN", price_usd: 15, price_source: "https://aifitlab.com/products/damiao-usb-to-can-canfd-module"}
+    - {id: robstride_usb2can, name: "RobStride USB-to-CAN", price_usd: 18, price_source: "https://aifitlab.com/products/robstride-usb-to-can-module", notes: "openelab.com $25.09"}
+    - {id: myactuator_usb2can, name: "MyActuator USB-CAN", price_usd: 23, price_source: "https://openelab.io/products/myactuator-usb-can-motor-converter", notes: "EUR 20.95"}
+    - {id: odrive_usb_can, name: "ODrive USB-CAN adapter", price_usd: 37, price_source: "https://shop.odriverobotics.com/products/usb-can-adapter", notes: "Native SocketCAN, CAN 2.0B 1 Mbps, no FD."}
+  cameras:
+    - {id: rpi_cam3, name: "Raspberry Pi Camera Module 3 (IMX708 12MP AF, rolling shutter)", price_usd: 25, price_source: "https://shop.pimoroni.com/products/raspberry-pi-camera-module-3", notes: "Pimoroni GBP 19.50 (Wide GBP 27.50); UK GBP 22.50-24 (Feb-Mar 2026); MSRP $25. Pi 5 needs 22-pin mini FPC cable."}
+    - {id: rpi_global_shutter, name: "Raspberry Pi Global Shutter Camera (IMX296 1.6MP, C/CS mount)", price_usd: 50, price_source: "https://thepihut.com/products/raspberry-pi-global-shutter-camera", notes: "MSRP $50; Pi Hut GBP 48; Pimoroni GBP 42.50 (sold out). Lens extra (~$15-25?). Bulky (38x38 mm board + C-mount lens) for a wrist."}
+    - {id: arducam_ov9281, name: "Arducam OV9281 1MP mono global shutter (Pi)", price_usd: 30, price_source: "https://thepihut.com/collections/latest-raspberry-pi-products/products/arducam-ov9281-monochrome-global-shutter-camera-module-for-raspberry-pi", notes: "Arducam cached $25.99-35.99; Pi Hut GBP 25 (sold out); DFRobot SEN0634 GBP 24.90. Includes Pi 5 cable. Best small GS wrist option; Jetson variant also exists (price not verified?)."}
+    - {id: rpi_ai_camera, name: "Raspberry Pi AI Camera (IMX500)", price_usd: 70, price_source: "https://shop.pimoroni.com/products/raspberry-pi-ai-camera", notes: "Pimoroni GBP 52.33 (NA); MSRP $70?"}
+    - {id: waveshare_isg1321, name: "Waveshare ISG1321 1.38MP mono GS 120fps", price_usd: 28, price_source: "https://openelab.io/products/waveshare-isg1321-1-38mp-mono", notes: "EUR 25.15 but currently only supported on Luckfox Pico Zero (not Pi/Jetson)."}
+    - {id: imx219_jetson, name: "IMX219 8MP CSI module (Jetson Orin Nano / Pi)", price_usd: 25, price_source: "general market price (Arducam/Waveshare)", notes: "Approx $20-30, not verified this session?. Orin Nano devkit uses 22-pin CSI like Pi 5."}
+  tof_8x8:
+    - {id: pimoroni_vl53l5cx, name: "Pimoroni VL53L5CX 8x8 ToF breakout", price_usd: 17, price_source: "https://shop.pimoroni.com/products/vl53l5cx-time-of-flight-tof-sensor-breakout", notes: "GBP 13.00 (in stock)."}
+    - {id: sparkfun_vl53l5cx, name: "SparkFun Qwiic ToF Imager VL53L5CX", price_usd: 29, price_source: "https://shop.pimoroni.com/products/sparkfun-qwiic-tof-imager-vl53l5cx", notes: "GBP 22.50 at Pimoroni; US SparkFun price not fetched?"}
+    - {id: pololu_vl53l8cx, name: "Pololu VL53L8CX 8x8 carrier (#3419)", price_usd: 24.95, price_source: "https://www.pololu.com/product/3419", notes: "One snapshot shows $29.95; 100-unit $19.43. Needs SPI >1.1 MHz to init reliably."}
+    - {id: boardoza_vl53l7cx, name: "Boardoza VL53L7CX module (90 deg FoV 8x8)", price_usd: 23, price_source: "https://openelab.io/products/boardoza-vl53l7cx-1-tof-module", notes: "EUR 20.77; wide-FoV sibling of L5CX/L8CX."}
+  drivers_encoders:
+    - {id: moteus_c1, name: "mjbots moteus-c1", price_usd: 69, price_source: "https://mjbots.com/products/moteus-c1", notes: "10-51V, 20 A pk / 5 A (14 A w/ cooling), CAN-FD 5 Mbps, on-board encoder, 8.9 g."}
+    - {id: moteus_r411, name: "mjbots moteus r4.11", price_usd: 94, price_source: "https://mjbots.com/products/moteus-r4-11", notes: "10-44V, 100 A pk, 12/32 A cont."}
+    - {id: moteus_n1, name: "mjbots moteus-n1", price_usd: 149, price_source: "https://mjbots.com/products/moteus-n1", notes: "10-54V, 100 A pk, 9/26 A cont."}
+    - {id: odrive_micro, name: "ODrive Micro", price_usd: 89, price_source: "https://shop.odriverobotics.com/products/odrive-micro"}
+    - {id: odrive_s1, name: "ODrive S1", price_usd: 149, price_source: "https://shop.odriverobotics.com/products/odrive-s1", notes: "Plus separate US tariff-surcharge line items on store."}
+    - {id: simplefoc_mini, name: "SimpleFOC Mini (DRV8313)", price_usd: 12, price_source: "https://docs.simplefoc.com/simplefocmini", notes: "Official target EUR 10-15; clones ~$8-14; ~2.5 A, gimbal motors only."}
+    - {id: mks_esp32_foc_v2, name: "MKS ESP32 FOC V2.0 (dual)", price_usd: 30, price_source: "https://www.newegg.com/p/0J2-0788-00977", notes: "Newegg $135.99 (marketplace markup); AliExpress ~$25-35 not verified?. Community: doc pin errors, noisy ESP32 ADC current sensing; related MKS Dual FOC Plus has smoke reports."}
+    - {id: as5047p, name: "AS5047P module (via motor bundle delta)", price_usd: 15, price_source: "https://aifitlab.com/products/steadywin-gb3505-motor", notes: "Bare vs +AS5047P variant delta = $15; AliExpress breakouts ~$5-10?"}
+    - {id: mt6701, name: "MT6701 14-bit magnetic encoder module", price_usd: 3, price_source: "https://www.ebay.com/itm/145296263367", notes: "$2.80 single (eBay); 10-pack EUR 23.20. I2C/SSI/ABZ/PWM."}

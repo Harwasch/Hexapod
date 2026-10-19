@@ -1,0 +1,248 @@
+[
+ {
+  "id": "strawberries",
+  "title": "Pick three strawberries into the deck tray",
+  "summary": {
+   "duration_s": 17.65,
+   "peak_torque": [
+    1.97,
+    7.27,
+    2.99,
+    0.87,
+    0.0,
+    0.4
+   ],
+   "peak_util": [
+    0.328,
+    0.396,
+    0.18,
+    0.255,
+    0.001,
+    0.082
+   ],
+   "rms_util": [
+    0.348,
+    0.275,
+    0.365,
+    0.219,
+    0.001,
+    0.08
+   ],
+   "min_margin_m": 0.2936,
+   "max_tool_force": 13.4
+  },
+  "tool": "gripper",
+  "note": ""
+ },
+ {
+  "id": "tomato",
+  "title": "Pick a tomato 0.8 m up (body raised and tilted back)",
+  "summary": {
+   "duration_s": 8.9,
+   "peak_torque": [
+    2.28,
+    4.15,
+    5.19,
+    0.91,
+    0.01,
+    0.73
+   ],
+   "peak_util": [
+    0.38,
+    0.226,
+    0.314,
+    0.266,
+    0.001,
+    0.149
+   ],
+   "rms_util": [
+    0.313,
+    0.269,
+    0.587,
+    0.269,
+    0.001,
+    0.095
+   ],
+   "min_margin_m": 0.2663,
+   "max_tool_force": 12.2
+  },
+  "tool": "gripper",
+  "note": ""
+ },
+ {
+  "id": "weed_body",
+  "title": "Pull a 60 N taproot: body leans in, legs lift",
+  "summary": {
+   "duration_s": 9.9,
+   "peak_torque": [
+    1.94,
+    12.28,
+    2.99,
+    0.78,
+    0.0,
+    0.42
+   ],
+   "peak_util": [
+    0.324,
+    0.669,
+    0.18,
+    0.227,
+    0.001,
+    0.086
+   ],
+   "rms_util": [
+    0.256,
+    0.274,
+    0.402,
+    0.156,
+    0.001,
+    0.061
+   ],
+   "min_margin_m": 0.1169,
+   "max_tool_force": 58.0
+  },
+  "tool": "gripper",
+  "note": "The legs slide the body 12 cm forward and tip it 8 degrees over the weed, then lift 9 cm while the arm holds."
+ },
+ {
+  "id": "weed_arm",
+  "title": "The same 60 N taproot pulled by the arm alone",
+  "summary": {
+   "duration_s": 8.7,
+   "peak_torque": [
+    1.94,
+    17.55,
+    4.47,
+    0.66,
+    0.0,
+    0.42
+   ],
+   "peak_util": [
+    0.324,
+    0.956,
+    0.27,
+    0.193,
+    0.001,
+    0.087
+   ],
+   "rms_util": [
+    0.273,
+    0.372,
+    0.402,
+    0.147,
+    0.001,
+    0.065
+   ],
+   "min_margin_m": 0.1909,
+   "max_tool_force": 57.9
+  },
+  "tool": "gripper",
+  "note": "Same weed, body still: the root's pull acts on the arm's full lever."
+ },
+ {
+  "id": "rock",
+  "title": "Lift a 1 kg rock at full reach and stow it on the deck",
+  "summary": {
+   "duration_s": 9.7,
+   "peak_torque": [
+    1.98,
+    8.82,
+    6.08,
+    1.86,
+    0.25,
+    0.89
+   ],
+   "peak_util": [
+    0.329,
+    0.481,
+    0.367,
+    0.543,
+    0.051,
+    0.181
+   ],
+   "rms_util": [
+    0.304,
+    0.342,
+    0.672,
+    0.323,
+    0.042,
+    0.143
+   ],
+   "min_margin_m": 0.2612,
+   "max_tool_force": 0.0
+  },
+  "tool": "gripper",
+  "note": "With the rock in hand the swing to the tray takes 1.6 s. At 1.0 s the yaw saturates and the rock lands 37 mm off."
+ },
+ {
+  "id": "soil_probe",
+  "title": "Press a soil probe 6 cm in with the body's weight",
+  "summary": {
+   "duration_s": 7.8,
+   "peak_torque": [
+    0.01,
+    10.35,
+    2.6,
+    1.44,
+    0.0,
+    0.0
+   ],
+   "peak_util": [
+    0.001,
+    0.564,
+    0.157,
+    0.418,
+    0.0,
+    0.0
+   ],
+   "rms_util": [
+    0.0,
+    0.504,
+    0.253,
+    0.485,
+    0.0,
+    0.0
+   ],
+   "min_margin_m": 0.1399,
+   "max_tool_force": 71.7
+  },
+  "tool": "probe",
+  "note": ""
+ },
+ {
+  "id": "spray",
+  "title": "Micro-dose eight weeds as fast as the arm can",
+  "summary": {
+   "duration_s": 5.64,
+   "peak_torque": [
+    3.73,
+    10.2,
+    5.66,
+    1.04,
+    0.0,
+    0.35
+   ],
+   "peak_util": [
+    0.622,
+    0.555,
+    0.342,
+    0.303,
+    0.001,
+    0.071
+   ],
+   "rms_util": [
+    0.68,
+    0.315,
+    0.304,
+    0.133,
+    0.001,
+    0.032
+   ],
+   "min_margin_m": 0.2601,
+   "max_tool_force": 0.0
+  },
+  "tool": "sprayer",
+  "note": "",
+  "per_weed_s": 0.48
+ }
+]
