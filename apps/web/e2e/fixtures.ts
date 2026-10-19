@@ -499,10 +499,27 @@ function retryJob(job: Record<string, unknown>, poll: number, fromStage: string 
   job.finishedAt = null;
 }
 
+type MockMission = Record<string, unknown> & { projectId?: unknown };
+
+/** Each page's private missions, as `mockApi` lists them (see `workspaceMissions`). */
+const missionsByPage = new WeakMap<Page, MockMission[]>();
+
+/**
+ * The workspace's private missions `mockApi` serves this page: a test's own mock of an endpoint
+ * that schedules one (a Land action's "Schedule mission") adds it here, so Plan lists it the way
+ * the API's `GET /workspaces/missions` would.
+ */
+export function workspaceMissions(page: Page): MockMission[] {
+  const missions = missionsByPage.get(page);
+  if (!missions) throw new Error("mockApi has not been set up on this page");
+  return missions;
+}
+
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<CaptureMockState> {
   // Plans approved during a test live here so list, revise and status round-trip.
   const mockPlans: Record<string, unknown>[] = [];
-  const mockMissions: (Record<string, unknown> & { projectId?: unknown })[] = [];
+  const mockMissions: MockMission[] = [];
+  missionsByPage.set(page, mockMissions);
   const partSize = options.partSize ?? 4;
   const windowParts = options.windowParts ?? 2;
   const state: CaptureMockState = {
