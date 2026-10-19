@@ -33,6 +33,7 @@ Start with `README.md`, then `docs/HANDOFF.md` and `docs/DEPLOYMENT.md`.
   committed; `pnpm format:check` covers YAML and Markdown and runs before lint; an e2e test asserts the exact
   tool-rail button count; the repo's `.env` leaks into `apps/api` settings tests, so override explicitly.
 - `VITE_` variables are public. Server secrets never carry that prefix.
+- Past experiments and parked work: `docs/ARCHIVE.md`; check it before starting research or a bake-off.
 
 ## Branches and PRs
 
