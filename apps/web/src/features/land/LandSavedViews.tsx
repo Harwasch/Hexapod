@@ -8,6 +8,7 @@ import { useLandContext } from "@/state/landContext";
 import { landScope, useLandCanEdit, useLandScope } from "@/state/landIdentity";
 import { useLand } from "@/state/land";
 import { useViewer } from "@/state/viewer";
+import { lensOfSection, sectionOfLens, useLens } from "./surface/lenses";
 import {
   downloadViewCapture,
   parseViewCapture,
@@ -34,8 +35,7 @@ function SavedViews({ land, scope }: { land: LandArea; scope: string }) {
       active.current = false;
     };
   }, []);
-  const [expanded, setExpanded] = useState(false),
-    [name, setName] = useState("");
+  const [name, setName] = useState("");
   const [offset, setOffset] = useState(0),
     [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<Create | null>(null);
@@ -71,7 +71,7 @@ function SavedViews({ land, scope }: { land: LandArea; scope: string }) {
           params: { path: { land_id: land.id }, query: { offset, limit: 25 } },
         }),
       ),
-    enabled: expanded,
+    enabled: true,
     retry: false,
   });
   const run = async (operation: () => Promise<void>) => {
@@ -177,6 +177,7 @@ function SavedViews({ land, scope }: { land: LandArea; scope: string }) {
       ),
       rasterErrors: {},
     });
+    useLens.getState().setLens(result.state.lens ?? lensOfSection(result.state.section));
     const camera = result.state.camera;
     scene?.camera.flyTo(camera.longitude, camera.latitude, camera.height, {
       heading: camera.heading,
@@ -202,7 +203,8 @@ function SavedViews({ land, scope }: { land: LandArea; scope: string }) {
           roll: camera.roll,
         },
         boundaryRevision: land.revision,
-        section: state.section,
+        section: sectionOfLens(useLens.getState().lens),
+        lens: useLens.getState().lens,
         investigationId: state.selectedInvestigationId,
         inventoryId: state.selectedInventoryId,
         surveyId: state.selectedSurveyId,
@@ -247,11 +249,11 @@ function SavedViews({ land, scope }: { land: LandArea; scope: string }) {
     await refresh();
   };
   return (
-    <details
-      className="land-saved-views"
-      onToggle={(event) => setExpanded(event.currentTarget.open)}
-    >
-      <summary>Saved exploration views{recovery ? " · unfinished save" : ""}</summary>
+    <section className="land-saved-views" aria-label="Saved map views">
+      <h3 className="land-headline">Saved map views{recovery ? " · unfinished save" : ""}</h3>
+      <p className="land-muted">
+        A view keeps the camera, the lens and what is shown on the map, so you can come back to it.
+      </p>
       {recovery && (
         <section aria-label="Recover captured view">
           <p>
@@ -515,6 +517,6 @@ function SavedViews({ land, scope }: { land: LandArea; scope: string }) {
           ))}
         </ul>
       )}
-    </details>
+    </section>
   );
 }

@@ -113,6 +113,20 @@ def test_archive_run_without_model_publishes_saved_media_and_validated_galleries
     assert len(detail["evidence"]) == 3 and len(detail["artifacts"]) == 2
     assert all(item["output"]["kind"] == "gallery" for item in detail["artifacts"])
     assert detail["evidence"][0]["media"]["creator"] == "A. Photographer"
+    # Each source says where it looks, and each gallery where its sources were catalogued.
+    events = client.get(f"/api/v1/research/runs/{run['id']}/events").json()
+    looking = {
+        item["payload"]["provider"]: item["location"]
+        for item in events
+        if item["kind"] == "looking"
+    }
+    assert looking["commons-place-images"]["meaning"] == "query-radius"
+    assert looking["commons-place-images"]["radiusM"] >= 500
+    assert looking["usgs-historical-maps"]["meaning"] == "query-bbox"
+    galleries = [item["location"] for item in events if item["kind"] == "artifact"]
+    assert galleries and all(
+        place["meaning"] in {"catalog-coordinate", "catalog-footprint"} for place in galleries
+    )
     media_id = uuid.UUID(detail["evidence"][0]["id"])
     start(client)
     claimed = queue.claim(db)

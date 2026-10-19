@@ -94,6 +94,11 @@ def test_raster_run_saves_cited_private_cog_tiles_samples_and_revision(
     assert len(detail["evidence"]) == len(detail["findings"]) == len(detail["artifacts"]) == 1
     assert detail["findings"][0]["evidenceIds"] == [detail["evidence"][0]["id"]]
     raster_id = detail["artifacts"][0]["output"]["rasterId"]
+    events = client.get(f"/api/v1/research/runs/{run['id']}/events").json()
+    extents = [item["location"] for item in events if item["kind"] == "analysis"]
+    assert extents and all(place["meaning"] == "analysis-extent" for place in extents)
+    artifact = next(item["location"] for item in events if item["kind"] == "artifact")
+    assert artifact["ref"]["rasterId"] == raster_id and artifact["kind"] == "bbox"
     base = f"/api/v1/land/rasters/{raster_id}"
     saved = client.get(base).json()
     assert saved["metadata"]["bands"][0]["mean"] == 0 and saved["stale"] is False

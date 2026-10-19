@@ -249,17 +249,17 @@ def test_0010_folds_an_estimated_scale_into_unresolved_on_the_way_down(
         assert list(labels) == [source.value for source in ScaleSource]
 
 
-def test_0030_links_missions_that_land_actions_already_scheduled(
+def test_0031_links_missions_that_land_actions_already_scheduled(
     alembic_config: Config, engine: Engine, db: Session, client: TestClient
 ) -> None:
-    """Missions scheduled from land actions before 0030 hang off their land afterwards: the
+    """Missions scheduled from land actions before 0031 hang off their land afterwards: the
     upgrade reads the land and boundary revision from the action revision that scheduled them."""
     from tests.test_workspace_missions import schedule_action
 
     land, _action, mission = schedule_action(client)
     # End the client's read transaction before DDL runs on another connection.
     db.rollback()
-    command.downgrade(alembic_config, "0030-1")
+    command.downgrade(alembic_config, "0031-1")
     try:
         columns = {column["name"] for column in inspect(engine).get_columns("plans")}
         assert "land_id" not in columns and "boundary_revision" not in columns

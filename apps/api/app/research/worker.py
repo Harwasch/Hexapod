@@ -53,6 +53,15 @@ from app.research.documents import retrieve as retrieve_documents
 from app.research.ecology_outputs import ecology_outputs
 from app.research.focus import model_context as focus_context
 from app.research.focus import read_geometry as read_focus_geometry
+from app.research.locations import (
+    focus_location,
+    geometry_location,
+    land_box,
+    media_location,
+    point,
+    provider_location,
+    union_location,
+)
 from app.research.model import (
     ActionDraftAction,
     ArchiveImageAction,
@@ -101,6 +110,8 @@ from app.schemas.land_solar import SolarMetadata, SolarRequest
 from app.schemas.land_surveys import SurveyLocator
 from app.schemas.research import (
     ArtifactContent,
+    EventLocation,
+    EventLocationRef,
     EvidenceContent,
     FindingContent,
     MapFeature,
@@ -150,6 +161,40 @@ def unpack(value: dict[str, Any]) -> SourceResult:
         [(key, EvidenceContent.model_validate(item)) for key, item in value["evidence"]],
         value["data"],
     )
+
+
+def action_location(
+    action: object,
+    context: SourceContext,
+    focus_snapshot: dict[str, Any] | None = None,
+) -> EventLocation | None:
+    """Where a model's chosen tool will look, from the decision alone (no lookups)."""
+    if isinstance(action, RetrieveAction):
+        return provider_location(action.provider, context)
+    if isinstance(action, MappedAssetSearchAction):
+        lon, lat = action.point.coordinates[:2] if action.point else context.point
+        return point(lon, lat, "query-radius", radius_m=action.radius_m)
+    if isinstance(action, SearchAction):
+        return land_box(context)
+    if isinstance(action, FocusGeometryAction):
+        return focus_location(focus_snapshot)
+    if isinstance(action, RasterAction):
+        return land_box(context, "analysis-extent")
+    if isinstance(action, SolarAction):
+        return geometry_location(action.analysis.array_zone, "array-zone")
+    if isinstance(action, ArchiveImageAction):
+        return EventLocation(
+            kind="geometry-ref",
+            ref=EventLocationRef(evidence_id=action.evidence_id),
+            meaning="catalog-coordinate",
+        )
+    if isinstance(action, FindingAction):
+        return geometry_location(action.finding.boundary, "result")
+    if isinstance(action, ArtifactAction) and isinstance(action.artifact.output, MapOutput):
+        return union_location(
+            (feature.geometry for feature in action.artifact.output.features), "result"
+        )
+    return None
 
 
 class ResearchWorker:
@@ -287,6 +332,7 @@ class ResearchWorker:
             return dict(state["sources"][key])
         identifier = uuid.uuid5(run_id, key)
         row = db.get(LandSolar, identifier)
+        zone = geometry_location(request.array_zone, "array-zone")
         if row is None:
             queue.checkpoint(
                 db,
@@ -295,6 +341,7 @@ class ResearchWorker:
                 state,
                 kind="analysis",
                 payload={"message": "Reading hourly weather and modeling the mapped solar array."},
+                location=zone,
             )
             db.rollback()
             try:
@@ -321,6 +368,9 @@ class ResearchWorker:
                     "message": "Hourly calculation and source archive saved.",
                     "assessmentId": str(identifier),
                 },
+                location=zone.model_copy(update={"ref": EventLocationRef(assessment_id=identifier)})
+                if zone
+                else None,
             )
         metadata = SolarMetadata.model_validate(row.metadata_json)
         evidence_id = queue.save_evidence(
@@ -357,7 +407,8 @@ class ResearchWorker:
             run_id,
             token,
             key,
-            FindingContent(
+            location=zone,
+            content=FindingContent(
                 title=f"Solar generation · {request.year}",
                 summary=summary,
                 category="physical",
@@ -422,6 +473,7 @@ class ResearchWorker:
             return dict(state["sources"][key])
         identifier = uuid.uuid5(run_id, key)
         row = db.get(LandRaster, identifier)
+        extent = land_box(context, "analysis-extent")
         if row is None:
             # The processor stops before the run's time budget does, leaving time to save.
             # Otherwise the lease keeper would end the run mid-calculation as "partial" and
@@ -454,6 +506,7 @@ class ResearchWorker:
                     if bare_earth
                     else "Reading surface elevation and calculating slope inside the selected boundary."
                 },
+                location=extent,
             )
             db.rollback()
             try:
@@ -483,6 +536,7 @@ class ResearchWorker:
                     "message": "Raster calculation saved; preparing the map and source evidence.",
                     "rasterId": str(identifier),
                 },
+                location=extent.model_copy(update={"ref": EventLocationRef(raster_id=identifier)}),
             )
         metadata = RasterMetadata.model_validate(row.metadata_json)
         ids = []
@@ -586,7 +640,8 @@ class ResearchWorker:
             run_id,
             token,
             key,
-            FindingContent(
+            location=extent,
+            content=FindingContent(
                 title=spec.name,
                 summary=summary,
                 category="ecology" if categorical or dated else "physical",
@@ -650,9 +705,21 @@ class ResearchWorker:
         if provider not in SOURCES:
             raise InvalidInputError("Choose a source from the available registry.")
         cached = state.get("pending_source")
+        where = provider_location(provider, context)
         if cached and cached["provider"] == provider:
             result = unpack(cached)
         else:
+            # Say where the source is looking before it answers, so the card can point there
+            # while it waits.
+            queue.checkpoint(
+                db,
+                run_id,
+                token,
+                state,
+                kind="looking",
+                payload={"provider": provider, "message": f"Checking {SOURCES[provider].name}"},
+                location=where,
+            )
             # Persist the exact retrieved snapshot before any derived outputs, so a
             # crash cannot associate newly fetched values with an older evidence ID.
             db.rollback()
@@ -665,6 +732,7 @@ class ResearchWorker:
                 state,
                 kind="source",
                 payload={"provider": provider, "status": result.status, "message": result.summary},
+                location=where,
             )
         ids = [
             queue.save_evidence(db, run_id, token, f"{provider}/{key}", item)
@@ -672,9 +740,11 @@ class ResearchWorker:
         ]
         finding, artifacts = overview_outputs(result, ids)
         if finding:
-            queue.save_finding(db, run_id, token, f"overview/{provider}", finding)
+            queue.save_finding(db, run_id, token, f"overview/{provider}", finding, location=where)
         for index, artifact in enumerate(artifacts):
-            queue.save_artifact(db, run_id, token, f"overview/{provider}/{index}", artifact)
+            queue.save_artifact(
+                db, run_id, token, f"overview/{provider}/{index}", artifact, location=where
+            )
         value = {
             "provider": provider,
             "status": result.status,
@@ -701,9 +771,20 @@ class ResearchWorker:
         if key in state["sources"]:
             return state["sources"][key]  # type: ignore[no-any-return]
         cached = state.get("pending_mapped_assets")
+        lon, lat = request.point.coordinates[:2]
+        where = point(lon, lat, "query-radius", radius_m=request.radius_m)
         if cached and cached["key"] == key:
             result = unpack(cached["result"])
         else:
+            queue.checkpoint(
+                db,
+                run_id,
+                token,
+                state,
+                kind="looking",
+                payload={"provider": "mapped-assets", "message": "Looking for mapped features"},
+                location=where,
+            )
             db.rollback()
             with self.sessions() as source_db:
                 result = inventory_research.mapped_search(source_db, context, request, client)
@@ -719,6 +800,7 @@ class ResearchWorker:
                     "status": result.status,
                     "message": result.summary,
                 },
+                location=where,
             )
         ids = [
             queue.save_evidence(db, run_id, token, f"{key}/{identifier}", item)
@@ -788,6 +870,17 @@ class ResearchWorker:
         if cached and cached["key"] == key:
             result = unpack(cached["result"])
         else:
+            queue.checkpoint(
+                db,
+                run_id,
+                token,
+                state,
+                kind="looking",
+                payload={
+                    "provider": "col-taxonomy",
+                    "message": f"Checking the name {query.scientific_name}",
+                },
+            )
             db.rollback()
             result = match_taxon(query, client)
             state["pending_taxonomy"] = {"key": key, "result": pack(result)}
@@ -973,7 +1066,13 @@ class ResearchWorker:
             state["output_tokens"] += allocation
             state["web_searches"] = previous_searches + searches
             queue.checkpoint(
-                db, run_id, token, state, kind="search", payload={"query": action.query}
+                db,
+                run_id,
+                token,
+                state,
+                kind="search",
+                payload={"query": action.query},
+                location=land_box(context),
             )
             db.rollback()
             try:
@@ -1060,7 +1159,15 @@ class ResearchWorker:
                 "vision": vision,
             },
         }
-        queue.checkpoint(db, run_id, token, state, kind="image", payload=image)
+        queue.checkpoint(
+            db,
+            run_id,
+            token,
+            state,
+            kind="image",
+            payload=image,
+            location=media_location(media, evidence_id),
+        )
         return "The saved archive image is ready for visual inspection; its evidence ID and checksums are recorded."
 
     def _model_images(
@@ -1443,7 +1550,8 @@ class ResearchWorker:
                         token,
                         state,
                         kind="progress",
-                        payload={"message": decision.progress},
+                        payload={"message": decision.progress, "action": decision.action.kind},
+                        location=action_location(decision.action, context, focus_snapshot),
                     )
                 action = decision.action
                 output_key = f"agent/{state['steps']}"
@@ -1964,6 +2072,7 @@ class ResearchWorker:
                     state,
                     kind="tool-result",
                     payload={"action": action.kind, "result": result},
+                    location=action_location(action, context, focus_snapshot),
                 )
             queue.finish(
                 db,

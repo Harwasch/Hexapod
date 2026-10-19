@@ -1,0 +1,1049 @@
+{
+  "verifiedAt": "2026-10-11",
+  "counties": [
+    {
+      "county": "Alameda",
+      "fips": "06001",
+      "status": "available",
+      "endpoint": "https://services5.arcgis.com/ROBnTHSNjoZ2Wm1P/arcgis/rest/services/Parcels/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Alameda County Information Technology Department",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=2b026350b5dd40b18ed7a321fdcdba81",
+      "testPoint": [
+        -122.2711,
+        37.8044
+      ],
+      "testResult": "5 features; APN 2-51-1 near point (layer total 489,651)",
+      "notes": ""
+    },
+    {
+      "county": "Alpine",
+      "fips": "06003",
+      "status": "available",
+      "endpoint": "https://services1.arcgis.com/9z9tEfqo0TExR9C8/arcgis/rest/services/AlpineCountyParcels_22_23_PublicUpdate/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Alpine County GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=df8ef5c751084a9986140d5cf88375b0",
+      "testPoint": [
+        -119.7804,
+        38.6941
+      ],
+      "testResult": "5 features; APN 002280019 near point (layer total 3,051)",
+      "notes": "2022-23 roll parcel update (item snippet); FULLAPN holds the 12-digit form."
+    },
+    {
+      "county": "Amador",
+      "fips": "06005",
+      "status": "available",
+      "endpoint": "https://services9.arcgis.com/Z65sx307Hunxj6eq/arcgis/rest/services/ParcelData_Public/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Amador County Planning Department (Megabyte assessor data)",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=c8f94fa5d9a0484b9acf39a0990d52b9",
+      "testPoint": [
+        -120.7741,
+        38.3488
+      ],
+      "testResult": "5 features; APN 020241002000 near point (layer total 24,567)",
+      "notes": ""
+    },
+    {
+      "county": "Butte",
+      "fips": "06007",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/3t3QfTXFRFX44zo8/arcgis/rest/services/CA_ButteCounty_Parcels_Public/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Butte County GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=e26916c5555b437eb2b4a7e4e6d3206d",
+      "testPoint": [
+        -121.5564,
+        39.5138
+      ],
+      "testResult": "5 features; APN 012-021-020-000 near point (layer total 96,164)",
+      "notes": "Replaces the older Butte_County_Parcel_Public_Data service (last edited 2021, duplicate-heavy)."
+    },
+    {
+      "county": "Calaveras",
+      "fips": "06009",
+      "status": "available",
+      "endpoint": "https://gisportal.calaverascounty.gov/server/rest/services/PARCELS/MapServer/0",
+      "format": "geojson",
+      "idField": "PIN9",
+      "maxRecordCount": 2000,
+      "attribution": "Calaveras County GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=c5f6a4f64d6f4bc388d00e869b7b7c4e",
+      "testPoint": [
+        -120.6805,
+        38.196
+      ],
+      "testResult": "5 features; PIN9 042021038 near point (layer total 43,450)",
+      "notes": "APN field drops the leading zero (e.g. 42021038); PIN9 is the zero-padded 9-digit APN, ASMT the 12-digit assessment. The old gisportal.co.calaveras.ca.us host fails TLS hostname verification; use gisportal.calaverascounty.gov."
+    },
+    {
+      "county": "Colusa",
+      "fips": "06011",
+      "status": "available",
+      "endpoint": "https://services5.arcgis.com/RHVBVx0fVmUtvfJV/arcgis/rest/services/Colusa_County_Tax_Parcels/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of Colusa Department of Public Works",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=09edc3983ec44125943a5a5631d03843",
+      "testPoint": [
+        -122.0094,
+        39.2143
+      ],
+      "testResult": "5 features; APN 001-032-001-000 near point (layer total 15,056)",
+      "notes": ""
+    },
+    {
+      "county": "Contra Costa",
+      "fips": "06013",
+      "status": "available",
+      "endpoint": "https://gis.cccounty.us/arcgis/rest/services/CCMAP/Assessment_Parcels_ArcPro/MapServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Contra Costa County Assessor's Office (CCMap, DoIT)",
+      "license": "Service description: legacy layer 'for demonstrative purposes only'",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=d486aaad4a6e42199ae0c2aff5060fb5",
+      "testPoint": [
+        -122.1341,
+        38.0194
+      ],
+      "testResult": "5 features; APN 373263003 near point (layer total 387,936)",
+      "notes": "County flags this as the legacy CCMap parcel layer, to be replaced; endpoint may move. Returns MultiPolygon geometries."
+    },
+    {
+      "county": "Del Norte",
+      "fips": "06015",
+      "status": "available",
+      "endpoint": "https://services3.arcgis.com/IkUDY1vRIUWiVvcz/arcgis/rest/services/Parcels_20241125/FeatureServer/0",
+      "format": "geojson",
+      "idField": "Asmt",
+      "maxRecordCount": 2000,
+      "attribution": "County of Del Norte",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=82781d56aaf04655b4bb551b5e907aa3",
+      "testPoint": [
+        -124.2026,
+        41.7558
+      ],
+      "testResult": "5 features; Asmt 118230004000 near point (layer total 16,181)",
+      "notes": "Asmt is a numeric (double) field, so leading zeros are lost; zero-pad to 12 digits. County republishes date-stamped services (Parcels_YYYYMMDD), so the URL may change; Parcels_20250122 omits public lands."
+    },
+    {
+      "county": "El Dorado",
+      "fips": "06017",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/UHg8l1wC48WQyDSO/arcgis/rest/services/Parcels/FeatureServer/1",
+      "format": "geojson",
+      "idField": "PRCL_ID",
+      "maxRecordCount": 2000,
+      "attribution": "County of El Dorado Surveyor Department, GIS Division",
+      "license": "County GIS data disclaimer: informational/planning use only, preliminary, not for legal or survey use",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=bc292ddd8ca44dc0a5a388fb13fe6764",
+      "testPoint": [
+        -120.7983,
+        38.7296
+      ],
+      "testResult": "5 features; PRCL_ID 002122044 near point (layer total 119,861)",
+      "notes": ""
+    },
+    {
+      "county": "Fresno",
+      "fips": "06019",
+      "status": "available",
+      "endpoint": "https://services3.arcgis.com/ibgDyuD2DLBge82s/arcgis/rest/services/REGIONAL_PARCELS_VW/FeatureServer/11",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of Fresno Internal Services Department (GIS)",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=599a17ca02fe4781af4efe31edd81669",
+      "testPoint": [
+        -119.7871,
+        36.7378
+      ],
+      "testResult": "5 features; APN 46606444T near point (layer total 315,647)",
+      "notes": "Some APNs carry a letter suffix (e.g. 46606444T)."
+    },
+    {
+      "county": "Glenn",
+      "fips": "06021",
+      "status": "available",
+      "endpoint": "https://services3.arcgis.com/GUHJKBhKMcD5JjTe/arcgis/rest/services/Zoning_Finder/FeatureServer/0",
+      "format": "geojson",
+      "idField": "PARCELID",
+      "maxRecordCount": 2000,
+      "attribution": "Glenn County GIS (Planning & Community Development)",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=c081df4a69904ae49a3fdc0f97ea9e6e",
+      "testPoint": [
+        -122.1936,
+        39.5243
+      ],
+      "testResult": "5 features; PARCELID 0021520110 near point (layer total 15,099)",
+      "notes": "No dedicated assessor parcel service found; this is the county's parcel-based 'Zoning Finder' layer (15,099 parcel polygons with PARCELID/APN_1 plus zoning), last edited 2023-11."
+    },
+    {
+      "county": "Humboldt",
+      "fips": "06023",
+      "status": "available",
+      "endpoint": "https://webgis.co.humboldt.ca.us/arcgis/rest/services/Parcels_no_APN_labels/MapServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 1000,
+      "attribution": "Humboldt County GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://webgis.co.humboldt.ca.us/arcgis/rest/services/Parcels_no_APN_labels/MapServer/0",
+      "testPoint": [
+        -124.1637,
+        40.8021
+      ],
+      "testResult": "5 features; APN 001132004 near point (layer total 72,669)",
+      "notes": "APN_12 holds the dashed 12-digit form."
+    },
+    {
+      "county": "Imperial",
+      "fips": "06025",
+      "status": "available",
+      "endpoint": "https://services1.arcgis.com/fwUrSNrE506Uxp7v/arcgis/rest/services/Assesors_Parcels_Update_2026/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Imperial County Planning & Development Services (GIS)",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=20a3e680af4e48cb9ced86b2190b7374",
+      "testPoint": [
+        -115.5631,
+        32.792
+      ],
+      "testResult": "5 features; APN 053-174-020 near point (layer total 88,487)",
+      "notes": ""
+    },
+    {
+      "county": "Inyo",
+      "fips": "06027",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/0jRlQ17Qmni5zEMr/arcgis/rest/services/ParcelsPublic/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of Inyo GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=2bb0742aafce4802aa2e7da9eb6fa634",
+      "testPoint": [
+        -118.2001,
+        36.8027
+      ],
+      "testResult": "5 features; APN 0020260400 near point (layer total 15,968)",
+      "notes": "Same data also served from gis.inyo.gov/server/rest/services/ParcelsPublic/FeatureServer/0; the old gis.inyoco.com host is unreachable."
+    },
+    {
+      "county": "Kern",
+      "fips": "06029",
+      "status": "available",
+      "endpoint": "https://services5.arcgis.com/Y8jwjGUWbRjuqpG5/arcgis/rest/services/Assessor_Parcels_Land_2026_gdb/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Kern County Assessor's Office, Mapping Section (Kern GEONET)",
+      "license": "Kern GEONET disclaimer: data provided as-is with no warranty; redistribution must include the disclaimer",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=d56d136772674db8a328a8deeb79f7cf",
+      "testPoint": [
+        -119.0187,
+        35.3733
+      ],
+      "testResult": "5 features; APN 00617101 near point (layer total 424,125)",
+      "notes": "APN is the 8-digit book-page-parcel; APN9 is the key that joins to the tax roll."
+    },
+    {
+      "county": "Kings",
+      "fips": "06031",
+      "status": "available",
+      "endpoint": "https://services3.arcgis.com/24gLq1DBBzDfd0cZ/arcgis/rest/services/Parcel_view/FeatureServer/143",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Kings County Community Development Agency (GIS)",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=3abb9ac188cc45f1b216b431c02eb3a1",
+      "testPoint": [
+        -119.6457,
+        36.3275
+      ],
+      "testResult": "5 features; APN 012092008000 near point (layer total 52,700)",
+      "notes": "Layer id is 143 inside the Parcel_view service."
+    },
+    {
+      "county": "Lake",
+      "fips": "06033",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/W9F9wfM5YRkBzUKB/arcgis/rest/services/Parcels/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Lake County Information Technology Department",
+      "license": "Planning tool for general information only; may not reflect legal parcel boundaries",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=5f289ef20e12469db9a0fb102cec6e17",
+      "testPoint": [
+        -122.9158,
+        39.043
+      ],
+      "testResult": "5 features; APN 02536311 near point (layer total 63,853)",
+      "notes": ""
+    },
+    {
+      "county": "Lassen",
+      "fips": "06035",
+      "status": "available",
+      "endpoint": "https://utility.arcgis.com/usrsvcs/servers/8f55f383e2e840deaad26e2acda2c902/rest/services/LandRecords/Planning_General_Features/MapServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Lassen County Planning & Building Services",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=8f55f383e2e840deaad26e2acda2c902",
+      "testPoint": [
+        -120.653,
+        40.4163
+      ],
+      "testResult": "5 features; APN 105-261-016 near point (layer total 33,332)",
+      "notes": "Reached through an ArcGIS Online utility proxy (utility.arcgis.com/usrsvcs) in front of Lassen County's Enterprise server."
+    },
+    {
+      "county": "Los Angeles",
+      "fips": "06037",
+      "status": "available",
+      "endpoint": "https://public.gis.lacounty.gov/public/rest/services/LACounty_Cache/LACounty_Parcel/MapServer/0",
+      "format": "geojson",
+      "idField": "AIN",
+      "maxRecordCount": 1000,
+      "attribution": "Los Angeles County Office of the Assessor",
+      "license": "No terms stated",
+      "documentationUrl": "https://public.gis.lacounty.gov/public/rest/services/LACounty_Cache/LACounty_Parcel/MapServer/0",
+      "testPoint": [
+        -118.2437,
+        34.0522
+      ],
+      "testResult": "5 features; AIN 5149001003 near point (layer total 2,433,213)",
+      "notes": "AIN is the 10-digit Assessor ID; APN holds the dashed form."
+    },
+    {
+      "county": "Madera",
+      "fips": "06039",
+      "status": "available",
+      "endpoint": "https://gis.maderacounty.com/server/rest/services/CountyParcels/FeatureServer/0",
+      "format": "geojson",
+      "idField": "Parcel",
+      "maxRecordCount": 2000,
+      "attribution": "Madera County GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=1e26e70719be46ce97b2eec0b63574c6",
+      "testPoint": [
+        -120.0607,
+        36.9613
+      ],
+      "testResult": "5 features; Parcel 010-133-001 near point (layer total 68,017)",
+      "notes": "Parcel is the dashed 9-digit APN; ASMT is the 12-digit assessment number."
+    },
+    {
+      "county": "Marin",
+      "fips": "06041",
+      "status": "available",
+      "endpoint": "https://gis.marinpublic.com/arcgis/rest/services/BaseMap/Basemap/MapServer/13",
+      "format": "geojson",
+      "idField": "Prop_ID",
+      "maxRecordCount": 5000,
+      "attribution": "County of Marin GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://gis.marinpublic.com/arcgis/rest/services/BaseMap/Basemap/MapServer/13",
+      "testPoint": [
+        -122.5311,
+        37.9735
+      ],
+      "testResult": "5 features; Prop_ID 011-253-03 near point (layer total 96,235)",
+      "notes": "Parcel layer (id 13) inside the BaseMap service; Prop_ID holds the APN (e.g. 011-253-03). maxRecordCount 5000; native SR 2872."
+    },
+    {
+      "county": "Mariposa",
+      "fips": "06043",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/wEula7SYiezXcdRv/arcgis/rest/services/Parcels_Public_View/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Mariposa County GIS",
+      "license": "Disclaimer: parcel boundaries are for reference only, not a legal description",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=e21cc83323ab43a3b1a3cdd929a7f8e7",
+      "testPoint": [
+        -119.9663,
+        37.4849
+      ],
+      "testResult": "5 features; APN 013181012000 near point (layer total 14,339)",
+      "notes": ""
+    },
+    {
+      "county": "Mendocino",
+      "fips": "06045",
+      "status": "available",
+      "endpoint": "https://services5.arcgis.com/8y4r60VTvWj2wnDH/arcgis/rest/services/Parcels_Public_/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Mendocino County Information Services Department, GIS Office",
+      "license": "Not a survey product; no warranty; user agrees not to hold the County liable",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=210b9da409d641c9b441fb62775922b4",
+      "testPoint": [
+        -123.2078,
+        39.1502
+      ],
+      "testResult": "5 features; APN 00226805 near point (layer total 62,051)",
+      "notes": ""
+    },
+    {
+      "county": "Merced",
+      "fips": "06047",
+      "status": "available",
+      "endpoint": "https://gis.countyofmerced.com/server/rest/services/Assessment_Parcels/FeatureServer/42",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of Merced",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=77b6b3140b294189a2e606a2dcb6a515",
+      "testPoint": [
+        -120.483,
+        37.3022
+      ],
+      "testResult": "5 features; APN 031053005 near point (layer total 91,363)",
+      "notes": "Layer id 42; PARCEL_NO holds the dashed APN, ASMT the 12-digit assessment."
+    },
+    {
+      "county": "Modoc",
+      "fips": "06049",
+      "status": "none",
+      "endpoint": null,
+      "format": null,
+      "idField": null,
+      "maxRecordCount": null,
+      "attribution": "Modoc County Assessor",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.countyofmodoc.gov/523/Assessor",
+      "testPoint": [
+        -120.5424,
+        41.4871
+      ],
+      "testResult": "No public parcel polygon service found (ArcGIS Online, Hub and web search). Plat maps can be viewed only at the Assessor's office; online parcel maps go through commercial ParcelQuest.",
+      "notes": ""
+    },
+    {
+      "county": "Mono",
+      "fips": "06051",
+      "status": "available",
+      "endpoint": "https://gis.mono.ca.gov/webgis/rest/services/OpenData/Cadastral/MapServer/1",
+      "format": "geojson",
+      "idField": "AsmtNum",
+      "maxRecordCount": 2000,
+      "attribution": "Mono County IT Department / GIS Division",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=6f2c0b4f280946a48762a35d1fafb54d",
+      "testPoint": [
+        -119.2313,
+        38.2557
+      ],
+      "testResult": "5 features; AsmtNum 008060060000 near point (layer total 20,495)",
+      "notes": ""
+    },
+    {
+      "county": "Monterey",
+      "fips": "06053",
+      "status": "available",
+      "endpoint": "https://maps.co.monterey.ca.us/server/rest/services/Parcel_Report/Parcel_Report/MapServer/21",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of Monterey",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=af683ca702db4ffaac6ad202de51befb",
+      "testPoint": [
+        -121.6555,
+        36.6777
+      ],
+      "testResult": "5 features; APN 002171033000 near point (layer total 124,073)",
+      "notes": "Layer 21 of the Parcel_Report service."
+    },
+    {
+      "county": "Napa",
+      "fips": "06055",
+      "status": "available",
+      "endpoint": "https://gis.napa.ca.gov/arcgis/rest/services/External/AccelaBasemap/MapServer/1",
+      "format": "geojson",
+      "idField": "ASMT",
+      "maxRecordCount": 2000,
+      "attribution": "County of Napa GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://gis.napa.ca.gov/arcgis/rest/services/External/AccelaBasemap/MapServer/1",
+      "testPoint": [
+        -122.2869,
+        38.2975
+      ],
+      "testResult": "5 features; ASMT 003-161-002-000 near point (layer total 51,366)",
+      "notes": "Parcels layer (id 1) of the AccelaBasemap service."
+    },
+    {
+      "county": "Nevada",
+      "fips": "06057",
+      "status": "available",
+      "endpoint": "https://maps.nevadacountyca.gov/arcgis/rest/services/web_public/Open_Data_Layers_Nevada_County_1/FeatureServer/200",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Nevada County GIS",
+      "license": "CC BY 4.0",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=8f06e50a475c417bb4b39a47c4811cae",
+      "testPoint": [
+        -121.0161,
+        39.2616
+      ],
+      "testResult": "5 features; APN 005390007000 near point (layer total 64,401)",
+      "notes": "County says geometry is a rough representation and parcels with multiple owners are overlapping polygons, so expect duplicates. The old gis.nevcounty.net host is unreachable."
+    },
+    {
+      "county": "Orange",
+      "fips": "06059",
+      "status": "available",
+      "endpoint": "https://www.ocgis.com/survey/rest/services/Landbase/MapLayers/MapServer/65",
+      "format": "geojson",
+      "idField": "ASSESSMENT_NO",
+      "maxRecordCount": 2000,
+      "attribution": "County of Orange, OC Public Works / OC Survey",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.ocgis.com/survey/rest/services/Landbase/MapLayers/MapServer/65",
+      "testPoint": [
+        -117.8678,
+        33.7455
+      ],
+      "testResult": "5 features; ASSESSMENT_NO 404-092-07 near point (layer total 703,000)",
+      "notes": ""
+    },
+    {
+      "county": "Placer",
+      "fips": "06061",
+      "status": "available",
+      "endpoint": "https://services9.arcgis.com/NENkjkswKTzMfG3A/arcgis/rest/services/County_Parcels_-_Public_View/FeatureServer/0",
+      "format": "geojson",
+      "idField": "Apn",
+      "maxRecordCount": 2000,
+      "attribution": "Placer County GIS Services",
+      "license": "Item license 'PUBLIC'; sanitized public view (owner fields removed), not survey grade",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=5b815f44b5584f52933dc377f796b87a",
+      "testPoint": [
+        -121.0769,
+        38.8966
+      ],
+      "testResult": "5 features; Apn 001-093-013-000 near point (layer total 199,381)",
+      "notes": "Layer description still reads 'Terms of Use: INTERNAL - PLACER COUNTY EMPLOYEES ONLY' (inherited from the source layer), but the item is a public, sanitized view refreshed daily. maps.placer.ca.gov has an expired TLS certificate."
+    },
+    {
+      "county": "Plumas",
+      "fips": "06063",
+      "status": "none",
+      "endpoint": null,
+      "format": null,
+      "idField": null,
+      "maxRecordCount": null,
+      "attribution": "Plumas County",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.plumascounty.us/3305/Parcel-Query-Tool",
+      "testPoint": [
+        -120.9469,
+        39.9368
+      ],
+      "testResult": "Parcels are published only through a MangoMap web viewer (mangomap.com/plumasgis) with no public feature-query API. The only ArcGIS layers found were third-party copies.",
+      "notes": ""
+    },
+    {
+      "county": "Riverside",
+      "fips": "06065",
+      "status": "available",
+      "endpoint": "https://gis.countyofriverside.us/arcgis_mapping/rest/services/OpenData/Assessor/MapServer/40",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Riverside County Assessor / RCIT",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=778c8b6ffa4f41fba2e714a132aa3751",
+      "testPoint": [
+        -117.3962,
+        33.9533
+      ],
+      "testResult": "5 features; APN 225111015 near point (layer total 871,742)",
+      "notes": "Updated daily. The older OpenData/ParcelBasic layer rejects resultRecordCount ('Pagination is not supported')."
+    },
+    {
+      "county": "Sacramento",
+      "fips": "06067",
+      "status": "available",
+      "endpoint": "https://mapservices.gis.saccounty.net/arcgis/rest/services/PARCELS/MapServer/22",
+      "format": "geojson",
+      "idField": "PARCEL_NUMBER",
+      "maxRecordCount": 2000,
+      "attribution": "Sacramento County GIS",
+      "license": "No terms stated",
+      "documentationUrl": "https://mapservices.gis.saccounty.net/arcgis/rest/services/PARCELS/MapServer/22",
+      "testPoint": [
+        -121.4944,
+        38.5816
+      ],
+      "testResult": "5 features; PARCEL_NUMBER 00601010180000 near point (layer total 600,327)",
+      "notes": "14-digit APN; APN_DASH holds the dashed form."
+    },
+    {
+      "county": "San Benito",
+      "fips": "06069",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/NjMFCzThTMQy3AJa/arcgis/rest/services/Open_Data_Parcels/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 1000,
+      "attribution": "County of San Benito",
+      "license": "No warranty; County disclaims accuracy and fitness for any purpose",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=7a13c04b751c49df9d5fc86475ed3e55",
+      "testPoint": [
+        -121.4016,
+        36.8525
+      ],
+      "testResult": "5 features; APN 0541010080 near point (layer total 26,162)",
+      "notes": ""
+    },
+    {
+      "county": "San Bernardino",
+      "fips": "06071",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/aA3snZwJfFkVyDuP/arcgis/rest/services/Parcels_for_San_Bernardino_County/FeatureServer/0",
+      "format": "geojson",
+      "idField": "ParcelNumber",
+      "maxRecordCount": 1000,
+      "attribution": "San Bernardino County GIS",
+      "license": "No warranty; County assumes no liability for errors or omissions",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=9ca3e6b812d1473fb42eafd412a16139",
+      "testPoint": [
+        -117.2898,
+        34.1083
+      ],
+      "testResult": "5 features; ParcelNumber 013508109 near point (layer total 840,110)",
+      "notes": "Owner names are redacted."
+    },
+    {
+      "county": "San Diego",
+      "fips": "06073",
+      "status": "available",
+      "endpoint": "https://geo.sandag.org/server/rest/services/Hosted/Parcels/FeatureServer/0",
+      "format": "geojson",
+      "idField": "apn",
+      "maxRecordCount": 2000,
+      "attribution": "SanGIS, published by SANDAG (source: San Diego County Assessor/Recorder/County Clerk)",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=032a5dcf654c4ccbb18711ad8a0ee754",
+      "testPoint": [
+        -117.1611,
+        32.7157
+      ],
+      "testResult": "5 features; apn 5335140101 near point (layer total 1,089,056)",
+      "notes": "Regional publication (SANDAG GIS server) of SanGIS parcels. The older gissd.sandag.org host is unreachable."
+    },
+    {
+      "county": "San Francisco",
+      "fips": "06075",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/Zs2aNLFN00jrS4gG/arcgis/rest/services/Active_Parcels_from_DataSF_pulled_daily_/FeatureServer/0",
+      "format": "geojson",
+      "idField": "blklot",
+      "maxRecordCount": 2000,
+      "attribution": "City and County of San Francisco (SFGIS / DataSF)",
+      "license": "Open Data Commons PDDL (public domain)",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=f81b5f0adb8c4d6a95282bec1ce10378",
+      "testPoint": [
+        -122.4194,
+        37.7749
+      ],
+      "testResult": "5 features; blklot 3505086 near point (layer total 227,700)",
+      "notes": "Daily ArcGIS Online copy of DataSF 'Parcels - Active and Retired' (acdm-wktn), filtered to active parcels; blklot = block + lot APN. sfplanninggis.org parcel layers require a token."
+    },
+    {
+      "county": "San Joaquin",
+      "fips": "06077",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/GQhSReJEO6f7tsvy/arcgis/rest/services/Parcels/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "San Joaquin County Department of Public Works (Assessor data)",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=03f97b03d2614a6b8505dd16962a0922",
+      "testPoint": [
+        -121.2908,
+        37.9577
+      ],
+      "testResult": "5 features; APN 13910022 near point (layer total 252,964)",
+      "notes": ""
+    },
+    {
+      "county": "San Luis Obispo",
+      "fips": "06079",
+      "status": "available",
+      "endpoint": "https://gis.slocounty.ca.gov/arcgis/rest/services/Public/SLO_CO_PARCELS/MapServer/0",
+      "format": "geojson",
+      "idField": "apn",
+      "maxRecordCount": 2000,
+      "attribution": "County of San Luis Obispo Assessor's Office",
+      "license": "No terms stated",
+      "documentationUrl": "https://gis.slocounty.ca.gov/arcgis/rest/services/Public/SLO_CO_PARCELS/MapServer/0",
+      "testPoint": [
+        -120.6596,
+        35.2828
+      ],
+      "testResult": "5 features; apn 002-443-016 near point (layer total 132,559)",
+      "notes": "Native SR 6424."
+    },
+    {
+      "county": "San Mateo",
+      "fips": "06081",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/yq3FgOI44hYHAFVZ/arcgis/rest/services/Active__Parcels_2/FeatureServer/32",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of San Mateo (smcmaps ArcGIS Online)",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=97bd327fec6846ff9e6c119cb346dac8",
+      "testPoint": [
+        -122.2364,
+        37.4852
+      ],
+      "testResult": "5 features; APN 052191110 near point (layer total 234,843)",
+      "notes": "Static snapshot last edited 2022-08 (234,843 parcels, fields APN and SITUS_ADDR only), uploaded by county staff. The official maps.smcgov.org service was unreachable (503/connection reset). The county also offers daily Active Parcels file downloads."
+    },
+    {
+      "county": "Santa Barbara",
+      "fips": "06083",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/KkJhFbLnXVqahKz2/arcgis/rest/services/Assessor_Parcels_Public1/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Santa Barbara County Clerk-Recorder-Assessor Mapping Department",
+      "license": "No warranty; for representational use only, not for coordinates, distances or bearings",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=7a87bfc7a4cd4f98a039bd62c757e849",
+      "testPoint": [
+        -119.6982,
+        34.4208
+      ],
+      "testResult": "5 features; APN 031-011-018 near point (layer total 133,602)",
+      "notes": "Closed-roll parcels with owners removed. The previously listed Parcels2020 service belongs to a trails nonprofit, not the county."
+    },
+    {
+      "county": "Santa Clara",
+      "fips": "06085",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/tcv2cMrq63AgvbHF/arcgis/rest/services/Parcels_Public_View/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of Santa Clara Department of Planning and Development",
+      "license": "No use constraints; informational only, no warranty",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=beb8b2e587d1450792e66cf07d831616",
+      "testPoint": [
+        -121.8863,
+        37.3382
+      ],
+      "testResult": "5 features; APN 46763035 near point (layer total 504,648)",
+      "notes": ""
+    },
+    {
+      "county": "Santa Cruz",
+      "fips": "06087",
+      "status": "available",
+      "endpoint": "https://sccgis.santacruzcountyca.gov/server/rest/services/data/MapServer/2",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of Santa Cruz Assessor's Office / Information Services Department",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=dfc38681763e4db3ae6baada0f49c713",
+      "testPoint": [
+        -122.0308,
+        36.9741
+      ],
+      "testResult": "5 features; APN 006-413-08 near point (layer total 97,180)",
+      "notes": "The old host gis.santacruzcounty.us/arcserver now 301-redirects here."
+    },
+    {
+      "county": "Shasta",
+      "fips": "06089",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/22p1CUjMjjRWlw6O/arcgis/rest/services/ParcelSitusAddress/FeatureServer/0",
+      "format": "geojson",
+      "idField": "ASMT",
+      "maxRecordCount": 2000,
+      "attribution": "Shasta County Assessor / IT GIS",
+      "license": "Shasta County GIS Data Disclaimer (gis.shastacounty.gov/Disclaimer/ShastaCountyDataDisclaimer.pdf)",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=115178478e6747ee8eee0822f1645d99",
+      "testPoint": [
+        -122.3917,
+        40.5865
+      ],
+      "testResult": "5 features; ASMT 101040003000 near point (layer total 100,225)",
+      "notes": "Last edited 2025-08. The sibling ParcelsLandUse layer (edited 2025-12) also has APN/ASMT."
+    },
+    {
+      "county": "Sierra",
+      "fips": "06091",
+      "status": "restricted",
+      "endpoint": null,
+      "format": null,
+      "idField": null,
+      "maxRecordCount": null,
+      "attribution": "Sierra County Assessor",
+      "license": "Data sold by the Assessor; viewer under vendor EULA",
+      "documentationUrl": "https://sierracounty.ca.gov/153/Maps---GIS",
+      "testPoint": [
+        -120.8277,
+        39.5593
+      ],
+      "testResult": "Parcel shapefiles are sold by the Assessor ($500). The public viewer is California CAD Solutions' DashGIS (mydashgis.com/SierraCountyPublic), which is under EULA and has no open query API. Only third-party survey-firm copies were found.",
+      "notes": ""
+    },
+    {
+      "county": "Siskiyou",
+      "fips": "06093",
+      "status": "available",
+      "endpoint": "https://services3.arcgis.com/JmPiYilyU1x5zuxM/arcgis/rest/services/Siskiyou_Parcels_Public/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Siskiyou County GIS",
+      "license": "No warranty; County assumes no liability",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=9a9d6df6fc6d4c929a3bced1dc234831",
+      "testPoint": [
+        -122.6345,
+        41.7354
+      ],
+      "testResult": "5 features; APN 053-044-040 near point (layer total 53,720)",
+      "notes": "Replaces an older 2017 Cal OES-hosted copy."
+    },
+    {
+      "county": "Solano",
+      "fips": "06095",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/SCn6czzcqKAFwdGU/arcgis/rest/services/Parcels_Public_Aumentum/FeatureServer/0",
+      "format": "geojson",
+      "idField": "parcelid",
+      "maxRecordCount": 2000,
+      "attribution": "Solano County (maintained by Geographic Technologies Group)",
+      "license": "Adjusted to 2024 imagery; Tax Map is authoritative; not for high-precision use",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=770f92f0bf314266ba0d1f80d9af3b9c",
+      "testPoint": [
+        -122.04,
+        38.2494
+      ],
+      "testResult": "5 features; parcelid 0030193030 near point (layer total 153,430)",
+      "notes": ""
+    },
+    {
+      "county": "Sonoma",
+      "fips": "06097",
+      "status": "available",
+      "endpoint": "https://services1.arcgis.com/P5Mv5GY5S66M8Z1Q/arcgis/rest/services/Parcels_Public/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "County of Sonoma (Clerk-Recorder-Assessor; ISD-GIS Central)",
+      "license": "Share with attribution 'County of Sonoma'; no redistribution of modified data (no derivatives)",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=4a3809ba63674b179f5c639547b95163",
+      "testPoint": [
+        -122.7141,
+        38.4405
+      ],
+      "testResult": "5 features; APN 009-011-001 near point (layer total 188,969)",
+      "notes": "Asmt holds the 12-digit assessment number."
+    },
+    {
+      "county": "Stanislaus",
+      "fips": "06099",
+      "status": "available",
+      "endpoint": "https://services.arcgis.com/EeYBJFxLdUojipYa/arcgis/rest/services/Public_Parcels/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Stanislaus County Assessor and ITC GIS",
+      "license": "Public resource of general information; no warranty",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=4781425e84ef4e598f26da49f47ff078",
+      "testPoint": [
+        -120.9969,
+        37.6391
+      ],
+      "testResult": "5 features; APN 103001004 near point (layer total 168,915)",
+      "notes": ""
+    },
+    {
+      "county": "Sutter",
+      "fips": "06101",
+      "status": "available",
+      "endpoint": "https://services6.arcgis.com/rHMUPKWdiOvdGXkw/arcgis/rest/services/Tax_Parcels_DS/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Sutter County",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=210a34b3bff1483abb99300b38551f0f",
+      "testPoint": [
+        -121.6169,
+        39.1404
+      ],
+      "testResult": "5 features; APN 52-164-016 near point (layer total 36,143)",
+      "notes": "PIN holds the 12-digit form."
+    },
+    {
+      "county": "Tehama",
+      "fips": "06103",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/3iNbxbY9zhyxPvde/arcgis/rest/services/Tehama_County_Parcels_Public_2025_11_04/FeatureServer/0",
+      "format": "geojson",
+      "idField": "Crest_APN",
+      "maxRecordCount": 2000,
+      "attribution": "Tehama County",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=618fe491381a4a6592fb9a67ebd557ed",
+      "testPoint": [
+        -122.2358,
+        40.1785
+      ],
+      "testResult": "5 features; Crest_APN 029-306-03-1 near point (layer total 43,079)",
+      "notes": "Service name is date-stamped (2025_11_04), so it may be superseded. LOWPARCELI holds the 12-digit form."
+    },
+    {
+      "county": "Trinity",
+      "fips": "06105",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/32siQkg0O6da8zFF/arcgis/rest/services/Parcel_Service/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 1000,
+      "attribution": "Trinity County Planning Department, Assessor's Office, Trinity County RCD",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=89895041f9ec4beaa91243a33d0eded6",
+      "testPoint": [
+        -122.9411,
+        40.731
+      ],
+      "testResult": "5 features; APN 001-053-20-00 near point (layer total 16,620)",
+      "notes": ""
+    },
+    {
+      "county": "Tulare",
+      "fips": "06107",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/bYBANhmQGwSSLC0l/arcgis/rest/services/Parcels_(Public_View)/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 1000,
+      "attribution": "County of Tulare",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=8eb4a5d77ca64debbe9e391cd04cadf4",
+      "testPoint": [
+        -119.2921,
+        36.3302
+      ],
+      "testResult": "5 features; APN 094281005 near point (layer total 166,875)",
+      "notes": "Owner and value fields removed."
+    },
+    {
+      "county": "Tuolumne",
+      "fips": "06109",
+      "status": "available",
+      "endpoint": "https://services3.arcgis.com/afQpMaliVrwHS7Ud/arcgis/rest/services/CadastralParcels_view/FeatureServer/0",
+      "format": "geojson",
+      "idField": "APN_Formatted",
+      "maxRecordCount": 2000,
+      "attribution": "County of Tuolumne GIS Division",
+      "license": "Courtesy of County of Tuolumne; no guarantee of reliability or suitability",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=03f47e3d188e4e5ba415a9275cca313a",
+      "testPoint": [
+        -120.3822,
+        37.9841
+      ],
+      "testResult": "5 features; APN_Formatted 002-163-005 near point (layer total 43,572)",
+      "notes": "The numeric APN field drops leading zeros; use APN_Formatted or FeeParcel."
+    },
+    {
+      "county": "Ventura",
+      "fips": "06111",
+      "status": "available",
+      "endpoint": "https://maps.ventura.org/arcgis/rest/services/SDs/Parcels/MapServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 1000,
+      "attribution": "County of Ventura",
+      "license": "No terms stated",
+      "documentationUrl": "https://maps.ventura.org/arcgis/rest/services/SDs/Parcels/MapServer/0",
+      "testPoint": [
+        -119.229,
+        34.2746
+      ],
+      "testResult": "5 features; APN 078005036 near point (layer total 268,165)",
+      "notes": ""
+    },
+    {
+      "county": "Yolo",
+      "fips": "06113",
+      "status": "available",
+      "endpoint": "https://services2.arcgis.com/RETsakmE0SJfZXCd/arcgis/rest/services/Yolo_County_Tax_Parcels_Open_Data_/FeatureServer/0",
+      "format": "geojson",
+      "idField": "Roll_Asmt",
+      "maxRecordCount": 2000,
+      "attribution": "Yolo County GIS Cooperative",
+      "license": "No terms stated",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=867d6a5e7a2c44c7a4f6e996b2d89561",
+      "testPoint": [
+        -121.7733,
+        38.6785
+      ],
+      "testResult": "5 features; Roll_Asmt 006563013000 near point (layer total 66,143)",
+      "notes": "No plain APN field; Roll_Asmt is the 12-digit assessment number. Also on-prem at gis.yolocounty.gov/ext/rest/services/Public/Parcels_Public/FeatureServer/0."
+    },
+    {
+      "county": "Yuba",
+      "fips": "06115",
+      "status": "available",
+      "endpoint": "https://gis.yuba.org/arcgis/rest/services/Public/Parcels_Public/MapServer/0",
+      "format": "geojson",
+      "idField": "APN",
+      "maxRecordCount": 2000,
+      "attribution": "Yuba County",
+      "license": "Dated/approximate; general location only, not survey quality or legal boundaries",
+      "documentationUrl": "https://www.arcgis.com/home/item.html?id=47678c53ae574e218d3a45f0c22c4d0e",
+      "testPoint": [
+        -121.5911,
+        39.1457
+      ],
+      "testResult": "5 features; APN 009222004000 near point (layer total 36,587)",
+      "notes": ""
+    }
+  ]
+}

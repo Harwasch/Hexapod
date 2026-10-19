@@ -53,7 +53,7 @@ import { RepresentationSwitcher } from "../sites/RepresentationSwitcher";
 import { SiteLoadStatus } from "../sites/SiteLoadStatus";
 import { TimelineControl } from "../timeline/TimelineControl";
 import { DevReadouts } from "./DevReadouts";
-import { LandPanelSlot } from "./LandPanelSlot";
+import { LandSurfaceSlot } from "./LandSurfaceSlot";
 import { MapCorner } from "./MapCorner";
 import { PhoneTabBar } from "./PhoneTabBar";
 import { stepBack } from "./stepBack";
@@ -72,14 +72,14 @@ function lazyNamed<K extends string, M extends Record<K, ComponentType>>(
   return lazy(() => load().then((module) => ({ default: module[name] })));
 }
 
-// The Land feature (VITE_ENABLE_LAND_EXPLORATION): its panel, the bridges that draw and sync it
+// The Land feature (VITE_ENABLE_LAND_EXPLORATION): its surface, strip, overlays and agent, the bridges that draw and sync it
 // on the globe, the fog of knowing, and the workspace sign-in behind them (oidc-client-ts, which
-// only the identity bridge and the panel reach). Each is loaded on demand like SettingsSheet,
+// only the identity bridge and the surface reach). Each is loaded on demand like SettingsSheet,
 // and only rendered with the flag on, so a build with the flag off never requests any of it
 // (its chunks are still built) and the globe's first load carries none of it
 // (`scripts/check-bundle.mjs` holds that line). With the flag on they load as the shell mounts
 // and behave as before; a chunk that fails to load fails alone (`OnDemand` for the bridges,
-// `LandPanelSlot`'s own boundary for the panel, the inline boundaries for the card and legend).
+// `LandSurfaceSlot`'s own boundary for the surface, the inline boundaries for the card and legend).
 const LandIdentityBridge = lazyNamed(
   () => import("../land/WorkspaceIdentity"),
   "LandIdentityBridge",
@@ -90,6 +90,10 @@ const LandContextBridge = lazyNamed(
   "LandContextBridge",
 );
 const LandRasterBridge = lazyNamed(() => import("@/cesium/LandRasterBridge"), "LandRasterBridge");
+const LandFocusBridge = lazyNamed(() => import("@/cesium/LandFocusBridge"), "LandFocusBridge");
+const LandOverlays = lazyNamed(() => import("../land/surface/LandOverlays"), "LandOverlays");
+const LandAgent = lazyNamed(() => import("../land/surface/LandAgent"), "LandAgent");
+const LandStrip = lazyNamed(() => import("../land/surface/LandStrip"), "LandStrip");
 const KnowledgeFogBridge = lazyNamed(
   () => import("@/cesium/KnowledgeFogBridge"),
   "KnowledgeFogBridge",
@@ -237,6 +241,7 @@ export function AppShell() {
           <LandBridge />
           <LandContextBridge />
           <LandRasterBridge />
+          <LandFocusBridge />
           <KnowledgeFogBridge />
           <ShowOnceBridge />
           <LandMissionBridge />
@@ -247,6 +252,11 @@ export function AppShell() {
         <ErrorBoundary inline label="Fleet overlay">
           <MissionOverlays />
         </ErrorBoundary>
+        {env.landExplorationEnabled && (
+          <OnDemand label="Land overlay">
+            <LandOverlays />
+          </OnDemand>
+        )}
         <CompareSplit />
         <LanternRim />
         <header className="hud-region hud-top">
@@ -267,7 +277,7 @@ export function AppShell() {
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
             {/* Its own boundary: a Land chunk that fails to load leaves the other panels. */}
-            {env.landExplorationEnabled && <LandPanelSlot />}
+            {env.landExplorationEnabled && <LandSurfaceSlot />}
             <MeasurePanel />
             <AddPanel />
           </ErrorBoundary>
@@ -291,6 +301,11 @@ export function AppShell() {
             <Toasts />
           </div>
           <div className="hud-stack hud-detail">
+            {env.landExplorationEnabled && (
+              <OnDemand label="Land agent">
+                <LandAgent />
+              </OnDemand>
+            )}
             <ErrorBoundary inline label="Selection">
               <SelectionCard />
               <FeedsPanel />
@@ -309,6 +324,11 @@ export function AppShell() {
           </div>
         </aside>
         <div className="hud-region hud-strip">
+          {env.landExplorationEnabled && (
+            <OnDemand label="Land controls">
+              <LandStrip />
+            </OnDemand>
+          )}
           <ExploreHud />
           {/* Dates, then the lens over dated imagery, then how old what you know is: time
               first, the way the strip reads left to right. */}

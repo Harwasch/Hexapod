@@ -52,7 +52,8 @@ def harness(monkeypatch):
             return {"branches": [{"id": "branch", "default": True}]}
         if path.endswith("/databases"):
             return {"databases": [{"name": "db", "owner_name": "user"}]}
-        return {"uri": "postgresql://user:private-password@ep-test-pooler.example/db"}
+        host = "ep-test.example" if "pooled=false" in path else "ep-test-pooler.example"
+        return {"uri": f"postgresql://user:private-password@{host}/db"}
 
     def run(args, **kwargs):
         calls.append((args, kwargs))
@@ -92,7 +93,7 @@ def harness(monkeypatch):
         elif args[:2] == ["docker", "cp"]:
             state["copied"] = Path(args[2]).read_bytes()
         elif args[0] == "psql":
-            output = "0028"
+            output = release.migration_head()
         return SimpleNamespace(stdout=output, returncode=0)
 
     class Storage:
@@ -130,7 +131,8 @@ def test_backup_download_restore_and_migration_are_separate_from_production(harn
     assert any("postgres:17-bookworm" in args for args, _ in calls)
     assert any("postgis/postgis:17-3.5" in args for args, _ in calls)
     dump = next(kwargs for args, kwargs in calls if "pg_dump" in args)
-    assert "ep-test-pooler.example" in dump["env"]["PGDATABASE"]
+    # The backup bypasses the pooler, whose server connections the running API shares.
+    assert "@ep-test.example/" in dump["env"]["PGDATABASE"]
     migration = next(kwargs for args, kwargs in calls if "alembic" in args)
     assert "127.0.0.1" in migration["env"]["ALEMBIC_DATABASE_URL"]
     assert calls[-1][0][:3] == ["docker", "rm", "--force"]

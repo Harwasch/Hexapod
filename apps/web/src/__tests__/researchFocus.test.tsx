@@ -1,10 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { components, LandArea } from "@twin/contracts";
 import { api } from "@/api/client";
-import { LandResearch } from "@/features/land/LandResearch";
-import { LandMapSelection } from "@/features/land/LandMapSelection";
+import { AgentCard } from "@/features/land/surface/agent/AgentCard";
 import {
   researchDraftKey,
   parseResearchDraft,
@@ -12,6 +11,8 @@ import {
 } from "@/features/land/researchDraft";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
+
+/** The agent card's question: its map focus, its draft in this browser, and lost sends. */
 
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => null }));
 const land: LandArea = {
@@ -44,12 +45,15 @@ const inv = {
   boundaryRevision: 1,
   createdAt: "2026-10-09",
   stale: false,
+  kinds: [],
 };
 const focus = {
   artifactId: "33333333-3333-4333-8333-333333333333",
   featureIndex: 0,
   label: "Survey point",
 };
+const RUNS = "/api/v1/research/investigations/{investigation_id}/runs";
+
 function mount() {
   useLand.getState().select(land);
   vi.spyOn(api, "GET").mockImplementation((path: string) =>
@@ -57,7 +61,7 @@ function mount() {
       data: path.endsWith("/status")
         ? { modelConfigured: true, model: "fixture" }
         : path.endsWith("/investigations")
-          ? [inv]
+          ? []
           : {
               investigation: inv,
               runs: [],
@@ -74,11 +78,26 @@ function mount() {
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}
     >
-      <LandResearch land={land} />
-      <LandMapSelection land={land} />
+      <AgentCard land={land} />
     </QueryClientProvider>,
   );
 }
+
+/** Creating the investigation works; the run request does whatever `runs` says. */
+function post(runs: () => Promise<unknown>) {
+  return vi
+    .spyOn(api, "POST")
+    .mockImplementation((path: string) =>
+      path === RUNS ? runs() : Promise.resolve({ data: inv, response: new Response() }),
+    );
+}
+const runCalls = (spy: ReturnType<typeof post>) =>
+  spy.mock.calls.filter((call) => call[0] === RUNS);
+const body = (call: unknown[] | undefined) =>
+  (call?.[1] as { body: components["schemas"]["RunCreate"] } | undefined)?.body;
+const input = () => screen.getByLabelText("Ask about this land");
+const send = () => screen.getByRole("button", { name: "Ask the agent" });
+
 afterEach(() => {
   cleanup();
   useLandContext.getState().clear();
@@ -86,7 +105,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it("carries map selection into the question while preserving an existing draft", () => {
+it("carries map selection into the question while preserving an existing draft", async () => {
   useLandContext.getState().setLayer({
     id: focus.artifactId,
     researchArtifactId: focus.artifactId,
@@ -103,37 +122,35 @@ it("carries map selection into the question while preserving an existing draft",
   useLandContext.getState().selectMapFeature(focus.artifactId, "0", "list");
   useLandContext.getState().setResearchQuestion("Explain the uncertainty");
   mount();
-  fireEvent.click(screen.getByRole("button", { name: "Ask about this feature" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Ask about this feature" }));
   expect(useLandContext.getState().researchFocus).toEqual(focus);
-  expect(screen.getByLabelText("Follow your curiosity")).toHaveValue("Explain the uncertainty");
+  expect(input()).toHaveValue("Explain the uncertainty");
   fireEvent.click(screen.getByRole("button", { name: "Clear question focus" }));
   expect(useLandContext.getState().researchFocus).toBeNull();
-  expect(screen.getByLabelText("Follow your curiosity")).toHaveValue("Explain the uncertainty");
+  expect(input()).toHaveValue("Explain the uncertainty");
 });
 
 it("retries the same pinned reference and request key after a lost queue response", async () => {
-  const post = vi.spyOn(api, "POST").mockRejectedValue(new Error("Lost queue response"));
+  const spy = post(() => Promise.reject(new Error("Lost queue response")));
   useLandContext.getState().setResearchQuestion("What about this?");
   useLandContext.getState().setResearchFocus(focus);
   mount();
-  const ask = screen.getByRole("button", { name: "Investigate" });
-  await waitFor(() => expect(ask).toBeEnabled());
-  fireEvent.click(ask);
+  await waitFor(() => expect(send()).toBeEnabled());
+  fireEvent.click(send());
   await screen.findByRole("alert");
   fireEvent.click(await screen.findByRole("button", { name: "Retry captured request" }));
-  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
-  const first = (post.mock.calls[0]?.[1] as unknown as { body: components["schemas"]["RunCreate"] })
-    .body;
+  await waitFor(() => expect(runCalls(spy)).toHaveLength(2));
+  const first = body(runCalls(spy)[0]);
   expect(first).toMatchObject({ focus: { artifactId: focus.artifactId, featureIndex: 0 } });
   expect(first?.focus).not.toHaveProperty("label");
-  expect(
-    (post.mock.calls[1]?.[1] as unknown as { body: components["schemas"]["RunCreate"] }).body,
-  ).toEqual(first);
+  expect(body(runCalls(spy)[1])).toEqual(first);
+  // The retry reuses the investigation it already made.
+  expect(spy.mock.calls.filter((call) => call[0] !== RUNS)).toHaveLength(1);
 });
 
 it("retains a newer question and focus when an earlier request finishes", async () => {
   let resolve!: (value: { data: unknown; response: Response }) => void;
-  vi.spyOn(api, "POST").mockImplementation(
+  post(
     () =>
       new Promise((done) => {
         resolve = done;
@@ -142,9 +159,8 @@ it("retains a newer question and focus when an earlier request finishes", async 
   useLandContext.getState().setResearchQuestion("First question");
   useLandContext.getState().setResearchFocus(focus);
   mount();
-  const ask = screen.getByRole("button", { name: "Investigate" });
-  await waitFor(() => expect(ask).toBeEnabled());
-  fireEvent.click(ask);
+  await waitFor(() => expect(send()).toBeEnabled());
+  fireEvent.click(send());
   await waitFor(() => expect(resolve).toBeDefined());
   act(() => {
     useLandContext.getState().setResearchQuestion("Next question");
@@ -153,26 +169,26 @@ it("retains a newer question and focus when an earlier request finishes", async 
       .setResearchFocus({ ...focus, featureIndex: 1, label: "Another point" });
     resolve({ data: {}, response: new Response() });
   });
-  await waitFor(() => expect(ask).toBeEnabled());
+  await waitFor(() => expect(useLandContext.getState().selectedInvestigationId).toBe(inv.id));
   expect(useLandContext.getState().researchQuestion).toBe("Next question");
   expect(useLandContext.getState().researchFocus?.featureIndex).toBe(1);
 });
 
 it("recovers a draft and retries the original request after a reload without overwriting a newer question", async () => {
-  const post = vi
-    .spyOn(api, "POST")
-    .mockRejectedValueOnce(new Error("Lost response"))
-    .mockResolvedValue({ data: {}, response: new Response() });
+  let attempts = 0;
+  const spy = post(() =>
+    attempts++ === 0
+      ? Promise.reject(new Error("Lost response"))
+      : Promise.resolve({ data: {}, response: new Response() }),
+  );
   useLandContext.getState().setResearchQuestion("First question");
   useLandContext.getState().setResearchFocus(focus);
   const view = mount();
-  await waitFor(() => expect(screen.getByRole("button", { name: "Investigate" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Investigate" }));
+  await waitFor(() => expect(send()).toBeEnabled());
+  fireEvent.click(send());
   await screen.findByRole("button", { name: "Retry captured request" });
-  const first = post.mock.calls[0]?.[1];
-  fireEvent.change(screen.getByLabelText("Follow your curiosity"), {
-    target: { value: "A newer question" },
-  });
+  const first = runCalls(spy)[0]?.[1];
+  fireEvent.change(input(), { target: { value: "A newer question" } });
   fireEvent.change(screen.getByLabelText("Time budget"), { target: { value: "600" } });
   const stored = parseResearchDraft(
     localStorage.getItem(researchDraftKey("pilot", land.id))!,
@@ -184,30 +200,26 @@ it("recovers a draft and retries the original request after a reload without ove
   view.unmount();
   useLandContext.getState().clear();
   mount();
-  expect(screen.getByLabelText("Follow your curiosity")).toHaveValue("A newer question");
+  expect(input()).toHaveValue("A newer question");
   expect(screen.getByLabelText("Time budget")).toHaveValue("600");
   expect(useLandContext.getState().researchFocus).toEqual(focus);
-  expect(post).toHaveBeenCalledTimes(1);
+  expect(runCalls(spy)).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Retry captured request" }));
-  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
-  expect(post.mock.calls[1]?.[1]).toEqual(first);
-  await waitFor(() =>
-    expect(
-      screen.queryByRole("region", { name: "Captured research request" }),
-    ).not.toBeInTheDocument(),
-  );
-  expect(screen.getByLabelText("Follow your curiosity")).toHaveValue("A newer question");
+  await waitFor(() => expect(runCalls(spy)).toHaveLength(2));
+  expect(runCalls(spy)[1]?.[1]).toEqual(first);
+  await waitFor(() => expect(useLandContext.getState().selectedInvestigationId).toBe(inv.id));
+  expect(useLandContext.getState().researchQuestion).toBe("A newer question");
   expect(
     parseResearchDraft(localStorage.getItem(researchDraftKey("pilot", land.id))!, land.id).pending,
   ).toBeNull();
 });
 
 it("rejects a recovered investigation belonging to different land before queueing research", async () => {
-  const post = vi.spyOn(api, "POST").mockRejectedValue(new Error("Lost response"));
+  const spy = post(() => Promise.reject(new Error("Lost response")));
   useLandContext.getState().setResearchQuestion("Inspect this feature");
   const view = mount();
-  await waitFor(() => expect(screen.getByRole("button", { name: "Investigate" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Investigate" }));
+  await waitFor(() => expect(send()).toBeEnabled());
+  fireEvent.click(send());
   await screen.findByRole("button", { name: "Retry captured request" });
   view.unmount();
   useLandContext.getState().clear();
@@ -220,20 +232,20 @@ it("rejects a recovered investigation belonging to different land before queuein
   await screen.findByText(
     "This captured investigation does not match the selected land and boundary revision.",
   );
-  expect(post).toHaveBeenCalledTimes(1);
+  expect(runCalls(spy)).toHaveLength(1);
 });
 
 it("keeps the live question usable and reports failed browser storage", async () => {
   vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
     throw new Error("Storage full");
   });
-  const post = vi.spyOn(api, "POST").mockResolvedValue({ data: {}, response: new Response() });
+  const spy = post(() => Promise.resolve({ data: {}, response: new Response() }));
   useLandContext.getState().setResearchQuestion("Research this land");
   mount();
   await screen.findByText(/This browser could not save or restore/);
-  await waitFor(() => expect(screen.getByRole("button", { name: "Investigate" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Investigate" }));
-  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  await waitFor(() => expect(send()).toBeEnabled());
+  fireEvent.click(send());
+  await waitFor(() => expect(runCalls(spy)).toHaveLength(1));
 });
 
 it("validates captured limits, source references, land identity and draft size", () => {
@@ -268,12 +280,10 @@ it("preserves an unreadable recovery record until explicitly discarded", async (
   const raw = JSON.stringify({ version: 42, question: "Keep this future-format draft" });
   localStorage.setItem(key, raw);
   mount();
-  await screen.findByRole("region", { name: "Unreadable saved question" });
+  const notice = await screen.findByRole("region", { name: "Unreadable saved question" });
   expect(localStorage.getItem(key)).toBe(raw);
-  fireEvent.change(screen.getByLabelText("Follow your curiosity"), {
-    target: { value: "A new question" },
-  });
+  fireEvent.change(input(), { target: { value: "A new question" } });
   expect(localStorage.getItem(key)).toBe(raw);
-  fireEvent.click(screen.getByRole("button", { name: "Discard unreadable record" }));
+  fireEvent.click(within(notice).getByRole("button", { name: "Discard unreadable record" }));
   expect(parseResearchDraft(localStorage.getItem(key)!, land.id).question).toBe("A new question");
 });

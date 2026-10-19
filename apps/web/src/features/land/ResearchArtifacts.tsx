@@ -8,6 +8,8 @@ import { SolarAssessmentView } from "./SolarAssessmentView";
 import { LandRasterView } from "./LandRasterView";
 import { ChartView } from "./ResearchChart";
 import { CalculationView } from "./CalculationView";
+import { useLens } from "./surface/lenses";
+import "./research.css";
 
 export function ResearchArtifactView({
   artifact,
@@ -34,7 +36,7 @@ export function ResearchArtifactView({
             type="button"
             onClick={() => {
               useLandContext.getState().selectSolar(output.assessmentId);
-              useLandContext.getState().setSection("scenarios");
+              useLens.getState().setLens("solar");
             }}
           >
             Explore solar economics

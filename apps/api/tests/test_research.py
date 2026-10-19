@@ -333,3 +333,23 @@ def test_status_queue_counts_are_workspace_scoped(oidc_client: IdentityClient, d
         assert status["worker"]["busy"] is True
     assert client.get("/api/v1/research/status", headers=alice).json()["queue"]["running"] == 0
     assert client.get("/api/v1/research/status", headers=bob).json()["queue"]["running"] == 1
+
+
+def test_investigations_say_what_has_run_in_them(client: TestClient) -> None:
+    land, inv, _run, _ = start(client)
+    asked = client.post(
+        f"/api/v1/land/{land['id']}/investigations",
+        json={"title": "Where could a pond go?", "boundaryRevision": 1},
+    ).json()
+    assert asked["kinds"] == []
+    client.post(
+        f"/api/v1/research/investigations/{asked['id']}/runs",
+        json={"requestKey": str(uuid.uuid4()), "question": "Where could a pond go?"},
+    )
+    listed = {
+        item["id"]: item["kinds"]
+        for item in client.get(f"/api/v1/land/{land['id']}/investigations").json()
+    }
+    assert listed == {inv["id"]: ["overview"], asked["id"]: ["investigation"]}
+    detail = client.get(f"/api/v1/research/investigations/{asked['id']}").json()
+    assert detail["investigation"]["kinds"] == ["investigation"]

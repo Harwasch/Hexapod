@@ -5,6 +5,8 @@ import {
   Color,
   ColorMaterialProperty,
   ConstantPositionProperty,
+  ConstantProperty,
+  Ellipsoid,
   Entity,
   HeightReference,
   Math as CesiumMath,
@@ -23,10 +25,19 @@ import { nearestBoundaryPoint } from "@/features/land/boundarySnap";
 import type { LandMode, LandPoint } from "@/state/land";
 
 import type { CesiumSceneManager } from "./CesiumSceneManager";
+import { repaintUntilDrawn } from "./repaintUntilDrawn";
 
 const FILL = Color.fromCssColorString("#a8d7b4").withAlpha(0.13);
 const LINE = Color.fromCssColorString("#b9edc6");
 const PREFIX = "land-boundary:";
+/** Handles beyond this many keep the globe-clamped placement rather than a scene sample. */
+const MAX_SAMPLED_HANDLES = 400;
+
+/** Below the Dead Sea shore or above Everest, a depth reading is not the ground. */
+const LOWEST_GROUND_M = -500;
+const HIGHEST_GROUND_M = 9_000;
+
+const key = (point: number[]) => `${point[0]},${point[1]}`;
 
 /** Land display persists while ordinary feature inspection continues beside it. */
 export class LandMapController {
@@ -40,7 +51,14 @@ export class LandMapController {
   private snapMapped = true;
   private readonly mappedSnap = new MappedSnapIndex();
   private snapMarker: Entity | null = null;
+  /** Surface height of each point picked or sampled here, keyed by its degrees. */
+  private heights = new Map<string, number>();
+  private points: LandPoint[] = [];
+  private sampling = 0;
+  /** Height of the last surface the depth buffer showed under the pointer. */
+  private surfaceHeight: number | undefined;
   private readonly release = () => this.finishDrag();
+  private stopRepaint: () => void = () => undefined;
 
   constructor(
     private readonly host: CesiumSceneManager,
@@ -52,30 +70,58 @@ export class LandMapController {
     window.addEventListener("blur", this.release);
   }
 
-  private groundPoint(position: Cartesian2): LandPoint | null {
+  /**
+   * The surface under a canvas pixel. The depth buffer comes first: photorealistic tiles hide
+   * the globe, so a globe pick lands on the terrain beneath them and drifts from the clicked
+   * spot as the camera tilts. Far from the ground the analytic globe pick is the precise one.
+   */
+  private surface(position: Cartesian2): { point: LandPoint; height: number } | null {
     const { scene, viewer } = this.host;
     const ray = viewer.camera.getPickRay(position);
-    const hit = ray ? scene.globe.pick(ray, scene) : undefined;
-    const world = hit ?? viewer.camera.pickEllipsoid(position, scene.globe.ellipsoid);
+    const far = this.host.camera.pose().altitude > 20_000;
+    const globe = ray ? scene.globe.pick(ray, scene) : undefined;
+    let world: Cartesian3 | undefined = far ? globe : undefined;
+    if (!world && scene.pickPositionSupported) {
+      const hit = scene.pickPosition(position);
+      const near = (viewer.camera.frustum as { near?: number }).near ?? 1;
+      const height = hit ? Cartographic.fromCartesian(hit).height : NaN;
+      if (hit && Cartesian3.distance(hit, viewer.camera.positionWC) > 2 * near) {
+        // Depth left over from a frame drawn before the camera moved puts the point deep
+        // underground; terrain where the globe is drawn, or Earth's range, rules that out.
+        const floor = globe ? Cartographic.fromCartesian(globe).height - 100 : LOWEST_GROUND_M;
+        if (height > floor && height < HIGHEST_GROUND_M) {
+          world = hit;
+          this.surfaceHeight = height;
+        }
+      } else if (hit && this.surfaceHeight !== undefined) {
+        // Dots drawn over everything write their depth on the near plane, so a click on one
+        // (or a handle being dragged) reads back the camera; the surface just seen stands in.
+        world = viewer.camera.pickEllipsoid(position, this.raised(this.surfaceHeight));
+      }
+    }
+    world ??= globe;
+    // No terrain drawn there yet: the bare ellipsoid still says where the click is.
+    world ??= viewer.camera.pickEllipsoid(position, scene.globe.ellipsoid);
     if (!world) return null;
     const at = Cartographic.fromCartesian(world);
-    const point: LandPoint = [
-      CesiumMath.toDegrees(at.longitude),
-      CesiumMath.toDegrees(at.latitude),
-    ];
-    return point;
+    return {
+      point: [CesiumMath.toDegrees(at.longitude), CesiumMath.toDegrees(at.latitude)],
+      height: at.height,
+    };
   }
 
-  private ground(position: Cartesian2): LandPoint | null {
-    const point = this.groundPoint(position);
-    if (!point) {
+  private ground(position: Cartesian2): { point: LandPoint; height: number } | null {
+    const hit = this.surface(position);
+    if (!hit) {
       this.showSnap(null);
       return null;
     }
-    if (this.mode === "pick" || this.mode === "candidates") return point;
-    const { scene } = this.host;
+    const { point, height } = hit;
+    if (this.mode === "pick" || this.mode === "candidates") return hit;
+    const { scene, viewer } = this.host;
+    // Snap targets lie within a few pixels of the pointer, so the surface height just picked
+    // stands in for theirs; the globe's own height is wrong wherever 3D tiles cover it.
     const distance = (target: LandPoint) => {
-      const height = scene.globe.getHeight(Cartographic.fromDegrees(...target)) ?? 0;
       const screen = scene.cartesianToCanvasCoordinates(Cartesian3.fromDegrees(...target, height));
       return screen ? Math.hypot(screen.x - position.x, screen.y - position.y) : Infinity;
     };
@@ -87,26 +133,89 @@ export class LandMapController {
       ? { point: boundary, label: "This boundary", distance: distance(boundary) }
       : null;
     if (this.snapMapped && !this.mappedSnap.empty) {
+      // The search window: neighbouring pixels cast onto an ellipsoid at the picked height,
+      // which matches the surface locally without another depth-buffer read per sample.
+      const local = this.raised(height);
       const bounds = { minX: point[0], minY: point[1], maxX: point[0], maxY: point[1] };
       for (const x of [-24, 0, 24])
         for (const y of [-24, 0, 24]) {
           if (!x && !y) continue;
-          const sample = this.groundPoint(new Cartesian2(position.x + x, position.y + y));
-          if (!sample || Math.abs(sample[0] - point[0]) > 180) continue;
-          bounds.minX = Math.min(bounds.minX, sample[0]);
-          bounds.maxX = Math.max(bounds.maxX, sample[0]);
-          bounds.minY = Math.min(bounds.minY, sample[1]);
-          bounds.maxY = Math.max(bounds.maxY, sample[1]);
+          const world = viewer.camera.pickEllipsoid(
+            new Cartesian2(position.x + x, position.y + y),
+            local,
+          );
+          if (!world) continue;
+          const at = Cartographic.fromCartesian(world);
+          const lon = CesiumMath.toDegrees(at.longitude);
+          const lat = CesiumMath.toDegrees(at.latitude);
+          if (Math.abs(lon - point[0]) > 180) continue;
+          bounds.minX = Math.min(bounds.minX, lon);
+          bounds.maxX = Math.max(bounds.maxX, lon);
+          bounds.minY = Math.min(bounds.minY, lat);
+          bounds.maxY = Math.max(bounds.maxY, lat);
         }
       const mapped = this.mappedSnap.nearest(point, bounds, distance);
       if (mapped && (!best || mapped.distance < best.distance)) best = mapped;
     }
     if (best && best.distance <= 12) {
-      this.showSnap(best.point, best.label);
-      return best.point;
+      this.showSnap(best.point, best.label, height);
+      return { point: best.point, height };
     }
     this.showSnap(null);
-    return point;
+    return hit;
+  }
+
+  /** The globe's ellipsoid lifted to a surface height: the ground there, to a close approximation. */
+  private raised(height: number): Ellipsoid {
+    const { radii } = this.host.scene.globe.ellipsoid;
+    return new Ellipsoid(radii.x + height, radii.y + height, radii.z + height);
+  }
+
+  /**
+   * Where a dot for this point is drawn. CLAMP_TO_GROUND follows only the globe, which sits
+   * beneath photorealistic tiles; a dot there floats off its line as the camera tilts, so a
+   * point drawn here keeps the height of the surface it was picked from.
+   */
+  private dot(
+    point: number[],
+    height = this.heights.get(key(point)),
+  ): { position: Cartesian3; heightReference: HeightReference } {
+    const [lon = 0, lat = 0] = point;
+    return height === undefined
+      ? {
+          position: Cartesian3.fromDegrees(lon, lat),
+          heightReference: HeightReference.CLAMP_TO_GROUND,
+        }
+      : {
+          position: Cartesian3.fromDegrees(lon, lat, height),
+          heightReference: HeightReference.NONE,
+        };
+  }
+
+  /** Surface heights for the handles of a boundary opened for editing, read from the scene. */
+  private sampleHandles(footprint: Footprint): void {
+    const { scene } = this.host;
+    if (!scene.sampleHeightSupported) return;
+    const points = polygonsOf(footprint)
+      .flatMap((polygon) => polygon.flatMap((ring) => ring.slice(0, -1)))
+      .filter((point) => !this.heights.has(key(point)))
+      .slice(0, MAX_SAMPLED_HANDLES);
+    if (!points.length) return;
+    const ticket = ++this.sampling;
+    const at = points.map(([lon = 0, lat = 0]) => Cartographic.fromDegrees(lon, lat));
+    scene
+      .sampleHeightMostDetailed(at)
+      .then((sampled) => {
+        if (ticket !== this.sampling || this.host.isDestroyed || this.footprint !== footprint)
+          return;
+        sampled.forEach((carto, index) => {
+          const point = points[index];
+          if (point && carto && Number.isFinite(carto.height))
+            this.heights.set(key(point), carto.height);
+        });
+        this.show(footprint, this.points, true);
+      })
+      .catch(() => undefined);
   }
 
   setSnapping(enabled: boolean, mapped = true): void {
@@ -120,25 +229,27 @@ export class LandMapController {
     if (this.mappedSnap.sync(layers)) this.showSnap(null);
   }
 
-  private showSnap(point: LandPoint | null, label: string | null = null): void {
+  private showSnap(point: LandPoint | null, label: string | null = null, height?: number): void {
     this.snapTarget?.(point ? label : null);
     if (!point && !this.snapMarker) return;
-    if (point && this.snapMarker) {
-      this.snapMarker.position = new ConstantPositionProperty(Cartesian3.fromDegrees(...point));
+    const at = point ? this.dot(point, height) : null;
+    if (at && this.snapMarker?.point) {
+      this.snapMarker.position = new ConstantPositionProperty(at.position);
+      this.snapMarker.point.heightReference = new ConstantProperty(at.heightReference);
       this.host.scene.requestRender();
       return;
     }
     if (this.snapMarker) this.host.viewer.entities.remove(this.snapMarker);
-    this.snapMarker = point
+    this.snapMarker = at
       ? this.host.viewer.entities.add({
           id: `${PREFIX}snap`,
-          position: Cartesian3.fromDegrees(...point),
+          position: at.position,
           point: {
             pixelSize: 17,
             color: Color.TRANSPARENT,
             outlineColor: Color.GOLD,
             outlineWidth: 3,
-            heightReference: HeightReference.CLAMP_TO_GROUND,
+            heightReference: at.heightReference,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         })
@@ -182,8 +293,10 @@ export class LandMapController {
           return;
         }
       }
-      const point = this.ground(event.position);
-      if (point) this.point(point);
+      const hit = this.ground(event.position);
+      if (!hit) return;
+      this.heights.set(key(hit.point), hit.height);
+      this.point(hit.point);
     }, ScreenSpaceEventType.LEFT_CLICK);
     handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (this.mode !== "edit") return;
@@ -207,12 +320,14 @@ export class LandMapController {
     }, ScreenSpaceEventType.LEFT_DOWN);
     handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
       if (this.mode === "edit" && !this.dragging) return;
-      const point = this.ground(event.endPosition);
-      if (!point || !this.dragging || !this.footprint) return;
+      const hit = this.ground(event.endPosition);
+      if (!hit || !this.dragging || !this.footprint) return;
       const copy = structuredClone(this.footprint);
       const { polygon, ring, vertex } = this.dragging;
       const coordinates = polygonsOf(copy)[polygon]?.[ring];
       if (!coordinates) return;
+      const { point } = hit;
+      this.heights.set(key(point), hit.height);
       coordinates[vertex] = point;
       if (vertex === 0) coordinates[coordinates.length - 1] = [...point];
       this.show(copy, [], true);
@@ -229,7 +344,20 @@ export class LandMapController {
   }
 
   show(footprint: Footprint | null, points: LandPoint[], editing: boolean): void {
+    if (footprint && editing && !this.dragging && footprint !== this.footprint)
+      this.sampleHandles(footprint);
     this.footprint = footprint;
+    this.points = points;
+    // Only points still on the map keep a height; a drag leaves one behind per move.
+    const kept = new Map<string, number>();
+    const keep = (point: number[]) => {
+      const height = this.heights.get(key(point));
+      if (height !== undefined) kept.set(key(point), height);
+    };
+    points.forEach(keep);
+    if (footprint)
+      polygonsOf(footprint).forEach((polygon) => polygon.forEach((r) => r.forEach(keep)));
+    this.heights = kept;
     this.entities.forEach((entity) => this.host.viewer.entities.remove(entity));
     this.entities = [];
     const add = (options: Entity.ConstructorOptions) => {
@@ -257,20 +385,21 @@ export class LandMapController {
             polyline: { positions: positions(ring), width: 2, material: LINE, clampToGround: true },
           });
           if (editing)
-            ring.slice(0, -1).forEach((point, vi) =>
+            ring.slice(0, -1).forEach((point, vi) => {
+              const at = this.dot(point);
               add({
                 id: `${PREFIX}handle:${pi}:${ri}:${vi}`,
-                position: Cartesian3.fromDegrees(point[0] ?? 0, point[1] ?? 0),
+                position: at.position,
                 point: {
                   pixelSize: 11,
                   color: Color.WHITE,
                   outlineColor: LINE,
                   outlineWidth: 2,
-                  heightReference: HeightReference.CLAMP_TO_GROUND,
+                  heightReference: at.heightReference,
                   disableDepthTestDistance: Number.POSITIVE_INFINITY,
                 },
-              }),
-            );
+              });
+            });
         });
       });
     }
@@ -287,19 +416,22 @@ export class LandMapController {
           material: new ColorMaterialProperty(FILL),
         },
       });
-    points.forEach((point, index) =>
+    points.forEach((point, index) => {
+      const at = this.dot(point);
       add({
         id: `${PREFIX}drawing:${index}`,
-        position: Cartesian3.fromDegrees(...point),
+        position: at.position,
         point: {
           pixelSize: 8,
           color: LINE,
-          heightReference: HeightReference.CLAMP_TO_GROUND,
+          heightReference: at.heightReference,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
-      }),
-    );
-    this.host.scene.requestRender();
+      });
+    });
+    // Clamped outlines are built over several frames that nothing else asks for.
+    this.stopRepaint();
+    this.stopRepaint = repaintUntilDrawn(this.host);
   }
 
   frame(footprint: Footprint): void {
@@ -308,6 +440,7 @@ export class LandMapController {
   }
 
   destroy(): void {
+    this.stopRepaint();
     this.finishDrag();
     this.handler?.destroy();
     this.showSnap(null);

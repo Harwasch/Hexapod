@@ -1,11 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type * as Osm from "@/missions/osm";
-import { GlassTooltipProvider } from "@twin/ui";
-import { LandCandidatePicker } from "@/features/land/LandCandidatePicker";
-import { LandPanel } from "@/features/land/LandPanel";
 import { mappedFeatureDraft } from "@/features/land/mappedFeature";
+import { LandParcelPicker } from "@/features/land/surface/LandParcelPicker";
+import { useMappedFeaturePick } from "@/features/land/surface/landFlow";
 import type { OsmCandidate } from "@/missions/osm";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
@@ -61,9 +60,9 @@ it("keeps only reviewed candidates as drawing guides without writing a boundary"
       source: { method: "mapped-feature", meaning: "physical-feature", label: "Synthetic fixture" },
     },
   ]);
-  render(<LandCandidatePicker />);
-  fireEvent.click(screen.getByRole("button", { name: /Public fixture line/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Trace using selected features" }));
+  render(<LandParcelPicker />);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Public fixture line" }));
+  fireEvent.click(screen.getByRole("button", { name: "Trace over them" }));
   expect(useLand.getState().mode).toBe("corridor");
   expect(useLand.getState().points).toEqual([]);
   expect(useLand.getState().draft).toBeNull();
@@ -76,9 +75,8 @@ it("keeps only reviewed candidates as drawing guides without writing a boundary"
   expect(useLand.getState().traceSources[0]?.label).toBe("Synthetic fixture");
 });
 
-/** LandPanel's "find the mapped area here" (pick mode), after mappedFeatureDraft took its literal. */
+/** The Land surface's "find the mapped area here" (pick mode), built by mappedFeatureDraft. */
 it("proposes the mapped area found at a picked point with the same source as before", async () => {
-  vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
   const footprint = {
     type: "Polygon" as const,
     coordinates: [
@@ -91,22 +89,13 @@ it("proposes the mapped area found at a picked point with the same source as bef
     ],
   };
   osm.answer = { id: "osm-w1", name: "Creek pasture", footprint, acres: 412 };
-  useUi.getState().setPanel("land");
-  render(
-    <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-    >
-      <GlassTooltipProvider>
-        <LandPanel />
-      </GlassTooltipProvider>
-    </QueryClientProvider>,
-  );
+  renderHook(() => useMappedFeaturePick(true));
   act(() => {
     useLand.getState().begin("pick");
     useLand.getState().addPoint([-120.04, 34.698]);
   });
   await waitFor(() => expect(useLand.getState().draft).not.toBeNull());
-  // The literal LandPanel built before the extraction, field for field.
+  // The literal the pick built before the extraction, field for field.
   expect(useLand.getState().draft).toEqual({
     name: "Creek pasture",
     description: "",
@@ -120,5 +109,4 @@ it("proposes the mapped area found at a picked point with the same source as bef
     },
   });
   expect(mappedFeatureDraft(osm.answer)).toEqual(useLand.getState().draft);
-  useUi.getState().setPanel(null);
 });

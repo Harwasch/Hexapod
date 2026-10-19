@@ -2,10 +2,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Footprint, LandCreate } from "@twin/contracts";
 import { api } from "@/api/client";
-import { LandBoundarySplit } from "@/features/land/LandBoundarySplit";
+import { LandSplitBar } from "@/features/land/surface/LandSplitBar";
 import { nearestBoundaryPoint } from "@/features/land/boundarySnap";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
+import { useLandMap } from "@/state/landMap";
 import { clearHistory, undo } from "@/state/history";
 vi.mock("@/cesium/SceneContext", () => ({
   useScene: () => ({ camera: { flyToRectangle: vi.fn() } }),
@@ -46,14 +47,16 @@ it("previews parts without changing land, applies only selected pieces and suppo
     .spyOn(api, "POST")
     .mockResolvedValueOnce({ data: { parts, selection: null }, response: new Response() })
     .mockResolvedValueOnce({ data: { parts, selection: parts[0] }, response: new Response() });
-  render(<LandBoundarySplit />);
-  fireEvent.click(screen.getByRole("button", { name: "Preview split" }));
-  const choice = await screen.findByRole("checkbox", { name: /Part 1/ });
+  render(<LandSplitBar />);
+  fireEvent.click(screen.getByRole("button", { name: "Show pieces" }));
+  // The pieces are pins on the map; clicking one keeps it.
+  await waitFor(() => expect(useLandMap.getState().pins.split).toHaveLength(2));
   expect(useLand.getState().draft).toBe(draft);
-  expect(screen.getByRole("button", { name: "Keep selected pieces" })).toBeDisabled();
-  fireEvent.click(choice);
+  expect(screen.getByRole("button", { name: /Keep\s+selected/ })).toBeDisabled();
+  act(() => useLandMap.getState().pins.split?.[0]?.onSelect?.());
   expect(useLandContext.getState().layers["boundary-split"]?.selectedIds).toEqual(["0"]);
-  fireEvent.click(screen.getByRole("button", { name: "Keep selected pieces" }));
+  expect(useLandMap.getState().pins.split?.[0]?.label).toMatch(/^Keep · Part 1/);
+  fireEvent.click(screen.getByRole("button", { name: "Keep 1 selected" }));
   await waitFor(() => expect(useLand.getState().mode).toBe("browse"));
   expect(post).toHaveBeenLastCalledWith("/api/v1/land/split", {
     body: {
@@ -79,14 +82,14 @@ it("ignores a delayed preview after the cut line changes", async () => {
         release = resolve;
       }),
   );
-  render(<LandBoundarySplit />);
-  fireEvent.click(screen.getByRole("button", { name: "Preview split" }));
+  render(<LandSplitBar />);
+  fireEvent.click(screen.getByRole("button", { name: "Show pieces" }));
   act(() => useLand.getState().addPoint([2, 2]));
   await act(async () => {
     release({ data: { parts, selection: null }, response: new Response() });
     await Promise.resolve();
   });
-  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(useLandMap.getState().pins.split).toBeUndefined();
   expect(useLand.getState().draft).toBe(draft);
 });
 it("snaps to corners, edges and holes while excluding the moving vertex and adjacent edges", () => {

@@ -1,0 +1,397 @@
+/* ---------------------------------------------------------------------------
+   Overview lens: terrain, land cover and greenness. Facts double as the switch for the one
+   raster on the map; the legend below them says what its colours mean.
+   --------------------------------------------------------------------------- */
+
+/* A fact that is also a layer switch: the whole row is the button. */
+/* Two classes: the shell's .land-fact loads after this file and would win a tie. */
+.land-fact.overview-fact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+}
+.overview-fact__button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.overview-fact__button:disabled {
+  cursor: default;
+}
+.overview-fact__button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.overview-fact__state {
+  grid-row: 1;
+  grid-column: 2;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.land-fact.overview-fact.is-on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.overview-fact.is-on .overview-fact__state {
+  color: var(--accent);
+}
+
+.overview-classes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+}
+.overview-class {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.overview-chip {
+  flex: none;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+}
+
+/* The legend for the raster on the map. */
+.overview-legend {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+.overview-ramp {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+.overview-ramp--viridis {
+  background: linear-gradient(90deg, #440154, #3b528b, #21918c, #5ec962, #fde725);
+}
+.overview-ramp--magma {
+  background: linear-gradient(90deg, #000004, #51127c, #b73779, #fc8961, #fcfdbf);
+}
+.overview-ramp--rdylgn {
+  background: linear-gradient(90deg, #a50026, #f46d43, #ffffbf, #66bd63, #006837);
+}
+.overview-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The spot read with "What's here". */
+.overview-spot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--divider);
+  font-size: var(--text-sm);
+}
+.overview-spot__label {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.overview-spot__value {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Progress and problems. */
+.overview-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.overview-status > span:nth-child(2) {
+  flex: 1;
+}
+.overview-spinner {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  animation: overview-spin 0.9s linear infinite;
+}
+@keyframes overview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.overview-failed {
+  display: grid;
+  gap: var(--space-2);
+}
+.overview-stale {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+/* ---- Details ------------------------------------------------------------- */
+.overview-map-controls {
+  display: grid;
+  gap: var(--space-2);
+}
+.overview-range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.overview-section {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--divider);
+}
+.overview-section h4,
+.overview-section h5,
+.overview-band h5 {
+  margin: 0;
+}
+.overview-section h4 {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.overview-section h5,
+.overview-band h5 {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.overview-raster,
+.overview-band {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.overview-raster p,
+.overview-band p {
+  margin: 0;
+}
+.overview-raster__coverage {
+  font-size: var(--text-sm);
+}
+
+.overview-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  gap: var(--space-1);
+  margin: 0;
+}
+.overview-stats > div {
+  padding: 4px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+.overview-stats dt {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.overview-stats dd {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-histogram,
+.overview-trend {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.overview-histogram svg {
+  width: 100%;
+  height: 56px;
+  display: block;
+}
+.overview-histogram rect {
+  fill: var(--accent);
+  opacity: 0.75;
+}
+.overview-histogram rect:hover {
+  opacity: 1;
+}
+.overview-trend svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.overview-trend__axis {
+  stroke: var(--divider);
+  stroke-dasharray: 3 3;
+}
+.overview-trend__line {
+  fill: none;
+  stroke: #91d6a2;
+  stroke-width: 2;
+}
+.overview-trend circle {
+  fill: #91d6a2;
+}
+
+.overview-class-table {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.overview-class-table li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px var(--space-2);
+  font-size: var(--text-sm);
+}
+.overview-class-table__bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.overview-class-table__bar > span {
+  display: block;
+  height: 100%;
+}
+.overview-class-table__area,
+.overview-class-table__name small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.overview-class-table__area {
+  grid-column: 1 / -1;
+}
+
+.overview-observations {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.overview-observation {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--divider);
+}
+.overview-observation__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+.overview-quality {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.overview-quality > summary {
+  cursor: pointer;
+}
+.overview-quality[open] {
+  display: grid;
+  gap: var(--space-1);
+}
+.overview-quality p {
+  margin: 0;
+}
+.overview-quality__counts {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+.overview-change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+.overview-change p {
+  flex: 1;
+  min-width: 12rem;
+}
+.overview-warnings {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-6);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-border);
+  font-size: var(--text-xs);
+}
+.overview-sources {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.overview-sources a {
+  color: var(--accent-strong);
+}
+
+.overview-periods {
+  display: grid;
+  gap: var(--space-2);
+}
+.overview-periods p {
+  margin: 0;
+}
+.overview-periods__list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.overview-periods__list li {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+.overview-periods__list .land-field {
+  flex: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overview-spinner {
+    animation: none;
+  }
+}
+
+/* The legend sits inside the fact whose layer is on the map. */
+.land-fact.overview-fact > .overview-legend {
+  padding: 0 var(--space-3) var(--space-2);
+}
+.overview-legend__caption {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}

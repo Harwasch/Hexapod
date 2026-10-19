@@ -4,12 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { components } from "@twin/contracts";
 import { api } from "@/api/client";
 import { LandRasterView } from "@/features/land/LandRasterView";
+import { RasterDetails } from "@/features/land/surface/lenses/overview/RasterDetails";
 import { useLandContext } from "@/state/landContext";
-import { useSelection } from "@/state/selection";
 
-vi.mock("@/cesium/SceneContext", () => ({
-  useScene: () => ({ camera: { flyToRectangle: vi.fn() } }),
-}));
+type Raster = components["schemas"]["LandRasterRead"];
+
 const elevation: components["schemas"]["RasterBand"] = {
   index: 1,
   name: "Surface elevation",
@@ -24,7 +23,7 @@ const elevation: components["schemas"]["RasterBand"] = {
   histogramCounts: [6, 2],
   palette: "viridis",
 };
-const raster: components["schemas"]["LandRasterRead"] = {
+const raster: Raster = {
   id: "raster",
   landId: "land",
   runId: "run",
@@ -57,26 +56,61 @@ const raster: components["schemas"]["LandRasterRead"] = {
         name: "Surface slope",
         unit: "degrees",
         validCells: 6,
+        minimum: 0,
+        maximum: 45,
+        percentiles: { "50": 45 },
+        histogramEdges: [0, 45],
+        histogramCounts: [6],
         palette: "magma",
       },
     ],
   },
 };
+const landCover: Raster = {
+  ...raster,
+  request: { dataset: "esa-worldcover-2021", resolutionM: 10 },
+  metadata: {
+    ...raster.metadata,
+    resolutionM: 10,
+    bands: [
+      {
+        ...elevation,
+        name: "Land cover (2021)",
+        palette: "categorical",
+        unit: "class code",
+        minimum: null,
+        maximum: null,
+        mean: null,
+        standardDeviation: null,
+        percentiles: {},
+        histogramCounts: [],
+        histogramEdges: [],
+        classes: [
+          {
+            code: 10,
+            label: "Tree cover",
+            color: "#006400",
+            cells: 6,
+            fraction: 0.75,
+            sampledAreaM2: 600,
+          },
+          {
+            code: 80,
+            label: "Permanent water bodies",
+            color: "#0064c8",
+            cells: 2,
+            fraction: 0.25,
+            sampledAreaM2: 200,
+          },
+        ],
+      },
+    ],
+  },
+};
+
 function mount(value = raster) {
-  vi.spyOn(api, "GET").mockImplementation(((path: string) =>
-    Promise.resolve({
-      data: path.endsWith("/sample")
-        ? {
-            longitude: -77.05,
-            latitude: 38.888,
-            values: value.request.dataset === "esa-worldcover-2021" ? [10] : [0, null],
-            units: ["m", "degrees"],
-            resolutionM: 30,
-            interpretation: "Nearest analysis-grid cell; not an on-site measurement.",
-          }
-        : value,
-      response: new Response(),
-    })) as typeof api.GET);
+  vi.spyOn(api, "GET").mockImplementation((() =>
+    Promise.resolve({ data: value, response: new Response() })) as never);
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   render(
     <QueryClientProvider client={cache}>
@@ -88,65 +122,20 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   useLandContext.getState().clear();
-  useSelection.getState().setSelection(null);
-});
-it("switches map bands and opacity while preserving land scope and showing band-specific coverage", async () => {
-  mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Show terrain map" }));
-  expect(useLandContext.getState().rasters.raster?.band).toBe(1);
-  expect(screen.getByText(/80% coverage/)).toBeVisible();
-  fireEvent.change(screen.getByLabelText("Map measurement"), { target: { value: "2" } });
-  expect(useLandContext.getState().rasters.raster?.band).toBe(2);
-  expect(screen.getByText(/60% coverage/)).toBeVisible();
-  fireEvent.change(screen.getByRole("slider"), { target: { value: "0.4" } });
-  expect(useLandContext.getState().rasters.raster?.opacity).toBe(0.4);
-  fireEvent.click(screen.getByRole("button", { name: "Hide terrain map" }));
-  expect(useLandContext.getState().rasters).toEqual({});
-});
-it("labels stale boundaries and keeps zero elevation distinct from missing slope", async () => {
-  useSelection.getState().setSelection({
-    kind: "ground",
-    title: "Public park test point",
-    longitude: -77.05,
-    latitude: 38.888,
-    height: null,
-    terrainHeight: null,
-    at: 1,
-  });
-  mount({ ...raster, stale: true });
-  expect(await screen.findByText(/uses an older boundary/)).toBeVisible();
-  fireEvent.click(screen.getByText("Sample a point"));
-  fireEvent.click(screen.getByRole("button", { name: "Sample selected point" }));
-  await waitFor(() => expect(screen.getByText("Surface elevation: 0 m")).toBeVisible());
-  expect(screen.getByText("Surface slope: No data")).toBeVisible();
-});
-it("does not offer a map for unresolved small areas", async () => {
-  mount({
-    ...raster,
-    metadata: {
-      ...raster.metadata,
-      boundaryCells: 0,
-      validCells: 0,
-      coverageFraction: null,
-      bands: [
-        {
-          ...elevation,
-          validCells: 0,
-          mean: null,
-          minimum: null,
-          maximum: null,
-          percentiles: {},
-          histogramCounts: [],
-          histogramEdges: [],
-        },
-      ],
-    },
-  });
-  expect(await screen.findByRole("button", { name: "Show terrain map" })).toBeDisabled();
-  expect(screen.getByText(/No grid cells inside/)).toBeVisible();
 });
 
-it("reopens the measurement and opacity of the map that is already visible", async () => {
+it("puts a research result's raster on the map and switches its band", async () => {
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Show on map" }));
+  expect(useLandContext.getState().rasters.raster?.band).toBe(1);
+  fireEvent.change(screen.getByLabelText("Map measurement"), { target: { value: "2" } });
+  expect(useLandContext.getState().rasters.raster?.band).toBe(2);
+  fireEvent.click(screen.getByRole("button", { name: "Hide from map" }));
+  expect(useLandContext.getState().rasters).toEqual({});
+  expect(screen.getByLabelText("Map measurement")).toHaveValue("2");
+});
+
+it("reopens the band of the map that is already visible", async () => {
   useLandContext.getState().setRaster({
     id: "raster",
     band: 2,
@@ -155,70 +144,60 @@ it("reopens the measurement and opacity of the map that is already visible", asy
     attribution: "Fixture",
   });
   mount();
-  expect(await screen.findByRole("combobox")).toHaveValue("2");
-  expect(screen.getByRole("slider")).toHaveValue("0.4");
-  fireEvent.click(screen.getByRole("button", { name: "Hide terrain map" }));
-  expect(screen.getByRole("combobox")).toHaveValue("2");
+  expect(await screen.findByLabelText("Map measurement")).toHaveValue("2");
+  expect(screen.getByRole("button", { name: "Hide from map" })).toBeVisible();
 });
 
-it("shows categorical cover proportions without arithmetic summaries and decodes point classes", async () => {
-  useSelection.getState().setSelection({
-    kind: "ground",
-    title: "Public park test point",
-    longitude: -77.05,
-    latitude: 38.888,
-    height: null,
-    terrainHeight: null,
-    at: 1,
-  });
+it("does not offer a map for areas smaller than the grid", async () => {
   mount({
     ...raster,
-    request: { dataset: "esa-worldcover-2021", resolutionM: 10 },
     metadata: {
       ...raster.metadata,
-      resolutionM: 10,
-      bands: [
-        {
-          ...elevation,
-          name: "Land cover (2021)",
-          palette: "categorical",
-          unit: "class code",
-          minimum: null,
-          maximum: null,
-          mean: null,
-          standardDeviation: null,
-          percentiles: {},
-          histogramCounts: [],
-          histogramEdges: [],
-          classes: [
-            {
-              code: 10,
-              label: "Tree cover",
-              color: "#006400",
-              cells: 6,
-              fraction: 0.75,
-              sampledAreaM2: 600,
-            },
-            {
-              code: 50,
-              label: "Built-up",
-              color: "#fa0000",
-              cells: 2,
-              fraction: 0.25,
-              sampledAreaM2: 200,
-            },
-          ],
-        },
-      ],
+      boundaryCells: 0,
+      validCells: 0,
+      coverageFraction: null,
+      bands: [{ ...elevation, validCells: 0, mean: null, minimum: null, maximum: null }],
     },
   });
-  expect(await screen.findByRole("region", { name: "Land-cover analysis" })).toBeVisible();
-  expect(screen.getByText("75%")).toBeVisible();
+  expect(await screen.findByRole("button", { name: "Show on map" })).toBeDisabled();
+  expect(screen.getByText(/No grid cells fall inside/)).toBeVisible();
+});
+
+it("shows full statistics in percent and plain units, with warnings and the method", () => {
+  render(<RasterDetails raster={{ ...raster, stale: true }} units="metric" />);
+  expect(screen.getByText(/an earlier one/)).toBeVisible();
+  expect(screen.getByText(/80% of the land has data/)).toBeVisible();
+  const slope = screen.getByRole("region", { name: "Slope statistics" });
+  // 45 degrees is a 100% slope; zero elevation stays a number, not "no data".
+  expect(slope).toHaveTextContent("Median100%");
+  expect(screen.getByRole("region", { name: "Elevation statistics" })).toHaveTextContent(
+    "Lowest0 m",
+  );
+  expect(screen.getAllByRole("img", { name: /how the land's cells spread/ })).toHaveLength(2);
+  expect(screen.getByText("This surface model is not a ground survey.")).toBeVisible();
+  expect(screen.getByText(/Synthetic fixture/)).toBeVisible();
+});
+
+it("lists only the land-cover classes present, by plain name, with their share", () => {
+  render(<RasterDetails raster={landCover} units="metric" />);
+  const classes = screen.getByRole("region", { name: "Land-cover classes" });
+  expect(classes).toHaveTextContent("Tree cover75%");
+  expect(classes).toHaveTextContent("Open water");
+  expect(classes).toHaveTextContent("(Permanent water bodies)");
   expect(screen.getByText(/do not identify species/)).toBeVisible();
-  expect(screen.queryByText("Mean")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Show land-cover map" }));
-  expect(useLandContext.getState().rasters.raster?.categorical).toBe(true);
-  fireEvent.click(screen.getByText("Sample a point"));
-  fireEvent.click(screen.getByRole("button", { name: "Sample selected point" }));
-  expect(await screen.findByText("Land cover (2021): Tree cover")).toBeVisible();
+  expect(screen.queryByText("Average")).not.toBeInTheDocument();
+});
+
+it("downloads the GeoTIFF", async () => {
+  const paths: string[] = [];
+  vi.spyOn(api, "GET").mockImplementation(((path: string) => {
+    paths.push(path);
+    return Promise.resolve({ data: new Blob(["tif"]), response: new Response() });
+  }) as never);
+  Object.assign(URL, { createObjectURL: () => "blob:fixture", revokeObjectURL: () => undefined });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  render(<RasterDetails raster={raster} units="metric" />);
+  fireEvent.click(screen.getByRole("button", { name: "Download GeoTIFF" }));
+  await waitFor(() => expect(click).toHaveBeenCalled());
+  expect(paths).toEqual(["/api/v1/land/rasters/{raster_id}/download"]);
 });

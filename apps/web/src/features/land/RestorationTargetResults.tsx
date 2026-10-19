@@ -4,7 +4,8 @@ import type { components } from "@twin/contracts";
 import { api, unwrap } from "@/api/client";
 import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
 import { useLandContext } from "@/state/landContext";
-import { EvidenceView } from "./LandResearch";
+import { EvidenceView } from "./EvidenceView";
+import { useLens } from "./surface/lenses";
 
 type Result = components["schemas"]["RestorationEcologyResult"];
 const percent = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -209,7 +210,7 @@ export function RestorationTargetResults({ result }: { result: Result }) {
                 type="button"
                 onClick={() => {
                   useLandContext.getState().selectSurvey(target.baselineSurveyId ?? null);
-                  useLandContext.getState().setSection("ecology");
+                  useLens.getState().setLens("ecology");
                 }}
               >
                 Open baseline field survey

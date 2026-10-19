@@ -6,6 +6,7 @@ import { api } from "@/api/client";
 import { LandSavedViews } from "@/features/land/LandSavedViews";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
+import { useLens } from "@/features/land/surface/lenses";
 import {
   parseViewCapture,
   serializeViewCapture,
@@ -85,7 +86,7 @@ function show() {
       <LandSavedViews land={land} />
     </QueryClientProvider>,
   );
-  fireEvent.click(screen.getByText(/Saved exploration views/));
+  expect(screen.getByRole("heading", { name: /Saved map views/ })).toBeTruthy();
 }
 afterEach(() => {
   cleanup();
@@ -146,6 +147,8 @@ it("restores map sources, band and camera while preserving unfinished map overla
     opacity: 0.4,
   });
   expect(useLandContext.getState().section).toBe("records");
+  // Saved before lenses, the view names a section; it opens the lens that stands there now.
+  expect(useLens.getState().lens).toBe("records");
 });
 it("does not move the camera when the user changes land during a slow open", async () => {
   let finish: ((value: unknown) => void) | undefined;

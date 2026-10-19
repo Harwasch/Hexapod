@@ -20,12 +20,16 @@ from app.models.research import (
     ResearchWorkerPresence,
 )
 from app.research.calculations import METHOD, calculate
+from app.research.locations import geometry_location, media_location, union_location
 from app.schemas.calculations import CalculationOutput
 from app.schemas.research import (
     ArtifactContent,
+    EventLocation,
+    EventLocationRef,
     EvidenceContent,
     FindingContent,
     GalleryOutput,
+    MapOutput,
     RasterOutput,
     SolarOutput,
     TimelineOutput,
@@ -163,10 +167,11 @@ def checkpoint(
     *,
     kind: str = "progress",
     payload: dict[str, Any] | None = None,
+    location: EventLocation | None = None,
 ) -> None:
     run = locked(db, run_id, token)
     run.checkpoint = deepcopy(state)
-    event(db, run, kind, payload or {})
+    event(db, run, kind, payload or {}, location)
     db.commit()
 
 
@@ -219,8 +224,16 @@ def validate_citations(db: Session, run: ResearchRun, ids: list[uuid.UUID]) -> N
 
 
 def save_finding(
-    db: Session, run_id: uuid.UUID, token: uuid.UUID, key: str, content: FindingContent
+    db: Session,
+    run_id: uuid.UUID,
+    token: uuid.UUID,
+    key: str,
+    content: FindingContent,
+    *,
+    location: EventLocation | None = None,
 ) -> uuid.UUID:
+    """`location` is where the finding came from when it has no boundary of its own (the
+    source's sample point or query box), so the card can still pin it on the map."""
     run = locked(db, run_id, token)
     validate_citations(db, run, content.evidence_ids)
     row = db.scalar(select(Finding).where(Finding.run_id == run_id, Finding.output_key == key))
@@ -228,16 +241,31 @@ def save_finding(
         row = Finding(run_id=run_id, output_key=key, content=content.model_dump(mode="json"))
         db.add(row)
         db.flush()
-        event(db, run, "finding", {"id": str(row.id), "title": content.title})
+        event(
+            db,
+            run,
+            "finding",
+            {"id": str(row.id), "title": content.title},
+            geometry_location(content.boundary, "result") or location,
+        )
     identifier = row.id
     db.commit()
     return identifier
 
 
 def save_artifact(
-    db: Session, run_id: uuid.UUID, token: uuid.UUID, key: str, content: ArtifactContent
+    db: Session,
+    run_id: uuid.UUID,
+    token: uuid.UUID,
+    key: str,
+    content: ArtifactContent,
+    *,
+    location: EventLocation | None = None,
 ) -> uuid.UUID:
+    """Artifacts with a place of their own (a map, a raster, an array zone, a gallery of
+    located sources) are located by it; `location` covers the rest (a chart from one point)."""
     run = locked(db, run_id, token)
+    derived: EventLocation | None = None
     if isinstance(content.output, CalculationOutput):
         expected = calculate(content.output.request)
         if content.output != expected:
@@ -252,12 +280,21 @@ def save_artifact(
         ids.extend(content.output.evidence_ids)
     validate_citations(db, run, ids)
     if isinstance(content.output, GalleryOutput):
+        located: list[EventLocation] = []
         for identifier in content.output.evidence_ids:
             item = db.get(Evidence, identifier)
             if item is None or not item.content.get("media"):
                 raise InvalidInputError(
                     "Gallery entries need licensed archive media from this investigation."
                 )
+            place = media_location(item.content["media"])
+            if place is not None:
+                located.append(place)
+        footprints = any(place.meaning == "catalog-footprint" for place in located)
+        derived = union_location(
+            (_as_geometry(place) for place in located),
+            "catalog-footprint" if footprints else "catalog-coordinate",
+        )
     if isinstance(content.output, RasterOutput):
         raster = db.scalar(
             select(LandRaster)
@@ -269,6 +306,12 @@ def save_artifact(
         )
         if raster is None:
             raise InvalidInputError("Raster outputs must belong to this investigation.")
+        bounds = raster.metadata_json.get("bounds")
+        if isinstance(bounds, list) and len(bounds) == 4:
+            derived = _bounds_location(
+                bounds,
+                EventLocationRef(raster_id=content.output.raster_id),
+            )
     if isinstance(content.output, SolarOutput):
         assessment = db.scalar(
             select(LandSolar)
@@ -280,6 +323,11 @@ def save_artifact(
         )
         if assessment is None:
             raise InvalidInputError("Solar outputs must belong to this investigation.")
+        derived = geometry_location(
+            assessment.request.get("array_zone"),
+            "array-zone",
+            ref=EventLocationRef(assessment_id=content.output.assessment_id),
+        )
     row = db.scalar(
         select(ResearchArtifact).where(
             ResearchArtifact.run_id == run_id, ResearchArtifact.output_key == key
@@ -291,12 +339,41 @@ def save_artifact(
         )
         db.add(row)
         db.flush()
+        if isinstance(content.output, MapOutput):
+            derived = union_location(
+                (feature.geometry for feature in content.output.features),
+                "result",
+                ref=EventLocationRef(artifact_id=row.id),
+            )
         event(
             db,
             run,
             "artifact",
             {"id": str(row.id), "title": content.title, "kind": content.output.kind},
+            derived or location,
         )
     identifier = row.id
     db.commit()
     return identifier
+
+
+def _as_geometry(place: EventLocation) -> dict[str, Any]:
+    if place.point is not None:
+        return {"type": "Point", "coordinates": list(place.point)}
+    west, south, east, north = place.bbox or (0.0, 0.0, 0.0, 0.0)
+    return {
+        "type": "Polygon",
+        "coordinates": [
+            [[west, south], [east, south], [east, north], [west, north], [west, south]]
+        ],
+    }
+
+
+def _bounds_location(bounds: list[Any], ref: EventLocationRef) -> EventLocation | None:
+    try:
+        west, south, east, north = (float(value) for value in bounds)
+        return EventLocation(
+            kind="bbox", bbox=(west, south, east, north), ref=ref, meaning="analysis-extent"
+        )
+    except (TypeError, ValueError):
+        return None

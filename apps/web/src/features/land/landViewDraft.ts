@@ -53,6 +53,13 @@ export function parseViewCapture(text: string, landId: string): ViewCapture {
     )
   )
     throw new Error("The captured workspace tab is unsupported.");
+  if (
+    state.lens != null &&
+    !["overview", "water", "soil", "ecology", "solar", "records", "assets", "plans"].includes(
+      typeof state.lens === "string" ? state.lens : "",
+    )
+  )
+    throw new Error("The captured lens is unsupported.");
   for (const key of ["investigationId", "inventoryId", "surveyId", "solarId"])
     if (state[key] != null) identifier(state[key]);
   if (state.inventoryVisible !== undefined && typeof state.inventoryVisible !== "boolean")

@@ -33,11 +33,16 @@ class InvestigationCreate(CamelModel):
     boundary_revision: int = Field(ge=1)
 
 
+RunKind = Literal["overview", "investigation", "raster", "archive", "solar", "ecology"]
+
+
 class InvestigationRead(InvestigationCreate):
     id: uuid.UUID
     land_id: uuid.UUID
     created_at: datetime
     stale: bool
+    # What has run in it: "investigation" marks a question put to the agent.
+    kinds: list[RunKind] = Field(default_factory=list)
 
 
 class ResearchFocusReference(CamelModel):
@@ -85,10 +90,67 @@ class RunRead(CamelModel):
     finished_at: datetime | None
 
 
+Longitude = Annotated[float, Field(ge=-180, le=180, allow_inf_nan=False)]
+Latitude = Annotated[float, Field(ge=-90, le=90, allow_inf_nan=False)]
+
+
+class EventLocationRef(CamelModel):
+    """A saved record whose geometry the event is about, when it has one."""
+
+    artifact_id: uuid.UUID | None = None
+    evidence_id: uuid.UUID | None = None
+    raster_id: uuid.UUID | None = None
+    assessment_id: uuid.UUID | None = None
+    # A feature inside the referenced map artifact (its index), or a saved land feature.
+    feature_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class EventLocation(CamelModel):
+    """Where on the map a research step is looking or what it found.
+
+    Small on purpose: a point, a box or a reference to saved geometry, never the geometry
+    itself, so a streamed event stays far below the frame limit.
+    """
+
+    kind: Literal["point", "bbox", "geometry-ref"]
+    point: tuple[Longitude, Latitude] | None = None
+    bbox: tuple[Longitude, Latitude, Longitude, Latitude] | None = None
+    radius_m: float | None = Field(default=None, gt=0, le=100_000, allow_inf_nan=False)
+    ref: EventLocationRef | None = None
+    meaning: Literal[
+        "sample-point",
+        "query-bbox",
+        "query-radius",
+        "catalog-coordinate",
+        "catalog-footprint",
+        "analysis-extent",
+        "array-zone",
+        "focus",
+        "result",
+    ]
+
+    @model_validator(mode="after")
+    def shape(self) -> EventLocation:
+        if self.kind == "point" and self.point is None:
+            raise ValueError("A point location needs a point.")
+        if self.kind == "bbox":
+            if self.bbox is None:
+                raise ValueError("A box location needs a bbox.")
+            west, south, east, north = self.bbox
+            if west > east or south > north:
+                raise ValueError("A bbox is west, south, east, north.")
+        if self.kind == "geometry-ref" and (
+            self.ref is None or not self.ref.model_dump(exclude_none=True)
+        ):
+            raise ValueError("A geometry reference needs a saved record.")
+        return self
+
+
 class EventRead(CamelModel):
     sequence: int
     kind: str
     payload: dict[str, object]
+    location: EventLocation | None = None
     created_at: datetime
 
 
