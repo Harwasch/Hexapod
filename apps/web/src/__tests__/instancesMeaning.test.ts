@@ -6,11 +6,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { QueryEmbedding } from "@/api/textEmbedding";
+import { ApiError } from "@/api/error";
+import { embeddable, queryLabel, type QueryEmbedding } from "@/api/textEmbedding";
 import {
   ANCESTOR_DISCOUNT,
   describedMatrix,
   MEANING_FLOOR,
+  MEANING_MIN_DESCRIBED,
   MEANING_SPAN,
   meaningScores,
   PROMINENCE_FLOOR,
@@ -19,7 +21,7 @@ import {
   type EmbeddingSource,
   type Instance,
 } from "@/lib/instances";
-import { configureMeaning, useInstances } from "@/state/instances";
+import { configureMeaning, meaningRowsHeld, useInstances } from "@/state/instances";
 
 /** float32 to half bits (round toward zero; exact for the values used here). */
 function half(v: number): number {
@@ -100,6 +102,23 @@ describe("meaning scores", () => {
     expect(m.score[6]).toBe(0);
   });
 
+  it("is not measurable with fewer than three described instances", () => {
+    expect(MEANING_MIN_DESCRIBED).toBe(3);
+    // One: its margin over the median is 0 whatever the query. Two: the median is their mean,
+    // so the nearer always clears it by half their difference. Neither says "this matches".
+    for (const cos of [Float32Array.from([NaN, 0.2, NaN]), Float32Array.from([NaN, 0.02, 0.2])]) {
+      const m = meaningScores([inst(1), inst(2, { parent: 1 })], cos);
+      expect(m.measurable).toBe(false);
+      expect([...m.score]).toEqual([0, 0, 0]);
+    }
+    const three = meaningScores(
+      [inst(1), inst(2), inst(3)],
+      Float32Array.from([NaN, 0.02, 0.03, 0.2]),
+    );
+    expect(three.measurable).toBe(true);
+    expect(three.score[3]).toBe(1);
+  });
+
   it("survives a parent cycle in a malformed file", () => {
     const m = meaningScores(
       [inst(1, { parent: 2 }), inst(2, { parent: 1 })],
@@ -125,7 +144,7 @@ describe("search blends tags and meaning", () => {
     const flags = new Uint8Array(6);
     for (const [id, s] of Object.entries(by)) score[Number(id)] = s;
     for (const id of inherited) flags[id] = 1;
-    return { score, inherited: flags };
+    return { score, inherited: flags, measurable: true };
   };
 
   it("without meaning, is the tag search", () => {
@@ -173,6 +192,17 @@ describe("search blends tags and meaning", () => {
     expect(searchInstances(instances, "behaviour:static", 50, meaning).map((r) => r.via)).toEqual(
       Array(5).fill("tags"),
     );
+  });
+});
+
+describe("what is sent to the encoder", () => {
+  it("is what the API would embed, and not what it would refuse", () => {
+    expect(queryLabel("  A Cable   SPOOL. ")).toBe("cable spool");
+    expect(queryLabel("a photo of a log cabin")).toBe("log cabin");
+    expect(queryLabel("antenna")).toBe("antenna");
+    for (const refused of ["", "  ", "a", "The", "an", "x".repeat(201)])
+      expect(embeddable(refused)).toBe(false);
+    for (const fine of ["spool", "a spool", "x".repeat(200)]) expect(embeddable(fine)).toBe(true);
   });
 });
 
@@ -312,6 +342,140 @@ describe("the store, searching by meaning", () => {
     await settle();
     expect(entry()?.meaning).toBe("unavailable");
     expect(entry()?.matches).toEqual([2]);
+  });
+
+  it("asks nothing for an article alone, then embeds the query it grows into", async () => {
+    useInstances.getState().setTable("scan", table());
+    useInstances.getState().setQuery("scan", "a");
+    await settle();
+    expect(encoded).toEqual([]);
+    expect(loads).toEqual([]);
+    expect(entry()?.meaning).toBe("idle");
+    useInstances.getState().setQuery("scan", "a spool");
+    expect(entry()?.meaning).toBe("loading");
+    await settle();
+    expect(encoded).toEqual(["a spool"]);
+    expect(entry()?.meaning).toBe("ready");
+    expect(entry()?.matches).toEqual([1]);
+  });
+
+  it("does not back off when the API refuses one query (422)", async () => {
+    configureMeaning({
+      encode: (text) => {
+        encoded.push(text);
+        return text === "zzz"
+          ? Promise.reject(new ApiError(422, undefined, "422 Unprocessable Content"))
+          : encode(text).then((e) => (encoded.pop(), e));
+      },
+    });
+    useInstances.getState().setTable("scan", table());
+    useInstances.getState().setQuery("scan", "zzz");
+    await settle();
+    expect(entry()?.meaning).toBe("unavailable");
+    useInstances.getState().setQuery("scan", "spool");
+    await settle();
+    expect(encoded).toEqual(["zzz", "spool"]);
+    expect(entry()?.meaning).toBe("ready");
+    expect(entry()?.matches).toEqual([1]);
+  });
+
+  it("backs off after a 5xx or no answer, not after a 4xx", async () => {
+    for (const [error, backsOff] of [
+      [new ApiError(503, undefined, "503"), true],
+      [new ApiError(500, undefined, "500"), true],
+      [new TypeError("Failed to fetch"), true],
+      [new ApiError(422, undefined, "422"), false],
+      [new ApiError(400, undefined, "400"), false],
+    ] as const) {
+      encoded = [];
+      configureMeaning({
+        encode: (text) => {
+          encoded.push(text);
+          return Promise.reject(error);
+        },
+      });
+      useInstances.getState().setTable("scan", table());
+      useInstances.getState().setQuery("scan", "moss");
+      await settle();
+      useInstances.getState().setQuery("scan", "mossy");
+      await settle();
+      expect(encoded).toEqual(backsOff ? ["moss"] : ["moss", "mossy"]);
+    }
+  });
+
+  it("never lets a late answer for an older query overwrite a newer one", async () => {
+    const pending = new Map<string, (e: QueryEmbedding) => void>();
+    configureMeaning({
+      encode: (text) => {
+        encoded.push(text);
+        return new Promise((resolve) => pending.set(text, resolve));
+      },
+    });
+    const answer = (text: string, vector: number[]) =>
+      pending.get(text)?.({
+        model: "siglip:test",
+        prompt: `a photo of a ${text}.`,
+        vector: Float32Array.from(vector),
+      });
+    useInstances.getState().setTable("scan", table());
+    useInstances.getState().setQuery("scan", "spool");
+    await settle(); // "spool" is asked
+    useInstances.getState().setQuery("scan", "moss");
+    await settle(); // and "moss"
+    expect(encoded).toEqual(["spool", "moss"]);
+    answer("moss", [0, 1, 0, 0]);
+    await settle();
+    expect(entry()?.matches).toEqual([2]);
+    answer("spool", [1, 0, 0, 0]); // late, for a query no longer typed
+    await settle();
+    expect(entry()?.query).toBe("moss");
+    expect(entry()?.matches).toEqual([2]);
+    expect(entry()?.meaning).toBe("ready");
+  });
+
+  it("keeps the rows of the last few scans searched, not of every scan", async () => {
+    configureMeaning({ rowsKept: 2 });
+    const scan = (n: number) => ({
+      ...table(),
+      embeddingSource: { ...SOURCE, url: `https://x.test/scan${String(n)}/instances.emb` },
+    });
+    for (const n of [1, 2, 3, 1]) {
+      useInstances.getState().setTable("scan", scan(n));
+      useInstances.getState().setQuery("scan", "spool");
+      await settle();
+      expect(entry()?.matches).toEqual([1]);
+      expect(meaningRowsHeld()).toBeLessThanOrEqual(2);
+    }
+    // Scan 1 was dropped for 3, so coming back to it reads it again; 2 and 3 once each.
+    expect(loads).toEqual([1, 2, 3, 1].map((n) => `https://x.test/scan${String(n)}/instances.emb`));
+    // Scan 3 is still held: searched again, it is not read again.
+    useInstances.getState().setTable("scan", scan(3));
+    useInstances.getState().setQuery("scan", "spool");
+    await settle();
+    expect(loads).toHaveLength(4);
+  });
+
+  it("is unavailable on a scan with fewer than three described objects", async () => {
+    configureMeaning({
+      loadEmbeddings: (source) => {
+        loads.push(source.url);
+        return Promise.resolve(
+          rows([
+            [1, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 1, 0, 0],
+          ]),
+        );
+      },
+    });
+    useInstances.getState().setTable("scan", table());
+    useInstances.getState().setQuery("scan", "spool");
+    await settle();
+    expect(entry()?.meaning).toBe("unavailable");
+    expect(entry()?.matches).toEqual([]);
+    expect(entry()?.byMeaning.size).toBe(0);
   });
 
   it("refuses a query embedding from another model", async () => {

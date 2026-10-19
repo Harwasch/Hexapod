@@ -8,7 +8,13 @@ import {
   type CategoryIndex,
   type SceneCategory,
 } from "@/lib/categories";
-import { embedQueryText, type EncodeText, type QueryEmbedding } from "@/api/textEmbedding";
+import {
+  embeddable,
+  embedQueryText,
+  encoderDown,
+  type EncodeText,
+  type QueryEmbedding,
+} from "@/api/textEmbedding";
 import {
   describedMatrix,
   loadEmbeddings,
@@ -584,6 +590,8 @@ export interface MeaningDeps {
   debounceMs: number;
   /** After a load fails (503, offline), how long search stays on tags before asking again. */
   retryMs: number;
+  /** How many scans' decoded rows are kept (the most recently searched); each is megabytes. */
+  rowsKept: number;
 }
 
 const DEFAULT_DEPS: MeaningDeps = {
@@ -592,10 +600,15 @@ const DEFAULT_DEPS: MeaningDeps = {
   loadEmbeddings: (source) => loadEmbeddings(source.url, source.rows, source.dim),
   debounceMs: 200,
   retryMs: 30_000,
+  rowsKept: 3,
 };
 
 let deps: MeaningDeps = DEFAULT_DEPS;
-/** Per `instances.emb` URL: its described rows (`describedMatrix`), or their load. */
+/**
+ * Per `instances.emb` URL: its described rows (`describedMatrix`), or their load; the
+ * `rowsKept` most recently used (Map order), so a session that visits many scans does not
+ * hold every scan's matrix. The raw file stays in lib/payloadCache.ts's own bounded cache.
+ */
 const rowsLoading = new Map<string, Promise<DescribedMatrix>>();
 const rowsLoaded = new Map<string, DescribedMatrix>();
 /** Per `instances.emb` URL whose load failed: when to try again. */
@@ -623,25 +636,61 @@ export function configureMeaning(change: Partial<MeaningDeps> | null): void {
   lastScores = undefined;
 }
 
+/** Marks `url`'s rows as just used, and forgets the least recently used past `rowsKept`. */
+function touchRows(url: string): void {
+  const pending = rowsLoading.get(url);
+  if (pending === undefined) return;
+  rowsLoading.delete(url);
+  rowsLoading.set(url, pending);
+  const loaded = rowsLoaded.get(url);
+  if (loaded) {
+    rowsLoaded.delete(url);
+    rowsLoaded.set(url, loaded);
+  }
+  for (const oldest of rowsLoading.keys()) {
+    if (rowsLoading.size <= Math.max(1, deps.rowsKept)) break;
+    const dropped = rowsLoaded.get(oldest);
+    rowsLoading.delete(oldest);
+    rowsLoaded.delete(oldest);
+    if (dropped && lastScores?.rows === dropped) lastScores = undefined;
+  }
+}
+
+/** The rows of `url` if they are here (and so just used). */
+function loadedRows(url: string): DescribedMatrix | undefined {
+  const rows = rowsLoaded.get(url);
+  if (rows) touchRows(url);
+  return rows;
+}
+
+/** How many scans' rows are held: what `rowsKept` bounds (tests). */
+export function meaningRowsHeld(): number {
+  return rowsLoading.size;
+}
+
 function rowsFor(source: EmbeddingSource): Promise<DescribedMatrix> {
   let pending = rowsLoading.get(source.url);
+  if (pending) touchRows(source.url);
   if (!pending) {
     if (Date.now() < (rowsDownUntil.get(source.url) ?? 0)) {
       return Promise.reject(new Error("instances.emb did not load a moment ago"));
     }
-    pending = deps.loadEmbeddings(source).then(
+    const mine: Promise<DescribedMatrix> = deps.loadEmbeddings(source).then(
       (raw) => {
         const rows = describedMatrix(raw, source.dim);
-        rowsLoaded.set(source.url, rows);
+        // Kept only while its load is still the one held (not dropped in the meantime).
+        if (rowsLoading.get(source.url) === mine) rowsLoaded.set(source.url, rows);
         return rows;
       },
       (error: unknown) => {
-        rowsLoading.delete(source.url);
+        if (rowsLoading.get(source.url) === mine) rowsLoading.delete(source.url);
         rowsDownUntil.set(source.url, Date.now() + deps.retryMs);
         throw error;
       },
     );
+    pending = mine;
     rowsLoading.set(source.url, pending);
+    touchRows(source.url);
   }
   return pending;
 }
@@ -664,7 +713,8 @@ function queryFor(text: string): Promise<QueryEmbedding> {
       },
       (error: unknown) => {
         queriesLoading.delete(text);
-        encoderDownUntil = Date.now() + deps.retryMs;
+        // Only an encoder that is down is waited out; a refused query (4xx) is not.
+        if (encoderDown(error)) encoderDownUntil = Date.now() + deps.retryMs;
         throw error;
       },
     );
@@ -673,9 +723,13 @@ function queryFor(text: string): Promise<QueryEmbedding> {
   return pending;
 }
 
-/** The words of a query, as the encoder is asked about them (filters are not meaning). */
+/**
+ * The words of a query, as the encoder is asked about them (filters are not meaning); empty
+ * when there are none, or when the API would refuse them (an article alone, "a"; too long).
+ */
 function meaningText(query: string): string {
-  return parseQuery(query).terms.join(" ");
+  const text = parseQuery(query).terms.join(" ");
+  return embeddable(text) ? text : "";
 }
 
 /** `unavailable` is tried again once the back-offs have passed. */
@@ -694,7 +748,7 @@ function searchNow(
   const text = meaningText(query);
   const source = current.embedding;
   if (!source) return { ...matchObjectsBy(current, query), meaning: "none" };
-  const rows = rowsLoaded.get(source.url);
+  const rows = text ? loadedRows(source.url) : undefined;
   const embedding = queriesLoaded.get(text);
   if (text && rows && embedding?.model === source.model) {
     let scores = lastScores?.rows === rows && lastScores.text === text ? lastScores.scores : null;
@@ -702,6 +756,8 @@ function searchNow(
       scores = meaningScores(current.instances, textCosines(embedding.vector, rows));
       lastScores = { rows, text, scores };
     }
+    // Too few described objects to tell a match from the scan's typical cosine: tags only.
+    if (!scores.measurable) return { ...matchObjectsBy(current, query), meaning: "unavailable" };
     return { ...matchObjectsBy(current, query, scores), meaning: "ready" };
   }
   const found = matchObjectsBy(current, query);

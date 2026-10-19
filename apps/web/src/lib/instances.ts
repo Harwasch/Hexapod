@@ -901,10 +901,20 @@ export const MEANING_SPAN = 0.05;
 /** An instance with no embedding of its own takes its nearest described ancestor's, times this. */
 export const ANCESTOR_DISCOUNT = 0.9;
 
+/**
+ * The fewest described instances whose median cosine is a scan's typical cosine for a query.
+ * With one, every margin over the median is 0; with two, the median is their mean, so one of
+ * them always clears it by half their difference whatever the query. No fixed baseline has
+ * been measured to stand in, so below this there is no match by meaning (`measurable`).
+ */
+export const MEANING_MIN_DESCRIBED = 3;
+
 /** Per id (index), the match by meaning, 0..1, and whether it came from an ancestor. */
 export interface MeaningScores {
   score: Float32Array;
   inherited: Uint8Array;
+  /** False when the scan has too few described instances to judge by (`MEANING_MIN_DESCRIBED`). */
+  measurable: boolean;
 }
 
 function median(values: Float32Array): number {
@@ -932,6 +942,7 @@ export function meaningScores(
     const c = cosines[i.id];
     if (c !== undefined && Number.isFinite(c)) finite.push(c);
   }
+  if (finite.length < MEANING_MIN_DESCRIBED) return { score, inherited, measurable: false };
   const baseline = median(Float32Array.from(finite));
   const own = (id: number): number | undefined => {
     const c = cosines[id];
@@ -957,5 +968,5 @@ export function meaningScores(
       p = byId.get(p)?.parent ?? null;
     }
   }
-  return { score, inherited };
+  return { score, inherited, measurable: true };
 }
