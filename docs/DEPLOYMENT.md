@@ -1192,6 +1192,10 @@ Actions → **Seed Land · Oak Bench Ranch** → Run workflow, with `confirm` se
 unless you want the Land's overview queued too: that is one paid AI research run, which the
 `research` process group picks up.
 
+Don't run it during a deploy; the workflow refuses. Its second step fails if a **Deploy** or
+**Provision** run (provision calls deploy) is queued or in progress, because a deploy replaces
+the API machine and migrates the schema under it.
+
 The job picks a started machine in the `app` process group of the app `fly.toml` names, and
 runs `cd /app && /app/.venv/bin/python -m app.seed.demo_land` there as `api` through
 `flyctl ssh console`, calling the venv's python by full path as `deploy.yml` does. Unlike provision's seed, this one runs on the machine, not the runner:
@@ -1205,9 +1209,10 @@ seeds anyway. If the session lacks it, the command lists the variable names it d
 default. The step passes only if the output ends in `SEED-LAND-OK`, which the command prints
 only after the seed exits 0. flyctl's own exit code is not trusted to carry the remote one.
 
-It needs only `FLY_API_TOKEN`, the same secret as `deploy.yml`. The job summary prints the
-seed's output, the Land id and the rollback, which deletes the Land and, by cascade, its
-features and anything attached to it:
+It needs only `FLY_API_TOKEN`, the same secret as `deploy.yml`. The deploy check uses the
+run's own token, with `actions: read`. The job summary prints whether the seed succeeded,
+whether a research overview was queued, the seed's output, the Land id and the rollback. The
+rollback deletes the Land and, by cascade, its features and anything attached to it:
 
 ```sh
 curl -fsS -X DELETE -H "Authorization: Bearer $API_WRITE_TOKEN" \

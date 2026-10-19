@@ -34,12 +34,15 @@ on:
 
 concurrency:
   # One seed at a time. Its own group rather than deploy-production: a queued run in a
-  # shared group would replace a deploy that is waiting, and GitHub keeps only one.
+  # shared group would replace a deploy that is waiting, and GitHub keeps only one. The
+  # job's second step refuses to seed while a deploy is queued or running instead.
   group: seed-land-production
   cancel-in-progress: false
 
 permissions:
   contents: read
+  # `gh run list`, to refuse to start while a deploy is queued or running.
+  actions: read
 
 jobs:
   seed:
@@ -53,6 +56,30 @@ jobs:
         run: |
           if [ "${CONFIRM}" != "seed-production" ]; then
             echo "::error::confirm must be exactly 'seed-production'; nothing was written."
+            exit 1
+          fi
+      # Not during a deploy: `fly deploy` replaces the API machine and its release command
+      # runs migrations, so a seed could land on a machine being torn down or a schema
+      # mid-change. The concurrency group cannot express this (see above), so the run
+      # refuses instead. provision.yml is checked too, because it calls deploy.yml and
+      # that deploy is listed as provision's run, not Deploy's.
+      - name: No deploy is queued or running
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          busy=""
+          for workflow in deploy.yml provision.yml; do
+            for status in in_progress queued requested waiting; do
+              runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" \
+                --status "$status" --json url --jq '.[].url')
+              if [ -n "$runs" ]; then
+                busy="${busy} ${workflow} ${status}: ${runs}"
+              fi
+            done
+          done
+          if [ -n "$busy" ]; then
+            echo "::error::a deploy is queued or in progress, so nothing was seeded. Dispatch again once it has finished.${busy}"
             exit 1
           fi
       - uses: actions/checkout@v4
@@ -98,6 +125,7 @@ jobs:
       # SEED-LAND-OK on the last line, printed only when the seed exits 0, and the step
       # requires it: flyctl's own exit code is not trusted to carry the remote one.
       - name: python -m app.seed.demo_land
+        id: seed
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -116,10 +144,15 @@ jobs:
           remote="${remote} echo \"Variables present (names only):\";"
           remote="${remote} ${py} -c \"import os; print(*sorted(os.environ))\"; exit 3; fi;"
           remote="${remote} ${py} -m app.seed.demo_land${flags} && echo SEED-LAND-OK"
+          rc=0
           flyctl ssh console --app "$APP" --machine "$MACHINE" --user api \
             --command "sh -c '${remote}'" \
-            2>&1 | tee seed-output.txt
-          if ! grep -qE '^SEED-LAND-OK\r?$' seed-output.txt; then
+            2>&1 | tee seed-output.txt || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::flyctl ssh console exited ${rc}; treat the seed as failed (output above)."
+            exit "$rc"
+          fi
+          if ! tr -d '\r' < seed-output.txt | grep -qx 'SEED-LAND-OK'; then
             echo "::error::the seed did not report SEED-LAND-OK; treat it as failed (output above)."
             exit 1
           fi
@@ -128,7 +161,20 @@ jobs:
         env:
           APP: ${{ steps.machine.outputs.app }}
           RESEARCH: ${{ inputs.research }}
+          SEEDED: ${{ steps.seed.outcome }}
         run: |
+          if [ "$SEEDED" = "success" ]; then
+            result="succeeded"
+          else
+            result="**failed** (${SEEDED:-not run}); check the output below before rolling back"
+          fi
+          if [ "$SEEDED" = "success" ] && [ "$RESEARCH" = "true" ]; then
+            research="queued (one paid run)"
+          elif [ "$RESEARCH" = "true" ]; then
+            research="requested, but the seed did not succeed"
+          else
+            research="not requested"
+          fi
           land_id=$(sed -n 's/.*(land \([0-9a-f-]\{36\}\),.*/\1/p' seed-output.txt 2>/dev/null | head -1)
           land_id="${land_id:-b1cc807c-652c-574a-8a56-caef5599b71c}"
           origin="https://${APP:-twin-api}.fly.dev"
@@ -136,7 +182,8 @@ jobs:
             echo "## Oak Bench Ranch · production Land"
             echo
             echo "- Land id: \`${land_id}\` (\`demo-land/demo-ranch\`, pilot workspace)"
-            echo "- Research overview queued: ${RESEARCH}"
+            echo "- Seed: ${result}"
+            echo "- Research overview: ${research}"
             echo
             echo "### Seed output"
             echo
