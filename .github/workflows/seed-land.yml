@@ -92,7 +92,13 @@ jobs:
           echo "seeding through $app machine $machine"
           echo "app=$app" >> "$GITHUB_OUTPUT"
           echo "id=$machine" >> "$GITHUB_OUTPUT"
+      # The venv's python by full path, as deploy.yml calls it: nothing here relies on the
+      # image's PATH reaching an SSH session. Without DATABASE_URL the remote command lists
+      # the variable *names* the session does have (never a value) and exits 3. Success is
+      # SEED-LAND-OK on the last line, printed only when the seed exits 0, and the step
+      # requires it: flyctl's own exit code is not trusted to carry the remote one.
       - name: python -m app.seed.demo_land
+        shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           APP: ${{ steps.machine.outputs.app }}
@@ -104,10 +110,19 @@ jobs:
           if [ "$RESEARCH" = "true" ]; then
             flags=" --research"
           fi
-          guard='test -n "$DATABASE_URL" || { echo "DATABASE_URL is not set in this SSH session; nothing was written." >&2; exit 3; }'
+          py=/app/.venv/bin/python
+          remote="cd /app || exit 4; if [ -z \"\$DATABASE_URL\" ]; then"
+          remote="${remote} echo \"DATABASE_URL is not set in this SSH session; nothing was written.\";"
+          remote="${remote} echo \"Variables present (names only):\";"
+          remote="${remote} ${py} -c \"import os; print(*sorted(os.environ))\"; exit 3; fi;"
+          remote="${remote} ${py} -m app.seed.demo_land${flags} && echo SEED-LAND-OK"
           flyctl ssh console --app "$APP" --machine "$MACHINE" --user api \
-            --command "sh -c '${guard}; cd /app && python -m app.seed.demo_land${flags}'" \
+            --command "sh -c '${remote}'" \
             2>&1 | tee seed-output.txt
+          if ! grep -qE '^SEED-LAND-OK\r?$' seed-output.txt; then
+            echo "::error::the seed did not report SEED-LAND-OK; treat it as failed (output above)."
+            exit 1
+          fi
       - name: Summary
         if: always() && steps.machine.outcome == 'success'
         env:

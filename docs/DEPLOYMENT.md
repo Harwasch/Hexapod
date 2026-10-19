@@ -1193,15 +1193,17 @@ unless you want the Land's overview queued too: that is one paid AI research run
 `research` process group picks up.
 
 The job picks a started machine in the `app` process group of the app `fly.toml` names, and
-runs `sh -c 'cd /app && python -m app.seed.demo_land'` there as `api` through
-`flyctl ssh console`. Unlike provision's seed, this one runs on the machine, not the runner:
+runs `cd /app && /app/.venv/bin/python -m app.seed.demo_land` there as `api` through
+`flyctl ssh console`, calling the venv's python by full path as `deploy.yml` does. Unlike provision's seed, this one runs on the machine, not the runner:
 it reads only `demo_ranch.json`, which the image carries, and so uses the deployed code and
 the app's own database without the runner ever holding `DATABASE_URL`. Fly injects an app's
 secrets into the machine's environment at boot, and SSH sessions inherit that environment
 (Fly's own guides run `fly ssh console -C "/rails/bin/rails db:migrate"` and
 `printenv RAILS_MASTER_KEY` this way). The command checks for `DATABASE_URL` before it
-seeds anyway, and stops with exit 3 if the session lacks it rather than trying the settings'
-localhost default.
+seeds anyway. If the session lacks it, the command lists the variable names it does have
+(names only, never values) and stops with exit 3, rather than trying the settings' localhost
+default. The step passes only if the output ends in `SEED-LAND-OK`, which the command prints
+only after the seed exits 0. flyctl's own exit code is not trusted to carry the remote one.
 
 It needs only `FLY_API_TOKEN`, the same secret as `deploy.yml`. The job summary prints the
 seed's output, the Land id and the rollback, which deletes the Land and, by cascade, its
