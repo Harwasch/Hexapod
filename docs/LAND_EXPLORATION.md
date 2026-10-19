@@ -2746,3 +2746,27 @@ and the picker says so. Re-check the registry with `python -m app.scripts.verify
 Validation: web unit tests (159 files, 1,374 tests), API tests (977 passed; S3 and OCR tests
 skipped without their services), ruff, mypy, eslint, prettier, typecheck and the contract check
 pass. The seven Land Chromium regressions were rewritten for the new controls and pass.
+
+## Implemented increment: the audit branch on the map-first lenses
+
+The Fog of Knowing, Descent, Time Lantern, Show once, Dress Rehearsal and the Land → Plan loop
+were built on the side panel. Merged onto map-first, the panel's deletion stands and each feature
+moved to the surface that now owns its job. Migrations follow production's
+`0029_research_event_location`: `0030_research_worker_presence`, then `0031_plan_land`.
+
+| Feature                                       | Was (side panel)                   | Now (map-first)                                                                                                                                                    |
+| --------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Plan work on this land                        | button under the land overview     | Plans lens, primary action under the headline (`land-plan-work`)                                                                                                   |
+| Schedule an action as a mission, Open in Plan | Actions tab                        | Plans lens `PlanNextStep`: "Schedule under" this land's plans or the open project, then "Open in Plan"                                                             |
+| Why Save, Approve or Schedule is disabled     | beside each control                | the same, in the plan editor and next-step form (`plans-draft-problems`, `plans-approval-blockers`)                                                                |
+| Research worker presence, queued runs         | Research tab                       | every lens that runs research and the agent card (`research-worker-notice`, "Cancel queued request")                                                               |
+| Bare-earth terrain (3DEP), 10 m signatures    | Research tab                       | Overview lens Details (`overview-bare-earth`, `overview-signatures`); terrain facts prefer bare earth when current and name their source                           |
+| Show once, everywhere                         | foot of the Ecology tab            | Ecology lens, under "Show once, everywhere"; it ends when the lens changes                                                                                         |
+| Fog and ground refresh after new evidence     | panel save handlers                | boundary revision, asset save, inspection, asset import, archive alignment and field survey all call `invalidateLandDerived`                                       |
+| Touch copy, framing above the phone sheet     | panel                              | draw bar, parcel picker, assets, records, plan step areas (`tapOrClick`); `landFraming` frames reviewed drafts and opened land beside the cards or above the sheet |
+| Opening a saved land                          | scrolled the panel to its overview | chip plus Overview lens, from the list, the command box, the map menu or the seeded ranch                                                                          |
+
+On a phone the agent card shares the bottom sheet with the land chip and the lens card, so until it
+has an answer it folds to its ask row (and to one line where the agent is not set up), which keeps
+the land in sight above the sheet. The Land surface, strip, overlays and agent load on demand like
+the bridges, so the globe's first load still carries no Land code (`scripts/check-bundle.mjs`).
