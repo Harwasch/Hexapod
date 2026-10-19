@@ -57,7 +57,8 @@ function cleanBuild(): Record<string, string> {
     "assets/upload-1.js": `export {};`,
     "assets/worlds-1.js": `export {};`,
     "assets/landing-1.js": `export {};`,
-    "assets/view-1.js": `const later=()=>import("./cesium-1.js");export{later};`,
+    "assets/view-1.js": `const later=()=>import("./viewer-1.js");export{later};`,
+    "assets/viewer-1.js": `export const spark=1;`,
     // The Land panel, on demand: AppShell's lazy import, never a static one.
     "assets/LandPanel-1.js": `export const p={className:\`land-library\`};`,
   };
@@ -100,10 +101,21 @@ describe("check-bundle.mjs", () => {
     expect(status).toBe(1);
   });
 
-  it("does not follow a dynamic import, which loads on demand rather than before the page", () => {
-    // view-1.js in the clean build does `import("./cesium-1.js")`; that alone passes.
-    const { status } = run(build(cleanBuild()));
+  it("follows a dynamic import, but measures only what loads before the first frame", () => {
+    // view-1.js in the clean build lazily imports viewer-1.js: not counted in its first load.
+    const { status, output } = run(build(cleanBuild()));
+    expect(output).toMatch(/view\.html\s+JS\s+1 files/);
     expect(status).toBe(0);
+  });
+
+  it("fails a Cesium-free page whose on-demand chunk reaches the engine", () => {
+    // The landing page's scenes load by `import()`: an engine import there still ships.
+    const files = cleanBuild();
+    files["assets/landing-1.js"] = "const scene=()=>import(`./scene-1.js`);export{scene};";
+    files["assets/scene-1.js"] = `import{a}from"./cesium-1.js";export const s=a;`;
+    const { status, output } = run(build(files));
+    expect(output).toContain("landing.html loads CesiumJS on demand: assets/cesium-1.js");
+    expect(status).toBe(1);
   });
 
   it("holds the globe page's entry script to its gzip budget", () => {
