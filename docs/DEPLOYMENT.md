@@ -1179,6 +1179,46 @@ URL belonging to different buckets or different accounts.
 Verification leaves one capture named `Provisioning check <run id>` and one small text
 object in the bucket behind. Deleting them is a console job; leaving them is harmless.
 
+### Seeding the demo Land
+
+`.github/workflows/seed-land.yml` saves Oak Bench Ranch as a Land in production's pilot
+workspace: `python -m app.seed.demo_land`, which writes the Land `demo-land/demo-ranch` (id
+`b1cc807c-652c-574a-8a56-caef5599b71c`) and its fence, creek and woodland features. It is
+idempotent by stable ids: a rerun creates nothing new and brings what changed back to
+`demo_ranch.json` as new revisions. Provisioning does not run it; Land stays opt-in.
+
+Actions → **Seed Land · Oak Bench Ranch** → Run workflow, with `confirm` set to
+`seed-production` (anything else fails before flyctl is installed). Leave `research` off
+unless you want the Land's overview queued too: that is one paid AI research run, which the
+`research` process group picks up.
+
+Don't run it during a deploy; the workflow refuses. Its second step fails if a **Deploy** or
+**Provision** run (provision calls deploy) is queued or in progress, because a deploy replaces
+the API machine and migrates the schema under it.
+
+The job picks a started machine in the `app` process group of the app `fly.toml` names, and
+runs `cd /app && /app/.venv/bin/python -m app.seed.demo_land` there as `api` through
+`flyctl ssh console`, calling the venv's python by full path as `deploy.yml` does. Unlike provision's seed, this one runs on the machine, not the runner:
+it reads only `demo_ranch.json`, which the image carries, and so uses the deployed code and
+the app's own database without the runner ever holding `DATABASE_URL`. Fly injects an app's
+secrets into the machine's environment at boot, and SSH sessions inherit that environment
+(Fly's own guides run `fly ssh console -C "/rails/bin/rails db:migrate"` and
+`printenv RAILS_MASTER_KEY` this way). The command checks for `DATABASE_URL` before it
+seeds anyway. If the session lacks it, the command lists the variable names it does have
+(names only, never values) and stops with exit 3, rather than trying the settings' localhost
+default. The step passes only if the output ends in `SEED-LAND-OK`, which the command prints
+only after the seed exits 0. flyctl's own exit code is not trusted to carry the remote one.
+
+It needs only `FLY_API_TOKEN`, the same secret as `deploy.yml`. The deploy check uses the
+run's own token, with `actions: read`. The job summary prints whether the seed succeeded,
+whether a research overview was queued, the seed's output, the Land id and the rollback. The
+rollback deletes the Land and, by cascade, its features and anything attached to it:
+
+```sh
+curl -fsS -X DELETE -H "Authorization: Bearer $API_WRITE_TOKEN" \
+  https://twin-api.fly.dev/api/v1/land/b1cc807c-652c-574a-8a56-caef5599b71c
+```
+
 ## Security checklist
 
 - No secrets in git; `.env` is ignored, `.env.example` is the template, and everything
