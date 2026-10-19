@@ -1,6 +1,6 @@
 import { ArrowLeft } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useMemo } from "react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { useEffect, useMemo, type ReactNode } from "react";
 
 import { GlassPanel, GlassProgress } from "@twin/ui";
 
@@ -21,6 +21,28 @@ import { ScoutExport } from "./ScoutExport";
 import { setPlanStatus } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
 import { usePlansSync } from "./usePlansSync";
+
+/**
+ * The Plans window's slide in and out. Leaving (another tab took the drawer), it takes no more
+ * keys or presses and leaves the accessibility tree at once, whatever its fade still shows: on
+ * a slow frame rate the exit can take seconds, under the window that replaced it.
+ */
+function PlansWindow({ children }: { children: ReactNode }) {
+  const present = useIsPresent();
+  return (
+    <motion.div
+      className="mc-window-wrap"
+      inert={!present}
+      aria-hidden={present ? undefined : true}
+      initial={{ opacity: 0, x: 16 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 16 }}
+      transition={{ type: "spring", stiffness: 360, damping: 32 }}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 /**
  * Plans list and plan detail (design: Plan view), in the right-hand drawer: the map beside it
@@ -49,14 +71,7 @@ export function PlansPanel() {
   return (
     <AnimatePresence>
       {open && (
-        <motion.div
-          key="plans"
-          className="mc-window-wrap"
-          initial={{ opacity: 0, x: 16 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 16 }}
-          transition={{ type: "spring", stiffness: 360, damping: 32 }}
-        >
+        <PlansWindow key="plans">
           <GlassPanel
             strong
             className={`mc-window ${compact ? "mc-window--compact" : ""}`}
@@ -152,7 +167,7 @@ export function PlansPanel() {
               <PlanDetail plan={plan} onBack={() => openPlan(null)} />
             )}
           </GlassPanel>
-        </motion.div>
+        </PlansWindow>
       )}
     </AnimatePresence>
   );

@@ -1284,6 +1284,8 @@ test.describe("mission control", () => {
   test("the rehearsal leaves the map with its plan card: another tab, All plans, another site", async ({
     app,
   }) => {
+    // Three rehearsals; on a CI runner's software WebGL each takes the better part of 20 s.
+    test.setTimeout(240_000);
     const onMap = async () =>
       (await entityIds(app)).filter((id) => id.startsWith("rehearsal:")).length;
     const draftAndRehearse = async () => {
@@ -1304,7 +1306,10 @@ test.describe("mission control", () => {
     // The Fleet tab: its ghosts, hands and lanes leave as the card does.
     await app.getByTestId("view-tab-fleet").click({ force: true });
     await expect.poll(onMap).toBe(0);
-    await expect(app.getByTestId("plan-review")).toHaveCount(0);
+    // The Plans window may still be fading out under Fleet's (slowly, at a CI frame rate);
+    // it has already left the accessibility tree, and its card with it.
+    await expect(app.getByRole("region", { name: "Plan draft" })).toHaveCount(0);
+    await expect(app.getByTestId("plan-review")).toHaveCount(0, { timeout: 60_000 });
     // The draft waits on the Plan tab, not rehearsing until asked again.
     await app.getByTestId("view-tab-plan").click({ force: true });
     await expect(app.getByTestId("plan-review")).toBeVisible();
