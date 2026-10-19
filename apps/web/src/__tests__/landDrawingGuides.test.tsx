@@ -1,5 +1,12 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type * as Osm from "@/missions/osm";
 import { mappedFeatureDraft } from "@/features/land/mappedFeature";
@@ -8,7 +15,6 @@ import { useMappedFeaturePick } from "@/features/land/surface/landFlow";
 import type { OsmCandidate } from "@/missions/osm";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
-import { useUi } from "@/state/ui";
 import { api } from "@/api/client";
 
 const osm = vi.hoisted(() => ({ answer: null as OsmCandidate | null }));
