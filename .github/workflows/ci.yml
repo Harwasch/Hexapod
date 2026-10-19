@@ -9,79 +9,74 @@ on:
   # cannot be verified by CI at all -- which matters here because some checks
   # (the MinIO service in the api job) can only run on a runner.
   workflow_dispatch:
+  # The nightly full run, the backstop for whatever the per-path mapping below misses. It
+  # does nothing on a day main did not move: the `changes` job compares main's head with
+  # the last nightly that ran. 06:17 UTC, off the hour GitHub's scheduler is busiest.
+  schedule:
+    - cron: "17 6 * * *"
 
+# A pull request's newer run replaces its older one: the diff against its base covers
+# both. A push to main must not, because each push is tested against its own `before`
+# only -- a cancelled push's changes would never be tested -- so every push gets a group of
+# its own. The nightly gets one too, so a push does not cancel it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
-  # What this diff touches, for the jobs that are worth skipping when it does not touch
-  # them -- today only the Playwright shards, the slowest thing here by far. A job-level
-  # `if:` rather than a workflow-level `paths:` filter, deliberately: a workflow that
-  # `paths:` leaves out never starts, so a required check on it waits for ever, while a job
-  # skipped by `if:` reports "skipped", which branch protection counts as passing. Only a
-  # pull request can skip anything: main, a dispatch, and a diff this cannot compute run
-  # everything.
+  # Which jobs this change needs; every job below is gated on one of these outputs. The
+  # mapping from paths to jobs is .github/scripts/ci_changes.py (tested by the workflows
+  # job): a pull request runs every job but skips Playwright when the web app's inputs did
+  # not change; a push to main runs only the jobs whose inputs changed since the push's
+  # `before`; a new branch, a force-push, an unclassified path, a diff that cannot be
+  # computed, a dispatch and the nightly run everything.
+  #
+  # A job-level `if:` rather than a workflow-level `paths:` filter, deliberately: a
+  # workflow that `paths:` leaves out never starts, so a required check on it waits for
+  # ever, while a job skipped by `if:` reports "skipped", which branch protection counts
+  # as passing. The gates read `!= 'false'`, so if this job fails the others run.
   changes:
     name: Changes · what this diff touches
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The nightly lists this workflow's earlier scheduled runs.
+      actions: read
     outputs:
       web: ${{ steps.filter.outputs.web }}
+      e2e: ${{ steps.filter.outputs.e2e }}
       scene: ${{ steps.filter.outputs.scene }}
       shards: ${{ steps.filter.outputs.shards }}
+      api: ${{ steps.filter.outputs.api }}
+      image: ${{ steps.filter.outputs.image }}
+      captures: ${{ steps.filter.outputs.captures }}
+      pipeline: ${{ steps.filter.outputs.pipeline }}
+      trainer: ${{ steps.filter.outputs.trainer }}
+      worlds: ${{ steps.filter.outputs.worlds }}
+      arm: ${{ steps.filter.outputs.arm }}
+      workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - uses: actions/checkout@v4
+      # A pull request's checkout is the PR merged onto its base, so its diff from the base
+      # commit is the PR's changes -- with whatever the base gained since the event, which
+      # can only make this run more, never less.
       - id: filter
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          # The Playwright shards: six when the 3D scene specs run (about 86 runner-minutes of
-          # tests), four when only the app's pages do (about 32).
-          all() { printf 'web=true\nscene=true\nshards=[1,2,3,4,5,6]\n' >> "$GITHUB_OUTPUT"; }
-          if [ "$EVENT" != "pull_request" ]; then
-            all; exit 0
-          fi
-          # The checkout is the PR merged onto its base, so its diff from the base commit is
-          # the PR's changes -- with whatever the base gained since the event, which can
-          # only make this run more, never less.
-          if ! git fetch --no-tags --depth=1 origin "$BASE" \
-            || ! changed=$(git diff --name-only "$BASE" HEAD); then
-            echo "::warning::could not diff against $BASE; running everything"
-            all; exit 0
-          fi
-          printf '%s\n' "$changed"
-          # What the web app is built and served from, the e2e fixtures it loads off disk
-          # (data/tiles), the pipeline data it bundles (tools/captures/data/categories.json,
-          # imported by apps/web/src/lib/categories.ts), and this file. A backend-only diff
-          # (apps/api, the rest of tools/, infra/, docs/) matches none of it. `contracts` is
-          # under packages/.
-          web='^(apps/web/|packages/|data/tiles/|tools/captures/data/|patches/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$|\.github/workflows/ci\.yml$)'
-          if ! printf '%s\n' "$changed" | grep -qE "$web"; then
-            # The shards job is skipped; a one-entry list keeps its matrix valid regardless.
-            printf 'web=false\nscene=false\nshards=[1]\n' >> "$GITHUB_OUTPUT"
-            echo "Nothing the web app is built or tested from changed: Playwright is skipped."
-            exit 0
-          fi
-          # What the 3D scene specs (the `scene` and `webgpu` projects, apps/web/playwright.
-          # config.ts) render from: the renderers and their harnesses, what they import
-          # (lib/, state/), the world and geo packages, the fixtures on disk, the dependencies
-          # and build, and any e2e file but the six page specs. A diff that touches only the
-          # app's pages (features/, app/, admin/, upload/, view/, api/, styles, packages/ui,
-          # contracts) runs the `chromium` project alone; main and a dispatch run everything.
-          scene='^(apps/web/src/(cesium|dev|lib|state)/|apps/web/(public/|[^/]*\.html$|package\.json$|vite\.config\.ts$|playwright\.config\.ts$|tsconfig[^/]*\.json$)|packages/(world|geo)/|data/|tools/captures/data/|patches/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$|\.github/workflows/ci\.yml$)'
-          pages='^apps/web/e2e/(admin|app|captures|layout|phoneUpload|view)\.spec\.ts$'
-          if printf '%s\n' "$changed" | grep -qE "$scene" \
-            || printf '%s\n' "$changed" | grep -E '^apps/web/e2e/' | grep -qvE "$pages"; then
-            printf 'web=true\nscene=true\nshards=[1,2,3,4,5,6]\n' >> "$GITHUB_OUTPUT"
-          else
-            printf 'web=true\nscene=false\nshards=[1,2,3,4]\n' >> "$GITHUB_OUTPUT"
-            echo "Only the app's pages changed: the 3D scene specs are skipped (main runs them)."
-          fi
+          BEFORE: ${{ github.event.before }}
+          FORCED: ${{ github.event.forced }}
+          HEAD: ${{ github.sha }}
+        run: >-
+          python3 .github/scripts/ci_changes.py --event "$EVENT" --base "$BASE"
+          --before "$BEFORE" --forced "$FORCED" --head "$HEAD"
 
   web:
     name: Web · lint, typecheck, test, build
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.web != 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -110,6 +105,8 @@ jobs:
   worlds:
     name: Worlds · CPU workers, transport and reconstruction contracts
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.worlds != 'false' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -130,6 +127,8 @@ jobs:
   workflows:
     name: Workflows · parse, and agree with the handover
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.workflows != 'false' }}
     steps:
       - uses: actions/checkout@v4
       # A workflow with a YAML error does not fail -- it silently never runs, and the
@@ -184,6 +183,10 @@ jobs:
               print(f"::error::{problem}")
           sys.exit(1 if problems else 0)
           PY
+      # The path-to-job mapping the `changes` job runs: a mistake there skips a job that
+      # should have run, and nothing else would say so.
+      - name: The changes job sends each kind of diff to the right jobs
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
 
   # Playwright, in shards. Cesium on SwiftShader's software GL is CPU-bound, so a runner keeps
   # `workers: 1` (apps/web/playwright.config.ts) and the parallelism is across runners instead
@@ -203,7 +206,7 @@ jobs:
       VITE_ENABLE_LAND_EXPLORATION: "true"
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.web == 'true'
+    if: needs.changes.outputs.e2e == 'true'
     strategy:
       # Every shard to the end: one failing must not hide what the others would have found.
       fail-fast: false
@@ -251,7 +254,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, e2e-shard]
     # After the shards whatever they found, but not when they were skipped or cancelled.
-    if: ${{ !cancelled() && needs.changes.outputs.web == 'true' }}
+    if: ${{ !cancelled() && needs.changes.outputs.e2e == 'true' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -288,16 +291,16 @@ jobs:
       - name: Every shard passed, or none was needed
         env:
           CHANGES: ${{ needs.changes.result }}
-          WEB: ${{ needs.changes.outputs.web }}
+          E2E: ${{ needs.changes.outputs.e2e }}
           SHARDS: ${{ needs.e2e-shard.result }}
           REPORT: ${{ needs.e2e-report.result }}
         run: |
-          echo "changes: $CHANGES (web: $WEB), shards: $SHARDS, report: $REPORT"
+          echo "changes: $CHANGES (e2e: $E2E), shards: $SHARDS, report: $REPORT"
           if [ "$CHANGES" != "success" ]; then
             echo "::error::the changes job did not succeed, so nothing says e2e could be skipped"
             exit 1
           fi
-          if [ "$WEB" != "true" ]; then
+          if [ "$E2E" != "true" ]; then
             echo "nothing the web app is built or tested from changed; Playwright skipped"
             exit 0
           fi
@@ -309,6 +312,8 @@ jobs:
   captures:
     name: Captures · lint, test
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.captures != 'false' }}
     defaults:
       run:
         working-directory: tools/captures
@@ -330,6 +335,8 @@ jobs:
   arm:
     name: Arm · lint, test
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.arm != 'false' }}
     defaults:
       run:
         working-directory: hardware/arm
@@ -348,6 +355,8 @@ jobs:
   pipeline:
     name: Pipeline · lint, typecheck, test
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.pipeline != 'false' }}
     defaults:
       run:
         working-directory: tools/pipeline
@@ -442,6 +451,8 @@ jobs:
   trainer:
     name: Trainer · gsplat v1.5.3 accepts the pipeline's argv (CPU replica)
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.trainer != 'false' }}
     # The training image's Python 3.10 environment, minus CUDA: CPU torch at the version
     # the gsplat wheel was built for, the committed trainer-requirements.txt, and the
     # committed check the image build itself runs last. It imports gsplat v1.5.3's own
@@ -474,6 +485,8 @@ jobs:
   api:
     name: API · lint, typecheck, test, migrations
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.api != 'false' }}
     services:
       postgis:
         image: postgis/postgis:16-3.5
@@ -567,6 +580,8 @@ jobs:
   image:
     name: Image · API and worker, from the real Dockerfile
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.image != 'false' }}
     # The other jobs run the code from the checkout, so none of them can see what is
     # missing from the image. This one builds infra/api.Dockerfile and asks the container
     # the two questions a deployment asks it: can the API list the recipes, and can the
