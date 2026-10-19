@@ -94,6 +94,8 @@ export function analysisBlocker({ ready, canEdit, run }: AnalysisInputs): string
 
 /** Shown only once the question box has been used: an empty box is not an error at first. */
 export const TYPE_A_QUESTION = "Type a question to ask the agent.";
+export const AGENT_NOT_SET_UP =
+  "The agent isn't set up on this server. The lens analyses still work.";
 
 export interface AskInputs extends AnalysisInputs {
   /** From /research/status: undefined while it loads, null when it could not be loaded. */
@@ -110,8 +112,7 @@ export function askBlocker(inputs: AskInputs): string | null {
   if (inputs.modelConfigured === undefined) return "Checking whether the agent is available…";
   if (inputs.modelConfigured === null)
     return "Could not check whether the agent is available. Reload the page to try again.";
-  if (!inputs.modelConfigured)
-    return "The agent isn't set up on this server. The lens analyses still work.";
+  if (!inputs.modelConfigured) return AGENT_NOT_SET_UP;
   if (inputs.pending) return "Confirm or discard the captured request above first.";
   if (inputs.recoveryError) return "Resolve the unreadable saved question above first.";
   if (!inputs.question.trim()) return TYPE_A_QUESTION;
