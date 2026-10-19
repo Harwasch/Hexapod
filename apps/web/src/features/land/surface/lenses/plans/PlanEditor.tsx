@@ -6,6 +6,7 @@ import { footprintAreaM2 } from "@twin/geo";
 import { GlassButton, GlassInput, GlassSelect, GlassTextarea } from "@twin/ui";
 
 import { ApiError, api, unwrap } from "@/api/client";
+import { tapOrClick } from "@/lib/pointer";
 
 import {
   actionDraftKey,
@@ -86,7 +87,7 @@ function DrawBar({
     <div className="plans-drawbar" role="group" aria-label="Drawing an area on the map">
       <p aria-live="polite">
         {drawing.picking
-          ? `Click the map to add corners · ${count} so far`
+          ? `${tapOrClick()} the map to add corners · ${count} so far`
           : `${count} ${count === 1 ? "corner" : "corners"} · paused`}
       </p>
       {count > 0 && !cornersInside(drawing.points, land.boundary) && (
