@@ -106,8 +106,8 @@ All of these are general models; none knows our scenes.
    | **API CPU, onnxruntime, fp32 maths (chosen)** | +565 MB image  | cos ≥ 0.9999998, same top-10 on every query and scan tried | first 1.24 s (load), then ~140 ms       |
 
    Re-measured on today's main (2026-10-19, hwgeekom, one onnxruntime thread): export parity
-   min cos 0.9999998, 543 MB of files; first query 1.13 s, then ~107 ms; the API process goes
-   from 368 MB resident to 876 MB with the encoder loaded, **peaking at 1.03 GB while it
+   min cos 0.9999998, 543 MB of files; first query 0.84-0.89 s, then ~100 ms (95-118); the API
+   process goes from 358 MB resident to 877 MB with the encoder loaded, **peaking at 1.03 GB while it
    loads** -- more than the app machine's 1 GB (docs/DEPLOYMENT.md, "Search by meaning runs on
    the app machine"). The match by meaning is the cosine's margin over the scan's median for
    that query (`MEANING_FLOOR` 0.015, `MEANING_SPAN` 0.05: crops of splat renders sit below

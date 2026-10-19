@@ -290,7 +290,7 @@ at it. No secret, no Modal: the model is public (Apache-2.0).
 
 - **Memory -- unverified on Fly, and the reason to look before relying on it.** The model
   loads on the first search, not at boot. Measured locally on 2026-10-19 (today's main, one
-  uvicorn process): 368 MB resident before, 876 MB after, and a peak of 1.03 GB while it
+  uvicorn process): 358 MB resident before, 877 MB after, and a peak of 1.03 GB while it
   loads. The app group is `shared-cpu-1x` with 1 GB (`fly.toml`), so the first search may
   get the machine OOM-killed. onnxruntime's `disable_prepacking` and arena options do not
   lower the peak (measured). Watch the app machine's memory in Fly's metrics on the first
@@ -298,8 +298,8 @@ at it. No secret, no Modal: the model is public (Apache-2.0).
   (`fly scale memory 2048 --process-group app`) or unset `TEXT_ENCODER_DIR` (search falls
   back to tags) rather than live with restarts. The worker and research groups run the same
   image but never load it.
-- **Time.** The first search on a freshly started machine pays ~1.1-1.3 s to load, later ones
-  ~110-140 ms on one core (`TEXT_ENCODER_THREADS`, default 1; slower on a shared vCPU).
+- **Time.** The first search on a freshly started machine pays ~0.9-1.3 s to load, later ones
+  ~100-140 ms on one core (`TEXT_ENCODER_THREADS`, default 1; slower on a shared vCPU).
   Responses are cacheable (the same text gives the same vector).
 - **Without it** (`TEXT_ENCODER_DIR` unset, or the files missing) the route answers 503 and
   the viewer searches by tags, which is also what it does while the encoder loads.
