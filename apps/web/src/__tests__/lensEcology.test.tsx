@@ -7,6 +7,7 @@ import type { components, LandArea } from "@twin/contracts";
 import { api } from "@/api/client";
 import { parseSurveyCorners, parseSurveyDraft } from "@/features/land/surveyDraft";
 import { useAgentBus } from "@/features/land/surface/agentBus";
+import { useLens } from "@/features/land/surface/lenses";
 import { EcologyLens } from "@/features/land/surface/lenses/EcologyLens";
 import {
   DEFAULT_REQUEST,
@@ -20,6 +21,8 @@ import {
 import { useLandContext } from "@/state/landContext";
 import type * as LandIdentity from "@/state/landIdentity";
 import { useLandMap } from "@/state/landMap";
+import { useShowOnce } from "@/state/showOnce";
+import { useUi } from "@/state/ui";
 
 const scene = vi.hoisted(() => ({
   areas: { pickGround: vi.fn(), cancelPick: vi.fn() },
@@ -361,6 +364,8 @@ afterEach(() => {
   useLandContext.getState().clear();
   useLandMap.setState({ pins: {}, focus: null });
   useAgentBus.setState({ request: null });
+  useLens.getState().setLens("overview");
+  useUi.getState().setPanel(null);
 });
 
 it("reads the sources in plain words and keeps survey drafts strict", () => {
@@ -624,4 +629,51 @@ it("invalidates a reviewed survey when it changes and recovers the unfinished dr
   fireEvent.click(screen.getByRole("button", { name: /Basics/ }));
   expect(screen.getByLabelText("Survey name")).toHaveValue("Revised field survey");
   expect(screen.getByLabelText("Observer", { exact: true })).toHaveValue("Test observer");
+});
+
+it("keeps Show once, everywhere under its own heading, taking the map while the lens is open", async () => {
+  serve({ investigations: [inv], detail });
+  useLens.getState().setLens("ecology");
+  useUi.getState().setPanel("land");
+  const view = mount();
+  const card = await screen.findByTestId("show-once");
+  const lens = screen.getByTestId("land-lens-card-ecology");
+  expect(lens).toContainElement(card);
+  // The lens still leads with its one sentence; Show once sits below, under its own heading.
+  await waitFor(() => expect(within(lens).getAllByRole("heading")[0]).toHaveClass("land-headline"));
+  expect(within(lens).getByRole("heading", { name: "Show once, everywhere" })).toBeVisible();
+  expect(card).toHaveTextContent("Not a species ID");
+  expect(await within(card).findByTestId("show-once-prepare")).toBeVisible();
+  // The drape and the taps belong to the card while it is on screen (ShowOnceBridge).
+  await waitFor(() => expect(useShowOnce.getState().shown).toBe(true));
+  view.unmount();
+  expect(useShowOnce.getState().shown).toBe(false);
+});
+
+it("counts a saved field survey for the whole land: the fog over it is asked again", async () => {
+  serve();
+  const post = vi.spyOn(api, "POST").mockImplementation((path: string) =>
+    Promise.resolve({
+      data: path.endsWith("/preview") ? summary : savedSurvey,
+      response: new Response(),
+    }),
+  );
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const fog = ["land-knowledge", "pilot", land.id];
+  client.setQueryData(fog, { cells: [] });
+  render(
+    <QueryClientProvider client={client}>
+      <EcologyLens land={land} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Record a field survey" }));
+  await fillBasics();
+  fireEvent.click(screen.getByRole("button", { name: "Use entire land as the surveyed plot" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review survey" }));
+  expect(client.getQueryState(fog)?.isInvalidated).toBe(false);
+  fireEvent.click(await screen.findByRole("button", { name: "Save immutable survey" }));
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith("/api/v1/land/{land_id}/surveys", expect.anything()),
+  );
+  await waitFor(() => expect(client.getQueryState(fog)?.isInvalidated).toBe(true));
 });

@@ -13,6 +13,7 @@ import type { LandArea, ResearchStatus, SignatureSimilarity, components } from "
 
 import { api } from "@/api/client";
 import { signaturePeriods } from "@/features/land/rasterRuns";
+import { useLens } from "@/features/land/surface/lenses";
 import { ShowOnceCard } from "@/features/showOnce/ShowOnceCard";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
@@ -146,7 +147,8 @@ function mount(shown: LandArea = land) {
 
 beforeEach(() => {
   useLand.getState().select(land);
-  useLandContext.getState().setSection("ecology");
+  // The card is on screen while the Land surface shows the Ecology lens.
+  useLens.getState().setLens("ecology");
   useUi.getState().setPanel("land");
   useShowOnce.getState().stop();
   rasters = [];
@@ -158,6 +160,7 @@ afterEach(() => {
   cleanup();
   useShowOnce.getState().stop();
   useLandContext.getState().clear();
+  useLens.getState().setLens("overview");
   useUi.getState().setPanel(null);
   useLand.getState().clear();
   vi.restoreAllMocks();
