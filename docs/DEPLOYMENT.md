@@ -279,6 +279,34 @@ completed stage is recomputed, and a Lane 2 run that was two hours into `train` 
 two hours again. You also need a root disk big enough for the largest capture plus the
 image. Size the machine accordingly and treat restarts as expensive.
 
+### Search by meaning runs on the app machine
+
+`GET /api/v1/text-embeddings` embeds a viewer's object-search query with SigLIP 2's text
+tower (docs/SCENE_OBJECTS.md §3 step 4), on the app machine's own CPU with onnxruntime. The
+image's `text-encoder` build stage exports the tower from the pinned model revision with
+torch (which does not reach the runtime image) and fails the build if it disagrees with
+transformers; the runtime gets ~545 MB at `/opt/text-encoder` and `TEXT_ENCODER_DIR` points
+at it. No secret, no Modal: the model is public (Apache-2.0).
+
+- **Memory -- unverified on Fly, and the reason to look before relying on it.** The model
+  loads on the first search, not at boot. Measured locally on 2026-10-19 (today's main, one
+  uvicorn process): 368 MB resident before, 876 MB after, and a peak of 1.03 GB while it
+  loads. The app group is `shared-cpu-1x` with 1 GB (`fly.toml`), so the first search may
+  get the machine OOM-killed. onnxruntime's `disable_prepacking` and arena options do not
+  lower the peak (measured). Watch the app machine's memory in Fly's metrics on the first
+  search after a deploy; if it nears the limit, raise it to 2 GB
+  (`fly scale memory 2048 --process-group app`) or unset `TEXT_ENCODER_DIR` (search falls
+  back to tags) rather than live with restarts. The worker and research groups run the same
+  image but never load it.
+- **Time.** The first search on a freshly started machine pays ~1.1-1.3 s to load, later ones
+  ~110-140 ms on one core (`TEXT_ENCODER_THREADS`, default 1; slower on a shared vCPU).
+  Responses are cacheable (the same text gives the same vector).
+- **Without it** (`TEXT_ENCODER_DIR` unset, or the files missing) the route answers 503 and
+  the viewer searches by tags, which is also what it does while the encoder loads.
+- **Build.** The export stage downloads torch (CPU) and the 1.5 GB model once per uncached
+  build: a few minutes on the builder. CI's `image` job asks the built image for
+  embeddings.
+
 ### Waking the worker, and letting Neon sleep
 
 A worker that polls the queue every two seconds forever keeps two things awake that need
