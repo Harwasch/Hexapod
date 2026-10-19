@@ -27,9 +27,9 @@ jobs:
   # Which jobs this change needs; every job below is gated on one of these outputs. The
   # mapping from paths to jobs is .github/scripts/ci_changes.py (tested by the workflows
   # job): a pull request runs only the jobs whose inputs it changed, and a push to main
-  # only those whose inputs changed since the push's `before`; a new branch, a
-  # force-push, an unclassified path, a diff that cannot be computed, a dispatch and the
-  # nightly run everything.
+  # only those whose inputs changed since the push's `before`; a change to this file or
+  # to ci_changes.py, a new branch, a force-push, an unclassified path, a diff that
+  # cannot be computed, a dispatch and the nightly run everything.
   #
   # A job-level `if:` rather than a workflow-level `paths:` filter, deliberately: a
   # workflow that `paths:` leaves out never starts, so a required check on it waits for
@@ -55,6 +55,7 @@ jobs:
       worlds: ${{ steps.filter.outputs.worlds }}
       arm: ${{ steps.filter.outputs.arm }}
       workflows: ${{ steps.filter.outputs.workflows }}
+      format: ${{ steps.filter.outputs.format }}
     steps:
       - uses: actions/checkout@v4
       # A pull request's checkout is the PR merged onto its base, so its diff from the base
@@ -186,7 +187,25 @@ jobs:
       # The path-to-job mapping the `changes` job runs: a mistake there skips a job that
       # should have run, and nothing else would say so.
       - name: The changes job sends each kind of diff to the right jobs
-        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+        run: python3 -m unittest discover -s .github/scripts -v
+
+  # `prettier --check .` alone, for a change Prettier reads (Markdown, YAML, JSON, ...)
+  # that does not run the web job, which checks formatting itself. Far cheaper than the
+  # web job: an install and one command.
+  format:
+    name: Format · prettier --check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.format != 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
 
   # Playwright, in shards. Cesium on SwiftShader's software GL is CPU-bound, so a runner keeps
   # `workers: 1` (apps/web/playwright.config.ts) and the parallelism is across runners instead
@@ -206,12 +225,14 @@ jobs:
       VITE_ENABLE_LAND_EXPLORATION: "true"
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.e2e == 'true'
+    # `!= 'false'`, like every gate here: if the changes job failed, the shards run (all
+    # six, through the matrix's fallback) rather than nothing.
+    if: ${{ !cancelled() && needs.changes.outputs.e2e != 'false' }}
     strategy:
       # Every shard to the end: one failing must not hide what the others would have found.
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.changes.outputs.shards) }}
+        shard: ${{ fromJSON(needs.changes.outputs.shards || '[1,2,3,4,5,6]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -231,7 +252,7 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           projects=()
-          if [ "$SCENE" != "true" ]; then projects=(--project=chromium); fi
+          if [ "$SCENE" = "false" ]; then projects=(--project=chromium); fi
           pnpm --filter @twin/web exec playwright test --list --reporter=list "${projects[@]}" \
             | grep ' › ' | sed 's/^ *//' > "$RUNNER_TEMP/all-tests.txt"
           awk -v n="$SHARDS" -v i="$SHARD" 'NR % n == i % n' "$RUNNER_TEMP/all-tests.txt" \
@@ -254,7 +275,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, e2e-shard]
     # After the shards whatever they found, but not when they were skipped or cancelled.
-    if: ${{ !cancelled() && needs.changes.outputs.e2e == 'true' }}
+    if: ${{ !cancelled() && needs.changes.outputs.e2e != 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -300,7 +321,7 @@ jobs:
             echo "::error::the changes job did not succeed, so nothing says e2e could be skipped"
             exit 1
           fi
-          if [ "$E2E" != "true" ]; then
+          if [ "$E2E" = "false" ]; then
             echo "nothing the web app is built or tested from changed; Playwright skipped"
             exit 0
           fi
