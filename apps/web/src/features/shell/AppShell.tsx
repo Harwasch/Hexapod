@@ -7,8 +7,12 @@ import { useScene } from "@/cesium/SceneContext";
 import { LandRasterBridge } from "@/cesium/LandRasterBridge";
 import { LandContextBridge } from "@/cesium/LandContextBridge";
 import { LandBridge } from "@/cesium/LandBridge";
+import { LandFocusBridge } from "@/cesium/LandFocusBridge";
 import { LandIdentityBridge } from "../land/WorkspaceIdentity";
-import { LandPanel } from "../land/LandPanel";
+import { LandAgent } from "../land/surface/LandAgent";
+import { LandOverlays } from "../land/surface/LandOverlays";
+import { LandStrip } from "../land/surface/LandStrip";
+import { LandSurface } from "../land/surface/LandSurface";
 import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
@@ -164,12 +168,18 @@ export function AppShell() {
           <LandBridge />
           <LandContextBridge />
           <LandRasterBridge />
+          <LandFocusBridge />
         </>
       )}
       <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">
         <ErrorBoundary inline label="Fleet overlay">
           <MissionOverlays />
         </ErrorBoundary>
+        {env.landExplorationEnabled && (
+          <ErrorBoundary inline label="Land overlay">
+            <LandOverlays />
+          </ErrorBoundary>
+        )}
         <CompareSplit />
         <header className="hud-region hud-top">
           <ErrorBoundary inline label="Site">
@@ -188,7 +198,7 @@ export function AppShell() {
         <section className="hud-region hud-dock hud-dock--left" aria-label="Panel">
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
-            {env.landExplorationEnabled && <LandPanel />}
+            {env.landExplorationEnabled && <LandSurface />}
             <MeasurePanel />
             <AddPanel />
           </ErrorBoundary>
@@ -211,6 +221,11 @@ export function AppShell() {
             <Toasts />
           </div>
           <div className="hud-stack hud-detail">
+            {env.landExplorationEnabled && (
+              <ErrorBoundary inline label="Land agent">
+                <LandAgent />
+              </ErrorBoundary>
+            )}
             <ErrorBoundary inline label="Selection">
               <SelectionCard />
               <FeedsPanel />
@@ -222,6 +237,11 @@ export function AppShell() {
           </div>
         </aside>
         <div className="hud-region hud-strip">
+          {env.landExplorationEnabled && (
+            <ErrorBoundary inline label="Land controls">
+              <LandStrip />
+            </ErrorBoundary>
+          )}
           <ExploreHud />
           <TimelineControl />
           <RepresentationSwitcher />

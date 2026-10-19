@@ -1,0 +1,22 @@
+/* ---------------------------------------------------------------------------
+   Soil lens: the hydrologic group guide in Details. Shared parts are in water/bundle.css.
+   --------------------------------------------------------------------------- */
+
+.soil-groups {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  font-size: var(--text-xs);
+}
+.soil-groups > div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  gap: var(--space-2);
+}
+.soil-groups dt {
+  color: var(--text-tertiary);
+}
+.soil-groups dd {
+  margin: 0;
+  color: var(--text-secondary);
+}

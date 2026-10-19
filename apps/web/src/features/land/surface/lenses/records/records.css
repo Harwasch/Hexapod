@@ -1,0 +1,629 @@
+/* ---------------------------------------------------------------------------
+   Records lens: the paper trail of the land, old maps and photos.
+   --------------------------------------------------------------------------- */
+
+/* Back to the summary from something opened. */
+.records-back {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2) 2px 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.records-back:hover {
+  color: var(--text-primary);
+  background: var(--control-bg);
+}
+.records-back:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Facts that open an item: the whole fact is one button. */
+.land-fact.records-fact {
+  padding: 0;
+}
+.records-fact__button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.records-fact__button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.records-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.records-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.records-legend__sheet {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1.5px solid rgba(8, 11, 7, 0.9);
+}
+.records-legend__photo {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  border: 1.5px solid rgba(8, 11, 7, 0.9);
+}
+
+.records-running {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+}
+.records-running__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--records, #d9c3a0);
+  animation: records-pulse 1.4s ease-in-out infinite;
+}
+@keyframes records-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Then and now: an aligned old map faded over today's. */
+.records-thennow {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(217, 195, 160, 0.08);
+  border: 1px solid rgba(217, 195, 160, 0.28);
+}
+.records-thennow__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.records-thennow__label {
+  font-size: var(--text-xs);
+  color: var(--records, #d9c3a0);
+}
+.records-thennow__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.records-thennow__fade {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+/* Sections inside details and sub-views. */
+.records-section {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.records-subhead {
+  margin: 0;
+  padding: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+.records-more {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.records-more > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.records-more > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+.records-more p,
+.records-section p,
+.records-item p,
+.records-doc p {
+  margin: 0;
+}
+.records-hash {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.records-plain-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
+}
+.records-facts {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.records-facts > div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+.records-facts dt {
+  color: var(--text-tertiary);
+}
+.records-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.records-out {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent-strong);
+  font-size: var(--text-sm);
+  text-underline-offset: 3px;
+}
+.records-tag {
+  justify-self: start;
+  padding: 1px 8px;
+  border-radius: var(--glass-radius-pill);
+  background: rgba(217, 195, 160, 0.14);
+  color: var(--records, #d9c3a0);
+  font-size: var(--text-xs);
+}
+
+/* Lists of documents and archive items. */
+.records-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.records-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.records-row:hover {
+  background: var(--control-bg-hover);
+}
+.records-row[aria-pressed="true"] {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+}
+.records-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.records-row__icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--records, #d9c3a0);
+}
+.records-row__main {
+  display: grid;
+  min-width: 0;
+}
+.records-row__main strong {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.records-row__main small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.records-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-tertiary);
+}
+.records-search input {
+  flex: 1;
+  min-width: 0;
+}
+.records-connection {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: var(--text-sm);
+}
+
+/* One old photo or map sheet. */
+.records-item {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.records-item__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 1.875rem;
+}
+.records-item__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.records-item__figure {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+.records-item__picture {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+.records-item__picture img {
+  display: block;
+  width: 100%;
+  max-height: 11rem;
+  object-fit: cover;
+}
+.records-item__figure.is-large .records-item__picture {
+  cursor: zoom-out;
+}
+.records-item__figure.is-large .records-item__picture img {
+  max-height: 60vh;
+  object-fit: contain;
+}
+.records-item__picture:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.records-item__figure figcaption {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+.records-item__figure figcaption a {
+  color: var(--text-secondary);
+}
+.records-item__head {
+  display: grid;
+  gap: 2px;
+}
+.records-item__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.records-item__align {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+}
+
+/* Saved alignments and how well they fit. */
+.records-alignment {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+.records-alignment__head {
+  display: grid;
+  gap: 2px;
+}
+.records-fit {
+  display: grid;
+  gap: var(--space-2);
+}
+.records-fit__numbers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+.records-fit__numbers dt {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.records-fit__numbers dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Lining up a map: the old map, click to match spots. */
+.records-align {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.records-align__status {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.records-align__zoom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.records-align__viewport {
+  max-height: 22rem;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  overscroll-behavior: contain;
+}
+.records-align__image {
+  position: relative;
+  display: block;
+  min-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: crosshair;
+}
+.records-align__image img {
+  display: block;
+  width: 100%;
+  user-select: none;
+}
+.records-align__image:disabled {
+  cursor: progress;
+}
+.records-align__image:focus-visible {
+  outline: none;
+  box-shadow: inset var(--focus-ring);
+}
+.records-align__marker {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-radius: 50%;
+  background: var(--records, #d9c3a0);
+  color: #1a140a;
+  border: 2px solid rgba(8, 11, 7, 0.9);
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.records-align__marker.is-pending {
+  background: #f1cb7a;
+}
+.records-matches {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.records-matches li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+.records-matches__n {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--records, #d9c3a0);
+  color: #1a140a;
+  font-size: 11px;
+  font-weight: 700;
+}
+.records-matches__where {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+/* Forms. */
+.records-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.records-form {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.records-form__fields {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.records-form textarea {
+  resize: vertical;
+}
+.records-drop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(217, 195, 160, 0.5);
+  background: rgba(217, 195, 160, 0.06);
+  color: var(--records, #d9c3a0);
+  cursor: pointer;
+}
+.records-drop:hover {
+  background: rgba(217, 195, 160, 0.12);
+}
+.records-drop:focus-within {
+  box-shadow: var(--focus-ring);
+}
+.records-drop span {
+  display: grid;
+  min-width: 0;
+  color: var(--text-primary);
+}
+.records-drop small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.records-select {
+  width: auto;
+}
+
+/* Document pages. */
+.records-doc {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.records-doc__head {
+  display: grid;
+  gap: 4px;
+}
+.records-pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.records-text {
+  margin: 0;
+  max-height: 16rem;
+  overflow: auto;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.22);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.records-page-image {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+.records-page-image__viewport {
+  max-height: 22rem;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+.records-page-image__viewport img {
+  display: block;
+}
+.records-page-image__viewport:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.records-reading {
+  display: grid;
+  gap: var(--space-2);
+}
+.records-reading__title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .records-running__pulse {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .records-grid,
+  .records-fit__numbers {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .records-item__picture img {
+    max-height: 8rem;
+  }
+  .records-align__viewport {
+    max-height: 14rem;
+  }
+}
+
+/* A source to tick in the evidence picker. */
+.records-row--choice {
+  align-items: center;
+  cursor: default;
+}
+.records-row--choice label {
+  flex: 1;
+  cursor: pointer;
+}

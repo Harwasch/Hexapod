@@ -4916,6 +4916,56 @@ export interface components {
             /** Taxa */
             taxa?: components["schemas"]["TaxonQuery"][];
         };
+        /**
+         * EventLocation
+         * @description Where on the map a research step is looking or what it found.
+         *
+         *     Small on purpose: a point, a box or a reference to saved geometry, never the geometry
+         *     itself, so a streamed event stays far below the frame limit.
+         */
+        EventLocation: {
+            /** Bbox */
+            bbox?: [
+                number,
+                number,
+                number,
+                number
+            ] | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "point" | "bbox" | "geometry-ref";
+            /**
+             * Meaning
+             * @enum {string}
+             */
+            meaning: "sample-point" | "query-bbox" | "query-radius" | "catalog-coordinate" | "catalog-footprint" | "analysis-extent" | "array-zone" | "focus" | "result";
+            /** Point */
+            point?: [
+                number,
+                number
+            ] | null;
+            /** Radiusm */
+            radiusM?: number | null;
+            ref?: components["schemas"]["EventLocationRef"] | null;
+        };
+        /**
+         * EventLocationRef
+         * @description A saved record whose geometry the event is about, when it has one.
+         */
+        EventLocationRef: {
+            /** Artifactid */
+            artifactId?: string | null;
+            /** Assessmentid */
+            assessmentId?: string | null;
+            /** Evidenceid */
+            evidenceId?: string | null;
+            /** Featureid */
+            featureId?: string | null;
+            /** Rasterid */
+            rasterId?: string | null;
+        };
         /** EventRead */
         EventRead: {
             /**
@@ -4925,6 +4975,7 @@ export interface components {
             createdAt: string;
             /** Kind */
             kind: string;
+            location?: components["schemas"]["EventLocation"] | null;
             /** Payload */
             payload: {
                 [key: string]: unknown;
@@ -5599,6 +5650,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Kinds */
+            kinds?: ("overview" | "investigation" | "raster" | "archive" | "solar" | "ecology")[];
             /**
              * Landid
              * Format: uuid
@@ -6744,6 +6797,8 @@ export interface components {
             inventoryVisible?: boolean;
             /** Investigationid */
             investigationId?: string | null;
+            /** Lens */
+            lens?: ("overview" | "water" | "soil" | "ecology" | "solar" | "records" | "assets" | "plans") | null;
             /** Rasters */
             rasters?: components["schemas"]["LandViewRaster"][];
             /**
@@ -10155,6 +10210,8 @@ export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
 export type SchemaDocumentPageRead = components['schemas']['DocumentPageRead'];
 export type SchemaDocumentSearchHit = components['schemas']['DocumentSearchHit'];
 export type SchemaEcologyRequest = components['schemas']['EcologyRequest'];
+export type SchemaEventLocation = components['schemas']['EventLocation'];
+export type SchemaEventLocationRef = components['schemas']['EventLocationRef'];
 export type SchemaEventRead = components['schemas']['EventRead'];
 export type SchemaEvidenceRead = components['schemas']['EvidenceRead'];
 export type SchemaFeatureBatchItem = components['schemas']['FeatureBatchItem'];

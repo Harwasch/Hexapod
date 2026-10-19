@@ -35,6 +35,11 @@ class LandViewState(CamelModel):
     section: Literal["discover", "records", "inventory", "ecology", "scenarios", "actions"] = (
         "discover"
     )
+    # The map lens the view was saved from. Views saved before lenses name only a section.
+    lens: (
+        Literal["overview", "water", "soil", "ecology", "solar", "records", "assets", "plans"]
+        | None
+    ) = None
     investigation_id: uuid.UUID | None = None
     inventory_id: uuid.UUID | None = None
     survey_id: uuid.UUID | None = None

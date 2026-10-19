@@ -1,0 +1,530 @@
+/* ---------------------------------------------------------------------------
+   Assets lens: the list, the chooser, the drawing controls and the asset forms. Shared card
+   parts (.land-fact, .land-details, .land-field…) come from surface.css.
+   --------------------------------------------------------------------------- */
+
+.assets-dot,
+.assets-kinds-fact i,
+.assets-legend i,
+.assets-filter i,
+.assets-chip i {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px rgba(8, 11, 7, 0.7);
+}
+
+/* Colour-by toggle in the card's top right. */
+.assets-colorby {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--glass-radius-pill);
+  background: var(--control-bg);
+}
+.assets-colorby button {
+  border: 0;
+  border-radius: var(--glass-radius-pill);
+  padding: 2px 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.assets-colorby button[aria-pressed="true"] {
+  background: var(--control-bg-hover);
+  color: var(--text-primary);
+}
+.assets-colorby button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.assets-kinds-fact,
+.assets-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-3);
+}
+.assets-kinds-fact > span,
+.assets-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.assets-legend {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.assets-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+/* ---- List ------------------------------------------------------------------ */
+.assets-browse {
+  display: grid;
+  gap: var(--space-2);
+}
+.assets-search {
+  position: relative;
+  display: block;
+}
+.assets-search > svg {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.assets-search input {
+  padding-left: 30px;
+}
+.assets-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.assets-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--glass-radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.assets-filter b {
+  font-weight: 500;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.assets-filter:hover {
+  background: var(--control-bg);
+}
+.assets-filter[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+.assets-filter:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.assets-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.assets-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  min-width: 0;
+}
+li.assets-row:not(:has(.assets-row__main)) {
+  padding: var(--space-1) var(--space-2);
+}
+.assets-row__main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.assets-row__main[aria-current="true"] {
+  background: rgba(241, 203, 122, 0.14);
+}
+.assets-row__main:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.assets-row__text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.assets-row__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assets-row__sub {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assets-flag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--glass-radius-pill);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-border);
+  color: var(--warn);
+  font-size: var(--text-xs);
+}
+
+/* ---- Chooser --------------------------------------------------------------- */
+.assets-chooser {
+  display: grid;
+  gap: var(--space-2);
+}
+.assets-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.assets-kind {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.assets-kind:hover {
+  background: var(--control-bg-hover);
+  border-color: var(--accent-border);
+}
+.assets-kind:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.assets-kind > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Drawing ----------------------------------------------------------------- */
+.assets-draw {
+  display: grid;
+  gap: var(--space-2);
+}
+.assets-draw__status {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Forms ------------------------------------------------------------------- */
+.assets-form,
+.assets-form__fields {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.assets-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.assets-chips > legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+.assets-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--glass-radius-pill);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.assets-chip input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+.assets-chip:has(input:checked) {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+.assets-chip:has(input:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+.assets-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.assets-shape {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  font-variant-numeric: tabular-nums;
+}
+.assets-measure,
+.assets-attributes__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 0.7fr) auto;
+  gap: 4px;
+  align-items: center;
+}
+.assets-attributes__row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+}
+.assets-attributes {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.assets-attributes > legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+
+/* ---- Detail ---------------------------------------------------------------- */
+.assets-notes {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.assets-subhead {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+.assets-history {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.assets-history__item {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.assets-history__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.assets-attributes-table {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.assets-attributes-table > div {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: var(--space-2);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.assets-attributes-table dt {
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+.assets-attributes-table dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.assets-recovery {
+  display: grid;
+  gap: var(--space-2);
+}
+.assets-recovery p {
+  margin: 0;
+}
+.assets-finder {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* ---- Full tools (import, coordinates, conflicts) keep native controls; give them the glass
+   look at a small size. ---------------------------------------------------------------- */
+.assets-tool,
+.assets-tool details[open],
+.assets-tool fieldset,
+.assets-tool article {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.assets-tool fieldset {
+  margin: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+}
+.assets-tool h4,
+.assets-tool p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.assets-tool summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.assets-tool input:not([type="checkbox"], [type="radio"], [type="file"]),
+.assets-tool select,
+.assets-tool textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 2rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.assets-tool button:not(.land-link, .glass-button, .land-primary) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2rem;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--glass-radius-pill);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.assets-tool button:not(.land-link, .glass-button):hover:not(:disabled) {
+  background: var(--control-bg-hover);
+}
+.assets-tool button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.assets-tool button:focus-visible,
+.assets-tool input:focus-visible,
+.assets-tool select:focus-visible,
+.assets-tool textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.assets-tool pre {
+  max-height: 12rem;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.assets-tool code {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.assets-tool input[type="file"] {
+  max-width: 100%;
+}
+.assets-vertices {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding-left: 1.5rem;
+}
+.assets-coordinates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.assets-coordinates label {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.assets-geometry {
+  padding: var(--space-3);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+}
+.assets-geometry__ok dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-3);
+  margin: 0;
+}
+.assets-geometry__ok dd {
+  margin: 0;
+}
+.assets-import__rows article {
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--divider);
+}
+.assets-conflict {
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-border);
+}
+
+@media (max-width: 640px) {
+  .assets-kinds {
+    grid-template-columns: repeat(auto-fill, minmax(5.75rem, 1fr));
+  }
+  .assets-measure {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}

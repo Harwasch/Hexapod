@@ -19,11 +19,13 @@ from app.models.research import (
     ResearchMessage,
     ResearchRun,
 )
+from app.research.locations import focus_location
 from app.schemas.land_ecology import EcologyRequest
 from app.schemas.land_rasters import RasterRequest
 from app.schemas.land_solar import SolarRequest
 from app.schemas.research import (
     ArtifactContent,
+    EventLocation,
     EvidenceRead,
     FindingRead,
     InvestigationCreate,
@@ -48,7 +50,13 @@ def now(db: Session) -> datetime:
     return db.execute(select(func.clock_timestamp())).scalar_one()  # type: ignore[no-any-return]
 
 
-def event(db: Session, run: ResearchRun, kind: str, payload: dict[str, Any]) -> None:
+def event(
+    db: Session,
+    run: ResearchRun,
+    kind: str,
+    payload: dict[str, Any],
+    location: EventLocation | None = None,
+) -> None:
     """Caller holds the run lock (or has just created the run)."""
     db.add(
         ResearchEvent(
@@ -56,6 +64,9 @@ def event(db: Session, run: ResearchRun, kind: str, payload: dict[str, Any]) -> 
             sequence=run.next_sequence,
             kind=kind,
             payload=payload,
+            location=location.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if location
+            else None,
             created_at=now(db),
         )
     )
@@ -78,7 +89,24 @@ def investigation(
     return row
 
 
-def read_investigation(db: Session, row: Investigation) -> InvestigationRead:
+def run_kinds(db: Session, identifiers: list[uuid.UUID]) -> dict[uuid.UUID, list[str]]:
+    """The kinds of run started in each investigation (an agent question, an analysis)."""
+    kinds: dict[uuid.UUID, list[str]] = {identifier: [] for identifier in identifiers}
+    if not identifiers:
+        return kinds
+    for investigation_id, kind in db.execute(
+        select(ResearchRun.investigation_id, ResearchRun.kind)
+        .where(ResearchRun.investigation_id.in_(identifiers))
+        .distinct()
+        .order_by(ResearchRun.investigation_id, ResearchRun.kind)
+    ):
+        kinds[investigation_id].append(kind)
+    return kinds
+
+
+def read_investigation(
+    db: Session, row: Investigation, kinds: list[str] | None = None
+) -> InvestigationRead:
     revision = db.scalar(select(LandArea.revision).where(LandArea.id == row.land_id))
     return InvestigationRead(
         id=row.id,
@@ -88,6 +116,7 @@ def read_investigation(db: Session, row: Investigation) -> InvestigationRead:
         boundary_revision=row.boundary_revision,
         created_at=row.created_at,
         stale=row.boundary_revision != revision,
+        kinds=run_kinds(db, [row.id])[row.id] if kinds is None else kinds,
     )
 
 
@@ -123,8 +152,9 @@ def list_investigations(
         .order_by(Investigation.created_at.desc(), Investigation.id)
         .limit(limit)
         .offset(offset)
-    )
-    return [read_investigation(db, row) for row in rows]
+    ).all()
+    kinds = run_kinds(db, [row.id for row in rows])
+    return [read_investigation(db, row, kinds[row.id]) for row in rows]
 
 
 def create_run(
@@ -166,7 +196,7 @@ def create_run(
     if payload.focus:
         pin_research_focus(db, target, run, payload.focus)
     db.add(ResearchMessage(investigation_id=identifier, role="user", content=payload.question))
-    event(db, run, "queued", {"kind": payload.kind})
+    event(db, run, "queued", {"kind": payload.kind}, focus_location(run.focus_snapshot))
     db.commit()
     return RunRead.model_validate(run)
 

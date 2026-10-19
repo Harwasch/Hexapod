@@ -149,8 +149,8 @@ agent. No production resources have been changed.
 
 ## Implemented increment: mapped selection, imports and recovery
 
-Mapped candidate lookup now supports Washington's public parcel service and OSM lines and
-buildings. Candidate outlines are interactive overlays; selected lines produce corridors
+Mapped candidate lookup supported Washington's public parcel service (since replaced by the
+California county registry; see the map-first increment below) and OSM lines and buildings. Candidate outlines are interactive overlays; selected lines produce corridors
 with total width, end caps and a selectable span of mapped vertices. Natural-language
 selection is grounded in candidate IDs, with explicit clarification for ambiguity. Local
 width/selection commands work without a model; broader interpretation uses the configured
@@ -2034,3 +2034,49 @@ occurred. Artifacts: `/tmp/land-calculation-result.json`, `/tmp/land-calculation
 `/tmp/land-calculation-mobile.png`. API/worker acceptance used a deterministic model fixture;
 live model credentials remain unavailable. The isolated API and worker were restarted, and the
 isolated Vite preview was restored on port 5175. The original checkout and deployment are unchanged.
+
+## Implemented increment: map-first Land and California parcels
+
+The side panel, with its six tabs, roughly 35 controls on a saved land and a single scroll, is
+replaced by a map-first layout. The map carries the information and a few glass surfaces float
+over it, each in its HUD region (`features/land/surface/`):
+
+- **Left dock** (`LandSurface`): a start card with two ways in (draw on the map, pick parcels) and
+  the rest under "More ways"; the parcel picker; a review card for a draft; and, for saved land, a
+  one-line land chip (name, size, source; a menu for editing, history, saved views, export and
+  switching land) over the current lens's card. Drawing has no card.
+- **Strip** (`LandStrip`): the draw bar while outlining (live corners and acreage, snapping, Undo,
+  Done, corridor width, split pieces as clickable pins), otherwise the lens dock.
+- **Right dock** (`LandAgent`; under the land chip below 900 px): the agent card.
+- **Map overlay** (`LandOverlays`, `cesium/LandAnchorProjector.ts`): labelled pins and leader lines
+  from cards to places, positioned after each rendered frame at heights sampled from the drawn
+  surface; `cesium/LandFocusBridge.tsx` outlines whatever a card points at.
+
+Lenses (`surface/lenses/`): Overview (terrain, land cover, greenness), Water (FEMA flood zones,
+rain), Soil (the SSURGO map unit at one sample point), Ecology (ecoregion, reference plant
+community, recorded species, field survey plots), Solar (array sketching, the hourly model,
+costs and payback), Records (boundary source, documents, old maps and photographs, alignment),
+Assets (inventory, inspections) and Plans (action plans with step areas, scenarios). Each card
+leads with one deterministic sentence and at most four facts tied to places on the map; full tools,
+raw tables, methods and sources sit under Details. Analyses run only when asked; the automatic
+overview on a new land is gone. Saved views record the lens (`LandViewState.lens`, optional;
+older views open the lens standing where their tab did).
+
+Drawing places points on the visible surface: the depth buffer first (the globe is hidden under
+photorealistic tiles), the analytic globe from high altitude, with near-plane dot depth and stale
+depth readings rejected. Vertex dots are drawn at their picked height.
+
+Research events carry an optional `location` (point, box or saved-record reference; migration
+`0029_research_event_location`), and a `looking` event precedes each source lookup with the place
+it queries, so the agent card draws a line to where the agent is looking while it waits. Findings
+with places drop as pins.
+
+Parcel lookup (`research/providers/parcels.py`) routes a search to the California counties it
+touches (US Census cartographic boundaries) and queries each county's public parcel layer; 55 of 58
+counties are verified (`data/ca_parcels.json`); Modoc, Plumas and Sierra publish no parcel service
+and the picker says so. Re-check the registry with `python -m app.scripts.verify_ca_parcels
+[county ...]`. Outside California the picker suggests drawing or importing.
+
+Validation: web unit tests (159 files, 1,374 tests), API tests (977 passed; S3 and OCR tests
+skipped without their services), ruff, mypy, eslint, prettier, typecheck and the contract check
+pass. The seven Land Chromium regressions were rewritten for the new controls and pass.

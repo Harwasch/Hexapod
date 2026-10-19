@@ -266,3 +266,23 @@ def test_overview_is_idempotent_per_boundary_revision(client: TestClient) -> Non
     second = client.post(url, json={"boundaryRevision": 2}).json()
     assert second["investigation"]["id"] != first.json()["investigation"]["id"]
     assert second["run"]["id"] != first.json()["run"]["id"]
+
+
+def test_investigations_say_what_has_run_in_them(client: TestClient) -> None:
+    land, inv, _run, _ = start(client)
+    asked = client.post(
+        f"/api/v1/land/{land['id']}/investigations",
+        json={"title": "Where could a pond go?", "boundaryRevision": 1},
+    ).json()
+    assert asked["kinds"] == []
+    client.post(
+        f"/api/v1/research/investigations/{asked['id']}/runs",
+        json={"requestKey": str(uuid.uuid4()), "question": "Where could a pond go?"},
+    )
+    listed = {
+        item["id"]: item["kinds"]
+        for item in client.get(f"/api/v1/land/{land['id']}/investigations").json()
+    }
+    assert listed == {inv["id"]: ["overview"], asked["id"]: ["investigation"]}
+    detail = client.get(f"/api/v1/research/investigations/{asked['id']}").json()
+    assert detail["investigation"]["kinds"] == ["investigation"]

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { LandCandidatePicker } from "@/features/land/LandCandidatePicker";
+import { LandParcelPicker } from "@/features/land/surface/LandParcelPicker";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { api } from "@/api/client";
@@ -40,9 +40,9 @@ it("keeps only reviewed candidates as drawing guides without writing a boundary"
       source: { method: "mapped-feature", meaning: "physical-feature", label: "Synthetic fixture" },
     },
   ]);
-  render(<LandCandidatePicker />);
-  fireEvent.click(screen.getByRole("button", { name: /Public fixture line/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Trace using selected features" }));
+  render(<LandParcelPicker />);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Public fixture line" }));
+  fireEvent.click(screen.getByRole("button", { name: "Trace over them" }));
   expect(useLand.getState().mode).toBe("corridor");
   expect(useLand.getState().points).toEqual([]);
   expect(useLand.getState().draft).toBeNull();

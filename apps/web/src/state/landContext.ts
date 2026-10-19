@@ -6,6 +6,16 @@ export interface LandContextFeature {
   label: string;
   geometry: LandMapGeometry;
   value?: number | null;
+  /** A colour of its own (a soil unit, a land-cover class); the layer's otherwise. */
+  color?: string;
+}
+/** How a lens draws its layer; absent, a layer keeps the neutral analysis blue. */
+export interface LandContextStyle {
+  color: string;
+  /** Fill opacity for areas, 0–1. */
+  fill?: number;
+  /** Outline and line width in pixels. */
+  width?: number;
 }
 export interface LandContextLayer {
   drawingGuideSources?: LandCandidate["source"][];
@@ -16,6 +26,7 @@ export interface LandContextLayer {
   title: string;
   features: LandContextFeature[];
   selectedIds?: string[];
+  style?: LandContextStyle;
 }
 export interface LandRasterLayer {
   kind?: "archive-alignment";
@@ -59,6 +70,8 @@ export interface LandContextState {
   candidates: LandCandidate[];
   selectedIds: string[];
   setCandidates: (candidates: LandCandidate[]) => void;
+  /** Adds records found around a new point, keeping the ones already chosen. */
+  addCandidates: (candidates: LandCandidate[]) => void;
   toggleCandidate: (id: string) => void;
   setLayer: (layer: LandContextLayer) => void;
   removeLayer: (id: string) => void;
@@ -153,6 +166,28 @@ export const useLandContext = create<LandContextState>((set, get) => ({
         },
       },
     })),
+  addCandidates: (found) =>
+    set((state) => {
+      const kept = state.candidates.filter((candidate) => state.selectedIds.includes(candidate.id));
+      const ids = new Set(kept.map((candidate) => candidate.id));
+      const candidates = [...kept, ...found.filter((candidate) => !ids.has(candidate.id))];
+      return {
+        candidates,
+        layers: {
+          ...state.layers,
+          candidates: {
+            id: "candidates",
+            title: "Selection candidates",
+            features: candidates.map((candidate) => ({
+              id: candidate.id,
+              label: candidate.label,
+              geometry: candidate.geometry,
+            })),
+            selectedIds: state.selectedIds,
+          },
+        },
+      };
+    }),
   toggleCandidate: (id) => {
     if (!get().candidates.some((candidate) => candidate.id === id)) return;
     set((state) => {

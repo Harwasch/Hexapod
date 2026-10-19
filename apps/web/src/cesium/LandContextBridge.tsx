@@ -9,11 +9,25 @@ import {
   type Entity,
 } from "cesium";
 import { polygonsOf } from "@twin/geo";
-import { useLandContext, type LandContextLayer } from "@/state/landContext";
+import {
+  useLandContext,
+  type LandContextFeature,
+  type LandContextLayer,
+} from "@/state/landContext";
 import { useLand } from "@/state/land";
 import { useUi } from "@/state/ui";
 import { useLandIdentity } from "@/state/landIdentity";
+import { repaintUntilDrawn } from "./repaintUntilDrawn";
 import { useScene } from "./SceneContext";
+
+const DEFAULT_COLOR = "#88c8e5";
+const SELECTED_COLOR = "#f1cb7a";
+
+function featureColor(layer: LandContextLayer, feature: LandContextFeature, selected: boolean) {
+  return Color.fromCssColorString(
+    selected ? SELECTED_COLOR : (feature.color ?? layer.style?.color ?? DEFAULT_COLOR),
+  );
+}
 
 /** Separate, disposable analytical/candidate overlays; never change the land scope. */
 export function LandContextBridge() {
@@ -24,6 +38,7 @@ export function LandContextBridge() {
       string,
       { layer: LandContextLayer; entities: { entity: Entity; featureId: string }[] }
     >();
+    let stopRepaint: () => void = () => undefined;
     const positions = (points: number[][]) =>
       Cartesian3.fromDegreesArray(points.flatMap((point) => [point[0] ?? 0, point[1] ?? 0]));
     const sync = () => {
@@ -37,12 +52,17 @@ export function LandContextBridge() {
           if (
             next?.features === current.layer.features &&
             next.researchArtifactId === current.layer.researchArtifactId &&
-            next.unit === current.layer.unit
+            next.unit === current.layer.unit &&
+            next.style === current.layer.style
           ) {
             for (const { entity, featureId } of current.entities) {
               const selected = Boolean(next.selectedIds?.includes(featureId));
               if (selected === Boolean(current.layer.selectedIds?.includes(featureId))) continue;
-              const color = Color.fromCssColorString(selected ? "#f1cb7a" : "#88c8e5");
+              const feature = next.features.find((candidate) => candidate.id === featureId);
+              if (!feature) continue;
+              const color = featureColor(next, feature, selected);
+              const fill = next.style?.fill ?? 0.18;
+              const width = next.style?.width ?? 2;
               if (entity.point) {
                 entity.point.color = new ConstantProperty(color);
                 entity.point.pixelSize = new ConstantProperty(selected ? 16 : 12);
@@ -50,12 +70,12 @@ export function LandContextBridge() {
               if (entity.polyline) {
                 entity.polyline.material = new ColorMaterialProperty(color);
                 entity.polyline.width = new ConstantProperty(
-                  entity.polygon ? (selected ? 4 : 2) : selected ? 6 : 3,
+                  entity.polygon ? (selected ? width + 2 : width) : selected ? 6 : 3,
                 );
               }
               if (entity.polygon)
                 entity.polygon.material = new ColorMaterialProperty(
-                  color.withAlpha(selected ? 0.28 : 0.18),
+                  color.withAlpha(selected ? Math.min(1, fill + 0.1) : fill),
                 );
             }
             current.layer = next;
@@ -64,13 +84,18 @@ export function LandContextBridge() {
           current.entities.forEach(({ entity }) => host.viewer.entities.remove(entity));
           rendered.delete(id);
         }
+        // Re-adding an id that was removed in the same suspended batch only cancels the
+        // removal and keeps the old geometry; flush the removals before adding anything.
+        host.viewer.entities.resumeEvents();
+        host.viewer.entities.suspendEvents();
         for (const layer of Object.values(layers)) {
           if (rendered.has(layer.id)) continue;
           const entities: { entity: Entity; featureId: string }[] = [];
+          const fill = layer.style?.fill ?? 0.18;
+          const width = layer.style?.width ?? 2;
           for (const feature of layer.features) {
-            const color = Color.fromCssColorString(
-              layer.selectedIds?.includes(feature.id) ? "#f1cb7a" : "#88c8e5",
-            );
+            const selected = Boolean(layer.selectedIds?.includes(feature.id));
+            const color = featureColor(layer, feature, selected);
             const id = `land-context:${layer.id}/${feature.id}`;
             const add = (options: Entity.ConstructorOptions) =>
               entities.push({
@@ -128,13 +153,11 @@ export function LandContextBridge() {
                       positions(outer),
                       polygon.slice(1).map((ring) => new PolygonHierarchy(positions(ring))),
                     ),
-                    material: color.withAlpha(
-                      layer.selectedIds?.includes(feature.id) ? 0.28 : 0.18,
-                    ),
+                    material: color.withAlpha(selected ? Math.min(1, fill + 0.1) : fill),
                   },
                   polyline: {
                     positions: positions(outer),
-                    width: layer.selectedIds?.includes(feature.id) ? 4 : 2,
+                    width: selected ? width + 2 : width,
                     material: color,
                     clampToGround: true,
                   },
@@ -147,7 +170,8 @@ export function LandContextBridge() {
       } finally {
         host.viewer.entities.resumeEvents();
       }
-      host.scene.requestRender();
+      stopRepaint();
+      stopRepaint = repaintUntilDrawn(host);
     };
     const offInventoryPick = host.events.on("land-feature-select", ({ id }) => {
       useLandContext.getState().selectInventory(id);
@@ -181,6 +205,7 @@ export function LandContextBridge() {
     });
     sync();
     return () => {
+      stopRepaint();
       offInventoryPick();
       offResearchPick();
       offContext();

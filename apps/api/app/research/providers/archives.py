@@ -88,6 +88,18 @@ def open_license(metadata: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
+def commons_radius(context: SourceContext) -> int:
+    """Metres around the representative point that reach every corner of the land, capped."""
+    lon, lat = context.point
+    west, south, east, north = context.geometry.bounds
+    geod = Geod(ellps="WGS84")
+    distance = max(
+        geod.inv(lon, lat, x, y)[2]
+        for x, y in [(west, south), (west, north), (east, south), (east, north)]
+    )
+    return int(min(10_000, max(500, math.ceil(distance + 250))))
+
+
 def commons(context: SourceContext, client: httpx.Client) -> SourceResult:
     spec = ARCHIVE_SOURCES["commons-place-images"]
     lon, lat = context.point
@@ -96,12 +108,7 @@ def commons(context: SourceContext, client: httpx.Client) -> SourceResult:
         return SourceResult(
             spec.id, "uncovered", "Choose a smaller area for nearby archive-photo discovery."
         )
-    geod = Geod(ellps="WGS84")
-    distance = max(
-        geod.inv(lon, lat, x, y)[2]
-        for x, y in [(west, south), (west, north), (east, south), (east, north)]
-    )
-    radius = min(10_000, max(500, math.ceil(distance + 250)))
+    radius = commons_radius(context)
     # Small batches respect Commons' guidance for expensive imageinfo/extmetadata requests.
     items: list[tuple[str, EvidenceContent]] = []
     excluded = 0

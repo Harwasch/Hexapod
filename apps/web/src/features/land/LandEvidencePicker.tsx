@@ -1,9 +1,20 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Search } from "lucide-react";
+
 import { api, unwrap } from "@/api/client";
 import { useLandAccessReady, useLandScope } from "@/state/landIdentity";
-import { EvidenceView } from "./LandResearch";
 
+import { EvidenceView } from "./EvidenceView";
+import { formatDate, providerLabel } from "./surface/lenses/records/recordsModel";
+import "./surface/lenses/records/records.css";
+
+const PAGE = 20;
+
+/**
+ * Picks saved sources (evidence from any analysis or document) to back a plan, a target or an
+ * action: find them by name, tick up to `limit`, and inspect one before linking it.
+ */
 export function LandEvidencePicker({
   landId,
   value,
@@ -17,10 +28,10 @@ export function LandEvidencePicker({
   label: string;
   limit?: number;
 }) {
-  const scope = useLandScope(),
-    ready = useLandAccessReady();
-  const [query, setQuery] = useState(""),
-    [offset, setOffset] = useState(0);
+  const scope = useLandScope();
+  const ready = useLandAccessReady();
+  const [query, setQuery] = useState("");
+  const [offset, setOffset] = useState(0);
   const [open, setOpen] = useState(false);
   const [inspected, setInspected] = useState<string | null>(null);
   const sources = useQuery({
@@ -29,7 +40,7 @@ export function LandEvidencePicker({
     queryFn: () =>
       unwrap(
         api.GET("/api/v1/land/{land_id}/evidence", {
-          params: { path: { land_id: landId }, query: { query, offset, limit: 20 } },
+          params: { path: { land_id: landId }, query: { query, offset, limit: PAGE } },
         }),
       ),
     retry: false,
@@ -45,90 +56,127 @@ export function LandEvidencePicker({
       ),
     retry: false,
   });
+  const listed = new Set(sources.data?.map((item) => item.id));
+  const unlisted = value.filter((id) => !listed.has(id));
   return (
     <details
-      className="land-evidence-picker"
+      className="records-more land-evidence-picker"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
         {label} · {value.length} linked
       </summary>
-      <label className="land-name">
-        Find saved source evidence
+      <div className="records-search">
+        <Search size={14} aria-hidden="true" />
         <input
+          className="glass-input"
           aria-label={`${label}: find sources`}
+          placeholder="Find saved sources by name"
           maxLength={100}
           value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
+          onChange={(event) => {
+            setQuery(event.target.value);
             setOffset(0);
           }}
         />
-      </label>
+      </div>
+      {sources.isPending && open && ready && (
+        <p className="land-muted" role="status">
+          Loading sources…
+        </p>
+      )}
       {sources.isError && (
-        <p role="alert">
-          Sources could not be loaded.{" "}
-          <button type="button" onClick={() => void sources.refetch()}>
+        <p className="land-alert" role="alert">
+          Sources did not load.{" "}
+          <button type="button" className="land-link" onClick={() => void sources.refetch()}>
             Retry sources
           </button>
         </p>
       )}
-      {sources.data?.map((item) => (
-        <div key={item.id} className="land-source-choice">
-          <label className="land-check">
-            <input
-              type="checkbox"
-              checked={value.includes(item.id)}
-              disabled={!value.includes(item.id) && value.length >= limit}
-              onChange={(e) =>
-                onChange(
-                  e.target.checked ? [...value, item.id] : value.filter((id) => id !== item.id),
-                )
-              }
-            />
-            {item.title} · boundary {item.boundaryRevision}
-          </label>
+      <ul className="records-list">
+        {sources.data?.map((item) => {
+          const checked = value.includes(item.id);
+          return (
+            <li key={item.id} className="records-row records-row--choice">
+              <label className="records-row__main">
+                <span>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={!checked && value.length >= limit}
+                    onChange={(event) =>
+                      onChange(
+                        event.target.checked
+                          ? [...value, item.id]
+                          : value.filter((id) => id !== item.id),
+                      )
+                    }
+                  />{" "}
+                  <strong>{item.title}</strong>
+                </span>
+                <small>
+                  {providerLabel(item.provider)} · {formatDate(item.retrievedAt)} · outline v
+                  {item.boundaryRevision}
+                </small>
+              </label>
+              <button
+                type="button"
+                className="land-link"
+                onClick={() => setInspected(item.id)}
+                aria-label={`Inspect ${item.title}`}
+              >
+                Inspect source
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {sources.data?.length === 0 && (
+        <p className="land-muted">
+          No saved sources match. Run an analysis from any lens, or add a document in Records, to
+          gather sources.
+        </p>
+      )}
+      {(offset > 0 || sources.data?.length === PAGE) && (
+        <div className="land-row">
           <button
             type="button"
-            onClick={() => setInspected(item.id)}
-            aria-label={`Inspect ${item.title}`}
+            className="land-link"
+            disabled={offset === 0}
+            onClick={() => setOffset(Math.max(0, offset - PAGE))}
           >
-            Inspect source
+            Previous sources
+          </button>
+          <button
+            type="button"
+            className="land-link"
+            disabled={(sources.data?.length ?? 0) < PAGE}
+            onClick={() => setOffset(offset + PAGE)}
+          >
+            More sources
+          </button>
+        </div>
+      )}
+      {unlisted.map((id, index) => (
+        <div key={id} className="land-row">
+          <span className="land-muted">Linked source {index + 1}</span>
+          <button type="button" className="land-link" onClick={() => setInspected(id)}>
+            Inspect linked source {index + 1}
+          </button>
+          <button
+            type="button"
+            className="land-link"
+            onClick={() => onChange(value.filter((item) => item !== id))}
+          >
+            Unlink source {index + 1}
           </button>
         </div>
       ))}
-      {sources.data?.length === 0 && (
-        <p>No saved sources match. Research this land in Discover or Ecology to gather evidence.</p>
+      {inspectedSource.isError && (
+        <p className="land-alert" role="alert">
+          That source could not be read.
+        </p>
       )}
-      <div className="land-actions">
-        <button
-          type="button"
-          disabled={offset === 0}
-          onClick={() => setOffset(Math.max(0, offset - 20))}
-        >
-          Previous sources
-        </button>
-        <button
-          type="button"
-          disabled={(sources.data?.length ?? 0) < 20}
-          onClick={() => setOffset(offset + 20)}
-        >
-          More sources
-        </button>
-      </div>
-      {value
-        .filter((id) => !sources.data?.some((item) => item.id === id))
-        .map((id, i) => (
-          <div key={id} className="land-actions">
-            <button type="button" onClick={() => setInspected(id)}>
-              Inspect linked source {i + 1}
-            </button>
-            <button type="button" onClick={() => onChange(value.filter((item) => item !== id))}>
-              Unlink source {i + 1}
-            </button>
-          </div>
-        ))}
-      {inspectedSource.isError && <p role="alert">The selected evidence could not be read.</p>}
       {inspected && inspectedSource.data && (
         <EvidenceView evidence={inspectedSource.data} onClose={() => setInspected(null)} />
       )}
