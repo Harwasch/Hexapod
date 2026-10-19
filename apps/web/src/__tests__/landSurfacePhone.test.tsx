@@ -1,7 +1,8 @@
 /**
- * The Land panel on a phone (and a window as narrow): a touch screen is told to tap, not click;
- * a boundary going to review is framed above the sheet that would otherwise cover it; and
- * reopening a saved land shows its overview rather than the list it was opened from.
+ * The Land surface on a phone (and a window as narrow): a touch screen is told to tap, not
+ * click; a boundary going to review is framed above the sheet that would otherwise cover it;
+ * and opening a saved land shows its chip over the Overview lens, framed above the sheet, rather
+ * than the list it was opened from or whichever lens was open before.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -13,7 +14,9 @@ import { GlassTooltipProvider } from "@twin/ui";
 
 import { api } from "@/api/client";
 import { frameLand } from "@/features/land/landFraming";
-import { LandPanel } from "@/features/land/LandPanel";
+import { LandStrip } from "@/features/land/surface/LandStrip";
+import { LandSurface } from "@/features/land/surface/LandSurface";
+import { useLens } from "@/features/land/surface/lenses";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useUi } from "@/state/ui";
@@ -49,6 +52,16 @@ const scene = vi.hoisted(() => ({
   },
 }));
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => scene }));
+
+// The lens cards are each tested on their own; here a card only says which lens it is.
+vi.mock("@/features/land/surface/lensCards", () => {
+  const card = (lens: string) =>
+    function LensStub({ land }: { land: LandArea }) {
+      return <section data-testid={`land-lens-card-${lens}`} aria-label={`${lens} ${land.name}`} />;
+    };
+  const lenses = ["overview", "water", "soil", "ecology", "solar", "records", "assets", "plans"];
+  return { LENS_CARDS: Object.fromEntries(lenses.map((lens) => [lens, card(lens)])) };
+});
 
 /** A square in the lower part of the view, where the sheet sits. */
 const LOW = {
@@ -92,6 +105,19 @@ function seen(call: unknown[]) {
   return { west: lon - dLon, south: lat - dLat, east: lon + dLon, north: lat + dLat };
 }
 
+/** Every corner of LOW, seen through that flight's view, is on screen above the sheet. */
+function expectAboveSheet(call: unknown[]) {
+  const { west, south, east, north } = seen(call);
+  for (const [lon, lat] of LOW.coordinates[0]!) {
+    const y = ((north - lat!) / (north - south)) * SCREEN.height;
+    const x = ((lon! - west) / (east - west)) * SCREEN.width;
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(y).toBeLessThan(SHEET.top);
+    expect(x).toBeGreaterThanOrEqual(0);
+    expect(x).toBeLessThanOrEqual(SCREEN.width);
+  }
+}
+
 function touchScreen(coarse: boolean) {
   vi.spyOn(window, "matchMedia").mockImplementation(
     (query: string) =>
@@ -108,14 +134,20 @@ function touchScreen(coarse: boolean) {
   );
 }
 
-function renderPanel() {
+function offline() {
+  vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+}
+
+/** The Land surface in the sheet, and its strip (the draw bar) below it. */
+function renderSurface() {
   useUi.getState().setPanel("land");
   return render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
       <GlassTooltipProvider>
-        <LandPanel />
+        <LandSurface />
+        <LandStrip />
       </GlassTooltipProvider>
     </QueryClientProvider>,
   );
@@ -126,7 +158,7 @@ beforeEach(() => {
   canvas.getBoundingClientRect = () => SCREEN as DOMRect;
   scene.viewer.canvas = canvas;
   scene.camera.flyTo.mockClear();
-  // Only the Land panel has a layout here: the bottom sheet. Everything else measures nothing.
+  // Only the Land surface has a layout here: the bottom sheet. Everything else measures nothing.
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
     this: HTMLElement,
   ) {
@@ -138,31 +170,39 @@ afterEach(() => {
   cleanup();
   useLand.getState().clear();
   useLandContext.getState().clear();
+  useLens.getState().setLens("overview");
   useUi.getState().setPanel(null);
   vi.restoreAllMocks();
 });
 
 it("tells a touch screen to tap, and a mouse to click", () => {
-  vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+  offline();
   touchScreen(true);
-  renderPanel();
-  expect(screen.getByText("Tap around your land on the map")).toBeInTheDocument();
+  renderSurface();
   act(() => useLand.getState().begin("draw"));
-  expect(
-    screen.getByText("0 points placed. Tap the map to add the first point."),
-  ).toBeInTheDocument();
+  expect(screen.getByTestId("land-drawbar")).toHaveTextContent("Tap the corners of your land");
+  act(() => useLand.getState().begin("corridor"));
+  expect(screen.getByTestId("land-drawbar")).toHaveTextContent("Tap along the centre line");
+  act(() => useLand.getState().begin("pick"));
+  expect(screen.getByTestId("land-drawbar")).toHaveTextContent(
+    "Tap a field, woodland, park or lake",
+  );
+  act(() => useLand.getState().begin("candidates"));
+  expect(screen.getByText("Tap near your land on the map.")).toBeInTheDocument();
   cleanup();
+  useLand.getState().clear();
   touchScreen(false);
-  renderPanel();
-  expect(
-    screen.getByText("0 points placed. Click the map to add the first point."),
-  ).toBeInTheDocument();
+  renderSurface();
+  act(() => useLand.getState().begin("draw"));
+  expect(screen.getByTestId("land-drawbar")).toHaveTextContent("Click the corners of your land");
+  act(() => useLand.getState().begin("candidates"));
+  expect(screen.getByText("Click near your land on the map.")).toBeInTheDocument();
 });
 
 it("frames a boundary going to review above the sheet that covers it", async () => {
-  vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+  offline();
   touchScreen(true);
-  renderPanel();
+  renderSurface();
   act(() =>
     useLand.getState().propose({
       name: "Untitled land",
@@ -171,25 +211,23 @@ it("frames a boundary going to review above the sheet that covers it", async () 
       source: { method: "drawn", label: "Drawn on the map", meaning: "study-area" },
     }),
   );
+  expect(screen.getByTestId("land-review")).toBeInTheDocument();
   await waitFor(() => expect(scene.camera.flyTo).toHaveBeenCalledTimes(1));
-  const { west, south, east, north } = seen(scene.camera.flyTo.mock.calls[0]!);
-  // Seen through that rectangle, the whole square sits above the sheet's top edge.
-  for (const [lon, lat] of LOW.coordinates[0]!) {
-    const y = ((north - lat!) / (north - south)) * SCREEN.height;
-    const x = ((lon! - west) / (east - west)) * SCREEN.width;
-    expect(y).toBeLessThan(SHEET.top);
-    expect(x).toBeGreaterThanOrEqual(0);
-    expect(x).toBeLessThanOrEqual(SCREEN.width);
-  }
-  // Renaming the draft does not move the camera again.
-  act(() => useLand.getState().updateDraft({ name: "West field" }));
+  // Seen through that view, the whole square sits above the sheet's top edge.
+  expectAboveSheet(scene.camera.flyTo.mock.calls[0]!);
+  // Naming the draft does not move the camera again.
+  fireEvent.change(screen.getByLabelText("Name this land"), { target: { value: "West field" } });
   await new Promise((resolve) => setTimeout(resolve, 50));
   expect(scene.camera.flyTo).toHaveBeenCalledTimes(1);
+  // Its own "Show boundary on map" frames it the same way.
+  fireEvent.click(screen.getByRole("button", { name: "Show boundary on map" }));
+  expect(scene.camera.flyTo).toHaveBeenCalledTimes(2);
+  expectAboveSheet(scene.camera.flyTo.mock.calls[1]!);
 });
 
 it("leaves the camera alone when the reviewed boundary is already in sight", async () => {
-  vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
-  renderPanel();
+  offline();
+  renderSurface();
   const high = {
     ...LOW,
     coordinates: [LOW.coordinates[0]!.map(([lon, lat]) => [lon!, lat! + 0.07])],
@@ -206,28 +244,44 @@ it("leaves the camera alone when the reviewed boundary is already in sight", asy
   expect(scene.camera.flyTo).not.toHaveBeenCalled();
 });
 
-it("opens a saved land at its overview, framed above the sheet", async () => {
+it("opens a saved land on its chip and Overview lens, framed above the sheet", async () => {
   vi.spyOn(api, "GET").mockImplementation(((path: string) =>
     path === "/api/v1/land"
       ? Promise.resolve({ data: [land], response: new Response(null, { status: 200 }) })
       : Promise.reject(new TypeError("offline"))) as never);
-  const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
-  renderPanel();
-  fireEvent.click(await screen.findByRole("button", { name: /Oak Bench Ranch/ }));
+  touchScreen(true);
+  // The last land was left on its Plans lens, and the start card scrolled down to its list.
+  useLens.getState().setLens("plans");
+  renderSurface();
+  const row = await screen.findByRole("button", { name: /Oak Bench Ranch/ });
+  const sheet = screen.getByTestId("land-panel");
+  sheet.scrollTop = 160;
+  fireEvent.click(row);
   expect(useLand.getState().active?.id).toBe(land.id);
-  await waitFor(() =>
-    expect(
-      scrolled.mock.contexts.some((el) => (el as Element).matches(".land-place-heading")),
-    ).toBe(true),
+  expect(screen.queryByTestId("land-start")).not.toBeInTheDocument();
+  expect(screen.getByTestId("land-chip")).toHaveTextContent("Oak Bench Ranch");
+  expect(screen.getByTestId("land-lens-card-overview")).toBeInTheDocument();
+  expect(screen.queryByTestId("land-lens-card-plans")).not.toBeInTheDocument();
+  expect(sheet.scrollTop).toBe(0);
+  // Framed once the chip and the lens have laid out, above the sheet they make.
+  expect(scene.camera.flyTo).not.toHaveBeenCalled();
+  await waitFor(() => expect(scene.camera.flyTo).toHaveBeenCalledTimes(1));
+  expectAboveSheet(scene.camera.flyTo.mock.calls[0]!);
+  // The chip's "Show the land on the map" does the same, straight away.
+  fireEvent.click(screen.getByRole("button", { name: "Show the land on the map" }));
+  expect(scene.camera.flyTo).toHaveBeenCalledTimes(2);
+  expectAboveSheet(scene.camera.flyTo.mock.calls[1]!);
+});
+
+it("says where saved land will be, and where plans on it go, before any is saved", async () => {
+  vi.spyOn(api, "GET").mockImplementation(((path: string) =>
+    path === "/api/v1/land"
+      ? Promise.resolve({ data: [], response: new Response(null, { status: 200 }) })
+      : Promise.reject(new TypeError("offline"))) as never);
+  renderSurface();
+  expect(await screen.findByTestId("land-saved-empty")).toHaveTextContent(
+    "Your saved areas stay here; plans you make on them appear in Plan.",
   );
-  const heading = scrolled.mock.contexts.find((el) =>
-    (el as Element).matches(".land-place-heading"),
-  );
-  expect(heading).toHaveTextContent("Land overview");
-  expect(scene.camera.flyTo).toHaveBeenCalled();
-  const { south, north } = seen(scene.camera.flyTo.mock.calls.at(-1)!);
-  // The land's centre is above the screen's centre: the sheet covers the lower part.
-  expect((south + north) / 2).toBeLessThan(34.63);
 });
 
 it("measures the flight from the ground only where the ground reads true", async () => {

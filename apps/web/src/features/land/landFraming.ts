@@ -14,11 +14,11 @@ import {
 } from "@/lib/viewFraming";
 
 /**
- * Framing a land beside the Land panel, wherever the panel is: beside it on a desktop, above it
- * on a phone, where the panel is a sheet over the lower half of the map (`lib/viewFraming.ts`
- * does the arithmetic). Used when a saved land is opened (from the panel's list or the command
- * box), by the panel's "Show boundary on map", and when a boundary goes to review and the sheet
- * would cover it.
+ * Framing a land beside the Land cards, wherever they are: beside them on a desktop, above them
+ * on a phone, where they are a sheet over the lower part of the map (`lib/viewFraming.ts` does
+ * the arithmetic). Used when a saved land is opened (from the start card's list, the chip's
+ * "Switch land" or the command box), by "Show the land on the map", and when a boundary goes to
+ * review and the sheet would cover it.
  */
 
 /** At most this many boundary points are projected to test what is on screen. */
@@ -30,18 +30,32 @@ function rectOf(element: Element | null): ScreenRect | null {
   return rect.width > 0 && rect.height > 0 ? rect : null;
 }
 
-/** The map's size, and what the Land panel and the HUD's top row cover of it now. */
+/**
+ * What covers the map beside a land: the Land surface (the left dock, or on a phone the bottom
+ * sheet that also holds the agent), and on a wide screen the agent card in the right dock while
+ * a saved land is open.
+ */
+const COVERS = ['[data-testid="land-panel"]', '.hud-dock--right [data-testid="land-agent"]'];
+
+/** The map's size, and what the Land cards and the HUD's top row cover of it now. */
 function openView(scene: CesiumSceneManager): {
   view: { width: number; height: number };
   insets: ViewInsets;
 } | null {
   const canvas = rectOf(scene.viewer.canvas);
   if (!canvas) return null;
-  const panel = rectOf(document.querySelector('[data-testid="land-panel"]'));
   const topBar = rectOf(document.querySelector(".hud-top"))?.bottom ?? canvas.top;
+  const insets = COVERS.map((selector) =>
+    panelInsets(rectOf(document.querySelector(selector)), canvas, topBar),
+  ).reduce((a, b) => ({
+    top: Math.max(a.top, b.top),
+    right: Math.max(a.right, b.right),
+    bottom: Math.max(a.bottom, b.bottom),
+    left: Math.max(a.left, b.left),
+  }));
   return {
     view: { width: canvas.right - canvas.left, height: canvas.bottom - canvas.top },
-    insets: panelInsets(panel, canvas, topBar),
+    insets,
   };
 }
 
@@ -111,7 +125,7 @@ export function frameLand(scene: CesiumSceneManager | null, boundary: Footprint)
 }
 
 /**
- * Whether any of the boundary is hidden: off screen, behind the globe, or under the Land panel
+ * Whether any of the boundary is hidden: off screen, behind the globe, or under the Land cards
  * or the top row. Tests a sample of its outer rings' vertices, at the ground's height.
  */
 export function landHidden(scene: CesiumSceneManager, boundary: Footprint): boolean {
@@ -150,7 +164,7 @@ export function revealLand(scene: CesiumSceneManager | null, boundary: Footprint
   });
 }
 
-/** Frames a land once the Land panel opening with it has laid out (the command box). */
+/** Frames a land once the Land cards opening with it have laid out (opening a saved land). */
 export function frameLandSoon(scene: CesiumSceneManager | null, boundary: Footprint): void {
   if (!scene) return;
   afterLayout(() => {

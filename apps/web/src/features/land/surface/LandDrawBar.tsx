@@ -5,6 +5,7 @@ import { footprintAreaM2 } from "@twin/geo";
 import { GlassButton, GlassPanel, GlassSelect } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
+import { tapOrClick } from "@/lib/pointer";
 import { useLand } from "@/state/land";
 
 import { areaLabel, beginLand, finishSketch, useLandFlow } from "./landFlow";
@@ -18,7 +19,7 @@ function sketchArea(points: [number, number][]): number | null {
 }
 
 /**
- * The controls for drawing on the map, kept on the map: where you are clicking, what you have
+ * The controls for drawing on the map, kept on the map: where to tap or click, what you have
  * placed so far, and the live area, with Undo and Done beside it.
  */
 export function LandDrawBar() {
@@ -62,7 +63,9 @@ export function LandDrawBar() {
     return (
       <GlassPanel strong pill className="land-drawbar" data-testid="land-drawbar">
         <span className="land-drawbar__status" aria-live="polite">
-          {points.length ? "Looking for the mapped area…" : "Click a field, woodland, park or lake"}
+          {points.length
+            ? "Looking for the mapped area…"
+            : `${tapOrClick()} a field, woodland, park or lake`}
         </span>
         <GlassButton size="sm" variant="ghost" onClick={cancel}>
           Cancel
@@ -96,8 +99,8 @@ export function LandDrawBar() {
         : operation === "intersection"
           ? "Draw the area to keep"
           : mode === "corridor"
-            ? "Click along the centre line"
-            : "Click the corners of your land";
+            ? `${tapOrClick()} along the centre line`
+            : `${tapOrClick()} the corners of your land`;
   const needed = mode === "draw" ? 3 : 2;
   const widthValid = mode !== "corridor" || (Number.isFinite(width) && width > 0);
   return (

@@ -17,6 +17,7 @@ import {
 
 import { api, unwrap } from "@/api/client";
 import { describeError } from "@/lib/log";
+import { tapOrClick } from "@/lib/pointer";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 
@@ -32,9 +33,9 @@ const KINDS: { value: Kind; label: string }[] = [
 ];
 
 /**
- * Pick the land from records instead of drawing it: click near it, the parcels around the
- * click outline on the map, and clicking them (on the map or here) selects them. Each new
- * click on open ground looks again there and keeps what is already chosen.
+ * Pick the land from records instead of drawing it: tap or click near it, the parcels around
+ * that spot outline on the map, and choosing them (on the map or here) selects them. Each new
+ * tap or click on open ground looks again there and keeps what is already chosen.
  */
 export function LandParcelPicker() {
   const points = useLand((s) => s.points);
@@ -116,7 +117,7 @@ export function LandParcelPicker() {
             .filter((candidate): candidate is LandCandidate => Boolean(candidate))
         : selected;
       const first = chosen[0];
-      if (!first) throw new Error("Click a highlighted parcel or feature first.");
+      if (!first) throw new Error(`${tapOrClick()} a highlighted parcel or feature first.`);
       let boundary: Footprint;
       if (first.geometry.type === "LineString") {
         if (chosen.length !== 1) throw new Error("Choose one line for a corridor.");
@@ -175,7 +176,7 @@ export function LandParcelPicker() {
   };
 
   const status = !point
-    ? "Click near your land on the map."
+    ? `${tapOrClick()} near your land on the map.`
     : searching
       ? "Looking for records around that spot…"
       : (result?.message ?? "");
@@ -205,10 +206,12 @@ export function LandParcelPicker() {
         </p>
       )}
       {result?.truncated && (
-        <p className="land-note">Only the nearest records are shown. Click closer to your land.</p>
+        <p className="land-note">
+          Only the nearest records are shown. {tapOrClick()} closer to your land.
+        </p>
       )}
       {candidates.length > 0 && (
-        <ul className="land-facts" aria-label="Records near your click">
+        <ul className="land-facts" aria-label="Records near that spot">
           {candidates.map((candidate) => {
             const chosen = selectedIds.includes(candidate.id);
             return (
